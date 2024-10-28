@@ -11,18 +11,20 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-const enabledPlugins = [
-  "TherapeuticPrediction",
-  "MultipleSegmentAnalysis",
-  "AdaptiveStimulation",
-  "CircadianThreshold",
-  "PatientEvents",
-  "ImageVisualization",
-  "CustomizedAnalysis",
-  "ExternalRecordings",
-  "MobileManager"
-];
+import {
+  Timeline, 
+} from "@mui/icons-material";
 
-export const experimentalRoutes = enabledPlugins.map((plugin) => {
-  return require("views/Experimental/" + plugin + "/route.js").default;
-});
+import ExternalRecodings from "./index";
+
+const route = {
+  name: "ExternalRecordings",
+  key: "external-recordings",
+  icon: <Timeline style={{color: "white", margin: 0, padding: 0}}/>,
+  route: "/experimental/external-recordings",
+  component: <ExternalRecodings />,
+  identified: true,
+  deidentified: true
+};
+
+export default route;

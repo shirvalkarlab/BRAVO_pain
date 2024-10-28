@@ -172,7 +172,7 @@ def queryMontageDataOverview(user, patientUniqueID, authority):
                 contacts, hemisphere = Percept.reformatChannelName(channel)
                 for lead in leads:
                     if lead["TargetLocation"].startswith(hemisphere):
-                        data["Channels"].append({"Hemisphere": lead["TargetLocation"], "Contacts": contacts})
+                        data["Channels"].append({"Hemisphere": lead["TargetLocation"], "CustomName": lead["CustomName"], "Contacts": contacts})
 
             BrainSenseData.append(data)
     return BrainSenseData

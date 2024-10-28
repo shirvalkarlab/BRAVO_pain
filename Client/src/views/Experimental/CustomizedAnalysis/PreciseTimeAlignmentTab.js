@@ -68,24 +68,6 @@ const TimeShiftController = ({data, handleUpdateConfig, handleRemoveRecording}) 
       <MDTypography fontSize={15} fontWeight={"bold"}>
         {recording.title}
       </MDTypography>
-      <TextField
-        variant="standard"
-        margin="dense"
-        value={recording.TimeShift}
-        placeholder={"0"}
-        onChange={(event) => setDataToRender((dataToRender) => {
-          dataToRender[index].TimeShift = event.target.value;
-          return [...dataToRender];
-        })}
-        label={"Time Adjustment (msec)"} type={"number"}
-        autoComplete={"off"}
-        style={{marginLeft: 15, paddingBottom: 15}}
-      />
-      <MDButton variant={"gradient"} color={"info"} style={{marginLeft: 15}} onClick={() => {
-        handleUpdateConfig(dataToRender);
-      }}>
-        {"Update"}
-      </MDButton>
       <MDButton variant={"gradient"} color={"error"} style={{marginLeft: 15}} onClick={() => {
         setDataToRender([...dataToRender.filter((data) => data.RecordingId != recording.RecordingId)]);
         handleRemoveRecording([...dataToRender.filter((data) => data.RecordingId != recording.RecordingId)])
@@ -114,6 +96,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
     } else {
       setData(analysisData);
       setAvailableRecordings(analysisData.Recordings.sort((a,b) => {
+        return b.Time - a.Time;
         if (a.RecordingLabel == b.RecordingLabel) {
           return b.Time - a.Time;
         } else {
@@ -124,7 +107,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
 
         return {
           key: recording.RecordingId,
-          title: "[" + descriptor.Type + "] - " + (descriptor.Label || (recording.RecordingLabel + " " + recording.RecordingId)),
+          title: "[" + descriptor.Type + "] - " + "[" + new Date(recording.Time*1000).toLocaleString() + "] - " + (descriptor.Label || (recording.RecordingLabel + " " + recording.RecordingId)),
           value: recording.RecordingId
         }
       }));
@@ -135,6 +118,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
     let newData = false;
     for (let i in dataToRender) {
       if (!dataToRender[i].data) {
+        console.log("New Download")
         try {
           const response = await SessionController.query("/api/queryRecordingsForAnalysis", {
             id: patientID, 
@@ -147,6 +131,8 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
           SessionController.displayError(error, setAlert);
           return error;
         }
+      } else {
+
       }
     }
     if (newData) setDataToRender([...dataToRender]);
@@ -165,7 +151,33 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
 
   useEffect(() => {
     setDataToRender([]);
-  }, [analysisData]);
+  }, [analysisId]);
+  
+  const handleAlignment = (alignment, movingObj) => {
+    setAlert(<LoadingProgress/>);
+    let calculator = {fixed: null, moving: null}
+    for (let i in dataToRender) {
+      if (dataToRender[i].RecordingId == alignment.anchor) {
+        calculator.fixed = dataToRender[i];
+      }
+      if (dataToRender[i].RecordingId == movingObj.meta) {
+        calculator.moving = dataToRender[i];
+      }
+    }
+
+    analysisData.Configuration.Descriptor[calculator.moving.RecordingId].TimeShift += (alignment.alignment*1000) - (movingObj.time);
+    SessionController.query("/api/queryCustomizedAnalysis", {
+      id: patientID, 
+      analysisId: analysisId,
+      updateRecording: calculator.moving.RecordingId, 
+      configuration: analysisData.Configuration.Descriptor[calculator.moving.RecordingId], 
+    }).then((response) => {
+      setAlert(null);
+      updateAnalysisData(analysisData);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }
 
   const handleAddDataToDisplay = () => {
     if (analysisData.Analysis.ProcessingQueued) {
@@ -204,6 +216,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
         <Grid container spacing={3}>
           <Grid item xs={12}>
             <TimeShiftController data={dataToRender} handleUpdateConfig={(dataToRender) => {
+              setAlert(<LoadingProgress/>);
               let changed = false;
               for (let i in dataToRender) {
                 if (parseInt(dataToRender[i].TimeShift) != analysisData.Configuration.Descriptor[dataToRender[i].RecordingId].TimeShift) {
@@ -222,9 +235,17 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
                 }
               }
               if (changed) updateAnalysisData(analysisData);
+              setAlert(null);
 
             }} handleRemoveRecording={(dataToRender) => {
               setDataToRender([...dataToRender]);
+              const currentData = dataToRender.map((a) => a.RecordingId);
+              for (let i in analysisData.Recordings) {
+                if (analysisData.Recordings[i].data && !currentData.includes(analysisData.Recordings[i].RecordingId)) {
+                  delete analysisData.Recordings[i].data;
+                }
+              }
+              updateAnalysisData(analysisData);
             }} />
           </Grid>
           <Grid item xs={12}>
@@ -265,7 +286,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
             </MDButton>
           </Grid>
           <Grid item xs={12}>
-            <PreciseTimeAlignmentView dataToRender={dataToRender} configuration={analysisData} height={600} figureTitle={"PreciseTimeAlignmentView"} />
+            <PreciseTimeAlignmentView dataToRender={dataToRender} handleAlignment={handleAlignment} configuration={analysisData} height={600} figureTitle={"PreciseTimeAlignmentView"} />
           </Grid>
         </Grid>
       </MDBox>

@@ -265,7 +265,7 @@ export default function PatientOverview() {
                         </MDTypography>
                       </MDBox>
                     </Grid>
-                    <Grid item xs={12} xl={user.Clinician ? 12 : 6}>
+                    <Grid item xs={12} xl={6}>
                       <Divider variant="middle" />
                       <MDButton variant="outlined" color="warning" fullWidth 
                         onClick={() => setEditPatientInfo({...patientInfo, show: true})}
@@ -273,16 +273,14 @@ export default function PatientOverview() {
                         {dictionary.PatientOverview.EditPatientInfo[language]}
                       </MDButton>
                     </Grid>
-                    {!user.Clinician ? (
-                      <Grid item xs={12} xl={6}>
-                        <Divider variant="middle" />
-                        <MDButton variant="outlined" color="info" fullWidth
-                          onClick={() => setUploadNewJson({show: true})}
-                        >
-                          {dictionary.PatientOverview.UploadNewSession[language]}
-                        </MDButton>
-                      </Grid>
-                    ) : null}
+                    <Grid item xs={12} xl={6}>
+                      <Divider variant="middle" />
+                      <MDButton variant="outlined" color="info" fullWidth
+                        onClick={() => setUploadNewJson({show: true})}
+                      >
+                        {dictionary.PatientOverview.UploadNewSession[language]}
+                      </MDButton>
+                    </Grid>
                   </Grid>
                 </MDBox>
               </Card>

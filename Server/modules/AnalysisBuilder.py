@@ -467,7 +467,7 @@ def processMDATRecordings(filename):
             Data["Data"][:len(Trigno["EMG"][i]),Counter] = Trigno["EMG"][i].flatten()
             Counter += 1
     Data["SamplingRate"] = np.around(1/np.median(np.diff(Trigno["EMGTime"])),3)
-    Data["StartTime"] = Trigno['Triggers']["Time"][0] # Javascript Time is in Milliseconds
+    Data["StartTime"] = Trigno['Triggers']["Time"][0]/1000 # Javascript Time is in Milliseconds
     Data["Missing"] = np.zeros(Data["Data"].shape)
     Data["Duration"] = Data["Data"].shape[0]/Data["SamplingRate"]
     TrignoSensorList.append(Data)
@@ -488,7 +488,7 @@ def processMDATRecordings(filename):
                     Data["Data"][:Trigno[sensorKey][i].shape[0],Counter] = Trigno[sensorKey][i][:,j].flatten()
                     Counter += 1
         Data["SamplingRate"] = np.around(1/np.median(np.diff(Trigno["IMUTime"])),3)
-        Data["StartTime"] = Trigno['Triggers']["Time"][0] # Javascript Time is in Milliseconds
+        Data["StartTime"] = Trigno['Triggers']["Time"][0]/1000 # Javascript Time is in Milliseconds
         Data["Missing"] = np.zeros(Data["Data"].shape)
         Data["Duration"] = Data["Data"].shape[0]/Data["SamplingRate"]
         TrignoSensorList.append(Data)

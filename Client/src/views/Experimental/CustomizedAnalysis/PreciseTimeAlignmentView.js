@@ -14,8 +14,11 @@
 import React, { useCallback } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
+import { Menu, MenuItem } from "@mui/material";
+
 import MDBox from "components/MDBox";
 
+import * as math from "mathjs";
 import colormap from "colormap";
 
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
@@ -23,13 +26,25 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function PreciseTimeAlignmentView({dataToRender, configuration, onStreamClicked, figureTitle}) {
+function PreciseTimeAlignmentView({dataToRender, configuration, handleAlignment, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
   const [show, setShow] = React.useState(false);
-  const fig = new PlotlyRenderManager(figureTitle, language);
+  let fig = new PlotlyRenderManager(figureTitle, language);
   
+  const [contextMenu, setContextMenu] = React.useState(null);
+  const [eventInfo, setEventInfo] = React.useState({
+    name: "",
+    time: 0,
+    duration: 0,
+    show: false
+  });
+  const [dataAlignment, setDataAlignment] = React.useState({
+    alignment: 0,
+    anchor: ""
+  });
+
   const handleGraphing = (data, configuration) => {
     fig.clearData();
     for (let i in data) {
@@ -58,11 +73,18 @@ function PreciseTimeAlignmentView({dataToRender, configuration, onStreamClicked,
       if (data[i].data.Data[0].length > 300000) {
         downScaleFactor = Math.floor(data[i].data.Data[0].length / 300000);
       }
+      if (dataAlignment.alignment > 0) {
+        fig.plot([new Date(dataAlignment.alignment*1000), new Date(dataAlignment.alignment*1000)], [math.min(data[i].data.Data[0]), math.max(data[i].data.Data[0])], {
+          linewidth: 2,
+          color: "#FF0000"
+        }, ax[i])
+      }
       for (let j in data[i].data.ChannelNames) {
         fig.plot(timeArray.filter((value, index) => index % downScaleFactor == 0), data[i].data.Data[j].filter((value, index) => index % downScaleFactor == 0), {
           linewidth: 0.5,
           hovertemplate: `  %{y:.2f} ${" (unit) "}<extra></extra>`,
-          //name: configuration[data[i].RecordingId]["Channels"][data[i].data.ChannelNames[j]].name,
+          name: configuration[data[i].RecordingId]["Channels"][data[i].data.ChannelNames[j]].name,
+          meta: data[i].RecordingId,
           showlegend: true,
         }, ax[i]);
       }
@@ -77,14 +99,14 @@ function PreciseTimeAlignmentView({dataToRender, configuration, onStreamClicked,
     }
   }
 
-  // Refresh Left Figure if Data Changed
   React.useEffect(() => {
     if (dataToRender.length > 0) handleGraphing(dataToRender, configuration.Configuration.Descriptor);
-    else { 
+    else {
+      fig.fresh = true;
       fig.purge();
       setShow(false);
     }
-  }, [dataToRender, configuration, language]);
+  }, [dataToRender, configuration, dataAlignment, language]);
 
   const onResize = useCallback(() => {
     fig.refresh();
@@ -97,8 +119,50 @@ function PreciseTimeAlignmentView({dataToRender, configuration, onStreamClicked,
     skipOnMount: false
   });
   
+  React.useEffect(() => {
+    if (ref.current.on) {
+      ref.current.on("plotly_click", (data) => {
+        setEventInfo((eventInfo) => {
+          eventInfo.time = new Date(data.points[0].x).getTime();
+          eventInfo.meta = data.points[0].data.meta
+          return {...eventInfo};
+        });
+      });
+    }
+  }, [ref.current, dataToRender, dataAlignment, configuration]);
+
   return (
-    <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 300*dataToRender.length, width: "100%", display: show ? "" : "none"}}/>
+    <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 300*dataToRender.length, width: "100%", display: show ? "" : "none"}}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setContextMenu(
+          contextMenu === null ? {
+            mouseX: event.clientX + 2,
+            mouseY: event.clientY - 6,
+          } : null
+        );
+      }}
+    >
+      <Menu open={contextMenu !== null}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenu !== null
+            ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+            : undefined
+        }
+        disableScrollLock={true}
+      >
+        <MenuItem onClick={() => {
+          setContextMenu(null);
+          setDataAlignment({alignment: eventInfo.time/1000, anchor: eventInfo.meta});
+        }}>{"Set Alignment Anchor"}</MenuItem>
+        <MenuItem onClick={() => {
+          setContextMenu(null);
+          handleAlignment({...dataAlignment}, eventInfo);
+        }}>{"Set Alignment"}</MenuItem>
+      </Menu>
+    </MDBox>
   );
 }
 

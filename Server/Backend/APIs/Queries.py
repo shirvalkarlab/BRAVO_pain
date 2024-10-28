@@ -781,6 +781,57 @@ class QuerySessionOverview(RestViews.APIView):
         data["AvailableSessions"] = Sessions.queryAvailableSessionFiles(request.user, PatientID, Authority)
         return Response(status=200, data=data)
 
+class QueryExternalRecordings(RestViews.APIView):
+    """ Query all External Recordings related to a patient.
+    
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not "id" in request.data or not "query" in request.data:
+            return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
+
+        Authority = {}
+        Authority["Level"] = Database.verifyAccess(request.user, request.data["id"])
+        if Authority["Level"] == 0:
+            return Response(status=404)
+
+        elif Authority["Level"] == 1:
+            Authority["Permission"] = Database.verifyPermission(request.user, request.data["id"], Authority, "ChronicLFPs")
+            PatientID = request.data["id"]
+
+        elif Authority["Level"] == 2:
+            PatientInfo = Database.extractAccess(request.user, request.data["id"])
+            Authority["Permission"] = Database.verifyPermission(request.user, PatientInfo.authorized_patient_id, Authority, "ChronicLFPs")
+            PatientID = PatientInfo.authorized_patient_id
+
+        if request.data["query"] == "QueryAll":
+            AvailableRecordings = []
+            recordings = models.ExternalRecording.objects.filter(patient_deidentified_id=PatientID).all()
+            for recording in recordings:
+                if not recording.recording_id in Authority["Permission"] and Authority["Level"] == 2:
+                    continue
+                
+                AvailableRecordings.append({
+                    "RecordingId": recording.recording_id,
+                    "RecordingType": recording.recording_type,
+                    "Time": recording.recording_date.timestamp(),
+                    "Duration": recording.recording_duration,
+                    "RecordingLabel": recording.recording_type
+                })
+
+            return Response(status=200, data=AvailableRecordings)
+        
+        elif request.data["query"] == "Delete":
+            AvailableRecordings = []
+            recordings = models.ExternalRecording.objects.filter(patient_deidentified_id=PatientID, recording_id=request.data["recordingId"]).first()
+            if recordings and not Authority["Level"] == 2:
+                recordings.purge()
+                return Response(status=200)
+        
+        return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
+
 class QueryPredictionModel(RestViews.APIView):
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]

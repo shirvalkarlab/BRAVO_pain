@@ -49,10 +49,18 @@ function TimeFrequencyFigure({dataToRender, height, figureTitle}) {
       for (var i in ax) {
         fig.setYlim([0,100],ax[i]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[i]);
-
+        
         const [side, target] = channelInfo[i].Hemisphere.split(" ");
-        const titleText = `${dictionaryLookup(dictionary.FigureStandardText, side, language)} ${dictionaryLookup(dictionary.BrainRegions, target, language)} E${channelInfo[i].Contacts[0]}-E${channelInfo[i].Contacts[1]}`;
-        fig.setSubtitle(`${titleText}`,ax[i]);
+        let titleText = (channelInfo[i].Hemisphere == channelInfo[i].CustomName) ? dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.FigureStandardText, target, language) : channelInfo[i].CustomName;
+        titleText += (typeof channelInfo[i].Contacts) == "string" ? " " + channelInfo[i].Contacts : ` E${channelInfo[i].Contacts[0]}-E${channelInfo[i].Contacts[1]}`;
+        
+        if (channelInfo[i].Hemisphere == channelInfo[i].CustomName) {
+          fig.setSubtitle(`${titleText}`,ax[i]);
+          fig.setSubtitle(`${titleText} ${dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "TimeFrequencyAnalysis", language)}`,ax[i]);
+        } else {
+          fig.setSubtitle(`${titleText}`,ax[i]);
+          fig.setSubtitle(`${titleText} ${dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "TimeFrequencyAnalysis", language)}`,ax[i]);
+        }
       }
       fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Local", language)})`, {fontSize: 15}, ax[ax.length-1]);
 

@@ -58,6 +58,8 @@ urlpatterns = [
 	path('queryPatientEvents', Queries.QueryPatientEvents.as_view()),
   path('queryAdaptiveStimulation', Queries.QueryAdaptiveStimulation.as_view()),
 	path('queryCircadianPower', Queries.QueryCircadianPower.as_view()),
+  
+	path('queryExternalRecordings', Queries.QueryExternalRecordings.as_view()),
     
 	path('queryCustomAnnotations', Queries.QueryCustomAnnotations.as_view()),
 	path('queryCustomizedAnalysis', Queries.QueryCustomizedAnalysis.as_view()),

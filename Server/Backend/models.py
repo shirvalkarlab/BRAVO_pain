@@ -18,6 +18,7 @@ SQL Table Definitions
 @email: jackson.cagle@neurology.ufl.edu
 """
 
+import os
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractBaseUser, User
 from django.utils import timezone
@@ -25,6 +26,8 @@ import uuid
 import json
 import datetime
 from cryptography.fernet import Fernet
+
+DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 def PerceptRecordingDefaultAuthorization():
     nullDateTime = 0
@@ -359,6 +362,13 @@ class ExternalRecording(models.Model):
 
     def __str__(self):
         return str(self.recording_id)
+    
+    def purge(self):
+        try:
+            os.remove(DATABASE_PATH + "recordings" + os.path.sep + self.recording_datapointer)
+        except:
+            pass
+        self.delete()
 
 class CombinedRecordingAnalysis(models.Model):
     deidentified_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)

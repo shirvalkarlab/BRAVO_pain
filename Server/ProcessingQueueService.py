@@ -386,6 +386,10 @@ def processExternalRecordingUpload():
 
             print(f"End Processing {queue.descriptor['filename']}")
             if ErrorMessage == "":
+                try:
+                    os.remove(DATABASE_PATH + "cache" + os.path.sep + queue.descriptor["filename"])
+                except:
+                    pass
                 queue.state = "Complete"
                 queue.save()
             else:

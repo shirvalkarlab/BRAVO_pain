@@ -127,6 +127,10 @@ function AnalysisBuilder({analysisId, analysisData, updateAnalysisData}) {
       />);
       return;
     }
+
+    if (data.Recordings.includes(recordingInfo.value.value)) {
+      return;
+    }
     
     SessionController.query("/api/queryCustomizedAnalysis", {
       id: patientID, 

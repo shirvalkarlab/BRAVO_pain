@@ -940,6 +940,10 @@ export const dictionary = {
       en: "Patient Events",
       zh: "标记事件记录"
     },
+    "external-recordings": {
+      en: "External Recordings",
+      zh: "External Recordings"
+    },
     "adaptive": {
       en: "Adaptive Stimulation",
       zh: "闭环功能"
@@ -1029,6 +1033,10 @@ export const dictionary = {
     PatientEvents: {
       en: "Patient Events",
       zh: "标记事件记录"
+    },
+    ExternalRecordings: {
+      en: "External Recordings",
+      zh: "External Recordings"
     },
     AdaptiveStimulation: {
       en: "Adaptive Stimulation",
