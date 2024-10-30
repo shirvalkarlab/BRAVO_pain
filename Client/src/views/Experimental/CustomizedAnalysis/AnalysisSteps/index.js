@@ -9,6 +9,7 @@ import NormalizeEditor from "./NormalizeEditor"
 import ViewEditor from "./ViewEditor"
 import WienerFilterrEditor from "./WienerFilterrEditor"
 import CrossCorrrelationAnalysisEditor from "./CrossCorrrelationAnalysisEditor"
+import CalculateSpectralPeaksEditor from "./CalculateSpectralPeaksEditor"
 
 
 const availableProcessings = [{
@@ -76,6 +77,12 @@ const availableProcessings = [{
     label: "Calculate Spectral Features from PSD Data"
   },
   bands: []
+}, {
+  type: {
+    value: "calculateSpectralPeaks",
+    label: "Calculate Spectral Peaks by Gaussian Fitting"
+  },
+  bands: []
 }];
 
 const AnalysisSteps = ({type, ...rest}) => {
@@ -111,6 +118,10 @@ const AnalysisSteps = ({type, ...rest}) => {
       />
     } else if (type === "calculateSpectralFeatures") {
       return <CalculateSpectralFeaturesEditor currentState={rest.currentState} availableRecordings={rest.availableRecordings} newProcess={rest.newProcess} defaultConfigs={defaultConfigs[0]}
+        updateConfiguration={rest.updateConfiguration}
+      />
+    } else if (type === "calculateSpectralPeaks") {
+      return <CalculateSpectralPeaksEditor currentState={rest.currentState} availableRecordings={rest.availableRecordings} newProcess={rest.newProcess} defaultConfigs={defaultConfigs[0]}
         updateConfiguration={rest.updateConfiguration}
       />
     } else if (type === "extractNarrowBandFeature") {

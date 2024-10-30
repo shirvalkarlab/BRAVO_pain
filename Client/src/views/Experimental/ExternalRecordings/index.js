@@ -79,22 +79,6 @@ function ExternalRecodings() {
     
   }, [data]);
 
-  const deleteRecords = (id) => {
-    setAlert(<LoadingProgress/>);
-    SessionController.query("/api/queryExternalRecordings", {
-      id: patientID,
-      query: "Delete",
-      recordingId: id,
-    }).then((response) => {
-      setRecordingList((recordingList) => {
-        return recordingList.filter((a) => a.RecordingId != id);
-      });
-      setAlert(null);
-    }).catch((error) => {
-      SessionController.displayError(error, setAlert);
-    });
-  }
-
   return (
     <>
       {alert}
@@ -113,7 +97,7 @@ function ExternalRecodings() {
                       </MDBox>
                     </Grid>
                     <Grid item xs={12}>
-                      <ExternalRecordingTable data={recordingList} deleteRecordingData={deleteRecords}/>
+                      <ExternalRecordingTable data={recordingList}/>
                     </Grid>
                   </Grid>
                 </Card>

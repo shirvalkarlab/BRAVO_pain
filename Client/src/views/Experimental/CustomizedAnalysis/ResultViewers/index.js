@@ -23,6 +23,7 @@ import { usePlatformContext, setContextState } from "context.js";
 import TimeDomainFigure from "./TimeDomainFigure";
 import EventPSDs from "./EventPSDs";
 import SpectralFeatures from "./SpectralFeatures";
+import SpectralPeaks from "./SpectralPeaks";
 import NarrowBandFeatures from "./NarrowBandFeatures";
 import SpectrogramView from "./SpectrogramView";
 import CrossCorrelationMatrix from "./CrossCorrelationMatrix";
@@ -34,7 +35,6 @@ function ResultViewer({data, result, config}) {
 
   if (Object.keys(data).length == 0) return null;
   const type = data.Data[0].ResultType;
-  console.log(type)
 
   if (type == "TimeDomain") {
     return <Grid container spacing={2}>
@@ -58,6 +58,12 @@ function ResultViewer({data, result, config}) {
     return <Grid container spacing={2}>
       <Grid item xs={12}>
         <SpectralFeatures dataToRender={data.Data[0].Features} height={600} figureTitle={result.title} />
+      </Grid>
+    </Grid>
+  } else if (type == "SpectralPeaks") {
+    return <Grid container spacing={2}>
+      <Grid item xs={12}>
+        <SpectralPeaks dataToRender={data.Data[0].Features} height={600} figureTitle={result.title} />
       </Grid>
     </Grid>
   } else if (type == "NarrowBandFeatures") {

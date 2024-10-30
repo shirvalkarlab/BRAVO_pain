@@ -36,6 +36,7 @@ import {
   Checkbox,
 } from "@mui/material"
 
+import LoadingProgress from "components/LoadingProgress";
 import { SessionController } from "database/session-control.js";
 import { formatSegmentString, matchArray } from "database/helper-function";
 import { usePlatformContext, setContextState } from "context.js";
@@ -56,6 +57,7 @@ function ExternalRecordingTable({data, deleteRecordingData, children}) {
     recordingId: "",
   });
 
+  const [alert, setAlert] = React.useState(null);
   const [toggleMerge, setToggleMerge] = React.useState({show: false, merge: []});
   const [selectedDate, setSelectedDate] = React.useState([]);
   const [availableDates, setAvailableDates] = React.useState([]);
@@ -120,8 +122,8 @@ function ExternalRecordingTable({data, deleteRecordingData, children}) {
     }).then((response) => {
       setDisplayData((displayData) => {
         for (let i in displayData) {
-          if (displayData[i].AnalysisID == editRecordingName.recordingId) {
-            displayData[i].AnalysisLabel = editRecordingName.name;
+          if (displayData[i].RecordingId == editRecordingName.recordingId) {
+            displayData[i].RecordingLabel = editRecordingName.name;
             return [...displayData];
           }
         }
@@ -133,9 +135,26 @@ function ExternalRecordingTable({data, deleteRecordingData, children}) {
     });
   }
 
+  const deleteRecords = (id) => {
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/queryExternalRecordings", {
+      id: patientID,
+      query: "Delete",
+      recordingId: id,
+    }).then((response) => {
+      setDisplayData((displayData) => {
+        return [...displayData.filter((a) => a.RecordingId != id)]
+      });
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }
+
   return (
     <>
       <MDBox p={2}>
+        {alert}
         <Autocomplete
           value={selectedDate}
           options={availableDates}
@@ -212,7 +231,7 @@ function ExternalRecordingTable({data, deleteRecordingData, children}) {
                     {recording.RecordingType}
                   </MDTypography>
                   <MDButton color={"info"} 
-                    onClick={() => setEditRecordingName({show: true, recordingId: recording.AnalysisID, name: recording.AnalysisLabel})}
+                    onClick={() => setEditRecordingName({show: true, recordingId: recording.RecordingId, name: recording.RecordingLabel})}
                   >
                     Edit Label
                   </MDButton>
@@ -223,7 +242,7 @@ function ExternalRecordingTable({data, deleteRecordingData, children}) {
                   </MDTypography>
                 </TableCell>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDButton variant={"contained"} color="info" onClick={() => deleteRecordingData(recording.RecordingId)} style={{padding: 0}}>
+                  <MDButton variant={"contained"} color="info" onClick={() => deleteRecords(recording.RecordingId)} style={{padding: 0}}>
                     {"Delete"}
                   </MDButton>
                 </TableCell>

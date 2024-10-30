@@ -1415,6 +1415,107 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
         "Type": "SpectralFeatures"
     }
 
+def MultiGaussianModel(x, *args):
+    ret = 0
+    numGaus = int(len(args)/3)
+    for i in range(numGaus):
+        GausCurve = args[i*3 + 0]*(1/(args[i*3 + 2]*(np.sqrt(2*np.pi))))*(np.exp((-1.0/2.0)*(((x-args[i*3 + 1])/args[i*3 + 2])**2)))
+        ret += GausCurve
+    return ret
+
+def handleCalculateSpectralPeaks(step, RecordingIds, Results, Configuration, analysis):
+    print("Start Calculating Spectral Peaks")
+    targetSignal = step["config"]["targetRecording"]
+    if not "bands" in step["config"].keys():
+        bands = [
+            ["Beta Band", 12, 30]
+        ]
+    elif len(step["config"]["bands"]) == 0:
+        bands = [
+            ["Beta Band", 12, 30]
+        ]
+    else:
+        bands = step["config"]["bands"]
+
+    ProcessedData = None
+    for result in Results:
+        if result["ResultLabel"] == targetSignal:
+            recording = models.ExternalRecording.objects.filter(recording_id=result["ProcessedData"]).first()
+            RawData = Database.loadSourceDataPointer(recording.recording_datapointer)
+
+            SpectralFeatures = []
+            if result["Type"] == "RawEventPSDs":
+                for channelName in RawData.keys():
+                    if channelName == "ResultType":
+                        continue
+                    for event in RawData[channelName].keys():
+                        Features = {"Channel": event + " | " + channelName}
+                        Features["Time"] = np.arange(len(RawData[channelName][event]["PSDs"]))
+                        for bandIndex in range(len(bands)):
+                            FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [float(bands[bandIndex][1]),float(bands[bandIndex][2])], "inclusive")
+                            MeanPeakFreq = np.mean([float(bands[bandIndex][1]),float(bands[bandIndex][2])])
+                            InitialGaussianGuess = [1, MeanPeakFreq, 1]
+
+                            Features[bands[bandIndex][0] + "_Peak"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                            Features[bands[bandIndex][0] + "_PeakFreq"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                            Features[bands[bandIndex][0] + "_Width"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                            
+                            for t in range(len(Features["Time"])):
+                                Power = RawData[channelName][event]["PSDs"][t][FrequencySelection]
+                                try:
+                                    popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, RawData[channelName][event]["Frequency"][FrequencySelection], Power, p0=InitialGaussianGuess)
+                                except:
+                                    continue 
+                                Features[bands[bandIndex][0] + "_Width"][t] = popt_gauss[2]
+                                Features[bands[bandIndex][0] + "_Peak"][t] = popt_gauss[0]
+                                Features[bands[bandIndex][0] + "_PeakFreq"][t] = popt_gauss[1]
+
+                        SpectralFeatures.append(Features)
+
+            else:
+                for i in range(len(RawData)):
+                    for j in range(len(RawData[i]["Spectrogram"])):
+                        Features = {"Channel": RawData[i]["ChannelNames"][j]}
+                        Features["Time"] = RawData[i]["Spectrogram"][j]["Time"]
+
+                        for bandIndex in range(len(bands)):
+                            FrequencySelection = PythonUtility.rangeSelection(RawData[i]["Spectrogram"][j]["Frequency"], [float(bands[bandIndex][1]),float(bands[bandIndex][2])], "inclusive")
+                            MeanPeakFreq = np.mean([float(bands[bandIndex][1]),float(bands[bandIndex][2])])
+                            InitialGaussianGuess = [1, MeanPeakFreq, 1]
+
+                            Features[bands[bandIndex][0] + "_Width"] = np.zeros(RawData[i]["Spectrogram"][j]["Time"].shape)
+                            Features[bands[bandIndex][0] + "_Peak"] = np.zeros(RawData[i]["Spectrogram"][j]["Time"].shape)
+                            Features[bands[bandIndex][0] + "_PeakFreq"] = np.zeros(RawData[i]["Spectrogram"][j]["Time"].shape)
+                            
+                            for t in range(RawData[i]["Spectrogram"][j]["Power"].shape[1]):
+                                Power = RawData[i]["Spectrogram"][j]["Power"][FrequencySelection, t]
+                                try:
+                                    popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, 
+                                                                                RawData[i]["Spectrogram"][j]["Frequency"][FrequencySelection], 
+                                                                                Power, 
+                                                                                p0=InitialGaussianGuess,
+                                                                                bounds=([0, float(bands[bandIndex][1]), 0], [1000, float(bands[bandIndex][2]), 100]))
+                                except Exception as e:
+                                    continue 
+
+                                Features[bands[bandIndex][0] + "_Width"][t] = popt_gauss[2]
+                                Features[bands[bandIndex][0] + "_Peak"][t] = popt_gauss[0]
+                                Features[bands[bandIndex][0] + "_PeakFreq"][t] = popt_gauss[1]
+
+                        SpectralFeatures.append(Features)
+            ProcessedData = {"ResultType": "SpectralPeaks", "Features": SpectralFeatures}
+
+    recording = createResultDataFile(ProcessedData, str(analysis.device_deidentified_id), "AnalysisOutput", 0)
+    analysis.recording_type.append(recording.recording_type)
+    analysis.recording_list.append(str(recording.recording_id))
+
+    return {
+        "ResultLabel": step["config"]["output"],
+        "Id": step["id"],
+        "ProcessedData": str(recording.recording_id),
+        "Type": "SpectralPeaks"
+    }
+
 def handleExtractNarrowBandFeature(step, RecordingIds, Results, Configuration, analysis):
     targetSignal = step["config"]["targetRecording"]
     labelSignal = step["config"]["labelRecording"]
@@ -1609,6 +1710,9 @@ def processAnalysis(user, analysisId):
                 Results.append(Result)
             elif step["type"]["value"] == "calculateSpectralFeatures":
                 Result = handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, analysis)
+                Results.append(Result)
+            elif step["type"]["value"] == "calculateSpectralPeaks":
+                Result = handleCalculateSpectralPeaks(step, RecordingIds, Results, Configuration, analysis)
                 Results.append(Result)
             elif step["type"]["value"] == "extractNarrowBandFeature":
                 Result = handleExtractNarrowBandFeature(step, RecordingIds, Results, Configuration, analysis)
