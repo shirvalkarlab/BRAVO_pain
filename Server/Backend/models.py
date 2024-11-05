@@ -253,6 +253,7 @@ class PerceptSession(models.Model):
     session_file_path = models.CharField(default="", max_length=255)
     session_source_filename = models.CharField(default="", max_length=255)
     session_date = models.DateTimeField(default=timezone.now)
+    session_timezone = models.CharField(default="", max_length=255)
 
     session_info = models.JSONField(default=dict, null=False)
 

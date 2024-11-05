@@ -22,11 +22,13 @@ import {
   TableHead,
   TableRow,
   TableCell,
-  TableBody
+  TableBody,
+  Autocomplete
 } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import FormField from "components/MDInput/FormField";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 
@@ -69,6 +71,23 @@ export default function SessionOverview() {
       deleteSession: id,
     }).then((response) => {
       setAvailableSessions(availableSessions.filter((session) => session.SessionID != id))
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
+  
+  const updateSessionTimezone = (id, timezone) => {
+    SessionController.query("/api/updateSessionFiles", {
+      patientId: patientID,
+      updateSession: id,
+      timezone: timezone
+    }).then((response) => {
+      setAvailableSessions(availableSessions.map((session) => {
+        if (session.SessionID == id) {
+          session.Timezone = timezone === "" ? "" : ("UTC" + timezone)
+        }
+        return session;
+      }))
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
@@ -243,8 +262,70 @@ export default function SessionOverview() {
                                   {session.DeviceName}
                                 </MDTypography>
                                 <MDTypography variant="span" fontSize={12} style={{marginBottom: 0}}>
-                                  {new Date(session.SessionTimestamp*1000).toLocaleString(language)}
+                                  {new Date(session.SessionTimestamp*1000).toLocaleString(language, SessionController.getTimezoneName(session.Timezone))}
                                 </MDTypography>
+                                
+                                <Autocomplete
+                                  value={session.Timezone}
+                                  options={[
+                                    "Not Set",
+                                    "UTC-12:00",
+                                    "UTC-11:00",
+                                    "UTC-10:00 (U.S. HST)",
+                                    "UTC-09:30",
+                                    "UTC-09:00 (U.S. HDT)",
+                                    "UTC-08:00 (U.S. PST)",
+                                    "UTC-07:00 (U.S. MST/PDT)",
+                                    "UTC-06:00 (U.S. CST/MDT)",
+                                    "UTC-05:00 (U.S. EST/CDT)",
+                                    "UTC-04:00 (U.S. EDT)",
+                                    "UTC-03:30",
+                                    "UTC-03:00",
+                                    "UTC-02:00",
+                                    "UTC-01:00",
+                                    "UTC+00:00 (U.K.)",
+                                    "UTC+01:00",
+                                    "UTC+02:00",
+                                    "UTC+03:00",
+                                    "UTC+03:30",
+                                    "UTC+04:00",
+                                    "UTC+04:30",
+                                    "UTC+05:00",
+                                    "UTC+05:30 (India)",
+                                    "UTC+05:45",
+                                    "UTC+06:00",
+                                    "UTC+06:30",
+                                    "UTC+07:00",
+                                    "UTC+08:00 (China)",
+                                    "UTC+09:00 (Japan, Korea)",
+                                    "UTC+09:30",
+                                    "UTC+10:00",
+                                    "UTC+10:30",
+                                    "UTC+11:00 (Australian Capital Territory)",
+                                    "UTC+12:00",
+                                    "UTC+13:00",
+                                    "UTC+14:00",
+                                  ]}
+                                  
+                                  onChange={(event, value) => {
+                                    if (value === "Not Set") {
+                                      updateSessionTimezone(session.SessionID, "")
+                                    } else {
+                                      updateSessionTimezone(session.SessionID, value.split(" ")[0].replace("UTC",""))
+                                    }
+                                  }}
+                                  isOptionEqualToValue={(option, value) => {
+                                    if (value === "") return (option === "Not Set");
+                                    return option.startsWith(value);
+                                  }}
+                                  renderInput={(params) => (
+                                    <FormField
+                                      {...params}
+                                      label={"Configure Session Timezone"}
+                                      InputLabelProps={{ shrink: true }}
+                                    />
+                                  )}
+                                />
                               </TableCell>
                               <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                                 <MDTypography variant="p" fontSize={10} style={{marginBottom: 0}}>

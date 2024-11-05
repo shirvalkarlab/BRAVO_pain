@@ -148,6 +148,8 @@ def queryMontageDataOverview(user, patientUniqueID, authority):
         if len(allSurveys) > 0:
             leads = device.device_lead_configurations
 
+        AllSessions = {}
+
         for recording in allSurveys:
             if not recording.recording_id in authority["Permission"] and authority["Level"] == 2:
                 continue
@@ -155,6 +157,13 @@ def queryMontageDataOverview(user, patientUniqueID, authority):
             # Skip data with less than 1 second data
             if recording.recording_duration < 1:
                 continue
+            
+            if not recording.source_file in AllSessions.keys():
+                sessionFile = models.PerceptSession.objects.filter(deidentified_id=recording.source_file).first()
+                if sessionFile: 
+                    AllSessions[recording.source_file] = "UTC" + sessionFile.session_timezone
+                else:
+                    AllSessions[recording.source_file] = ""
 
             data = dict()
             if device.device_name == "":
@@ -165,6 +174,7 @@ def queryMontageDataOverview(user, patientUniqueID, authority):
             data["Duration"] = recording.recording_duration
             data["DeviceID"] = device.deidentified_id
             data["DeviceLocation"] = device.device_location
+            data["Timezone"] = AllSessions[recording.source_file]
             data["Channels"] = []
 
             Channels = recording.recording_info["Channel"]
@@ -205,6 +215,7 @@ def queryMontageData(user, devices, timestamps, authority):
                     continue
 
                 stream = Database.loadSourceDataPointer(recording.recording_datapointer)
+                sessionFile = models.PerceptSession.objects.filter(deidentified_id=recording.source_file).first()
 
                 # Skip this because this recording doesn't have enough data
                 if stream["Duration"] < 1:
@@ -216,6 +227,7 @@ def queryMontageData(user, devices, timestamps, authority):
 
                 data = dict()
                 data["Timestamp"] = stream["StartTime"]
+                data["Timezone"] = "UTC" + sessionFile.session_timezone
                 data["Duration"] = stream["Duration"]
                 data["DeviceID"] = devices[i]
                 data["Channels"] = stream["ChannelNames"]

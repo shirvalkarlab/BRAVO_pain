@@ -439,7 +439,7 @@ def processInput(argv):
           print(device)
         
         return True
-
+      
     elif argv[1] == "Refresh":
       from BRAVO import asgi
       from Backend import models
@@ -483,6 +483,7 @@ def processInput(argv):
                   therapy.save()
         
       elif argv[2] == "Sessions":
+        DATABASE_PATH = os.environ.get('DATASERVER_PATH')
         if argv[3] == "All":
           SessionFiles = models.PerceptSession.objects.all()
         else:
@@ -491,9 +492,12 @@ def processInput(argv):
         for sessionFile in SessionFiles:
           if not sessionFile.session_file_path.startswith("sessions/"):
             sessionFile.session_file_path = "sessions/" + sessionFile.session_file_path.split(os.path.sep)[-1]
+            
           try:
             JSON = Percept.decodeEncryptedJSON(DATABASE_PATH + sessionFile.session_file_path, key)
-          except:
+            sessionFile.session_timezone = JSON["ProgrammerUtcOffset"]
+          except Exception as e:
+            print(e)
             print(sessionFile.session_file_path)
             continue
           
@@ -592,5 +596,6 @@ def processInput(argv):
             Database.deleteSourceDataPointer(recording.recording_datapointer)
             recording.recording_datapointer = filename
             recording.save()
-
       return True
+    
+    

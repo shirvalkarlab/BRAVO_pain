@@ -158,7 +158,7 @@ function IndefiniteStreamingTable({data, requestDataForRender, children}) {
                 </TableCell>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                   <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
-                    {new Date(recording.Timestamp*1000).toLocaleString(language)}
+                    {new Date(recording.Timestamp*1000).toLocaleString(language, SessionController.getTimezoneName(recording.Timezone))}
                   </MDTypography>
                   <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
                     {recording.DeviceName}

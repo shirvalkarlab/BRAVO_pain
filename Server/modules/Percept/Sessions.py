@@ -336,6 +336,7 @@ def processPerceptJSON(user, filename, device_deidentified_id="", lookupTable=No
         os.rename(DATABASE_PATH + "cache" + os.path.sep + filename, DATABASE_PATH + session.session_file_path)
         patient.last_change = datetime.now(tz=pytz.utc)
         patient.save()
+        session.session_timezone = JSON["ProgrammerUtcOffset"]
         session.save()
     else:
         os.remove(DATABASE_PATH + "cache" + os.path.sep + filename)
@@ -508,6 +509,7 @@ def queryAvailableSessionFiles(user, patient_id, authority):
             sessionInfo["SessionFilename"] = session.session_file_path.split(os.path.sep)[-1]
             sessionInfo["SessionID"] = session.deidentified_id
             sessionInfo["SessionTimestamp"] = session.session_date.timestamp()
+            sessionInfo["Timezone"] = ("UTC" + session.session_timezone) if not session.session_timezone == "" else ""
             sessionInfo["AvailableRecording"] = {
                 "BrainSenseStreaming": models.NeuralActivityRecording.objects.filter(source_file=session.deidentified_id, recording_type="BrainSenseStreamTimeDomain").count(),
                 "IndefiniteStreaming": models.NeuralActivityRecording.objects.filter(source_file=session.deidentified_id, recording_type="IndefiniteStream").count(),

@@ -19,6 +19,84 @@ import MuiAlertDialog from "components/MuiAlertDialog"
 
 //import { Manager } from "socket.io-client"
 
+const timezoneNameDict={
+  "UTC-12:00": "Etc/GMT+12",
+  "UTC-11:00": "Etc/GMT+11",
+  "UTC-10:00": "Etc/GMT+10",
+  "UTC-09:30": "Pacific/Marquesas",
+  "UTC-09:00": "Etc/GMT+9",
+  "UTC-08:00": "Etc/GMT+8",
+  "UTC-07:00": "Etc/GMT+7",
+  "UTC-06:00": "Etc/GMT+6",
+  "UTC-05:00": "Etc/GMT+5",
+  "UTC-04:00": "Etc/GMT+4",
+  "UTC-03:30": "America/St_Johns",
+  "UTC-03:00": "Etc/GMT+3",
+  "UTC-02:00": "Etc/GMT+2",
+  "UTC-01:00": "Etc/GMT+1",
+  "UTC+00:00": "Etc/GMT",
+  "UTC+01:00": "Etc/GMT-1",
+  "UTC+02:00": "Etc/GMT-2",
+  "UTC+03:00": "Etc/GMT-3",
+  "UTC+03:30": "Iran",
+  "UTC+04:00": "Etc/GMT-4",
+  "UTC+04:30": "Asia/Kabul",
+  "UTC+05:00": "Etc/GMT-5",
+  "UTC+05:30": "Asia/Colombo",
+  "UTC+05:45": "Asia/Kathmandu",
+  "UTC+06:00": "Etc/GMT-6",
+  "UTC+06:30": "Asia/Yangon",
+  "UTC+07:00": "Etc/GMT-7",
+  "UTC+08:00": "Etc/GMT-8",
+  "UTC+09:00": "Etc/GMT-9",
+  "UTC+09:30": "Australia/Darwin",
+  "UTC+10:00": "Etc/GMT-10",
+  "UTC+10:30": "Australia/LHI",
+  "UTC+11:00": "Etc/GMT-11",
+  "UTC+12:00": "Etc/GMT-12",
+  "UTC+13:00": "Etc/GMT-13",
+  "UTC+14:00": "Etc/GMT-14"
+};
+
+const timezoneOffsetDict={
+  "UTC-12:00": -12*3600000,
+  "UTC-11:00": -11*3600000,
+  "UTC-10:00": -10*3600000,
+  "UTC-09:30": -9*3600000-30*60000,
+  "UTC-09:00": -9*3600000,
+  "UTC-08:00": -8*3600000,
+  "UTC-07:00": -7*3600000,
+  "UTC-06:00": -6*3600000,
+  "UTC-05:00": -5*3600000,
+  "UTC-04:00": -4*3600000,
+  "UTC-03:30": -3*3600000-30*60000,
+  "UTC-03:00": -3*3600000,
+  "UTC-02:00": -2*3600000,
+  "UTC-01:00": -1*3600000,
+  "UTC+00:00": 0,
+  "UTC+01:00": 1*3600000,
+  "UTC+02:00": 2*3600000,
+  "UTC+03:00": 3*3600000,
+  "UTC+03:30": 3*3600000+30*60000,
+  "UTC+04:00": 4*3600000,
+  "UTC+04:30": 4*3600000+30*60000,
+  "UTC+05:00": 5*3600000,
+  "UTC+05:30": 5*3600000+30*60000,
+  "UTC+05:45": 5*3600000+45*60000,
+  "UTC+06:00": 6*3600000,
+  "UTC+06:30": 6*3600000+30*60000,
+  "UTC+07:00": 7*3600000,
+  "UTC+08:00": 8*3600000,
+  "UTC+09:00": 9*3600000,
+  "UTC+09:30": 9*3600000+30*60000,
+  "UTC+10:00": 10*3600000,
+  "UTC+10:30": 10*3600000+30*60000,
+  "UTC+11:00": 11*3600000,
+  "UTC+12:00": 12*3600000,
+  "UTC+13:00": 13*3600000,
+  "UTC+14:00": 14*3600000
+};
+
 export const SessionController = (function () {
   //let server = "https://bravo-server.jcagle.solutions";
   let server = "http://localhost:3001";
@@ -214,6 +292,15 @@ export const SessionController = (function () {
     }
   };
 
+  const getTimezoneName = (UTCTime) => {
+    return timezoneNameDict[UTCTime] ? {timeZone: timezoneNameDict[UTCTime]} : {};
+  }
+
+  const getTimezoneOffset = (startTime, UTCTime) => {
+    const localOffset = new Date(startTime).getTimezoneOffset() * -60000
+    return timezoneOffsetDict[UTCTime] ? (localOffset - timezoneOffsetDict[UTCTime]) : 0;
+  }
+
   const handShake = async () => {
     if (Object.keys(user).length === 0 || refreshToken === "") {
       return false;
@@ -305,6 +392,8 @@ export const SessionController = (function () {
     setSession: setSession,
 
     getDateTimeOptions: getDateTimeOptions,
+    getTimezoneName: getTimezoneName,
+    getTimezoneOffset: getTimezoneOffset,
 
     isSynced: isSynced,
     handShake: handShake,

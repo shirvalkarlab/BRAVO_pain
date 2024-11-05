@@ -29,6 +29,7 @@ urlpatterns = [
 	path('uploadSessionFiles', Upload.SessionUpload.as_view()),
 	path('uploadExternalFiles', Upload.ExternalRecordingUpload.as_view()),
 	path('deleteSessionFiles', Upload.SessionRemove.as_view()),
+	path('updateSessionFiles', Upload.UpdateSessionFile.as_view()),
 	path('requestProcessing', Upload.RequestProcessingQueue.as_view()),
 	path('extractSessionEMR', Upload.ExtractSessionEMR.as_view()),
 

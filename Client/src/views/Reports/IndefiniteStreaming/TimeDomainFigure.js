@@ -22,6 +22,7 @@ import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import colormap from "colormap";
 
+import { SessionController } from "database/session-control";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { formatSegmentString, matchArray } from "database/helper-function";
 
@@ -82,13 +83,14 @@ function TimeDomainFigure({dataToRender, height, handleAddEvent, handleDeleteEve
     }
 
     for (var i in data) {
+      const OffsetTime = SessionController.getTimezoneOffset(data[i].Timestamp*1000, data[i].Timezone)
       for (var j in data[i].Channels) {
-        var timeArray = Array(data[i]["Stream"][j].length).fill(0).map((value, index) => new Date(data[i].Timestamp*1000 + 4*index));
-        if (xlim[0] == 0 || xlim[0] > data[i].Timestamp) {
-          xlim[0] = data[i].Timestamp;
+        var timeArray = Array(data[i]["Stream"][j].length).fill(0).map((value, index) => new Date(data[i].Timestamp*1000 + 4*index - OffsetTime));
+        if (xlim[0] == 0 || xlim[0] > data[i].Timestamp - OffsetTime/1000) {
+          xlim[0] = data[i].Timestamp-OffsetTime/1000;
         }
-        if (xlim[1] == 0 || xlim[1] < data[i].Timestamp+0.004*data[i]["Stream"][j].length) {
-          xlim[1] = data[i].Timestamp+0.004*data[i]["Stream"][j].length;
+        if (xlim[1] == 0 || xlim[1] < data[i].Timestamp+0.004*data[i]["Stream"][j].length-OffsetTime/1000) {
+          xlim[1] = data[i].Timestamp+0.004*data[i]["Stream"][j].length-OffsetTime/1000;
         }
         
         for (var k in ax) {

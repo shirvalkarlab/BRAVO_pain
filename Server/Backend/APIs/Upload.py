@@ -241,6 +241,49 @@ class RequestProcessingQueue(RestViews.APIView):
         #tasks.ProcessUploadQueue.apply_async(countdown=0)
         return Response(status=200)
 
+class UpdateSessionFile(RestViews.APIView):
+    """ Update JSON Session File.
+
+    **POST**: ``/api/updateSessionFiles``
+    
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        Authority = {}
+        Authority["Level"] = Database.verifyAccess(request.user, request.data["patientId"])
+        if Authority["Level"] != 1:
+            return Response(status=400, data={"code": ERROR_CODE["PERMISSION_DENIED"]})
+
+        patient = models.Patient.objects.get(deidentified_id=request.data["patientId"])
+
+        if "timezone" in request.data:
+            Authority["Permission"] = Database.verifyPermission(request.user, request.data["patientId"], Authority, "ChronicLFPs")
+
+            availableDevices = Database.getPerceptDevices(request.user, request.data["patientId"], Authority)
+            session_ids = [request.data["updateSession"]]
+            for i in range(len(session_ids)):
+                for device in availableDevices:
+                    session = models.PerceptSession.objects.filter(device_deidentified_id=device.deidentified_id, deidentified_id=str(session_ids[i])).first()
+                    if session:
+                        if request.data["timezone"] == "":
+                            session.session_timezone = ""
+                            session.save()
+                        
+                        else:
+                            try:
+                                tz = datetime.datetime.fromisoformat("2000-01-01T00:00:00" + request.data["timezone"])
+                                session.session_timezone = request.data["timezone"]
+                                session.save()
+                            except Exception as e:
+                                print(e)
+                                return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
+                            
+            return Response(status=200)
+
+        return Response(status=404)
+
 class SessionRemove(RestViews.APIView):
     """ Delete JSON Session File.
 

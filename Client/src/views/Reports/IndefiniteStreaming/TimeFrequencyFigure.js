@@ -23,6 +23,7 @@ import { formatSegmentString, matchArray } from "database/helper-function";
 
 import { dictionary, dictionaryLookup } from "assets/translation";
 import { usePlatformContext } from "context";
+import { SessionController } from "database/session-control";
 
 function TimeFrequencyFigure({dataToRender, height, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
@@ -73,7 +74,8 @@ function TimeFrequencyFigure({dataToRender, height, figureTitle}) {
 
     for (var i in data) {
       for (var j in data[i].Channels) {
-        var timeArray = Array(data[i].Spectrums[j].Time.length).fill(0).map((value, index) => new Date(data[i].Timestamp*1000 + data[i].Spectrums[j].Time[index]*1000));
+        console.log(SessionController.getTimezoneName(data[i].Timezone))
+        var timeArray = Array(data[i].Spectrums[j].Time.length).fill(0).map((value, index) => new Date(data[i].Timestamp*1000 + data[i].Spectrums[j].Time[index]*1000 - SessionController.getTimezoneOffset(data[i].Timestamp*1000, data[i].Timezone)));
         for (var k in ax) {
           if (!ax[k].title) {
             ax[k].title = data[i].Channels[j];
