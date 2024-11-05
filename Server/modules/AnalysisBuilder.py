@@ -1415,6 +1415,61 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
         "Type": "SpectralFeatures"
     }
 
+def handleCalculateTimeOfSpectralChanges(step, RecordingIds, Results, Configuration, analysis):
+    print("Start Calculating Time of Spectral Feature Changes")
+    targetSignal = step["config"]["targetRecording"]
+    
+    ProcessedData = None
+    for result in Results:
+        if result["ResultLabel"] == targetSignal:
+            recording = models.ExternalRecording.objects.filter(recording_id=result["ProcessedData"]).first()
+            RawData = Database.loadSourceDataPointer(recording.recording_datapointer)
+
+            SpectralFeatures = []
+            if result["Type"] == "SpectralFeatures":
+                if step["config"]["baselineMethod"] == "Time as Baseline":
+                    baselineTime = [float(i) for i in step["config"]["baseline"]]
+                    
+                    startTime = 0
+                    for i in range(len(RawData["Features"])):
+                        if startTime == 0 or startTime > RawData["Features"][i]["Time"][0]:
+                            startTime = RawData["Features"][i]["Time"][0]
+
+                    baselineTime = np.array(baselineTime) + startTime
+                    BaselinePower = {}
+                    for i in range(len(RawData["Features"])):
+                        TimeSelection = PythonUtility.rangeSelection(RawData["Features"][i]["Time"], baselineTime, "inclusive")
+                        if not np.any(TimeSelection):
+                            continue 
+                        for key in RawData["Features"][i].keys():
+                            if key == "Time" or key == "Channel":
+                                continue
+                            
+                            if not key in BaselinePower.keys():
+                                BaselinePower[key] = []
+                            BaselinePower[key].extend(RawData["Features"][i][key][TimeSelection])
+                    
+                    for i in range(len(RawData["Features"])):
+                        for key in RawData["Features"][i].keys():
+                            if key == "Time" or key == "Channel":
+                                continue
+
+                            RawData["Features"][i][key] = (RawData["Features"][i][key] - np.mean(BaselinePower[key])) / np.std(BaselinePower[key])
+                        SpectralFeatures.append(RawData["Features"][i])
+
+            ProcessedData = {"ResultType": "SpectralFeaturesNorm", "Features": SpectralFeatures}
+
+    recording = createResultDataFile(ProcessedData, str(analysis.device_deidentified_id), "AnalysisOutput", 0)
+    analysis.recording_type.append(recording.recording_type)
+    analysis.recording_list.append(str(recording.recording_id))
+
+    return {
+        "ResultLabel": step["config"]["output"],
+        "Id": step["id"],
+        "ProcessedData": str(recording.recording_id),
+        "Type": "SpectralFeaturesNorm"
+    }
+
 def MultiGaussianModel(x, *args):
     ret = 0
     numGaus = int(len(args)/3)
@@ -1713,6 +1768,9 @@ def processAnalysis(user, analysisId):
                 Results.append(Result)
             elif step["type"]["value"] == "calculateSpectralPeaks":
                 Result = handleCalculateSpectralPeaks(step, RecordingIds, Results, Configuration, analysis)
+                Results.append(Result)
+            elif step["type"]["value"] == "calculateTimeOfChange":
+                Result = handleCalculateTimeOfSpectralChanges(step, RecordingIds, Results, Configuration, analysis)
                 Results.append(Result)
             elif step["type"]["value"] == "extractNarrowBandFeature":
                 Result = handleExtractNarrowBandFeature(step, RecordingIds, Results, Configuration, analysis)

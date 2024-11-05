@@ -29,7 +29,7 @@ import { usePlatformContext } from "context";
 
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function SpectralFeatures({dataToRender, height, config, figureTitle}) {
+function SpectralFeaturesTimeOfChange({dataToRender, height, config, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -42,9 +42,9 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
     fig.clearData();
 
     if (fig.fresh) {
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)})`, {fontSize: 15})
+      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (z-score)`, {fontSize: 15})
       fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)}`, {fontSize: 15})
-      fig.setYlim([0, 5]);
+      fig.setYlim([-6, 6]);
       
       fig.setLegend({
         tracegroupgap: 5,
@@ -80,7 +80,7 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
           legendgroup: AllFeatures[k],
           showlegend: true,
           color: colors[k],
-          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)}<extra></extra>`,
+          hovertemplate: `  %{y:.2f} <extra></extra>`,
         })
       }
     }
@@ -196,4 +196,4 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
   );
 }
 
-export default SpectralFeatures;
+export default SpectralFeaturesTimeOfChange;

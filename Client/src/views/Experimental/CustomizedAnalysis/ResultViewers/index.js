@@ -27,6 +27,7 @@ import SpectralPeaks from "./SpectralPeaks";
 import NarrowBandFeatures from "./NarrowBandFeatures";
 import SpectrogramView from "./SpectrogramView";
 import CrossCorrelationMatrix from "./CrossCorrelationMatrix";
+import SpectralFeaturesTimeOfChange from "./SpectralFeaturesTimeOfChange";
 
 function ResultViewer({data, result, config}) {
   const navigate = useNavigate();
@@ -58,6 +59,12 @@ function ResultViewer({data, result, config}) {
     return <Grid container spacing={2}>
       <Grid item xs={12}>
         <SpectralFeatures dataToRender={data.Data[0].Features} height={600} figureTitle={result.title} />
+      </Grid>
+    </Grid>
+  } else if (type == "SpectralFeaturesNorm") {
+    return <Grid container spacing={2}>
+      <Grid item xs={12}>
+        <SpectralFeaturesTimeOfChange dataToRender={data.Data[0].Features} height={600} figureTitle={result.title} />
       </Grid>
     </Grid>
   } else if (type == "SpectralPeaks") {

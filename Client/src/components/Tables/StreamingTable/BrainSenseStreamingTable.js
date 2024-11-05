@@ -84,7 +84,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
     var uniqueDates = [];
     for (var i = 0; i < data.length; i++) {
       var timestruct = new Date(data[i]["Timestamp"]*1000);
-      if (data[i].Duration >= 30) {
+      if (data[i].Duration >= 1) {
         var found = false
         for (var date of uniqueDates) {
           if (date.value == timestruct.toLocaleDateString(language)) {
@@ -113,7 +113,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
       var timestruct = new Date(data[i]["Timestamp"]*1000);
-      if (timestruct.toLocaleDateString(language) == date.value && data[i].Duration >= (toggle ? 0 : 30)) {
+      if (timestruct.toLocaleDateString(language) == date.value && data[i].Duration >= 1) {
         collectiveData.push({...data[i], state: false});
       }
     }

@@ -20,6 +20,7 @@ import { Slider } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDButton from "components/MDButton";
 import FormField from "components/MDInput/FormField";
+import MDTypography from "components/MDTypography";
 
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { formatSegmentString, matchArray } from "database/helper-function";
@@ -116,6 +117,10 @@ function NarrowBandFeatures({dataToRender, height, config, figureTitle}) {
         {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
       </MDButton>
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 0, marginBottom: 10, height: height, width: "100%", display: show ? "" : "none"}}/>
+      
+      <MDTypography>
+        {"Scatter-point Size"}
+      </MDTypography>
       <Slider defaultValue={5} step={0.1} value={dotSize} onChange={(event, newValue) => setDotSize(newValue)} valueLabelDisplay="auto"/>
     </MDBox>
   );

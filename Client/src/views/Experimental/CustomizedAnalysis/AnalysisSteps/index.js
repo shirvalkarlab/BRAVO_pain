@@ -10,7 +10,7 @@ import ViewEditor from "./ViewEditor"
 import WienerFilterrEditor from "./WienerFilterrEditor"
 import CrossCorrrelationAnalysisEditor from "./CrossCorrrelationAnalysisEditor"
 import CalculateSpectralPeaksEditor from "./CalculateSpectralPeaksEditor"
-
+import CalculateTimeOfChangeEditor from "./CalculateTimeOfChangeEditor"
 
 const availableProcessings = [{
   type: {
@@ -83,6 +83,14 @@ const availableProcessings = [{
     label: "Calculate Spectral Peaks by Gaussian Fitting"
   },
   bands: []
+}, {
+  type: {
+    value: "calculateTimeOfChange",
+    label: "Calculate Time of Change from Baseline in Spectral Features"
+  },
+  baselineMethod: "Time as Baseline",
+  baseline: ["0","300"],
+  annotation: ""
 }];
 
 const AnalysisSteps = ({type, ...rest}) => {
@@ -126,6 +134,10 @@ const AnalysisSteps = ({type, ...rest}) => {
       />
     } else if (type === "extractNarrowBandFeature") {
       return <ExtractNarrowBandSpectralEditor currentState={rest.currentState} availableRecordings={rest.availableRecordings} newProcess={rest.newProcess} defaultConfigs={defaultConfigs[0]}
+        updateConfiguration={rest.updateConfiguration}
+      />
+    } else if (type === "calculateTimeOfChange") {
+      return <CalculateTimeOfChangeEditor currentState={rest.currentState} availableRecordings={rest.availableRecordings} newProcess={rest.newProcess} defaultConfigs={defaultConfigs[0]}
         updateConfiguration={rest.updateConfiguration}
       />
     } else if (type === "export") {

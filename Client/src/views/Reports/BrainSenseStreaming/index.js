@@ -26,14 +26,17 @@ import {
   SpeedDial,
   SpeedDialAction,
   SpeedDialIcon,
-  Slider
+  Slider,
+  Menu,
+  MenuItem,
 } from "@mui/material"
 
 import { 
   ChevronRight as ChevronRightIcon,
   Settings as SettingsIcon,
   KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon
+  Dashboard as DashboardIcon,
+  KeyboardArrowDown
 } from "@mui/icons-material";
 
 // core components
@@ -121,6 +124,7 @@ function BrainSenseStreaming() {
 
   const [referenceType, setReferenceType] = React.useState([]);
   const [alert, setAlert] = React.useState(null);
+  const [exportMenu, setExportMenu] = React.useState(null);
 
   React.useEffect(() => {
     if (!patientID) {
@@ -381,6 +385,15 @@ function BrainSenseStreaming() {
     downloader.click();
   };
 
+  const exportWebData = () => {
+    var csvData = JSON.stringify(dataToRender);
+    var downloader = document.createElement('a');
+    downloader.href = 'data:text/json;charset=utf-8,' + encodeURI(csvData);
+    downloader.target = '_blank';
+    downloader.download = 'NeuralRecordingsExport.json';
+    downloader.click();
+  }
+
   const adaptiveClosedLoopParameters = (therapy) => {
     if (!therapy) return null;
 
@@ -597,9 +610,28 @@ function BrainSenseStreaming() {
                             <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
                               {dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "RawData", language)}
                             </MDTypography>
-                            <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
-                              {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
-                            </MDButton>
+                          <MDButton size="small" variant="contained" color="warning" endIcon={<KeyboardArrowDown/>} onClick={(event) => {
+                            setExportMenu(event.currentTarget)
+                          }}>
+                            {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
+                          </MDButton>
+                          <Menu
+                            anchorEl={exportMenu}
+                            open={Boolean(exportMenu)}
+                            onClose={() => setExportMenu(null)}
+                          >
+                            <MenuItem onClick={() => exportWebData()}>
+                              <MDTypography variant="h5" fontWeight={"bold"} fontSize={18} px={1} py={0}>
+                                {"Raw Web Data"}
+                              </MDTypography>
+                            </MenuItem>
+                            <Divider />
+                            <MenuItem onClick={() => exportCurrentStream()}>
+                              <MDTypography variant="h5" fontWeight={"bold"} fontSize={18} px={1} py={0}>
+                                {"Formatted CSV"}
+                              </MDTypography>
+                            </MenuItem>
+                          </Menu>
                           </MDBox>
                           <MDBox display={"flex"} flexDirection={"column"}>
                             <MDButton size="small" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => toggleCardiacFilter()}>

@@ -25,14 +25,17 @@ import {
   SpeedDialAction,
   SpeedDialIcon,
   ToggleButton,
-  ToggleButtonGroup
+  ToggleButtonGroup,
+  Menu,
+  MenuItem,
 } from "@mui/material"
 
 import { 
   ChevronRight as ChevronRightIcon,
   Settings as SettingsIcon,
   KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon
+  Dashboard as DashboardIcon,
+  KeyboardArrowDown
 } from "@mui/icons-material";
 
 // core components
@@ -80,6 +83,7 @@ function IndefiniteStreaming() {
   const [alert, setAlert] = React.useState(null);
 
   const [drawerOpen, setDrawerOpen] = React.useState({open: false, config: {}});
+  const [exportMenu, setExportMenu] = React.useState(null);
 
   const [figureHeight, setFigureHeight] = React.useState(0);
 
@@ -179,7 +183,6 @@ function IndefiniteStreaming() {
   }
 
   const exportCurrentStream = () => {
-    /*
     var csvData = "Time";
     for (var i = 0; i < dataToRender.data[0]["Channels"].length; i++) {
       csvData += "," + dataToRender.data[0]["Channels"][i] + " Raw";
@@ -199,25 +202,19 @@ function IndefiniteStreaming() {
     var downloader = document.createElement('a');
     downloader.href = 'data:text/csv;charset=utf-8,' + encodeURI(csvData);
     downloader.target = '_blank';
-    downloader.download = 'IndefiniteStreamExport.json';
+    downloader.download = 'IndefiniteStreamExport.csv';
     downloader.click();
-    */
-    var csvData = JSON.stringify(dataToRender);
+    
+  };
 
+  const exportWebData = () => {
+    var csvData = JSON.stringify(dataToRender);
     var downloader = document.createElement('a');
     downloader.href = 'data:text/json;charset=utf-8,' + encodeURI(csvData);
     downloader.target = '_blank';
     downloader.download = 'MultiChannelRecordingExport.json';
     downloader.click();
-    
-    csvData = JSON.stringify(eventPSDs);
-
-    downloader = document.createElement('a');
-    downloader.href = 'data:text/json;charset=utf-8,' + encodeURI(csvData);
-    downloader.target = '_blank';
-    downloader.download = 'MultiChannelRecordingEventPSDs.json';
-    downloader.click();
-  };
+  }
 
   const handleAddEvent = async (eventInfo) => {
     try {
@@ -372,9 +369,29 @@ function IndefiniteStreaming() {
                           <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
                             {dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "RawData", language)}
                           </MDTypography>
-                          <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
+                          <MDButton size="small" variant="contained" color="warning" endIcon={<KeyboardArrowDown/>} onClick={(event) => {
+                            setExportMenu(event.currentTarget)
+                          }}>
                             {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
                           </MDButton>
+                          <Menu
+                            anchorEl={exportMenu}
+                            open={Boolean(exportMenu)}
+                            onClose={() => setExportMenu(null)}
+                          >
+                            <MenuItem onClick={() => exportWebData()}>
+                              <MDTypography variant="h5" fontWeight={"bold"} fontSize={18} px={1} py={0}>
+                                {"Raw Web Data"}
+                              </MDTypography>
+                            </MenuItem>
+                            <Divider />
+                            <MenuItem onClick={() => exportCurrentStream()}>
+                              <MDTypography variant="h5" fontWeight={"bold"} fontSize={18} px={1} py={0}>
+                                {"Formatted CSV"}
+                              </MDTypography>
+                            </MenuItem>
+                          </Menu>
+
                         </MDBox>
                         <MDBox display={"flex"} flexDirection={"column"}>
                           <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => refreshEventAnalysis()}>

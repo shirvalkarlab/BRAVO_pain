@@ -17,10 +17,11 @@ import * as math from "mathjs";
 
 import colormap from "colormap";
 
-import { Autocomplete } from "@mui/material";
+import { Autocomplete, colors, Slider } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDButton from "components/MDButton";
 import FormField from "components/MDInput/FormField";
+import MDTypography from "components/MDTypography";
 
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { formatSegmentString, matchArray } from "database/helper-function";
@@ -34,7 +35,9 @@ function SpectrogramView({dataToRender, height, config, figureTitle}) {
 
   const [show, setShow] = React.useState(true);
   const [selector, setSelector] = React.useState({value: "", options: []});
-  const fig = new PlotlyRenderManager(figureTitle, language);
+  const [fig, setFig] = React.useState(new PlotlyRenderManager(figureTitle, language));
+
+  const [colorScale, setColorScale] = React.useState(null);
 
   const handleGraphing = (data) => {
     fig.clearData();
@@ -53,24 +56,12 @@ function SpectrogramView({dataToRender, height, config, figureTitle}) {
 
     let ax = fig.getAxes();
     
-    let colorRange = [999,-999];
-    for (let recordingId in data) {
-      if (data[recordingId].ChannelNames.includes(selector.value)) {
-        const channelIndex = data[recordingId].ChannelNames.indexOf(selector.value);
-        if (data[recordingId].Spectrogram[channelIndex].ColorRange[0] < colorRange[0]) {
-          colorRange[0] = data[recordingId].Spectrogram[channelIndex].ColorRange[0];
-        }
-        if (data[recordingId].Spectrogram[channelIndex].ColorRange[1] > colorRange[1]) {
-          colorRange[1] = data[recordingId].Spectrogram[channelIndex].ColorRange[1];
-        }
-      }
-    }
-    fig.setYlim(colorRange, ax[1]);
+    fig.setYlim(colorScale, ax[1]);
 
     const cAxis = fig.createColorAxis({
       colorscale: "Jet",
       colorbar: {y: 0.75, len: 0.4},
-      clim: colorRange,
+      clim: colorScale,
     });
 
     const colors = colormap({
@@ -86,7 +77,7 @@ function SpectrogramView({dataToRender, height, config, figureTitle}) {
         const channelIndex = data[recordingId].ChannelNames.indexOf(selector.value);
         var timeArray = data[recordingId].Spectrogram[channelIndex].Time.map((value, index) => new Date(value*1000));
         fig.surf(timeArray, data[recordingId].Spectrogram[channelIndex].Frequency, data[recordingId].Spectrogram[channelIndex].logPower, {
-          zlim: colorRange,
+          zlim: colorScale,
           hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)}<br>  %{x} <br>  %{z:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)} <extra></extra>`,
           coloraxis: cAxis,
         }, ax[0]);
@@ -123,12 +114,30 @@ function SpectrogramView({dataToRender, height, config, figureTitle}) {
         channelNames.push(...dataToRender.Data[i].ChannelNames.filter((a) => !channelNames.includes(a)));
       }
       setSelector({options: channelNames, value: channelNames[0]})
+      return;
     }    
     
+    if (!colorScale) {
+      let colorRange = [999,-999];
+      for (let recordingId in dataToRender.Data) {
+        if (dataToRender.Data[recordingId].ChannelNames.includes(selector.value)) {
+          const channelIndex = dataToRender.Data[recordingId].ChannelNames.indexOf(selector.value);
+          if (dataToRender.Data[recordingId].Spectrogram[channelIndex].ColorRange[0] < colorRange[0]) {
+            colorRange[0] = Math.round(dataToRender.Data[recordingId].Spectrogram[channelIndex].ColorRange[0]);
+          }
+          if (dataToRender.Data[recordingId].Spectrogram[channelIndex].ColorRange[1] > colorRange[1]) {
+            colorRange[1] = Math.round(dataToRender.Data[recordingId].Spectrogram[channelIndex].ColorRange[1]);
+          }
+        }
+      }
+      setColorScale(colorRange);
+      return
+    }
+
     if (dataToRender && selector.value) {
       handleGraphing(dataToRender.Data)
     }
-  }, [dataToRender, selector.value, language]);
+  }, [dataToRender, colorScale, selector.value, language]);
 
   const onResize = useCallback(() => {
     fig.refresh();
@@ -160,6 +169,28 @@ function SpectrogramView({dataToRender, height, config, figureTitle}) {
         disableClearable
       />
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 0, marginBottom: 10, height: height, width: "100%", display: show ? "" : "none"}}/>
+      <MDTypography>
+        {"Spectrogram Colorscale Adjustment"}
+      </MDTypography>
+      <Slider getAriaLabel={() => 'Color-Scale Range'}
+        value={colorScale}
+        min={-100} max={100}
+        onChange={(event, newValue, activeThumb) => {
+          if (!Array.isArray(newValue)) return;
+
+          if (newValue[1] < newValue[0]) {
+            if (activeThumb === 0) {
+              setColorScale([newValue[0],newValue[0]]);
+            } else {
+              setColorScale([newValue[1],newValue[1]]);
+            }
+          } else {
+            setColorScale(newValue);
+          }
+        }}
+        valueLabelDisplay="auto"
+        getAriaValueText={(value) => `${value} dB`}
+      /> 
     </MDBox>
   );
 }
