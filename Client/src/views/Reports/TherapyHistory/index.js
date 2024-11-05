@@ -104,7 +104,7 @@ function TherapyHistory() {
           therapyHistory[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType] = {};
           if (!therapyTypes.includes(data[therapyTimestamp[i]][j].TherapyType)) therapyTypes.push(data[therapyTimestamp[i]][j].TherapyType);
         }
-        const dateString = new Date(data[therapyTimestamp[i]][j].TherapyDate*1000).toLocaleString(language, {dateStyle: "full"});
+        const dateString = new Date(data[therapyTimestamp[i]][j].TherapyDate*1000).toLocaleString(language, {dateStyle: "full", ...SessionController.getTimezoneName(data[therapyTimestamp[i]][j].Timezone)});
         if (!Object.keys(therapyHistory[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType]).includes(dateString)) {
           therapyHistory[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType][dateString] = [];
         }
@@ -589,7 +589,7 @@ function TherapyHistory() {
                                         {therapy.Overview.GroupName} {" "} {therapy.Overview.DutyPercent}
                                       </MDTypography>
                                       <MDTypography fontWeight={"medium"} fontSize={10} style={{paddingBottom: 0, paddingTop: 0, marginBottom: 0}}>
-                                        {new Date(therapy.TherapyDate*1000).toLocaleString(language)}
+                                        {new Date(therapy.TherapyDate*1000).toLocaleString(language, SessionController.getTimezoneName(therapy.Timezone))}
                                       </MDTypography>
                                     </TableCell>
                                     <TableCell>

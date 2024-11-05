@@ -95,8 +95,8 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
         if (!found) {
           uniqueDates.push({
             time: data[i]["Timestamp"]*1000,
-            value: timestruct.toLocaleDateString(language),
-            label: timestruct.toLocaleDateString(language)
+            value: timestruct.toLocaleDateString(language, SessionController.getTimezoneName(data[i].Timezone)),
+            label: timestruct.toLocaleDateString(language, SessionController.getTimezoneName(data[i].Timezone))
           });
         }
       }
@@ -113,7 +113,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
       var timestruct = new Date(data[i]["Timestamp"]*1000);
-      if (timestruct.toLocaleDateString(language) == date.value && data[i].Duration >= 1) {
+      if (timestruct.toLocaleDateString(language, SessionController.getTimezoneName(data[i].Timezone)) == date.value && data[i].Duration >= 1) {
         collectiveData.push({...data[i], state: false});
       }
     }
@@ -286,6 +286,8 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                 }
               }
 
+              console.log(recording)
+
               return <TableRow key={recording.AnalysisID}>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                   {recording.AnalysisLabel ? (
@@ -294,7 +296,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                     </MDTypography>
                   ) : null}
                   <MDTypography variant="h5" fontSize={recording.AnalysisLabel ? 12 : 15} style={{marginBottom: 0}}>
-                    {new Date(recording.Timestamp*1000).toLocaleString(language)}
+                    {new Date(recording.Timestamp*1000).toLocaleString(language, {...SessionController.getTimezoneName(recording.Timezone), timeZoneName: "short"})}
                   </MDTypography>
                   <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
                     {recording.DeviceName}

@@ -65,7 +65,7 @@ function IndefiniteStreamingTable({data, requestDataForRender, children}) {
     var existingDates = [];
     for (var i = 0; i < data.length; i++) {
       var timestruct = new Date(data[i]["Timestamp"]*1000);
-      const dateString = timestruct.toLocaleDateString(language);
+      const dateString = timestruct.toLocaleDateString(language, SessionController.getTimezoneName(data[i].Timezone));
 
       var found = false
       for (var session of uniqueSession) {
@@ -99,7 +99,7 @@ function IndefiniteStreamingTable({data, requestDataForRender, children}) {
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
       var timestruct = new Date(data[i]["Timestamp"]*1000);
-      const dateString = timestruct.toLocaleDateString(language);
+      const dateString = timestruct.toLocaleDateString(language, SessionController.getTimezoneName(data[i].Timezone));
 
       if (dateString == value.timestamp && data[i]["DeviceName"] == value.device) {
         collectiveData.push(data[i]);
@@ -158,7 +158,7 @@ function IndefiniteStreamingTable({data, requestDataForRender, children}) {
                 </TableCell>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                   <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
-                    {new Date(recording.Timestamp*1000).toLocaleString(language, SessionController.getTimezoneName(recording.Timezone))}
+                    {new Date(recording.Timestamp*1000).toLocaleString(language, {...SessionController.getTimezoneName(recording.Timezone), timeZoneName: "short"})}
                   </MDTypography>
                   <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
                     {recording.DeviceName}

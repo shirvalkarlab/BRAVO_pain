@@ -21,6 +21,7 @@ import MDBox from "components/MDBox";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { formatSegmentString, matchArray } from "database/helper-function";
 import { usePlatformContext } from "context";
+import { SessionController } from "database/session-control";
 
 import { dictionary, dictionaryLookup } from "assets/translation";
 
@@ -72,11 +73,11 @@ function ChannelCompare({dataToRender, height, config, figureTitle}) {
       const colorIndex = Math.floor((data[0]["Timestamp"] - data[i]["Timestamp"]) / Timespan * (colors.length-1));
       
       fig.plot(data[i]["Frequency"], data[i]["MeanPower"], {
-        name: timestruct.toLocaleString(language),
+        name: timestruct.toLocaleString(language, SessionController.getTimezoneName(data[i].Timezone)),
         color: colors[colors.length-1-colorIndex],
         linewidth: 2,
         showlegend: true,
-        hovertemplate: `${timestruct.toLocaleString(language)} %{y:.2f} μV<sup>2</sup>/Hz <extra></extra>`,
+        hovertemplate: `${timestruct.toLocaleString(language, SessionController.getTimezoneName(data[i].Timezone))} %{y:.2f} μV<sup>2</sup>/Hz <extra></extra>`,
       });
     }
 

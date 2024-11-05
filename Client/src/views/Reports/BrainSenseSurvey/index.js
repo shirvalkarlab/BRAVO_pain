@@ -113,8 +113,8 @@ function BrainSenseSurvey() {
           segmented: segmented,
           timestamp: data[i]["Timestamp"],
           device: data[i]["DeviceName"],
-          value: "[" + data[i]["DeviceName"] + "] " + timestruct.toLocaleString(language),
-          label: "[" + data[i]["DeviceName"] + "] (" + timestruct.toLocaleString(language) + ") " + segmented + " Survey"
+          value: "[" + data[i]["DeviceName"] + "] " + timestruct.toLocaleString(language, SessionController.getTimezoneName(data[i].Timezone)),
+          label: "[" + data[i]["DeviceName"] + "] (" + timestruct.toLocaleString(language, SessionController.getTimezoneName(data[i].Timezone)) + ") " + segmented + " Survey"
         });
       }
     }

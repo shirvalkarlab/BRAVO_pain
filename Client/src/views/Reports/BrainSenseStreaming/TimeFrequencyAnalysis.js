@@ -25,6 +25,7 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
+import { SessionController } from "database/session-control";
 
 const filter = createFilterOptions();
 
@@ -79,11 +80,12 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
     }
     
     let ax = fig.getAxes();
+    const OffsetTime = SessionController.getTimezoneOffset(data.Timestamp*1000, data.Timezone);
     for (let i in data.Channels) {
       const ylim = Math.quantileSeq(Math.abs(Math.matrix(data.Stream[i].Filtered)), 0.99);
       fig.setYlim([-ylim*1.1, ylim*1.1], ax[i*2 + 0]);
       
-      var timeArray = Array(data.Stream[i].Filtered.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + 4*index));
+      var timeArray = Array(data.Stream[i].Filtered.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + 4*index - OffsetTime));
       fig.plot(timeArray, data.Stream[i].Filtered, {
         linewidth: 0.5,
         hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
@@ -91,7 +93,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       fig.setXlim([timeArray[0],timeArray[timeArray.length-1]], ax[0]);
 
       for (let j = 0; j < data.Annotations.length; j++) {
-        fig.scatter([new Date(data.Annotations[j].Time*1000)], [0], {
+        fig.scatter([new Date(data.Annotations[j].Time*1000 - OffsetTime)], [0], {
           color: "#AA0000",
           size: 10,
           name: data.Annotations[j].Name,
@@ -101,7 +103,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
         }, ax[i*2 + 0]);
 
         if (data.Annotations[j].Duration > 0) {
-          fig.addShadedArea([new Date(data.Annotations[j].Time*1000), new Date((data.Annotations[j].Time+data.Annotations[j].Duration)*1000)], null, {
+          fig.addShadedArea([new Date(data.Annotations[j].Time*1000 - OffsetTime), new Date((data.Annotations[j].Time+data.Annotations[j].Duration)*1000 - OffsetTime)], null, {
             color: "#AA0000",
             name: data.Annotations[j].Name,
             legendgroup: data.Annotations[j].Name,
@@ -110,7 +112,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
         }
       }
 
-      var timeArray = Array(data.Stream[i].Spectrogram.Time.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + data.Stream[i].Spectrogram.Time[index]*1000));
+      var timeArray = Array(data.Stream[i].Spectrogram.Time.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + data.Stream[i].Spectrogram.Time[index]*1000 - OffsetTime));
       fig.surf(timeArray, data.Stream[i].Spectrogram.Frequency, data.Stream[i].Spectrogram.Power, {
         zlim: [-20, 20],
         hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)}<br>  %{x} <br>  %{z:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)} <extra></extra>`,
@@ -123,7 +125,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
     }
     
     for (let i in data.PowerBand) {
-      var timeArray = Array(data.PowerBand[i].Time.length).fill(0).map((value, index) => new Date(data.PowerTimestamp*1000 + data.PowerBand[i].Time[index]*1000));
+      var timeArray = Array(data.PowerBand[i].Time.length).fill(0).map((value, index) => new Date(data.PowerTimestamp*1000 + data.PowerBand[i].Time[index]*1000 - OffsetTime));
       fig.plot(timeArray, data.PowerBand[i].Power, {
         linewidth: 2,
         hovertemplate: `  %{y:.2f}<extra></extra>`,
@@ -140,7 +142,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
 
     let stimulationLineColor = ["#253EF7", "#FCA503", "#8bc34a", "#9c27b0"]
     for (let i in data.Stimulation) {
-      var timeArray = Array(data.Stimulation[i].Time.length).fill(0).map((value, index) => new Date(data.PowerTimestamp*1000 + data.Stimulation[i].Time[index]*1000));
+      var timeArray = Array(data.Stimulation[i].Time.length).fill(0).map((value, index) => new Date(data.PowerTimestamp*1000 + data.Stimulation[i].Time[index]*1000 - OffsetTime));
       fig.plot(timeArray, data.Stimulation[i].Amplitude, {
         linewidth: 3,
         color: stimulationLineColor[i],
