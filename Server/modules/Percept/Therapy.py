@@ -184,6 +184,9 @@ def queryTherapyConfigurations(user, device, TherapyHistoryObjs, authority):
     for therapy in TherapyHistoryObjs:
         TherapyInfo = {"DeviceID": str(device.deidentified_id), "Device": deviceName, "DeviceLocation": device.device_location}
         TherapyInfo["TherapyDate"] = therapy.therapy_date.timestamp()
+        
+        sessionFile = models.PerceptSession.objects.filter(deidentified_id=therapy.source_file).first()
+        TherapyInfo["Timezone"] = "UTC" + sessionFile.session_timezone
         TherapyInfo["TherapyGroup"] = therapy.group_id
         TherapyInfo["TherapyType"] = therapy.therapy_type
         TherapyInfo["LogID"] = str(therapy.history_log_id)

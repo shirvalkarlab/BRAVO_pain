@@ -38,7 +38,7 @@ DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 import queue
 import hashlib, random, string
-from uuid import UUID
+from uuid import UUID, uuid4
 processingQueue = queue.Queue()
 
 from Backend import models, tasks
@@ -186,11 +186,23 @@ class SessionUpload(RestViews.APIView):
                     return Response(status=400, data={"code": ERROR_CODE["PERMISSION_DENIED"]})
 
                 deviceId = request.data["deviceId"]
-                device = models.PerceptDevice.objects.filter(patient_deidentified_id=request.data["patientId"], deidentified_id=request.data["deviceId"]).first()
+                
+                try:
+                    UUID(request.data["deviceId"])
+                    device = models.PerceptDevice.objects.filter(patient_deidentified_id=request.data["patientId"], deidentified_id=request.data["deviceId"]).first()
+                except:
+                    device = None
+
                 if not device:
                     serial_number = "".join(random.choices(string.ascii_uppercase + string.digits, k=32))
                     patient = models.Patient.objects.get(deidentified_id=request.data["patientId"])
-                    device = models.PerceptDevice(patient_deidentified_id=request.data["patientId"], serial_number=serial_number, deidentified_id=UUID(request.data["deviceId"]), device_location="")
+
+                    try:
+                        UUID(request.data["deviceId"])
+                        device = models.PerceptDevice(patient_deidentified_id=request.data["patientId"], serial_number=serial_number, deidentified_id=UUID(request.data["deviceId"]), device_location="")
+                    except:
+                        device = models.PerceptDevice(patient_deidentified_id=request.data["patientId"], serial_number=serial_number, device_name=request.data["deviceId"], deidentified_id=uuid4(), device_location="")
+                        
                     device.device_eol_date = datetime.datetime.fromtimestamp(0, tz=pytz.utc)
                     device.device_last_seen = datetime.datetime.fromtimestamp(0, tz=pytz.utc)
                     device.authority_level = "Research"
@@ -205,14 +217,14 @@ class SessionUpload(RestViews.APIView):
                         if request.data[key].name.endswith(".json"):
                             queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="decodeJSON", state="InProgress", descriptor={
                                 "filename": request.data[key].name,
-                                "device_deidentified_id": deviceId
+                                "device_deidentified_id": str(device.deidentified_id)
                             })
                             Sessions.saveCacheJSON(request.data[key].name, rawBytes)
                             queueItem.save()
                         elif request.data[key].name.endswith(".zip"):
                             queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="decodeSummitZIP", state="InProgress", descriptor={
                                 "filename": request.data[key].name,
-                                "device_deidentified_id": deviceId
+                                "device_deidentified_id": str(device.deidentified_id)
                             })
                             SummitSessions.saveCacheZIP(request.data[key].name, rawBytes)
                             queueItem.save()
@@ -427,6 +439,9 @@ class ExternalRecordingUpload(RestViews.APIView):
                 if request.data["Format"] == "CSV":
                     if not request.data[key].name.endswith(".csv"):
                         return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
+                if request.data["Format"] == "HPFCSV":
+                    if not request.data[key].name.endswith(".csv"):
+                        return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
                 elif request.data["Format"] == "MDAT":
                     if not request.data[key].name.endswith(".mdat"):
                         return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
@@ -437,6 +452,17 @@ class ExternalRecordingUpload(RestViews.APIView):
                 if request.data["DataType"] == "ExternalRecordings":
                     if request.data["Format"] == "CSV":
                         queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="externalCSVs", state="WaitToStart", descriptor={
+                            "filename": request.data[key].name,
+                            "patientId": request.data["patientId"],
+                            "batchSessionId": request.data["batchSessionId"],
+                            "descriptor": {
+                                "SamplingRate": request.data["SamplingRate"],
+                                "Label": request.data["RecordingLabel"],
+                                "StartTime": request.data["StartTime"]
+                            }
+                        })
+                    elif request.data["Format"] == "HPFCSV":
+                        queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="DelsysHDFCSV", state="WaitToStart", descriptor={
                             "filename": request.data[key].name,
                             "patientId": request.data["patientId"],
                             "batchSessionId": request.data["batchSessionId"],

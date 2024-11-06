@@ -329,7 +329,7 @@ class CustomAnnotations(models.Model):
 class NeuralActivityRecording(models.Model):
     recording_id = models.UUIDField(default=uuid.uuid4, unique=True)
     device_deidentified_id = models.UUIDField(default=uuid.uuid4)
-    recording_type = models.CharField(default="", max_length=32)
+    recording_type = models.CharField(default="", max_length=255)
     recording_date = models.DateTimeField(default=timezone.now)
     recording_info = models.JSONField(default=dict, null=True)
     recording_duration = models.FloatField(default=0)
@@ -351,7 +351,7 @@ class UserConfigurations(models.Model):
 class ExternalRecording(models.Model):
     recording_id = models.UUIDField(default=uuid.uuid4, unique=True)
     patient_deidentified_id = models.UUIDField(default=uuid.uuid4)
-    recording_type = models.CharField(default="", max_length=32)
+    recording_type = models.CharField(default="", max_length=255)
     recording_date = models.DateTimeField(default=timezone.now)
     recording_info = models.JSONField(default=dict, null=True)
     recording_duration = models.FloatField(default=0)

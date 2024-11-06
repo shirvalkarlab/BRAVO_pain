@@ -323,6 +323,108 @@ def processExternalRecordingUpload():
                 except Exception as e:
                     print(e)
                 
+    if models.ProcessingQueue.objects.filter(type="DelsysHDFCSV", state="InProgress").exists():
+        print(datetime.datetime.now())
+        BatchQueues = models.ProcessingQueue.objects.filter(type="DelsysHDFCSV", state="InProgress").order_by("datetime").all()
+        for queue in BatchQueues:
+            if not models.ProcessingQueue.objects.filter(state="InProgress", queue_id=queue.queue_id).exists():
+                continue
+            queue.state = "Processing"
+            queue.save()
+            ErrorMessage = ""
+            try:
+                ws.connect("ws://localhost:3001/socket/notification")
+                ws.send(json.dumps({
+                    "NotificationType": "TaskProcessing",
+                    "TaskUser": str(queue.owner),
+                    "TaskID": str(queue.queue_id),
+                    "Authorization": os.environ["ENCRYPTION_KEY"],
+                    "State": "Processing",
+                    "Message": "",
+                }))
+                ws.close()
+            except Exception as e:
+                print(e)
+
+            print(f"Start Processing {queue.descriptor['filename']}")
+            try:
+                ProcessedDataList = AnalysisBuilder.processTrignoHDFCSVRecordings(DATABASE_PATH + "cache" + os.path.sep + queue.descriptor["filename"])
+            except Exception as e:
+                print(e)
+                queue.state = "Error"
+                queue.descriptor["Message"] = str(e)
+                print(queue.descriptor["Message"])
+                queue.save()
+                
+                try:
+                    ws.connect("ws://localhost:3001/socket/notification")
+                    ws.send(json.dumps({
+                        "NotificationType": "TaskComplete",
+                        "TaskUser": str(queue.owner),
+                        "TaskID": str(queue.queue_id),
+                        "Authorization": os.environ["ENCRYPTION_KEY"],
+                        "State": "Error",
+                        "Message": queue.descriptor["Message"],
+                    }))
+                    ws.close()
+                except Exception as e:
+                    print(e)
+                continue
+            
+            def CommonName(nameList):
+                commonNames = []
+                allSubString = nameList[0].split(" ")
+                for i in range(len(allSubString)):
+                    Found = True
+                    for j in range(len(nameList)):
+                        if not allSubString[i] in nameList[j].split(" "):
+                            Found = False 
+                    if Found:
+                        commonNames.append(allSubString[i])
+                return commonNames
+
+            try:
+                for ProcessedData in ProcessedDataList:
+                    ProcessedData["StartTime"] = float(queue.descriptor["descriptor"]["StartTime"])/1000
+                    recording = models.ExternalRecording(patient_deidentified_id=queue.descriptor["patientId"], 
+                                            recording_type="DelsysCSV." + ("_".join(CommonName(ProcessedData["ChannelNames"]))), 
+                                            recording_date=datetime.datetime.fromtimestamp(ProcessedData["StartTime"]).astimezone(pytz.utc),
+                                            recording_duration=ProcessedData["Duration"])
+                    filename = Database.saveSourceFiles(ProcessedData, "ExternalRecording", "Raw", recording.recording_id, recording.patient_deidentified_id)
+                    recording.recording_datapointer = filename
+                    recording.save()
+                
+            except Exception as e:
+                ErrorMessage = str(e)
+
+            print(f"End Processing {queue.descriptor['filename']}")
+            if ErrorMessage == "":
+                try:
+                    os.remove(DATABASE_PATH + "cache" + os.path.sep + queue.descriptor["filename"])
+                except:
+                    pass
+                queue.state = "Complete"
+                queue.save()
+            else:
+                print(ErrorMessage)
+                queue.state = "Error"
+                queue.descriptor["Message"] = ErrorMessage
+                queue.save()
+                
+                try:
+                    ws.connect("ws://localhost:3001/socket/notification")
+                    ws.send(json.dumps({
+                        "NotificationType": "TaskComplete",
+                        "TaskUser": str(queue.owner),
+                        "TaskID": str(queue.queue_id),
+                        "Authorization": os.environ["ENCRYPTION_KEY"],
+                        "State": "Error",
+                        "Message": queue.descriptor["Message"],
+                    }))
+                    ws.close()
+                except Exception as e:
+                    print(e)
+
     if models.ProcessingQueue.objects.filter(type="externalMDATs", state="InProgress").exists():
         print(datetime.datetime.now())
         BatchQueues = models.ProcessingQueue.objects.filter(type="externalMDATs", state="InProgress").order_by("datetime").all()

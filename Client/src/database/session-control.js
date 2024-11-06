@@ -298,7 +298,7 @@ export const SessionController = (function () {
 
   const getTimezoneOffset = (startTime, UTCTime) => {
     const localOffset = new Date(startTime).getTimezoneOffset() * -60000
-    return timezoneOffsetDict[UTCTime] ? (localOffset - timezoneOffsetDict[UTCTime]) : 0;
+    return timezoneOffsetDict[UTCTime] === undefined ? 0 : (localOffset - timezoneOffsetDict[UTCTime]);
   }
 
   const handShake = async () => {

@@ -55,6 +55,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
     format: "CSV",
     label: "External Recording",
     samplingRate: "100",
+    timezone: "Browser Local Time",
     startDate: formatAsDate(new Date()),
     startTime: formatAsTime(new Date())
   });
@@ -73,10 +74,14 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
   }, [dropzoneRef]);
 
   const uploadSessionsDeidentified = () => {
+    const currentTime = new Date(externalDataInfo.startDate + " " + externalDataInfo.startTime).getTime();
+    
     const myDropzone = dropzoneRef.current.dropzone;
     let deviceId = selectedDevice.value;
     if (deviceId === "NewDevice") {
-      deviceId = uuidv4();
+      if (selectedDevice.newName) {
+        deviceId = selectedDevice.newName;
+      }
     }
     
     const batchSessionId = uuidv4() + new Date().toISOString();
@@ -92,7 +97,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
         formData.append("DataType", "ExternalRecordings");
         formData.append("Format", externalDataInfo.format);
         formData.append("SamplingRate", externalDataInfo.samplingRate);
-        formData.append("StartTime", new Date(externalDataInfo.startDate + " " + externalDataInfo.startTime).getTime());
+        formData.append("StartTime", currentTime + SessionController.getTimezoneOffset(currentTime, externalDataInfo.timezone));
         formData.append("RecordingLabel", externalDataInfo.label);
       } else if (deviceId === "Annotations") {
         formData.append("DataType", "Annotations");
@@ -133,6 +138,8 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
         return ".csv";
       } else if (externalDataInfoConfig.format === "MDAT") {
         return ".mdat";
+      } else if (externalDataInfoConfig.format === "HPFCSV") {
+        return ".csv";
       }
     } else if (selectedDeviceConfig.value === "Annotations") {
       return ".csv";
@@ -144,7 +151,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
 
   return <>
   <Dialog open={show} onClose={cancelUpload}>
-    <MDBox px={2} pt={2}>
+    <MDBox px={2} pt={2} style={{minWidth: 500}}>
       <MDTypography variant="h5">
         {"Upload New Recordings"} 
       </MDTypography>
@@ -153,7 +160,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
       <Grid container spacing={2}>
         <Grid item xs={12}>
           <Autocomplete
-            value={selectedDevice}
+            value={selectedDevice} disableClearable
             options={[...availableDevices, 
               {label: "New Device", value: "NewDevice"}, 
               {label: "External Recording", value: "ExternalRecordings"}, 
@@ -175,7 +182,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
           <Grid item xs={12} style={{display: "flex", flexDirection: "column"}}>
             <Autocomplete
               value={externalDataInfo.format}
-              options={[{label: "CSV", value: "CSV"}, {label: "UF MDAT Format", value: "MDAT"}]}
+              options={[{label: "CSV", value: "CSV"}, {label: "Delsys HPF CSV Format", value: "HPFCSV"}, {label: "UF MDAT Format", value: "MDAT"}]}
               onChange={(event, value) => {
                 setExternalDataInfo({...externalDataInfo, format: value.value})
               }}
@@ -233,11 +240,173 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
                     fullWidth
                   />
                 </MDBox>
+                <MDBox>
+                <Autocomplete
+                  value={externalDataInfo.timezone}
+                  options={[
+                    "Browser Local Time",
+                    "UTC-12:00",
+                    "UTC-11:00",
+                    "UTC-10:00 (U.S. HST)",
+                    "UTC-09:30",
+                    "UTC-09:00 (U.S. HDT)",
+                    "UTC-08:00 (U.S. PST)",
+                    "UTC-07:00 (U.S. MST/PDT)",
+                    "UTC-06:00 (U.S. CST/MDT)",
+                    "UTC-05:00 (U.S. EST/CDT)",
+                    "UTC-04:00 (U.S. EDT)",
+                    "UTC-03:30",
+                    "UTC-03:00",
+                    "UTC-02:00",
+                    "UTC-01:00",
+                    "UTC+00:00 (U.K.)",
+                    "UTC+01:00",
+                    "UTC+02:00",
+                    "UTC+03:00",
+                    "UTC+03:30",
+                    "UTC+04:00",
+                    "UTC+04:30",
+                    "UTC+05:00",
+                    "UTC+05:30 (India)",
+                    "UTC+05:45",
+                    "UTC+06:00",
+                    "UTC+06:30",
+                    "UTC+07:00",
+                    "UTC+08:00 (China)",
+                    "UTC+09:00 (Japan, Korea)",
+                    "UTC+09:30",
+                    "UTC+10:00",
+                    "UTC+10:30",
+                    "UTC+11:00 (Australian Capital Territory)",
+                    "UTC+12:00",
+                    "UTC+13:00",
+                    "UTC+14:00",
+                  ]}
+                  isOptionEqualToValue={(option, value) => {
+                    return option.startsWith(value);
+                  }}
+                  onChange={(event, value) => {
+                    if (value.startsWith("UTC")) {
+                      setExternalDataInfo({...externalDataInfo, timezone: value.split(" ")[0]})
+                    } else {
+                      setExternalDataInfo({...externalDataInfo, timezone: value})
+                    }
+                  }}
+                  renderInput={(params) => (
+                    <FormField
+                      {...params}
+                      label={"Configure Recording Timezone"}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                  )}
+                />
+                </MDBox>
               </>
             ) : null }
             
+            {externalDataInfo.format === "HPFCSV" ? (
+              <>
+                <MDBox style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
+                  <TextField
+                    variant="standard"
+                    margin="dense"
+                    label="Recording Date"
+                    placeholder="Recording Time"
+                    value={externalDataInfo.startDate}
+                    type={"date"}
+                    onChange={(event) => setExternalDataInfo({...externalDataInfo, startDate: event.target.value})}
+                    fullWidth
+                  />
+                  <TextField
+                    variant="standard"
+                    margin="dense"
+                    label="Recording Time"
+                    placeholder="Recording Time"
+                    value={externalDataInfo.startTime}
+                    type={"time"}
+                    onChange={(event) => setExternalDataInfo({...externalDataInfo, startTime: event.target.value})}
+                    fullWidth
+                  />
+                </MDBox>
+                <MDBox>
+                <Autocomplete
+                  value={externalDataInfo.timezone}
+                  options={[
+                    "Browser Local Time",
+                    "UTC-12:00",
+                    "UTC-11:00",
+                    "UTC-10:00 (U.S. HST)",
+                    "UTC-09:30",
+                    "UTC-09:00 (U.S. HDT)",
+                    "UTC-08:00 (U.S. PST)",
+                    "UTC-07:00 (U.S. MST/PDT)",
+                    "UTC-06:00 (U.S. CST/MDT)",
+                    "UTC-05:00 (U.S. EST/CDT)",
+                    "UTC-04:00 (U.S. EDT)",
+                    "UTC-03:30",
+                    "UTC-03:00",
+                    "UTC-02:00",
+                    "UTC-01:00",
+                    "UTC+00:00 (U.K.)",
+                    "UTC+01:00",
+                    "UTC+02:00",
+                    "UTC+03:00",
+                    "UTC+03:30",
+                    "UTC+04:00",
+                    "UTC+04:30",
+                    "UTC+05:00",
+                    "UTC+05:30 (India)",
+                    "UTC+05:45",
+                    "UTC+06:00",
+                    "UTC+06:30",
+                    "UTC+07:00",
+                    "UTC+08:00 (China)",
+                    "UTC+09:00 (Japan, Korea)",
+                    "UTC+09:30",
+                    "UTC+10:00",
+                    "UTC+10:30",
+                    "UTC+11:00 (Australian Capital Territory)",
+                    "UTC+12:00",
+                    "UTC+13:00",
+                    "UTC+14:00",
+                  ]}
+                  isOptionEqualToValue={(option, value) => {
+                    return option.startsWith(value);
+                  }}
+                  onChange={(event, value) => {
+                    if (value.startsWith("UTC")) {
+                      setExternalDataInfo({...externalDataInfo, timezone: value.split(" ")[0]})
+                    } else {
+                      setExternalDataInfo({...externalDataInfo, timezone: value})
+                    }
+                  }}
+                  renderInput={(params) => (
+                    <FormField
+                      {...params}
+                      label={"Configure Recording Timezone"}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                  )}
+                />
+                </MDBox>
+              </>
+            ) : null }
           </Grid>
         ) : null}
+        
+        {selectedDevice.value === "NewDevice" ? (
+          <Grid item xs={12} style={{display: "flex", flexDirection: "column"}}>
+            <TextField
+              variant="standard"
+              margin="dense"
+              label="Device Name"
+              placeholder="New Device"
+              value={selectedDevice.newName}
+              onChange={(event) => setSelectedDevice({...selectedDevice, newName: event.target.value})}
+            />
+          </Grid>
+        ) : null}
+
       </Grid>
         
       <MDBox pt={2}>

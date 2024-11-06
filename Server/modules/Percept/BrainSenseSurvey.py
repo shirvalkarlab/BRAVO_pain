@@ -144,7 +144,6 @@ def querySurveyResults(user, patientUniqueID, options, requestRaw, authority):
                 Database.saveSourceFiles(survey, "BrainSenseSurvey", "Combined", recording.recording_id, recording.device_deidentified_id)
 
             # Monopolar Estimation
-
             MonopolarEstimation = []
             for i in range(len(survey["ChannelNames"])):
                 data = dict()
@@ -153,6 +152,8 @@ def querySurveyResults(user, patientUniqueID, options, requestRaw, authority):
                 else:
                     data["DeviceName"] = device.device_name
                 data["Timestamp"] = recording.recording_date.timestamp()
+                sessionFile = models.PerceptSession.objects.filter(deidentified_id=recording.source_file).first()
+                data["Timezone"] = "UTC" + sessionFile.session_timezone
                 data["Channel"], data["Hemisphere"] = Percept.reformatChannelName(survey["ChannelNames"][i])
                 for lead in leads:
                     if lead["TargetLocation"].startswith(data["Hemisphere"]):
@@ -203,6 +204,7 @@ def querySurveyResults(user, patientUniqueID, options, requestRaw, authority):
                                 if len(data["MeanPower"]) == 0:
                                     data["DeviceName"] = MonopolarEstimation[i]["DeviceName"]
                                     data["Timestamp"] = MonopolarEstimation[i]["Timestamp"]
+                                    data["Timezone"] = MonopolarEstimation[i]["Timezone"]
                                     data["Hemisphere"] = MonopolarEstimation[i]["Hemisphere"]
                                     data["CustomName"] = MonopolarEstimation[i]["CustomName"]
                                     data["Frequency"] = MonopolarEstimation[i]["Frequency"]
@@ -229,6 +231,7 @@ def querySurveyResults(user, patientUniqueID, options, requestRaw, authority):
                                 if len(data["MeanPower"]) == 0:
                                     data["DeviceName"] = MonopolarEstimation[i]["DeviceName"]
                                     data["Timestamp"] = MonopolarEstimation[i]["Timestamp"]
+                                    data["Timezone"] = MonopolarEstimation[i]["Timezone"]
                                     data["Hemisphere"] = MonopolarEstimation[i]["Hemisphere"]
                                     data["CustomName"] = MonopolarEstimation[i]["CustomName"]
                                     data["Frequency"] = MonopolarEstimation[i]["Frequency"]

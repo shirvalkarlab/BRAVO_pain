@@ -470,6 +470,8 @@ def queryRealtimeStreamRecording(analysis, cardiacFilter=False, refresh=False):
     if TimeRecording:
         BrainSenseData["Info"].update(TimeRecording.recording_info)
         BrainSenseData["TimeDomain"] = Database.loadSourceDataPointer(TimeRecording.recording_datapointer)
+        sessionFile = models.PerceptSession.objects.filter(deidentified_id=TimeRecording.source_file).first()
+        BrainSenseData["Timezone"] = "UTC" + sessionFile.session_timezone
     
     if not "CardiacFilter" in TimeRecording.recording_info:
         TimeRecording.recording_info["CardiacFilter"] = cardiacFilter
