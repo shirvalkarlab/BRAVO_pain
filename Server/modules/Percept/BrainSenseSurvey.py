@@ -153,7 +153,11 @@ def querySurveyResults(user, patientUniqueID, options, requestRaw, authority):
                     data["DeviceName"] = device.device_name
                 data["Timestamp"] = recording.recording_date.timestamp()
                 sessionFile = models.PerceptSession.objects.filter(deidentified_id=recording.source_file).first()
-                data["Timezone"] = "UTC" + sessionFile.session_timezone
+                if sessionFile:
+                    data["Timezone"] = "UTC" + sessionFile.session_timezone
+                else:
+                    data["Timezone"] = ""
+                    
                 data["Channel"], data["Hemisphere"] = Percept.reformatChannelName(survey["ChannelNames"][i])
                 for lead in leads:
                     if lead["TargetLocation"].startswith(data["Hemisphere"]):

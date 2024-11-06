@@ -186,7 +186,10 @@ def queryTherapyConfigurations(user, device, TherapyHistoryObjs, authority):
         TherapyInfo["TherapyDate"] = therapy.therapy_date.timestamp()
         
         sessionFile = models.PerceptSession.objects.filter(deidentified_id=therapy.source_file).first()
-        TherapyInfo["Timezone"] = "UTC" + sessionFile.session_timezone
+        if sessionFile:
+            TherapyInfo["Timezone"] = "UTC" + sessionFile.session_timezone
+        else:
+            TherapyInfo["Timezone"] = ""
         TherapyInfo["TherapyGroup"] = therapy.group_id
         TherapyInfo["TherapyType"] = therapy.therapy_type
         TherapyInfo["LogID"] = str(therapy.history_log_id)

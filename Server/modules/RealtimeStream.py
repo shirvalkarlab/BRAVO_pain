@@ -202,7 +202,10 @@ def queryRealtimeStreamOverview(user, patientUniqueID, authority):
                     TimeRecording.save()
 
                 sessionFile = models.PerceptSession.objects.filter(deidentified_id=TimeRecording.source_file).first()
-                data["Timezone"] = "UTC" + sessionFile.session_timezone
+                if sessionFile:
+                    data["Timezone"] = "UTC" + sessionFile.session_timezone
+                else:
+                    data["Timezone"] = ""
                 data["Duration"] = TimeRecording.recording_duration
                 if data["Duration"] < 5:
                     continue
@@ -261,7 +264,10 @@ def queryRealtimeStreamOverview(user, patientUniqueID, authority):
                     PowerRecording.save()
                 
                 sessionFile = models.PerceptSession.objects.filter(deidentified_id=TimeRecording.source_file).first()
-                data["Timezone"] = "UTC" + sessionFile.session_timezone
+                if sessionFile:
+                    data["Timezone"] = "UTC" + sessionFile.session_timezone
+                else:
+                    data["Timezone"] = ""
                 data["Therapy"] = PowerRecording.recording_info["Therapy"]
                 data["Duration"] = RawData["Duration"]
 

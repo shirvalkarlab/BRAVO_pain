@@ -227,7 +227,10 @@ def queryMontageData(user, devices, timestamps, authority):
 
                 data = dict()
                 data["Timestamp"] = stream["StartTime"]
-                data["Timezone"] = "UTC" + sessionFile.session_timezone
+                if sessionFile:
+                    data["Timezone"] = "UTC" + sessionFile.session_timezone
+                else:
+                    data["Timezone"] = ""
                 data["Duration"] = stream["Duration"]
                 data["DeviceID"] = devices[i]
                 data["Channels"] = stream["ChannelNames"]
