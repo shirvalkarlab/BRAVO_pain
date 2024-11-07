@@ -95,6 +95,27 @@ const StimulationReferenceButton = ({value, onChange}) => {
   )
 }
 
+const indexOf = (list, dict1) => {
+  for (let i in list) {
+    if (dict1 == list[i]) return i;
+    if (JSON.stringify(dict1) === JSON.stringify(list[i])) return i;
+  }
+  return -1;
+}
+
+const matchDictionary = (dict1, dict2) => {
+  return JSON.stringify(dict1) === JSON.stringify(dict2);
+}
+
+const includesDict = (list, dict1) => {
+  for (let dict2 of list) {
+    if (matchDictionary(dict1, dict2)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function BrainSenseStreaming() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
@@ -104,7 +125,7 @@ function BrainSenseStreaming() {
   const [data, setData] = React.useState([]);
   const [annotations, setAnnotations] = React.useState([]);
   const [drawerOpen, setDrawerOpen] = React.useState({open: false, config: {}});
-  const [dataToRender, setDataToRender] = React.useState(false);
+  const [dataToRender, setDataToRender] = React.useState([]);
   const [channelInfos, setChannelInfos] = React.useState([]);
   const [recordingName, setRecordingName] = React.useState("");
 
@@ -161,21 +182,44 @@ function BrainSenseStreaming() {
       recordingId: timestamp, 
       requestData: true
     }).then((response) => {
-      setChannelInfos(ChannelInfos);
+      setChannelInfos([...ChannelInfos]);
       setReferenceType(ChannelInfos.map((value) => "Ipsilateral"));
-      setDataToRender(response.data);
+      setDataToRender([{...response.data, ChannelInfos: ChannelInfos, AnalysisId: timestamp}]);
 
-      if (Object.keys(response.data.EventPSDs).length > 0) {
-        setEventPSDs(response.data.EventPSDs)
-      } else {
-        setEventPSDs(false);
-      }
-      if (Object.keys(response.data.EventOnsetSpectrum).length > 0) {
-        setEventSpectrograms(response.data.EventOnsetSpectrum);
-      } else {
-        setEventSpectrograms(false);
-      }
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
 
+  const addRecordingData = (timestamp) => {
+    var ChannelInfos = [];
+    for (var i in data) {
+      if (data[i].AnalysisID == timestamp) {
+        ChannelInfos = data[i].Channels;
+        setRecordingName((recordingName) => recordingName + (recordingName.length > 0 ? " + " : "") + data[i].AnalysisLabel)
+      }
+    }
+    //setRecordingId(timestamp);
+
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/queryNeuralActivityStreaming", {
+      id: patientID, 
+      recordingId: timestamp, 
+      requestData: true
+    }).then((response) => {
+      setChannelInfos((currentInfo) => {
+        for (let i in ChannelInfos) {
+          if (!includesDict(currentInfo, ChannelInfos[i])) {
+            currentInfo.push(ChannelInfos[i])
+          }
+        }
+        return [...currentInfo];
+      });
+      setDataToRender((dataToRender) => {
+        dataToRender.push({...response.data, ChannelInfos: ChannelInfos, AnalysisId: timestamp})
+        return [...dataToRender];
+      });
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -194,15 +238,21 @@ function BrainSenseStreaming() {
     } else {
       const Events = Object.keys(eventPSDs);
       if (Events.length > 0) {
-        eventPSDSelector.options = eventPSDs[Events[0]].map((value, i) => {
-          const [side, target] = channelInfos[i].Hemisphere.split(" ");
-          let titleText = (channelInfos[i].Hemisphere == channelInfos[i].CustomName) ? dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.FigureStandardText, target, language) : channelInfos[i].CustomName;
-          titleText += (typeof channelInfos[i].Contacts) == "string" ? " " + channelInfos[i].Contacts : ` E${channelInfos[i].Contacts[0]}-E${channelInfos[i].Contacts[1]}`;
-          return {
-            text: titleText,
-            value: value.Channel
-          };
-        });
+        eventPSDSelector.options = [];
+        dataToRender.map((a, trial) => {
+          a.ChannelInfos.map((b, i) => {
+            const [side, target] = b.Hemisphere.split(" ");
+            let titleText = (b.Hemisphere == channelInfos[i].CustomName) ? dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.FigureStandardText, target, language) : b.CustomName;
+            titleText += (typeof b.Contacts) == "string" ? " " + b.Contacts : ` E${b.Contacts[0]}-E${b.Contacts[1]}`;
+            
+            if (!eventPSDSelector.options.map((c) => c.value).includes(a.Channels[i])) {
+              eventPSDSelector.options.push({
+                text: titleText,
+                value: a.Channels[i]
+              });
+            }
+          })
+        })
         eventPSDSelector.value = eventPSDSelector.options[0];
         setEventPSDSelector({...eventPSDSelector});
       } else {
@@ -243,13 +293,15 @@ function BrainSenseStreaming() {
     }
   };
 
-  const onCenterFrequencyChange = (side, freq) => {
+  const onCenterFrequencyChange = (side, freq, recordingId) => {
     var reference = "Ipsilateral";
+    /*
     for (let i in channelInfos) {
       if (channelInfos[i] == side) {
         reference = referenceType[i];
       }
     }
+      */
 
     SessionController.query("/api/queryNeuralActivityStreaming", {
       updateStimulationPSD: true,
@@ -260,9 +312,10 @@ function BrainSenseStreaming() {
       stimulationReference: reference
     }).then((response) => {
       setChannelPSDs((channelPSDs) => {
-        for (let i in channelInfos) {
-          if (channelInfos[i] == side) {
-            channelPSDs[i] = response.data;
+        for (let i in dataToRender) {
+          if (dataToRender[i].AnalysisId == recordingId) {
+            const channelInfoIndex = indexOf(dataToRender[i].ChannelInfos, side);
+            channelPSDs[i][channelInfoIndex] = response.data;
           }
         }
         return [...channelPSDs];
@@ -349,40 +402,42 @@ function BrainSenseStreaming() {
   }
 
   const exportCurrentStream = () => {
-    var csvData = "Time"
-    for (var i = 0; i < dataToRender["Channels"].length; i++) {
-      csvData += "," + dataToRender["Channels"][i] + " Raw";
-      csvData += "," + dataToRender["Channels"][i] + " Stimulation";
-    }
-    csvData += "\n";
-  
-    for (var i = 0; i < dataToRender.Stream[0]["Time"].length; i++) {
-      csvData += dataToRender.Stream[0]["Time"][i] + dataToRender.Timestamp;
-      for (var j = 0; j < dataToRender["Channels"].length; j++) {
-        csvData += "," + dataToRender.Stream[j]["RawData"][i];
-        for (var k = 0; k < dataToRender["Stimulation"].length; k++) {
-          if (dataToRender["Stimulation"][k]["Name"] == dataToRender["Channels"][j]) {
-            for (var l = 0; l < dataToRender["Stimulation"][k]["Amplitude"].length; l++) {
-              if (dataToRender["Stimulation"][k]["Time"][l] >= dataToRender.Stream[j]["Time"][i]+dataToRender.Timestamp-dataToRender.PowerTimestamp) {
-                break;
+    for (let trial in dataToRender) {
+      var csvData = "Time"
+      for (var i = 0; i < dataToRender[trial]["Channels"].length; i++) {
+        csvData += "," + dataToRender[trial]["Channels"][i] + " Raw";
+        csvData += "," + dataToRender[trial]["Channels"][i] + " Stimulation";
+      }
+      csvData += "\n";
+    
+      for (var i = 0; i < dataToRender[trial].Stream[0]["Time"].length; i++) {
+        csvData += dataToRender[trial].Stream[0]["Time"][i] + dataToRender[trial].Timestamp;
+        for (var j = 0; j < dataToRender[trial]["Channels"].length; j++) {
+          csvData += "," + dataToRender[trial].Stream[j]["RawData"][i];
+          for (var k = 0; k < dataToRender[trial]["Stimulation"].length; k++) {
+            if (dataToRender[trial]["Stimulation"][k]["Name"] == dataToRender[trial]["Channels"][j]) {
+              for (var l = 0; l < dataToRender[trial]["Stimulation"][k]["Amplitude"].length; l++) {
+                if (dataToRender[trial]["Stimulation"][k]["Time"][l] >= dataToRender[trial].Stream[j]["Time"][i]+dataToRender[trial].Timestamp-dataToRender[trial].PowerTimestamp) {
+                  break;
+                }
               }
-            }
-            if (l == 0) {
-              csvData += "," + dataToRender["Stimulation"][k]["Amplitude"][l];
-            } else {
-              csvData += "," + dataToRender["Stimulation"][k]["Amplitude"][l-1];
+              if (l == 0) {
+                csvData += "," + dataToRender[trial]["Stimulation"][k]["Amplitude"][l];
+              } else {
+                csvData += "," + dataToRender[trial]["Stimulation"][k]["Amplitude"][l-1];
+              }
             }
           }
         }
+        csvData += "\n";
       }
-      csvData += "\n";
+      
+      var downloader = document.createElement('a');
+      downloader.href = 'data:text/csv;charset=utf-8,' + encodeURI(csvData);
+      downloader.target = '_blank';
+      downloader.download = 'NeuralRecordingsExport.csv';
+      downloader.click();
     }
-    
-    var downloader = document.createElement('a');
-    downloader.href = 'data:text/csv;charset=utf-8,' + encodeURI(csvData);
-    downloader.target = '_blank';
-    downloader.download = 'NeuralRecordingsExport.csv';
-    downloader.click();
   };
 
   const exportWebData = () => {
@@ -469,11 +524,28 @@ function BrainSenseStreaming() {
 
   // Divide all PSDs by day or by channel
   React.useEffect(() => {
-    if (dataToRender.Stream) {
-      setChannelPSDs(dataToRender.Stream.map((data) => data.StimPSD));
-    } else {
-      setChannelPSDs([]);
-    }
+    setChannelPSDs(dataToRender.map((a) => a.Stream ? a.Stream.map((data) => data.StimPSD) : []));
+
+    setEventPSDs(() => {
+      let eventPSDs = {};
+      for (let trial in dataToRender) {
+        for (let key in dataToRender[trial].EventPSDs) {
+          eventPSDs[key] = dataToRender[trial].EventPSDs[key]
+        }
+      }
+      return eventPSDs;
+    });
+    
+    setEventSpectrograms(() => {
+      let eventOnsetSpectrum = {};
+      for (let trial in dataToRender) {
+        for (let key in dataToRender[trial].EventOnsetSpectrum) {
+          eventOnsetSpectrum[key] = dataToRender[trial].EventOnsetSpectrum[key]
+        }
+      }
+      return eventOnsetSpectrum;
+    });
+    
   }, [dataToRender]);
 
   const handleAddEvent = async (eventInfo) => {
@@ -491,12 +563,12 @@ function BrainSenseStreaming() {
 
       if (response.status == 200) {
         setDataToRender((dataToRender) => {
-          dataToRender.Annotations = [...dataToRender.Annotations, {
+          dataToRender[dataToRender.length-1].Annotations = [...dataToRender[dataToRender.length-1].Annotations, {
             Time: eventInfo.time / 1000,
             Name: eventInfo.name,
             Duration: parseFloat(eventInfo.duration)
           }];
-          return {...dataToRender};
+          return [...dataToRender];
         });
 
         setAnnotations((annotations) => {
@@ -589,7 +661,7 @@ function BrainSenseStreaming() {
                     <Grid item xs={12}>
                       <MDBox p={2} lineHeight={1}>
                         {data.length > 0 ? (
-                          <BrainSenseStreamingTable data={data} getRecordingData={getRecordingData} handleMerge={handleMerge}/>
+                          <BrainSenseStreamingTable data={data} getRecordingData={getRecordingData} addRecordingData={addRecordingData} handleMerge={handleMerge}/>
                         ) : (
                           <MDTypography variant="h6" fontSize={24}>
                             {dictionary.WarningMessage.NoData[language]}
@@ -600,7 +672,7 @@ function BrainSenseStreaming() {
                   </Grid>
                 </Card>
               </Grid>
-              {dataToRender && channelInfos.length > 0 ? (
+              {dataToRender.length > 0 && channelInfos.length > 0 ? (
                 <Grid item xs={12}>
                   <Card sx={{width: "100%"}}>
                     <Grid container>
@@ -633,14 +705,6 @@ function BrainSenseStreaming() {
                             </MenuItem>
                           </Menu>
                           </MDBox>
-                          <MDBox display={"flex"} flexDirection={"column"}>
-                            <MDButton size="small" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => toggleCardiacFilter()}>
-                              {dictionaryLookup(dictionary.BrainSenseStreaming.Figure.CardiacFilter, dataToRender.Info.CardiacFilter ? "Remove" : "Add", language)}
-                            </MDButton>
-                            <MDButton size="small" variant="contained" color="info" onClick={() => toggleWaveletTransform()}>
-                              {dictionaryLookup(dictionary.BrainSenseStreaming.Figure.Wavelet, drawerOpen.config.SpectrogramMethod.value === "Wavelet" ? "Remove" : "Add", language)}
-                            </MDButton>
-                          </MDBox>
                         </MDBox>
                       </Grid>
                       {recordingName === "" ? null : (
@@ -658,42 +722,46 @@ function BrainSenseStreaming() {
                           figureTitle={"TimeFrequencyAnalysis"} height={700}/>
                       </Grid>
                       <Grid item xs={12}>
-                        {adaptiveClosedLoopParameters(dataToRender.Info.Therapy)}
                       </Grid>
                     </Grid>
                   </Card>
                 </Grid>
               ) : null}
-              {!BrainSensestreamLayout.StimulationPSDs && dataToRender && channelInfos.length > 0 ? (
-                <Grid item xs={12}>
-                  <Card>
-                    <Grid container>
-                      <Grid item xs={12}>
-                        <MDBox p={3}>
-                          <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                            {dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "EffectOfStim", language)}
-                          </MDTypography>
-                        </MDBox>
+
+              {dataToRender.map((a, i) => {
+                return (!BrainSensestreamLayout.StimulationPSDs && channelPSDs[i]) ? (
+                  <Grid key={a.AnalysisId} item xs={12}>
+                    <Card>
+                      <Grid container>
+                        <Grid item xs={12}>
+                          <MDBox p={3}>
+                            <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
+                              {dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "EffectOfStim", language)}
+                            </MDTypography>
+                          </MDBox>
+                        </Grid>
+                        {channelPSDs[i].map((channelData, index) => {
+                          let channelInfoIndex = indexOf(channelInfos, a.ChannelInfos[index]);
+                          if (channelInfoIndex < 0) return;
+                          return <React.Fragment key={a.AnalysisId + index}>
+                            <Grid item xs={12} lg={6}>
+                              <MDBox display={"flex"} flexDirection={"column"}>
+                                <StimulationReferenceButton value={referenceType[index]} onChange={(event, value) => handlePSDUpdate(value, channelInfos[channelInfoIndex])} />
+                                <StimulationPSD dataToRender={channelData} channelInfos={channelInfos[channelInfoIndex]} type={"Left"} figureTitle={a.AnalysisId + channelInfos[channelInfoIndex].Hemisphere + index.toFixed(0) + " PSD"} onCenterFrequencyChange={(x,y) => onCenterFrequencyChange(x,y,a.AnalysisId)} height={600}/>
+                              </MDBox>
+                            </Grid>
+                            <Grid item xs={12} lg={6}>
+                              <StimulationBoxPlot dataToRender={channelData} channelInfos={channelInfos[channelInfoIndex]} type={"Left"} figureTitle={a.AnalysisId + channelInfos[channelInfoIndex].Hemisphere + index.toFixed(0) + " Box"} height={600}/>
+                            </Grid>
+                          </React.Fragment>
+                        })}
                       </Grid>
-                      {channelPSDs.map((channelData, index) => {
-                        if (!channelInfos[index]) return;
-                        return <React.Fragment key={index}>
-                          <Grid item xs={12} lg={6}>
-                            <MDBox display={"flex"} flexDirection={"column"}>
-                              <StimulationReferenceButton value={referenceType[index]} onChange={(event, value) => handlePSDUpdate(value, channelInfos[index])} />
-                              <StimulationPSD dataToRender={channelData} channelInfos={channelInfos[index]} type={"Left"} figureTitle={channelInfos[index].Hemisphere + index.toFixed(0) + " PSD"} onCenterFrequencyChange={onCenterFrequencyChange} height={600}/>
-                            </MDBox>
-                          </Grid>
-                          <Grid item xs={12} lg={6}>
-                            <StimulationBoxPlot dataToRender={channelData} channelInfos={channelInfos[index]} type={"Left"} figureTitle={channelInfos[index].Hemisphere + index.toFixed(0) + " Box"} height={600}/>
-                          </Grid>
-                        </React.Fragment>
-                      })}
-                    </Grid>
-                  </Card>
-                </Grid>
-              ) : null}
-              {(!BrainSensestreamLayout.EventStatePSD && eventPSDs) ? (
+                    </Card>
+                  </Grid>
+                ) : null}
+              )}
+
+              {(!BrainSensestreamLayout.EventStatePSD && Object.keys(eventPSDs).length > 0) ? (
                 <Grid item xs={12} md={6}> 
                   <Card sx={{width: "100%"}}>
                     <Grid container p={2}>
@@ -748,7 +816,8 @@ function BrainSenseStreaming() {
                   </Card>
                 </Grid>
               ) : null}
-              {(!BrainSensestreamLayout.EventOnsetSpectrum && eventSpectrograms) ? (
+
+              {(!BrainSensestreamLayout.EventOnsetSpectrum && Object.keys(eventSpectrograms).length > 0) ? (
                 <Grid item xs={12} md={6}> 
                   <Card sx={{width: "100%"}}>
                     <Grid container p={2}>

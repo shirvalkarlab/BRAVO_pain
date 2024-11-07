@@ -46,7 +46,7 @@ import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, children}) {
+function BrainSenseStreamingTable({data, getRecordingData, addRecordingData, handleMerge, toggle, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { patientID, language } = controller;
 
@@ -286,8 +286,6 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                 }
               }
 
-              console.log(recording)
-
               return <TableRow key={recording.AnalysisID}>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                   {recording.AnalysisLabel ? (
@@ -390,9 +388,18 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                   </MDTypography>
                 </TableCell>
                 <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDButton variant={"contained"} color="info" onClick={() => getRecordingData(recording.AnalysisID)} style={{padding: 0}}>
-                      {dictionary.PatientOverview.PatientInformation.View[language]}
+                  <MDBox>
+                  <MDButton variant={"contained"} color="info" onClick={() => getRecordingData(recording.AnalysisID)} style={{width: 100, padding: 0}} fullWidth>
+                    <MDTypography variant="h5" fontSize={13} color={"white"}>
+                      {"New View"}
+                    </MDTypography>
                   </MDButton>
+                  <MDButton variant={"contained"} color="warning" onClick={() => addRecordingData(recording.AnalysisID)} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
+                    <MDTypography variant="h5" fontSize={13} color={"white"}>
+                      {"Add to View"}
+                    </MDTypography>
+                  </MDButton>
+                  </MDBox>
                 </TableCell>
               </TableRow>
             })}
