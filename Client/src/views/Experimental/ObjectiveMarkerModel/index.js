@@ -112,7 +112,7 @@ function ObjectiveMarkerModel() {
       therapy: availableDevice.current.therapy,
       event: event
     }).then((response) => {
-      setMarkerModel({...markerModel, model: response.data.Model})
+      setMarkerModel({model: response.data.Model, timestamp: [], probability: [], params: {}})
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -129,7 +129,7 @@ function ObjectiveMarkerModel() {
       therapy: availableDevice.current.therapy,
       event: event
     }).then((response) => {
-      console.log(response.data)
+      setMarkerModel({model: response.data.Model, timestamp: [], probability: [], params: {}})
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -232,7 +232,7 @@ function ObjectiveMarkerModel() {
                   </Grid>
                 </Card>
               </Grid>
-              {data ? (
+              {markerModel.probability.length > 0 ? (
               <Grid item xs={12}>
                 <Card sx={{width: "100%"}}>
                   <MDBox p={2}>
