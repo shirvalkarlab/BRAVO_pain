@@ -940,6 +940,10 @@ export const dictionary = {
       en: "Patient Events",
       zh: "标记事件记录"
     },
+    "objective-marker": {
+      en: "Objective Markers",
+      zh: "Objective Markers"
+    },
     "external-recordings": {
       en: "External Recordings",
       zh: "External Recordings"
@@ -1029,6 +1033,10 @@ export const dictionary = {
     MultipleSegmentAnalysis: {
       en: "Multiple Segment Analysis",
       zh: "Multiple Segment Analysis"
+    },
+    ObjectiveMarkerModel: {
+      en: "Objective Markers",
+      zh: "Objective Markers"
     },
     PatientEvents: {
       en: "Patient Events",

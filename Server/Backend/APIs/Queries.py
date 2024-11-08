@@ -1072,7 +1072,90 @@ class QueryCustomAnnotations(RestViews.APIView):
                 return Response(status=200)
 
         return Response(status=400, data={"code": ERROR_CODE["MALFORMATED_REQUEST"]})
-    
+
+class QueryObjectiveMarkerModel(RestViews.APIView):
+    """ 
+
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if "id" in request.data and "request" in request.data:
+            Authority = {}
+            Authority["Level"] = Database.verifyAccess(request.user, request.data["id"])
+            if Authority["Level"] == 0:
+                return Response(status=404)
+
+            elif Authority["Level"] == 1:
+                Authority["Permission"] = Database.verifyPermission(request.user, request.data["id"], Authority, "ChronicLFPs")
+                PatientID = request.data["id"]
+
+            elif Authority["Level"] == 2:
+                PatientInfo = Database.extractAccess(request.user, request.data["id"])
+                deidentification = Database.extractPatientInfo(request.user, PatientInfo.authorized_patient_id, deidentifiedId=request.data["id"])
+                Authority["Permission"] = Database.verifyPermission(request.user, PatientInfo.authorized_patient_id, Authority, "ChronicLFPs")
+                PatientID = PatientInfo.authorized_patient_id
+
+            if request.data["request"] == "Overview":
+                data = dict()
+                availableDevices = Database.getPerceptDevices(request.user, PatientID, Authority)
+                DeviceTypes = [device.device_type for device in availableDevices]
+                if "Summit RC+S" in DeviceTypes:
+                    TherapyHistory = Therapy.queryTherapyHistory(request.user, PatientID, Authority)
+                    data["ChronicData"] = ChronicLogs.queryChronicLFPs(request.user, PatientID, TherapyHistory, Authority)
+                else:
+                    TherapyHistory = Therapy.queryTherapyHistory(request.user, PatientID, Authority)
+                    data["ChronicData"] = ChronicBrainSense.queryChronicLFPs(request.user, PatientID, TherapyHistory, Authority)
+                    data["ChronicData"] = ChronicBrainSense.addTherapyOverview(data["ChronicData"])
+
+                annotations = models.CustomAnnotations.objects.filter(patient_deidentified_id=PatientID)
+                data["ClinicianEvents"] = [{
+                    "Name": item.event_name,
+                    "Time": item.event_time.timestamp(),
+                    "Duration": item.event_duration
+                } for item in annotations]
+
+                return Response(status=200, data=data)
+            
+            elif request.data["request"] == "GenerateModel":
+                data = dict()
+                TherapyHistory = Therapy.queryTherapyHistory(request.user, PatientID, Authority)
+                data["ChronicData"] = ChronicBrainSense.queryChronicLFPs(request.user, PatientID, TherapyHistory, Authority)
+                data["ChronicData"] = ChronicBrainSense.addTherapyOverview(data["ChronicData"])
+                ObjectiveMarkerMLModel = AnalysisBuilder.createObjectiveMarkerModel(request.data["device"], request.data["target"], request.data["therapy"], request.data["event"], data["ChronicData"])
+
+                markerModel = models.ObjectiveMarkerModel.objects.filter(recording_id=PatientID, recording_channel=request.data["device"] + " " + request.data["target"], therapy_overview=request.data["therapy"], objective_marker=request.data["event"]).first()
+                if not markerModel:
+                    markerModel = models.ObjectiveMarkerModel(recording_id=PatientID, recording_channel=request.data["device"] + " " + request.data["target"], therapy_overview=request.data["therapy"], objective_marker=request.data["event"])
+                
+                markerModel.purgeFile()
+                markerModel.source_file = Database.saveModelFile(ObjectiveMarkerMLModel, markerModel.deidentified_id, PatientID)
+                markerModel.save()
+                
+                return Response(status=200, data=data)
+
+            elif request.data["request"] == "CheckModel":
+                markerModel = models.ObjectiveMarkerModel.objects.filter(recording_id=PatientID, recording_channel=request.data["device"] + " " + request.data["target"], therapy_overview=request.data["therapy"], objective_marker=request.data["event"]).first()
+                return Response(status=200, data={"Model": True if markerModel else False})
+
+            elif request.data["request"] == "GetModel":
+                data = dict()
+                TherapyHistory = Therapy.queryTherapyHistory(request.user, PatientID, Authority)
+                data["ChronicData"] = ChronicBrainSense.queryChronicLFPs(request.user, PatientID, TherapyHistory, Authority)
+                data["ChronicData"] = ChronicBrainSense.addTherapyOverview(data["ChronicData"])
+
+                markerModel = models.ObjectiveMarkerModel.objects.filter(recording_id=PatientID, recording_channel=request.data["device"] + " " + request.data["target"], therapy_overview=request.data["therapy"], objective_marker=request.data["event"]).first()
+                if not markerModel:
+                    Response(status=400, data={"code": ERROR_CODE["MALFORMATED_REQUEST"]})
+                
+                ObjectiveMarkerMLModel = Database.loadModelFile(markerModel.deidentified_id, PatientID)
+                ProbabilityTimestamp, EventProbability = AnalysisBuilder.applyObjectiveMarkerModel(ObjectiveMarkerMLModel, request.data["device"], request.data["target"], request.data["therapy"], request.data["event"], data["ChronicData"])
+                return Response(status=200, data={"Time": ProbabilityTimestamp, "Probability": EventProbability})
+
+        return Response(status=400, data={"code": ERROR_CODE["MALFORMATED_REQUEST"]})
+
+
 class QueryCustomizedAnalysis(RestViews.APIView):
     """ Query Customized Analysis.
 

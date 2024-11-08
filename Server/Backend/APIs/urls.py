@@ -62,6 +62,8 @@ urlpatterns = [
   
 	path('queryExternalRecordings', Queries.QueryExternalRecordings.as_view()),
     
+	path('queryObjectiveMarkerModel', Queries.QueryObjectiveMarkerModel.as_view()),
+  
 	path('queryCustomAnnotations', Queries.QueryCustomAnnotations.as_view()),
 	path('queryCustomizedAnalysis', Queries.QueryCustomizedAnalysis.as_view()),
 	path('queryRecordingsForAnalysis', Queries.QueryRecordingsForAnalysis.as_view()),

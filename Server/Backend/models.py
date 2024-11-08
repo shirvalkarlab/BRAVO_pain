@@ -285,6 +285,23 @@ class ImpedanceHistory(models.Model):
     impedance_record = models.JSONField(default=dict, null=True)
     session_date = models.DateTimeField(default=timezone.now)
 
+class ObjectiveMarkerModel(models.Model):
+    deidentified_id = models.UUIDField(default=uuid.uuid4)
+    recording_id = models.UUIDField(default=uuid.uuid4)
+    recording_channel = models.CharField(default="", max_length=64)
+    therapy_overview = models.CharField(default="", max_length=128)
+    objective_marker = models.CharField(default="", max_length=64)
+    source_file = models.CharField(default="", max_length=255)
+
+    def purgeFile(self):
+        if self.source_file == "":
+            return
+
+        try:
+            os.remove(DATABASE_PATH + "recordings" + os.path.sep + self.source_file)
+        except:
+            pass
+
 class PredictionModel(models.Model):
     recording_id = models.UUIDField(default=uuid.uuid4)
     recording_channel = models.CharField(default="", max_length=64)

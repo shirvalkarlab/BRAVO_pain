@@ -335,6 +335,29 @@ def normalizeCircadianPower(Power, Timestamp):
     
     return normPower
 
+def addTherapyOverview(LFPTrends):
+    for i in range(len(LFPTrends)):
+        if LFPTrends[i]["Hemisphere"].startswith("Left"):
+            Hemisphere = "LeftHemisphere"
+        else:
+            Hemisphere = "RightHemisphere"
+
+        TherapyList = list()
+        for j in range(len(LFPTrends[i]["Therapy"])):
+            if not Hemisphere in LFPTrends[i]["Therapy"][j].keys():
+                continue
+            Therapy = LFPTrends[i]["Therapy"][j][Hemisphere]
+            if "SensingSetup" in Therapy.keys():
+                TherapyOverview = f"{Therapy['Frequency']}Hz {Therapy['PulseWidth']}uS {Therapy['Channel']} @ {Therapy['SensingSetup']['FrequencyInHertz']}Hz"
+            else:
+                TherapyOverview = f"{Therapy['Frequency']}Hz {Therapy['PulseWidth']}uS {Therapy['Channel']} @ {0}Hz"
+            LFPTrends[i]["Therapy"][j]["TherapyOverview"] = TherapyOverview
+
+            TherapyList.append(TherapyOverview)
+        LFPTrends[i]["TherapyList"] = uniqueList(TherapyList)
+    return LFPTrends
+
+
 def processChronicLFPs(LFPTrends, timezoneOffset=0, normalizeCircadian=False):
     """ Process Chronic LFPs based on Therapy History.
 

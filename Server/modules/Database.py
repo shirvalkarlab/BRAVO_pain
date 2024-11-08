@@ -598,6 +598,23 @@ def saveSourceFiles(datastruct, datatype, info, id, device_id):
         file.write(blosc.compress(pData))
     return filename
 
+def saveModelFile(model, id, device_id):
+    try:
+        os.mkdir(DATABASE_PATH + "recordings" + os.path.sep + str(device_id))
+    except Exception:
+        pass
+
+    filename = str(device_id) + os.path.sep + "MLModel_" + str(id) + ".pkl"
+    with open(DATABASE_PATH + "recordings" + os.path.sep + filename, "wb+") as file:
+        pickle.dump(model, file)
+    return filename
+
+def loadModelFile(id, device_id):
+    filename = str(device_id) + os.path.sep + "MLModel_" + str(id) + ".pkl"
+    with open(DATABASE_PATH + "recordings" + os.path.sep + filename, "rb") as file:
+        model = pickle.load(file)
+    return model
+
 def loadSourceDataPointer(filename, bytes=False):
     with open(DATABASE_PATH + "recordings" + os.path.sep + filename, "rb") as file:
         if bytes:

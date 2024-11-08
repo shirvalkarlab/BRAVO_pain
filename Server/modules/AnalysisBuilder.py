@@ -32,6 +32,8 @@ from io import BytesIO
 import copy
 import websocket
 from scipy import signal, io, stats, optimize, interpolate
+from sklearn import svm
+import random
 from specparam import SpectralModel
 
 from Backend import models
@@ -1487,20 +1489,24 @@ def handleCalculateTimeOfSpectralChanges(step, RecordingIds, Results, Configurat
                         TimeSelection = PythonUtility.rangeSelection(RawData["Features"][i]["Time"], baselineTime, "inclusive")
                         if not np.any(TimeSelection):
                             continue 
+                        
+                        if not RawData["Features"][i]["Channel"] in BaselinePower.keys():
+                            BaselinePower[RawData["Features"][i]["Channel"]] = {}
+                        
                         for key in RawData["Features"][i].keys():
                             if key == "Time" or key == "Channel":
                                 continue
                             
                             if not key in BaselinePower.keys():
-                                BaselinePower[key] = []
-                            BaselinePower[key].extend(RawData["Features"][i][key][TimeSelection])
+                                BaselinePower[RawData["Features"][i]["Channel"]][key] = []
+                            BaselinePower[RawData["Features"][i]["Channel"]][key].extend(RawData["Features"][i][key][TimeSelection])
                     
                     for i in range(len(RawData["Features"])):
                         for key in RawData["Features"][i].keys():
                             if key == "Time" or key == "Channel":
                                 continue
 
-                            RawData["Features"][i][key] = (RawData["Features"][i][key] - np.mean(BaselinePower[key])) / np.std(BaselinePower[key])
+                            RawData["Features"][i][key] = (RawData["Features"][i][key] - np.mean(BaselinePower[RawData["Features"][i]["Channel"]][key])) / np.std(BaselinePower[RawData["Features"][i]["Channel"]][key])
                         SpectralFeatures.append(RawData["Features"][i])
 
             ProcessedData = {"ResultType": "SpectralFeaturesNorm", "Features": SpectralFeatures}
@@ -1710,6 +1716,53 @@ def handleExtractNarrowBandFeature(step, RecordingIds, Results, Configuration, a
         "ProcessedData": str(recording.recording_id),
         "Type": "NarrowBandFeatures"
     }
+
+PredictionTimestamp = np.linspace(-150*60, 150*60, 31)
+
+def createObjectiveMarkerModel(deviceName, targetName, therapyOverview, eventName, chronicLFPs):
+    for i in range(len(chronicLFPs)):
+        if chronicLFPs[i]["Device"] == deviceName and chronicLFPs[i]["Hemisphere"] == targetName:
+            Features = []
+            Labels = []
+            for j in range(len(chronicLFPs[i]["Therapy"])):
+                if chronicLFPs[i]["Therapy"][j]["TherapyOverview"] == therapyOverview:
+                    chronicLFPs[i]["Power"][j] = np.array(chronicLFPs[i]["Power"][j])
+                    chronicLFPs[i]["Timestamp"][j] = np.array(chronicLFPs[i]["Timestamp"][j])
+                    for k in range(len(chronicLFPs[i]["EventName"][j])):
+                        if chronicLFPs[i]["EventName"][j][k] == eventName:
+                            Windowed = PythonUtility.rangeSelection(chronicLFPs[i]["Timestamp"][j], [chronicLFPs[i]["EventTime"][j][k]-150*60, chronicLFPs[i]["EventTime"][j][k]+150*60])
+                            NewTimestamp = PredictionTimestamp + chronicLFPs[i]["EventTime"][j][k]
+                            
+                            if np.sum(Windowed) < 20:
+                                continue
+
+                            Features.append(np.interp(NewTimestamp, chronicLFPs[i]["Timestamp"][j][Windowed], chronicLFPs[i]["Power"][j][Windowed]))
+                            Labels.append(1)
+                    
+                    for k in range(np.sum(np.array(Labels)==1) - np.sum(np.array(Labels)==0)):
+                        newIndex = random.randint(len(PredictionTimestamp), len(chronicLFPs[i]["Timestamp"][j])-1)
+                        Features.append(chronicLFPs[i]["Power"][j][newIndex-len(PredictionTimestamp):newIndex])
+                        Labels.append(0)
+
+            model = svm.SVC(probability=True)
+            model.fit(Features, Labels)
+            return model
+
+def applyObjectiveMarkerModel(model, deviceName, targetName, therapyOverview, eventName, chronicLFPs):
+    EventProbability = []
+    ProbabilityTimestamp = []
+    for i in range(len(chronicLFPs)):
+        if chronicLFPs[i]["Device"] == deviceName and chronicLFPs[i]["Hemisphere"] == targetName:
+            for j in range(len(chronicLFPs[i]["Therapy"])):
+                if chronicLFPs[i]["Therapy"][j]["TherapyOverview"] == therapyOverview:
+                    chronicLFPs[i]["Power"][j] = np.array(chronicLFPs[i]["Power"][j])
+                    chronicLFPs[i]["Timestamp"][j] = np.array(chronicLFPs[i]["Timestamp"][j])
+                    
+                    for k in range(len(chronicLFPs[i]["Power"][j])-len(PredictionTimestamp)):
+                        EventProbability.append(model.predict_proba(chronicLFPs[i]["Power"][j][k:k+len(PredictionTimestamp)].reshape((1, -1)))[0][1])
+                        ProbabilityTimestamp.append(chronicLFPs[i]["Timestamp"][j][int(k+len(PredictionTimestamp)/2)])
+    
+    return ProbabilityTimestamp, EventProbability
 
 def handleExportStructure(step, RecordingIds, Configuration, analysis):
     ProcessedData = []
