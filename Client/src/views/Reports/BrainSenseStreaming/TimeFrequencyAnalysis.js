@@ -105,7 +105,8 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
         fig.plot(timeArray, data[trial].Stream[i].Filtered, {
           linewidth: 0.5,
           hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
-          analysisId: data[trial].AnalysisId
+          analysisId: data[trial].AnalysisId,
+          metadata: data[trial].Timezone
         }, ax[channelIndex*2 + 0]);
 
         if (xlim[0] === 0 || xlim[0] > timeArray[0]) {
@@ -220,6 +221,8 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       ref.current.on("plotly_click", (data) => {
         setEventInfo((eventInfo) => {
           eventInfo.time = new Date(data.points[0].x).getTime();
+          const OffsetTime = SessionController.getTimezoneOffset(eventInfo.time, data.points[0].data.metadata);
+          eventInfo.time += OffsetTime;
           return {...eventInfo};
         });
       });

@@ -584,20 +584,21 @@ function BrainSenseStreaming() {
   };
 
   const handleDeleteEvent = async (eventInfo) => {
-    if (dataToRender.Annotations.length > 0) {
-      eventInfo.targetInfo = eventInfo;
-      eventInfo.targetInfo.timeDiff = 10;
-    }
+    eventInfo.targetInfo = {};
+    eventInfo.targetInfo.timeDiff = 100;
 
-    for (let i = 0; i < dataToRender.Annotations.length; i++) {
-      let absoluteDiffTime = Math.abs(dataToRender.Annotations[i].Time - eventInfo.time/1000);
-      if (absoluteDiffTime < eventInfo.targetInfo.timeDiff) {
-        eventInfo.targetInfo = dataToRender.Annotations[i];
-        eventInfo.targetInfo.timeDiff = absoluteDiffTime;
+    for (let j in dataToRender) {
+      for (let i = 0; i < dataToRender[j].Annotations.length; i++) {
+        let absoluteDiffTime = Math.abs(dataToRender[j].Annotations[i].Time - eventInfo.time/1000);
+        if (absoluteDiffTime < eventInfo.targetInfo.timeDiff) {
+          eventInfo.targetInfo = dataToRender[j].Annotations[i];
+          eventInfo.targetInfo.trial = j;
+          eventInfo.targetInfo.timeDiff = absoluteDiffTime;
+        }
       }
     }
     
-    if (eventInfo.targetInfo.timeDiff < 10) {
+    if (eventInfo.targetInfo.timeDiff < 100) {
       setAlert(<MuiAlertDialog 
         title={`Remove ${eventInfo.targetInfo.Name} Event`}
         message={`Are you sure you want to delete the entry [${eventInfo.targetInfo.Name}] @ ${new Date(eventInfo.targetInfo.Time*1000)} ?`}
@@ -614,13 +615,13 @@ function BrainSenseStreaming() {
             time: eventInfo.targetInfo.Time
           }).then(() => {
             setDataToRender((dataToRender) => {
-              dataToRender.Annotations = dataToRender.Annotations.filter((a) => {
+              dataToRender[eventInfo.targetInfo.trial].Annotations = dataToRender[eventInfo.targetInfo.trial].Annotations.filter((a) => {
                 if (a.Name == eventInfo.targetInfo.Name && a.Time == eventInfo.targetInfo.Time && a.Duration == eventInfo.targetInfo.Duration) {
                   return false;
                 }
                 return true;
               })
-              return {...dataToRender};
+              return [...dataToRender];
             });
             setAlert(null);
           }).catch((error) => {
