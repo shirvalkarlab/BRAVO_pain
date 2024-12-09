@@ -235,6 +235,11 @@ def AuthorizeRecordingAccess(user, researcher_id, patient_id, recording_id="", r
                     CurrentStruct[recording_type] = [0, datetime.utcnow().timestamp()]
                     DeidentifiedPatientID.authorized_time_range = CurrentStruct
                     DeidentifiedPatientID.save()
+                else:
+                    CurrentStruct = DeidentifiedPatientID.authorized_time_range
+                    CurrentStruct[recording_type] = [0, datetime.utcnow().timestamp()]
+                    DeidentifiedPatientID.authorized_time_range = CurrentStruct
+                    DeidentifiedPatientID.save()
 
                 TimeRange = [datetime.fromtimestamp(timestamp) for timestamp in DeidentifiedPatientID.authorized_time_range[recording_type]]
                 AvailableDevices = models.PerceptDevice.objects.filter(patient_deidentified_id=patient_id).all()

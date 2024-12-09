@@ -140,6 +140,8 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
         return ".mdat";
       } else if (externalDataInfoConfig.format === "HPFCSV") {
         return ".csv";
+      } else if (externalDataInfoConfig.format === "BRAVOWearable") {
+        return ".bdat";
       }
     } else if (selectedDeviceConfig.value === "Annotations") {
       return ".csv";
@@ -182,7 +184,7 @@ export default function UploadDialog({show, availableDevices, onCancel}) {
           <Grid item xs={12} style={{display: "flex", flexDirection: "column"}}>
             <Autocomplete
               value={externalDataInfo.format}
-              options={[{label: "CSV", value: "CSV"}, {label: "Delsys HPF CSV Format", value: "HPFCSV"}, {label: "UF MDAT Format", value: "MDAT"}]}
+              options={[{label: "CSV", value: "CSV"}, {label: "Delsys HPF CSV Format", value: "HPFCSV"}, {label: "UF MDAT Format", value: "MDAT"}, {label: "BRAVO Wearable Format (v1)", value: "BRAVOWearable"}]}
               onChange={(event, value) => {
                 setExternalDataInfo({...externalDataInfo, format: value.value})
               }}

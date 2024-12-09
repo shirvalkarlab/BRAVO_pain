@@ -445,6 +445,9 @@ class ExternalRecordingUpload(RestViews.APIView):
                 elif request.data["Format"] == "MDAT":
                     if not request.data[key].name.endswith(".mdat"):
                         return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
+                elif request.data["Format"] == "BRAVOWearable":
+                    if not request.data[key].name.endswith(".bdat"):
+                        return Response(status=400, data={"code": ERROR_CODE["IMPROPER_SUBMISSION"]})
 
         for key in request.data.keys():
             if key.startswith("file"):
@@ -479,6 +482,15 @@ class ExternalRecordingUpload(RestViews.APIView):
                             "batchSessionId": request.data["batchSessionId"],
                             "descriptor": {
                                 "Format": "MDAT"
+                            }
+                        })
+                    elif request.data["Format"] == "BRAVOWearable":
+                        queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="bravoWearable", state="WaitToStart", descriptor={
+                            "filename": request.data[key].name,
+                            "patientId": request.data["patientId"],
+                            "batchSessionId": request.data["batchSessionId"],
+                            "descriptor": {
+                                "Format": "BDAT"
                             }
                         })
                     AnalysisBuilder.saveCacheFile(request.data[key].name, rawBytes)

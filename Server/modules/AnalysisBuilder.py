@@ -40,7 +40,7 @@ from Backend import models
 from modules import Database
 from modules.Percept import BrainSenseStream
 
-from decoder import DelsysTrigno
+from decoder import DelsysTrigno, BRAVOWearableApp
 from utility import PythonUtility
 from utility import SignalProcessingUtility as SPU
 
@@ -542,6 +542,60 @@ def processTrignoHDFCSVRecordings(filename):
         TrignoSensorList.append(Data)
     
     return TrignoSensorList
+
+def processBRAVOWearableStructure(filename):
+    secureEncoder = Fernet(key)
+    with open(filename, "rb") as file:
+        bdatFile = secureEncoder.decrypt(file.read())
+
+    Wearable = BRAVOWearableApp.decodeAppleWatchStructureRaw(bdatFile)
+    WearableSensorList = []
+    
+    if len(Wearable["Accelerometer"]["Data"]) > 0:
+        Data = {"ChannelNames": ["Accelerometer.X","Accelerometer.Y","Accelerometer.Z"]}
+        Data["StartTime"] = Wearable["Accelerometer"]["Time"][0] # Javascript Time is in Milliseconds
+        Data["SamplingRate"] = np.around(1/np.median(np.diff(Wearable["Accelerometer"]["Time"])),3)
+        SampleSize = int((Wearable["Accelerometer"]["Time"][-1] - Wearable["Accelerometer"]["Time"][0])*50)
+        TimeArray = np.arange(SampleSize) / Data["SamplingRate"] + Data["StartTime"]
+        Data["Data"] = np.zeros((len(TimeArray), 3))
+        Data["Data"][:,0] = np.interp(TimeArray, Wearable["Accelerometer"]["Time"], Wearable["Accelerometer"]["Data"][:,0])
+        Data["Data"][:,1] = np.interp(TimeArray, Wearable["Accelerometer"]["Time"], Wearable["Accelerometer"]["Data"][:,1])
+        Data["Data"][:,2] = np.interp(TimeArray, Wearable["Accelerometer"]["Time"], Wearable["Accelerometer"]["Data"][:,2])
+        Data["Missing"] = np.zeros(Data["Data"].shape)
+        Data["Duration"] = Data["Data"].shape[0]/Data["SamplingRate"]
+        WearableSensorList.append(Data)
+
+    if len(Wearable["TremorSeverity"]["Data"]) > 0:
+        Data = {"ChannelNames": ["TremorSeverity.Unknown","TremorSeverity.None","TremorSeverity.Slight","TremorSeverity.Mild","TremorSeverity.Moderate","TremorSeverity.Strong"]}
+        Data["StartTime"] = Wearable["TremorSeverity"]["Time"][0] # Javascript Time is in Milliseconds
+        Data["Time"] = Wearable["TremorSeverity"]["Time"] # Javascript Time is in Milliseconds
+        Data["SamplingRate"] = -1
+        Data["Data"] = Wearable["TremorSeverity"]["Data"]
+        Data["Missing"] = np.zeros(Data["Data"].shape)
+        Data["Duration"] = Wearable["TremorSeverity"]["Time"][-1] - Wearable["TremorSeverity"]["Time"][0]
+        WearableSensorList.append(Data)
+
+    if len(Wearable["DyskineticProbability"]["Data"]) > 0:
+        Data = {"ChannelNames": ["DyskineticProbability"]}
+        Data["StartTime"] = Wearable["DyskineticProbability"]["Time"][0] # Javascript Time is in Milliseconds
+        Data["Time"] = Wearable["DyskineticProbability"]["Time"] # Javascript Time is in Milliseconds
+        Data["SamplingRate"] = -1
+        Data["Data"] = Wearable["DyskineticProbability"]["Data"].reshape(-1,1)
+        Data["Missing"] = np.zeros(Data["Data"].shape)
+        Data["Duration"] = Wearable["DyskineticProbability"]["Time"][-1] - Wearable["DyskineticProbability"]["Time"][0]
+        WearableSensorList.append(Data)
+
+    if len(Wearable["HeartRate"]["Data"]) > 0:
+        Data = {"ChannelNames": ["HeartRate"]}
+        Data["StartTime"] = Wearable["HeartRate"]["Time"][0] # Javascript Time is in Milliseconds
+        Data["Time"] = Wearable["HeartRate"]["Time"] # Javascript Time is in Milliseconds
+        Data["SamplingRate"] = -1
+        Data["Data"] = Wearable["HeartRate"]["Data"].reshape(-1,1)
+        Data["Missing"] = np.zeros(Data["Data"].shape)
+        Data["Duration"] = Wearable["HeartRate"]["Time"][-1] - Wearable["HeartRate"]["Time"][0]
+        WearableSensorList.append(Data)
+
+    return WearableSensorList
 
 def getRawRecordingData(user, patientId, analysisId, recordingId, authority):
     if not authority["Permission"]:

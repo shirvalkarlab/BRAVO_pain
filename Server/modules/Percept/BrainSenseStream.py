@@ -314,6 +314,7 @@ def processRealtimeStreams(stream, cardiacFilter=False):
     for i in range(len(stream["TimeDomain"]["ChannelNames"])):
         [b,a] = signal.butter(5, np.array([1,100])*2/stream["TimeDomain"]["SamplingRate"], 'bp', output='ba')
         stream["TimeDomain"]["Filtered"].append(signal.filtfilt(b, a, stream["TimeDomain"]["Data"][:,i]))
+        #stream["TimeDomain"]["Filtered"].append(stream["TimeDomain"]["Data"][:,i])
 
         if cardiacFilter:
             filterMethod = "Kurtosis"
@@ -407,6 +408,8 @@ def processRealtimeStreams(stream, cardiacFilter=False):
                     CardiacFiltered[sliceSelection] = Original - EKGTemplateFunc(sliceSelection, *params)
                 stream["TimeDomain"]["Filtered"][i] = CardiacFiltered
 
+        stream["TimeDomain"]["Filtered"][i][np.isnan(stream["TimeDomain"]["Filtered"][i])] = 0
+        
         # Wavelet Computation
         stream["TimeDomain"]["Wavelet"].append(SPU.waveletTimeFrequency(stream["TimeDomain"]["Filtered"][i], freq=np.arange(0.5,100.5,0.5), ma=int(stream["TimeDomain"]["SamplingRate"]/2), fs=stream["TimeDomain"]["SamplingRate"]))
         stream["TimeDomain"]["Wavelet"][i]["Missing"] = stream["TimeDomain"]["Missing"][:,i][::int(stream["TimeDomain"]["SamplingRate"]/2)]
