@@ -84,16 +84,8 @@ export default function PatientOverview() {
       navigate("/dashboard", {replace: false});
     } else {
       SessionController.getPatientInfo(patientID).then((response) => {
-        response.data.Tags = response.data.Tags.map((tag) => ({
-          title: tag,
-          value: tag
-        }));
         setEditPatientInfo({...editPatientInfo, ...response.data});
         setPatientInfo(response.data);
-        setAvailableTags(response.data.AvailableTags.map((tag) => ({
-          title: tag,
-          value: tag
-        })));
       }).catch((error) => {
         SessionController.displayError(error, setAlert);
       });
@@ -143,7 +135,7 @@ export default function PatientOverview() {
       LastName: editPatientInfo.LastName,
       Diagnosis: editPatientInfo.Diagnosis,
       MRN: editPatientInfo.MRN,
-      Tags: editPatientInfo.Tags ? editPatientInfo.Tags.map((tag) => tag.value ? tag.value : tag.inputValue ) : []
+      Tags: editPatientInfo.Tags ? editPatientInfo.Tags : []
     }).then(() => {
       setPatientInfo({...patientInfo, 
         FirstName: editPatientInfo.FirstName,
@@ -337,48 +329,18 @@ export default function PatientOverview() {
                       />
                     </Grid>
                     <Grid item xs={12}>
-                      <Autocomplete 
-                        selectOnFocus 
-                        clearOnBlur 
-                        multiple
-                        renderInput={(params) => (
-                          <TextField
+                      <Autocomplete
+                        multiple freeSolo
+                        value={editPatientInfo.Tags}
+                        options={[]}
+                        onChange={(event, newValue) => setEditPatientInfo({...editPatientInfo, Tags: newValue})}
+                        renderInput={(params) => {
+                          return <TextField
                             {...params}
-                            variant="standard"
+                            variant="standard" id="participant_tags"
                             placeholder={dictionary.PatientOverview.TagNames[language]}
                           />
-                        )}
-                        filterOptions={(options, params) => {
-                          const filtered = filter(options, params);
-                          const { inputValue } = params;
-
-                          // Suggest the creation of a new value
-                          const isExisting = options.some((option) => inputValue === option.title);
-                          if (inputValue !== '' && !isExisting) {
-                            filtered.push({
-                              inputValue,
-                              title: `Add "${inputValue}"`,
-                            });
-                          }
-                          return filtered;
                         }}
-                        getOptionLabel={(option) => {
-                          if (typeof option === 'string') {
-                            return option;
-                          }
-                          if (option.inputValue) {
-                            return option.inputValue;
-                          }
-                          return option.title;
-                        }}
-                        isOptionEqualToValue={(option, value) => {
-                          return option.value === value.value;
-                        }}
-                        renderOption={(props, option) => <li {...props}>{option.title}</li>}
-
-                        value={editPatientInfo.Tags}
-                        options={availableTags}
-                        onChange={(event, newValue) => setEditPatientInfo({...editPatientInfo, Tags: newValue})}
                       />
                     </Grid>
                     <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
