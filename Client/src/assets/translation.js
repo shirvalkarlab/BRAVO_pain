@@ -1240,6 +1240,10 @@ export const dictionary = {
       en: "mV",
       zh: "毫伏"
     },
+    uV: {
+      en: "μV",
+      zh: "微伏"
+    },
     mA: {
       en: "mA",
       zh: "毫安"

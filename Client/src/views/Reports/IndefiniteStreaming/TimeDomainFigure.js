@@ -64,7 +64,7 @@ function TimeDomainFigure({dataToRender, height, handleAddEvent, handleDeleteEve
       fig.setXlabel("Time (local time)", {fontSize: 15}, ax[ax.length-1]);
       for (var i in ax) {
         fig.setYlim([-100,100],ax[i]);
-        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)})`, {fontSize: 15}, ax[i]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)})`, {fontSize: 15}, ax[i]);
 
         const [side, target] = channelInfo[i].Hemisphere.split(" ");
         let titleText = (channelInfo[i].Hemisphere == channelInfo[i].CustomName) ? dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.FigureStandardText, target, language) : channelInfo[i].CustomName;
@@ -99,7 +99,7 @@ function TimeDomainFigure({dataToRender, height, handleAddEvent, handleDeleteEve
             ax[k].title = data[i].Channels[j];
             fig.plot(timeArray, data[i]["Stream"][j], {
               linewidth: 0.5,
-              hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+              hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
             }, ax[k]);
 
             for (let l = 0; l < data[i].Annotations.length; l++) {
@@ -125,7 +125,7 @@ function TimeDomainFigure({dataToRender, height, handleAddEvent, handleDeleteEve
           } else if (ax[k].title == data[i].Channels[j]) {
             fig.plot(timeArray, data[i]["Stream"][j], {
               linewidth: 0.5,
-              hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+              hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
             }, ax[k]);
             
             for (let l = 0; l < data[i].Annotations.length; l++) {

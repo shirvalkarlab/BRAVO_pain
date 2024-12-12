@@ -65,7 +65,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       for (var i in channelInfos) {
         fig.setYlim([0, 100], ax[1+i*2]);
 
-        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)})`, {fontSize: 15}, ax[i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)})`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[i*2+1]);
       
         const [side, target] = channelInfos[i].Hemisphere.split(" ");
@@ -104,7 +104,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
         var timeArray = Array(data[trial].Stream[i].Filtered.length).fill(0).map((value, index) => new Date(data[trial].Timestamp*1000 + 4*index - OffsetTime));
         fig.plot(timeArray, data[trial].Stream[i].Filtered, {
           linewidth: 0.5,
-          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
           analysisId: data[trial].AnalysisId,
           metadata: data[trial].Timezone
         }, ax[channelIndex*2 + 0]);
