@@ -22,12 +22,18 @@ import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from django.http import HttpResponse
 
 import os, sys, pathlib
 import json
 import base64
 import datetime, pytz
 import websocket
+import numpy as np
+import blosc
+import zipfile
+
+from cryptography.fernet import Fernet
 
 RESOURCES = str(pathlib.Path(__file__).parent.resolve())
 with open(RESOURCES + "/../codes.json", "r") as file:
@@ -509,3 +515,86 @@ class ExternalRecordingUpload(RestViews.APIView):
                         queueItem.save()
 
         return Response(status=200)
+
+class QueryDatabaseExport(RestViews.APIView):
+    """
+    
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        os.makedirs(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id), exist_ok=True)
+        if request.data["RequestType"] == "Query":
+            key = os.environ.get('ENCRYPTION_KEY')
+            AllData = []
+            for filename in os.listdir(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id)):
+                if filename.endswith(".bin"):
+                    patient = models.Patient.objects.get(deidentified_id=filename.replace("_Export.bin",""))
+
+                    AllData.append({
+                        "Id": filename.replace("_Export.bin",""),
+                        "Name": patient.getPatientFirstName(key) + " " + patient.getPatientLastName(key),
+                        "Path": filename,
+                        "Date": os.path.getmtime(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id) + os.path.sep + filename),
+                        "Size": os.path.getsize(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id) + os.path.sep + filename)
+                    }) 
+            return Response(status=200, data={"Data": AllData, "Passphrase": request.user.configuration["ExportPassphrase"]})
+        
+        elif request.data["RequestType"] == "Download":
+            AllData = os.listdir(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id))
+            if request.data["Id"] + "_Export.bin" in AllData:
+                with open(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id) + os.path.sep + (request.data["Id"] + "_Export.bin"), "rb") as file:
+                    data = file.read()
+                return HttpResponse(bytes(data), status=200, headers={
+                    "Content-Type": "application/octet-stream"
+                })
+            
+        return Response(status=403)
+
+class CreateDatabaseExport(RestViews.APIView):
+    """
+    
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        os.makedirs(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id), exist_ok=True)
+        if models.ProcessingQueue.objects.filter(owner=request.user.unique_user_id, type="ExportDatabase").exists():
+            return Response(status=200, data={"message": "An Export Request is already underway"})
+
+        if "Path" in request.data.keys():
+            queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="ExportDatabase", state="InProgress", descriptor={
+                "exportKey": request.user.configuration["ExportPassphrase"],
+                "patientId": request.data["Path"],
+                "identified": True,
+                "finalFile": filename,
+            })
+            queueItem.save()
+
+            return Response(status=200, data={"message": "An Export Request is already underway"})
+ 
+        else:
+            for filename in os.listdir(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id)):
+                if not filename == "." and not filename == "..":
+                    try:
+                        os.unlink(DATABASE_PATH + "raws" + os.path.sep + str(request.user.unique_user_id) + os.path.sep + filename)
+                    except Exception as e:
+                        print(e)
+                        pass
+                    
+            filename = str(uuid4())
+            exportKey = Fernet.generate_key().decode("utf-8")
+            request.user.configuration["ExportPassphrase"] = exportKey
+            request.user.save()
+            queueItem = models.ProcessingQueue(owner=request.user.unique_user_id, type="ExportDatabase", state="InProgress", descriptor={
+                "exportKey": exportKey,
+                "patientId": "All",
+                "identified": True,
+                "finalFile": filename,
+            })
+            queueItem.save()
+
+            return Response(status=200, data={"message": "An Export Request has started"})
+

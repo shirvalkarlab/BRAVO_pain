@@ -25,6 +25,8 @@ urlpatterns = [
 	path('logout', Auth.UserSignout.as_view()), 
 	#path('authorizedInstitute', Auth.FetchAuthorizedInstitute.as_view()), 
 	
+	path('queryDatabaseExport', Upload.QueryDatabaseExport.as_view()),
+	path('createDatabaseExport', Upload.CreateDatabaseExport.as_view()),
 	path('deidentificationTable', Upload.DeidentificationTable.as_view()),
 	path('uploadSessionFiles', Upload.SessionUpload.as_view()),
 	path('uploadExternalFiles', Upload.ExternalRecordingUpload.as_view()),

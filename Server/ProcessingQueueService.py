@@ -30,7 +30,8 @@ import time
 import numpy as np
 import pytz
 from cryptography.fernet import Fernet
-from zipfile import ZipFile
+import pickle
+from zipfile import ZipFile, ZIP_LZMA
 
 import websocket
 from BRAVO import asgi
@@ -696,6 +697,112 @@ def processSummitZIPUpload():
                     print(e)
                 
 
+def exportDatabase():
+    if models.ProcessingQueue.objects.filter(type="ExportDatabase", state="InProgress").exists():
+        print(datetime.datetime.now())
+        BatchQueues = models.ProcessingQueue.objects.filter(type="ExportDatabase", state="InProgress").order_by("datetime").all()
+        for queue in BatchQueues:
+            if not models.ProcessingQueue.objects.filter(state="InProgress", queue_id=queue.queue_id).exists():
+                continue
+            queue.state = "Processing"
+            queue.save()
+                
+        key = os.environ.get('ENCRYPTION_KEY')
+        secureEncoder = Fernet(key)
+
+        exportKey = queue.descriptor["exportKey"]
+        exportEncoder = Fernet(exportKey)
+
+        if queue.descriptor["patientId"] == "All":
+            user = models.PlatformUser.objects.get(unique_user_id=queue.owner)
+            patients = models.Patient.objects.filter(institute=user.institute).all()
+        else:
+            patients = models.Patient.objects.filter(deidentified_id=queue.descriptor["patientId"]).all()
+
+        counter = 0
+        for patient in patients:
+            try:
+                ExportFile = open(DATABASE_PATH + "raws" + os.path.sep + str(queue.owner) + os.path.sep + str(patient.deidentified_id) + "_Export.bin", "wb+")
+                devices = models.PerceptDevice.objects.filter(patient_deidentified_id=patient.deidentified_id).all() 
+                Header = {
+                    "Id": str(patient.deidentified_id),
+                    "Name": (patient.getPatientFirstName(key) + " " + patient.getPatientLastName(key)) if queue.descriptor["identified"] else str(patient.deidentified_id),
+                    "Gender": patient.getPatientGender(key),
+                    "Diagnosis": patient.diagnosis,
+                    "MRN": patient.getPatientMRN(key) if queue.descriptor["identified"] else "",
+                    "DOB": patient.birth_date.timestamp() if queue.descriptor["identified"] else 0,
+                    "Tags": patient.tags,
+                    "Devices": [{
+                        "Id": str(device.deidentified_id),
+                        "SerialNumber": device.getDeviceSerialNumber(key) if queue.descriptor["identified"] else str(device.deidentified_id),
+                        "Type": device.device_type,
+                        "Name": device.device_name,
+                        "ImplantDate": device.implant_date.timestamp(),
+                        "Location": device.device_location,
+                        "Leads": device.device_lead_configurations,
+                    } for device in devices]
+                }
+                headerBytes = exportEncoder.encrypt(json.dumps(Header).encode("utf8"))
+
+                # Write Initial Headers
+                ExportFile.write("BRAVO EXPORT".encode("utf-8"))
+
+                # Write Header Byte Size (4 bytes)
+                ExportFile.write(np.array(len(headerBytes), dtype=np.int32).tobytes())
+                ExportFile.write(headerBytes)
+
+                availableSessions = models.PerceptSession.objects.filter(device_deidentified_id__in=[device.deidentified_id for device in devices]).all()
+                for session in availableSessions:
+                    with open(DATABASE_PATH + session.session_file_path, "rb") as file:
+                        rawBytes = exportEncoder.encrypt(secureEncoder.decrypt(file.read()))
+                
+                    # Write Session Segment Header (7 bytes)
+                    ExportFile.write("NVMSEDA".encode("utf-8"))
+                    ExportFile.write(np.array(len(rawBytes), dtype=np.int32).tobytes())
+                    ExportFile.write(rawBytes)
+
+                for annotation in models.CustomAnnotations.objects.filter(patient_deidentified_id=patient.deidentified_id).all():
+                    rawBytes = exportEncoder.encrypt(json.dumps({
+                        "Type": annotation.event_type,
+                        "Name": annotation.event_name,
+                        "Date": annotation.event_time.timestamp(),
+                        "Duration": annotation.event_duration,
+                    }).encode("utf8"))
+
+                    # Write Session Segment Header (7 bytes)
+                    ExportFile.write("EVSDADA".encode("utf-8"))
+                    ExportFile.write(np.array(len(rawBytes), dtype=np.int32).tobytes())
+                    ExportFile.write(rawBytes)
+
+                for recording in models.ExternalRecording.objects.filter(patient_deidentified_id=patient.deidentified_id).all():
+                    rawBytes = exportEncoder.encrypt(json.dumps({
+                        "Type": recording.recording_type,
+                        "Info": recording.recording_info,
+                        "Date": recording.recording_date.timestamp(),
+                        "Duration": recording.recording_duration,
+                    }).encode("utf8"))
+
+                    # Write Session Segment Header (7 bytes)
+                    ExportFile.write("AVSDADA".encode("utf-8"))
+                    ExportFile.write(np.array(len(rawBytes), dtype=np.int32).tobytes())
+                    ExportFile.write(rawBytes)
+
+                    Data = Database.loadSourceDataPointer(recording.recording_datapointer)
+                    pData = pickle.dumps(Data)
+                    ExportFile.write(np.array(len(pData), dtype=np.int32).tobytes())
+                    ExportFile.write(pData)
+
+                ExportFile.close()
+
+                counter += 1
+                print(counter)
+                
+            except Exception as e:
+                print(e)
+                print(patient.deidentified_id)
+                
+        queue.state = "Complete"
+        queue.delete()
 
 
 if __name__ == '__main__':
@@ -703,3 +810,4 @@ if __name__ == '__main__':
     processSummitZIPUpload()
     processExternalRecordingUpload()
     processAnnotations()
+    exportDatabase()

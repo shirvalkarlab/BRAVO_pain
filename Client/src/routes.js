@@ -40,6 +40,7 @@ import BiotechIcon from '@mui/icons-material/Biotech';
 import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
 import { experimentalRoutes } from "views/Experimental/plugins";
+import ExportDataManager from "views/Dashboard/ExportDataManager";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
@@ -72,6 +73,17 @@ const routes = [
     key: "access-permissions",
     component: <ResearchAccessView />,
     route: "/access-permissions",
+    icon: <IosShare/>,
+    noCollapse: true,
+    identified: true,
+    deidentified: true
+  },
+  {
+    type: "collapse",
+    name: "ExportManager",
+    key: "export-manager",
+    component: <ExportDataManager />,
+    route: "/export-manager",
     icon: <IosShare/>,
     noCollapse: true,
     identified: true,

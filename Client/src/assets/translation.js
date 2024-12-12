@@ -884,6 +884,10 @@ export const dictionary = {
       en: "Patient Lookup Table",
       zh: "Patient Lookup Table"
     },
+    "export-manager": {
+      en: "Export Data Manager",
+      zh: "Export Data Manager"
+    },
     "access-permissions": {
       en: "Access Permission List",
       zh: "Access Permission List"
@@ -981,6 +985,10 @@ export const dictionary = {
     Dashboard: {
       en: "Dashboard",
       zh: "主平台"
+    },
+    ExportManager: {
+      en: "Export Data Manager",
+      zh: "Export Data Manager"
     },
     PatientLookupTable: {
       en: "Patient Lookup Table",

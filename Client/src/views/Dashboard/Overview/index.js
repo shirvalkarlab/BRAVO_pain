@@ -23,6 +23,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
+import MuiAlertDialog from "components/MuiAlertDialog";
 
 import UploadDialog from "./UploadDialog";
 import PatientTable from "components/Tables/PatientTable";
@@ -87,6 +88,8 @@ export default function DashboardOverview() {
   const [patients, setPatients] = useState([]);
   const [uploadInterface, setUploadInterface] = useState(null);
   const [showUpload, setShowUpload] = useState(false);
+
+  const [alert, setAlert] = useState(null);
 
   useEffect(() => {
     SessionController.query("/api/queryDatabaseInfo").then((response) => {
@@ -181,6 +184,7 @@ export default function DashboardOverview() {
 
   return (
     <DatabaseLayout>
+      {alert}
       <MDBox py={3}>
         <MDBox mb={3}>
           <Grid container spacing={2}>
@@ -195,6 +199,45 @@ export default function DashboardOverview() {
                 title={dictionary.Dashboard.TotalStorage[language]} 
                 value={databaseInfo.totalStorage} 
                 description={currentDate.toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))} />
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <Card>
+                <MDBox p={2}>
+                  <Grid container>
+                    <Grid item xs={7}>
+                      <MDBox mb={0.5} lineHeight={1}>
+                        <MDTypography
+                          variant="button"
+                          fontWeight="medium"
+                          color="text"
+                          textTransform="capitalize"
+                        >
+                          {"Database Export"}
+                        </MDTypography>
+                      </MDBox>
+                      <MDBox lineHeight={1}>
+                        <MDTypography variant="h5" fontWeight="bold">
+                          {"All Participant"}
+                        </MDTypography>
+                      </MDBox>
+                    </Grid>
+                    <Grid item xs={5}>
+                      <MDButton color="error" fullWidth style={{height: "100%"}} onClick={() => {
+                        SessionController.query("/api/createDatabaseExport").then((response) => {
+                          setAlert(<MuiAlertDialog 
+                            title={"Export All Participant in Binary Data"}
+                            message={response.data.message}
+                            handleClose={() => setAlert(null)}
+                            handleConfirm={() => setAlert(null)}
+                          />)
+                        })
+                      }}>
+                        {"Download (Multiple Files Download)"}
+                      </MDButton>
+                    </Grid>
+                  </Grid>
+                </MDBox>
+              </Card>
             </Grid>
           </Grid>
         </MDBox>
