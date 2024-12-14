@@ -43,6 +43,7 @@ import LoginIcon from '@mui/icons-material/Login';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import StorageIcon from '@mui/icons-material/Storage';
 import CheckIcon from '@mui/icons-material/Check';
+import NoteAltIcon from '@mui/icons-material/NoteAlt';
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -283,9 +284,12 @@ function DefaultNavbar({ transparent, light, action }) {
             light={light} 
           />
           <DefaultNavbarLink 
-            icon={<ChangeCircleIcon/>}
-            name={dictionary.SimplifiedNavbar.ChangeLanguage[language]}
-            onClick={(event) => handleOpenMenu(event, "LanguageMenu")} 
+            icon={<NoteAltIcon/>}
+            name={"Deidentification Tool"}
+            onClick={() => {
+              window.location.href = "https://deidentification-manager.jcagle.solutions/"
+              return null
+            }}
             light={light} 
           />
           <DefaultNavbarLink
