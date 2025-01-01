@@ -50,7 +50,7 @@ import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-export default function SurveyViewer({match}) {
+export default function FormViewer({match}) {
   const [controller, dispatch] = usePlatformContext();
   const { user, language } = controller;
 
@@ -61,22 +61,21 @@ export default function SurveyViewer({match}) {
 
   const inputFile = useRef(null) 
 
-  const { surveyId } = useParams();
+  const { form_link } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     setAlert(<LoadingProgress/>);
-    if (SessionController.getServer() === "") {
-      SessionController.setServer("https://bravo-server.jcagle.solutions");
-    }
-
-    SessionController.query("/api/querySurveyContent", {
-      id: surveyId
+    SessionController.query("/api/querySurveyForms", {
+      RequestType: "RequestForm",
+      FormLink: form_link,
+      VersionRel: searchParams.get("__passcode") ? searchParams.get("__passcode") : null
     }).then((response) => {
-      if (response.status == 200) {
-        setContents(response.data);
-        setAlert(null);
-      }
+      setContents({
+        ...response.data,
+        contents: response.data.Record
+      });
+      setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
@@ -117,12 +116,13 @@ export default function SurveyViewer({match}) {
       }
     }
 
-    SessionController.query("/api/submitSurvey", {
-      id: surveyId,
-      passcode: searchParams.get("__passcode"),
-      version: contents.version,
-      date: new Date().getTime(),
-      results: results
+    SessionController.query("/api/querySurveyForms", {
+      RequestType: "SubmitForm",
+      FormId: contents.Id,
+      Version: contents.Version,
+      Passcode: searchParams.get("__passcode"),
+      Date: searchParams.get("__date") ? searchParams.get("__date") : new Date().getTime()/1000,
+      FormResults: results
     }).then((response) => {
       setCompleted(true);
     }).catch((error) => {
@@ -141,7 +141,7 @@ export default function SurveyViewer({match}) {
                   <Grid item xs={12} >
                     <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItem: "center"}}>
                       <MDTypography variant="h3">
-                        {contents.title ? contents.title : ""}
+                        {contents.Name ? contents.Name : ""}
                       </MDTypography>
                     </MDBox>
                   </Grid>
@@ -285,7 +285,7 @@ export default function SurveyViewer({match}) {
           <Grid item xs={12}>
             <Card sx={{marginTop: 0}}>
               <MDBox p={2}>
-                {"Thank you for submitting the survey! You can close this window now."}
+                {"Thank you for submitting the questionnaire! You can close this window now."}
               </MDBox>
             </Card>
           </Grid>

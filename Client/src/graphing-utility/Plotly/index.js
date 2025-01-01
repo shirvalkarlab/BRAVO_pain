@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import Plotly from 'plotly.js-dist-min';
+import Plotly from 'plotly.js-dist';
 import { zhCN } from "assets/plotly-locales/zh-cn";
 
 const defaultLineOptions = {
@@ -108,6 +108,22 @@ const defaultLayoutOptions = {
   annotations: [],
 }
 
+const setDictionaryProps = (dict, key, value) => {
+  if (dict[key]) {
+    if (typeof dict[key] == "object" && typeof value == "object") {
+      for (let subkey in value) {
+        dict[key] = setDictionaryProps(dict[key], subkey, value[subkey]);
+      }
+    } else {
+      dict[key] = value;
+    }
+  } else {
+    dict[key] = value;
+  }
+  return dict;
+
+}
+
 class PlotlyRenderManager {
 
   /**
@@ -128,6 +144,7 @@ class PlotlyRenderManager {
     this.coloraxis = [];
     this.gca = this.ax[0];
     this.layout = JSON.parse(JSON.stringify(defaultLayoutOptions));
+    this.onClick = async (evt) => {}
     
     // How we handle figure update
     this.fresh = true;
@@ -150,6 +167,11 @@ class PlotlyRenderManager {
    * Clear all traces
    */
   clearData() {
+    for (let i in this.ax) {
+      delete this.layout[this.ax[i].xlayout];
+      delete this.layout[this.ax[i].ylayout];
+    }
+    this.layout["annotations"] = [];
     this.traces = [];
   }
 
@@ -216,13 +238,44 @@ class PlotlyRenderManager {
     return this.ax;
   }
 
+  addDualYAxis(ax) {
+    let nextY = 2;
+    for (let i in this.ax) {
+      if (parseInt(this.ax[i].ylayout.replace("yaxis","")) >= nextY) {
+        nextY += 1;
+      }
+    }
+
+    let axProp = {...ax};
+    axProp["yaxis"] = "y" + nextY.toFixed(0);
+    axProp["ylayout"] = "yaxis" + nextY.toFixed(0);
+    this.ax.push(axProp);
+
+    this.layout[axProp.ylayout] = JSON.parse(JSON.stringify(defaultLayoutOptions.yaxis));
+    this.layout[axProp.ylayout].domain = axProp.ydomain;
+    this.layout[axProp.ylayout].overlaying = ax.yaxis;
+    this.layout[axProp.ylayout].side = "right";
+    
+
+    return axProp;
+  }
+
+  setSubplotId(ids) {
+    for (let i in this.ax) {
+      this.ax[i].id = ids[i]
+    }
+  }
+
   /**
    * Get the subplot array from Manager Cache.
    *
    * @return {string[]} Array of subplots created, C-ordered. 
    */
-  getAxes() {
-    return this.ax;
+  getAxes(id=null) {
+    if (!id) return this.ax;
+    for (let i in this.ax) {
+      if (this.ax[i].id == id) return this.ax[i];
+    }
   }
 
   /**
@@ -461,6 +514,8 @@ class PlotlyRenderManager {
     for (var key of Object.keys(options)) {
       if (key == "facecolor") {
         trace.marker.color = options[key];
+      } else if (key == "color") {
+        trace.facecolor = options[key];
       } else {
         trace[key] = options[key];
       }
@@ -798,7 +853,7 @@ class PlotlyRenderManager {
    * @param {string} [ax] - Subplot to configure. Default to last access axes.
    * 
    */
-  setYlim(ylim, ax=null) {
+  setYlim(ylim, ax=null, update=null) {
     if (!ax) {
       ax = this.gca;
     } else {
@@ -810,7 +865,16 @@ class PlotlyRenderManager {
       }
     }
     
-    this.layout[ax["ylayout"]].range = ylim;
+    if (update && this.layout[ax["ylayout"]].range) {
+      if (this.layout[ax["ylayout"]].range[0] > ylim[0]) {
+        this.layout[ax["ylayout"]].range[0] = ylim[0];
+      }
+      if (this.layout[ax["ylayout"]].range[1] < ylim[1]) {
+        this.layout[ax["ylayout"]].range[1] = ylim[1];
+      }
+    } else {
+      this.layout[ax["ylayout"]].range = ylim;
+    }
   }
 
   /**
@@ -880,7 +944,9 @@ class PlotlyRenderManager {
       }
     }
     
-    this.layout[ax[axis+"layout"]] = {...this.layout[ax[axis+"layout"]], ...props};
+    for (let key in props) {
+      this.layout[ax[axis+"layout"]] = setDictionaryProps(this.layout[ax[axis+"layout"]], key, props[key]);
+    }
   }
 
   /**
@@ -930,6 +996,27 @@ class PlotlyRenderManager {
     this.layout[ax[axis+"layout"]].type = type;
   }
 
+  updateAxes(traceId, ax=null) {
+    if (!ax) {
+      ax = this.gca;
+    } else {
+      if (this.ax.includes(ax)) {
+        this.gca = ax;
+      } else {
+        console.log("WARNING: Ax Not Found");
+        ax = this.gca;
+      }
+    }
+
+    for (let i in this.traces) {
+      if (this.traces[i].id == traceId) {
+        this.traces[i].xaxis = this.gca.xaxis;
+        this.traces[i].yaxis = this.gca.yaxis;
+      }
+    }
+  }
+
+  
   /**
    * Call to update figure or initial render
    */
@@ -967,11 +1054,37 @@ class PlotlyRenderManager {
       ],
     }
 
-    if (this.fresh) {
-      Plotly.newPlot(this.divName, this.traces, this.layout, config);
-      this.fresh = false;
-    } else {
-      Plotly.react(this.divName, this.traces, this.layout, config);
+    const ref = document.getElementById(this.divName);
+    if (ref) {
+      this.onClick = async (evt) => {
+        const bb = evt.target.getBoundingClientRect();
+        let gca = this.ax[0];
+        for (let axId in ref._fullLayout.grid.subplots) {
+          if (ref._fullLayout.grid.subplots[axId][0] == evt.target.dataset.subplot) {
+            gca = this.ax[axId];
+          }
+        }
+        
+        const x = ref._fullLayout[gca.xlayout].p2d(evt.clientX - bb.left);
+        const y = ref._fullLayout[gca.ylayout].p2d(evt.clientY - bb.top);
+        const event = new CustomEvent("PlotlyClick", {detail: {
+          divName: this.divName,
+          x, y, ax: gca
+        }});
+        document.dispatchEvent(event);
+      }
+
+      if (this.fresh) {
+        Plotly.newPlot(this.divName, this.traces, this.layout, config).then(() => {
+          ref.on("plotly_relayout", (evt) => {
+            const event = new CustomEvent("PlotlyRelayout", {detail: evt});
+            document.dispatchEvent(event);
+          })
+        });
+        this.fresh = false;
+      } else {
+        Plotly.react(this.divName, this.traces, this.layout, config);
+      }
     }
   }
 

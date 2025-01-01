@@ -19,8 +19,86 @@ import MuiAlertDialog from "components/MuiAlertDialog"
 
 //import { Manager } from "socket.io-client"
 
+const timezoneNameDict = {
+  "UTC-12:00": "Etc/GMT+12",
+  "UTC-11:00": "Etc/GMT+11",
+  "UTC-10:00": "Etc/GMT+10",
+  "UTC-09:30": "Pacific/Marquesas",
+  "UTC-09:00": "Etc/GMT+9",
+  "UTC-08:00": "Etc/GMT+8",
+  "UTC-07:00": "Etc/GMT+7",
+  "UTC-06:00": "Etc/GMT+6",
+  "UTC-05:00": "Etc/GMT+5",
+  "UTC-04:00": "Etc/GMT+4",
+  "UTC-03:30": "America/St_Johns",
+  "UTC-03:00": "Etc/GMT+3",
+  "UTC-02:00": "Etc/GMT+2",
+  "UTC-01:00": "Etc/GMT+1",
+  "UTC+00:00": "Etc/GMT",
+  "UTC+01:00": "Etc/GMT-1",
+  "UTC+02:00": "Etc/GMT-2",
+  "UTC+03:00": "Etc/GMT-3",
+  "UTC+03:30": "Iran",
+  "UTC+04:00": "Etc/GMT-4",
+  "UTC+04:30": "Asia/Kabul",
+  "UTC+05:00": "Etc/GMT-5",
+  "UTC+05:30": "Asia/Colombo",
+  "UTC+05:45": "Asia/Kathmandu",
+  "UTC+06:00": "Etc/GMT-6",
+  "UTC+06:30": "Asia/Yangon",
+  "UTC+07:00": "Etc/GMT-7",
+  "UTC+08:00": "Etc/GMT-8",
+  "UTC+09:00": "Etc/GMT-9",
+  "UTC+09:30": "Australia/Darwin",
+  "UTC+10:00": "Etc/GMT-10",
+  "UTC+10:30": "Australia/LHI",
+  "UTC+11:00": "Etc/GMT-11",
+  "UTC+12:00": "Etc/GMT-12",
+  "UTC+13:00": "Etc/GMT-13",
+  "UTC+14:00": "Etc/GMT-14"
+};
+
+const timezoneOffsetDict={
+  "UTC-12:00": -12*3600000,
+  "UTC-11:00": -11*3600000,
+  "UTC-10:00": -10*3600000,
+  "UTC-09:30": -9*3600000-30*60000,
+  "UTC-09:00": -9*3600000,
+  "UTC-08:00": -8*3600000,
+  "UTC-07:00": -7*3600000,
+  "UTC-06:00": -6*3600000,
+  "UTC-05:00": -5*3600000,
+  "UTC-04:00": -4*3600000,
+  "UTC-03:30": -3*3600000-30*60000,
+  "UTC-03:00": -3*3600000,
+  "UTC-02:00": -2*3600000,
+  "UTC-01:00": -1*3600000,
+  "UTC+00:00": 0,
+  "UTC+01:00": 1*3600000,
+  "UTC+02:00": 2*3600000,
+  "UTC+03:00": 3*3600000,
+  "UTC+03:30": 3*3600000+30*60000,
+  "UTC+04:00": 4*3600000,
+  "UTC+04:30": 4*3600000+30*60000,
+  "UTC+05:00": 5*3600000,
+  "UTC+05:30": 5*3600000+30*60000,
+  "UTC+05:45": 5*3600000+45*60000,
+  "UTC+06:00": 6*3600000,
+  "UTC+06:30": 6*3600000+30*60000,
+  "UTC+07:00": 7*3600000,
+  "UTC+08:00": 8*3600000,
+  "UTC+09:00": 9*3600000,
+  "UTC+09:30": 9*3600000+30*60000,
+  "UTC+10:00": 10*3600000,
+  "UTC+10:30": 10*3600000+30*60000,
+  "UTC+11:00": 11*3600000,
+  "UTC+12:00": 12*3600000,
+  "UTC+13:00": 13*3600000,
+  "UTC+14:00": 14*3600000
+};
+
 export const SessionController = (function () {
-  let server = window.location.protocol + "//localhost";
+  let server = "";
   let connectionStatus = false;
 
   let synced = false;
@@ -95,12 +173,12 @@ export const SessionController = (function () {
     });
   };
 
-  const displayError = (error, setAlert) => {
+  const displayError = (error, setAlert, redirect) => {
     if (typeof(error) === "string" && setAlert) {
       setAlert(
         <MuiAlertDialog title={"ERROR"} message={error}
           handleClose={() => setAlert()} 
-          handleConfirm={() => setAlert()}/>
+          handleConfirm={() => redirect ? redirect() : setAlert()}/>
       );
       return;
     }
@@ -109,6 +187,8 @@ export const SessionController = (function () {
       var errorMessage = dictionary.ErrorMessage.UNKNOWN_ERROR[session.language];
       if (error.response.status === 500) {
         errorMessage = dictionary.ErrorMessage.INTERNAL_SERVER_ERROR[session.language];
+      } else if (error.response.status === 405) {
+        errorMessage = dictionary.ErrorMessage.ENDPOINT_NOT_EXIST[session.language];
       } else if (error.response.status === 404) {
         errorMessage = dictionary.ErrorMessage.ENDPOINT_NOT_EXIST[session.language];
       } else if (error.response.status === 403) {
@@ -133,42 +213,15 @@ export const SessionController = (function () {
       setAlert(
         <MuiAlertDialog title={"ERROR"} message={errorMessage}
           handleClose={() => setAlert()} 
-          handleConfirm={() => setAlert()}/>
+          handleConfirm={() => redirect ? redirect() : setAlert()}/>
       );
     } else {
       console.log(error);
-    }
-  };
-
-  const verifyServerAddress = async (storedServer) => {
-    // Reset Credentials in case of 401
-    server = storedServer;
-    connectionStatus = false;
-    try {
-      const response = await query("/api/handshake", {}, {}, 2000);
-      if (response.status == 200) {
-        if (response.data.Version) {
-          serverVersion = response.data.Version;
-        } else {
-          serverVersion = "";
-        }
-        connectionStatus = true;
-      }
-    } catch (error) {
-      serverVersion = "";
-      console.log(error);
-    }
-
-    if (connectionStatus) setServer(server);
-    return connectionStatus;
-  };
-
-  const refreshAuthToken = async () => {
-    try {
-      const refreshResponse = await query("/api/authRefresh");
-      return refreshResponse;
-    } catch(error) {
-      return error;
+      setAlert(
+        <MuiAlertDialog title={"ERROR"} message={"Client Javascript Error"}
+          handleClose={() => setAlert()} 
+          handleConfirm={() => redirect ? redirect() : setAlert()}/>
+      );
     }
   };
 
@@ -198,7 +251,7 @@ export const SessionController = (function () {
   };
 
   const setSession = (type, value, update) => {
-    if (update) query("/api/updateSession", {[type]: value}).catch((error) => console.log(error));
+    if (update) query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
     session[type] = value;
     session["lastActive"] = new Date().getTime();
     localStorage.setItem("sessionContext", JSON.stringify(session));
@@ -216,26 +269,21 @@ export const SessionController = (function () {
     }
   };
 
-  const handShake = async () => {
-    if (Object.keys(user).length === 0) {
-      return false;
-    }
-    
-    try {
-      await query("/api/handshake");
-      return true;
-    } catch (error) {
-      nullifyUser();
-      return false;
-    }
-  };
+  const getTimezoneName = (UTCTime) => {
+    return timezoneNameDict[UTCTime] ? {timeZone: timezoneNameDict[UTCTime]} : {};
+  }
+
+  const getTimezoneOffset = (startTime, UTCTime) => {
+    const localOffset = new Date(startTime).getTimezoneOffset() * -60000
+    return timezoneOffsetDict[UTCTime] === undefined ? 0 : (localOffset - timezoneOffsetDict[UTCTime]);
+  }
 
   const authenticate = (username, password, rememberMe) => {
-    return query("/api/authenticate", {Email: username, Password: password, Persistent: rememberMe ? true : false});
+    return query("/api/login", {Email: username, Password: password, Persistent: rememberMe ? true : false});
   };
 
   const register = (username, email, password, institute) => {
-    return query("/api/registration", {UserName: username, Email: email, Password: password});
+    return query("/api/register", {UserName: username, Email: email, Password: password});
   };
 
   const logout = () => {
@@ -258,14 +306,9 @@ export const SessionController = (function () {
     return user;
   };
 
-  const setParticipantUID = async (id) => {
-    try {
-      await query("/api/CheckAccessPermission", { participant_uid: id });  
-      session.participant_uid = id;
-      return true;
-    } catch (error) {
-      return false;
-    }
+  const setParticipantUID = (id) => {
+    session.participant_uid = id;
+    return true;
   };
 
   const setPageIndex = (type, index) => {
@@ -273,15 +316,12 @@ export const SessionController = (function () {
   };
 
   return {
-    refreshAuthToken: refreshAuthToken,
     setServer: setServer,
     getServer: getServer,
     setDecryptionPassword: setDecryptionPassword,
     decodeTimestamp: decodeTimestamp,
     decodeMessage: decodeMessage,
     getConnectionStatus: getConnectionStatus,
-
-    verifyServerAddress: verifyServerAddress,
 
     query: query,
     displayError: displayError,
@@ -290,9 +330,10 @@ export const SessionController = (function () {
     setSession: setSession,
 
     getDateTimeOptions: getDateTimeOptions,
+    getTimezoneName: getTimezoneName,
+    getTimezoneOffset: getTimezoneOffset,
 
     isSynced: isSynced,
-    handShake: handShake,
 
     authenticate: authenticate,
     register: register,

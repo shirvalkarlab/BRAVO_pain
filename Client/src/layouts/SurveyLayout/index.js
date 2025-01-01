@@ -34,22 +34,7 @@ export default function SurveyLayout({viewOnly, children}) {
 
   useEffect(() => {
     if (!viewOnly) {
-      SessionController.handShake().then((state) => {
-        if (!state) {
-          SessionController.nullifyUser();
-          setContextState(dispatch, "user", {});
-          setContextState(dispatch, "participant_uid", null);
-
-          const handleTimeout = () => {
-            navigate("/", {replace: false});
-          };
-
-          setAlert(
-            <MuiAlertDialog title={"ERROR"} message={dictionaryLookup(dictionary.ErrorMessage, "CONNECTION_TIMEDOUT", language)}
-              handleClose={handleTimeout} 
-              handleConfirm={handleTimeout}/>)
-        }
-      });
+      
     }
   }, [pathname, sessionState]);
 

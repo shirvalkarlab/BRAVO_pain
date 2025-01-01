@@ -1,0 +1,116 @@
+""""""
+"""
+=========================================================
+* UF BRAVO Platform
+=========================================================
+
+* Copyright 2025 by Jackson Cagle, Fixel Institute
+* The source code is made available under Open Source GPL-3.0 License
+
+ =========================================================
+
+* The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+"""
+"""
+SQL Table Definitions
+===================================================
+@author: Jackson Cagle, University of Florida
+@email: jackson.cagle@neurology.ufl.edu
+"""
+
+from django.db import models
+from django.contrib.auth.models import BaseUserManager, AbstractBaseUser
+import json
+import datetime
+
+from modules.HelperFunctions import current_time, get_token, uuid4_hex
+
+class DBSDevice(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
+    name = models.CharField(max_length=128, default="")
+    type = models.CharField(max_length=128, default="")
+    owner = models.ForeignKey('Participant', models.CASCADE)
+
+    serial_number = models.CharField(max_length=256, default="")
+    implanted_location = models.CharField(max_length=128, default="")
+    implanted_date = models.FloatField(default=0)
+    estimated_eol = models.FloatField(default=0)
+    device_bloodline = models.CharField(max_length=128, default="")
+    electrodes = models.ManyToManyField("Electrode", related_name="has_dbs_electrode")
+
+    def get_name(self):
+        if len(self.name) > 0:
+            return self.name
+        return self.device_bloodline
+
+    def include(*args, **kwargs):
+        return DBSDevice.objects.filter(**kwargs).exists()
+
+    def find(*args, **kwargs):
+        return DBSDevice.objects.filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return DBSDevice.objects.filter(**kwargs).all()
+
+    def find_or_create(serial_number, type, institute):
+        device = DBSDevice.objects.filter(serial_number=serial_number, type=type, owner__institute__pk=institute).first()
+        if device:
+            return device, False
+        
+        device = DBSDevice(serial_number=serial_number, type=type)
+        return device, True
+    
+    def get_info(self):
+        return {
+            "Id": self.uid,
+            "Name": self.name if self.name else self.serial_number,
+            "GenericName": self.get_name(),
+            "Type": self.type,
+            "Location": self.implanted_location,
+            "Date": self.implanted_date,
+            "Heritage": self.device_bloodline,
+            "Electrodes": [i.get_info() for i in self.electrodes.all()]
+        }
+
+class MERDevice(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
+    name = models.CharField(max_length=128, default="")
+    type = models.CharField(max_length=128, default="")
+    owner = models.ForeignKey('Participant', models.CASCADE)
+
+    electrodes = models.ManyToManyField("Electrode", related_name="has_mer_electrode")
+
+class Electrode(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
+    type = models.CharField(max_length=128, default="")
+    name = models.CharField(max_length=128, default="")
+    hemisphere = models.CharField(max_length=128, default="")
+    target = models.CharField(max_length=128, default="")
+    custom_name = models.CharField(max_length=128, default="")
+    owner = models.ForeignKey('Participant', models.CASCADE)
+
+    channel_count = models.IntegerField(default=4)
+    channel_names = models.JSONField(default=list)
+    channel_mapping = models.CharField(max_length=512, default="") #This should be a path to the mapping file, if available
+    channel_coordinates = models.JSONField(default=list) # It is in reality XYZ coordinates or trajectory, but will be encoded into String for simplicity
+    implanted_date = models.FloatField(default=0)
+
+    def find_or_create(owner, target):
+        electrode = Electrode.objects.filter(owner=owner, target=target).first()
+        if electrode:
+            return electrode, False
+        
+        electrode = Electrode(owner=owner, target=target)
+        return electrode, True
+    
+    def get_info(self):
+        return {
+            "Id": self.uid,
+            "Name": self.name,
+            "Type": self.type,
+            "Hemisphere": self.hemisphere,
+            "Target": self.target,
+            "CustomName": self.custom_name,
+            "Date": self.implanted_date,
+            "ChannelNames": self.channel_names
+        }

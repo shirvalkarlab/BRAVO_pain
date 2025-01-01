@@ -41,8 +41,7 @@ import MuiLink from "@mui/material/Link";
 import ChangeCircleIcon from '@mui/icons-material/ChangeCircle';
 import LoginIcon from '@mui/icons-material/Login';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
-import StorageIcon from '@mui/icons-material/Storage';
-import CheckIcon from '@mui/icons-material/Check';
+import NoteAltIcon from "@mui/icons-material/NoteAlt";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -66,8 +65,6 @@ function DefaultNavbar({ transparent, light, action }) {
   const [mobileView, setMobileView] = useState(false);
   const [openMenu, setOpenMenu] = useState(false);
   const [whichMenu, setWhichMenu] = useState("");
-  const [currentHost, setCurrentHost] = useState("Localhost");
-  const [customServer, setCustomServer] = useState({show: false, address: ""});
 
   const openMobileNavbar = ({ currentTarget }) => setMobileNavbar(currentTarget.parentNode);
   const closeMobileNavbar = () => setMobileNavbar(false);
@@ -141,10 +138,8 @@ function DefaultNavbar({ transparent, light, action }) {
   return (
     <Container>
       <MDBox
-        py={1}
-        px={{ xs: 4, sm: transparent ? 2 : 3, lg: transparent ? 0 : 2 }}
-        my={3}
-        mx={3}
+        py={1} px={{ xs: 4, sm: transparent ? 2 : 3, lg: transparent ? 0 : 2 }}
+        my={3} mx={3}
         width="calc(100% - 48px)"
         borderRadius="lg"
         shadow={transparent ? "none" : "md"}
@@ -182,6 +177,15 @@ function DefaultNavbar({ transparent, light, action }) {
             name={dictionary.SimplifiedNavbar.ChangeLanguage[language]}
             onClick={(event) => handleOpenMenu(event, "LanguageMenu")} 
             light={light} 
+          />
+          <DefaultNavbarLink
+            icon={<NoteAltIcon/>}
+            name={"Deidentification Tool"}
+            onClick={() => {
+              window.location.href = "https://deidentification-manager.jcagle.solutions/"
+              return null
+            }}
+            light={light}
           />
           <DefaultNavbarLink
             icon={<LoginIcon/>}

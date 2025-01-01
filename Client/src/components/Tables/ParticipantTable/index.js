@@ -37,7 +37,7 @@ import ParticipantTablePagination from "./ParticipantTablePagination";
 
 const ParticipantTable = ({data}) => {
   const [controller, dispatch] = usePlatformContext();
-  const { language, ParticipantTablePageIndex, lastActive } = controller;
+  const { language } = controller;
 
   const navigate = useNavigate();
 
@@ -67,12 +67,7 @@ const ParticipantTable = ({data}) => {
       return;
     }
 
-    if (new Date().getTime() - lastActive > 600000) {
-      SessionController.setPageIndex("ParticipantTable", 0);
-      setPagination({currentPage: 0, totalPages: Math.ceil(data.length / viewPerPage)});
-    } else {
-      setPagination({currentPage: ParticipantTablePageIndex ? ParticipantTablePageIndex : 0, totalPages: Math.ceil(data.length / viewPerPage)});
-    }
+    setPagination({currentPage: 0, totalPages: Math.ceil(data.length / viewPerPage)});
   }, [data]);
 
   useEffect(() => {
@@ -83,16 +78,23 @@ const ParticipantTable = ({data}) => {
     switch (sortType.key) {
       case "ParticipantTableName": 
         if (sortType.direction == 1) {
-          setSortedData([...data.sort((a,b) => (a.name).localeCompare(b.name))]);
+          setSortedData([...data.sort((a,b) => (a.Name).localeCompare(b.Name))]);
         } else {
-          setSortedData([...data.sort((a,b) => (b.name).localeCompare(a.name))]);
+          setSortedData([...data.sort((a,b) => (b.Name).localeCompare(a.Name))]);
         }
         break;
       case "ParticipantTableDiagnosis": 
         if (sortType.direction == 1) {
-          setSortedData([...data.sort((a,b) => (a.diagnosis).localeCompare(b.diagnosis))]);
+          setSortedData([...data.sort((a,b) => (a.Diagnosis).localeCompare(b.Diagnosis))]);
         } else {
-          setSortedData([...data.sort((a,b) => (b.diagnosis).localeCompare(a.diagnosis))]);
+          setSortedData([...data.sort((a,b) => (b.Diagnosis).localeCompare(a.Diagnosis))]);
+        }
+        break;
+      case "ParticipantTableLastModified": 
+        if (sortType.direction == 1) {
+          setSortedData([...data.sort((a,b) => (a.LastModified)-(b.LastModified))]);
+        } else {
+          setSortedData([...data.sort((a,b) => (b.LastModified)-(a.LastModified))]);
         }
         break;
       default:
@@ -102,12 +104,8 @@ const ParticipantTable = ({data}) => {
   }, [sortType]);
 
   const viewParticipantData = (id) => {
-    SessionController.setParticipantUID(id).then((result) => {
-      if (result) {
-        setContextState(dispatch, "participant_uid", id);
-        navigate("/participant-overview", {replace: false});
-      }
-    });
+    setContextState(dispatch, "participant_uid", id);
+    navigate("/participant-overview/" + id, {replace: false});
   };
 
   const sortParticipantList = (col) => {
@@ -129,9 +127,9 @@ const ParticipantTable = ({data}) => {
       <Table size="small">
         <TableHead sx={{display: "table-header-group"}}>
           <TableRow>
-            {["ParticipantTableName", "ParticipantTableDiagnosis"].map((col) => {
+            {["ParticipantTableName", "ParticipantTableDiagnosis", "ParticipantTableLastModified"].map((col) => {
               return (
-                <TableCell key={col} variant="head" style={{width: "25%", minWidth: 200, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
+                <TableCell key={col} variant="head" style={{width: "30%", minWidth: 200, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
                   <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>sortParticipantList(col)}>
                     {dictionaryLookup(dictionary.Dashboard, col, language)}
                   </MDTypography>
@@ -146,21 +144,26 @@ const ParticipantTable = ({data}) => {
         </TableHead>
         <TableBody>
           {displayData.map((participant) => {
-            return <Fragment key={participant.uid}>
+            return <Fragment key={participant.Id}>
               <TableRow>
                 <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)"}}>
                   <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                    {participant.name}
+                    {participant.Name}
                   </MDTypography>
                 </TableCell>
                 <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)"}}>
                   <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
-                    {participant.diagnosis}
+                    {participant.Diagnosis}
+                  </MDTypography>
+                </TableCell>
+                <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)"}}>
+                  <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
+                    {new Date(participant.LastModified*1000).toLocaleDateString("en-US", {dateStyle: "full"})}
                   </MDTypography>
                 </TableCell>
                 <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)", display: "flex"}}>
                   <Tooltip title="View Participant" placement="top">
-                    <MDButton variant="contained" color="info" size="small" onClick={() => viewParticipantData(participant.uid)} style={{marginLeft: "auto"}}>
+                    <MDButton variant="contained" color="info" size="small" onClick={() => viewParticipantData(participant.Id)} style={{marginLeft: "auto"}}>
                       <i className="fa-solid fa-eye"></i>
                     </MDButton>
                   </Tooltip>
@@ -168,7 +171,7 @@ const ParticipantTable = ({data}) => {
               </TableRow>
               <TableRow>
                 <TableCell colSpan={5} style={{paddingTop: 0, borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  {participant.tags.map((tag) => {
+                  {participant.Tags.map((tag) => {
                     return <Chip key={participant.uid + " " + tag} label={tag} size={"small"} sx={{marginRight: 0.5}} />
                   })}
                 </TableCell>

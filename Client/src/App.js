@@ -108,7 +108,6 @@ export default function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/profile" element={<Profile />} />
         {getRoutes(routes)}
-        <Route path="/inertiaSensorViewer" element={<InertiaSensorViewer />} />
         <Route path="/reports/*" element={<Navigate to="/patient-overview" />} />
         <Route path="/experimental/*" element={<Navigate to="/patient-overview" />} />
         <Route exact path="/survey/:surveyId/edit" element={<SurveyEditor />} />

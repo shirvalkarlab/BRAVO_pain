@@ -17,6 +17,7 @@ import { useParams } from "react-router-dom";
 import Papa from "papaparse";
 
 import {
+  Autocomplete,
   Card,
   Checkbox,
   Grid,
@@ -46,6 +47,7 @@ import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import SurveyTable from "components/Tables/SurveyTable";
+import FormField from "components/MDInput/FormField";
 
 import SurveyLayout from "layouts/SurveyLayout";
 
@@ -53,7 +55,7 @@ import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-export default function SurveyEditor({match}) {
+export default function FormEditor({match}) {
   const [controller, dispatch] = usePlatformContext();
   const { user, language } = controller;
 
@@ -61,21 +63,22 @@ export default function SurveyEditor({match}) {
   const [alert, setAlert] = useState(null);
 
   const [editText, setEditText] = useState(false);
-
   const inputFile = useRef(null) 
-
-  const { surveyId } = useParams();
+  const { form_link } = useParams();
 
   useEffect(() => {
-    SessionController.query("/api/querySurveyContent", {
-      id: surveyId
+    SessionController.query("/api/querySurveyForms", {
+      RequestType: "RequestForm",
+      FormLink: form_link
     }).then((response) => {
-      if (response.status == 200) {
-        if (!response.data.editable) {
-          SessionController.displayError({response: {status: 403}}, setAlert);
-        } else {
-          setContents(response.data);
-        }
+      console.log(response.data)
+      if (!response.data.Editable) {
+        SessionController.displayError({response: {status: 403}}, setAlert);
+      } else {
+        setContents({
+          ...response.data,
+          contents: response.data.Record
+        });
       }
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -177,10 +180,12 @@ export default function SurveyEditor({match}) {
   };
 
   const saveChanges = () => {
-    SessionController.query("/api/updateSurveyContent", {
-      id: surveyId,
-      title: contents.title,
-      contents: contents.contents
+    SessionController.query("/api/setSurveyForms", {
+      RequestType: "Update",
+      FormLink: form_link,
+      FormContent: contents.contents
+    }).then((response) => {
+      
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
@@ -188,7 +193,7 @@ export default function SurveyEditor({match}) {
 
   const addPage = () => {
     contents.contents.push({
-      header: "New Page",
+      header: "",
       questions: []
     });
     setContents({...contents});
@@ -236,6 +241,7 @@ export default function SurveyEditor({match}) {
         step: 1,
         value: 0,
         default: 0,
+        activeView: false,
         show: true
       };
     } else if (type === "text") {
@@ -245,6 +251,7 @@ export default function SurveyEditor({match}) {
         value: "",
         default: "",
         validation: "text",
+        activeView: false,
         show: true
       };
     } else if (type === "multiple-choice") {
@@ -255,6 +262,7 @@ export default function SurveyEditor({match}) {
         value: [],
         options: [],
         default: [],
+        activeView: false,
         show: true
       };
     } else if (type === "description") {
@@ -263,7 +271,16 @@ export default function SurveyEditor({match}) {
         type: type,
         value: "",
         default: "",
+        activeView: false,
         show: true
+      };
+    } else if (type === "cumulativeScore") {
+      contents.contents[index].questions[questionId] = {
+        text: contents.contents[index].questions[questionId].text,
+        type: type,
+        list: [],
+        activeView: false,
+        show: false
       };
     }
     setContents({...contents});
@@ -276,6 +293,11 @@ export default function SurveyEditor({match}) {
 
   const setQuestionRequired = (index, questionId, value) => {
     contents.contents[index].questions[questionId]["changed"] = !value;
+    setContents({...contents});
+  };
+
+  const setQuestionAlwaysView = (index, questionId, value) => {
+    contents.contents[index].questions[questionId]["activeView"] = value;
     setContents({...contents});
   };
 
@@ -301,6 +323,11 @@ export default function SurveyEditor({match}) {
     setContents({...contents});
   }
 
+  const setCumulativeScoreInclusion = (index, questionId, value) => {
+    contents.contents[index].questions[questionId].list = value;
+    setContents({...contents});
+  }
+
   return (
     <SurveyLayout>
       <MDBox>
@@ -311,17 +338,9 @@ export default function SurveyEditor({match}) {
                 <Grid container spacing={2}>
                   <Grid item xs={12} sm={6} >
                     <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItem: "center"}}>
-                      {editText === "contentName" ? (
-                        <TextField variant={"standard"} value={contents.title} onChange={(event) => setContents({...contents, title: event.target.value})} sx={{marginX: 1}}>
-                        </TextField>
-                      ) : (
-                        <MDTypography variant="h3">
-                          {contents.title ? contents.title : ""}
-                        </MDTypography>
-                      )}
-                      <IconButton onClick={() => editText === "contentName" ? setEditText(false) : setEditText("contentName")}>
-                        <i className="fa-solid fa-pen"></i>
-                      </IconButton>
+                      <MDTypography variant="h3">
+                        {contents.Name ? contents.Name : ""}
+                      </MDTypography>
                     </MDBox>
                   </Grid>
                   <Grid item xs={12} sm={6} >
@@ -399,6 +418,7 @@ export default function SurveyEditor({match}) {
                                   <MenuItem value={"text"}>{"Text"}</MenuItem>
                                   <MenuItem value={"multiple-choice"}>{"Multiple Choice"}</MenuItem>
                                   <MenuItem value={"description"}>{"Description"}</MenuItem>
+                                  <MenuItem value={"cumulativeScore"}>{"Cumulative Score"}</MenuItem>
                                 </Select>
                               </FormControl>
                               {question.type === "multiple-choice" ? (
@@ -407,12 +427,18 @@ export default function SurveyEditor({match}) {
                                 />
                               ) : null} 
                             </MDBox>
-                            <FormControlLabel label={"Show to user?"}
-                              control={<Checkbox checked={question.show} onChange={(event) => setQuestionDisplay(index, questionId, event.target.checked)}/>}
-                            />
-                            <FormControlLabel label={"Response required?"}
-                              control={<Checkbox checked={!question.changed} onChange={(event) => setQuestionRequired(index, questionId, event.target.checked)}/>}
-                            />
+                            <MDBox display={"flex"} flexDirection={"row"}>
+                              <FormControlLabel label={"Show to user?"}
+                                control={<Checkbox checked={question.show} onChange={(event) => setQuestionDisplay(index, questionId, event.target.checked)}/>}
+                              />
+                              <FormControlLabel label={"Response required?"}
+                                control={<Checkbox checked={!question.changed} onChange={(event) => setQuestionRequired(index, questionId, event.target.checked)}/>}
+                              />
+                              <FormControlLabel label={"Set Active in Record Timeline?"}
+                                control={<Checkbox checked={question.activeView} onChange={(event) => setQuestionAlwaysView(index, questionId, event.target.checked)}/>}
+                              />
+                            </MDBox>
+                              
                             {question.type === "text" ? (
                             <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginY: 1}}>
                               <TextField variant={"standard"} value={question.value} label={"Default Text Field"} onChange={(event) => setTextQuestionValue(index, questionId, event.target.value)} rows={4} sx={{marginX: 1}} fullWidth multiline>
@@ -469,6 +495,27 @@ export default function SurveyEditor({match}) {
                                   </IconButton>
                                 </MDBox>
                               })}
+                            </MDBox>
+                            ) : null}
+                            {question.type === "cumulativeScore" ? (
+                            <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginY: 1}}>
+                              
+                              <Autocomplete
+                                multiple value={question.list} options={contents.contents.reduce((cumulative, value) => {
+                                  cumulative.push(...value.questions.filter((a) => a.type == "score").map((a) => a.text));
+                                  return cumulative;
+                                }, [])}
+                                onChange={(event, value) => { setCumulativeScoreInclusion(index, questionId, value) }}
+                                renderOption={(props, option) => <li {...props}>{option}</li>}
+                                renderInput={(params) => (
+                                  <FormField
+                                    {...params}
+                                    label={"Choose Question Label for Summation"}
+                                    InputLabelProps={{ shrink: true }}
+                                  />
+                                )}
+                                fullWidth
+                              />
                             </MDBox>
                             ) : null}
                           </Grid>

@@ -103,10 +103,9 @@ export const dictionary = {
       zh: "条款与细则"
     },
     DisclaimerContent: {
-      en: `This is a demo website for the UF BRAVO Platform submitted for publication.
-      Registered Accounts are by default "Researcher-only" accounts without ability to view identified data.
-      The platform is hosted in a cloud-server and data are stored in cloud server to demonstrate long-term data analysis capability.
-      Please upload data with that in mind and upload deidentified data only.`,
+      en: `###################################\n
+      #######################################\n
+      ####################################`,
       zh: `This is a demo website for the UF BRAVO Platform submitted for publication.
       Registered Accounts are by default "Researcher-only" accounts without ability to view identified data.
       The platform is hosted in a cloud-server and data are stored in cloud server to demonstrate long-term data analysis capability.
@@ -1147,6 +1146,10 @@ export const dictionary = {
     mV: {
       en: "mV",
       zh: "毫伏"
+    },
+    uV: {
+      en: "μV",
+      zh: "微伏"
     },
     mA: {
       en: "mA",

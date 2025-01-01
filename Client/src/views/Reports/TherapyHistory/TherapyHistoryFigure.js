@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
 import { Card, Grid } from "@mui/material";
@@ -147,7 +147,7 @@ function TherapyHistoryFigure({dataToRender, height, figureTitle}) {
     let therapyBlocks = [];
     let xLim = [0,0]
     for (let i in data) {
-      if (showDevice.includes(data[i].device)) {
+      if (showDevice.includes(data[i].device.Id)) {
         for (let j in data[i].therapyBlocks) {
           if (data[i].therapyBlocks[j].solid) {
             therapyBlocks.push({
@@ -185,49 +185,49 @@ function TherapyHistoryFigure({dataToRender, height, figureTitle}) {
   }
 
   React.useEffect(() => {
-    setShowDevice(Object.keys(dataToRender.TherapyDevices));
+    setShowDevice(dataToRender.TherapyDevices.map((a) => a.Id));
   }, []);
 
   // Refresh Left Figure if Data Changed
   React.useEffect(() => {
-    if (dataToRender.TherapyModification.length > 0) {
-      let graphingData = []
-      for (let device in dataToRender.TherapyDevices) {
-        let TherapyChangeHistory = dataToRender.TherapyModification.filter((a) => a.type == "TherapyChangeGroup" && a.device == device).sort((a,b) => a.date-b.date);
-        let TherapyBlocks = [];
-        for (let i in TherapyChangeHistory) {
-          if (i > 0) {
-            if (TherapyChangeHistory[i-1].new_group == TherapyChangeHistory[i].old_group) {
-              TherapyBlocks.push({
-                label: TherapyChangeHistory[i-1].new_group,
-                start: TherapyChangeHistory[i-1].date,
-                end: TherapyChangeHistory[i].date,
-                solid: true
-              });
-            } else {
-              TherapyBlocks.push({
-                label: TherapyChangeHistory[i-1].new_group,
-                start: TherapyChangeHistory[i-1].date,
-                end: TherapyChangeHistory[i-1].date + 24*3600 > TherapyChangeHistory[i].date ? (TherapyChangeHistory[i-1].date + 12*3600) : (TherapyChangeHistory[i-1].date + 24*3600),
-                solid: false
-              });
-              TherapyBlocks.push({
-                label: TherapyChangeHistory[i].old_group,
-                start: TherapyChangeHistory[i].date - 24*3600 > TherapyChangeHistory[i-1].date ? (TherapyChangeHistory[i].date - 24*3600) : (TherapyChangeHistory[i].date - 12*3600),
-                end: TherapyChangeHistory[i].date,
-                solid: false
-              });
-            }
+    let graphingData = []
+    for (let i in dataToRender.TherapyModification) {
+      let TherapyBlocks = [];
+      let TherapyChangeHistory = dataToRender.TherapyModification[i].History.filter((a) => a.Type == "TherapyChangeGroup").sort((a,b) => a.Date-b.Date);
+      
+      for (let j in TherapyChangeHistory) {
+        if (j > 0) {
+          if (TherapyChangeHistory[j-1].New == TherapyChangeHistory[j].Previous) {
+            TherapyBlocks.push({
+              label: TherapyChangeHistory[j-1].New,
+              start: TherapyChangeHistory[j-1].Date,
+              end: TherapyChangeHistory[j].Date,
+              solid: true
+            });
+          } else {
+            TherapyBlocks.push({
+              label: TherapyChangeHistory[j-1].New,
+              start: TherapyChangeHistory[j-1].Date,
+              end: TherapyChangeHistory[j-1].Date + 24*3600 > TherapyChangeHistory[j].Date ? (TherapyChangeHistory[j-1].Date + 12*3600) : (TherapyChangeHistory[j-1].Date + 24*3600),
+              solid: false
+            });
+            TherapyBlocks.push({
+              label: TherapyChangeHistory[j].Previous,
+              start: TherapyChangeHistory[j].Date - 24*3600 > TherapyChangeHistory[j-1].Date ? (TherapyChangeHistory[j].Date - 24*3600) : (TherapyChangeHistory[j].Date - 12*3600),
+              end: TherapyChangeHistory[j].Date,
+              solid: false
+            });
           }
         }
-        graphingData.push({
-          device: device,
-          therapyBlocks: TherapyBlocks
-        });
       }
-      
-      handleGraphing(graphingData);
+
+      graphingData.push({
+        device: dataToRender.TherapyModification[i].Device,
+        therapyBlocks: TherapyBlocks
+      });
     }
+
+    handleGraphing(graphingData);
   }, [dataToRender, showDevice, language]);
 
   const onResize = useCallback(() => {
@@ -241,24 +241,24 @@ function TherapyHistoryFigure({dataToRender, height, figureTitle}) {
     skipOnMount: false
   });
 
-  return (
+  return useMemo(() => (
     <MDBox>
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: height, width: "100%", display: show ? "" : "none"}}/>
       {dataToRender ? (
         <Grid container spacing={2}>
-          {Object.keys(dataToRender.TherapyDevices).map((device, index) => {
-            return <Grid item xs={4} sm={3} key={device}>
+          {dataToRender.TherapyDevices.map((device, index) => {
+            return <Grid item xs={4} sm={3} key={device.Id}>
               <Card style={{cursor: "pointer"}} onClick={() => {
                 setShowDevice((showDevice) => {
-                  if (showDevice.includes(device)) showDevice = showDevice.filter((a) => a != device)
-                  else showDevice.push(device);
+                  if (showDevice.includes(device.Id)) showDevice = showDevice.filter((a) => a != device.Id)
+                  else showDevice.push(device.Id);
                   return [...showDevice];
                 })
               }}>
-                <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} padding={1}>
+                <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} py={2} px={2}>
                   <MDBox style={{backgroundColor: colors[index*step], height: "10px", width: "10px", marginRight: 5}} />
-                  <MDTypography fontSize={12} style={{textDecoration: showDevice.includes(device) ? "" : "line-through"}}>
-                    {dataToRender.TherapyDevices[device].name.length > 15 ? dataToRender.TherapyDevices[device].name.slice(0,15) : dataToRender.TherapyDevices[device].name}
+                  <MDTypography fontSize={18} fontFamily={"lato"} fontWeight={"bold"} style={{textDecoration: showDevice.includes(device.Id) ? "" : "line-through"}}>
+                    {device.Name.length > 15 ? device.Name.slice(0,15) : device.Name}
                   </MDTypography>
                 </MDBox>
               </Card>
@@ -267,7 +267,7 @@ function TherapyHistoryFigure({dataToRender, height, figureTitle}) {
         </Grid>
       ) : null}
     </MDBox>
-  );
+  ), [showDevice, dataToRender]);
 }
 
 export default TherapyHistoryFigure;

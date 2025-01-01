@@ -13,7 +13,7 @@
 
 import { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Link, useNavigate } from "react-router-dom";
+import { BrowserRouter, Link, useLocation, useNavigate } from "react-router-dom";
 import App from "App";
 
 import { ThemeProvider } from "@mui/material/styles";
@@ -37,30 +37,22 @@ function Main() {
 
   const [controller, dispatch] = usePlatformContext();
   const { user, layout } = controller;
+  const { pathname } = useLocation();
 
   const [sessionReady, setSessionReady] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    let server = window.location.protocol + "//" + window.location.hostname;
-    SessionController.verifyServerAddress(server).then(async (connectionState) => {
-      let sessionStates = {};
-      if (connectionState) {
-        sessionStates = await SessionController.syncSession();
-      } else if (server === "") {
-        // Regardless of condition, reset Auth Token if we cannot connect to the first serverAddress in cache.
-        if (window.location.protocol == "http:") {
-          if (await SessionController.verifyServerAddress(window.location.protocol + "//" + window.location.hostname + ":3001")) {
-            sessionStates = await SessionController.syncSession();
-          }
-        }
-      }
-
-      for (let key of Object.keys(sessionStates)) {
-        setContextState(dispatch, key, sessionStates[key]);
-      }
+    if (pathname.startsWith("/survey/")) {
       setSessionReady(true);
-    });
+    } else {
+      SessionController.syncSession().then((sessionStates) => {
+        for (let key of Object.keys(sessionStates)) {
+          setContextState(dispatch, key, sessionStates[key]);
+        }
+        setSessionReady(true);
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -83,23 +75,8 @@ function Main() {
     return () => clearTimeout(sessionTimeout);
   }, [sessionReady])
 
-  const updateToken = () => {
-    const usr = SessionController.getUser();
-    if (Object.keys(usr).length == 0) return;
-    SessionController.refreshAuthToken().then((response) => {
-      if (response.status != 200) {
-        SessionController.nullifyUser();
-      }
-    });
-  };
-
   useEffect(() => {
-    let authWatchdog = setInterval(updateToken, 10*60*1000);
-    updateToken();
     
-    return () => {
-      clearInterval(authWatchdog);
-    };
   }, [user])
 
   return initialized ? (

@@ -32,22 +32,7 @@ export default function DatabaseLayout({children}) {
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
-    SessionController.handShake().then((state) => {
-      if (!state) {
-        SessionController.nullifyUser();
-        setContextState(dispatch, "user", {});
-        setContextState(dispatch, "participant_uid", null);
-        
-        const handleTimeout = () => {
-          navigate("/", {replace: false});
-        }
-
-        setAlert(
-          <MuiAlertDialog title={"ERROR"} message={dictionaryLookup(dictionary.ErrorMessage, "CONNECTION_TIMEDOUT", language)}
-            handleClose={handleTimeout} 
-            handleConfirm={handleTimeout}/>)
-      }
-    });
+    
   }, [pathname, authExpired]);
 
   return <>

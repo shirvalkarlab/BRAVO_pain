@@ -11,8 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import React from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useMemo } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -50,9 +50,6 @@ import LayoutOptions from "./LayoutOptions";
 import TherapeuticAnalysisTable from "./TherapeuticAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
 import StimulationPSD from "./StimulationPSD";
-import StimulationBoxPlot from "./StimulationBoxPlot";
-import EventPSDs from "./EventPSDs";
-import EventOnsetSpectrogram from "./EventOnsetSpectrum";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
@@ -61,78 +58,134 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 function TherapeuticEffects() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
-  const { participant_uid, experiment, TherapeuticEffectLayout, language } = controller;
-  const [recordingId, setRecordingId] = React.useState([]);
+  const { experiment, TherapeuticEffectLayout, language } = controller;
+  const { participant_uid } = useParams();
 
-  const [availableAnalysis, setAvailableAnalysis] = React.useState({analyses: [], recordings: []})
-  const [data, setData] = React.useState(false);
-  const [annotations, setAnnotations] = React.useState([]);
-  const [drawerOpen, setDrawerOpen] = React.useState({open: false, config: {}});
-  const [dataToRender, setDataToRender] = React.useState(false);
-  const [channel, setChannel] = React.useState({active: "", options: []})
-  const [channelInfos, setChannelInfos] = React.useState([]);
+  const [recordingId, setRecordingId] = useState([]);
 
-  const [channelPSDs, setChannelPSDs] = React.useState([]);
+  const [availableAnalysis, setAvailableAnalysis] = useState({Analyses: [], Recordings: []});
+  const [data, setData] = useState(false);
+  const [dataToRender, setDataToRender] = useState(false);
+
+  const [annotations, setAnnotations] = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState({open: false, config: {}});
+  const [channel, setChannel] = useState({active: "", options: []});
+
+  const [channelInfos, setChannelInfos] = useState([]);
+
+  const [therapyLabel, setTherapyLabel] = useState({active: "Default", options: ["Default"]});
   
-  const [eventPSDs, setEventPSDs] = React.useState(false);
-  const [eventPSDSelector, setEventPSDSelector] = React.useState({
+  const [eventPSDs, setEventPSDs] = useState(false);
+  const [eventPSDSelector, setEventPSDSelector] = useState({
     type: "Channels",
     options: [],
     value: ""
   });
-  const [eventSpectrograms, setEventSpectrograms] = React.useState(false);
-  const [eventSpectrogramSelector, setEventSpectrogramSelector] = React.useState({
+  const [eventSpectrograms, setEventSpectrograms] = useState(false);
+  const [eventSpectrogramSelector, setEventSpectrogramSelector] = useState({
     options: [],
     value: ""
   });
 
-  const [referenceType, setReferenceType] = React.useState([]);
+  const [referenceType, setReferenceType] = useState([]);
   
-  const [alert, setAlert] = React.useState(null);
+  const [alert, setAlert] = useState(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!participant_uid) {
       navigate("/dashboard", {replace: false});
-    } else {
-      setAlert(<LoadingProgress/>);
-      SessionController.query("/api/queryTherapeuticEffectAnalysis", {
-        request_type: "Overview",
-        participant_uid: participant_uid,
-        experiment_uid: experiment
-      }).then((response) => {
-        setAvailableAnalysis(response.data);
-        setAlert(null);
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
+      return;
     }
-  }, [participant_uid]);
+    setContextState(dispatch, "report", "GeneralReports");
 
-  const getRecordingData = (analysisId, channel=null) => {
-    setAlert(<LoadingProgress />)
+    setAlert(<LoadingProgress/>);
     SessionController.query("/api/queryTherapeuticEffectAnalysis", {
-      request_type: channel ? "QueryChannel" : "QueryData",
-      participant_uid: participant_uid,
-      experiment_uid: experiment,
-      analysis_uid: analysisId,
-      channel: channel
+      RequestType: "Overview",
+      ParticipantId: participant_uid
     }).then((response) => {
-      setData({...response.data, AnalysisID: analysisId});
-      setChannel({active: response.data.ActiveChannel, options: response.data.ChannelNames})
+      console.log(response.data)
+      setAvailableAnalysis(response.data);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
+    
+  }, [participant_uid]);
+
+  const getRecordingData = async (analysis, channel) => {
+    let newQueryChannel = [];
+    for (let i in channel) {
+      if (!data.CachedChannel.includes(channel[i])) {
+        newQueryChannel.push(channel[i])
+      }
+    }
+
+    setAlert(<LoadingProgress />)
+    if (!channel || newQueryChannel.length > 0) {
+      try {
+        const response = await SessionController.query("/api/queryTherapeuticEffectAnalysis", {
+          RequestType: "RequestData",
+          ParticipantId: participant_uid,
+          AnalysisId: analysis.Id,
+          ActiveChannels: newQueryChannel
+        })
+        
+        setTherapyLabel((currentLabel) => {
+          let newOptions = ["Default"];
+          for (let i in response.data.Therapy) {
+            for (let j in response.data.Therapy[i].TherapySeries) {
+              for (let name in response.data.Therapy[i].TherapySeries[j].TherapyOverview) {
+                if (!newOptions.includes(name)) {
+                  newOptions.push(name);
+                }
+              }
+            }
+          }
+          if (newOptions.length === currentLabel.options.length) {
+            for (let i in newOptions) {
+              if (!currentLabel.options.includes(newOptions[i])) {
+                return {active: newOptions.includes(currentLabel.active) ? currentLabel.active : newOptions[0], options: newOptions};
+              }
+            }
+            return currentLabel;
+          } else {
+            return {active: newOptions.includes(currentLabel.active) ? currentLabel.active : newOptions[0], options: newOptions};
+          }
+        })
+
+        if (!channel) {
+          setAnnotations(response.data.Annotations);
+          setData({...response.data, CachedChannel: response.data.ActiveChannel, Analysis: analysis});
+          setChannel({active: response.data.ActiveChannel, options: response.data.AllChannels})
+        } else {
+          setData((data) => {
+            data.CachedChannel.push(...newQueryChannel);
+            data.ActiveChannel = channel;
+            data.Signal.push(...response.data.Signal);
+            setChannel((oldChannel) => {
+              oldChannel.active = channel;
+              return {...oldChannel}
+            });
+            setAnnotations((annotations) => {
+              annotations.push(...response.data.Annotations);
+              return [...new Set(annotations)];
+            });
+            return {...data};
+          });
+        }
+        setAlert(null);
+      } catch (error) {
+        SessionController.displayError(error, setAlert);
+      }
+    } else {
+      setChannel((oldChannel) => {
+        oldChannel.active = channel;
+        return {...oldChannel}
+      });
+      setAlert(null);
+    }
   };
   
-  React.useEffect(() => {
-
-  }, []);
-  
-  React.useEffect(() => {
-    
-  }, []);
-
   const onCenterFrequencyChange = (side, freq) => {
     
   };
@@ -157,38 +210,20 @@ function TherapeuticEffects() {
     
   }
 
-  // Divide all PSDs by day or by channel
-  React.useEffect(() => {
-    
-  }, [dataToRender]);
-
   const handleAddEvent = async (eventInfo) => {
+    setAlert(<LoadingProgress />);
     try {
-      const response = await SessionController.query("/api/queryCustomAnnotations", {
-        id: patientID,
-        addEvent: true,
-        name: eventInfo.name,
-        time: eventInfo.time / 1000,
-        type: "Streaming",
-        duration: parseFloat(eventInfo.duration)
+      const response = await SessionController.query("/api/addParticipantAnnotation", {
+        ParticipantId: participant_uid,
+        EventName: eventInfo.name,
+        EventTime: eventInfo.time / 1000,
+        EventDuration: parseFloat(eventInfo.duration),
+        EventType: "RecordingCustomEvent"
       });
+      setAlert(null);
 
       if (response.status == 200) {
-        setDataToRender((dataToRender) => {
-          dataToRender.Annotations = [...dataToRender.Annotations, {
-            Time: eventInfo.time / 1000,
-            Name: eventInfo.name,
-            Duration: parseFloat(eventInfo.duration)
-          }];
-          return {...dataToRender};
-        });
-
-        setAnnotations((annotations) => {
-          if (!annotations.includes(eventInfo.name)) {
-            annotations.push(eventInfo.name);
-          }
-          return [...annotations];
-        });
+        setAnnotations([...annotations, response.data]);
       }
     } catch (error) {
       SessionController.displayError(error, setAlert);
@@ -196,15 +231,15 @@ function TherapeuticEffects() {
   };
 
   const handleDeleteEvent = async (eventInfo) => {
-    if (dataToRender.Annotations.length > 0) {
+    if (annotations.length > 0) {
       eventInfo.targetInfo = eventInfo;
       eventInfo.targetInfo.timeDiff = 10;
     }
 
-    for (let i = 0; i < dataToRender.Annotations.length; i++) {
-      let absoluteDiffTime = Math.abs(dataToRender.Annotations[i].Time - eventInfo.time/1000);
+    for (let i = 0; i < annotations.length; i++) {
+      let absoluteDiffTime = Math.abs(annotations[i].Date - eventInfo.time/1000);
       if (absoluteDiffTime < eventInfo.targetInfo.timeDiff) {
-        eventInfo.targetInfo = dataToRender.Annotations[i];
+        eventInfo.targetInfo = annotations[i];
         eventInfo.targetInfo.timeDiff = absoluteDiffTime;
       }
     }
@@ -212,27 +247,19 @@ function TherapeuticEffects() {
     if (eventInfo.targetInfo.timeDiff < 10) {
       setAlert(<MuiAlertDialog 
         title={`Remove ${eventInfo.targetInfo.Name} Event`}
-        message={`Are you sure you want to delete the entry [${eventInfo.targetInfo.Name}] @ ${new Date(eventInfo.targetInfo.Time*1000)} ?`}
+        message={`Are you sure you want to delete the entry [${eventInfo.targetInfo.Name}] @ ${new Date(eventInfo.targetInfo.Date*1000)} ?`}
         confirmText={"YES"}
         denyText={"NO"}
         denyButton
         handleClose={() => setAlert(null)}
         handleDeny={() => setAlert(null)}
         handleConfirm={() => {
-          SessionController.query("/api/queryCustomAnnotations", {
-            id: patientID,
-            deleteEvent: true,
-            name: eventInfo.targetInfo.Name,
-            time: eventInfo.targetInfo.Time
+          SessionController.query("/api/deleteParticipantAnnotation", {
+            ParticipantId: participant_uid,
+            EventId: eventInfo.targetInfo.Id
           }).then(() => {
-            setDataToRender((dataToRender) => {
-              dataToRender.Annotations = dataToRender.Annotations.filter((a) => {
-                if (a.Name == eventInfo.targetInfo.Name && a.Time == eventInfo.targetInfo.Time && a.Duration == eventInfo.targetInfo.Duration) {
-                  return false;
-                }
-                return true;
-              })
-              return {...dataToRender};
+            setAnnotations((annotations) => {
+              return [...annotations.filter((a) => a.Id != eventInfo.targetInfo.Id)];
             });
             setAlert(null);
           }).catch((error) => {
@@ -243,75 +270,89 @@ function TherapeuticEffects() {
     }
   }
 
-  const handleAdjustAlignment = async (alignment) => {
-    const Alignment = parseFloat(alignment)/1000;
-    SessionController.query("/api/updateRecordings", {
-      request_type: "Alignment",
-      participant: participant_uid,
-      analysis_uid: data.AnalysisID,
-      recording_uid: data.Therapy.RecordingId,
-      alignment: Alignment
-    }).then((response) => {
-      setData((data) => {
-        data.Therapy.AlignmentOffset = Alignment;
-        return {...data};
-      });
+  const handleAdjustAlignment = async (alignment, eventInfo) => {
+    setAlert(<LoadingProgress />)
+    const Alignment = parseFloat(alignment.alignment)/1000;
+    try {
+      const response = await SessionController.query("/api/setRecordingTimeShift", {
+        ParticipantId: participant_uid,
+        RequestType: "Analysis",
+        AnalysisId: data.Analysis.Id,
+        RecordingId: eventInfo.channel,
+        Alignment: Alignment
+      })
       setAlert(null);
-    }).catch((error) => {
+      
+      if (response.status == 200) {
+        setData((data) => {
+          for (let i in data.Signal) {
+            if (data.Signal[i].RecordingId == eventInfo.channel) {
+              data.Signal[i].Alignment = Alignment
+            }
+          }
+          for (let i in data.Therapy) {
+            if (data.Therapy[i].RecordingId == eventInfo.channel) {
+              data.Therapy[i].Alignment = Alignment
+            }
+          }
+          return {...data};
+        });
+      }
+      return response
+    } catch (error) {
       SessionController.displayError(error, setAlert);
-    });
+    }
   }
 
   return (
-    <>
+    <DatabaseLayout>
       {alert}
-      <DatabaseLayout>
-        <MDBox pt={3}>
-          <MDBox>
-            <Grid container spacing={2}>
+      <MDBox pt={3}>
+        <MDBox>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Card sx={{width: "100%"}}>
+                <Grid container>
+                  <Grid item xs={12}>
+                    <MDBox p={2} lineHeight={1}>
+                      {availableAnalysis.Analyses.length > 0 ? (
+                        <TherapeuticAnalysisTable data={availableAnalysis.Analyses} recordings={availableAnalysis.Recordings} getRecordingData={getRecordingData}/>
+                      ) : (
+                        <MDTypography variant="h6" fontSize={24}>
+                          {dictionary.WarningMessage.NoData[language]}
+                        </MDTypography>
+                      )}
+                    </MDBox>
+                  </Grid>
+                </Grid>
+              </Card>
+            </Grid>
+            {data ? (
               <Grid item xs={12}>
                 <Card sx={{width: "100%"}}>
                   <Grid container>
                     <Grid item xs={12}>
-                      <MDBox p={2} lineHeight={1}>
-                        {availableAnalysis.analyses.length > 0 ? (
-                          <TherapeuticAnalysisTable data={availableAnalysis.analyses} recordings={availableAnalysis.recordings} getRecordingData={getRecordingData}/>
-                        ) : (
-                          <MDTypography variant="h6" fontSize={24}>
-                            {dictionary.WarningMessage.NoData[language]}
+                      <MDBox display={"flex"} justifyContent={"space-between"} p={3}>
+                        <MDBox display={"flex"} flexDirection={"column"}>
+                          <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
+                            {"Therapeutic Effect Analysis"}
                           </MDTypography>
-                        )}
+                        </MDBox>
+                        <MDBox display={"flex"} flexDirection={"column"}>
+                          <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
+                            {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
+                          </MDButton>
+                        </MDBox>
                       </MDBox>
                     </Grid>
-                  </Grid>
-                </Card>
-              </Grid>
-              {data ? (
-                <Grid item xs={12}>
-                  <Card sx={{width: "100%"}}>
-                    <Grid container>
-                      <Grid item xs={12}>
-                        <MDBox display={"flex"} justifyContent={"space-between"} p={3}>
-                          <MDBox display={"flex"} flexDirection={"column"}>
-                            <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                              {"Therapeutic Effect Analysis"}
-                            </MDTypography>
-                          </MDBox>
-                          <MDBox display={"flex"} flexDirection={"column"}>
-                            <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
-                              {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
-                            </MDButton>
-                          </MDBox>
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <MDBox p={3}>
+                    <Grid item xs={12}>
+                      <MDBox px={3} pb={3} pt={0}>
                         <Autocomplete
+                          multiple
                           value={channel.active}
                           options={channel.options}
                           onChange={(event, value) => {
-                            setChannel({...channel, active: value});
-                            getRecordingData(data.AnalysisID, value);
+                            getRecordingData(data.Analysis, value);
                           }}
                           renderInput={(params) => (
                             <FormField
@@ -320,283 +361,171 @@ function TherapeuticEffects() {
                               InputLabelProps={{ shrink: true }}
                             />
                           )}
+                        />
+                      </MDBox>
+                    </Grid>
+                    <Grid item xs={12}>
+                      <TimeFrequencyAnalysis dataToRender={data} activeChannels={channel.active} annotations={annotations}
+                        handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} 
+                        figureTitle={"TimeFrequencyAnalysis"} height={700}/>
+                    </Grid>
+                  </Grid>
+                </Card>
+              </Grid>
+            ) : null}
+            {data ? (
+              <Grid item xs={12}>
+                <Card>
+                  <Grid container>
+                    <Grid item xs={12}>
+                      <MDBox p={3}>
+                        <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
+                          {"Effect of Stimulation"}
+                        </MDTypography>
+                      </MDBox>
+                      <MDBox px={3}>
+                        <Autocomplete
+                          value={therapyLabel.active}
+                          options={therapyLabel.options}
+                          onChange={(event, value) => setTherapyLabel({...therapyLabel, active: value})}
+                          renderInput={(params) => (
+                            <FormField
+                              {...params}
+                              label={"Therapy Label Selector"}
+                              InputLabelProps={{ shrink: true }}
+                            />
+                          )}
                           disableClearable
                         />
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <TimeFrequencyAnalysis dataToRender={data}
-                          handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} annotations={annotations}
-                          figureTitle={"TimeFrequencyAnalysis"} height={700}/>
-                      </Grid>
+                      </MDBox>
                     </Grid>
-                  </Card>
-                </Grid>
-              ) : null}
-              {dataToRender && channelInfos.length > 0 ? (
-                <Grid item xs={12}>
-                  <Card>
-                    <Grid container>
-                      <Grid item xs={12}>
-                        <MDBox p={3}>
-                          <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                            {dictionaryLookup(dictionary.BrainSenseStreaming.Figure, "EffectOfStim", language)}
-                          </MDTypography>
-                        </MDBox>
-                      </Grid>
-                      {channelPSDs.map((channelData, index) => {
-                        if (!channelInfos[index]) return;
-                        return <React.Fragment key={index}>
-                          <Grid item xs={12} lg={6}>
-                            <MDBox display={"flex"} flexDirection={"column"}>
-                              <StimulationReferenceButton value={referenceType[index]} onChange={(event, value) => handlePSDUpdate(value, channelInfos[index])} />
-                              <StimulationPSD dataToRender={channelData} channelInfos={channelInfos[index]} type={"Left"} figureTitle={channelInfos[index].Hemisphere + index.toFixed(0) + " PSD"} onCenterFrequencyChange={onCenterFrequencyChange} height={600}/>
-                            </MDBox>
-                          </Grid>
-                          <Grid item xs={12} lg={6}>
-                            <StimulationBoxPlot dataToRender={channelData} channelInfos={channelInfos[index]} type={"Left"} figureTitle={channelInfos[index].Hemisphere + index.toFixed(0) + " Box"} height={600}/>
-                          </Grid>
-                        </React.Fragment>
-                      })}
+                    <Grid item xs={12}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        <StimulationPSD dataToRender={data} activeChannels={channel.active} therapyLabel={therapyLabel.active} figureTitle={"StimulationPSDs"} />
+                      </MDBox>
                     </Grid>
-                  </Card>
-                </Grid>
-              ) : null}
-              {(eventPSDs) ? (
-                <Grid item xs={12} md={6}> 
-                  <Card sx={{width: "100%"}}>
-                    <Grid container p={2}>
-                      <Grid item xs={12}>
-                        <MDBox display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
-                          <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                            {"Event-State Power Spectrum"}
-                          </MDTypography>
-                          <ToggleButtonGroup
-                            value={eventPSDSelector.type}
-                            exclusive
-                            onChange={(event, newSelector) => setEventPSDSelector({...eventPSDSelector, type: newSelector})}
-                            aria-label="Event Comparisons"
-                          >
-                            <ToggleButton value="Channels" aria-label="by channels">
-                              <MDTypography variant="p" fontWeight={"bold"} fontSize={12}>
-                                {"Channels"}
-                              </MDTypography>
-                            </ToggleButton>
-                            <ToggleButton value="Events" aria-label="by events">
-                              <MDTypography variant="p" fontWeight={"bold"} fontSize={12}>
-                                {"Events"}
-                              </MDTypography>
-                            </ToggleButton>
-                          </ToggleButtonGroup>
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <MDBox lineHeight={1}>
-                          <Autocomplete
-                            value={eventPSDSelector.value}
-                            options={eventPSDSelector.options}
-                            onChange={(event, value) => setEventPSDSelector({...eventPSDSelector, value: value})}
-                            getOptionLabel={(option) => {
-                              return option.text;
-                            }}
-                            renderInput={(params) => (
-                              <FormField
-                                {...params}
-                                label={"Comparison Selector"}
-                                InputLabelProps={{ shrink: true }}
-                              />
-                            )}
-                            disableClearable
-                          />
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <EventPSDs dataToRender={eventPSDs} selector={eventPSDSelector} height={500} figureTitle={"EventPSDComparison"}/>
-                      </Grid>
-                    </Grid>
-                  </Card>
-                </Grid>
-              ) : null}
-              {(eventSpectrograms) ? (
-                <Grid item xs={12} md={6}> 
-                  <Card sx={{width: "100%"}}>
-                    <Grid container p={2}>
-                      <Grid item xs={12}>
-                        <MDBox display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
-                          <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                            {"Event-Onset Spectrogram"}
-                          </MDTypography>
-                          <ToggleButtonGroup
-                            value={eventSpectrogramSelector.type}
-                            exclusive
-                            onChange={(event, newSelector) => setEventSpectrogramSelector({...eventSpectrogramSelector, type: newSelector})}
-                            aria-label="Event Comparisons"
-                          >
-                            <ToggleButton value="Non-Normalized" aria-label="by events">
-                              <MDTypography variant="p" fontWeight={"bold"} fontSize={12}>
-                                {"Non-Normalized"}
-                              </MDTypography>
-                            </ToggleButton>
-                            <ToggleButton value="Normalized" aria-label="by channels">
-                              <MDTypography variant="p" fontWeight={"bold"} fontSize={12}>
-                                {"Normalized"}
-                              </MDTypography>
-                            </ToggleButton>
-                          </ToggleButtonGroup>
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <MDBox lineHeight={1}>
-                          <Autocomplete
-                            value={eventSpectrogramSelector.value}
-                            options={eventSpectrogramSelector.options}
-                            onChange={(event, value) => setEventSpectrogramSelector({...eventSpectrogramSelector, value: value})}
-                            getOptionLabel={(option) => {
-                              return option;
-                            }}
-                            renderInput={(params) => (
-                              <FormField
-                                {...params}
-                                label={"Comparison Selector"}
-                                InputLabelProps={{ shrink: true }}
-                              />
-                            )}
-                            disableClearable
-                          />
-                        </MDBox>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <EventOnsetSpectrogram dataToRender={eventSpectrograms} selector={eventSpectrogramSelector} height={500} normalize={eventSpectrogramSelector.type=="Normalized"} figureTitle={"EventSpectrogramComparison"}/>
-                      </Grid>
-                    </Grid>
-                  </Card>
-                </Grid>
-              ) : null}
-            </Grid>
-            <Drawer
-              sx={{
+                  </Grid>
+                </Card>
+              </Grid>
+            ) : null}
+          </Grid>
+          <Drawer
+            sx={{
+              width: 300,
+              flexShrink: 0,
+              '& .MuiDrawer-paper': {
                 width: 300,
-                flexShrink: 0,
-                '& .MuiDrawer-paper': {
-                  width: 300,
-                  boxSizing: 'border-box',
-                },
+                boxSizing: 'border-box',
+              },
+            }}
+            PaperProps={{
+              sx: {
+                borderWidth: "2px",
+                borderColor: "black",
+                borderStyle: "none",
+                boxShadow: "-2px 0px 5px gray",
+              }
+            }}
+            variant="persistent"
+            anchor="right"
+            open={drawerOpen.open}
+          >
+          <MDBox>
+            <IconButton onClick={() => setDrawerOpen({...drawerOpen, open: false})}>
+              <ChevronRightIcon />
+              <MDTypography>
+                {"Close"}
+              </MDTypography>
+            </IconButton>
+          </MDBox>
+          <MDBox>
+          <Grid container spacing={2} sx={{paddingLeft: 2, paddingRight: 2}}>
+            {Object.keys(drawerOpen.config).map((key) => {
+              return <Grid item xs={12} key={key} sx={{
+                wordWrap: "break-word",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word"
+              }}>
+                <MDTypography fontSize={18} fontWeight={"bold"}>
+                  {drawerOpen.config[key].name}
+                </MDTypography>
+                <MDTypography fontSize={15} fontWeight={"regular"}>
+                  {drawerOpen.config[key].description}
+                </MDTypography>
+                <Autocomplete
+                  options={drawerOpen.config[key].options}
+                  value={drawerOpen.config[key].value}
+                  onChange={(event, value) => setDrawerOpen((option) => {
+                    option.config[key].value = value;
+                    return {...option};
+                  })}
+                  renderInput={(params) => (
+                    <FormField
+                      {...params}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                  )}
+                  disableClearable
+                />
+                <Divider variant="middle" />
+              </Grid>
+            })}
+          </Grid>
+          </MDBox>
+          <MDBox p={3}>
+            <MDButton variant={"gradient"} color={"success"} onClick={() => {
+              setAlert(<LoadingProgress/>);
+              SessionController.query("/api/updateSession", {
+                "RealtimeStream": drawerOpen.config
+              }).then(() => {
+                setDrawerOpen({...drawerOpen, open: false});
+                setAlert(null);
+              }).catch((error) => {
+                SessionController.displayError(error, setAlert);
+              });
+            }} fullWidth>
+              <MDTypography color={"light"}>
+                {"Update"}
+              </MDTypography>
+            </MDButton>
+          </MDBox>
+          </Drawer>
+          <MDBox style={{
+            position: 'sticky',
+            bottom: 32,
+            right: 32,
+            pointerEvents: "none"
+          }}>
+            <SpeedDial
+              ariaLabel={"SurveySpeedDial"}
+              color={"info"}
+              icon={<SpeedDialIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+              FabProps={{
+                color: "info",
+                sx: {display: "flex", marginLeft: "auto"}
               }}
-              PaperProps={{
-                sx: {
-                  borderWidth: "2px",
-                  borderColor: "black",
-                  borderStyle: "none",
-                  boxShadow: "-2px 0px 5px gray",
-                }
-              }}
-              variant="persistent"
-              anchor="right"
-              open={drawerOpen.open}
+              sx={{alignItems: "end"}}
+              hidden={false}
             >
-            <MDBox>
-              <IconButton onClick={() => setDrawerOpen({...drawerOpen, open: false})}>
-                <ChevronRightIcon />
-                <MDTypography>
-                  {"Close"}
-                </MDTypography>
-              </IconButton>
-            </MDBox>
-            <MDBox>
-            <Grid container spacing={2} sx={{paddingLeft: 2, paddingRight: 2}}>
-              {Object.keys(drawerOpen.config).map((key) => {
-                return <Grid item xs={12} key={key} sx={{
-                  wordWrap: "break-word",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word"
-                }}>
-                  <MDTypography fontSize={18} fontWeight={"bold"}>
-                    {drawerOpen.config[key].name}
-                  </MDTypography>
-                  <MDTypography fontSize={15} fontWeight={"regular"}>
-                    {drawerOpen.config[key].description}
-                  </MDTypography>
-                  <Autocomplete
-                    options={drawerOpen.config[key].options}
-                    value={drawerOpen.config[key].value}
-                    onChange={(event, value) => setDrawerOpen((option) => {
-                      option.config[key].value = value;
-                      return {...option};
-                    })}
-                    renderInput={(params) => (
-                      <FormField
-                        {...params}
-                        InputLabelProps={{ shrink: true }}
-                      />
-                    )}
-                    disableClearable
-                  />
-                  <Divider variant="middle" />
-                </Grid>
-              })}
-            </Grid>
-            </MDBox>
-            <MDBox p={3}>
-              <MDButton variant={"gradient"} color={"success"} onClick={() => {
-                setAlert(<LoadingProgress/>);
-                SessionController.query("/api/updateSession", {
-                  "RealtimeStream": drawerOpen.config
-                }).then(() => {
-                  setDrawerOpen({...drawerOpen, open: false});
-                  setAlert(null);
-                }).catch((error) => {
-                  SessionController.displayError(error, setAlert);
-                });
-              }} fullWidth>
-                <MDTypography color={"light"}>
-                  {"Update"}
-                </MDTypography>
-              </MDButton>
-            </MDBox>
-            </Drawer>
-            <MDBox style={{
-              position: 'sticky',
-              bottom: 32,
-              right: 32,
-              pointerEvents: "none"
-            }}>
-              <SpeedDial
-                ariaLabel={"SurveySpeedDial"}
-                color={"info"}
-                icon={<SpeedDialIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
-                FabProps={{
-                  color: "info",
-                  sx: {display: "flex", marginLeft: "auto"}
+              <SpeedDialAction
+                key={"GoToTop"}
+                icon={<KeyboardDoubleArrowUpIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Go to Top"}
+                onClick={() => {
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
-                sx={{alignItems: "end"}}
-                hidden={false}
-              >
-                <SpeedDialAction
-                  key={"GoToTop"}
-                  icon={<KeyboardDoubleArrowUpIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
-                  tooltipTitle={"Go to Top"}
-                  onClick={() => {
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                />
-                <SpeedDialAction
-                  key={"EditLayout"}
-                  icon={<DashboardIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
-                  tooltipTitle={"Edit Layout"}
-                  onClick={() => setAlert(<LayoutOptions setAlert={setAlert} />)}
-                />
-                <SpeedDialAction
-                  key={"ChangeSettings"}
-                  icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
-                  tooltipTitle={"Edit Processing Configurations"}
-                  onClick={() => setDrawerOpen({...drawerOpen, open: true})}
-                />
-              </SpeedDial>
-            </MDBox>
+              />
+              <SpeedDialAction
+                key={"ChangeSettings"}
+                icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Edit Processing Configurations"}
+                onClick={() => setDrawerOpen({...drawerOpen, open: true})}
+              />
+            </SpeedDial>
           </MDBox>
         </MDBox>
-      </DatabaseLayout>
-    </>
+      </MDBox>
+    </DatabaseLayout>
   );
 }
 

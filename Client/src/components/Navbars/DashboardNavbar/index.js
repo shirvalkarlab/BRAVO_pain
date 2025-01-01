@@ -66,6 +66,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const { miniSidenav, hideSidenav, transparentNavbar, darkMode, language, user } = controller;
   const [openMenu, setOpenMenu] = useState(false);
   const [whichMenu, setWhichMenu] = useState("");
+
   const route = useLocation().pathname.split("/").slice(1);
 
   function handleTransparentNavbar() {

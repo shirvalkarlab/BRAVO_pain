@@ -1,0 +1,99 @@
+""""""
+"""
+=========================================================
+* UF BRAVO Platform
+=========================================================
+
+* Copyright 2025 by Jackson Cagle, Fixel Institute
+* The source code is made available under Open Source GPL-3.0 License
+
+ =========================================================
+
+* The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+"""
+"""
+User Authentication APIs
+===================================================
+@author: Jackson Cagle, University of Florida
+@email: jackson.cagle@neurology.ufl.edu
+"""
+
+from django.contrib.auth import authenticate, login, logout
+
+import rest_framework.views as RestViews
+import rest_framework.parsers as RestParsers
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny, IsAuthenticated
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect, csrf_exempt
+from django.conf import settings
+
+from modules.HelperFunctions import sanitize_input, get_or_none
+from modules import Database, Auth
+from Server import models
+
+class UserRegister(RestViews.APIView):
+    
+    permission_classes = [AllowAny,]
+    parser_classes = [RestParsers.JSONParser]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["Email", "Password", "Username", "Institute"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if len(request.data["Password"]) < 8:
+            return Response(status=400, data={"message": "Password need at least 8-character"})
+
+        if len(request.data["UserName"]) == 0 and len(request.data["Institute"]) == 0:
+            return Response(status=400, data={"message": "Username and Institute IDs must both be present."})
+
+        try:
+            user = Auth.registerUser(request.data["Email"], request.data["Password"], user_name=request.data["Username"], institute="Independent")
+        except Exception as e:
+            return Response(status=400, data={"message": str(e)})
+
+        user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
+        login(request, user)
+        return Response(status=200, data=user.get_info())
+
+class UserLogin(RestViews.APIView):
+    
+    permission_classes = [AllowAny,]
+    parser_classes = [RestParsers.JSONParser]
+    
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["Email", "Password"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
+        if user is not None:
+            if "Persistent" in request.data:
+                login(request, user)
+            else:
+                request.session.set_expiry(3600)
+                login(request, user)
+            return Response(status=200, data=user.get_info())
+        return Response(status=400, data={"message": "Incorrect Email or Password"})
+
+class FetchAuthorizedInstitute(RestViews.APIView):
+    """ NOT IMPLEMENTED
+    """
+
+    permission_classes = [AllowAny,]
+    parser_classes = [RestParsers.JSONParser]
+    def post(self, request):
+        return Response(status=404)
+
+class UserLogout(RestViews.APIView):
+    
+    permission_classes = [IsAuthenticated,]
+    parser_classes = [RestParsers.JSONParser]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        logout(request)
+        return Response(status=204)
+    

@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { createRef, useState, memo, useEffect } from "react";
+import { createRef, useState, useMemo, useEffect } from "react";
 
 import {
   Autocomplete,
@@ -44,16 +44,14 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
   const [controller, dispatch] = usePlatformContext();
   const { language, participant_uid } = controller;
 
-  const [editDeviceInfo, setEditDeviceInfo] = useState({...deviceInfo});
+  const [editDeviceInfo, setEditDeviceInfo] = useState({});
   
   useEffect(() => {
     if (!deviceInfo) return;
     setEditDeviceInfo({...deviceInfo});
   }, [deviceInfo]);
 
-  if (Object.keys(editDeviceInfo).length == 0) return;
-
-  return (
+  return useMemo(() => Object.keys(editDeviceInfo).length > 0 ? (
     <Dialog open={show} onClose={() => {
       onCancel();
       setEditDeviceInfo({...deviceInfo});
@@ -65,7 +63,7 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
         </MDTypography>
         <Tooltip title={"Click to Copy Device Unique Identifier"}>
           <IconButton onClick={() => {
-            navigator.clipboard.writeText(editDeviceInfo.uid);
+            navigator.clipboard.writeText(editDeviceInfo.Id);
           }}>
             <FaCopy />
           </IconButton>
@@ -79,24 +77,24 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
               name="device-name"
               variant="standard"
               margin="dense"
-              label="Device Name (Encoded)"
+              label="Device Name"
               placeholder="Device Name"
-              value={editDeviceInfo.name}
-              onChange={(event) => setEditDeviceInfo({...editDeviceInfo, name: event.target.value})}
+              value={editDeviceInfo.Name}
+              onChange={(event) => setEditDeviceInfo({...editDeviceInfo, Name: event.target.value})}
               fullWidth
             />
           </Grid>
-          {editDeviceInfo.leads.map((lead, index) => (
-            <Grid key={lead.name} item xs={6}>
+          {editDeviceInfo.Electrodes.map((lead, index) => (
+            <Grid key={lead.Target} item xs={6}>
               <TextField
                 id="lead-name"
                 variant="standard"
                 margin="dense"
                 label={`Lead #${index+1}`}
-                placeholder={lead.name}
-                value={lead.custom_name}
-                onChange={(event) => setEditDeviceInfo({...editDeviceInfo, leads: editDeviceInfo.leads.map((oldLead, oldIndex) => {
-                  if (index == oldIndex) return {...oldLead, custom_name: event.target.value};
+                placeholder={lead.Target}
+                value={lead.CustomName}
+                onChange={(event) => setEditDeviceInfo({...editDeviceInfo, Electrodes: editDeviceInfo.Electrodes.map((oldLead, oldIndex) => {
+                  if (index == oldIndex) return {...oldLead, CustomName: event.target.value};
                   return oldLead;
                 })})}
                 fullWidth
@@ -120,7 +118,7 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
         </MDBox>
       </DialogActions>
     </Dialog>
-  )
+  ) : null, [editDeviceInfo, show]);
 }
 
-export default memo(EditDeviceInfoView);
+export default EditDeviceInfoView;

@@ -28,6 +28,12 @@ import MDAvatar from "components/MDAvatar";
 // @mui icons
 import Icon from "@mui/material/Icon";
 
+import { MdOutlineEventAvailable } from "react-icons/md";
+import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
+import { PiWavesBold } from "react-icons/pi";
+import { FcSurvey } from "react-icons/fc";
+
+
 // Images
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import DescriptionIcon from '@mui/icons-material/Description';
@@ -40,7 +46,6 @@ import PersonIcon from '@mui/icons-material/Person';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
-import { FaBrain } from "react-icons/fa6";
 
 import { experimentalRoutes } from "views/Experimental/plugins";
 import TimeSeriesAnalysis from "views/Reports/TimeSeriesAnalysis";
@@ -51,12 +56,16 @@ const UploadDataView = lazy(() => import('views/Dashboard/UploadDataView'));
 const ResearchAccessView = lazy(() => import('views/Dashboard/ShareResearchAccess'));
 const ParticipantOverview = lazy(() => import('views/Dashboard/ParticipantOverview'));
 const ImageVisualization = lazy(() => import('views/Experimental/ImageVisualization'));
-const SurveyList = lazy(() => import('views/Survey/Overview'));
+const FormList = lazy(() => import('views/Survey/FormList'));
+const FormEditor = lazy(() => import('views/Survey/Editor'));
+const FormViewer = lazy(() => import('views/Survey/Viewer'));
+const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
-const BrainSenseSurvey = lazy(() => import('views/Reports/Percept/BrainSenseSurvey'));
+const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
+const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
-const IndefiniteStreaming = lazy(() => import('views/Reports/IndefiniteStreaming'));
-const ChronicBrainSense = lazy(() => import('views/Reports/ChronicBrainSense'));
+const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const SessionOverview = lazy(() => import('views/Reports/SessionsOverview'));
 
 const routes = {
@@ -83,13 +92,43 @@ const routes = {
       { type: "divider", key: "divider-1" },
       {
         type: "collapse",
+        name: "Existing Forms",
+        key: "SurveyList",
+        component: <FormList />,
+        route: "/form-manager",
+        icon: <FaClipboardList />,
+        noCollapse: true,
+      },
+      {
+        type: "collapse",
+        name: "Forms Editor",
+        key: "SurveyEditor",
+        component: <FormEditor />,
+        route: "/form-manager/:form_link",
+        icon: <FaClipboardList />,
+        noCollapse: true,
+        hide: true,
+      },
+      {
+        type: "collapse",
+        name: "Forms Viewer",
+        key: "SurveyViewer",
+        component: <FormViewer />,
+        route: "/survey/:form_link",
+        icon: <FaClipboardList />,
+        noCollapse: true,
+        hide: true,
+      },
+      { type: "divider", key: "divider-2" },
+      {
+        type: "collapse",
         name: "ParticipantOverview",
         key: "participant-overview",
         component: <ParticipantOverview />,
-        route: "/participant-overview",
+        route: "/participant-overview/:participant_uid",
         icon: <PersonIcon/>,
         noCollapse: true,
-      }
+      },
     ]
   },
   "GeneralReports": {
@@ -100,15 +139,49 @@ const routes = {
         key: "therapyHistory",
         name: "Therapy History",
         icon: <BoltIcon />,
-        route: "/reports/therapy-history",
+        route: "/reports/therapy-history/:participant_uid",
         component: <TherapyHistory />,
+      },
+      {
+        key: "nerualactivitysnapshot",
+        name: "Neural Activity Snapshot",
+        icon: <PiWavesBold />,
+        route: "/reports/nerual-activity-snapshot/:participant_uid",
+        component: <NeuralActivitySnapshot />,
       },
       {
         key: "therapeutic-effect",
         name: "Therapeutic Effect Analysis",
-        icon: <TimelineIcon />,
-        route: "/reports/therapeutic-effect",
+        icon: <FaFileWaveform />,
+        route: "/reports/therapeutic-effect/:participant_uid",
         component: <TherapeuticEffects />,
+      },
+      {
+        key: "chronic-neural-activity",
+        name: "Chronic Neural Activity",
+        icon: <TimelineIcon />,
+        route: "/reports/chronic-neural-activity/:participant_uid",
+        component: <ChronicNeuralActivity />,
+      },
+      {
+        key: "events",
+        name: "Chronic Events",
+        icon: <MdOutlineEventAvailable />,
+        route: "/reports/events/:participant_uid",
+        component: <ParticipantEvents />,
+      }
+    ]
+  },
+  "SurveyReports": {
+    icon: <FcSurvey />,
+    name: "Surveys and Questionnaires",
+    children: [
+      {
+        key: "FormRecords",
+        name: "Form Records",
+        icon: <FaClipboardList />,
+        route: "/form-records/:participant_uid",
+        component: <ParticipantSurveyRecords />,
       }
     ]
   },
@@ -120,7 +193,7 @@ const routes = {
         key: "3dImageViewer",
         name: "3D Image Viewer",
         icon: <FaBrain />,
-        route: "/reports/image-visualization",
+        route: "/reports/image-visualization/:participant_uid",
         component: <ImageVisualization />,
       }
     ]

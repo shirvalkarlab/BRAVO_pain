@@ -30,67 +30,133 @@ import { usePlatformContext } from "context";
 import { dictionary } from "assets/translation";
 import { dictionaryLookup } from "assets/translation";
 
+function isUUID(str) {
+  const regex = /^[0-9a-f]{8}[0-9a-f]{4}[4][0-9a-f]{3}[89ab][0-9a-f]{3}[0-9a-f]{12}$/i;
+  return regex.test(str);
+}
+
 function Breadcrumbs({ icon, title, route, light }) {
   const [controller, ] = usePlatformContext();
   const { language } = controller;
   const routes = route.slice(0, -1);
 
-  return (
-    <MDBox mr={{ xs: 0, xl: 8 }}>
-      <MuiBreadcrumbs
-        sx={{
-          "& .MuiBreadcrumbs-separator": {
-            color: ({ palette: { white, grey } }) => (light ? white.main : grey[600]),
-          },
-        }}
-      >
-        <Link to="/dashboard">
-          <MDTypography
-            component="span"
-            variant="body2"
-            color={light ? "white" : "dark"}
-            opacity={light ? 0.8 : 0.5}
-            sx={{ lineHeight: 0 }}
-          >
-            <Icon>{icon}</Icon>
-          </MDTypography>
-        </Link>
-        {routes.map((el) => (
-          <Link to={`/${el}`} key={el}>
+  let participant_uid = ""
+  if (isUUID(route[route.length-1])) {
+    participant_uid = route[route.length-1]
+    return (
+      <MDBox mr={{ xs: 0, xl: 8 }}>
+        <MuiBreadcrumbs
+          sx={{
+            "& .MuiBreadcrumbs-separator": {
+              color: ({ palette: { white, grey } }) => (light ? white.main : grey[600]),
+            },
+          }}
+        >
+          <Link to="/dashboard">
             <MDTypography
               component="span"
-              variant="button"
-              fontWeight="regular"
-              textTransform="capitalize"
+              variant="body2"
               color={light ? "white" : "dark"}
               opacity={light ? 0.8 : 0.5}
               sx={{ lineHeight: 0 }}
             >
-              {dictionary.Breadcrumbs[el] ? dictionary.Breadcrumbs[el][language] : el}
+              <Icon>{icon}</Icon>
             </MDTypography>
           </Link>
-        ))}
+          {route.slice(0,-2).map((el) => {
+            return <Link to={`/${el}`} key={el}>
+              <MDTypography
+                component="span"
+                variant="button"
+                fontWeight="regular"
+                textTransform="capitalize"
+                color={light ? "white" : "dark"}
+                opacity={light ? 0.8 : 0.5}
+                sx={{ lineHeight: 0 }}
+              >
+                {dictionary.Breadcrumbs[el] ? dictionary.Breadcrumbs[el][language] : el}
+              </MDTypography>
+            </Link>
+          })}
+          <MDTypography
+            variant="button"
+            fontWeight="regular"
+            textTransform="capitalize"
+            color={light ? "white" : "dark"}
+            sx={{ lineHeight: 0 }}
+          >
+            {dictionaryLookup(dictionary.Breadcrumbs, route[route.length-2], language)}
+          </MDTypography>
+        </MuiBreadcrumbs>
         <MDTypography
-          variant="button"
-          fontWeight="regular"
+          fontWeight="bold"
           textTransform="capitalize"
+          variant="h6"
           color={light ? "white" : "dark"}
-          sx={{ lineHeight: 0 }}
+          noWrap
+        >
+          {dictionaryLookup(dictionary.Breadcrumbs, route[route.length-2], language)}
+        </MDTypography>
+      </MDBox>
+    );
+  } else {
+    return (
+      <MDBox mr={{ xs: 0, xl: 8 }}>
+        <MuiBreadcrumbs
+          sx={{
+            "& .MuiBreadcrumbs-separator": {
+              color: ({ palette: { white, grey } }) => (light ? white.main : grey[600]),
+            },
+          }}
+        >
+          <Link to="/dashboard">
+            <MDTypography
+              component="span"
+              variant="body2"
+              color={light ? "white" : "dark"}
+              opacity={light ? 0.8 : 0.5}
+              sx={{ lineHeight: 0 }}
+            >
+              <Icon>{icon}</Icon>
+            </MDTypography>
+          </Link>
+          {routes.map((el) => {
+            return <Link to={`/${el}`} key={el}>
+              <MDTypography
+                component="span"
+                variant="button"
+                fontWeight="regular"
+                textTransform="capitalize"
+                color={light ? "white" : "dark"}
+                opacity={light ? 0.8 : 0.5}
+                sx={{ lineHeight: 0 }}
+              >
+                {dictionary.Breadcrumbs[el] ? dictionary.Breadcrumbs[el][language] : el}
+              </MDTypography>
+            </Link>
+          })}
+          <MDTypography
+            variant="button"
+            fontWeight="regular"
+            textTransform="capitalize"
+            color={light ? "white" : "dark"}
+            sx={{ lineHeight: 0 }}
+          >
+            {dictionaryLookup(dictionary.Breadcrumbs, title, language)}
+          </MDTypography>
+        </MuiBreadcrumbs>
+        <MDTypography
+          fontWeight="bold"
+          textTransform="capitalize"
+          variant="h6"
+          color={light ? "white" : "dark"}
+          noWrap
         >
           {dictionaryLookup(dictionary.Breadcrumbs, title, language)}
         </MDTypography>
-      </MuiBreadcrumbs>
-      <MDTypography
-        fontWeight="bold"
-        textTransform="capitalize"
-        variant="h6"
-        color={light ? "white" : "dark"}
-        noWrap
-      >
-        {dictionaryLookup(dictionary.Breadcrumbs, title, language)}
-      </MDTypography>
-    </MDBox>
-  );
+      </MDBox>
+    );
+  }
 }
 
 // Setting default values for the props of Breadcrumbs

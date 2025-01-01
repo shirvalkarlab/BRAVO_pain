@@ -12,7 +12,7 @@
 */
 
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
   Box,
@@ -61,10 +61,10 @@ import TherapyHistoryTable from "./TherapyHistoryTable";
 function TherapyHistory() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
-  const { participant_uid, language, report } = controller;
+  const { language, report } = controller;
 
   const [data, setData] = React.useState({});
-  const [therapyHistory, setTherapyHistory] = React.useState({TherapyModification: [], TherapyDevices: {}});
+  const [therapyHistory, setTherapyHistory] = React.useState({TherapyModification: [], TherapyDevices: []});
   const [therapyHistoryOld, setTherapyHistoryOld] = React.useState({});
   const [therapyDate, setTherapyDate] = React.useState({active: false, options: []});
   const [therapyConfigurations, setTherapyConfigurations] = React.useState([]);
@@ -78,55 +78,71 @@ function TherapyHistory() {
   const [activeTab, setActiveTab] = React.useState(null);
   const [activeDevice, setActiveDevice] = React.useState(null);
 
+  const { participant_uid } = useParams();
+
   React.useEffect(() => {
     if (!participant_uid) {
       navigate("/dashboard", {replace: false});
-    } else {
-      setAlert(<LoadingProgress/>);
-      SessionController.query("/api/queryTherapyHistory", {
-        participant_uid: participant_uid
-      }).then((response) => {
-        setTherapyHistory(response.data);
-        const TherapyDates = Object.keys(response.data.TherapyConfigurations);
-        if (TherapyDates.length > 0) {
-          setTherapyDate({active: TherapyDates[0], options: TherapyDates});
-        }
-        setAlert(null);
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
+      return
     }
+    setContextState(dispatch, "report", "GeneralReports");
+
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/queryTherapyHistory", {
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setTherapyHistory(response.data);
+      console.log(response.data)
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
   }, [participant_uid]);
 
   React.useEffect(() => {
-    var therapyHistoryOld = {};
-    var therapyTimestamp = Object.keys(data);
-    therapyTimestamp = therapyTimestamp.map((value, index) => therapyTimestamp[therapyTimestamp.length - 1 - index]);
+    let UniqueDateStrings = [];
+    let TherapyConofigurations = {}
+    for (let i in therapyHistory.TherapyConfiguration) {
+      for (let j in therapyHistory.TherapyConfiguration[i].History) {
+        const dateString = new Date(therapyHistory.TherapyConfiguration[i].History[j].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(therapyHistory.TherapyConfiguration[i].History[j].Timezone),
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "longGeneric"
+        })
+        if (!UniqueDateStrings.map((a)=>a.label).includes(dateString)) {
+          UniqueDateStrings.push({
+            label: dateString,
+            value: therapyHistory.TherapyConfiguration[i].History[j].Date
+          });
+          TherapyConofigurations[dateString] = [];
+        }
 
-    var therapyTypes = [];
-
-    for (var i in therapyTimestamp) {
-      for (var j in data[therapyTimestamp[i]]) {
-        if (!Object.keys(therapyHistoryOld).includes(data[therapyTimestamp[i]][j].DeviceID)) {
-          therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID] = {Device: data[therapyTimestamp[i]][j].Device, Lead: null, Therapy: {}};
-        }
-        if (!Object.keys(therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Therapy).includes(data[therapyTimestamp[i]][j].TherapyType)) {
-          therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType] = {};
-          if (!therapyTypes.includes(data[therapyTimestamp[i]][j].TherapyType)) therapyTypes.push(data[therapyTimestamp[i]][j].TherapyType);
-        }
-        const dateString = new Date(data[therapyTimestamp[i]][j].TherapyDate*1000).toLocaleString(language, {dateStyle: "full"});
-        if (!Object.keys(therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType]).includes(dateString)) {
-          therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType][dateString] = [];
-        }
-        therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Therapy[data[therapyTimestamp[i]][j].TherapyType][dateString].push(data[therapyTimestamp[i]][j]);
-        therapyHistoryOld[data[therapyTimestamp[i]][j].DeviceID].Lead = data[therapyTimestamp[i]][j].LeadInfo;
+        TherapyConofigurations[dateString].push({
+          ...therapyHistory.TherapyConfiguration[i].History[j],
+          Device: therapyHistory.TherapyConfiguration[i].Device
+        })
       }
     }
-    setActiveDevice(Object.keys(therapyHistoryOld)[0]);
-    setTherapyTypes(therapyTypes);
-    setActiveTab(therapyTypes[0]);
-    setTherapyHistoryOld(therapyHistoryOld);
-  }, [data, language]);
+    UniqueDateStrings = UniqueDateStrings.sort((a,b) => b.value - a.value).map((a) => a.label)
+
+    if (UniqueDateStrings.length > 0) {
+      setTherapyConfigurations(TherapyConofigurations)
+      setTherapyDate({
+        active: UniqueDateStrings[0],
+        options: UniqueDateStrings
+      })
+    } else {
+      setTherapyConfigurations({})
+      setTherapyDate({
+        active: null,
+        options: []
+      })
+    }
+
+  }, [therapyHistory, language]);
 
   const showPerceptAdaptiveSettings = (therapy, captureAmplitude, amplitudeThreshold) => {
     setAlert(
@@ -504,15 +520,14 @@ function TherapyHistory() {
               sx={{ borderRight: 1, borderColor: 'divider', maxHeight: "80vh" }}
             >
               {therapyDate.options.map((date) => {
-                let dateString = new Date(parseFloat(date)*1000)
-                return <Tab value={date} label={dateString.toDateString()}/>
+                return <Tab key={date} value={date} label={date}/>
               })}
             </Tabs>
           </Grid>
           
           {therapyDate.active ? (
             <Grid item xs={6} sm={8}>
-              <TherapyHistoryTable therapyHistory={therapyHistory.TherapyConfigurations[therapyDate.active]} />
+              <TherapyHistoryTable therapyHistory={therapyConfigurations[therapyDate.active]} />
             </Grid>
           ) : null}
 

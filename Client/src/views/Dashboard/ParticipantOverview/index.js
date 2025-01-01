@@ -12,7 +12,7 @@
 */
 
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -75,7 +75,7 @@ const filter = createFilterOptions();
 export default function ParticipantOverview() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
-  const { user, language, participant_uid, experiment, report } = controller;
+  const { user, language, experiment, report } = controller;
 
   const [participantInfo, setParticipantInfo] = useState(false);
   const [editParticipantInfo, setEditParticipantInfo] = useState(false);
@@ -87,34 +87,33 @@ export default function ParticipantOverview() {
   const [availableTags, setAvailableTags] = useState([]);
 
   const [alert, setAlert] = useState(null);
+  const { participant_uid } = useParams();
+
+  const initialSetup = async () => {
+    try {
+      let response = await SessionController.query("/api/queryParticipantInformation", {
+        ParticipantId: participant_uid
+      })
+      
+      setContextState(dispatch, "participant_uid", participant_uid);
+      setEditParticipantInfo(false);
+      setParticipantInfo(response.data);
+      setAvailableTags([]);
+
+    } catch (error) {
+      SessionController.displayError(error, setAlert, () => {
+        navigate("/dashboard", {replace: true});
+      });
+    }
+  }
 
   useEffect(() => {
     if (!participant_uid) {
       navigate("/dashboard", {replace: false});
-    } else {
-      SessionController.query("/api/queryParticipantInformation", {
-        participant_uid: participant_uid
-      }).then((response) => {
-        response.data.tags = response.data.tags.map((tag) => ({
-          title: tag,
-          value: tag
-        }));
-        setEditParticipantInfo(false);
-        setParticipantInfo(response.data);
-        setAvailableTags([]);
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
-
-      SessionController.query("/api/queryParticipantExperiments", {
-        request_type: "Query",
-        participant_uid: participant_uid
-      }).then((response) => {
-        setActiveExperiment({show: true, options: response.data, active: experiment});
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
+      return
     }
+
+    initialSetup();
   }, [participant_uid]);
 
   const removeDevice = (device_uid) => {
@@ -128,11 +127,11 @@ export default function ParticipantOverview() {
       handleDeny={() => setAlert(null)}
       handleConfirm={() => {
         setAlert(<LoadingProgress />);
-        SessionController.query("/api/deleteData", {
-          participant_uid: participant_uid,
-          device: device_uid
-        }).then(() => {
-          setParticipantInfo({...participantInfo, dbsDevices: participantInfo.dbsDevices.filter((device) => device.uid != device_uid)});
+        SessionController.query("/api/deleteDeviceInformation", {
+          ParticipantId: participant_uid,
+          DeviceId: device_uid
+        }).then((response) => {
+          setParticipantInfo(response.data);
           setAlert(null);
         }).catch((error) => {
           SessionController.displayError(error, setAlert);
@@ -153,11 +152,11 @@ export default function ParticipantOverview() {
       handleConfirm={() => {
         setEditParticipantInfo(false);
         setAlert(<LoadingProgress />);
-        SessionController.query("/api/deleteStudyParticipant", {
-          participant_uid: participant_uid
+        SessionController.query("/api/deleteParticipantInformation", {
+          ParticipantId: participant_uid
         }).then(() => {
-          setParticipantInfo(false);
           setContextState(dispatch, "participant_uid", null);
+          navigate("/dashboard", {replace: true});
         }).catch((error) => {
           SessionController.displayError(error, setAlert);
         });
@@ -166,41 +165,33 @@ export default function ParticipantOverview() {
   };
 
   const updateParticipantInformation = (editParticipantInfo) => {
-    SessionController.query("/api/updateStudyParticipant", {
-      participant_uid: participant_uid,
-      name: editParticipantInfo.name,
-      diagnosis: editParticipantInfo.diagnosis,
-      sex: editParticipantInfo.sex,
-      tags: editParticipantInfo.tags ? editParticipantInfo.tags.map((tag) => tag.value ? tag.value : tag.inputValue ) : []
-    }).then(() => {
-      setParticipantInfo({...participantInfo, 
-        name: editParticipantInfo.name,
-        diagnosis: editParticipantInfo.diagnosis,
-        sex: editParticipantInfo.sex,
-        tags: editParticipantInfo.tags ? editParticipantInfo.tags : []
-      });
+    setAlert(<LoadingProgress />);
+    SessionController.query("/api/updateParticipantInformation", {
+      ParticipantId: participant_uid,
+      Name: editParticipantInfo.Name,
+      Diagnosis: editParticipantInfo.Diagnosis,
+      Sex: editParticipantInfo.Sex,
+      Tags: editParticipantInfo.Tags
+    }).then((response) => {
+      setParticipantInfo(response.data);
       setEditParticipantInfo(false);
+      setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
   };
 
   const updateDeviceInformation = (deviceInfo) => {
+    setAlert(<LoadingProgress />);
     SessionController.query("/api/updateDeviceInformation", {
-      participant_uid: participant_uid,
-      device: deviceInfo.uid,
-      name: deviceInfo.name,
-      leads: deviceInfo.leads,
-    }).then(() => {
-      setParticipantInfo({...participantInfo, dbsDevices: participantInfo.dbsDevices.map((device) => {
-        if (device.uid != deviceInfo.uid) return device;
-        return {
-          ...device,
-          name: deviceInfo.name,
-          leads: deviceInfo.leads
-        };
-      })});
+      ParticipantId: participant_uid,
+      DeviceId: deviceInfo.Id,
+      Name: deviceInfo.Name,
+      Electrodes: deviceInfo.Electrodes,
+    }).then((response) => {
+      setParticipantInfo(response.data);
       setEditDeviceInfo({...editDeviceInfo, show: false});
+      setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
@@ -224,7 +215,7 @@ export default function ParticipantOverview() {
                           fontWeight="bold"
                           textTransform="capitalize"
                         >
-                          {SessionController.decodeMessage(participantInfo.name)}
+                          {participantInfo.Name}
                         </MDTypography>
                       </MDBox>
                       <MDBox mb={2} lineHeight={1}>
@@ -235,11 +226,12 @@ export default function ParticipantOverview() {
                           color="text"
                           textTransform="capitalize"
                         >
-                          {participantInfo.diagnosis ? (
-                            dictionary.ParticipantOverview.ParticipantInformation[participantInfo.diagnosis] ? dictionary.ParticipantOverview.ParticipantInformation[participantInfo.diagnosis][language] : participantInfo.diagnosis
+                          {participantInfo.Diagnosis ? (
+                            dictionary.ParticipantOverview.ParticipantInformation[participantInfo.Diagnosis] ? dictionary.ParticipantOverview.ParticipantInformation[participantInfo.Diagnosis][language] : participantInfo.Diagnosis
                           ) : "Diagnosis: N/A"}
                         </MDTypography>
                       </MDBox>
+                      {participantInfo.DOB !== 0 ? (
                       <MDBox mb={0.5} lineHeight={1}>
                         <MDTypography
                           variant="p"
@@ -247,9 +239,10 @@ export default function ParticipantOverview() {
                           fontSize={13}
                           textTransform="capitalize"
                         >
-                          {dictionary.ParticipantOverview.ParticipantInformation.DOB[language]}: {new Date(SessionController.decodeTimestamp(participantInfo.dob*1000)).toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))}
+                          {dictionary.ParticipantOverview.ParticipantInformation.DOB[language]}: {new Date(participantInfo.DOB*1000).toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))}
                         </MDTypography>
                       </MDBox>
+                      ) : null}
                     </Grid>
                     <Grid item xs={12}>
                       <Divider variant="middle" />
@@ -294,12 +287,12 @@ export default function ParticipantOverview() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {participantInfo.dbsDevices.map((device) => {
-                      const deviceName = SessionController.decodeMessage(device.name);
-                      return <TableRow key={device.uid}>
+                    {participantInfo.DBSDevices.map((device) => {
+                      const deviceName = device.Name;
+                      return <TableRow key={device.Id}>
                         <TableCell key={"devicetype"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                           <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                            {device.type}
+                            {device.Type}
                           </MDTypography>
                         </TableCell>
                         <TableCell key={"devicename"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
@@ -308,26 +301,27 @@ export default function ParticipantOverview() {
                           </MDTypography>
                         </TableCell>
                         <TableCell key={"leadname"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          {device.leads.map((lead) => {
-                            return <MDBox key={lead.type + lead.name} style={{marginBottom: 5}}>
+                          {device.Electrodes.map((lead) => {
+                            console.log(lead)
+                            return <MDBox key={lead.Id} style={{marginBottom: 5}}>
                             <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={8}>
-                              {lead.type}
+                              {lead.Type}
                             </MDTypography>
                             <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={11}>
-                              {lead.custom_name ? lead.custom_name : lead.name}
+                              {lead.CustomName ? lead.CustomName : lead.Target}
                             </MDTypography>
                           </MDBox>
                           })}
                         </TableCell>
                         <TableCell key={"implantdate"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                           <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                            {new Date(SessionController.decodeTimestamp(device.implant_date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
+                            {new Date(SessionController.decodeTimestamp(device.Date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
                           </MDTypography>
                         </TableCell>
                         <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                           <MDBox style={{display: "flex", flexDirection: "row"}}>
                             <Tooltip title="Delete Device" placement="top">
-                              <IconButton variant="contained" color="error" onClick={() => removeDevice(device.uid)}>
+                              <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
                                 <i className="fa-solid fa-xmark" style={{fontSize: 10}}></i>
                               </IconButton>
                             </Tooltip>
@@ -354,47 +348,6 @@ export default function ParticipantOverview() {
           </Grid>
         </MDBox>
         ) : null}
-        <MDBox mb={3}>
-          <Grid container spacing={2}>
-            <Grid item xs={12} display={"flex"} alignItems={"stretch"}>
-              <MDTypography variant={"span"} fontSize={15} fontWeight={"bold"}>
-                {dictionary.Routes.Experiments[language]}
-              </MDTypography>
-            </Grid>
-            {activeExperiment.options.map((experiment) => {
-              return <Grid key={experiment.uid} item xs={12} display={"flex"} alignItems={"stretch"}>
-              <Card sx={{width: "100%", background: activeExperiment.active == experiment.uid ? "light" : "transparent", 
-                        border: activeExperiment.active == experiment.uid ? "solid" : "dashed", 
-                        borderWidth: activeExperiment.active == experiment.uid ? 2 : 1, cursor: "pointer"}}
-                onClick={() => {
-                  setActiveExperiment((activeExperiment) => {
-                    activeExperiment.active = experiment.uid;
-                    activeExperiment.show = false;
-                    setContextState(dispatch, "experiment", experiment.uid, false);
-                    return {...activeExperiment};
-                  })
-                }}
-              >
-                <MDBox p={2} mx={3} display="flex" justifyContent="space-between">
-                  <MDBox display="flex" justifyContent="start">
-                    <MDTypography variant={"span"} fontSize={20} fontWeight={"bold"}>
-                      {experiment.name}
-                    </MDTypography>
-                  </MDBox>
-                  <MDBox display="flex" flexDirection={"column"} justifyContent="end">
-                    <MDTypography variant={"span"} color={"secondary"} fontSize={12} fontWeight={"bold"}>
-                      {"# of Recordings: " + experiment.recordings}
-                    </MDTypography>
-                    <MDTypography variant={"span"} color={"secondary"} fontSize={12} fontWeight={"bold"}>
-                      {"# of Events: " + experiment.events}
-                    </MDTypography>
-                  </MDBox>
-                </MDBox>
-              </Card>
-            </Grid>
-            })}
-          </Grid>
-        </MDBox>
         <MDBox mb={3}>
           <Grid container spacing={2}>
             <Grid item xs={12} display={"flex"} alignItems={"stretch"}>
@@ -443,7 +396,8 @@ export default function ParticipantOverview() {
                 </MDTypography>
               </Grid>
               {routes[report].children.map((subreport) => {
-                return <Grid item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                if (subreport.hide) return;
+                return <Grid key={subreport.route} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
                   <Card sx={{width: "100%"}}>
                     <MDBox p={2} mx={3} display="flex" justifyContent="center">
                       <MDBox
@@ -463,7 +417,7 @@ export default function ParticipantOverview() {
                     </MDBox>
                     <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
                       <MDButton variant={"contained"} color={"info"} fullWidth onClick={() => {
-                        navigate(subreport.route, {replace: false})
+                        navigate(subreport.route.replace(":participant_uid", participant_uid), {replace: false})
                       }}>
                         {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
                       </MDButton>

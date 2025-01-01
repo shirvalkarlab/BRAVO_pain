@@ -31,7 +31,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   const [openCollapse, setOpenCollapse] = useState(false);
   const [openNestedCollapse, setOpenNestedCollapse] = useState(false);
   const [controller, dispatch] = usePlatformContext();
-  const { miniSidenav, transparentSidenav, hideSidenav, showSidenav, whiteSidenav, language, darkMode, user, report } = controller;
+  const { miniSidenav, transparentSidenav, hideSidenav, showSidenav, whiteSidenav, language, darkMode, user, report, participant_uid } = controller;
 
   const location = useLocation();
   const { pathname } = location;
@@ -109,8 +109,10 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   };
 
   // Render all the routes from the routes.js (All the visible items on the Sidenav)
-  const renderRoutes = routes.Main.children.map(({ type, name, icon, title, collapse, noCollapse, key, href, route, report_type }) => {
+  const renderRoutes = routes.Main.children.map(({ type, name, icon, title, collapse, noCollapse, key, hide, href, route, report_type }) => {
     let returnValue;
+
+    if (hide) return;
 
     var nameString = "";
     if (Object.keys(dictionary.Routes).includes(name)) {
@@ -126,7 +128,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
     if (type === "collapse") {
       if (noCollapse && route) {
         returnValue = (
-          <NavLink to={route} key={key}>
+          <NavLink to={route.replace(":participant_uid",participant_uid)} key={key}>
             <SidenavCollapse
               name={nameString}
               icon={icon}
@@ -236,7 +238,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
             nameString = name;
           }
           
-          return <NavLink to={route} key={key}>
+          return <NavLink to={route.replace(":participant_uid",participant_uid)} key={key}>
             <SidenavCollapse
               name={nameString}
               icon={icon}

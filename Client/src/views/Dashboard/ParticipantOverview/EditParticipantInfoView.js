@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { createRef, useState, memo } from "react";
+import { createRef, useState, memo, useMemo, useEffect } from "react";
 
 import {
   Autocomplete,
@@ -46,9 +46,14 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
   const [controller, dispatch] = usePlatformContext();
   const { language, participant_uid } = controller;
 
-  const [editParticipantInfo, setEditParticipantInfo] = useState({...participantInfo});
-  
-  return (
+  const [tagOptions, setTagOptions] = useState([]);
+  const [editParticipantInfo, setEditParticipantInfo] = useState({});
+
+  useEffect(() => {
+    setEditParticipantInfo({...participantInfo});
+  }, [participantInfo])
+
+  return useMemo(() => (
     <Dialog open={show} onClose={() => {
       onCancel();
       setEditParticipantInfo({...participantInfo});
@@ -71,9 +76,9 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
           <Grid item xs={12} md={6}>
             <TextField
               variant="standard"
-              margin="dense" id="name"
-              value={editParticipantInfo.name}
-              onChange={(event) => setEditParticipantInfo({...editParticipantInfo, name: event.target.value})}
+              margin="dense" id="participant_name"
+              value={editParticipantInfo.Name}
+              onChange={(event) => setEditParticipantInfo({...editParticipantInfo, Name: event.target.value})}
               label={"Participant Name"} type="text"
               fullWidth
             />
@@ -81,9 +86,9 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
           <Grid item xs={12} md={6}>
             <TextField
               variant="standard"
-              margin="dense" id="diagnosis"
-              value={editParticipantInfo.diagnosis}
-              onChange={(event) => setEditParticipantInfo({...editParticipantInfo, diagnosis: event.target.value})}
+              margin="dense" id="participant_diagnosis"
+              value={editParticipantInfo.Diagnosis}
+              onChange={(event) => setEditParticipantInfo({...editParticipantInfo, Diagnosis: event.target.value})}
               label={"Diagnosis"} type="text"
               fullWidth
             />
@@ -97,52 +102,24 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
                 return option === value;
               }}
               renderOption={(props, option) => <li {...props}>{option}</li>}
-              value={editParticipantInfo.sex ? editParticipantInfo.sex : "Other"}
+              value={editParticipantInfo.Sex ? editParticipantInfo.Sex : "Other"}
               options={["Male", "Female", "Other"]}
-              onChange={(event, newValue) => setEditParticipantInfo({...editParticipantInfo, sex: newValue})}
+              onChange={(event, newValue) => setEditParticipantInfo({...editParticipantInfo, Sex: newValue})}
             />
           </Grid>
           <Grid item xs={12}>
-            <Autocomplete 
-              selectOnFocus clearOnBlur multiple
-              renderInput={(params) => (
-                <TextField
+            <Autocomplete
+              multiple freeSolo
+              value={editParticipantInfo.Tags}
+              options={tagOptions}
+              onChange={(event, newValue) => setEditParticipantInfo({...editParticipantInfo, Tags: newValue})}
+              renderInput={(params) => {
+                return <TextField
                   {...params}
-                  variant="standard" id="tags"
+                  variant="standard" id="participant_tags"
                   placeholder={dictionary.ParticipantOverview.TagNames[language]}
                 />
-              )}
-              filterOptions={(options, params) => {
-                const filtered = filter(options, params);
-                const { inputValue } = params;
-
-                // Suggest the creation of a new value
-                const isExisting = options.some((option) => inputValue === option.title);
-                if (inputValue !== '' && !isExisting) {
-                  filtered.push({
-                    inputValue,
-                    title: `Add "${inputValue}"`,
-                  });
-                }
-                return filtered;
               }}
-              getOptionLabel={(option) => {
-                if (typeof option === 'string') {
-                  return option;
-                }
-                if (option.inputValue) {
-                  return option.inputValue;
-                }
-                return option.title;
-              }}
-              isOptionEqualToValue={(option, value) => {
-                return option.value === value.value;
-              }}
-              renderOption={(props, option) => <li {...props}>{option.title}</li>}
-
-              options={[]}
-              value={editParticipantInfo.tags}
-              onChange={(event, newValue) => setEditParticipantInfo({...editParticipantInfo, tags: newValue})}
             />
           </Grid>
           <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
@@ -169,7 +146,7 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
         </Grid>
       </DialogContent>
     </Dialog>
-  )
+  ), [editParticipantInfo, show])
 }
 
-export default memo(EditParticipantInfoView);
+export default EditParticipantInfoView;

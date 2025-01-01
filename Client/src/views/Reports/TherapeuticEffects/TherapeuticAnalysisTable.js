@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import React from "react"
+import React, { useMemo } from "react"
 import { useHistory } from "react-router-dom";
 
 import {
@@ -30,6 +30,7 @@ import {
   MenuItem,
   Tooltip,
   Checkbox,
+  Collapse,
 } from "@mui/material"
 
 import { SessionController } from "database/session-control.js";
@@ -41,14 +42,17 @@ import FormField from "components/MDInput/FormField.js";
 import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDInput from "components/MDInput";
 
 function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
+  const [showTable, setShowTable] = React.useState(true);
   const [selectedDate, setSelectedDate] = React.useState([]);
   const [availableDates, setAvailableDates] = React.useState([]);
   
+  const [filterOptions, setFilterOptions] = React.useState({Type: "", Keyword: "", TypeOptions: []});
   const [displayData, setDisplayData] = React.useState([]);
 
   const tableHeader = [{
@@ -71,43 +75,85 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
 
   React.useEffect(() => {
     var uniqueDates = [];
+    let typeOptions = ["All"]; 
     for (var i = 0; i < data.length; i++) {
-      var timestruct = new Date(data[i]["date"]*1000);
-      var found = false
-      for (var date of uniqueDates) {
-        if (date.value == timestruct.toLocaleDateString(language)) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        uniqueDates.push({
-          time: data[i]["date"]*1000,
-          value: timestruct.toLocaleDateString(language),
-          label: timestruct.toLocaleDateString(language)
-        });
-      }
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        timeZoneName: "longGeneric"
+      })
+
+      if (!uniqueDates.includes(dateString)) uniqueDates.push(dateString);
+
+      if (!typeOptions.includes(data[i].Type)) typeOptions.push(data[i].Type);
     }
 
     if (uniqueDates.length > 0) {
-      setAvailableDates(uniqueDates.sort((a,b) => b.time - a.time));
+      setAvailableDates(uniqueDates.sort((a,b) => a.localeCompare(b)));
       setViewDate(uniqueDates[0]);
+      setFilterOptions({TypeOptions: typeOptions, Type: "All", Keyword: ""})
     }
-  }, [data])
+  }, [data]);
+  
+  React.useEffect(() => {
+    var collectiveData = [];
+    for (var i = 0; i < data.length; i++) {
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        timeZoneName: "longGeneric"
+      })
+
+      let filterState = dateString == selectedDate && (data[i].Type == filterOptions.Type || filterOptions.Type == "All");
+      if (filterState) {
+        let recordingList = recordings.filter((a) => data[i].DataId.includes(a.Id))
+        if (filterOptions.Keyword.length > 0) {
+          let contents = filterOptions.Keyword.split(" ");
+          for (let content of contents) {
+            const optionLower = content.toLowerCase();
+            filterState = filterState && (
+              data[i].Type.toLowerCase().includes(optionLower) || 
+              data[i].Name.toLowerCase().includes(optionLower) || 
+              data[i].Id.toLowerCase().includes(optionLower) || 
+              recordingList.filter((b) => b.Metadata.ChannelNames.filter((a) => a.toLowerCase().includes(optionLower)).length > 0).length > 0
+            );
+
+          }
+        }
+        
+        if (filterState) {
+          collectiveData.push({...data[i], 
+            Recordings: recordingList,
+          state: false});
+        }
+      }
+    }
+    setDisplayData(collectiveData);
+  }, [filterOptions]);
   
   const setViewDate = (date) => {
     setSelectedDate(date);
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
-      var timestruct = new Date(data[i]["date"]*1000);
-      if (timestruct.toLocaleDateString(language) == date.value) {
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        timeZoneName: "longGeneric"
+      })
+
+      if (dateString == date) {
         collectiveData.push({...data[i], 
-          recordings: recordings.filter((a) => data[i].recordings.includes(a.uid)),
+          Recordings: recordings.filter((a) => data[i].DataId.includes(a.Id)),
         state: false});
       }
     }
     setDisplayData(collectiveData);
   };
+
+  
 
   const setStimMode = (recordingID, index, event) => {
     for (var i in displayData) {
@@ -146,16 +192,13 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     getRecordingData(recordingList);
   };
 
-  return (
+  return useMemo(() => (
     <>
       <MDBox p={2}>
         <Autocomplete
           value={selectedDate}
           options={availableDates}
           onChange={(event, value) => setViewDate(value)}
-          getOptionLabel={(option) => {
-            return option.label || "";
-          }}
           renderInput={(params) => (
             <FormField
               {...params}
@@ -165,60 +208,114 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
           )}
         />
       </MDBox>
-      <MDBox style={{overflowX: "auto"}}>
-        <Table size="large" style={{marginTop: 20}}>
-          <TableHead sx={{display: "table-header-group"}}>
-            <TableRow>
-              {tableHeader.map((col) => (
-                <TableCell key={col.title} variant="head" style={{width: col.width, minWidth: col.minWidth, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
-                  <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
-                    {dictionary.TherapeuticAnalysis.Table[col.title][language]}
-                  </MDTypography>
-                </TableCell>
-              ))}
-              <TableCell key={"viewedit"} variant="head" style={{width: "100px", minWidth: 100, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
-                <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}}>{" "}</MDTypography>
-              </TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {displayData.map((analysis) => {
-              return <TableRow key={analysis.uid}>
-                <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
-                    {new Date(analysis.date*1000).toLocaleString(language)}
-                  </MDTypography>
-                  <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
-                    {analysis.name}
-                  </MDTypography>
-                </TableCell>
-                <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDBox style={{display: "flex", flexDirection: "column"}}>
-                    
-                  </MDBox>
-                </TableCell>
-                <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDBox style={{display: "flex", flexDirection: "column"}}>
-                    
-                  </MDBox>
-                </TableCell>
-                <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
-                    {analysis.duration.toFixed(2)}{" " + dictionary.Time.Seconds[language]} <br/>
-                  </MDTypography>
-                </TableCell>
-                <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                  <MDButton variant={"contained"} color="info" onClick={() => getRecordingData(analysis.uid)} style={{padding: 0}}>
-                    {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
-                  </MDButton>
+      <Collapse in={showTable} >
+        <MDBox p={2} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, justifyContent: "space-between"}}>
+          <MDInput label={"Search for Analysis"} value={filterOptions.Keyword} onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
+          <Autocomplete
+            fullWidth
+            value={filterOptions.Type}
+            options={filterOptions.TypeOptions}
+            onChange={(event, value) => setFilterOptions({...filterOptions, Type: value})}
+            renderInput={(params) => (
+              <FormField
+                {...params}
+                label={"Filter by Analysis Type"}
+                InputLabelProps={{ shrink: true }}
+              />
+            )}
+          />
+        </MDBox>
+        <MDBox style={{overflowX: "auto", height: "60vh"}}>
+          
+          <Table size="large" style={{marginTop: 20, display: "block", height: "fit-content"}}>
+            <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>
+              <TableRow sx={{background: "white"}}>
+                {tableHeader.map((col) => (
+                  <TableCell key={col.title} variant="head" style={{width: col.width, minWidth: col.minWidth, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
+                    <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
+                      {col.title ? dictionary.TherapeuticAnalysis.Table[col.title][language] : "[]"}
+                    </MDTypography>
+                  </TableCell>
+                ))}
+                <TableCell key={"viewedit"} variant="head" style={{width: "100px", minWidth: 100, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
+                  <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}}>{" "}</MDTypography>
                 </TableCell>
               </TableRow>
-            })}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {displayData.sort((a,b) => a.Date - b.Date).map((analysis) => {
+                for (let i in analysis.DataId) {
+                  const recording = recordings.filter((a) => a.Id == analysis.DataId[i])[0];
+                  if (recording.Therapy) {
+                    analysis.Therapy = recording.Therapy;
+                  } else {
+                    analysis.RecordingChannels = recording.Metadata.ChannelNames;
+                  }
+                }
+                return <TableRow key={analysis.Id}>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
+                      {new Date(analysis.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(analysis.Timezone),
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                        timeZoneName: "longGeneric"
+                      })}
+                    </MDTypography>
+                    <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
+                      {analysis.Name}
+                    </MDTypography>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column"}}>
+                    {analysis.RecordingChannels.map((a) => (
+                      <MDTypography key={a} variant="h6" fontSize={15} style={{marginBottom: 0}}>
+                        {a}
+                      </MDTypography>
+                    ))} 
+                    </MDBox>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column"}}>
+                    {analysis.Therapy.map((a, i) => (
+                      <MDBox key={a.Contact} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
+                      <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
+                        {a.Contact}{": "}
+                      </MDTypography>
+                      <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
+                        {a.Frequency.toFixed(1)}{" Hz "}{a.Pulsewidth.toFixed(1)}{" μSec"}
+                      </MDTypography>
+                      </MDBox>
+                    ))} 
+                    </MDBox>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
+                      {analysis.Recordings[0].Metadata.Duration.toFixed(2)}{" " + dictionary.Time.Seconds[language]} <br/>
+                    </MDTypography>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDButton variant={"contained"} color="info" onClick={() => {
+                      getRecordingData(analysis);
+                      setShowTable(false);
+                    }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
+                      {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
+                    </MDButton>
+                    
+                  </TableCell>
+                </TableRow>
+              })}
+            </TableBody>
+          </Table>
+        </MDBox>
+      </Collapse>
+      <MDBox p={2}>
+        <MDButton variant={"contained"} color="info" onClick={() => setShowTable(!showTable)} >
+          {showTable ? "Hide Table" : "Show Table"}
+        </MDButton>
       </MDBox>
     </>
-  );
+  ), [data, showTable, displayData]);
 }
 
 export default TherapeuticAnalysisTable;

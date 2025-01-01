@@ -56,7 +56,7 @@ function TimeSeriesVisualization({dataToRender, channelInfos, handleAddEvent, ha
       let ax = fig.subplots(dataTypes.length, 1, {sharey: false, sharex: true});
 
       for (let i in dataTypes) {
-        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)})`, {fontSize: 15}, ax[i]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)})`, {fontSize: 15}, ax[i]);
       }
     }
     
@@ -66,7 +66,7 @@ function TimeSeriesVisualization({dataToRender, channelInfos, handleAddEvent, ha
         var timeArray = Array(data.Timeseries[dataTypes[i]][j].length).fill(0).map((value, index) => new Date(data.ChannelInfo[dataTypes[i]][j].StartTime*1000 + index*1000/data.ChannelInfo[dataTypes[i]][j].SamplingRate));
         fig.plot(timeArray, data.Timeseries[dataTypes[i]][j], {
           linewidth: 0.5,
-          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
           meta: data.ChannelInfo[dataTypes[i]][j].RecordingUID
         }, ax[i]);
       }

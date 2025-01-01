@@ -56,7 +56,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       for (var i in data.Channels) {
         fig.setYlim([0, 100], ax[1+i*2]);
 
-        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)})`, {fontSize: 15}, ax[i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)})`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[i*2+1]);
       
         const [side, target] = channelInfos[i].Hemisphere.split(" ");
@@ -86,7 +86,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       var timeArray = Array(data.Stream[i].RawData.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + 4*index));
       fig.plot(timeArray, data.Stream[i].RawData, {
         linewidth: 0.5,
-        hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+        hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
       }, ax[i*2 + 0]);
       fig.setXlim([timeArray[0],timeArray[timeArray.length-1]], ax[0]);
 
@@ -127,7 +127,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
         var timeArray = Array(data.Stream[i].RawData.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + 4*index));
         fig.plot(timeArray, data.Stream[i].RawData, {
           linewidth: 0.5,
-          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
         }, ax[i*3 + 0]);
         fig.setXlim([timeArray[0],timeArray[timeArray.length-1]], ax[0]);
 
@@ -173,7 +173,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       var timeArray = Array(data.Stream[0].RawData.length).fill(0).map((value, index) => new Date(data.Timestamp*1000 + 4*index));
       fig.plot(timeArray, data.Stream[0].RawData, {
         linewidth: 0.5,
-        hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+        hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
       }, ax[0]);
       fig.setXlim([timeArray[0],timeArray[timeArray.length-1]], ax[0]);
 

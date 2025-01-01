@@ -1,3 +1,0 @@
-[submodule "Server/modules/python-scripts"]
-	path = Server/modules/python-scripts
-	url = https://github.com/Fixel-Institute/python-scripts.git

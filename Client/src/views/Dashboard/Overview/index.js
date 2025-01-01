@@ -94,27 +94,14 @@ export default function DashboardOverview() {
   const [showDecryptionPassword, setShowDecryptionPassword] = useState(false);
 
   useEffect(() => {
-    SessionController.query("/api/queryDatabaseInfo").then((response) => {
-      if (response.status == 200) {
-        setDatabaseInfo(response.data);
-      }
-    });
-
-    SessionController.query("/api/queryStudyParticipant").then((response) => {
-      if (response.status == 200) {
-        setAvailableParticipants(() => {
-          for (let i in response.data.studies) {
-            for (let j in response.data.participants[response.data.studies[i].uid]) {
-              response.data.participants[response.data.studies[i].uid][j].name = SessionController.decodeMessage(response.data.participants[response.data.studies[i].uid][j].name);
-            }
-          }
-          setCurrentStudy(response.data.studies[0]);
-          return response.data;
-        });
-      }
+    SessionController.query("/api/queryParticipants", {
+      ParticipantGroupId: user.InstituteId
+    }).then((response) => {
+      setAvailableParticipants(response.data);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
+    setContextState(dispatch, "report", "");
   }, []);
 
   const handleParticipantFilter = (event) => {
@@ -139,62 +126,38 @@ export default function DashboardOverview() {
   
   useEffect(() => {
     const filterTimer = setTimeout(() => {
-      if (!availableParticipants) return;
+      if (availableParticipants.length == 0) return;
       
       if (filterOptions.value) {
         const options = filterOptions.value.split(" ");
-        setFilteredParticipants(availableParticipants.participants[currentStudy.uid].filter((participant) => {
+        setFilteredParticipants(availableParticipants.filter((participant) => {
           let state = true;
           for (var option of options) {
             const optionLower = option.toLowerCase();
             state = state && (
-              participant.uid.toLowerCase().includes(optionLower) || 
-              participant.name.toLowerCase().includes(optionLower) || 
-              participant.diagnosis.toLowerCase().includes(optionLower) || 
-              participant.tags.filter((tag) => tag.toLowerCase().includes(optionLower)).length > 0
+              participant.Id.toLowerCase().includes(optionLower) || 
+              participant.MRN.toLowerCase().includes(optionLower) || 
+              participant.Name.toLowerCase().includes(optionLower) || 
+              participant.Diagnosis.toLowerCase().includes(optionLower) || 
+              participant.Tags.filter((tag) => tag.toLowerCase().includes(optionLower)).length > 0
             );
           }
           return state;
         }));
       } else {
-        setFilteredParticipants([...availableParticipants.participants[currentStudy.uid]]);
+        setFilteredParticipants([...availableParticipants]);
       }
     }, 200);
     return () => clearTimeout(filterTimer);
-  }, [filterOptions, currentStudy, availableParticipants]);
+  }, [filterOptions, availableParticipants]);
 
   const currentDate = new Date();
 
   return (
     <DatabaseLayout>
       {alert}
-      <MDBox py={3}>
-        <MDBox mb={3}>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={4}>
-              <DatabaseStatistic 
-                title={dictionary.Dashboard.TotalParticipants[language]} 
-                value={databaseInfo.participants} 
-                description={currentDate.toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))} />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <DatabaseStatistic 
-                title={dictionary.Dashboard.TotalStorage[language]} 
-                value={databaseInfo.totalStorage} 
-                description={currentDate.toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))} />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <MDButton variant="contained" color="info" style={{width: "100%", height: "100%"}} onClick={() => setShowDecryptionPassword(true)}>
-                <MDTypography variant="h3" color="light">
-                  {"Set Decryption Password"}
-                </MDTypography>
-              </MDButton>
-            </Grid>
-          </Grid>
-        </MDBox>
-      </MDBox>
       {availableParticipants ? (
-      <MDBox>
+      <MDBox mt={2}>
         <Card>
           <MDBox p={2}>
             <Grid container spacing={2}>
@@ -202,25 +165,6 @@ export default function DashboardOverview() {
                 <MDTypography variant="h3">
                   {dictionary.Dashboard.ParticipantTable[language]}
                 </MDTypography>
-              </Grid>
-              <Grid item xs={6} md={6}>
-                <Autocomplete
-                  options={availableParticipants.studies ? availableParticipants.studies : []}
-                  value={currentStudy}
-                  onChange={(event, value) => setCurrentStudy(value)}
-                  getOptionLabel={(option) => {
-                    return option.name;
-                  }}
-                  renderInput={(params) => (
-                    <FormField
-                      {...params}
-                      label={"Select Active Study"}
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                  )}
-                  disableClearable
-                />
               </Grid>
               <Grid item sm={6} md={6} display="flex" sx={{
                 justifyContent: {
@@ -238,7 +182,6 @@ export default function DashboardOverview() {
         </Card>
       </MDBox>
       ) : ( <LoadingProgress /> )}
-      <SessionPasswordView show={showDecryptionPassword} onUpdate={onEncryptionUpdated} onCancel={() => setShowDecryptionPassword(false)} />
     </DatabaseLayout>
   );
 };

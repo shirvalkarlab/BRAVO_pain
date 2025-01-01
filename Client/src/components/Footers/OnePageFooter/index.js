@@ -91,13 +91,13 @@ function Footer({ light }) {
               </Link>
             </MDBox>
             <MDBox component="li" px={2} lineHeight={1}>
-              <Link href="https://fixel.ufhealth.org/contact/" target="_blank">
+              <Link href="https://join.slack.com/t/bravoplatform/shared_invite/zt-2v3w5foab-KrbECnW673LcX498opHe7Q" target="_blank">
                 <MDTypography
                   variant="button"
                   fontWeight="regular"
                   color={light ? "white" : "dark"}
                 >
-                  Contact Us
+                  Contact Us (Slack)
                 </MDTypography>
               </Link>
             </MDBox>

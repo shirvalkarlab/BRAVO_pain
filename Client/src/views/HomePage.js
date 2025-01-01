@@ -15,8 +15,7 @@ import { useEffect, useState } from "react";
 
 // @mui material components
 import { 
-  Card, 
-  CardContent,
+  Card, CardContent,
 } from "@mui/material";
 
 import MDTypography from "components/MDTypography";
@@ -26,9 +25,6 @@ import OnePageLayout from "layouts/OnePage";
 import { SessionController } from "database/session-control";
 
 export default function HomePage() {
-  const server = SessionController.getServer();
-  const connectionStatus = SessionController.getConnectionStatus();
-
   const [alert, setAlert] = useState(null);
 
   return (
@@ -44,16 +40,14 @@ export default function HomePage() {
       }}>
         <CardContent>
           <MDTypography variant={"h2"} color={"black"} align={"center"} fontSize={48}>
-            {"Brain Recording Analysis and Visualization Online V3.0"}
+            {"Brain Recording Analysis and Visualization Online ver 3.0"}
           </MDTypography>
           <MDTypography variant={"h4"} color={"black"} align={"center"} fontSize={24}>
-            {"University of Florida, Fixel Institute for Neurological Diseases"}
+            {"Fixel Institute for Neurological Diseases, University of Florida"}
           </MDTypography>
         </CardContent>
         <CardContent>
-          <MDTypography variant={"h6"} color={"black"} align={"center"} fontSize={20}>
-            {connectionStatus.status ? "Backend Server Connected" : "Backend Server not Found"}
-          </MDTypography>
+        
         </CardContent>
       </Card>
 

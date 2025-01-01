@@ -55,7 +55,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
       let ax = fig.subplots(2, 1, {sharey: false, sharex: true});
       fig.setYlim([0, 100], ax[1]);
 
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)})`, {fontSize: 15}, ax[0]);
+      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)})`, {fontSize: 15}, ax[0]);
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1]);
     }
     
@@ -63,7 +63,7 @@ function TimeFrequencyAnalysis({dataToRender, channelInfos, handleAddEvent, hand
     var timeArray = Array(data.Filtered.length).fill(0).map((value, index) => new Date(data.StartTime*1000 + index*1000/data.SamplingRate));
     fig.plot(timeArray, data.Filtered, {
       linewidth: 0.5,
-      hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mV", language)}<extra></extra>`,
+      hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV", language)}<extra></extra>`,
     }, ax[0]);
 
     timeArray = Array(data.Spectrum.Time.length).fill(0).map((value, index) => new Date(data.StartTime*1000 + data.Spectrum.Time[index]*1000));
