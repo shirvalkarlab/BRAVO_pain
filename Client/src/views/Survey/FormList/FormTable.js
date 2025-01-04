@@ -56,7 +56,6 @@ const FormTable = ({data, onDelete}) => {
 
   useEffect(() => {
     setPagination({currentPage: 0, totalPages: Math.ceil(data.length / viewPerPage)});
-    console.log(data)
   }, [data]);
 
   useEffect(() => {

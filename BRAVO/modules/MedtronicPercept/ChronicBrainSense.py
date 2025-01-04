@@ -103,8 +103,6 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                     WindowSelected = rangeSelection(Data["Time"], [Timestamps[j-1], Timestamps[j]]) & (Data["Data"][:,0] < 50000)
                     if np.any(WindowSelected):
                         GroupId = TherapyHistory["TherapyModification"][i]["History"][j-1]["New"]
-                        if datetime.fromtimestamp(Data["Time"][0]).isoformat() == "2021-07-02T21:59:16":
-                            print(TherapyHistory["TherapyModification"][i]["History"][j-1])
                         ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
                         TherapyNote = Therapy.findClosestAdaptiveTherapy(Data["Time"][WindowSelected][0], ClosestTherapy)
                         if extractSensingString(TherapyNote) == "Unknown":

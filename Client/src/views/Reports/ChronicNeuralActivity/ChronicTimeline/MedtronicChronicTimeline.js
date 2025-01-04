@@ -227,7 +227,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
         <Grid container spacing={2}>
           {Object.keys(annotationState).map((name) => {
             return <Grid item xs={6} sm={4} md={3} lg={2}>
-              <Card>
+              <Card sx={{background: annotationState[name].show ? "" : "darkgrey"}}>
               <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
                 <IconButton
                   style={{padding: 0, marginRight: 3, borderStyle: "solid", borderColor: "#000000", borderWidth: 1, height: "100%"}} 
@@ -258,7 +258,6 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
                 </Popover>
                 <MDTypography variant="h6" fontSize={15} color={"dark"} style={{cursor: "pointer"}} onClick={() => {
                   setAnnotationState((annotationState) => {
-                    console.log(annotationState[name].show)
                     annotationState[name].show = !annotationState[name].show;
                     return {...annotationState}
                   });

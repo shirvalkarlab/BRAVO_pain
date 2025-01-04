@@ -110,7 +110,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
             }
           }
         }
-        return {data: response.data.Annotations, options: options, active: options.length > 0 ? options[0] : ""};
+        return options.length > 0 ? {data: response.data.Annotations, options: options, active: options[0]} : false;
       })
       setData(response.data);
       setAnnotations(response.data.Annotations);

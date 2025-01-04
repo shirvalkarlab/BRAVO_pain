@@ -40,19 +40,32 @@ class UserRegister(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["Email", "Password", "Username", "Institute"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["Email", "Password", "UserName", "Institute"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         if len(request.data["Password"]) < 8:
             return Response(status=400, data={"message": "Password need at least 8-character"})
 
-        if len(request.data["UserName"]) == 0 and len(request.data["Institute"]) == 0:
-            return Response(status=400, data={"message": "Username and Institute IDs must both be present."})
+        if len(request.data["UserName"]) == 0:
+            return Response(status=400, data={"message": "User's Name must be present."})
 
-        try:
-            user = Auth.registerUser(request.data["Email"], request.data["Password"], user_name=request.data["Username"], institute="Independent")
-        except Exception as e:
-            return Response(status=400, data={"message": str(e)})
+        if len(request.data["Institute"]) == 0:
+            try:
+                user = Auth.registerUser(request.data["Email"], request.data["Password"], user_name=request.data["UserName"])
+            except Exception as e:
+                return Response(status=400, data={"message": str(e)})
+        else:
+            institute = models.Institute.find(invite_code=request.data["Institute"])
+            if not institute:
+                return Response(status=403)
+
+            try:
+                user = Auth.registerUser(request.data["Email"], request.data["Password"], user_name=request.data["UserName"], institute=institute)
+            except Exception as e:
+                return Response(status=400, data={"message": str(e)})
+            
+            institute.invite_code = ""
+            institute.save()
 
         user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
         login(request, user)
@@ -86,6 +99,14 @@ class FetchAuthorizedInstitute(RestViews.APIView):
     parser_classes = [RestParsers.JSONParser]
     def post(self, request):
         return Response(status=404)
+
+class UserInfo(RestViews.APIView):
+
+    permission_classes = [IsAuthenticated,]
+    parser_classes = [RestParsers.JSONParser]
+    
+    def post(self, request):
+        return Response(status=200, data=request.user.get_info())
 
 class UserLogout(RestViews.APIView):
     

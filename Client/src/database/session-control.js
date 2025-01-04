@@ -283,7 +283,6 @@ export const SessionController = (function () {
   };
 
   const register = (username, email, password, institute) => {
-    return query("/api/register", {UserName: username, Email: email, Password: password});
   };
 
   const logout = () => {

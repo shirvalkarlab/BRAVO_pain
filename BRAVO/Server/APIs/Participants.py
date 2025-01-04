@@ -40,15 +40,12 @@ class QueryParticipants(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantGroupId"]):
-            return Response(status=400, data={"message": "Malformed Input"})
-        
         AllParticipants = []
-        institute = models.Institute.find(uid=request.data["ParticipantGroupId"])
+        institute = request.user.institute
         if institute:
             AllParticipants = models.Participant.from_institute(institute)
 
-        if not institute:
+        if "ParticipantGroupId" in request.data.keys():
             study = models.Study.find(uid=request.data["ParticipantGroupId"])
             if study:
                 AllParticipants = study.participants
@@ -79,13 +76,25 @@ class UpdateParticipantInformation(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId", "Name", "DOB", "Sex", "Diagnosis", "DiagnosisStartTime", "Tags"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId", "MergeWith", "Name", "DOB", "Sex", "Diagnosis", "DiagnosisStartTime", "Tags"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
+
+        if "MergeWith" in request.data.keys():
+            if not Database.checkManagePermission(request.user, request.data["MergeWith"]):
+                return Response(status=403)
+
+            TargetParticipant = models.Participant.find(uid=request.data["MergeWith"])
+            try:
+                Database.mergeParticipants(source=Participant, target=TargetParticipant)
+            except Exception as e:
+                return Response(status=400, data={"message": str(e)})
+            return Response(status=200)
+
         if "Name" in request.data.keys():
             Participant.name = request.data["Name"]
         if "DOB" in request.data.keys():

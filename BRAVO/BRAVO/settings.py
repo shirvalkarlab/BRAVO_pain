@@ -101,6 +101,7 @@ TEMPLATES = [
 # Authentication for Standalone Version should use basic auth without Tokens
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'Server.authentication.BRAVOAPIAuthentication',
         'rest_framework.authentication.BasicAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ]

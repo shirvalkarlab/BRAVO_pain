@@ -46,19 +46,19 @@ export default function Register() {
 
   const [alert, setAlert] = useState(null);
   const [displayDisclaimer, setDisplayDisclaimer] = useState(false);
-  const [authInfo, setAuthInfo] = useState({username: "", email: "", password: ""});
+  const [authInfo, setAuthInfo] = useState({username: "", email: "", password: "", institute: ""});
   const [agree, setAgreeDisclaimer] = useState(false);
 
   const handleRegistration = () => {
     if (agree) {
-      SessionController.register(authInfo.username, authInfo.email, authInfo.password, authInfo.email).then((response) => {
-        SessionController.setUser(response.data.user);
-        SessionController.syncSession();
-        setAuthInfo({...authInfo, password: ""});
-        setContextState(dispatch, "user", response.data.user);
+      SessionController.query("/api/register", {
+        UserName: authInfo.username, Email: authInfo.email, Password: authInfo.password, Institute: authInfo.institute
+      }).then((response) => {
+        window.location.reload()
       }).catch((error) => {
         SessionController.displayError(error, setAlert);
       });
+
     } else {
       setAlert(<MuiAlertDialog title={"ERROR"} message={
           "You must accept the terms and conditions listed on the tool."
@@ -103,6 +103,9 @@ export default function Register() {
             </MDBox>
             <MDBox mb={2}>
               <MDInput type="password" id="password" label={dictionary.Register.Password[language]} value={authInfo.password} onChange={(event) => setAuthInfo({...authInfo, password: event.currentTarget.value})} fullWidth/>
+            </MDBox>
+            <MDBox mb={2}>
+              <MDInput type="text" id="institute-invite-code" label={"Institute Invitation Code (Optional)"} value={authInfo.institute} onChange={(event) => setAuthInfo({...authInfo, institute: event.currentTarget.value})} fullWidth/>
             </MDBox>
             <MDBox display="flex" alignItems="center" ml={-1}>
               <Checkbox value={agree} onClick={() => setAgreeDisclaimer(!agree)} />

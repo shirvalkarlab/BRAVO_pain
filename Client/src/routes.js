@@ -28,11 +28,10 @@ import MDAvatar from "components/MDAvatar";
 // @mui icons
 import Icon from "@mui/material/Icon";
 
-import { MdOutlineEventAvailable } from "react-icons/md";
+import { MdOutlineEventAvailable, MdFitbit } from "react-icons/md";
 import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
-
 
 // Images
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -60,6 +59,8 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+const FitbitAuth = lazy(() => import('views/Fitbit/Auth'));
+const FitbitDashboard = lazy(() => import('views/Fitbit/Dashboard'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
@@ -92,7 +93,7 @@ const routes = {
       { type: "divider", key: "divider-1" },
       {
         type: "collapse",
-        name: "Existing Forms",
+        name: "Survey and Questionnaire",
         key: "SurveyList",
         component: <FormList />,
         route: "/form-manager",
@@ -182,6 +183,26 @@ const routes = {
         icon: <FaClipboardList />,
         route: "/form-records/:participant_uid",
         component: <ParticipantSurveyRecords />,
+      }
+    ]
+  },
+  "FitbitReports": {
+    icon: <MdFitbit />,
+    name: "Fitbit Dashboard",
+    children: [
+      {
+        key: "FitbitAuth",
+        name: "Fitbit Request Authentication",
+        icon: <MdFitbit />,
+        route: "/fitbit/auth/:participant_uid",
+        component: <FitbitAuth />,
+      },
+      {
+        key: "FitbitDashboard",
+        name: "Fitbit Dashboard",
+        icon: <MdFitbit />,
+        route: "/fitbit/dashboard/:participant_uid",
+        component: <FitbitDashboard />,
       }
     ]
   },

@@ -463,8 +463,10 @@ def getTimestamp(DateTimeString):
     Returns:
       Unix Timestamp (in seconds)
     """
-
-    return datetime.fromisoformat(DateTimeString.replace("Z","+00:00")).timestamp()
+    if "█" in DateTimeString:
+        return 0 
+    else:
+        return datetime.fromisoformat(DateTimeString.replace("Z","+00:00")).timestamp()
 
 def deIdentification(JSON, patientIdentifier="", saveName=None):
     for key in JSON.keys():

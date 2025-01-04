@@ -11,3 +11,4 @@ scikit-learn==1.5.2
 pandas==2.2.3
 spectrum==0.8.1
 specparam==2.0.0rc2
+requests==2.32.3

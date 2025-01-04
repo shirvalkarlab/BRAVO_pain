@@ -52,15 +52,18 @@ class PlatformUser(AbstractBaseUser):
     register_date = models.FloatField(default=current_time)
     configuration = models.JSONField(default=dict)
 
-    api_token = models.CharField(max_length=64, default=newToken)
+    api_token = models.CharField(max_length=128, default=newToken)
     verification_code = models.CharField(max_length=16, default=newVerification)
 
     is_active = models.IntegerField(default=1)
     is_mobile = models.IntegerField(default=0)
     is_admin = models.IntegerField(default=0)
 
-    def find(email):
-        return PlatformUser.objects.filter(email=email).first()
+    def find(email=None, api_token=None):
+        if email:
+            return PlatformUser.objects.filter(email=email).first()
+        if api_token:
+            return PlatformUser.objects.filter(api_token=api_token).first()
     
     def include(email):
         return PlatformUser.objects.filter(email=email).exists()
@@ -78,6 +81,7 @@ class PlatformUser(AbstractBaseUser):
 
 class Institute(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
+    invite_code = models.CharField(max_length=512, default="")
     name = models.CharField(max_length=512, default="")
     members = models.ManyToManyField("PlatformUser", related_name="institute_has_member")
 

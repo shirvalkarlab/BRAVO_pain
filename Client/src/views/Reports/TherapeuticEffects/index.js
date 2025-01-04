@@ -103,7 +103,6 @@ function TherapeuticEffects() {
       RequestType: "Overview",
       ParticipantId: participant_uid
     }).then((response) => {
-      console.log(response.data)
       setAvailableAnalysis(response.data);
       setAlert(null);
     }).catch((error) => {

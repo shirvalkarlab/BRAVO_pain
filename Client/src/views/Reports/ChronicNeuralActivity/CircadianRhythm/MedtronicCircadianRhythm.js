@@ -75,8 +75,6 @@ function MedtronicCircadianRhythm({dataToRender, annotations, showEventCount, ac
       tickformat: "%H:%M"
     }, "x", ax[0])
     
-    console.log(dataToRender)
-    
     if (!fig.fresh) {
       refreshRender();
     }

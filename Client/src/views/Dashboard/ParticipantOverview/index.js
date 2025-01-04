@@ -165,20 +165,32 @@ export default function ParticipantOverview() {
   };
 
   const updateParticipantInformation = (editParticipantInfo) => {
-    setAlert(<LoadingProgress />);
-    SessionController.query("/api/updateParticipantInformation", {
-      ParticipantId: participant_uid,
-      Name: editParticipantInfo.Name,
-      Diagnosis: editParticipantInfo.Diagnosis,
-      Sex: editParticipantInfo.Sex,
-      Tags: editParticipantInfo.Tags
-    }).then((response) => {
-      setParticipantInfo(response.data);
-      setEditParticipantInfo(false);
-      setAlert(null);
-    }).catch((error) => {
-      SessionController.displayError(error, setAlert);
-    });
+    if (editParticipantInfo.MergeWith) {
+      setAlert(<LoadingProgress />);
+      SessionController.query("/api/updateParticipantInformation", {
+        ParticipantId: participant_uid,
+        MergeWith: editParticipantInfo.MergeWith
+      }).then((response) => {
+        navigate("/participant-overview/" + editParticipantInfo.MergeWith, {replace: true});
+      }).catch((error) => {
+        SessionController.displayError(error, setAlert);
+      });
+    } else {
+      setAlert(<LoadingProgress />);
+      SessionController.query("/api/updateParticipantInformation", {
+        ParticipantId: participant_uid,
+        Name: editParticipantInfo.Name,
+        Diagnosis: editParticipantInfo.Diagnosis,
+        Sex: editParticipantInfo.Sex,
+        Tags: editParticipantInfo.Tags
+      }).then((response) => {
+        setParticipantInfo(response.data);
+        setEditParticipantInfo(false);
+        setAlert(null);
+      }).catch((error) => {
+        SessionController.displayError(error, setAlert);
+      });
+    }
   };
 
   const updateDeviceInformation = (deviceInfo) => {
@@ -302,7 +314,6 @@ export default function ParticipantOverview() {
                         </TableCell>
                         <TableCell key={"leadname"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                           {device.Electrodes.map((lead) => {
-                            console.log(lead)
                             return <MDBox key={lead.Id} style={{marginBottom: 5}}>
                             <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={8}>
                               {lead.Type}

@@ -71,7 +71,6 @@ export default function FormEditor({match}) {
       RequestType: "RequestForm",
       FormLink: form_link
     }).then((response) => {
-      console.log(response.data)
       if (!response.data.Editable) {
         SessionController.displayError({response: {status: 403}}, setAlert);
       } else {

@@ -35,11 +35,7 @@ def registerUser(email, password, user_name="", institute="Independent"):
 
     user = PlatformUser.create(email, password, user_name)
 
-    if institute == "Independent":
-        institute = Institute.create(email)
-        if not institute:
-            raise Exception("Institute Conflicts. Please Check with Server Admin")
-            
+    if not institute == "Independent":
         if not institute.has_permission(user):
             institute.join(user)
         user.institute = institute
@@ -47,7 +43,7 @@ def registerUser(email, password, user_name="", institute="Independent"):
     return user
 
 def verifyUser(email, password):
-    user = PlatformUser.find(email)
+    user = PlatformUser.find(email=email)
     if not user:
         raise Exception("Permission Denied")
 

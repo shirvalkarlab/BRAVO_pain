@@ -1,0 +1,233 @@
+/**
+=========================================================
+* UF BRAVO Platform
+=========================================================
+
+* Copyright 2023 by Jackson Cagle, Fixel Institute
+* The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
+
+ =========================================================
+
+* The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+*/
+
+import { useEffect, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+
+import {
+  Card,
+  Grid,
+  Link,
+  Dialog,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Step,
+  StepLabel,
+  Stepper,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel
+} from "@mui/material";
+
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+
+import MDBox from "components/MDBox";
+import MDTypography from "components/MDTypography";
+import MDInput from "components/MDInput";
+import MDButton from "components/MDButton";
+import MuiAlertDialog from "components/MuiAlertDialog";
+import LoadingProgress from "components/LoadingProgress";
+
+import DatabaseLayout from "layouts/DatabaseLayout";
+
+import { SessionController } from "database/session-control";
+import { usePlatformContext, setContextState } from "context";
+import { dictionary, dictionaryLookup } from "assets/translation";
+
+export default function FitbitAuth() {
+  const [controller, dispatch] = usePlatformContext();
+  const { user, language } = controller;
+  const { participant_uid } = useParams();
+
+  const [alert, setAlert] = useState(null);
+  const [OAuthURL, setOAuthURL] = useState(null);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [fitbitTokenURL, setFitbitTokenURL] = useState("");
+
+  const [authPeriod, setAuthPeriod] = useState([]);
+
+  useEffect(() => {
+    SessionController.query("/api/requestFitbitAuth", {
+      RequestType: "RequestURL",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      if (!response.data.OAuthURL) {
+        setAuthenticated(true);
+        setAuthPeriod(response.data.map((a) => a.map((b) => moment(new Date(b*1000+new Date().getTimezoneOffset()*60000)))))
+      } else {
+        setOAuthURL(response.data.OAuthURL);
+      }
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated || !authPeriod) return;
+    SessionController.query("/api/requestFitbitAuth", {
+      RequestType: "SetAuthPeriod",
+      ParticipantId: participant_uid,
+      DatePeriods: authPeriod.map((a) => a.map((b) => {
+        const timestamp = new Date(b.format("YYYY-MM-DD")+"T00:00:00Z").getTime()/1000 - b.utcOffset()*60;
+        return timestamp
+      })),
+    }).then((response) => {
+      
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }, [authPeriod])
+
+  return (
+    <DatabaseLayout>
+      {alert}
+      {!authenticated ? (
+        <MDBox>
+          <Card sx={{marginTop: 5}}>
+            <MDBox p={2}>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <MDTypography variant="h3">
+                    {"Request Fitbit Web API Access"}
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
+                    {"The Fitbit Dashboard Web API require OAuth 2.0 authentication for your account. Please use the Authentication Link provided below to request Authentication token. "}
+                    {"Once authentication is successful, please copy the redirect URL into the textbox below to extract authentication token. "}
+                  </MDTypography>
+                </Grid>
+                {OAuthURL ? (
+                <Grid item xs={12} sx={{lineHeight: 1}}>
+                  <Link href={OAuthURL} target="_blank">
+                    <MDTypography variant="p" fontWeight="regular" color={"info"} fontSize={12}>
+                      {OAuthURL}
+                    </MDTypography>
+                  </Link>
+                </Grid>
+                ) : null}
+
+                {OAuthURL ? (
+                <Grid item xs={12} sx={{lineHeight: 1}}>
+                  <MDBox display={"flex"} flexDirection={"row"}>
+                    <TextField
+                      variant="standard"
+                      margin="dense" id="fitbit_oauth_redirect"
+                      value={fitbitTokenURL}
+                      onChange={(event) => setFitbitTokenURL(event.target.value)}
+                      fullWidth
+                    />
+                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
+                      setAlert(<LoadingProgress />)
+                      SessionController.query("/api/requestFitbitAuth", {
+                        RequestType: "VerifyToken",
+                        ParticipantId: participant_uid,
+                        TokenURL: fitbitTokenURL
+                      }).then((response) => {
+                        setAlert(null);
+                      }).catch((error) => {
+                        SessionController.displayError(error, setAlert);
+                      });
+                    }}>
+                      {"Verify Token"} 
+                    </MDButton>
+                  </MDBox>
+                </Grid>
+                ) : null}
+              </Grid>
+            </MDBox>
+          </Card>
+        </MDBox>
+      ) : (
+        <MDBox>
+          <Card sx={{marginTop: 5}}>
+            <MDBox p={2}>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <MDTypography variant="h3">
+                    {"Define Data Collection Period"}
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
+                    {"If multiple participants are sharing the same device, please use this section to define time period of data collection. All dates are inclusive. If empty, full data range is available (Device is not shared across multiple participants). "}
+                  </MDTypography>
+
+                  <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                    setAuthPeriod((authPeriod) => {
+                      return [...authPeriod, [moment(new Date()), moment(new Date())]]
+                    });
+                  }}>
+                    {"Add Date Periods"} 
+                  </MDButton>
+                </Grid>
+                {authPeriod.map((section, sectionIndex) => {
+                return <Grid key={sectionIndex} item xs={12}>
+                  <MDBox p={2} display={"flex"} flexDirection={"row"} alignItems={"center"}>
+                    <MDTypography variant={"h6"} fontSize={24} pr={2}>
+                      {"Date " + (sectionIndex+1).toFixed(0) + ": From"}
+                    </MDTypography>
+                    <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+                      <DatePicker
+                        label="Start Date"
+                        value={section[0]}
+                        onChange={(newDate) => {
+                          setAuthPeriod((authPeriod) => {
+                            authPeriod[sectionIndex][0] = newDate;
+                            return [...authPeriod];
+                          });
+                        }}
+                        renderInput={(params) => <TextField {...params} />}
+                      />
+                    </LocalizationProvider>
+                    <MDTypography variant={"h6"} fontSize={24} px={2}>
+                      {"To"}
+                    </MDTypography>
+                    <LocalizationProvider dateAdapter={AdapterMoment}>
+                      <DatePicker
+                        label="End Date"
+                        value={section[1]}
+                        onChange={(newDate) => {
+                          setAuthPeriod((authPeriod) => {
+                            authPeriod[sectionIndex][1] = newDate;
+                            return [...authPeriod];
+                          });
+                        }}
+                        renderInput={(params) => <TextField {...params} />}
+                      />
+                    </LocalizationProvider>
+                    <MDButton variant="contained" color="error" style={{marginLeft: 15}} onClick={() => {
+                      setAuthPeriod((authPeriod) => {
+                        authPeriod.splice(sectionIndex, 1);
+                        return [...authPeriod]
+                      });
+                    }}>
+                      {"Remove"} 
+                    </MDButton>
+                  </MDBox>
+                </Grid>
+                })}
+              </Grid>
+            </MDBox>
+          </Card>
+        </MDBox>
+      )}
+    </DatabaseLayout>
+  );
+};
+

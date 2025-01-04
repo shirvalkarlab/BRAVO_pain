@@ -81,7 +81,6 @@ def queryAvailableAnalyses(participant_uid, request_type):
         for analysis in AnalysisList:
             Analysis = models.Analysis.find(type=analysis["Type"], metadata__DataId=analysis["Metadata"]["DataId"])
             if not Analysis:
-                print(analysis["Metadata"]["DataId"])
                 Analysis = models.Analysis.create(type=analysis["Type"], name=analysis["Name"], date=analysis["Date"], metadata=analysis["Metadata"])
                 for recordingId in analysis["Metadata"]["DataId"]:
                     recording = Recordings.filter(uid=recordingId).first() # NOTE: SQL-Specific QuerySet

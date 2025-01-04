@@ -27,7 +27,7 @@ import MDButton from "components/MDButton";
 
 import FormField from "components/MDInput/FormField.js";
 import SessionPasswordView from "./SessionPasswordView";
-import ParticipantTable from "components/Tables/ParticipantTable";
+import ParticipantTable from "./ParticipantTable";
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";

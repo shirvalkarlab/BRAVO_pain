@@ -141,6 +141,41 @@ def extractParticipantInformation(participant_uid):
     ParticipantInfo["DBSDevices"] = [i.get_info() for i in models.DBSDevice.find_all(owner=Participant)]
     return ParticipantInfo
 
+def mergeParticipants(source, target):
+    for entry in models.DBSDevice.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+    
+    for entry in models.MERDevice.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+    
+    for entry in models.FitbitDevice.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+    
+    for entry in models.Electrode.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+
+    for entry in models.TherapyModification.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+
+    for entry in models.Annotation.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+
+    for entry in models.ScaleRecord.find_all(participant=source):
+        entry.owner = target
+        entry.save()
+
+    for entry in models.SourceFile.find_all(owner=source):
+        entry.owner = target
+        entry.save()
+    
+    source.delete()
+
 def deleteSourceFile(pointer):
     if not pointer.startswith(DATABASE_PATH) or ".." in pointer:
         raise Exception("Malicious Attempt at Accessing Other Data in the Computer.")

@@ -248,7 +248,7 @@ function TherapyHistoryFigure({dataToRender, height, figureTitle}) {
         <Grid container spacing={2}>
           {dataToRender.TherapyDevices.map((device, index) => {
             return <Grid item xs={4} sm={3} key={device.Id}>
-              <Card style={{cursor: "pointer"}} onClick={() => {
+              <Card style={{cursor: "pointer", background: showDevice.includes(device.Id) ? "" : "darkgrey"}} onClick={() => {
                 setShowDevice((showDevice) => {
                   if (showDevice.includes(device.Id)) showDevice = showDevice.filter((a) => a != device.Id)
                   else showDevice.push(device.Id);

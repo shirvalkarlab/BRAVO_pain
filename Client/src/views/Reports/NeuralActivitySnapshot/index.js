@@ -240,10 +240,10 @@ function NeuralActivitySnapshot() {
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Card sx={{width: "100%"}}>
+                {availableSnapshots.Analyses.length > 0 ? (
                 <Grid container>
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
-                      {availableSnapshots.Analyses.length > 0 ? (
                         <Autocomplete
                           value={viewSnapshot}
                           options={availableSnapshots.Analyses.map((a) => a.Date + " | " + a.Overview)}
@@ -256,25 +256,27 @@ function NeuralActivitySnapshot() {
                             />
                           )}
                         />
-                      ) : (
-                        <MDTypography variant="h6" fontSize={24}>
-                          {dictionary.WarningMessage.NoData[language]}
-                        </MDTypography>
-                      )}
                     </MDBox>
                   </Grid>
+                  <Grid item xs={12}>
+                    <SnapshotPSDs dataToRender={snapshot} figureTitle={"Neural Activity Montages"} />
+                  </Grid>
                 </Grid>
-                <Grid item xs={12}>
-                  <SnapshotPSDs dataToRender={snapshot} figureTitle={"Neural Activity Montages"} />
-                </Grid>
+                ) : (
+                  <MDBox p={2} lineHeight={1}>
+                    <MDTypography variant="h6" fontSize={24}>
+                      {dictionary.WarningMessage.NoData[language]}
+                    </MDTypography>
+                  </MDBox>
+                )}
               </Card>
             </Grid>
             <Grid item xs={12}>
               <Card sx={{width: "100%"}}>
+                {viewChronicChannel.options.length > 0 ? (
                 <Grid container>
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
-                      {viewChronicChannel.options.length > 0 ? (
                         <Autocomplete
                           value={viewChronicChannel.active}
                           options={viewChronicChannel.options}
@@ -287,17 +289,19 @@ function NeuralActivitySnapshot() {
                             />
                           )}
                         />
-                      ) : (
-                        <MDTypography variant="h6" fontSize={24}>
-                          {dictionary.WarningMessage.NoData[language]}
-                        </MDTypography>
-                      )}
                     </MDBox>
                   </Grid>
+                  <Grid item xs={12}>
+                    <ChronicSnapshots dataToRender={chronicSnapshot} figureTitle={"Snapshot across Time"} />
+                  </Grid>
                 </Grid>
-                <Grid item xs={12}>
-                  <ChronicSnapshots dataToRender={chronicSnapshot} figureTitle={"Snapshot across Time"} />
-                </Grid>
+                ) : (
+                  <MDBox p={2} lineHeight={1}>
+                    <MDTypography variant="h6" fontSize={24}>
+                      {dictionary.WarningMessage.NoData[language]}
+                    </MDTypography>
+                  </MDBox>
+                )}
               </Card>
             </Grid>
           </Grid>

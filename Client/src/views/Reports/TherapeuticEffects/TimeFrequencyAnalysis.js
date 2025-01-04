@@ -50,6 +50,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
     
     if (!fig.fresh) {
       fig.clearData();
+      fig.fresh = true;
     }
 
     const ax = fig.subplots(activeChannels.length * 2 + 1, 1, {sharey: false, sharex: true});

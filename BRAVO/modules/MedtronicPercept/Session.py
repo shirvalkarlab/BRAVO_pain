@@ -122,8 +122,10 @@ def extractPatientInformation(JSON):
             electrode["channel_names"] = ["E00","E01","E02","E03"]
         elif lead["Model"] == "LeadModelDef.LEAD_OTHER":
             electrode["type"] = "Other"
+            electrode["channel_names"] = ["Contact-"+str(i) for i in range(electrode["channel_count"])]
         else:
             electrode["type"] = lead["Model"].replace("LeadModelDef.","")
+            electrode["channel_names"] = ["Contact-"+str(i) for i in range(electrode["channel_count"])]
 
         PatientOverview["Device"]["ConnectedLeads"].append(electrode)
 

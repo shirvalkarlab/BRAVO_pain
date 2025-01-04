@@ -72,6 +72,7 @@ function TherapyHistory() {
   const [impedanceLogs, setImpedanceLogs] = React.useState({});
   const [impedanceMode, setImpedanceMode] = React.useState("Bipolar");
   const [dataToRender, setDataToRender] = React.useState(null);
+  const [therapyConfig, setTherapyConfig] = React.useState({show: false, config: null});
 
   const [alert, setAlert] = React.useState(null);
   const [therapyTypes, setTherapyTypes] = React.useState([]);
@@ -92,7 +93,6 @@ function TherapyHistory() {
       ParticipantId: participant_uid
     }).then((response) => {
       setTherapyHistory(response.data);
-      console.log(response.data)
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -450,6 +450,107 @@ function TherapyHistory() {
     return `${percent.toFixed(1)}% (${(cycling.OnDurationInMilliSeconds/1000).toFixed(1) + " " + dictionary.Time.Seconds[language]} : ${(cycling.OffDurationInMilliSeconds/1000).toFixed(1) + " " + dictionary.Time.Seconds[language]})`;
   };
 
+  const translateMedtronicAdaptiveString = (string) => {
+    if (string === "AdaptiveModeDef.SINGLE_THRESHOLD_DIRECT") {
+      return "Single Threshold"
+    } else if (string === "AdaptiveModeDef.DUAL_THRESHOLD_DIRECT" ) {
+      return "Dual Threshold"
+    } else {
+      return string
+    }
+  }
+
+  const formatConfigurationTable = (config) => {
+    if (config.StimulationType === "BrainSense") {
+      return (
+        <Grid container spacing={2}>
+          <Grid item xs={12}>
+            <Grid container spacing={0}>
+              <Grid item xs={12}>
+                <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                  {"Sensing Frequency: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.SensingSetup.FrequencyInHertz} {" Hz"}</b>
+                </MDTypography>
+              </Grid>
+              <Grid item xs={12}>
+                <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                  {"Averaging Duration: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.SensingSetup.AveragingDurationInMilliSeconds} {" milliseconds"}</b>
+                </MDTypography>
+              </Grid>
+              {therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0] != therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1] ? (
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Amplitude Threshold: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]}
+                    {" - "}{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}
+                    {" mA"}</b>
+                  </MDTypography>
+                </Grid>
+              ) : null}
+            </Grid>
+          </Grid>
+          {therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Type === "Medtronic Adaptive" ? (
+            <Grid item xs={12} pt={5}>
+              <Grid container spacing={0}>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Threshold Mode: "}<b>{translateMedtronicAdaptiveString(therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.Mode)}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Capture Threshold: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.CaptureAmplitudes[0]}
+                    {" - "}{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.CaptureAmplitudes[1]}
+                    {" mA"}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"LFP at Capture Threshold: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.MeasuredLFP[0]}
+                    {" - "}{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.MeasuredLFP[1]}
+                    {" A.U."}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Final Threshold: "}<b>{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.LFPThresholds[0]}
+                    {" - "}{therapyConfig.config.AdaptiveSettings[0].RecordingConfiguration.Config.Thresholds.LFPThresholds[1]}
+                    {" A.U."}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Detection Blanking: "}<b>{therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.DetectionBlankingDurationInMilliSeconds} {" milliseconds"}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Lower Onset Duration: "}<b>{therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.LowerThresholdOnsetInMilliSeconds} {" milliseconds"}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Upper Onset Duration: "}<b>{therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.UpperThresholdOnsetInMilliSeconds} {" milliseconds"}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Ramp-up Time: "}<b>{therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.RampUpTime} {" milliseconds"}</b>
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant={"p"} fontSize={18} fontFamily={"lato"}>
+                    {"Ramp-down Time: "}<b>{therapyConfig.config.AdaptiveSettings[0].StimulationConfiguration.Config.RampDownTime} {" milliseconds"}</b>
+                  </MDTypography>
+                </Grid>
+              </Grid>
+            </Grid>
+          ) : null}
+        </Grid>
+      )
+    }
+
+    return <></>
+  }
+
   const onContactSelect = (point) => {
     let dataToRender = {};
     if (point.data.xaxis === "x") {
@@ -527,12 +628,39 @@ function TherapyHistory() {
           
           {therapyDate.active ? (
             <Grid item xs={6} sm={8}>
-              <TherapyHistoryTable therapyHistory={therapyConfigurations[therapyDate.active]} />
+              <TherapyHistoryTable therapyHistory={therapyConfigurations[therapyDate.active]} viewConfigurationTable={(config) => {
+                if (config.StimulationType == "BrainSense") {
+                  setTherapyConfig({show: true, config: config});
+                }
+              }} />
             </Grid>
           ) : null}
 
         </Grid>
       </MDBox>
+
+      <Dialog PaperProps={{sx: {minWidth: 600}}} open={therapyConfig.show} onClose={() => setTherapyConfig({...therapyConfig, show: false})}>
+        {therapyConfig.config ? (
+          <MDBox px={2} pt={2}>
+            <MDTypography variant={"h5"} >
+              {therapyConfig.config.GroupName ? therapyConfig.config.GroupName : therapyConfig.config.GroupId}
+            </MDTypography>
+            <MDTypography variant={"subtitle1"} color={"error"} fontSize={18} fontWeight={"medium"} lineHeight={1.5}>
+              {therapyConfig.config.StimulationSettings[0].Electrode.CustomName}
+            </MDTypography>
+          </MDBox>
+        ) : null}
+        <DialogContent>
+        {therapyConfig.config ? <>
+          {formatConfigurationTable(therapyConfig.config)}
+        </> : null}
+        </DialogContent>
+        <DialogActions>
+          <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
+            
+          </MDBox>
+        </DialogActions>
+      </Dialog>
     </DatabaseLayout>
   );
 }

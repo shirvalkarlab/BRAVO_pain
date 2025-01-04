@@ -225,7 +225,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
             )}
           />
         </MDBox>
-        <MDBox style={{overflowX: "auto", height: "60vh"}}>
+        <MDBox style={{overflowX: "auto", maxHeight: "60vh"}}>
           
           <Table size="large" style={{marginTop: 20, display: "block", height: "fit-content"}}>
             <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>

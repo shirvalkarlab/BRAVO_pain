@@ -23,7 +23,7 @@ from django.contrib.auth.models import BaseUserManager, AbstractBaseUser
 import json
 import datetime
 
-from modules.HelperFunctions import current_time, get_token, uuid4_hex
+from modules.HelperFunctions import current_time, get_token, uuid4_hex, PKCE_code_verifier
 
 class DBSDevice(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
@@ -44,16 +44,16 @@ class DBSDevice(models.Model):
         return self.device_bloodline
 
     def include(*args, **kwargs):
-        return DBSDevice.objects.filter(**kwargs).exists()
+        return DBSDevice.objects.select_related("owner").filter(**kwargs).exists()
 
     def find(*args, **kwargs):
-        return DBSDevice.objects.filter(**kwargs).first()
+        return DBSDevice.objects.select_related("owner").filter(**kwargs).first()
 
     def find_all(*args, **kwargs):
-        return DBSDevice.objects.filter(**kwargs).all()
+        return DBSDevice.objects.select_related("owner").filter(**kwargs).all()
 
     def find_or_create(serial_number, type, institute):
-        device = DBSDevice.objects.filter(serial_number=serial_number, type=type, owner__institute__pk=institute).first()
+        device = DBSDevice.objects.select_related("owner").filter(serial_number=serial_number, type=type, owner__institute__pk=institute).first()
         if device:
             return device, False
         
@@ -80,6 +80,40 @@ class MERDevice(models.Model):
 
     electrodes = models.ManyToManyField("Electrode", related_name="has_mer_electrode")
 
+    def include(*args, **kwargs):
+        return MERDevice.objects.select_related("owner").filter(**kwargs).exists()
+
+    def find(*args, **kwargs):
+        return MERDevice.objects.select_related("owner").filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return MERDevice.objects.select_related("owner").filter(**kwargs).all()
+
+class FitbitDevice(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
+    name = models.CharField(max_length=128, default="")
+    type = models.CharField(max_length=128, default="")
+    owner = models.ForeignKey('Participant', models.CASCADE)
+
+    pkce = models.CharField(max_length=128, default=PKCE_code_verifier)
+    auth = models.JSONField(default=dict)
+
+    date_periods = models.JSONField(default=list)
+
+    def include(*args, **kwargs):
+        return FitbitDevice.objects.select_related("owner").filter(**kwargs).exists()
+
+    def find(*args, **kwargs):
+        return FitbitDevice.objects.select_related("owner").filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return FitbitDevice.objects.select_related("owner").filter(**kwargs).all()
+
+    def create(owner):
+        device = FitbitDevice(owner=owner)
+        device.save()
+        return device
+
 class Electrode(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
     type = models.CharField(max_length=128, default="")
@@ -94,6 +128,15 @@ class Electrode(models.Model):
     channel_mapping = models.CharField(max_length=512, default="") #This should be a path to the mapping file, if available
     channel_coordinates = models.JSONField(default=list) # It is in reality XYZ coordinates or trajectory, but will be encoded into String for simplicity
     implanted_date = models.FloatField(default=0)
+
+    def include(*args, **kwargs):
+        return Electrode.objects.select_related("owner").filter(**kwargs).exists()
+
+    def find(*args, **kwargs):
+        return Electrode.objects.select_related("owner").filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return Electrode.objects.select_related("owner").filter(**kwargs).all()
 
     def find_or_create(owner, target):
         electrode = Electrode.objects.filter(owner=owner, target=target).first()

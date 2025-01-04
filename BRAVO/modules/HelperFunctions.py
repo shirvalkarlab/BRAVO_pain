@@ -18,6 +18,8 @@ import random, string
 import datetime
 import uuid
 from cryptography.fernet import Fernet
+import secrets
+import hashlib, base64
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
 secureEncoder = Fernet(key)
@@ -47,8 +49,14 @@ def sanitize_input(data, required_keys=[], accepted_keys=[]):
     
     return True
 
+def PKCE_code_verifier():
+    return secrets.token_urlsafe(64)
+
+def PKCE_code_challenger(pkce):
+    return base64.urlsafe_b64encode(hashlib.sha256(pkce.encode("utf-8")).digest()).decode().strip().replace("=","")
+
 def get_token(size=16):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=size))
+    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for i in range(size))
 
 def uuid4_hex():
     return uuid.uuid4().hex

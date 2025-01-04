@@ -21,13 +21,17 @@ All API URLs
 from django.urls import path
 from django.conf import settings
 
-from . import Auth, WebSession, Participants, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy
+from . import Auth, WebSession, Participants, FitbitDashboard, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy
 
 urlpatterns = [
+    path('getUserInfo', Auth.UserInfo.as_view()),
     path('register', Auth.UserRegister.as_view()),
     path('login', Auth.UserLogin.as_view()),
     path('logout', Auth.UserLogout.as_view()),
     
+    path('requestFitbitAuth', FitbitDashboard.FitbitAuthHandler.as_view()),
+    path('queryFitbitData', FitbitDashboard.QueryFitbitData.as_view()),
+
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
     path('setRecordingTimeShift', DataHandler.RecordingTimeShiftHandler.as_view()),
 
