@@ -1,18 +1,17 @@
 version: "3.9"
 services:
-  neo4j:
-    image: neo4j:5.19
+  mysql:
+    image: mysql:8.0
     restart: always
     environment:
-      NEO4J_server_default__listen__address: "0.0.0.0"
-      NEO4J_AUTH: "neo4j/Florida1"
+      MYSQL_ROOT_PASSWORD: "ROOTPASSWORD"
+      MYSQL_DATABASE: "BRAVOServer"
+      MYSQL_USER: "BRAVOAdmin"
+      MYSQL_PASSWORD: "AdminPassword"
     ports:
-      - '7473:7473'
-      - '7474:7474'
-      - '7687:7687'
+      - '3306:3306'
     volumes:
-      - Neo4jDatabase:/data
-      - Neo4jLogs:/logs
+      - SQLDatabase:/var/lib/mysql
     networks:
       - backend
   
@@ -20,19 +19,27 @@ services:
     image: jcagle95/bravo-server:3.0.0-alpha
     restart: always
     environment:
+      BRAVO_DATABASE: "BRAVOServer"
+      BRAVO_DATABASE_USER: "BRAVOAdmin"
+      BRAVO_DATABASE_PASSWORD: "AdminPassword"
+      BRAVO_DATABASE_HOST: "mysql"
+      BRAVO_DATABASE_PORT: "3306"
+
       REDIS_HOST: "redis"
-      ENCRYPTION_KEY: "4LLHi6IJ0PRdneDJo48kCcBf3tHTLRXQ_tyKfttDIm0="
-      SECRET_KEY: "django-insecure-v#a8t(pk6biv%9pzcl!zttd%&8wdb@z4&)+jm*b((!ea+"
-      NEO4J_BOLT: "bolt://neo4j:Florida1@bravo-neo4j-1:7687"
-      SERVER_ADDRESS: "localhost"
-      CLIENT_ADDRESS: "https://localhost"
-      MODE: "DEBUG"
+      DATASERVER_ENCRYPTION: "O6sHoRxTt3dYohP0kndr6rvFl8ebxZbELT9wKI2FICk="
+      DATASERVER_HASHKEY: "BRAVOServerHashkey="
+      DJANGO_SECRET_KEY: "django-insecure-v#aagfodpaihopfda#$$%()I*()RETGEDRF*()a+"
+      SERVER_ADDRESS: "http://localhost:27286"
+      SERVER_HOST: "localhost"
+      DJANGO_MODE: "DEBUG"
+
+      FIBIT_CLIENT_SECRET: ""
+      FIBIT_CLIENT_ID: ""
+      
     stdin_open: true
     tty: true
-    volumes:
-      - BRAVOStorage:/usr/src/BRAVO/BRAVOStorage
     depends_on:
-      - neo4j
+      - mysql
       - redis
     networks:
       - backend
@@ -41,8 +48,9 @@ services:
     ports:
       - '80:80'
       - '443:443'
+      - '27286:27286'
     command: >
-      bash -c "env >> /etc/environment && service nginx start && cron && daphne -p 3001 -b 0.0.0.0 BRAVO.asgi:application"
+      bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate && python3 manage.py runserver 0:27286"
   
   redis:
     image: redis:5
@@ -56,8 +64,6 @@ networks:
   backend:
 
 volumes:
-  Neo4jDatabase:
-    name: neo4jdata
-  Neo4jLogs:
-    name: neo4jlogs
+  SQLDatabase:
+    name: sqldata
   BRAVOStorage: 

@@ -12,3 +12,5 @@ pandas==2.2.3
 spectrum==0.8.1
 specparam==2.0.0rc2
 requests==2.32.3
+pymysql==1.1.1
+mysqlclient==2.2.6

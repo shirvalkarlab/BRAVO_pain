@@ -5,8 +5,8 @@ import traceback
 import datetime
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
-FITBIT_CLIENT_ID = os.environ["FitbitClientId"]
-FITBIT_CLIENT_SECRET = os.environ["FitbitClientSecret"]
+FITBIT_CLIENT_ID = os.environ["FIBIT_CLIENT_ID"]
+FITBIT_CLIENT_SECRET = os.environ["FIBIT_CLIENT_SECRET"]
 
 FitbitDataTypes = {
     "active-zone-minutes": ["activities/active-zone-minutes", "activities-active-zone-minutes"], 

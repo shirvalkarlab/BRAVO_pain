@@ -39,6 +39,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
 
   const [fig, setFig] = useState(null);
   const [renderData, setRenderData] = useState(null);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     const fig = new PlotlyRenderManager(figureTitle, language);
@@ -71,11 +72,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
     subplotIds.push(`Stimulation`);
 
     fig.setSubplotId(subplotIds);
-    
-    if (!fig.fresh) {
-      refreshRender();
-    }
-
+    setRefresh((a) => a+1);
   }, [fig, activeChannels]);
 
   useEffect(() => {
@@ -197,7 +194,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         ref.removeListener("plotly_click", plotly_onClick);
       }
     };
-  }, [fig, renderData]);
+  }, [fig, refresh, renderData]);
 
   const onResize = useCallback(() => {
     if (!fig) return;

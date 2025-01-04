@@ -43,14 +43,14 @@ os.makedirs(DATASERVER_PATH + "visualization", exist_ok=True)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = not (os.environ.get('DJANGO_MODE') == "PRODUCTION")
 
-CSRF_TRUSTED_ORIGINS = ["http://localhost:27286"]
+CSRF_TRUSTED_ORIGINS = ["http://localhost:27286", os.environ.get('SERVER_ADDRESS')]
 #SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 #SESSION_COOKIE_HTTPONLY = True
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 3600*24*365
 
-ALLOWED_HOSTS = ["localhost"]
+ALLOWED_HOSTS = ["localhost", os.environ.get('SERVER_HOST')]
 
 # Application definition
 
@@ -112,12 +112,41 @@ WSGI_APPLICATION = 'BRAVO.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+BRAVODatabase = os.environ.get('BRAVO_DATABASE')
+if BRAVODatabase:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': os.environ.get('BRAVO_DATABASE'),
+            'USER': os.environ.get('BRAVO_DATABASE_USER'),
+            'PASSWORD': os.environ.get('BRAVO_DATABASE_PASSWORD'),
+            'HOST': os.environ.get('BRAVO_DATABASE_HOST'),
+            'PORT': os.environ.get('BRAVO_DATABASE_PORT'),
+            'PROTOCOL': "tcp",
+            'OPTIONS': {
+                'init_command': "SET sql_mode='STRICT_TRANS_TABLES'"
+            },
+        }
     }
-}
+
+elif True:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'OPTIONS': {
+                'read_default_file': os.path.join(BASE_DIR, 'mysql.config'),
+                'init_command': "SET sql_mode='STRICT_TRANS_TABLES'"
+            },
+        }
+    }
 
 
 # Password validation

@@ -71,7 +71,7 @@ class FitbitAuthHandler(RestViews.APIView):
             challenger = PKCE_code_challenger(device.pkce)
             FitbitAuthURL = "https://www.fitbit.com/oauth2/authorize?" + urlencode({
                 "response_type": "code",
-                "client_id": os.environ["FitbitClientId"],
+                "client_id": os.environ["FIBIT_CLIENT_ID"],
                 "code_challenge": challenger,
                 "code_challenge_method": "S256",
                 "state": device.uid,
