@@ -40,7 +40,7 @@ def retrieveToken(code, verifier):
             "client_id": FITBIT_CLIENT_ID,
             "grant_type": "authorization_code",
             "redirect_uri": "https://bravo-api.jcagle.solutions/oath/fitbit_redirect",
-            "code": code["code"][0],
+            "code": code,
             "code_verifier": verifier
         })
         data = response.json()
@@ -98,6 +98,7 @@ def getGeneralTimeseries(device, type="br", start_date=0, end_date=0):
 
     token = device.auth
     url = "https://api.fitbit.com/1/user/-/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(end_date) + ".json"
+    print(url)
     response = requests.get(url, headers={
         "Authorization": "Bearer " + token["access_token"], 
         "Content-Type": "application/json",
@@ -140,6 +141,8 @@ def queryFitbitData(device, type, start_date, end_date):
                 Data.extend(data)
             else:
                 Data.extend(data[FitbitDataTypes[type][1]])
+        
+        return Data
 
     data = getGeneralTimeseries(device, FitbitDataTypes[type][0], start_date, end_date)
     if FitbitDataTypes[type][1] == "":
@@ -151,6 +154,7 @@ def queryFitbitData(device, type, start_date, end_date):
 
 def queryAllData(device, start_date, end_date):
     Data = {}
-    for key in FitbitDataTypes:
+    for key in FitbitDataTypes.keys():
+        print(key)
         Data[key] = queryFitbitData(device, key, start_date, end_date)
     return Data

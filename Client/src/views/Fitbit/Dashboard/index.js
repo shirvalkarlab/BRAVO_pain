@@ -43,6 +43,7 @@ import MuiAlertDialog from "components/MuiAlertDialog";
 import LoadingProgress from "components/LoadingProgress";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
+import FitbitScoreTimeline from "./FitbitScoreTimeline";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
@@ -54,15 +55,16 @@ export default function FitbitDashboard() {
   const { participant_uid } = useParams();
 
   const [alert, setAlert] = useState(null);
-  const [OAuthURL, setOAuthURL] = useState(null);
-  const [fitbitTokenURL, setFitbitTokenURL] = useState("");
+  const [data, setData] = useState(null);
 
   useEffect(() => {
+    setAlert(<LoadingProgress />)
     SessionController.query("/api/queryFitbitData", {
       RequestType: "RequestOverview",
       ParticipantId: participant_uid
     }).then((response) => {
-      
+      setData(response.data)
+      setAlert(null)
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
@@ -77,14 +79,36 @@ export default function FitbitDashboard() {
             <Grid container spacing={2}>
               <Grid item xs={12}>
                 <MDTypography variant="h3">
-                  {"Request Fitbit Web API Access"}
+                  {"Request Fitbit Data Update"}
                 </MDTypography>
               </Grid>
               <Grid item xs={12}>
                 <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
-                  {"The Fitbit Dashboard Web API require OAuth 2.0 authentication for your account. Please use the Authentication Link provided below to request Authentication token. "}
-                  {"Once authentication is successful, please copy the redirect URL into the textbox below to extract authentication token. "}
+                  {"Fitbit Data API has a request data limit of 150 Request Per Hour (Reset at xx:00), therefore, the data will be be automatically requested unless user interaction. "}
+                  {"Please use the button below to request data update. Each refresh (depending on the duration of data acquisition) takes about 20 Requests to complete. "}
                 </MDTypography>
+              </Grid>
+              <Grid item xs={12}>
+                <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                  setAlert(<LoadingProgress />)
+                  SessionController.query("/api/queryFitbitData", {
+                    RequestType: "RefreshFitbitData",
+                    ParticipantId: participant_uid
+                  }).then((response) => {
+                    setAlert(null)
+                  }).catch((error) => {
+                    SessionController.displayError(error, setAlert);
+                  });
+                }}>
+                  {"Refresh Fitbit Data"} 
+                </MDButton>
+              </Grid>
+            </Grid>
+          </MDBox>
+          <MDBox p={2}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <FitbitScoreTimeline dataToRender={data} figureTitle={"FitbitScoreTimeline"}/>
               </Grid>
             </Grid>
           </MDBox>

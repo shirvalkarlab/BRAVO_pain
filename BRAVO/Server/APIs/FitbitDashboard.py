@@ -144,8 +144,13 @@ class QueryFitbitData(RestViews.APIView):
         if len(device.auth.keys()) == 0:
             return Response(status=400, data={"message": "Verification Failed"})
 
-        Data = DataManager.loadFitbitData(Participant)
-        DataManager.calculateDataDifference(device, Data)
+        if request.data["RequestType"] == "RequestOverview":
+            Data = DataManager.loadFitbitData(Participant)
+            return Response(status=200, data=Data)
+        elif request.data["RequestType"] == "RefreshFitbitData":
+            Data = DataManager.refreshFitbitData(device)
+            DataManager.saveFitbitData(Participant, Data)
+            return Response(status=200, data=Data)
 
         #Data = DataQuery.queryAllData(device, 0, 0)
         #DataManager.saveFitbitData(Participant, Data)
