@@ -350,6 +350,8 @@ def reformatStimulationChannel(channel):
                 electrodeName = "E" + contact["Electrode"].replace("ElectrodeDef.FourElectrodes_","")
             elif contact["Electrode"].find("ElectrodeDef.Sen") >= 0:
                 electrodeName = "E" + contact["Electrode"].upper().replace("ELECTRODEDEF.SENSIGHT_","")
+            else:
+                electrodeName = contact["Electrode"].upper()
                 
             if contact["ElectrodeStateResult"] == "ElectrodeStateDef.Negative":
                 channelName = "+" + electrodeName + channelName
@@ -1377,7 +1379,8 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
             MissingPacket = np.where(ChangesInMs > TimePerPacket)[0] + 1
             TDSequences = np.arange(len(Data["StreamingTD"][nStream]["Ticks"]))
             Data["StreamingTD"][nStream]["Missing"] = np.zeros(Data["StreamingTD"][nStream]["Data"].shape)
-            
+            PacketSize = int(np.mean(Data["StreamingTD"][nStream]["PacketSizes"]))
+
             # is all missing sequence accounted for?
             if len(MissingPacket) > 0:
                 for missingIndex in MissingPacket:
@@ -1390,14 +1393,19 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
                     
                     if Data["StreamingTD"][nStream]["PacketSizes"][insertionIndex-1] == 62:
                         insertionPackets = [63+(i%2) for i in range(numMissingPacket)]
-                    else:
+                    elif Data["StreamingTD"][nStream]["PacketSizes"][insertionIndex-1] == 63:
                         insertionPackets = [62+(i%2) for i in range(numMissingPacket)]
+                    elif Data["StreamingTD"][nStream]["PacketSizes"][insertionIndex-1] == 125:
+                        insertionPackets = [125 for i in range(numMissingPacket)]
+                    else:
+                        insertionPackets = [PacketSize for i in range(numMissingPacket)]
                     
                     remainderPacket = (ChangesInMs[missingIndex-1] / TimePerPacket - 1) % 1
                     if remainderPacket > 0:
-                        insertionPackets.append(int(remainderPacket * 62))
+                        insertionPackets.append(int(remainderPacket * PacketSize))
                     insertionPackets = np.array(insertionPackets)
-                        
+
+                    TDSequences = np.concatenate((TDSequences[:insertionIndex], np.zeros(numMissingPacket), TDSequences[insertionIndex:]))
                     Data["StreamingTD"][nStream]["PacketSizes"] = np.concatenate((Data["StreamingTD"][nStream]["PacketSizes"][:insertionIndex], insertionPackets, Data["StreamingTD"][nStream]["PacketSizes"][insertionIndex:]))
                     Data["StreamingTD"][nStream]["Data"] = np.concatenate((Data["StreamingTD"][nStream]["Data"][:startIndex],np.zeros(np.sum(insertionPackets)),Data["StreamingTD"][nStream]["Data"][startIndex:]))
                     Data["StreamingTD"][nStream]["Missing"] = np.concatenate((Data["StreamingTD"][nStream]["Missing"][:startIndex],np.ones(np.sum(insertionPackets)),Data["StreamingTD"][nStream]["Missing"][startIndex:]))
