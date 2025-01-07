@@ -855,9 +855,10 @@ def handleWienerFilterProcessing(step, RecordingIds, Results, Configuration, ana
     targetSignal = step["config"]["targetRecording"]
 
     def processRawData(RawData):
-        Errors = signal.wiener(RawData["Data"], mysize=int(RawData["SamplingRate"]/2))
-        RawData["Data"] = RawData["Data"] - Errors
-        RawData["ResultType"] = "TimeDomain"
+        for i in range(RawData["Data"].shape[1]):
+            Errors = signal.wiener(RawData["Data"][:,i], mysize=int(RawData["SamplingRate"]/2))
+            RawData["Data"][:,i] = Errors
+            RawData["ResultType"] = "TimeDomain"
         return RawData
 
     ProcessedData = []
@@ -1408,7 +1409,7 @@ def handleNormalizeProcessing(step, RecordingIds, Results, Configuration, analys
                                 
                 ProcessedData = RawData
 
-            elif RawData["ResultType"] == "RawPSDs":
+            elif RawData["ResultType"] == "RawEventPSDs":
                 for channelName in RawData.keys():
                     if channelName == "ResultType":
                         continue
@@ -1459,6 +1460,11 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
     else:
         bands = step["config"]["bands"]
 
+    if not "method" in step["config"].keys():
+        method = "Automated"
+    else:
+        method = step["config"]["method"]
+
     ProcessedData = None
     for result in Results:
         if result["ResultLabel"] == targetSignal:
@@ -1473,17 +1479,69 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                     for event in RawData[channelName].keys():
                         Features = {"Channel": event + " | " + channelName}
                         Features["Time"] = np.arange(len(RawData[channelName][event]["PSDs"]))
-                        for bandIndex in range(len(bands)):
-                            FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [float(bands[bandIndex][1]),float(bands[bandIndex][2])], "inclusive")
-                            Features[bands[bandIndex][0] + "_Mean"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
-                            Features[bands[bandIndex][0] + "_Peak"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
-                            Features[bands[bandIndex][0] + "_PeakFreq"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
-                            
+
+                        if method == "Bands":
+                            for bandIndex in range(len(bands)):
+                                FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [float(bands[bandIndex][1]),float(bands[bandIndex][2])], "inclusive")
+                                Features[bands[bandIndex][0] + "_Mean"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                                Features[bands[bandIndex][0] + "_Peak"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                                Features[bands[bandIndex][0] + "_PeakFreq"] = np.zeros(len(RawData[channelName][event]["PSDs"]))
+                                
+                                for t in range(len(Features["Time"])):
+                                    Power = RawData[channelName][event]["PSDs"][t][FrequencySelection]
+                                    Features[bands[bandIndex][0] + "_Mean"][t] = np.nanmean(Power)
+                                    Features[bands[bandIndex][0] + "_Peak"][t] = np.nanmax(Power)
+                                    Features[bands[bandIndex][0] + "_PeakFreq"][t] = RawData[channelName][event]["Frequency"][np.nanargmax(Power)] + float(bands[bandIndex][1])
+                        
+                        else:
+                            for i in range(6):
+                                Features["FeatureId_" + str(i) + "_Peak"] = np.zeros(len(Features["Time"]))
+                                Features["FeatureId_" + str(i) + "_PeakWidth"] = np.zeros(len(Features["Time"]))
+                                Features["FeatureId_" + str(i) + "_PeakFreq"] = np.zeros(len(Features["Time"]))
+                                
                             for t in range(len(Features["Time"])):
-                                Power = RawData[channelName][event]["PSDs"][t][FrequencySelection]
-                                Features[bands[bandIndex][0] + "_Mean"][t] = np.nanmean(Power)
-                                Features[bands[bandIndex][0] + "_Peak"][t] = np.nanmax(Power)
-                                Features[bands[bandIndex][0] + "_PeakFreq"][t] = RawData[channelName][event]["Frequency"][np.nanargmax(Power)] + float(bands[bandIndex][1])
+                                FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [60,90], "inclusive")
+                                StdDrift = RawData[channelName][event]["PSDs"][t][FrequencySelection]
+                                while len(SPU.removeOutlier(StdDrift)) != len(StdDrift):
+                                    StdDrift = SPU.removeOutlier(StdDrift)
+                            
+                                FrequencyWindow = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [4,90])
+                                MeanPSD = RawData[channelName][event]["PSDs"][t][FrequencyWindow]
+                                Threshold = np.std(StdDrift)*2 + 1
+                                peaks, _ = signal.find_peaks(MeanPSD, height=Threshold)
+                                SpectralPeakFrequency = RawData[channelName][event]["Frequency"][FrequencyWindow][peaks]
+                                SpectralPeakPower = MeanPSD[peaks]
+
+                                try:
+                                    InitialGaussianGuess = []
+                                    BoundGuess = ([],[])
+                                    if len(peaks) < 6:
+                                        for j in range(len(peaks)):
+                                            InitialGaussianGuess.extend([SpectralPeakPower[j], SpectralPeakFrequency[j], 1])
+                                            BoundGuess[0].extend([0, SpectralPeakFrequency[j]-5, 0])
+                                            BoundGuess[1].extend([1000, SpectralPeakFrequency[j]+5, 10])
+                                        popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, RawData[channelName][event]["Frequency"][FrequencyWindow], MeanPSD-1, p0=InitialGaussianGuess,
+                                                                                    bounds=BoundGuess)
+                                    else:
+                                        for j in range(6):
+                                            InitialGaussianGuess.extend([SpectralPeakPower[j], SpectralPeakFrequency[j], 1])
+                                            BoundGuess[0].extend([0, SpectralPeakFrequency[j]-5, 0])
+                                            BoundGuess[1].extend([1000, SpectralPeakFrequency[j]+5, 10])
+                                        popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, RawData[channelName][event]["Frequency"][FrequencyWindow], MeanPSD-1, p0=InitialGaussianGuess,
+                                                                                    bounds=BoundGuess)
+                                except Exception as e:
+                                    print(e)
+                                    continue 
+                                    
+                                WidthBoundary = popt_gauss[2::3]
+                                Amplitudes = popt_gauss[0::3][PythonUtility.rangeSelection(WidthBoundary, [0,9])]
+                                CenterFrequency = popt_gauss[1::3][PythonUtility.rangeSelection(WidthBoundary, [0,9])]
+                                PeakWidth = popt_gauss[2::3][PythonUtility.rangeSelection(WidthBoundary, [0,9])]
+                                for i in range(len(Amplitudes)):
+                                    Features["FeatureId_" + str(i) + "_Peak"][t] = Amplitudes[i]
+                                    Features["FeatureId_" + str(i) + "_PeakWidth"][t] = PeakWidth[i]
+                                    Features["FeatureId_" + str(i) + "_PeakFreq"][t] = CenterFrequency[i]
+                        
                         SpectralFeatures.append(Features)
 
             else:

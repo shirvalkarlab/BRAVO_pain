@@ -38,13 +38,18 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
   const [smoothFactor, setSmoothFactor] = React.useState(1);
   const fig = new PlotlyRenderManager(figureTitle, language);
 
+  const MultiGaussianModel = (x, Amp, CentFreq, PeakWidth) => {
+    const GausCurve = x.map((a) => Amp*(1/(PeakWidth*(Math.sqrt(2*Math.PI))))*(Math.exp((-1.0/2.0)*(Math.pow((a-CentFreq)/PeakWidth, 2)))))
+    return GausCurve
+  }
+
   const handleGraphing = (data) => {
     fig.clearData();
 
     if (fig.fresh) {
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)})`, {fontSize: 15})
       fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)}`, {fontSize: 15})
-      fig.setYlim([0, 5]);
+      fig.setYlim([0, 10]);
       
       fig.setLegend({
         tracegroupgap: 5,
@@ -54,10 +59,10 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
     }
     
     const smoothingIndex = Math.floor(smoothFactor / 2);
-    
-    for (let i in data) {
-      const AllFeatures = Object.keys(data[i]).filter((a) => a.endsWith("_Mean")).map((a) => a.replaceAll("_Mean",""));
-      
+    if (data.length == 0) return;
+
+    const AllFeatures = Object.keys(data[0]).filter((a) => a.endsWith("_Mean")).map((a) => a.replaceAll("_Mean",""));
+    if (AllFeatures.length == 0) {
       const colors = colormap({
         colormap: 'rainbow',
         nshades: AllFeatures.length > 9 ? AllFeatures.length : 9,
@@ -65,23 +70,48 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
         alpha: 1,
       });
 
-      for (let k in AllFeatures) {
-        fig.plot(data[i].Time.map((a) => new Date(a*1000)), smoothFactor > 1 ? data[i][AllFeatures[k] + "_Mean"].map((a, index) => {
-          if (index < smoothingIndex) {
-            return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(0, index+smoothingIndex))
-          } else if (index > data[i][AllFeatures[k] + "_Mean"].length-smoothingIndex) {
-            return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(index-smoothingIndex, data[i][AllFeatures[k] + "_Mean"].length-1))
-          } else {
-            return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(index-smoothingIndex, index+smoothingIndex))
+      const Frequency = new Array(200).fill(0).map((i, a) => a/2);
+      for (let i in data) {
+        for (let j = 0; j < 6; j++) {
+          if (data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"] > 0) {
+            console.log(MultiGaussianModel(Frequency, data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakFreq"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakWidth"]))
+            fig.plot(Frequency, MultiGaussianModel(Frequency, data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakFreq"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakWidth"]), {
+              linewidth: 2,
+              name: "FeatureId_" + (j).toFixed(0) + "_Time: " + i,
+              showlegend: true,
+              color: colors[j],
+              hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)}<extra></extra>`,
+            })
           }
-        }) : data[i][AllFeatures[k] + "_Mean"], {
-          linewidth: 2,
-          name: AllFeatures[k] + "_Mean",
-          legendgroup: AllFeatures[k],
-          showlegend: true,
-          color: colors[k],
-          hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)}<extra></extra>`,
-        })
+        }
+      }
+    } else {
+      for (let i in data) {
+        const colors = colormap({
+          colormap: 'rainbow',
+          nshades: AllFeatures.length > 9 ? AllFeatures.length : 9,
+          format: 'hex',
+          alpha: 1,
+        });
+  
+        for (let k in AllFeatures) {
+          fig.plot(data[i].Time.map((a) => new Date(a*1000)), smoothFactor > 1 ? data[i][AllFeatures[k] + "_Mean"].map((a, index) => {
+            if (index < smoothingIndex) {
+              return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(0, index+smoothingIndex))
+            } else if (index > data[i][AllFeatures[k] + "_Mean"].length-smoothingIndex) {
+              return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(index-smoothingIndex, data[i][AllFeatures[k] + "_Mean"].length-1))
+            } else {
+              return math.mean(data[i][AllFeatures[k] + "_Mean"].slice(index-smoothingIndex, index+smoothingIndex))
+            }
+          }) : data[i][AllFeatures[k] + "_Mean"], {
+            linewidth: 2,
+            name: AllFeatures[k] + "_Mean",
+            legendgroup: AllFeatures[k],
+            showlegend: true,
+            color: colors[k],
+            hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)}<extra></extra>`,
+          })
+        }
       }
     }
 

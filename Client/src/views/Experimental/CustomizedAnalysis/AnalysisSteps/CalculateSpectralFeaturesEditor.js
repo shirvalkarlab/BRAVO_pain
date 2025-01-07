@@ -2,7 +2,7 @@ import { useState } from "react";
 import MDBox from "components/MDBox";
 import MDButton from "components/MDButton";
 import MDTypography from "components/MDTypography";
-import { Autocomplete, TextField } from "@mui/material";
+import { Autocomplete, TextField, Switch, FormControlLabel } from "@mui/material";
 
 import { createFilterOptions } from "@mui/material/Autocomplete";
 const filter = createFilterOptions();
@@ -49,6 +49,11 @@ const CalculateSpectralFeaturesEditor = ({currentState, newProcess, availableRec
         })}
       />
       
+      <FormControlLabel 
+        control={<Switch checked={filterOptions.method == "Automated"} 
+        onChange={() => setFilterOptions({...filterOptions, method: filterOptions.method == "Bands" ? "Automated" : "Bands"})} />} 
+        label="Automated Peak Finding (Require Normalization)" />
+
       {filterOptions.bands.map((band, index) => {
         return <MDBox key={"Band_" + index} style={{display: "flex", paddingLeft: 5, paddingRight: 5, justifyContent: "space-between"}}>
           <TextField
