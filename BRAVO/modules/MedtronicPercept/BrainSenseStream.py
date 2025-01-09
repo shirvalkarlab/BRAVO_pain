@@ -58,10 +58,7 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
             Recording["Data"][:,0] = StreamingTD[n]["Data"]
             Recording["Missing"] = np.zeros((len(StreamingTD[n]["Missing"]), 1))
             Recording["Missing"][:,0] = StreamingTD[n]["Missing"]
-            if StreamingTD[n]["Ticks"][0] > 3276800:
-                StreamingTD[n]["Ticks"][0] -= 3276800
-            Rounding = (StreamingTD[n]["Ticks"][0]%1000)/1000
-            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"] + Rounding
+            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"]
             Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
             TimeDomainRecordings.append(Recording)
             n += 1
@@ -86,11 +83,7 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
                 Recording["Missing"][:,0] = StreamingTD[n]["Missing"]
                 Recording["Missing"][:,1] = StreamingTD[n+1]["Missing"]
 
-            if StreamingTD[n]["Ticks"][0] > 3276800:
-                StreamingTD[n]["Ticks"][0] -= 3276800
-            
-            Rounding = (StreamingTD[n]["Ticks"][0]%1000)/1000
-            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"] + Rounding
+            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"]
             Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
             TimeDomainRecordings.append(Recording)
             n += 2
@@ -103,10 +96,7 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
             Recording["Data"][:,0] = StreamingTD[n]["Data"]
             Recording["Missing"] = np.zeros((len(StreamingTD[n]["Missing"]), 1))
             Recording["Missing"][:,0] = StreamingTD[n]["Missing"]
-            if StreamingTD[n]["Ticks"][0] > 3276800:
-                StreamingTD[n]["Ticks"][0] -= 3276800
-            Rounding = (StreamingTD[n]["Ticks"][0]%1000)/1000
-            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"] + Rounding
+            Recording["StartTime"] = StreamingTD[n]["FirstPacketDateTime"]
             Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
             TimeDomainRecordings.append(Recording)
             n += 1

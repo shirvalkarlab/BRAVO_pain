@@ -1411,6 +1411,15 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
                     Data["StreamingTD"][nStream]["Missing"] = np.concatenate((Data["StreamingTD"][nStream]["Missing"][:startIndex],np.ones(np.sum(insertionPackets)),Data["StreamingTD"][nStream]["Missing"][startIndex:]))
                 print(f"Warning: Missing sequence occured for Stream #{nStream}, Data insertion complete. Check ['Missing'] field.")
 
+        Data["StreamingTD"][0]["FirstPacketDateTime"] += (Data["StreamingTD"][0]["Ticks"][0] % 1000) / 1000
+        if len(Data["StreamingTD"]) > 1:
+            for nStream in range(1, len(Data["StreamingTD"])):
+                while Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][nStream-1]["Ticks"][0] < 0:
+                    Data["StreamingTD"][nStream]["Ticks"] += 3276800
+                    
+            for nStream in range(1, len(Data["StreamingTD"])):
+                Data["StreamingTD"][nStream]["FirstPacketDateTime"] = Data["StreamingTD"][0]["FirstPacketDateTime"] + (Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][0]["Ticks"][0]) / 1000
+
     for key in Data.keys():
         sourceData[key] = Data[key]
         
