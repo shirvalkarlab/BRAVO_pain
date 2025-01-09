@@ -134,10 +134,12 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
     if len(TimeDomainRecordings) == len(PowerDomainRecordings):
 
         # Updated Power Domain Alignment based on Benchtop Testing
-        for i in range(len(TimeDomainRecordings)):
-            for j in range(len(TimeDomainRecordings[i]["Ticks"])):
-                if TimeDomainRecordings[i]["Sequences"][j] == (PowerDomainRecordings[i]["Sequences"][0] - 1):
-                    PowerDomainRecordings[i]["StartTime"] = TimeDomainRecordings[i]["StartTime"] + (TimeDomainRecordings[i]["Ticks"][j] - TimeDomainRecordings[i]["Ticks"][0]) / 1000
+        for n in range(len(TimeDomainRecordings)):
+            for i in range(len(StreamingTD)):
+                if StreamingTD[i]["FirstPacketDateTime"] == TimeDomainRecordings[n]["StartTime"]:
+                    for j in range(len(StreamingTD[i]["Ticks"])):
+                        if StreamingTD[i]["Sequences"][j] == (StreamingPower[n]["Sequences"][0] - 1):
+                            PowerDomainRecordings[n]["StartTime"] = TimeDomainRecordings[n]["StartTime"] + (StreamingTD[i]["Ticks"][j] - StreamingTD[i]["Ticks"][0]) / 1000
 
         # Fix Breaking TimeDomain Recording based on PowerDomain Recordings (Therapy) Descriptor
         i = 1
