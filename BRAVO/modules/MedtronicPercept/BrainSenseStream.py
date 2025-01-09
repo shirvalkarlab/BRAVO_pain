@@ -123,12 +123,7 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
             Recording["Missing"][:,:2] = StreamingPower[n]["Missing"]
             Recording["Missing"][:,2:] = StreamingPower[n]["Missing"]
 
-        if StreamingPower[n]["InitialTickInMs"] > 3276800:
-            StreamingPower[n]["InitialTickInMs"] -= 3276800
-        Rounding = (StreamingPower[n]["InitialTickInMs"]%1000)/1000
-        if Rounding > 0.5:
-            Rounding -= 1
-        Recording["StartTime"] = StreamingPower[n]["FirstPacketDateTime"] + Rounding
+        Recording["StartTime"] = StreamingPower[n]["FirstPacketDateTime"]
         Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
         Recording["Descriptor"] = {
             "Therapy": StreamingPower[n]["TherapySnapshot"]
@@ -137,6 +132,13 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
         PowerDomainRecordings.append(Recording)
 
     if len(TimeDomainRecordings) == len(PowerDomainRecordings):
+
+        # Updated Power Domain Alignment based on Benchtop Testing
+        for i in range(len(TimeDomainRecordings)):
+            for j in range(len(TimeDomainRecordings[i]["Ticks"])):
+                if TimeDomainRecordings[i]["Sequences"][j] == (PowerDomainRecordings[i]["Sequences"][0] - 1):
+                    PowerDomainRecordings[i]["StartTime"] = TimeDomainRecordings[i]["StartTime"] + (TimeDomainRecordings[i]["Ticks"][j] - TimeDomainRecordings[i]["Ticks"][0]) / 1000
+
         # Fix Breaking TimeDomain Recording based on PowerDomain Recordings (Therapy) Descriptor
         i = 1
         while i < len(TimeDomainRecordings):
@@ -182,7 +184,7 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
                     continue
             
             Timeskip = TimeDomainRecordings[i]["StartTime"] - (TimeDomainRecordings[i-1]["StartTime"] + TimeDomainRecordings[i-1]["Duration"])
-            if Timeskip > 120:
+            if Timeskip > 30: # This has been updated to 30 seconds break only in favor of AnalysisBuilder customized inclusion
                 i += 1
                 continue
 

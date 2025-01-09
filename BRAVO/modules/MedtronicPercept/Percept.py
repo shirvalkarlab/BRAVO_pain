@@ -1416,7 +1416,7 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
             for nStream in range(1, len(Data["StreamingTD"])):
                 while Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][nStream-1]["Ticks"][0] < 0:
                     Data["StreamingTD"][nStream]["Ticks"] += 3276800
-                    
+
             for nStream in range(1, len(Data["StreamingTD"])):
                 Data["StreamingTD"][nStream]["FirstPacketDateTime"] = Data["StreamingTD"][0]["FirstPacketDateTime"] + (Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][0]["Ticks"][0]) / 1000
 
@@ -1520,7 +1520,16 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 Data["StreamingPower"][nStream]["Power"] = processedPower
                 Data["StreamingPower"][nStream]["Stimulation"] = processedStimulation
                 Data["StreamingPower"][nStream]["Time"] = newTimestamp
-        
+
+        Data["StreamingPower"][0]["FirstPacketDateTime"] += (Data["StreamingPower"][0]["Ticks"][0] % 1000) / 1000
+        if len(Data["StreamingPower"]) > 1:
+            for nStream in range(1, len(Data["StreamingPower"])):
+                while Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][nStream-1]["Ticks"][0] < 0:
+                    Data["StreamingPower"][nStream]["Ticks"] += 3276800
+                    
+            for nStream in range(1, len(Data["StreamingPower"])):
+                Data["StreamingPower"][nStream]["FirstPacketDateTime"] = Data["StreamingPower"][0]["FirstPacketDateTime"] + (Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][0]["Ticks"][0]) / 1000
+
     for key in Data.keys():
         sourceData[key] = Data[key]
         
