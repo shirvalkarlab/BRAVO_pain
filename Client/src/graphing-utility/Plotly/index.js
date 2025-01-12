@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -15,7 +15,7 @@ import Plotly from 'plotly.js-dist';
 import { zhCN } from "assets/plotly-locales/zh-cn";
 
 const defaultLineOptions = {
-  type: "scatter",
+  type: "scattergl",
   mode: "lines",
   line: {color: "rgb(0,0,0)", width: 2},
   showlegend: false,
@@ -1059,9 +1059,12 @@ class PlotlyRenderManager {
       this.onClick = async (evt) => {
         const bb = evt.target.getBoundingClientRect();
         let gca = this.ax[0];
-        for (let axId in ref._fullLayout.grid.subplots) {
-          if (ref._fullLayout.grid.subplots[axId][0] == evt.target.dataset.subplot) {
-            gca = this.ax[axId];
+
+        if (ref._fullLayout.grid) {
+          for (let axId in ref._fullLayout.grid.subplots) {
+            if (ref._fullLayout.grid.subplots[axId][0] == evt.target.dataset.subplot) {
+              gca = this.ax[axId];
+            }
           }
         }
         

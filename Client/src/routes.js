@@ -28,7 +28,7 @@ import MDAvatar from "components/MDAvatar";
 // @mui icons
 import Icon from "@mui/material/Icon";
 
-import { MdOutlineEventAvailable, MdFitbit } from "react-icons/md";
+import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle } from "react-icons/md";
 import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
@@ -61,6 +61,7 @@ const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
 const FitbitAuth = lazy(() => import('views/Fitbit/Auth'));
 const FitbitDashboard = lazy(() => import('views/Fitbit/Dashboard'));
+const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
@@ -218,7 +219,20 @@ const routes = {
         component: <ImageVisualization />,
       }
     ]
-  }
+  },
+  "CustomizedAnalysis": {
+    icon: <MdBuildCircle />,
+    name: "Customized Analysis",
+    children: [
+      {
+        key: "AnalysisBuilder",
+        name: "Analysis Builder",
+        icon: <MdBuildCircle />,
+        route: "/analysis-builder/:participant_uid",
+        component: <CustomizedAnalysis />,
+      }
+    ]
+  },
 }
 
 /*

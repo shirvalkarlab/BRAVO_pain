@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -57,8 +57,8 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
  
   const [eventList, setEventList] = useState([]);
   const [circadianData, setCircadianData] = useState({});
-  const [eventLockedPowerData, setEventLockedPowerData] = useState({});
   const [eventPSDData, setEventPSDData] = useState(false);
+  const [eventLockedPowerData, setEventLockedPowerData] = useState(false);
   const [normalizeCircadianRhythm, setNormalizeCircadianRhythm] = useState(false);
 
   const [alert, setAlert] = useState(null);
@@ -110,8 +110,9 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
             }
           }
         }
+        
         return options.length > 0 ? {data: response.data.Annotations, options: options, active: options[0]} : false;
-      })
+      });
       setData(response.data);
       setAnnotations(response.data.Annotations);
       setAlert(null);

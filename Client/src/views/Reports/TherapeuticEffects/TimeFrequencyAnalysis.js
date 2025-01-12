@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -115,6 +115,24 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             }, 
             axName: activeChannels[i] + " " + "TimeFrequencyAnalysis"
           });
+          
+          if (dataToRender.Signal[trial].Alignment != 0) {
+            graphSeries.push({
+              type: "shading",
+              x: [new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000 + dataToRender.Signal[trial].Alignment*1000), new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000)],
+              xDot: [new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000)],
+              y: [-100,100],
+              yDot: [0],
+              options: {
+                size: 10,
+                color: "#00ff00", 
+                alpha: 0.3, 
+                hovertemplate: ` Shifted Alignment ${dataToRender.Signal[trial].Alignment*1000}ms <extra></extra>`,
+                name: "Shifted Alignment"
+              }, 
+              axName: activeChannels[i]
+            })
+          }
         }
       }
     }
@@ -138,6 +156,24 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           }, 
           axName: "Stimulation"
         });
+        
+        if (dataToRender.Therapy[trial].Alignment != 0) {
+          graphSeries.push({
+            type: "shading",
+            x: [new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000 + dataToRender.Therapy[trial].Alignment*1000), new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000)],
+            xDot: [new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000)],
+            y: [-100,100],
+            yDot: [0],
+            options: {
+              size: 10,
+              color: "#00ff00", 
+              alpha: 0.3, 
+              hovertemplate: ` Shifted Alignment ${dataToRender.Therapy[trial].Alignment*1000}ms <extra></extra>`,
+              name: "Shifted Alignment"
+            }, 
+          axName: "Stimulation"
+          })
+        }
       }
     }
     

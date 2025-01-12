@@ -62,6 +62,10 @@ def queryTherapyHistory(Participant):
             "History": [i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)]
         }
 
+        TherapyHistory["History"] = [i for i in TherapyHistory["History"] if (i["Type"] in ["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"])]
+        TherapyHistory["History"].sort(key=lambda x: x["Date"])
+        TherapyHistories.append(TherapyHistory)
+    
         DeviceTherapyModification = {
             "Device": DeviceInfo,
             "History": [i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)]
@@ -85,7 +89,7 @@ def queryTherapyHistory(Participant):
                         })
                         break
                     LastTherapyChange = DeviceTherapyModification["History"][j]["New"]
-
+        
         if LastTherapyChange:
             DeviceTherapyModification["History"].append({
                 "Id": uuid.uuid4().hex,
@@ -98,10 +102,6 @@ def queryTherapyHistory(Participant):
 
         TherapyModifications.append(DeviceTherapyModification)
 
-        TherapyHistory["History"] = [i for i in TherapyHistory["History"] if (i["Type"] in ["Pre-visit Therapy", "Post-visit Therapy"])]
-        TherapyHistory["History"].sort(key=lambda x: x["Date"])
-        TherapyHistories.append(TherapyHistory)
-    
     return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories}
 
 def findClosestTherapy(timestamp, hemisphere, group, TherapyHistories):
@@ -110,18 +110,43 @@ def findClosestTherapy(timestamp, hemisphere, group, TherapyHistories):
         for j in range(len(TherapyHistories[i]["StimulationSettings"])):
             if TherapyHistories[i]["StimulationSettings"][j]["Electrode"]["Target"].startswith(hemisphere):
                 if TherapyHistories[i]["GroupId"].startswith(group):
-                    if not ClosestTherapy["Post"] and TherapyHistories[i]["Date"] >= timestamp and TherapyHistories[i]["Type"] == "Pre-visit Therapy":
-                        ClosestTherapy["Post"] = {
-                            "Date": TherapyHistories[i]["Date"],
-                            "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
-                            "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
-                        }
-                    if TherapyHistories[i]["Date"] < timestamp and TherapyHistories[i]["Type"] == "Post-visit Therapy":
-                        ClosestTherapy["Pre"] = {
-                            "Date": TherapyHistories[i]["Date"],
-                            "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
-                            "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
-                        }
+                    if TherapyHistories[i]["Date"] >= timestamp:
+                        if TherapyHistories[i]["Type"] == "Past Therapy" and not ClosestTherapy["Post"]:
+                                ClosestTherapy["Post"] = {
+                                    "TherapyId": TherapyHistories[i]["Id"],
+                                    "Date": TherapyHistories[i]["Date"],
+                                    "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
+                                    "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
+                                }
+
+                        elif TherapyHistories[i]["Type"] == "Pre-visit Therapy":
+                            if not ClosestTherapy["Post"]:
+                                ClosestTherapy["Post"] = {
+                                    "TherapyId": TherapyHistories[i]["Id"],
+                                    "Date": TherapyHistories[i]["Date"],
+                                    "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
+                                    "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
+                                }
+                            elif TherapyHistories[i]["Date"] - ClosestTherapy["Post"]["Date"] < 3600*12:
+                                ClosestTherapy["Post"] = {
+                                    "TherapyId": TherapyHistories[i]["Id"],
+                                    "Date": TherapyHistories[i]["Date"],
+                                    "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
+                                    "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
+                                }
+
+                    if TherapyHistories[i]["Date"] < timestamp:
+                        if TherapyHistories[i]["Type"] == "Post-visit Therapy":
+                            ClosestTherapy["Pre"] = {
+                                "TherapyId": TherapyHistories[i]["Id"],
+                                "Date": TherapyHistories[i]["Date"],
+                                "Stimulation": TherapyHistories[i]["StimulationSettings"][j],
+                                "Adaptive": TherapyHistories[i]["AdaptiveSettings"][j]
+                            }
+                        elif TherapyHistories[i]["Type"] == "Past Therapy" and ClosestTherapy["Pre"]:
+                            if TherapyHistories[i]["Date"] > ClosestTherapy["Pre"]["Date"] + 3600*12:
+                                ClosestTherapy["Pre"] = None
+                                
     return ClosestTherapy
 
 def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):

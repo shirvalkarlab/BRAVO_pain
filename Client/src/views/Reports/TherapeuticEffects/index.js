@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -377,30 +377,8 @@ function TherapeuticEffects() {
                 <Card>
                   <Grid container>
                     <Grid item xs={12}>
-                      <MDBox p={3}>
-                        <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                          {"Effect of Stimulation"}
-                        </MDTypography>
-                      </MDBox>
-                      <MDBox px={3}>
-                        <Autocomplete
-                          value={therapyLabel.active}
-                          options={therapyLabel.options}
-                          onChange={(event, value) => setTherapyLabel({...therapyLabel, active: value})}
-                          renderInput={(params) => (
-                            <FormField
-                              {...params}
-                              label={"Therapy Label Selector"}
-                              InputLabelProps={{ shrink: true }}
-                            />
-                          )}
-                          disableClearable
-                        />
-                      </MDBox>
-                    </Grid>
-                    <Grid item xs={12}>
                       <MDBox display={"flex"} flexDirection={"column"}>
-                        <StimulationPSD dataToRender={data} activeChannels={channel.active} therapyLabel={therapyLabel.active} figureTitle={"StimulationPSDs"} />
+                        <StimulationPSD dataToRender={data} activeChannels={channel.active} figureTitle={"StimulationPSDs"} />
                       </MDBox>
                     </Grid>
                   </Grid>

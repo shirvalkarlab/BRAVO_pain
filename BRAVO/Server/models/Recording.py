@@ -35,12 +35,17 @@ class Recording(models.Model):
     name = models.CharField(max_length=128, default="")
     type = models.CharField(max_length=128, default="")
     date = models.FloatField(default=current_time)
+    adjusted_alignment = models.FloatField(default=0)
     
     pointer = models.CharField(max_length=1024, default="")
     hashed = models.CharField(max_length=64, default="")
     metadata = models.JSONField(default=dict)
     
     source = models.ForeignKey('SourceFile', models.CASCADE)
+    original = models.ForeignKey('Recording', models.CASCADE, null=True)
+
+    def create(recording, type):
+        return Recording(name=recording.name, type=type, date=current_time(), source=recording.source, original=recording)
 
     def include(*args, **kwargs):
         return Recording.objects.select_related("source").filter(**kwargs).exists()
@@ -58,39 +63,8 @@ class Recording(models.Model):
             "Type": self.type,
             "Date": self.date,
             "Metadata": self.metadata,
-            "Device": self.source.metadata["Device"],
-            "Timezone": self.source.metadata["Timezone"]
-        }
-
-class ProcessedRecording(models.Model):
-    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
-    name = models.CharField(max_length=128, default="")
-    type = models.CharField(max_length=128, default="")
-    date = models.FloatField(default=current_time)
-    
-    pointer = models.CharField(max_length=1024, default="")
-    hashed = models.CharField(max_length=64, default="")
-    metadata = models.JSONField(default=dict)
-    
-    source = models.ForeignKey('Recording', models.CASCADE)
-    
-    def create(recording, type):
-        return ProcessedRecording(name=recording.name, type=type, date=current_time(), source=recording)
-
-    def find(*args, **kwargs):
-        return ProcessedRecording.objects.select_related("source").filter(**kwargs).first()
-
-    def find_all(*args, **kwargs):
-        return ProcessedRecording.objects.select_related("source").filter(**kwargs).all()
-
-    def get_info(self):
-        return {
-            "Id": self.uid,
-            "Name": self.name,
-            "Type": self.type,
-            "Date": self.date,
-            "Metadata": self.metadata,
-            "Timezone": "UTC+00:00"
+            "Device": self.source.metadata["Device"] if "Device" in self.source.metadata.keys() else "",
+            "Timezone": self.source.metadata["Timezone"] if "Timezone" in self.source.metadata.keys() else "",
         }
 
 class RecordingRel(models.Model):
@@ -157,8 +131,4 @@ def on_recording_delete(sender, instance, **kwargs):
         get_or_none(deleteSourceFile)(instance.pointer)
         get_or_none(os.remove)(instance.pointer + ".lock")
         
-@receiver(pre_delete, sender=ProcessedRecording)
-def on_recording_delete(sender, instance, **kwargs):
-    if len(instance.pointer) > 0:
-        get_or_none(deleteSourceFile)(instance.pointer)
-        get_or_none(os.remove)(instance.pointer + ".lock")
+        

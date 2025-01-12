@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -96,7 +96,8 @@ function NeuralActivitySnapshot() {
 
         if (allChannels.length > 0) return {active: allChannels[0], options: allChannels}
         return {active: "", options: []}
-      })
+      });
+
       setAvailableSnapshots((data) => {
         let uniqueDates = [];
         for (let i in response.data.Recordings) {
@@ -127,6 +128,7 @@ function NeuralActivitySnapshot() {
         let analyses = [];
         for (let i in uniqueDates) {
           const recordings = response.data.Recordings.filter((a) => a.DateString == uniqueDates[i]);
+          console.log(recordings)
           let analysis = {
             Date: uniqueDates[i],
             RecordingIds: recordings.map((a) => a.Id),

@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -73,6 +73,8 @@ function TherapyHistory() {
   const [impedanceMode, setImpedanceMode] = React.useState("Bipolar");
   const [dataToRender, setDataToRender] = React.useState(null);
   const [therapyConfig, setTherapyConfig] = React.useState({show: false, config: null});
+  const [currentTherapy, setCurrentTherapy] = React.useState({show: false, configs: []});
+  const [interleavingSwitch, setInterleavingSwitch] = React.useState({});
 
   const [alert, setAlert] = React.useState(null);
   const [therapyTypes, setTherapyTypes] = React.useState([]);
@@ -101,7 +103,7 @@ function TherapyHistory() {
 
   React.useEffect(() => {
     let UniqueDateStrings = [];
-    let TherapyConofigurations = {}
+    let TherapyConfigurations = {}
     for (let i in therapyHistory.TherapyConfiguration) {
       for (let j in therapyHistory.TherapyConfiguration[i].History) {
         const dateString = new Date(therapyHistory.TherapyConfiguration[i].History[j].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(therapyHistory.TherapyConfiguration[i].History[j].Timezone),
@@ -117,10 +119,10 @@ function TherapyHistory() {
             label: dateString,
             value: therapyHistory.TherapyConfiguration[i].History[j].Date
           });
-          TherapyConofigurations[dateString] = [];
+          TherapyConfigurations[dateString] = [];
         }
 
-        TherapyConofigurations[dateString].push({
+        TherapyConfigurations[dateString].push({
           ...therapyHistory.TherapyConfiguration[i].History[j],
           Device: therapyHistory.TherapyConfiguration[i].Device
         })
@@ -129,7 +131,7 @@ function TherapyHistory() {
     UniqueDateStrings = UniqueDateStrings.sort((a,b) => b.value - a.value).map((a) => a.label)
 
     if (UniqueDateStrings.length > 0) {
-      setTherapyConfigurations(TherapyConofigurations)
+      setTherapyConfigurations(TherapyConfigurations)
       setTherapyDate({
         active: UniqueDateStrings[0],
         options: UniqueDateStrings
@@ -604,8 +606,19 @@ function TherapyHistory() {
           <Grid item xs={12}>
             <Card>
               <MDBox p={2}>
-                <TherapyHistoryFigure dataToRender={{TherapyModification: therapyHistory.TherapyModification, 
-                                                    TherapyDevices: therapyHistory.TherapyDevices}} 
+                <TherapyHistoryFigure dataToRender={therapyHistory} 
+                  onTimeClick={(time, group) => {
+                    let configs = [];
+                    for (let dateString in therapyConfigurations) {
+                      for (let j in therapyConfigurations[dateString]) {
+                        if (therapyConfigurations[dateString][j].Date > time && therapyConfigurations[dateString][j].GroupId == group) {
+                          configs.push(therapyConfigurations[dateString][j])
+                        }
+                      }
+                      if (configs.length > 0) break;
+                    }
+                    setCurrentTherapy({configs: configs, show: true});
+                  }}
                   height={400} figureTitle={"TherapyHistoryLog"}/>
               </MDBox>
             </Card>
@@ -639,6 +652,163 @@ function TherapyHistory() {
         </Grid>
       </MDBox>
 
+      <Dialog PaperProps={{sx: {minWidth: 600}}} open={currentTherapy.show} onClose={() => setCurrentTherapy({...currentTherapy, show: false})}>
+        {currentTherapy.config ? (
+          <MDBox px={2} pt={2}>
+            <MDTypography variant={"h5"} >
+              {currentTherapy.config.GroupName ? currentTherapy.config.GroupName : currentTherapy.config.GroupId}
+            </MDTypography>
+            <MDTypography variant={"subtitle1"} color={"error"} fontSize={18} fontWeight={"medium"} lineHeight={1.5}>
+              {currentTherapy.config.StimulationSettings[0].Electrode.CustomName}
+            </MDTypography>
+          </MDBox>
+        ) : null}
+        <DialogContent>
+        <Grid container spacing={2}>
+          {currentTherapy.configs.map((config) => {
+            return <Grid key={config.Id} item xs={12} sm={6}>
+              <Card>
+                <MDBox px={2} pt={1}>
+                  <MDTypography variant={"h5"} >
+                    {config.GroupName ? config.GroupName : config.GroupId}
+                  </MDTypography>
+                  <MDTypography variant={"subtitle1"} color={"secondary"} fontSize={15} fontWeight={"medium"} lineHeight={1} style={{cursor: "pointer"}} onClick={() => {
+                    if (config.StimulationType == "BrainSense") {
+                      setTherapyConfig({show: true, config: config});
+                    }
+                  }}>
+                    {new Date(config.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(config.Timezone),
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    {" (" + config.StimulationType + ")"}
+                  </MDTypography>
+                  <MDTypography variant={"subtitle1"} color={"error"} fontSize={18} fontWeight={"medium"} lineHeight={1.5}>
+                    {config.StimulationSettings[0].Electrode.CustomName}
+                  </MDTypography>
+                </MDBox>
+                {config.StimulationSettings.length > 1 ? (
+                  <MDBox px={2} pt={1} pb={2} style={{cursor: "pointer"}} onClick={() => {
+                    setInterleavingSwitch((switchDict) => {
+                      switchDict[config.Id] = !switchDict[config.Id];
+                      return {...switchDict};
+                    })
+                  }}>
+                    <MDTypography variant={"subtitle1"} color={"secondary"} fontSize={18} fontWeight={"medium"} lineHeight={1.5}>
+                      {"Program " + (interleavingSwitch[config.Id] ? "2" : "1")}
+                    </MDTypography>
+                    <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Frequency: "}<b>{config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].Frequency}</b>{" Hz"}<br/>
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Pulsewidth: "}<b>{config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].Pulsewidth}</b>{" "}{config.StimulationSettings[0].PulsewidthUnit}<br/>
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Stimulation: "}
+                      </MDTypography>
+                      {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].Contact.map((a, index) => {
+                        return <Tooltip key={a} title={config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
+                          <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
+                        </Tooltip>
+                      })}
+                    </MDBox>
+                    {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].ReturnContact.length > 0 ? (
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Return: "}
+                      </MDTypography>
+                      {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].ReturnContact.map((a) => {
+                        return <MDBadge key={a} badgeContent={a} color={"info"} size={"xs"} container sx={{marginLeft: 1}} />
+                      })}
+                    </MDBox>
+                    ) : null}
+                    {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].ReturnContact.length > 0 ? (
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Return: "}
+                      </MDTypography>
+                      {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].ReturnContact.map((a) => {
+                        return <MDBadge key={a} badgeContent={a} color={"info"} size={"xs"} container sx={{marginLeft: 1}} />
+                      })}
+                    </MDBox>
+                    ) : null}
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
+                        {"Cycling: "}{" "}
+                      </MDTypography>
+                      {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].CyclingPeriod == 0 ? (
+                        <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                          {" Continuous Stimulation"}
+                        </MDTypography>
+                      ) : (
+                        <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                          {"Duty Cycle " + (config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].Cycling*100).toFixed(1) + "%"}<br/>
+                          {"Duty Period " + (config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].CyclingPeriod/60000).toFixed(1) + " minutes"}
+                        </MDTypography>
+                      )}
+                    </MDBox>
+                  </MDBox>
+                ) : (
+                  <MDBox px={2} pt={1} pb={2}>
+                    <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Frequency: "}<b>{config.StimulationSettings[0].Frequency}</b>{" Hz"}<br/>
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Pulsewidth: "}<b>{config.StimulationSettings[0].Pulsewidth}</b>{" "}{config.StimulationSettings[0].PulsewidthUnit}<br/>
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"start"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Stimulation: "}
+                      </MDTypography>
+                      {config.StimulationSettings[0].Contact.map((a, index) => {
+                        return <Tooltip key={a} title={config.StimulationSettings[0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
+                          <MDBadge key={a} badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
+                        </Tooltip>
+                      })}
+                    </MDBox>
+                    {config.StimulationSettings[0].ReturnContact.length > 0 ? (
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                        {"Return: "}
+                      </MDTypography>
+                      {config.StimulationSettings[0].ReturnContact.map((a) => {
+                        return <MDBadge key={a} badgeContent={a} color={"info"} size={"xs"} container sx={{marginLeft: 1}} />
+                      })}
+                    </MDBox>
+                    ) : null}
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+                      <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
+                        {"Cycling: "}{" "}
+                      </MDTypography>
+                      {config.StimulationSettings[0].CyclingPeriod == 0 ? (
+                        <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                          {" Continuous Stimulation"}
+                        </MDTypography>
+                      ) : (
+                        <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                          {"Duty Cycle " + (config.StimulationSettings[0].Cycling*100).toFixed(1) + "%"}<br/>
+                          {"Duty Period " + (config.StimulationSettings[0].CyclingPeriod/60000).toFixed(1) + " minutes"}
+                        </MDTypography>
+                      )}
+                    </MDBox>
+                  </MDBox>
+                )}
+              </Card>
+            </Grid>
+          })}
+        </Grid>
+        </DialogContent>
+      </Dialog>
+
       <Dialog PaperProps={{sx: {minWidth: 600}}} open={therapyConfig.show} onClose={() => setTherapyConfig({...therapyConfig, show: false})}>
         {therapyConfig.config ? (
           <MDBox px={2} pt={2}>
@@ -655,11 +825,6 @@ function TherapyHistory() {
           {formatConfigurationTable(therapyConfig.config)}
         </> : null}
         </DialogContent>
-        <DialogActions>
-          <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
-            
-          </MDBox>
-        </DialogActions>
       </Dialog>
     </DatabaseLayout>
   );

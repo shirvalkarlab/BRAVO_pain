@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -115,10 +115,6 @@ function TherapyHistoryTable({therapyHistory, viewConfigurationTable}) {
                         })}
                         {" (" + config.StimulationType + ")"}
                       </MDTypography>
-                      <MDTypography variant={"subtitle1"} color={"secondary"} fontSize={13} fontWeight={"medium"} lineHeight={1}>
-                        
-                      </MDTypography>
-                      
                       <MDTypography variant={"subtitle1"} color={"error"} fontSize={18} fontWeight={"medium"} lineHeight={1.5}>
                         {config.StimulationSettings[0].Electrode.CustomName}
                       </MDTypography>
@@ -148,8 +144,8 @@ function TherapyHistoryTable({therapyHistory, viewConfigurationTable}) {
                             {"Stimulation: "}
                           </MDTypography>
                           {config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].Contact.map((a, index) => {
-                            return <Tooltip title={config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
-                              <MDBadge key={a} badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
+                            return <Tooltip key={a} title={config.StimulationSettings[interleavingSwitch[config.Id] ? 1 : 0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
+                              <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
                             </Tooltip>
                           })}
                         </MDBox>
@@ -206,7 +202,7 @@ function TherapyHistoryTable({therapyHistory, viewConfigurationTable}) {
                             {"Stimulation: "}
                           </MDTypography>
                           {config.StimulationSettings[0].Contact.map((a, index) => {
-                            return <Tooltip title={config.StimulationSettings[0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
+                            return <Tooltip key={a} title={config.StimulationSettings[0].FractionalAmplitudes[index] + " " + config.StimulationSettings[0].AmplitudeUnit}>
                               <MDBadge key={a} badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
                             </Tooltip>
                           })}

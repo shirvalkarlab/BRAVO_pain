@@ -120,3 +120,98 @@ class QueryChronicNeuralActivity(RestViews.APIView):
             #LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
             #Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
+
+class QueryCustomizedAnalysis(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RequestList":
+            analysis = models.Analysis.find_all(type="CustomizedAnalysis", metadata__ParticipantId= request.data["ParticipantId"])
+            return Response(status=200, data=[i.get_info() for i in analysis])
+
+        elif request.data["RequestType"] == "ProcessingNodes":
+            nodes = DataAnalysis.queryProcessingNodes()
+            return Response(status=200, data=nodes)
+
+        elif request.data["RequestType"] == "NewAnalysis":
+            analysis = models.Analysis.create(name="Unnamed", type="CustomizedAnalysis", metadata={
+                "ParticipantId": request.data["ParticipantId"]
+            })
+            
+            info = analysis.get_info()
+            return Response(status=200, data=info)
+
+        elif request.data["RequestType"] == "EditAnalysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "AnalysisId", "AnalysisName", "RequestType"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
+            if not analysis:
+                return Response(status=403)
+
+            analysis.name = request.data["AnalysisName"]
+            analysis.save()
+            return Response(status=200)
+        
+        elif request.data["RequestType"] == "SaveAnalysisPipeline":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "AnalysisId", "Nodes", "Edges", "StartProcessing", "RequestType"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
+            if not analysis:
+                return Response(status=403)
+            
+            analysis.metadata["Results"] = False
+            analysis.metadata["Nodes"] = request.data["Nodes"]
+
+            # Reset Results
+            for i in analysis.metadata["Nodes"]:
+                if "Result" in i["data"].keys():
+                    del i["data"]["Result"]
+
+            analysis.metadata["Edges"] = request.data["Edges"]
+
+            try:
+                if request.data["StartProcessing"]:
+                    DataAnalysis.processCustomizedPipeline(analysis)
+                    analysis.metadata["Results"] = True
+            except Exception as e:
+                print(traceback.format_exc())
+                return Response(status=400, data={"message": str(e)})
+            
+            analysis.save()
+            Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
+            return Response(status=200, data=Overview)
+
+        elif request.data["RequestType"] == "DeleteAnalysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "AnalysisId", "RequestType"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
+            if not analysis:
+                return Response(status=403)
+
+            analysis.delete()
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "AnalysisOverview":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "AnalysisId", "RequestType"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
+            if not analysis:
+                return Response(status=403)
+            
+            Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
+            return Response(status=200, data=Overview)
+        
+        return Response(status=400, data={"message": "Malformed Input"})

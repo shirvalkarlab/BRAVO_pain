@@ -75,7 +75,7 @@ class QuerySurveyForms(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "FormLink"]):
                 return Response(status=400, data={"message": "Malformed Input"})
 
-            if request.data["VersionRel"]:
+            if "VersionRel" in request.data.keys():
                 rel = models.ParticipantLinkRel.find(link_code=request.data["VersionRel"])
                 if not rel.record.short_link == request.data["FormLink"]:
                     return Response(status=400, data={"message": "Your Passcode does not apply to the Survey Form you are attempting to submit."})

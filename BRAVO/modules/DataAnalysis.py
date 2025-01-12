@@ -38,6 +38,24 @@ from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainS
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 
+ProcessingNodes = []
+
+def queryProcessingNodes(type=None):
+    if not type:
+        return ProcessingNodes
+    
+    for i in range(len(ProcessingNodes)):
+        if type == ProcessingNodes[i]["Type"]:
+            return ProcessingNodes[i]
+
+def saveAnalysisProcessedData(Data, type, metadata, recording):
+    ProcessedData = models.Recording.create(recording, type)
+    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
+    ProcessedData.hashed = Database.saveSourceFile(Data, ProcessedData.pointer)
+    ProcessedData.metadata = metadata
+    ProcessedData.save()
+    return ProcessedData
+
 def queryAvailableAnalyses(participant_uid, request_type):
     Overview = {"Analyses": [], "Recordings": []}
     Participant = models.Participant.find(uid=participant_uid)
@@ -49,7 +67,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
         Overview["Recordings"] = []
         for recording in Recordings:
             Description = recording.get_info()
-            if recording.type == "MedtronicBrainSenseTimeDomain":
+            if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
                 for device in DBSDevices:
                     if device["Id"] == recording.source.metadata["Device"]:
                         Description["Device"] = device
@@ -87,8 +105,230 @@ def queryAvailableAnalyses(participant_uid, request_type):
                     Analysis.add_recording(recording)
             
             Overview["Analyses"].append(Analysis.get_info())
-        
+    
     return Overview
+
+def queryCustomizedAnalysis(participant_uid, analysis):
+    Overview = {"Analysis": analysis.get_info(), "Configurations": {}, "Recordings": []}
+    Participant = models.Participant.find(uid=participant_uid)
+    
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"])
+    
+    Overview["Recordings"] = []
+    for recording in Recordings:
+        Description = recording.get_info()
+        if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
+            for device in DBSDevices:
+                if device["Id"] == recording.source.metadata["Device"]:
+                    Description["Device"] = device
+                    for i in range(len(Description["Metadata"]["ChannelNames"])):
+                        Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+        elif recording.type == "MedtronicBrainSensePowerDomain":
+            for device in DBSDevices:
+                if device["Id"] == recording.source.metadata["Device"]:
+                    Description["Therapy"] = [{
+                        "Hemisphere": side,
+                        "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
+                        "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
+                        "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                        "Segment": ""
+                    } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
+                    Description["Device"] = device
+                    for i in range(len(Description["Metadata"]["ChannelNames"])):
+                        if Description["Metadata"]["ChannelNames"][i].endswith("Stimulation"):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Stimulation"
+                        else:
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Recording"
+
+        Overview["Recordings"].append(Description)
+        
+    Overview["Configurations"] = analysis.metadata
+    return Overview
+
+def processCustomizedPipeline(analysis):
+    Participant = models.Participant.find(uid=analysis.metadata["ParticipantId"])
+    if not Participant:
+        raise Exception("Participant Not Found")
+
+    source = models.SourceFile.find(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
+    if not source:
+        source = models.SourceFile(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
+        source.save()
+    
+    for edge in analysis.metadata["Edges"]:
+        edge["Input"] = [node for node in analysis.metadata["Nodes"] if node["id"] == edge["source"]][0]
+        edge["Output"] = [node for node in analysis.metadata["Nodes"] if node["id"] == edge["target"]][0]
+    
+    def checkProcessingState():
+        for node in analysis.metadata["Nodes"]:
+            if not "Result" in node["data"].keys():
+                return True
+        return False
+
+    Counter = 0
+    while checkProcessingState() and Counter < 1000:
+        Counter += 1
+
+        for node in analysis.metadata["Nodes"]:
+            if "Result" in node["data"].keys():
+                continue
+
+            InputReady = True
+            InputNodes = []
+            for edge in analysis.metadata["Edges"]:
+                if edge["target"] == node["id"]:
+                    if not "Result" in edge["Input"]["data"].keys():
+                        InputReady = False
+                    InputNodes.append(edge["Input"])
+            
+            if InputReady:
+                if node["type"] == "RecordingNode":
+                    node["data"]["Result"] = True
+                
+                elif node["type"] == "RecordingGroupNode":
+                    recording = models.Recording.find(type=node["type"], metadata={ "RecordingList": node["data"]["List"], }, source=source)
+                    if recording:
+                        node["data"]["Result"] = recording.uid
+                        continue
+
+                    ProcessedData = []
+                    recordings = models.Recording.find_all(uid__in=[input["data"]["Id"] for input in InputNodes])
+                    for recording in recordings:
+                        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+                        ProcessedData.append(Data)
+                    
+                    recording = models.Recording(name=node["data"]["Name"], type=node["type"], metadata={
+                        "RecordingList": node["data"]["List"],
+                    }, source=source)
+                    filename = DATABASE_PATH + "recordings" + os.path.sep + source.owner.uid + os.path.sep + recording.uid + ".bdat"
+                    hashed = Database.saveSourceFile({
+                        "DataType": "Original",
+                        "Data": ProcessedData,
+                    }, filename)
+                    # TODO: Error handling
+                    recording.pointer = filename
+                    recording.hashed = hashed
+                    recording.save()
+
+                    node["data"]["Result"] = recording.uid
+                
+                elif node["type"] == "SingleInputProcessingNode":
+                    if len(InputNodes) == 0:
+                        raise Exception("No Input provided for processing node.")
+                    node = handleProcessingNode(node, InputNodes[0])
+
+def handleProcessingNode(node, input):
+    recording = models.Recording.find(uid=input["data"]["Result"])
+    if not recording:
+        raise Exception("Input not found")
+
+    DefaultConfig = queryProcessingNodes(node["data"]["Type"])
+    for i in range(len(DefaultConfig["Configurations"])):
+        if not "Value" in node["data"]["Configurations"][i]:
+            node["data"]["Configurations"][i]["Value"] = node["data"]["Configurations"][i]["Default"]
+    
+    metadata = {
+        "Input": input["data"]["Result"],
+        "Configurations": node["data"]
+    }
+    
+    processed = models.Recording.find(metadata=metadata, original=recording)
+    if not processed:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        if node["data"]["Type"] == "Butterworth Digital Filter":
+            Data = handleButterworthFilter(Data, node["data"])
+            Data["DataType"] = "TimeDomain"
+            
+        elif node["data"]["Type"] == "Wiener Filter":
+            Data = handleWienerFilter(Data, node["data"])
+            Data["DataType"] = "TimeDomain"
+            
+        processed = saveAnalysisProcessedData(Data, node["data"]["Type"], metadata, recording)
+        
+    node["data"]["Result"] = processed.uid
+    return node
+
+ProcessingNodes.append({
+    "Group": "Digital Filters",
+    "Type": "Butterworth Digital Filter",
+    "Description": "Default 5th-order Butterworth IIR Digital Filter with zero-phase Filtering.",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "FilterType",
+            "Condition": True,
+            "Label": "Filter Type",
+            "Type": "SelectSingle",
+            "Options": ["Bandpass Filter", "Bandstop Filter"],
+            "Default": "Bandpass Filter",
+        },
+        {
+            "Id": "FilterRangeLow",
+            "Condition": True,
+            "Label": "Filter Range (Lower, Leave Empty to Disable)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "1",
+        },
+        {
+            "Id": "FilterRangeHigh",
+            "Condition": True,
+            "Label": "Filter Range (Upper, Leave Empty to Disable)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "100",
+        }
+    ]
+})
+def handleButterworthFilter(Data, config):
+    if config["Configurations"][1]["Value"] == "" and config["Configurations"][2]["Value"] == "":
+        return Data
+
+    for data in Data["Data"]:
+        if config["Configurations"][0]["Value"] == "Bandpass Filter":
+            if config["Configurations"][1]["Value"] == "":
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'lowpass', output='ba')
+            elif config["Configurations"][2]["Value"] == "":
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'highpass', output='ba')
+            else:
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bp', output='ba')
+        elif config["Configurations"][0]["Value"] == "Bandstop Filter":
+            if config["Configurations"][1]["Value"] == "":
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'highpass', output='ba')
+            elif config["Configurations"][2]["Value"] == "":
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'lowpass', output='ba')
+            else:
+                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bandstop', output='ba')
+
+        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+    return Data
+
+ProcessingNodes.append({
+    "Group": "Digital Filters",
+    "Type": "Wiener Filter",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "FilterSize",
+            "Condition": True,
+            "Label": "Wiener Filter Window Size (Samples)",
+            "Type": "Input",
+            "Verify": "Int",
+            "Default": "250",
+        }
+    ]
+})
+def handleWienerFilter(Data, config):
+    size = int(config["Configurations"][0]["Value"])
+    for data in Data["Data"]:
+        for i in range(data["Data"].shape[1]):
+            Errors = signal.wiener(data["Data"][:,i], mysize=size)
+            data["Data"][:,i] = Errors
+    return Data
 
 def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
     Analysis = models.Analysis.find(uid=analysis_uid)
@@ -108,7 +348,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
             for i in range(len(Data["ChannelNames"])):
                 Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
 
-            TimeShift = rel.time_shift if rel else 0
+            TimeShift = (rel.time_shift if rel else 0) + recording.adjusted_alignment
             AnalysisStruct["Signal"].append({
                 "Type": "Signal",
                 "RecordingId": recording.uid,
@@ -129,7 +369,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                 "RecordingId": recording.uid,
                 "TherapySeries": TherapeuticLabel,
                 "TherapyGraphs": TherapyGraphs,
-                "Alignment": rel.time_shift if rel else 0
+                "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
             })
 
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
@@ -172,7 +412,7 @@ def processTimeDomainStreaming(recording, data, config):
     return data
 
 def handleCardiacFilter(recording, data, config):
-    ProcessedData = models.ProcessedRecording.find(source=recording, type="CardiacFlitered", metadata=config)
+    ProcessedData = models.Recording.find(original=recording, type="CardiacFlitered", metadata=config)
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
 
@@ -227,7 +467,7 @@ def handleCardiacFilter(recording, data, config):
             CardiacFiltered[sliceSelection] = Original - EKGTemplateFunc(sliceSelection, *params)
         data["Data"][:,i] = CardiacFiltered
     
-    ProcessedData = models.ProcessedRecording.create(recording, "CardiacFlitered")
+    ProcessedData = models.Recording.create(recording, "CardiacFlitered")
     ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
     ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
     ProcessedData.metadata = config
@@ -235,7 +475,7 @@ def handleCardiacFilter(recording, data, config):
     return data
 
 def handleTimeFrequencyAnalysis(recording, data, config):
-    ProcessedData = models.ProcessedRecording.find(source=recording, type="TimeFrequencyAnalysis", metadata=config)
+    ProcessedData = models.Recording.find(original=recording, type="TimeFrequencyAnalysis", metadata=config)
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
@@ -287,7 +527,7 @@ def handleTimeFrequencyAnalysis(recording, data, config):
         Spectrum["Config"] = {**Spectrum["Config"], **config}
         data["Spectrum"].append(Spectrum)
     
-    ProcessedData = models.ProcessedRecording.create(recording, "TimeFrequencyAnalysis")
+    ProcessedData = models.Recording.create(recording, "TimeFrequencyAnalysis")
     ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
     ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
     ProcessedData.metadata = config
@@ -295,7 +535,7 @@ def handleTimeFrequencyAnalysis(recording, data, config):
     return data
 
 def handlePowerSpectralEstimation(recording, data, config):
-    ProcessedData = models.ProcessedRecording.find(source=recording, type="PowerSpectralEstimation", metadata=config)
+    ProcessedData = models.Recording.find(original=recording, type="PowerSpectralEstimation", metadata=config)
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
@@ -348,7 +588,7 @@ def handlePowerSpectralEstimation(recording, data, config):
         PowerSpectralEstimation["Config"] = {**Spectrum["Config"], **config}
         data["PSD"].append(PowerSpectralEstimation)
     
-    ProcessedData = models.ProcessedRecording.create(recording, "PowerSpectralEstimation")
+    ProcessedData = models.Recording.create(recording, "PowerSpectralEstimation")
     ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
     ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
     ProcessedData.metadata = config
@@ -401,7 +641,11 @@ def queryNeuralActivitySnapshot(participant_uid, config):
         
         DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
         for i in range(len(Data["ChannelNames"])):
-            Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+            ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+            if ElectrodeIdentifier.startswith("Left"):
+                Description["Date"] += 1
+
+            Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + ElectrodeIdentifier
             Data["ChannelNames"][i] = Data["ChannelNames"][i].replace(".1","A").replace(".2","B").replace(".3","C")
 
         NeuralActivitySnapshot["Recordings"].append({**Description, **{
@@ -410,11 +654,11 @@ def queryNeuralActivitySnapshot(participant_uid, config):
             "Channels": Data["ChannelNames"],
             "PSDs": Data["PSD"],
         }})
-        
+    
     return NeuralActivitySnapshot
 
 def processNeuralActivitySnapshot(recording, data, config):
-    ProcessedData = models.ProcessedRecording.find(source=recording, type="TimeFrequencyAnalysis", metadata=config)
+    ProcessedData = models.Recording.find(original=recording, type="NeuralActivitySnapshot", metadata=config)
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
@@ -451,6 +695,12 @@ def processNeuralActivitySnapshot(recording, data, config):
         "Normalization": config["TimeSeriesRecording"]["Normalization"]["value"]
     })
 
+    ProcessedData = models.Recording.create(recording, "NeuralActivitySnapshot")
+    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
+    ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
+    ProcessedData.metadata = config
+    ProcessedData.save()
+
     return data
 
 def queryChronicNeuralActivity(participant_uid, config):
@@ -460,7 +710,7 @@ def queryChronicNeuralActivity(participant_uid, config):
 
     ChronicNeuralActivity = {"AnalysisType": "", "ChronicNeuralActivity": [], "Annotations": []}
 
-    Annotations = Event.queryDBSEvents(participant_uid, "PatientControllerEvent", source_files=SourceFiles)
+    Annotations = Event.queryDBSEvents(participant_uid, "PatientControllerEvent", source_files=SourceFiles, data=True)
     ChronicNeuralActivity["Annotations"].extend(Annotations)
 
     Annotations = Event.queryAnnotations(participant_uid, "ChronicCustomEvent")

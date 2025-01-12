@@ -78,7 +78,18 @@ class DataUploadHandler(RestViews.APIView):
         lockFile = source_file.pointer + ".lock"
         if request.data["DataType"] == "MedtronicJSON":
             try:
-                DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                if not request.data["ParticipantId"] == "batch-upload":
+                    if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                        return Response(status=403)
+
+                    person = models.Participant.find(uid=request.data["ParticipantId"])
+                    if not person:
+                        return Response(status=400, data={"message": "Participant not found."})
+                    
+                    DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
+                else:
+                    DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())
@@ -97,7 +108,6 @@ class DataUploadHandler(RestViews.APIView):
             
         get_or_none(os.remove)(lockFile)
         return Response(status=200)
-
 
 class RecordingTimeShiftHandler(RestViews.APIView):
 
@@ -125,8 +135,8 @@ class RecordingTimeShiftHandler(RestViews.APIView):
             return Response(status=403)
         
         try:
-            rel.time_shift = float(request.data["Alignment"])
-            rel.save()
+            Recording.adjusted_alignment = float(request.data["Alignment"])
+            Recording.save()
         except:
             return Response(status=400, data={"message": "Time Alignment is not valid"})
 

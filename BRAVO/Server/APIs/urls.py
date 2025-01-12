@@ -62,6 +62,8 @@ urlpatterns = [
     path('queryNeuralActivitySnapshot', DataAnalysis.QueryNeuralActivitySnapshot.as_view()),
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),
 
+    path('queryCustomizedAnalysis', DataAnalysis.QueryCustomizedAnalysis.as_view()),
+    
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
     
 ]

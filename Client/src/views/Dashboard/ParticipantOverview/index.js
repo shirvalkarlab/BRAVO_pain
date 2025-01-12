@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -165,32 +165,20 @@ export default function ParticipantOverview() {
   };
 
   const updateParticipantInformation = (editParticipantInfo) => {
-    if (editParticipantInfo.MergeWith) {
-      setAlert(<LoadingProgress />);
-      SessionController.query("/api/updateParticipantInformation", {
-        ParticipantId: participant_uid,
-        MergeWith: editParticipantInfo.MergeWith
-      }).then((response) => {
-        navigate("/participant-overview/" + editParticipantInfo.MergeWith, {replace: true});
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
-    } else {
-      setAlert(<LoadingProgress />);
-      SessionController.query("/api/updateParticipantInformation", {
-        ParticipantId: participant_uid,
-        Name: editParticipantInfo.Name,
-        Diagnosis: editParticipantInfo.Diagnosis,
-        Sex: editParticipantInfo.Sex,
-        Tags: editParticipantInfo.Tags
-      }).then((response) => {
-        setParticipantInfo(response.data);
-        setEditParticipantInfo(false);
-        setAlert(null);
-      }).catch((error) => {
-        SessionController.displayError(error, setAlert);
-      });
-    }
+    setAlert(<LoadingProgress />);
+    SessionController.query("/api/updateParticipantInformation", {
+      ParticipantId: participant_uid,
+      Name: editParticipantInfo.Name,
+      Diagnosis: editParticipantInfo.Diagnosis,
+      Sex: editParticipantInfo.Sex,
+      Tags: editParticipantInfo.Tags
+    }).then((response) => {
+      setParticipantInfo(response.data);
+      setEditParticipantInfo(false);
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
   };
 
   const updateDeviceInformation = (deviceInfo) => {
@@ -282,71 +270,73 @@ export default function ParticipantOverview() {
                           
                   </Grid>
                 </Grid>
-                <Table size="small">
-                  <TableHead sx={{display: "table-header-group"}}>
-                    <TableRow key={"header"}>
-                      {["DeviceType", "DeviceName", "Electrodes", "ImplantDate"].map((col) => {
-                        return (
-                          <TableCell key={col} variant="head" style={{width: "15%", minWidth: 150, verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
-                            <MDTypography variant="p" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
-                              {dictionary.ParticipantOverview.DeviceTable[col][language]}
-                            </MDTypography>
-                          </TableCell>
-                      )})}
-                      <TableCell key={"viewdelete"} variant="head" style={{width: "15%", verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
-                        <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}}> {" "} </MDTypography>
-                      </TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {participantInfo.DBSDevices.map((device) => {
-                      const deviceName = device.Name;
-                      return <TableRow key={device.Id}>
-                        <TableCell key={"devicetype"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                            {device.Type}
-                          </MDTypography>
-                        </TableCell>
-                        <TableCell key={"devicename"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                            {deviceName.length > 32 ? deviceName.slice(0,32) : deviceName}
-                          </MDTypography>
-                        </TableCell>
-                        <TableCell key={"leadname"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          {device.Electrodes.map((lead) => {
-                            return <MDBox key={lead.Id} style={{marginBottom: 5}}>
-                            <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={8}>
-                              {lead.Type}
-                            </MDTypography>
-                            <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={11}>
-                              {lead.CustomName ? lead.CustomName : lead.Target}
-                            </MDTypography>
-                          </MDBox>
-                          })}
-                        </TableCell>
-                        <TableCell key={"implantdate"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                            {new Date(SessionController.decodeTimestamp(device.Date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
-                          </MDTypography>
-                        </TableCell>
-                        <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                          <MDBox style={{display: "flex", flexDirection: "row"}}>
-                            <Tooltip title="Delete Device" placement="top">
-                              <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
-                                <i className="fa-solid fa-xmark" style={{fontSize: 10}}></i>
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title="Edit Device" placement="top">
-                              <IconButton variant="contained" color="info" onClick={() => setEditDeviceInfo({deviceInfo: device, show: true})}>
-                                <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
-                              </IconButton>
-                            </Tooltip>
-                          </MDBox>
+                <MDBox style={{overflowX: "auto", maxHeight: 200}}>
+                  <Table size="large" style={{marginTop: 10, display: "block", height: "fit-content"}}>
+                    <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>
+                      <TableRow sx={{background: "white"}}>
+                        {["DeviceType", "DeviceName", "Electrodes", "ImplantDate"].map((col) => {
+                          return (
+                            <TableCell key={col} variant="head" style={{width: "25%", minWidth: 150, verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
+                              <MDTypography variant="p" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
+                                {dictionary.ParticipantOverview.DeviceTable[col][language]}
+                              </MDTypography>
+                            </TableCell>
+                        )})}
+                        <TableCell key={"viewdelete"} variant="head" style={{width: "15%", verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
+                          <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}}> {" "} </MDTypography>
                         </TableCell>
                       </TableRow>
-                    })}
-                  </TableBody>
-                </Table>
+                    </TableHead>
+                    <TableBody>
+                      {participantInfo.DBSDevices.sort((a,b) => b.Date-a.Date).map((device) => {
+                        const deviceName = device.Name;
+                        return <TableRow key={device.Id}>
+                          <TableCell key={"devicetype"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                            <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
+                              {device.Type}
+                            </MDTypography>
+                          </TableCell>
+                          <TableCell key={"devicename"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                            <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
+                              {deviceName.length > 32 ? deviceName.slice(0,32) : deviceName}
+                            </MDTypography>
+                          </TableCell>
+                          <TableCell key={"leadname"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                            {device.Electrodes.map((lead) => {
+                              return <MDBox key={lead.Id} style={{marginBottom: 5}}>
+                              <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={8}>
+                                {lead.Type}
+                              </MDTypography>
+                              <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={11}>
+                                {lead.CustomName ? lead.CustomName : lead.Target}
+                              </MDTypography>
+                            </MDBox>
+                            })}
+                          </TableCell>
+                          <TableCell key={"implantdate"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                            <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
+                              {new Date(SessionController.decodeTimestamp(device.Date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
+                            </MDTypography>
+                          </TableCell>
+                          <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                            <MDBox style={{display: "flex", flexDirection: "row"}}>
+                              <Tooltip title="Delete Device" placement="top">
+                                <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
+                                  <i className="fa-solid fa-xmark" style={{fontSize: 10}}></i>
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Edit Device" placement="top">
+                                <IconButton variant="contained" color="info" onClick={() => setEditDeviceInfo({deviceInfo: device, show: true})}>
+                                  <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                </IconButton>
+                              </Tooltip>
+                            </MDBox>
+                          </TableCell>
+                        </TableRow>
+                      })}
+                    </TableBody>
+                  </Table>
+                </MDBox>
               </Card>
 
               <EditDeviceInfoView 

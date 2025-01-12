@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -16,7 +16,8 @@ import {useResizeDetector} from "react-resize-detector";
 import colormap from "colormap";
 import * as math from "mathjs";
 
-import { Grid } from "@mui/material";
+import { Autocomplete, Grid, Switch, FormControlLabel } from "@mui/material";
+import FormField from "components/MDInput/FormField";
 import MDBox from "components/MDBox";
 
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
@@ -25,7 +26,7 @@ import { formatSegmentString, matchArray } from "database/helper-function";
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFrequencyChange, figureTitle}) {
+function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   
@@ -33,6 +34,8 @@ function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFre
   const [fig, setFig] = useState(null);
   const [renderData, setRenderData] = useState(null);
   const [cacheData, setCacheData] = useState(null);
+  const [therapyLabel, setTherapyLabel] = useState({});
+  const [parameter, setParameter] = useState("Amplitude");
 
   const [refresh, setRefresh] = useState(0);
   const [centerFreq, setCenterFreq] = useState(22);
@@ -49,6 +52,7 @@ function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFre
       }
     }
     setFigGroup(newGroup);
+    setTherapyLabel({})
   }, [figureTitle, activeChannels, dataToRender]);
 
   useEffect(() => {
@@ -83,114 +87,65 @@ function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFre
     }
   }, [figGroup]);
 
-  useEffect(() => {
-    let cacheData = {};
-    if (therapyLabel == "Default") {
-      for (let key of dataToRender.AllChannels) {
-        // Identify what parameter is changed.
-        let modifiedParameters = [];
-        let previousState = {};
-        let therapySeries = {};
-        for (let i in dataToRender.Therapy) {
-          for (let j in dataToRender.Therapy[i].TherapySeries) {
-            if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key]) {
-              if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key].Type == "StandardIPGStimulation") {
-                let parameters = ["Amplitude", "Frequency", "Pulsewidth"];
-                for (let parameter of parameters) {
-                  if (previousState[parameter] === undefined) {
-                    therapySeries[parameter] = [{time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]}]
-                  } else {
-                    if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter] != previousState[parameter]) {
-                      modifiedParameters.push(parameter)
-                      therapySeries[parameter].push({time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]})
-                    }
-                  }
-                  previousState[parameter] = dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter];
-                }
-              }
-            }
-          }
-        }
+  const getTherapyChanges = (key) => {
 
-        // Extract PSDs
-        for (let parameter in therapySeries) {
-          if (therapySeries[parameter].length > 1) {
-            for (let stage = 0; stage < therapySeries[parameter].length; stage++) {
-              for (let i in dataToRender.Signal) {
-                if (dataToRender.Signal[i].SignalSeries.ChannelNames === key) {
-                  const selected_data = dataToRender.Signal[i].SignalSeries.Spectrum.Power.map((a) => {
-                    return a.filter((b,t) => {
-                      const currentTime = dataToRender.Signal[i].SignalSeries.Spectrum.Time[t] + dataToRender.Signal[i].SignalSeries.StartTime;
-                      return (currentTime > therapySeries[parameter][stage].time+2) && (
-                        (stage+1 >= therapySeries[parameter].length) ? true : (currentTime < therapySeries[parameter][stage+1].time-2)
-                      ) ;
-                    })
-                  });
-                  if (selected_data[0].length > 0) {
-                    therapySeries[parameter][stage].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
-                    therapySeries[parameter][stage].power = math.matrix(selected_data);
-                  }
+    let modifiedParameters = [];
+    let previousState = {};
+    let therapySeries = {};
+    for (let i in dataToRender.Therapy) {
+      for (let j in dataToRender.Therapy[i].TherapySeries) {
+        if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key]) {
+          if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key].Type == "StandardIPGStimulation") {
+            let parameters = ["Amplitude", "Frequency", "Pulsewidth"];
+            for (let parameter of parameters) {
+              if (previousState[parameter] === undefined) {
+                therapySeries[parameter] = [{time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]}]
+              } else {
+                if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter] != previousState[parameter]) {
+                  modifiedParameters.push(parameter)
+                  therapySeries[parameter].push({time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]})
                 }
               }
-            }
-          }
-        }
-        cacheData[key] = therapySeries;
-      }
-    } else {
-      
-      // Identify what parameter is changed.
-      let key = therapyLabel
-      let modifiedParameters = [];
-      let previousState = {};
-      let therapySeries = {};
-      for (let i in dataToRender.Therapy) {
-        for (let j in dataToRender.Therapy[i].TherapySeries) {
-          if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key]) {
-            if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key].Type == "StandardIPGStimulation") {
-              let parameters = ["Amplitude", "Frequency", "Pulsewidth"];
-              for (let parameter of parameters) {
-                if (previousState[parameter] === undefined) {
-                  therapySeries[parameter] = [{time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]}]
-                } else {
-                  if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter] != previousState[parameter]) {
-                    modifiedParameters.push(parameter)
-                    therapySeries[parameter].push({time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]})
-                  }
-                }
-                previousState[parameter] = dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter];
-              }
-            }
-          }
-        }
-      }
-
-      // Extract PSDs
-      for (let i in dataToRender.Signal) {
-        cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames] = JSON.parse(JSON.stringify(therapySeries));
-        for (let parameter in therapySeries) {
-          if (therapySeries[parameter].length > 1) {
-            for (let stage = 0; stage < therapySeries[parameter].length; stage++) {
-              const selected_data = dataToRender.Signal[i].SignalSeries.Spectrum.Power.map((a) => {
-                return a.filter((b,t) => {
-                  const currentTime = dataToRender.Signal[i].SignalSeries.Spectrum.Time[t] + dataToRender.Signal[i].SignalSeries.StartTime;
-                  return (currentTime > therapySeries[parameter][stage].time+2) && (
-                    (stage+1 >= therapySeries[parameter].length) ? true : (currentTime < therapySeries[parameter][stage+1].time-2)
-                  ) ;
-                })
-              });
-              if (selected_data[0].length > 0) {
-                cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
-                cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].power = math.matrix(selected_data);
-              }
+              previousState[parameter] = dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter];
             }
           }
         }
       }
     }
 
+    return therapySeries;
+  }
+
+  useEffect(() => {
+    let cacheData = {};
+    
+    // Extract PSDs
+    for (let i in dataToRender.Signal) {
+      const therapySeries = getTherapyChanges(therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] ? therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] : dataToRender.Signal[i].SignalSeries.ChannelNames)
+      cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames] = JSON.parse(JSON.stringify(therapySeries));
+      if (therapySeries[parameter].length > 1) {
+        for (let stage = 0; stage < therapySeries[parameter].length; stage++) {
+          const selected_data = dataToRender.Signal[i].SignalSeries.Spectrum.Power.map((a) => {
+            return a.filter((b,t) => {
+              const currentTime = dataToRender.Signal[i].SignalSeries.Spectrum.Time[t] + dataToRender.Signal[i].SignalSeries.StartTime;
+              return (currentTime > therapySeries[parameter][stage].time+2) && (
+                (stage+1 >= therapySeries[parameter].length) ? true : (currentTime < therapySeries[parameter][stage+1].time-2)
+              );
+            })
+          });
+          if (selected_data[0].length > 0) {
+            cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
+            cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].power = math.matrix(selected_data);
+          }
+        }
+      } else if (therapySeries[parameter].length == 1) {
+        cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][0].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
+        cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][0].power = math.matrix(dataToRender.Signal[i].SignalSeries.Spectrum.Power);
+      }
+    }
+
     setCacheData(cacheData);
-  }, [figGroup, therapyLabel, dataToRender]);
+  }, [figGroup, parameter, therapyLabel, dataToRender]);
 
   useEffect(() => {
     let graphSeries = [];
@@ -201,7 +156,7 @@ function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFre
       // Calculate Average PSDs
       for (let parameter in therapySeries) {
         const colors = colormap({
-          colormap: 'bluered',
+          colormap: 'jet',
           nshades: 101,
           format: 'hex',
           alpha: 1,
@@ -340,11 +295,34 @@ function StimulationPSD({dataToRender, activeChannels, therapyLabel, onCenterFre
 
   return useMemo(() => (
     <Grid container spacing={2}>
-      {dataToRender.AllChannels.map((a) => {
+      <Grid item xs={12}>
+        <MDBox px={3} pt={3}>
+          <Autocomplete
+            value={parameter}
+            options={["Amplitude", "Frequency", "Pulsewidth"]}
+            onChange={(event, value) => setParameter(value)}
+            renderInput={(params) => (
+              <FormField
+                {...params}
+                label={"Therapy Label Selector"}
+                InputLabelProps={{ shrink: true }}
+              />
+            )}
+            disableClearable
+          />
+        </MDBox>
+      </Grid>
+      {dataToRender.AllChannels.map((a, thatIndex) => {
         let visibility = activeChannels.includes(a) && (figGroup[a] && figGroup[a].traces.length > 0);
         return [
-          <Grid key={"TherapySelector_" + a} item xs={12}>
-            
+          <Grid key={figureTitle + "_SwitchControl"} item xs={12}>
+            <MDBox px={3}>
+              <FormControlLabel control={<Switch value={therapyLabel[a] != a} onChange={(event, value) => {
+                if (dataToRender.AllChannels.length == 2) {
+                  setTherapyLabel({...therapyLabel, [a]: therapyLabel[a] == dataToRender.AllChannels[0] ? dataToRender.AllChannels[1] : dataToRender.AllChannels[0]})
+                }
+              }} />} label="Contralateral Stimulation Label" />
+            </MDBox>
           </Grid>,
           <Grid key={figureTitle + "_" + a} item xs={12} sm={6}>
             <MDBox ref={ref} id={figureTitle + "_" + a} style={{height: 600, width: "100%", display: visibility ? "" : "none"}}/>

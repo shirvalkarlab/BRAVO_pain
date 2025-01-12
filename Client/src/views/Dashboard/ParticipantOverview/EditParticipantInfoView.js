@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -120,16 +120,6 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
                   placeholder={dictionary.ParticipantOverview.TagNames[language]}
                 />
               }}
-            />
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              variant="outlined"
-              margin="dense" id="participant_mergedwith"
-              value={editParticipantInfo.MergeWith}
-              onChange={(event) => setEditParticipantInfo({...editParticipantInfo, MergeWith: event.target.value})}
-              label={"Merge with (Enter Target Participant's BRAVO ID to move this record to another Participant Entry)"} type="text"
-              fullWidth
             />
           </Grid>
           <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>

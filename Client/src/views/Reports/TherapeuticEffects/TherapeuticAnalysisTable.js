@@ -3,7 +3,7 @@
 * UF BRAVO Platform
 =========================================================
 
-* Copyright 2023 by Jackson Cagle, Fixel Institute
+* Copyright 2025 by Jackson Cagle, Fixel Institute
 * The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
 
  =========================================================
@@ -226,7 +226,6 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
           />
         </MDBox>
         <MDBox style={{overflowX: "auto", maxHeight: "60vh"}}>
-          
           <Table size="large" style={{marginTop: 20, display: "block", height: "fit-content"}}>
             <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>
               <TableRow sx={{background: "white"}}>

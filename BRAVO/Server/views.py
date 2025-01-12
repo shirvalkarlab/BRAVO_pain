@@ -18,6 +18,7 @@ SQL Table Definitions
 @email: jackson.cagle@neurology.ufl.edu
 """
 
+import os
 from uuid import uuid4
 
 from django.shortcuts import render
@@ -30,7 +31,7 @@ from django.utils.decorators import method_decorator
 
 class StaticProxy(RestViews.APIView):
     def get(self, request):
-        return HttpResponseRedirect('//localhost:3000' + request.path)
+        return HttpResponseRedirect('//' + os.environ["SERVER_HOST"] + ':3000' + request.path)
 
 class Homepage(RestViews.APIView):
     parser_classes = [RestParsers.JSONParser]
