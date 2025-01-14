@@ -18,12 +18,20 @@ All API URLs
 @email: jackson.cagle@neurology.ufl.edu
 """
 
+import os
 from django.urls import path, re_path
 from django.conf import settings
 
 from . import views
 
-urlpatterns = [
-	re_path(r"static/*", views.StaticProxy.as_view()),
-	re_path(r'.*', views.Homepage.as_view()),
-]
+if not (os.environ.get('DJANGO_MODE') == "PRODUCTION"):
+	urlpatterns = [
+		re_path(r"static/*", views.StaticProxy.as_view()),
+		re_path(r'.*', views.Homepage.as_view()),
+	]
+
+else:
+	urlpatterns = [
+		re_path(r'.*', views.Homepage.as_view()),
+	]
+

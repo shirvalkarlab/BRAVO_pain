@@ -30,26 +30,41 @@ import 'filepond/dist/filepond.min.css'
 
 import { v4 as uuidv4 } from 'uuid';
 
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
+
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
-function NeuroimageUploader({institute, participant}) {
+function ExternalCSVUploader({institute, participant}) {
   const [files, setFiles] = useState([]);
+  const [metadata, setMetadata] = useState({});
 
   useEffect(() => {
     setFiles([]);
   }, [participant]);
 
-  const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, upload_metadata, load, error, progress, abort, transfer, options) => {
+    let date = 0;
+    if (metadata.date && metadata.time) {
+      date = new Date(metadata.date.toISOString().split("T")[0] + "T" + metadata.time.toISOString().split("T")[1]).getTime();
+      date -= (metadata.date.utcOffset() - metadata.time.utcOffset()) * 60000;
+    }
+
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("DataType", "NeuroImage");  
+    formData.append("DataType", "ExternalCSV");  
     formData.append("ParticipantId", participant);  
     formData.append("Institute", institute);
-    formData.append("Metadata", JSON.stringify(metadata));
+    formData.append("Metadata", JSON.stringify({
+      StartTime: date
+    }));
 
     const request = new XMLHttpRequest();
     request.open('POST', "/api/uploadData");
@@ -105,18 +120,43 @@ function NeuroimageUploader({institute, participant}) {
     <MDBox pt={2}>
       <Divider variant="insert" />
       <MDTypography variant="h5" fontSize={15} lineHeight={1}>
-        {"Accept NifTi (.nii) format for CT/MRI Images. \
-          Accept binary STL file for Segmented Atlas. \
-          Accept MRTRIX TCK file for tractography. \
-          Accept Blender GLB file for scene exports for better visualization/controls."}
+        {"Accept CSV Files. The CSV format must follow a specific convention for the parser to understand what you uploaded."}
+        {"The CSV must contain a column header named 'Time', with unit in seconds (decimals for milliseconds precisions)."}
+        {"If the first index of Time is not 0, it will use the Metadata Recording Time as the starting time, otherwise it will interpret Time column as Unix Timestamp."}
+        {"Other column names will be interpreted as the Recording Channel Names."}
       </MDTypography>
 
       <Divider variant="insert" />
       <MDTypography variant="h6">
         {"Metadata"}
       </MDTypography>
-      <MDBox pt={2} px={3}>
-        
+      <MDBox pt={2}>
+        <MDTypography variant="h5" fontSize={15} style={{marginBottom: 15}}>
+          {"Recording Time: "}
+        </MDTypography>
+        <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
+          <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+            <DatePicker
+              style={{marginRight: 3}}
+              label="Date"
+              value={metadata.date}
+              onChange={(newDate) => {
+                setMetadata({...metadata, date: newDate});
+              }}
+              renderInput={(params) => <TextField {...params} />}
+            />
+          </LocalizationProvider>
+          <LocalizationProvider dateAdapter={AdapterMoment}>
+            <TimePicker
+              label="Time"
+              value={metadata.time}
+              onChange={(newDate) => {
+                setMetadata({...metadata, time: newDate});
+              }}
+              renderInput={(params) => <TextField {...params} />}
+            />
+          </LocalizationProvider>
+        </MDBox>
       </MDBox>
       <Divider variant="insert" />
       
@@ -130,7 +170,7 @@ function NeuroimageUploader({institute, participant}) {
         <FilePond
           name="File" 
           files={files} allowMultiple allowRevert={false}
-          acceptedFileTypes={[".bin"]}
+          acceptedFileTypes={[".csv"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
           server={{
@@ -147,4 +187,4 @@ function NeuroimageUploader({institute, participant}) {
   )
 };
 
-export default memo(NeuroimageUploader);
+export default memo(ExternalCSVUploader);

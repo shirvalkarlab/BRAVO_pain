@@ -88,8 +88,6 @@ function FitbitScoreTimeline({dataToRender, type, figureTitle}) {
       }
     }
 
-    console.log(dataToRender)
-    console.log(allSubscores)
     const colors = colormap({
       colormap: 'rainbow',
       nshades: allSubscores.length < 10 ? 10 : allSubscores.length,
@@ -147,7 +145,6 @@ function FitbitScoreTimeline({dataToRender, type, figureTitle}) {
     
     fig.traces = [];
     refreshRender();
-    console.log(renderData)
   }, [fig, renderData]);
 
   const onResize = useCallback(() => {

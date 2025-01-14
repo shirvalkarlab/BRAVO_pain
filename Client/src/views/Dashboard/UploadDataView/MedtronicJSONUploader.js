@@ -44,7 +44,7 @@ function MedtronicJSONUploader({institute, participant}) {
     setFiles([])
   }, [participant]);
 
-  const handleFileUploa = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
     formData.append("DataType", "MedtronicJSON");  
@@ -158,7 +158,7 @@ function MedtronicJSONUploader({institute, participant}) {
           maxFiles={1000}
           server={{
             url: SessionController.getServer(),
-            process: handleFileUploa
+            process: handleFileUpload
           }}
           labelFileProcessingError={(error) => {
             return error.body

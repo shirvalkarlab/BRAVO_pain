@@ -50,7 +50,7 @@ import { SessionController } from "database/session-control";
 
 function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
 
-  const [nodeConfig, setNodeConfig] = useState({Metadata: {ChannelNames: []}});
+  const [nodeConfig, setNodeConfig] = useState({Alignment: 0, Metadata: {ChannelNames: []}});
   const [channelNameEdit, setChannelNameEdit] = useState({index: -1, name: ""})
 
   useEffect(() => {
@@ -122,14 +122,14 @@ function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
       <MDBox>
         <TextField
           variant="standard"
-          margin="dense"
-          value={nodeConfig.Metadata.TimeShift}
+          margin="dense" type={"number"}
+          value={nodeConfig.Alignment}
           placeholder={"0"}
           onChange={(event) => setNodeConfig((nodeConfig) => {
-            nodeConfig.Metadata.TimeShift = event.target.value;
+            nodeConfig.Alignment = parseFloat(event.target.value);
             return {...nodeConfig}
           })}
-          label={"Time Adjustment (msec)"} type={"number"}
+          label={"Time Adjustment (sec)"}
           autoComplete={"off"}
           fullWidth
         />
@@ -194,10 +194,12 @@ function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
       </Dialog>
       
       <MDBox p={2}>
-        <MDButton color={"secondary"} 
-          onClick={onClose}
+        <MDButton color={"success"} 
+          onClick={() => {
+            onSetRecordingNode({...editNode, data: {...nodeConfig}});
+          }}
         >
-          Close
+          Update
         </MDButton>
       </MDBox>
     </DialogContent>

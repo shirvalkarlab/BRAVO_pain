@@ -110,8 +110,6 @@ function TherapyHistory() {
           year: "numeric",
           month: "2-digit",
           day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
           timeZoneName: "longGeneric"
         })
         if (!UniqueDateStrings.map((a)=>a.label).includes(dateString)) {

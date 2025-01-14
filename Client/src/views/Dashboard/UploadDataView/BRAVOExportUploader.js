@@ -46,7 +46,7 @@ function BRAVOExportUploader({institute, version}) {
     setMetadataField({"Password": ""});
   }, [institute]);
 
-  const handleFileUploa = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
     formData.append("ParticipantId", "");
@@ -139,7 +139,7 @@ function BRAVOExportUploader({institute, version}) {
           maxFiles={1000}
           server={{
             url: SessionController.getServer(),
-            process: handleFileUploa
+            process: handleFileUpload
           }}
           labelFileProcessingError={(error) => {
             return error.body

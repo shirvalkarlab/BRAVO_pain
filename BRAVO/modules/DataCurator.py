@@ -132,10 +132,12 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             detail_setting.save()
             stimulation_therapy.adaptive_settings.add(detail_setting)
     
+    AllEntries = []
     for log in DatabaseEntries["TherapyChangeHistory"]:
-        if models.TherapyModification.include(date=log["date"], type=log["type"]):
+        if models.TherapyModification.include(date=log["date"], type=log["type"], source__metadata__Device=device.uid, owner=person):
             continue
-        models.TherapyModification(**log, source=source_file, owner=person).save()
+        AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
+    models.TherapyModification.objects.bulk_create(AllEntries)
     
     for survey in DatabaseEntries["SurveyRecordings"]:
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)

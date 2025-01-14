@@ -114,7 +114,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT"])
     
     Overview["Recordings"] = []
     for recording in Recordings:
@@ -349,7 +349,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
             
             DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
             for i in range(len(Data["ChannelNames"])):
-                Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+                Data["ChannelNames"][i] = DBSDevice["GenericName"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
 
             TimeShift = (rel.time_shift if rel else 0) + recording.adjusted_alignment
             AnalysisStruct["Signal"].append({

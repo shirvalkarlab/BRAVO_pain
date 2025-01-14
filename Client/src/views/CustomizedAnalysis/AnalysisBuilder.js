@@ -63,11 +63,11 @@ import LoadingProgress from "components/LoadingProgress";
 import SettingsIcon from "@mui/icons-material/Settings";
 
 // core components
-import DatabaseLayout from "layouts/DatabaseLayout";
 import RecordingSelect from "./RecordingSelect";
 import RecordingEdit from "./RecordingEdit";
 import ProcessingSelect from "./ProcessingSelect";
 import ProcessingEdit from "./ProcessingEdit";
+import RecordingAlignmentView from "./RecordingAlignmentView";
 
 import { FaCirclePlay } from "react-icons/fa6";
 
@@ -101,6 +101,7 @@ function AnalysisBuilder({analysisId}) {
 
   const [editRecording, setEditRecording] = useState({show: false});
   const [editProcessing, setEditProcessing] = useState({show: false});
+  const [editAlignment, setEditAlignment] = useState({show: false});
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -206,35 +207,63 @@ function AnalysisBuilder({analysisId}) {
         <Grid container spacing={3}>
           <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
             <MDBox>
+              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
+                {"Add Source Data"}
+              </MDTypography>
               <MDButton color={"error"} onClick={() => setShowRecordingList(true)}>
                 {"Add Recording for Analysis"}
               </MDButton>
-              <MDButton color={"info"} onClick={() => setShowProcessingList(true)} style={{marginLeft: 10}}>
+              <MDButton color={"error"} onClick={() => {}}  style={{marginLeft: 10}}>
+                {"Add Questionnaire Scores"}
+              </MDButton>
+            </MDBox>
+          </Grid>
+          <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
+            <MDBox>
+              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
+                {"Edit Data Alignments"}
+              </MDTypography>
+              <MDButton color={"error"} onClick={() => {
+                let connectedNodes = [];
+                for (let i in nodes) {
+                  if (nodes[i].type == "RecordingNode") {
+                    connectedNodes.push(nodes[i]);
+                  }
+                }
+                setEditAlignment({nodes: connectedNodes, show: true})
+              }}>
+                {"Open Alignment Edit Window"}
+              </MDButton>
+            </MDBox>
+          </Grid>
+          <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
+            <MDBox>
+              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
+                {"Edit Processing Pipeline"}
+              </MDTypography>
+              <MDButton color={"info"} onClick={() => setShowProcessingList(true)}>
                 {"Add Processing Node"}
               </MDButton>
               <MDButton color={"info"} onClick={() => {}} style={{marginLeft: 10}}>
                 {"Use Processing Template"}
               </MDButton>
-            </MDBox>
-            <MDBox>
-              <MDButton color={"success"} onClick={() => saveProcessingPipeline(false)}>
+              <MDButton color={"success"} onClick={() => saveProcessingPipeline(false)} style={{marginLeft: 10}}>
                 {"Save Analysis Pipeline"}
               </MDButton>
             </MDBox>
           </Grid>
           <Grid item xs={12} sx={{minHeight: 600}}>
-            <ReactFlow
+            <ReactFlow fitView
               nodeTypes={flowchartNodeTypes} nodes={nodes} edges={edges}
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
               onNodeClick={(event, node) => {
                 if (node.type == "RecordingNode") {
                   setEditRecording({show: true, node: node});
                 } else if (node.type == "RecordingGroupNode") {
-                  
+
                 } else {
                   setEditProcessing({show: true, node: node});
                 }
-                console.log(node)
               }}
             >
               <Controls />
@@ -260,10 +289,7 @@ function AnalysisBuilder({analysisId}) {
           const groupNode = {
             id: uuidv4(),
             type: "RecordingGroupNode",
-            data: {
-              Name: "Recording Group",
-              List: recordings
-            },
+            data: { Name: "Recording Group", List: recordings },
             position: {x: 0, y: 0}
           };
 
@@ -302,7 +328,12 @@ function AnalysisBuilder({analysisId}) {
       >
         <RecordingEdit editNode={editRecording.node} onSetRecordingNode={(node) => {
           setNodes((nds) => {
-            return nds;
+            for (let i in nds) {
+              if (nds[i].id == node.id) {
+                nds[i] = node;
+              }
+            }
+            return [...nds];
           });
           setEditRecording({...editRecording, show: false});
         }} onClose={() => setEditRecording({...editRecording, show: false})} />
@@ -335,33 +366,12 @@ function AnalysisBuilder({analysisId}) {
         }} onClose={() => setEditProcessing({...editProcessing, show: false})} />
       </Dialog>
 
-      <Dialog open={configureRecording.show} onClose={() => setConfigureRecording({...configureRecording, show: false})}>
-        <MDBox px={2} pt={2}>
-          <MDTypography variant="h5">
-            {"Configure Recording for Analysis"}
-          </MDTypography>
-          <MDTypography variant="p" fontSize={15}>
-            {configureRecording.title || ""}
-          </MDTypography>
-        </MDBox>
-        <DialogContent style={{minWidth: 500}} >
-        </DialogContent>
-        <MDBox px={2} py={2} style={{display: "flex", justifyContent: "space-between"}}>
-          <MDBox px={2} py={2} style={{display: "flex", justifyContent: "space-between"}}>
-            <MDButton variant={"gradient"} color={"error"} onClick={handleDeleteVerification}>
-              {"Delete"}
-            </MDButton>
-          </MDBox>
-          <MDBox px={2} py={2} style={{display: "flex", justifyContent: "space-around"}}>
-            <MDButton variant={"gradient"} color={"secondary"} onClick={() => setConfigureRecording({...configureRecording, show: false})}>
-              {"Cancel"}
-            </MDButton>
-            <MDButton variant={"gradient"} color={"success"} onClick={handleUpdateConfiguration}>
-              {"Update"}
-            </MDButton>
-          </MDBox>
-        </MDBox>
+      <Dialog open={editAlignment.show} onClose={() => setEditAlignment({...editAlignment, show: false})} 
+        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+      >
+        <RecordingAlignmentView nodes={editAlignment.nodes} />
       </Dialog>
+
     </Card>
   ) : null;
 }

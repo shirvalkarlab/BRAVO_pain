@@ -128,7 +128,6 @@ function NeuralActivitySnapshot() {
         let analyses = [];
         for (let i in uniqueDates) {
           const recordings = response.data.Recordings.filter((a) => a.DateString == uniqueDates[i]);
-          console.log(recordings)
           let analysis = {
             Date: uniqueDates[i],
             RecordingIds: recordings.map((a) => a.Id),

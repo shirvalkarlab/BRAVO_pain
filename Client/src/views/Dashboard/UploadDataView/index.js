@@ -39,6 +39,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 
 import FormField from "components/MDInput/FormField.js";
+import MuiAlertDialog from "components/MuiAlertDialog";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
@@ -48,13 +49,15 @@ import { FaPerson, FaPeopleGroup } from "react-icons/fa6";
 import { HiIdentification } from "react-icons/hi2"
 
 import DatabaseLayout from "layouts/DatabaseLayout";
-import MuiAlertDialog from "components/MuiAlertDialog";
-
-import { SessionController } from "database/session-control";
-import { usePlatformContext, setContextState } from "context";
 import MedtronicJSONUploader from "./MedtronicJSONUploader";
 import BRAVOExportUploader from "./BRAVOExportUploader";
 import NeuroimageUploader from "./NeuroimageUploader";
+import ExternalCSVUploader from "./ExternalCSVUploader";
+import UFMDATUploader from "./UFMDATUploader";
+
+import { SessionController } from "database/session-control";
+import { usePlatformContext, setContextState } from "context";
+
 import colors from "assets/theme/base/colors";
 
 const filter = createFilterOptions();
@@ -222,7 +225,7 @@ function UploadDeidentifiedDataView() {
                 <Autocomplete 
                   disableClearable
                   options={[{value: "create", label: "Create New Participant"},
-                    ...availableParticipants.map((participant) => ({...participant, value: participant.Id, label: participant.Name}))]} 
+                    ...availableParticipants.map((participant) => ({...participant, value: participant.Id, label: participant.Name})).sort((a,b) => a.label.localeCompare(b.label))]} 
                   value={activeParticipant}
                   onChange={(event, newValue) => {
                     if (newValue.value == "create") {
@@ -360,11 +363,17 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "3D Images"]}
+                    options={["Medtronic JSON Files", "External CSVs", "UF MDAT Files", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
                     <MedtronicJSONUploader institute={user.Institute} participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "External CSVs" ? (
+                    <ExternalCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "UF MDAT Files" ? (
+                    <UFMDATUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "3D Images" ? (
                     <NeuroimageUploader institute={user.Institute}  participant={activeParticipant.value}/>

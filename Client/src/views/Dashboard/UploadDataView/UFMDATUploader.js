@@ -30,23 +30,30 @@ import 'filepond/dist/filepond.min.css'
 
 import { v4 as uuidv4 } from 'uuid';
 
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
+
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
-function NeuroimageUploader({institute, participant}) {
+function UFMDATUploader({institute, participant}) {
   const [files, setFiles] = useState([]);
+  const [metadata, setMetadata] = useState({});
 
   useEffect(() => {
     setFiles([]);
   }, [participant]);
 
-  const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, upload_metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("DataType", "NeuroImage");  
+    formData.append("DataType", "UFMDAT");  
     formData.append("ParticipantId", participant);  
     formData.append("Institute", institute);
     formData.append("Metadata", JSON.stringify(metadata));
@@ -105,19 +112,13 @@ function NeuroimageUploader({institute, participant}) {
     <MDBox pt={2}>
       <Divider variant="insert" />
       <MDTypography variant="h5" fontSize={15} lineHeight={1}>
-        {"Accept NifTi (.nii) format for CT/MRI Images. \
-          Accept binary STL file for Segmented Atlas. \
-          Accept MRTRIX TCK file for tractography. \
-          Accept Blender GLB file for scene exports for better visualization/controls."}
+        {"Accept .mdat File. This is a standard file format created for Delsys Acquisition Interface software or the SummitTouretteTask software made at University of Florida. "}
       </MDTypography>
 
       <Divider variant="insert" />
       <MDTypography variant="h6">
         {"Metadata"}
       </MDTypography>
-      <MDBox pt={2} px={3}>
-        
-      </MDBox>
       <Divider variant="insert" />
       
       <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
@@ -130,7 +131,7 @@ function NeuroimageUploader({institute, participant}) {
         <FilePond
           name="File" 
           files={files} allowMultiple allowRevert={false}
-          acceptedFileTypes={[".bin"]}
+          acceptedFileTypes={[".mdat"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
           server={{
@@ -147,4 +148,4 @@ function NeuroimageUploader({institute, participant}) {
   )
 };
 
-export default memo(NeuroimageUploader);
+export default memo(UFMDATUploader);

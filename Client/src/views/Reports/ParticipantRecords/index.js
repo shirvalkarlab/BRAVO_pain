@@ -28,6 +28,7 @@ import moment from "moment";
 import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
 
 import colormap from "colormap";
 
@@ -47,7 +48,6 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary } from "assets/translation.js";
-import { TimePicker } from "@mui/x-date-pickers";
 
 function ParticipantSurveyRecords() {
   const navigate = useNavigate();

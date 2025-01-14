@@ -878,6 +878,48 @@ class PlotlyRenderManager {
   }
 
   /**
+   * Get x-axis limits. 
+   *
+   * @param {string} [ax] - Subplot to configure. Default to last access axes.
+   * 
+   */
+  getXlim(ax=null) {
+    if (!ax) {
+      ax = this.gca;
+    } else {
+      if (this.ax.includes(ax)) {
+        this.gca = ax;
+      } else {
+        console.log("WARNING: Ax Not Found");
+        ax = this.gca;
+      }
+    }
+    
+    return this.layout[ax["xlayout"]].range;
+  }
+
+  /**
+   * Get y-axis limits. 
+   *
+   * @param {string} [ax] - Subplot to configure. Default to last access axes.
+   * 
+   */
+  getYlim(ax=null) {
+    if (!ax) {
+      ax = this.gca;
+    } else {
+      if (this.ax.includes(ax)) {
+        this.gca = ax;
+      } else {
+        console.log("WARNING: Ax Not Found");
+        ax = this.gca;
+      }
+    }
+    
+    return this.layout[ax["ylayout"]].range;
+  }
+
+  /**
    * Change axis ticks location. 
    *
    * @param {number[]} values - array of tick values

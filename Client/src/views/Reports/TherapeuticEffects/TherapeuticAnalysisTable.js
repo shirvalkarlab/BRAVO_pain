@@ -277,7 +277,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
                     {analysis.Therapy.map((a, i) => (
-                      <MDBox key={a.Contact} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
+                      <MDBox key={i} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
                       <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
                         {a.Contact}{": "}
                       </MDTypography>
