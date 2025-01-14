@@ -143,6 +143,9 @@ def queryCustomizedAnalysis(participant_uid, analysis):
                         else:
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Recording"
 
+        elif recording.type == "DelsysMDAT":
+            pass
+
         Overview["Recordings"].append(Description)
         
     Overview["Configurations"] = analysis.metadata

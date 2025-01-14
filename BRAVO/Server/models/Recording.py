@@ -62,6 +62,7 @@ class Recording(models.Model):
             "Name": self.name,
             "Type": self.type,
             "Date": self.date,
+            "Alignment": self.adjusted_alignment,
             "Metadata": self.metadata,
             "Device": self.source.metadata["Device"] if "Device" in self.source.metadata.keys() else "",
             "Timezone": self.source.metadata["Timezone"] if "Timezone" in self.source.metadata.keys() else "",

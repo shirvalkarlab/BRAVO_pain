@@ -129,7 +129,7 @@ if BRAVODatabase:
         }
     }
 
-elif True:
+elif not os.path.exists(os.path.join(BASE_DIR, 'mysql.config')):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',

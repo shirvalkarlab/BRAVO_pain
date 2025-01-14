@@ -106,6 +106,22 @@ class DataUploadHandler(RestViews.APIView):
                 return Response(status=400, data={"message": str(e)})
             source_file.delete()
             
+        elif request.data["DataType"] == "UFMDAT":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                DataCurator.UFMDATDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         get_or_none(os.remove)(lockFile)
         return Response(status=200)
 
@@ -141,3 +157,32 @@ class RecordingTimeShiftHandler(RestViews.APIView):
             return Response(status=400, data={"message": "Time Alignment is not valid"})
 
         return Response(status=200)
+
+class TimeSeriesRecordingHandler(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+        
+        recording = models.Recording.find(uid=request.data["RecordingId"])
+        if not recording.source.owner.uid == request.data["ParticipantId"]:
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RawTimeseries":
+            Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+            Data["Alignment"] = recording.adjusted_alignment
+            if "ChannelIndex" in request.data.keys():
+                Data["Data"] = Data["Data"][:,int(request.data["ChannelIndex"])]
+                Data["Missing"] = Data["Missing"][:,int(request.data["ChannelIndex"])]
+
+            return Response(status=200, data=Data)
+
+
+        return Response(status=400, data={"message": "Malformed Input"})

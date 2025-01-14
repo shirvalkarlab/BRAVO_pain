@@ -34,6 +34,7 @@ urlpatterns = [
 
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
     path('setRecordingTimeShift', DataHandler.RecordingTimeShiftHandler.as_view()),
+    path('queryTimeseriesRecording', DataHandler.TimeSeriesRecordingHandler.as_view()),
 
     path('querySurveyForms', EventAnnotationHandler.QuerySurveyForms.as_view()),
     path('deleteSurveyForms', EventAnnotationHandler.DeleteSurveyForms.as_view()),
