@@ -1494,14 +1494,14 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                     Features[bands[bandIndex][0] + "_PeakFreq"][t] = RawData[channelName][event]["Frequency"][np.nanargmax(Power)] + float(bands[bandIndex][1])
                         
                         else:
-                            for i in range(6):
+                            for i in range(12):
                                 Features["FeatureId_" + str(i) + "_Peak"] = np.zeros(len(Features["Time"]))
                                 Features["FeatureId_" + str(i) + "_PeakWidth"] = np.zeros(len(Features["Time"]))
                                 Features["FeatureId_" + str(i) + "_PeakFreq"] = np.zeros(len(Features["Time"]))
                                 
                             for t in range(len(Features["Time"])):
                                 FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [60,90], "inclusive")
-                                StdDrift = RawData[channelName][event]["PSDs"][t][FrequencySelection]
+                                StdDrift = RawData[channelName][event]["PSDs"][t][FrequencySelection]/10
                                 while len(SPU.removeOutlier(StdDrift)) != len(StdDrift):
                                     StdDrift = SPU.removeOutlier(StdDrift)
                             
@@ -1514,7 +1514,7 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                 try:
                                     InitialGaussianGuess = []
                                     BoundGuess = ([],[])
-                                    if len(peaks) < 6:
+                                    if len(peaks) < 12:
                                         for j in range(len(peaks)):
                                             InitialGaussianGuess.extend([SpectralPeakPower[j], SpectralPeakFrequency[j], 1])
                                             BoundGuess[0].extend([0, SpectralPeakFrequency[j]-5, 0])
@@ -1523,7 +1523,7 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                         popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, RawData[channelName][event]["Frequency"][FrequencyWindow], MeanPSD-1, p0=InitialGaussianGuess,
                                                                                     bounds=BoundGuess)
                                     else:
-                                        for j in range(6):
+                                        for j in range(12):
                                             InitialGaussianGuess.extend([SpectralPeakPower[j], SpectralPeakFrequency[j], 1])
                                             BoundGuess[0].extend([0, SpectralPeakFrequency[j]-5, 0])
                                             BoundGuess[1].extend([1000, SpectralPeakFrequency[j]+5, 10])

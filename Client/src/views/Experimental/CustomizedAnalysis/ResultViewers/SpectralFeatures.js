@@ -72,7 +72,7 @@ function SpectralFeatures({dataToRender, height, config, figureTitle}) {
 
       const Frequency = new Array(200).fill(0).map((i, a) => a/2);
       for (let i in data) {
-        for (let j = 0; j < 6; j++) {
+        for (let j = 0; j < 12; j++) {
           if (data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"] > 0) {
             console.log(MultiGaussianModel(Frequency, data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakFreq"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakWidth"]))
             fig.plot(Frequency, MultiGaussianModel(Frequency, data[i]["FeatureId_" + (j).toFixed(0) + "_Peak"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakFreq"], data[i]["FeatureId_" + (j).toFixed(0) + "_PeakWidth"]), {
