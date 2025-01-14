@@ -1506,12 +1506,11 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                     StdDrift = SPU.removeOutlier(StdDrift)
                             
                                 FrequencyWindow = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [4,90])
-                                MeanPSD = RawData[channelName][event]["PSDs"][t][FrequencyWindow]
-                                Threshold = np.std(StdDrift)*2 + 1
+                                MeanPSD = np.power(10,RawData[channelName][event]["PSDs"][t][FrequencyWindow]/10)
+                                Threshold = np.std(np.power(10,StdDrift))*2 + 1
                                 peaks, _ = signal.find_peaks(MeanPSD, height=Threshold)
                                 SpectralPeakFrequency = RawData[channelName][event]["Frequency"][FrequencyWindow][peaks]
                                 SpectralPeakPower = MeanPSD[peaks]
-
                                 try:
                                     InitialGaussianGuess = []
                                     BoundGuess = ([],[])
@@ -1520,6 +1519,7 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                             InitialGaussianGuess.extend([SpectralPeakPower[j], SpectralPeakFrequency[j], 1])
                                             BoundGuess[0].extend([0, SpectralPeakFrequency[j]-5, 0])
                                             BoundGuess[1].extend([1000, SpectralPeakFrequency[j]+5, 10])
+                                            
                                         popt_gauss, pcov_gauss = optimize.curve_fit(MultiGaussianModel, RawData[channelName][event]["Frequency"][FrequencyWindow], MeanPSD-1, p0=InitialGaussianGuess,
                                                                                     bounds=BoundGuess)
                                     else:
