@@ -1375,7 +1375,7 @@ def handleNormalizeProcessing(step, RecordingIds, Results, Configuration, analys
             if result["Type"] == "RawSpectrogram":
                 for k in range(len(RawData)):
                     for i in range(len(RawData[k]["Spectrogram"])):
-                        meanPSDs = np.nanmean(np.array(RawData[k]["Spectrogram"][i]["Power"]), axis=1)
+                        meanPSDs = np.nanmedian(np.array(RawData[k]["Spectrogram"][i]["Power"]), axis=1)
                         if len(meanPSDs) == 0:
                             continue
 
@@ -1391,7 +1391,7 @@ def handleNormalizeProcessing(step, RecordingIds, Results, Configuration, analys
                             fm = SpectralModel(peak_width_limits=[1,24])
                             fm.fit(np.array(RawData[k]["Spectrogram"][i]["Frequency"])[FrequencyWindow], meanPSDs[FrequencyWindow], WindowRange)
                             oof = fm.get_model("aperiodic", "linear")
-                            
+
                             for j in range(RawData[k]["Spectrogram"][i]["Power"].shape[1]):
                                 RawData[k]["Spectrogram"][i]["Power"][FrequencyWindow,j] = np.array(RawData[k]["Spectrogram"][i]["Power"][FrequencyWindow,j]) / oof
                             RawData[k]["Spectrogram"][i]["Power"] = RawData[k]["Spectrogram"][i]["Power"][FrequencyWindow,:]
@@ -1501,14 +1501,14 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                 
                             for t in range(len(Features["Time"])):
                                 FrequencySelection = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [60,90], "inclusive")
-                                StdDrift = RawData[channelName][event]["PSDs"][t][FrequencySelection]/10
+                                StdDrift = np.power(10,RawData[channelName][event]["PSDs"][t][FrequencySelection]/10)
                                 while len(SPU.removeOutlier(StdDrift)) != len(StdDrift):
                                     StdDrift = SPU.removeOutlier(StdDrift)
                             
                                 FrequencyWindow = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [4,90])
                                 MeanPSD = np.power(10,RawData[channelName][event]["PSDs"][t][FrequencyWindow]/10)
-                                Threshold = np.std(np.power(10,StdDrift))*2 + 1
-                                peaks, _ = signal.find_peaks(SPU.smooth(MeanPSD,7), height=Threshold, distance=8) # 8 Samples apart, typically 4Hz in 0.5 Resolution
+                                Threshold = np.std(StdDrift)*2 + np.median(StdDrift)
+                                peaks, _ = signal.find_peaks(MeanPSD, height=Threshold, distance=8) # 8 Samples apart, typically 4Hz in 0.5 Resolution
                                 SpectralPeakFrequency = RawData[channelName][event]["Frequency"][FrequencyWindow][peaks]
                                 SpectralPeakPower = MeanPSD[peaks]
 
@@ -1533,7 +1533,7 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                 except Exception as e:
                                     print(e)
                                     continue 
-                                    
+                                
                                 WidthBoundary = popt_gauss[2::3]
                                 Amplitudes = popt_gauss[0::3][PythonUtility.rangeSelection(WidthBoundary, [0,9])]
                                 CenterFrequency = popt_gauss[1::3][PythonUtility.rangeSelection(WidthBoundary, [0,9])]
