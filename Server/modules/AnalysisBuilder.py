@@ -1508,9 +1508,10 @@ def handleCalculateSpectralFeatures(step, RecordingIds, Results, Configuration, 
                                 FrequencyWindow = PythonUtility.rangeSelection(RawData[channelName][event]["Frequency"], [4,90])
                                 MeanPSD = np.power(10,RawData[channelName][event]["PSDs"][t][FrequencyWindow]/10)
                                 Threshold = np.std(np.power(10,StdDrift))*2 + 1
-                                peaks, _ = signal.find_peaks(MeanPSD, height=Threshold, distance=8) # 8 Samples apart, typically 4Hz in 0.5 Resolution
+                                peaks, _ = signal.find_peaks(SPU.smooth(MeanPSD,7), height=Threshold, distance=8) # 8 Samples apart, typically 4Hz in 0.5 Resolution
                                 SpectralPeakFrequency = RawData[channelName][event]["Frequency"][FrequencyWindow][peaks]
                                 SpectralPeakPower = MeanPSD[peaks]
+
                                 try:
                                     InitialGaussianGuess = []
                                     BoundGuess = ([],[])
