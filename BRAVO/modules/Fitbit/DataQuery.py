@@ -98,7 +98,6 @@ def getGeneralTimeseries(device, type="br", start_date=0, end_date=0):
 
     token = device.auth
     url = "https://api.fitbit.com/1/user/-/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(end_date) + ".json"
-    print(url)
     response = requests.get(url, headers={
         "Authorization": "Bearer " + token["access_token"], 
         "Content-Type": "application/json",
@@ -155,6 +154,5 @@ def queryFitbitData(device, type, start_date, end_date):
 def queryAllData(device, start_date, end_date):
     Data = {}
     for key in FitbitDataTypes.keys():
-        print(key)
         Data[key] = queryFitbitData(device, key, start_date, end_date)
     return Data

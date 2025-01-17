@@ -77,10 +77,11 @@ class QuerySurveyForms(RestViews.APIView):
 
             if "VersionRel" in request.data.keys():
                 rel = models.ParticipantLinkRel.find(link_code=request.data["VersionRel"])
-                if not rel.record.short_link == request.data["FormLink"]:
-                    return Response(status=400, data={"message": "Your Passcode does not apply to the Survey Form you are attempting to submit."})
-                Form = rel.record.get_info()
-                return Response(status=200, data=Form)
+                if rel:
+                    if not rel.record.short_link == request.data["FormLink"]:
+                        return Response(status=400, data={"message": "Your Passcode does not apply to the Survey Form you are attempting to submit."})
+                    Form = rel.record.get_info()
+                    return Response(status=200, data=Form)
 
             form = models.ScaleForms.find(short_link=request.data["FormLink"])
             if not form:

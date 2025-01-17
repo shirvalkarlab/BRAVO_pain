@@ -44,7 +44,7 @@ function MedtronicJSONUploader({institute, participant}) {
     setFiles([])
   }, [participant]);
 
-  const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, file_metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
     formData.append("DataType", "MedtronicJSON");  

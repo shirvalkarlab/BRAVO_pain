@@ -109,6 +109,7 @@ class UpdateParticipantInformation(RestViews.APIView):
                 tag, _ = models.Tag.find_or_create(name=tag_name, owner=request.user)
                 Participant.tags.add(tag)
 
+        Participant.save()
         ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"])
         return Response(status=200, data=ParticipantInfo)
 

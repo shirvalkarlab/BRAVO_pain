@@ -96,6 +96,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
           }
         }
       }
+
       setAvailableTherapy({active: availableTherapy.length > 0 ? availableTherapy[0] : "", options: availableTherapy});
       setAvailableChannels({active: availableChannels, options: availableChannels});
       setEventPSDData(() => {

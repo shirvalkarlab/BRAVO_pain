@@ -13,4 +13,4 @@ spectrum==0.8.1
 specparam==2.0.0rc2
 requests==2.32.3
 pymysql==1.1.1
-mysqlclient==2.2.6
+mysqlclient==2.1

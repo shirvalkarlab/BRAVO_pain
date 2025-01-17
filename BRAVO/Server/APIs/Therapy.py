@@ -54,6 +54,12 @@ class QueryTherapyHistory(RestViews.APIView):
         if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
             return Response(status=403)
         
+        result = Database.getCachedResult("/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
+        if result:
+            return Response(status=200, data=result)
+
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         TherapyHistory = Therapy.queryTherapyHistory(Participant)
+        
+        Database.saveCachedResult(TherapyHistory, "/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
         return Response(status=200, data=TherapyHistory)

@@ -85,7 +85,15 @@ def extractSensingString(note):
             return str(note["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + "Hz"
     except Exception as e:
         return "Unknown"
-    
+
+def checkExistingSegments(segments, params):
+    for i in range(len(segments)):
+        if segments[i]["TherapyWindow"] == params["TherapyWindow"]:
+            if segments[i]["TherapyNote"] == params["TherapyNote"]:
+                if segments[i]["Device"] == params["Device"]:
+                    return i
+    return -1
+
 def extractChronicNeuralActivity(participant, devices, recordings, config):
     TherapyHistory = Therapy.queryTherapyHistory(participant)
     ChronicNeuralActivity = []
@@ -110,7 +118,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
                             TherapyNote = Therapy.findClosestAdaptiveTherapy(Data["Time"][WindowSelected][0], ClosestTherapy)
 
-                        ChronicNeuralActivity.append({
+                        Activity = {
                             "Device": DBSDevice["Id"],
                             "TherapyWindow": [Timestamps[j-1], Timestamps[j]],
                             "TherapyNote": TherapyNote,
@@ -120,6 +128,14 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             "ChannelNames": copy.deepcopy(Data["ChannelNames"]),
                             "ChannelUnits": ["", "mA"],
                             "Data": Data["Data"][WindowSelected,:].T
-                        })
+                        }
+
+                        duplicates = checkExistingSegments(ChronicNeuralActivity, Activity)
+                        if duplicates > -1:
+                            if len(Activity["Data"]) > len(ChronicNeuralActivity[duplicates]["Data"]):
+                                ChronicNeuralActivity[duplicates] = Activity
+
+                        else:
+                            ChronicNeuralActivity.append(Activity)
 
     return ChronicNeuralActivity

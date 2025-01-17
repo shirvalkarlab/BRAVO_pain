@@ -8,7 +8,7 @@ Created on Mon Apr 12 14:00:53 2021
 
 import numpy as np
 import pandas as pd
-
+from io import BytesIO
 
 def decodeDelsysFormat(rawData):
     PackageOnset = np.where([rawData[i:i+3] == b"BML" for i in range(len(rawData)-2)])[0]
@@ -87,10 +87,7 @@ def decodeDelsysFormat(rawData):
                     Delsys["Mag"][sensorID][t,1] = Delsys["Mag"][sensorID][t-1,1]
                 if Delsys["Mag"][sensorID][t,2] == 0:
                     Delsys["Mag"][sensorID][t,2] = Delsys["Mag"][sensorID][t-1,2]
-
-        
         return Delsys
-    
     return []
 
 def decodeMDATData(mdatFile):
@@ -135,4 +132,46 @@ def decodeMDATData(mdatFile):
         Data["Duration"] = Data["Data"].shape[0]/Data["SamplingRate"]
         TrignoSensorList.append(Data)
 
+    return TrignoSensorList
+
+def decodeHDFCSVData(mdatFile):
+    CSV = pd.read_csv(BytesIO(mdatFile), skiprows=0)
+    keys = list(CSV.keys())
+
+    HPFCSV = list()
+
+    i = 0
+    while i < len(keys):
+        if keys[i].startswith("X[s]"):
+            SensorData = {
+                "Name": keys[i+1],
+                "Time": np.array(CSV[keys[i]])
+            }
+            SensorData["Time"] = SensorData["Time"][~np.isnan(SensorData["Time"])]
+            SensorData["Data"] = np.array(CSV[keys[i+1]])[:len(SensorData["Time"])]
+            HPFCSV.append(SensorData)
+            i += 2
+        else:
+            i += 1
+    
+    MinimumRecordingDuration = np.min([i["Time"][-1] for i in HPFCSV if not np.all(i["Data"] == 0)])
+    SamplingRates = np.unique([np.around(1/np.median(np.diff(i["Time"])),0) for i in HPFCSV if not np.all(i["Data"] == 0)])
+
+    TrignoSensorList = []
+    for fs in SamplingRates:
+        Data = {"ChannelNames": []}
+        Data["Time"] = np.arange(fs * MinimumRecordingDuration) / fs
+        Data["Data"] = []
+        for i in range(len(HPFCSV)):
+            SamplingRate = np.around(1/np.median(np.diff(HPFCSV[i]["Time"])),0)
+            if SamplingRate == fs and not np.all(HPFCSV[i]["Data"] == 0):
+                Data["Data"].append(np.interp(Data["Time"], HPFCSV[i]["Time"], HPFCSV[i]["Data"]))
+                Data["ChannelNames"].append(HPFCSV[i]["Name"])
+        Data["Data"] = np.array(Data["Data"]).T
+        Data["SamplingRate"] = fs
+        Data["StartTime"] = 0
+        Data["Missing"] = np.zeros(Data["Data"].shape)
+        Data["Duration"] = MinimumRecordingDuration
+        TrignoSensorList.append(Data)
+    
     return TrignoSensorList

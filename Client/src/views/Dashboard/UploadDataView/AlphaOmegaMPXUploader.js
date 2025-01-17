@@ -36,17 +36,18 @@ import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
-function NeuroimageUploader({institute, participant}) {
+function AlphaOmegaMPXUploader({institute, participant}) {
+  const [metadata, setMetadata] = useState({device_location: "", infer_from_device: true});
   const [files, setFiles] = useState([]);
 
   useEffect(() => {
-    setFiles([]);
+    setFiles([])
   }, [participant]);
 
   const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("DataType", "NeuroImage");  
+    formData.append("DataType", "AlphaOmegaMPX");  
     formData.append("ParticipantId", participant);  
     formData.append("Institute", institute);
     formData.append("Metadata", JSON.stringify(metadata));
@@ -104,33 +105,28 @@ function NeuroimageUploader({institute, participant}) {
   return (
     <MDBox pt={2}>
       <Divider variant="insert" />
-      <MDTypography variant="h5" fontSize={15} lineHeight={1}>
-        {"Accept NifTi (.nii) format for CT/MRI Images. \
-          Accept binary STL file for Segmented Atlas. \
-          Accept MRTRIX TCK file for tractography. \
-          Accept Blender GLB file for scene exports for better visualization/controls."}
-      </MDTypography>
-
-      <Divider variant="insert" />
-      <MDTypography variant="h6">
-        {"Metadata"}
-      </MDTypography>
-      <MDBox pt={2} px={3}>
-        
-      </MDBox>
-      <Divider variant="insert" />
-      
+      {participant === "batch-upload" ? null : <>
+        <MDTypography variant="h6">
+          {"Metadata"}
+        </MDTypography>
+        <MDBox pt={2} px={3}>
+          
+        </MDBox>
+        <Divider variant="insert" />
+      </>}
       <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
         <MDTypography variant="h6">
           {"Data Uploader"}
         </MDTypography>
+
         <MDButton color="info" onClick={() => setFiles([])} style={{marginLeft: "auto"}}>{"Clear Upload Queue"}</MDButton>
       </MDBox>
+      
       <MDBox pt={2}>
         <FilePond
           name="File" 
           files={files} allowMultiple allowRevert={false}
-          acceptedFileTypes={[".stl",".nii",".nii.gz"]}
+          acceptedFileTypes={[".mpx"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
           server={{
@@ -147,4 +143,4 @@ function NeuroimageUploader({institute, participant}) {
   )
 };
 
-export default memo(NeuroimageUploader);
+export default memo(AlphaOmegaMPXUploader);

@@ -23,6 +23,7 @@ import pickle, blosc
 import hashlib, hmac
 import shutil
 from filelock import Timeout, FileLock
+import numpy as np
 
 from Server import models
 from modules.MedtronicPercept import BrainSenseStream
@@ -175,6 +176,110 @@ def mergeParticipants(source, target):
         entry.save()
     
     source.delete()
+
+def listSourceFiles(participant_uid, file_type=None):
+    Participant = models.Participant.find(uid=participant_uid)
+    if not file_type:
+        source_files = models.SourceFile.find_all(owner=Participant)
+    else:
+        source_files = models.SourceFile.find_all(owner=Participant, type=file_type)
+
+    SourceFiles = []
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
+    for source in source_files:
+        if source.type == "MedtronicJSON":
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": "Medtronic JSON Sessions",
+                "DateOfUpload": source.date,
+                "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else ""
+            }
+
+            if "Device" in source.metadata.keys():
+                for device in DBSDevices:
+                    if device.uid == source.metadata["Device"]:
+                        SourceFile["Device"] = device.get_info()
+
+            AllRecordings = models.Recording.find_all(source=source)
+            SourceFile["RecordingCount"] = len(AllRecordings)
+            if SourceFile["RecordingCount"] > 0:
+                SourceFile["DateOfRecording"] = np.mean([i.date for i in AllRecordings])
+            else:
+                SourceFile["DateOfRecording"] = source.date
+            SourceFile["TherapyEventCount"] = len(models.TherapyModification.find_all(source=source))
+            SourceFile["TherapyEventCount"] = len(models.TherapyModification.find_all(source=source))
+            SourceFile["TherapyCount"] = len(models.Therapy.find_all(source=source))
+            SourceFile["DBSEventCount"] = len(models.DBSEvent.find_all(source=source).exclude(type="MedtronicDeviceImpedance"))
+
+            SourceFiles.append(SourceFile)
+        
+        elif source.type == "NeuroImage":
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": "NeuroImaging Data",
+                "DateOfUpload": source.date,
+                "DateOfRecording": source.date,
+                "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else "",
+                "DataType": source.metadata["FileType"],
+                "DataSize": os.path.getsize(source.pointer)
+            }
+
+            SourceFiles.append(SourceFile)
+
+        elif source.type == "HDFCSV":
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": "HDF CSV Format",
+                "DateOfUpload": source.date,
+                "DateOfRecording": source.date,
+                "Timezone": "",
+                "DataSize": os.path.getsize(source.pointer)
+            }
+
+            AllRecordings = models.Recording.find_all(source=source)
+            
+            SourceFile["RecordingCount"] = 0
+            for i in range(len(AllRecordings)):
+                SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
+
+            SourceFiles.append(SourceFile)
+
+        elif source.type == "AlphaOmegaMPX":
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": "AlphaOmega MPX Format",
+                "DateOfUpload": source.date,
+                "DateOfRecording": source.date,
+                "Timezone": "",
+                "DataSize": os.path.getsize(source.pointer)
+            }
+
+            AllRecordings = models.Recording.find_all(source=source)
+            
+            SourceFile["RecordingCount"] = 0
+            for i in range(len(AllRecordings)):
+                SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
+
+            SourceFiles.append(SourceFile)
+
+        else:
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": source.type,
+                "DateOfUpload": source.date,
+                "DateOfRecording": source.date,
+                "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else ""
+            }
+
+            SourceFiles.append(SourceFile)
+
+    SourceFiles.sort(key=lambda x: x["DateOfRecording"])
+    return SourceFiles
 
 def deleteSourceFile(pointer):
     if not pointer.startswith(DATABASE_PATH) or ".." in pointer:

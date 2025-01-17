@@ -114,7 +114,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
     
     Overview["Recordings"] = []
     for recording in Recordings:
@@ -145,6 +145,9 @@ def queryCustomizedAnalysis(participant_uid, analysis):
 
         elif recording.type == "DelsysMDAT":
             pass
+
+        elif recording.type == "HDFCSV":
+            Description["Name"] = recording.metadata["SensorType"]
 
         Overview["Recordings"].append(Description)
         
@@ -722,8 +725,7 @@ def queryChronicNeuralActivity(participant_uid, config):
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
         ChronicNeuralActivity["AnalysisType"] = "MedtronicChronicBrainSense"
         Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
-        if True:
-        #if not Recording:
+        if not Recording:
             Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
             Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
             ChronicNeuralActivity["ChronicNeuralActivity"] = Activity

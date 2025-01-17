@@ -79,13 +79,16 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
 
   useEffect(() => {
     if (!fig) return;
-    
+
     let graphingData = []
     for (let i in dataToRender.TherapyModification) {
       let TherapyBlocks = [];
       let TherapyChangeHistory = dataToRender.TherapyModification[i].History.filter((a) => a.Type == "TherapyChangeGroup").sort((a,b) => a.Date-b.Date);
       
       for (let j in TherapyChangeHistory) {
+        if (TherapyChangeHistory[j].Date < dataToRender.TherapyModification[i].Device.Date) {
+          TherapyChangeHistory[j].Date = dataToRender.TherapyModification[i].Device.Date;
+        }
         if (j > 0) {
           if (TherapyChangeHistory[j-1].New == TherapyChangeHistory[j].Previous) {
             TherapyBlocks.push({

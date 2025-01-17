@@ -54,11 +54,13 @@ import BRAVOExportUploader from "./BRAVOExportUploader";
 import NeuroimageUploader from "./NeuroimageUploader";
 import ExternalCSVUploader from "./ExternalCSVUploader";
 import UFMDATUploader from "./UFMDATUploader";
+import HDFCSVUploader from "./HDFCSVUploader";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 
 import colors from "assets/theme/base/colors";
+import AlphaOmegaMPXUploader from "./AlphaOmegaMPXUploader";
 
 const filter = createFilterOptions();
 
@@ -363,14 +365,17 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "External CSVs", "UF MDAT Files", "3D Images"]}
+                    options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "UF MDAT Files", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
                     <MedtronicJSONUploader institute={user.Institute} participant={activeParticipant.value}/>
                   ) : null}
-                  {uploadDataType === "External CSVs" ? (
-                    <ExternalCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  {uploadDataType === "AlphaOmega MPX Files" ? (
+                    <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "HDF CSV Format" ? (
+                    <HDFCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "UF MDAT Files" ? (
                     <UFMDATUploader institute={user.Institute}  participant={activeParticipant.value}/>

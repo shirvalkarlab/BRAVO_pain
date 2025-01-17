@@ -28,7 +28,7 @@ import MDAvatar from "components/MDAvatar";
 // @mui icons
 import Icon from "@mui/material/Icon";
 
-import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle } from "react-icons/md";
+import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle, MdStorage, MdSdStorage } from "react-icons/md";
 import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
@@ -54,7 +54,7 @@ const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
 const UploadDataView = lazy(() => import('views/Dashboard/UploadDataView'));
 const ResearchAccessView = lazy(() => import('views/Dashboard/ShareResearchAccess'));
 const ParticipantOverview = lazy(() => import('views/Dashboard/ParticipantOverview'));
-const ImageVisualization = lazy(() => import('views/Experimental/ImageVisualization'));
+const ImageVisualization = lazy(() => import('views/ImageVisualization'));
 const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
@@ -68,7 +68,7 @@ const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySn
 const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
-const SessionOverview = lazy(() => import('views/Reports/SessionsOverview'));
+const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 const routes = {
   "Main": {
@@ -215,7 +215,7 @@ const routes = {
         key: "3dImageViewer",
         name: "3D Image Viewer",
         icon: <FaBrain />,
-        route: "/reports/image-visualization/:participant_uid",
+        route: "/image-visualization/:participant_uid",
         component: <ImageVisualization />,
       }
     ]
@@ -233,190 +233,19 @@ const routes = {
       }
     ]
   },
+  "DataManager": {
+    icon: <MdStorage />,
+    name: "Data Manager",
+    children: [
+      {
+        key: "ExistingSourceFiles",
+        name: "Existing Source Files",
+        icon: <MdSdStorage  />,
+        route: "/source-files/:participant_uid",
+        component: <SourceFiles />,
+      }
+    ]
+  },
 }
-
-/*
-const routes = [
-  
-  { type: "title", name: "Reports for Percept™", key: "Percept-Reports-title", report_type: "PerceptReport"},
-  {
-    type: "collapse",
-    name: "Reports",
-    key: "percept-reports",
-    icon: <DescriptionIcon/>,
-    report_type: "PerceptReport",
-    collapse: [
-      {
-        name: "TherapyHistory",
-        key: "medtronic-therapy-history",
-        icon: <BoltIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/percept/therapy-history",
-        component: <TherapyHistory />,
-      },
-      {
-        name: "BrainSenseSurvey",
-        key: "survey",
-        icon: <PollIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/percept/survey",
-        component: <BrainSenseSurvey />,
-      },
-    ]
-  },
-  { type: "title", name: "General Reports", key: "Reports-title", report_type: "GeneralReport"},
-  {
-    type: "collapse",
-    name: "Reports",
-    key: "reports",
-    icon: <DescriptionIcon/>,
-    report_type: "GeneralReport",
-    collapse: [
-      {
-        name: "TimeSeriesAnalysis",
-        key: "time-series",
-        icon: <SensorsIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/time-series",
-        component: <TimeSeriesAnalysis />,
-      },
-    ]
-  },
-];
-*/
-
-/*
-const routes = [
-  {
-    type: "collapse",
-    name: "Dashboard",
-    key: "dashboard",
-    component: <DashboardOverview />,
-    route: "/dashboard",
-    icon: <DashboardIcon/>,
-    noCollapse: true,
-    identified: true,
-    deidentified: true
-  },
-  {
-    type: "collapse",
-    name: "ShareResearchAccess",
-    key: "access-permissions",
-    component: <ResearchAccessView />,
-    route: "/access-permissions",
-    icon: <IosShare/>,
-    noCollapse: true,
-    identified: true,
-    deidentified: true
-  },
-  {
-    type: "collapse",
-    name: "PatientLookupTable",
-    key: "deidentification-table",
-    component: <PatientLookupTable />,
-    route: "/deidentification-table",
-    icon: <People/>,
-    noCollapse: true,
-    identified: false,
-    deidentified: true
-  },
-  { type: "divider", key: "divider-1" },
-  {
-    type: "collapse",
-    name: "PatientOverview",
-    key: "patient-overview",
-    component: <PatientOverview />,
-    route: "/patient-overview",
-    icon: <PersonIcon/>,
-    noCollapse: true,
-    identified: true,
-    deidentified: true
-  },
-  { type: "title", name: "Reports", key: "title-pages" },
-  {
-    type: "collapse",
-    name: "Reports",
-    key: "reports",
-    identified: true,
-    deidentified: true,
-    icon: <DescriptionIcon/>,
-    collapse: [
-      {
-        name: "TherapyHistory",
-        key: "therapy-history",
-        icon: <BoltIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/therapy-history",
-        component: <TherapyHistory />,
-        identified: true,
-        deidentified: true
-      },
-      {
-        name: "BrainSenseSurvey",
-        key: "survey",
-        icon: <PollIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/survey",
-        component: <BrainSenseSurvey />,
-        identified: true,
-        deidentified: true
-      },
-      {
-        name: "BrainSenseStreaming",
-        key: "stream",
-        icon: <SensorsIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/stream",
-        component: <BrainSenseStreaming />,
-        identified: true,
-        deidentified: true
-      },
-      {
-        name: "IndefiniteStreaming",
-        key: "multistream",
-        icon: <SensorsIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/multistream",
-        component: <IndefiniteStreaming />,
-        identified: true,
-        deidentified: true
-      },
-      {
-        name: "ChronicRecordings",
-        key: "chronic-recordings",
-        icon: <TimelineIcon style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/chronic-recordings",
-        component: <ChronicBrainSense />,
-        identified: true,
-        deidentified: true
-      },
-      {
-        name: "SessionOverview",
-        key: "session-overview",
-        icon: <Article style={{color: "white", margin: 0, padding: 0}}/>,
-        route: "/reports/session-overview",
-        component: <SessionOverview />,
-        identified: true,
-        deidentified: true
-      },
-    ]
-  },
-  {
-    type: "collapse",
-    name: "Experimental",
-    key: "experimental",
-    identified: true,
-    deidentified: true,
-    icon: <BiotechIcon/>,
-    collapse: [
-      ...experimentalRoutes
-    ]
-  },
-  {
-    type: "collapse",
-    name: "Surveys",
-    key: "surveys",
-    component: <SurveyList />,
-    route: "/surveys",
-    icon: <DashboardIcon/>,
-    noCollapse: true,
-    identified: true,
-    deidentified: true
-  },
-];
-*/
 
 export default routes;

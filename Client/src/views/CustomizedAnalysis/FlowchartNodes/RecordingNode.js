@@ -24,7 +24,7 @@ const handleStyle = { left: 10 };
  
 function RecordingNode({ id, data }) {
   const onChange = useCallback((evt) => {
-    console.log(evt.target.value);
+    
   }, []);
 
   return useMemo(() => (

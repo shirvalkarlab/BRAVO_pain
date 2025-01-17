@@ -26,10 +26,12 @@ import json
 from cryptography.fernet import Fernet
 import hmac, hashlib
 import pickle
+import numpy as np
 
 from Server import models
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
-from modules.ExternalDevices.MDAT import decodeMDATData
+from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHDFCSVData
+from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
 from modules import Database, Therapy
 
 import time
@@ -46,6 +48,7 @@ def loadCacheFile(source_file):
 
 def saveCacheFile(filename, metadata, raw_bytes):
     source_file = models.SourceFile.create(type=metadata["UploadType"], metadata=metadata)
+    source_file.name = filename
     source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.uid + "_" + filename
     hashed = Database.saveSourceFile(secureEncoder.encrypt(raw_bytes), source_file.pointer, bytes=True)
     source_file.hashed = hashed
@@ -100,6 +103,10 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         
         if not device.electrodes.filter(uid=electrode.uid).exists():
             device.electrodes.add(electrode)
+        
+        if DatabaseEntries["SessionOverview"]["SessionTimestamp"] < electrode.implanted_date:
+            electrode.implanted_date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
+            electrode.save()
     
     # Therapy History Storage
     for therapy in DatabaseEntries["Therapies"]:
@@ -182,6 +189,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
             recording.delete()
             continue
+
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
         hashed = Database.saveSourceFile(stream["recording"], filename)
         # TODO: Error handling
@@ -223,6 +231,139 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     person.save()
     return True
 
+def NeuroImageStorage(source_file, person):
+    os.makedirs(DATABASE_PATH + "imaging" + os.path.sep + person.uid, exist_ok=True)
+    if source_file.pointer.endswith(".nii") or source_file.pointer.endswith(".nii.gz"):
+        source_file.metadata["FileType"] = "NifTi"
+    elif source_file.pointer.endswith(".stl"):
+        source_file.metadata["FileType"] = "STL"
+    elif source_file.pointer.endswith(".glb"):
+        source_file.metadata["FileType"] = "Blender Scene"
+    else:
+        source_file.metadata["FileType"] = "Unknown"
+
+    shutil.move(source_file.pointer, DATABASE_PATH + "imaging" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".image")
+    source_file.pointer = DATABASE_PATH + "imaging" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".image"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = ""
+    source_file.owner = person
+    source_file.save()
+
+def HDFCSVDecoder(source_file, person, startTime=None):
+    rawBytes = loadCacheFile(source_file)
+    TrignoData = decodeHDFCSVData(rawBytes)
+
+    def CommonName(nameList):
+        commonNames = []
+        allSubString = nameList[0].split(" ")
+        for i in range(len(allSubString)):
+            Found = True
+            for j in range(len(nameList)):
+                if not allSubString[i] in nameList[j].split(" "):
+                    Found = False 
+            if Found:
+                commonNames.append(allSubString[i])
+        return commonNames
+
+    for ProcessedData in TrignoData:
+        if startTime:
+            ProcessedData["StartTime"] = startTime
+
+        recording = models.Recording(**{
+            "name": "", "type": "HDFCSV", "date": ProcessedData["StartTime"], "metadata": {
+                "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
+                "Duration": ProcessedData["Duration"],
+                "ChannelNames": ProcessedData["ChannelNames"]
+            }
+        }, source=source_file)
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+            recording.delete()
+            continue
+
+        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+        hashed = Database.saveSourceFile(ProcessedData, filename)
+        # TODO: Error handling
+        if not hashed:
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue 
+        if models.Recording.include(hashed=hashed):
+            recording.delete()
+        else:
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.save()
+
+    os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
+    shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
+    source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = ""
+    source_file.owner = person
+    source_file.save()
+
+    person.last_update = models.current_time()
+    person.save()
+    
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    return True
+
+def AlphaOmegaMPXDecoder(source_file, person):
+    rawBytes = loadCacheFile(source_file)
+    MPXData = extractAlphaOmegaRecordings(rawBytes)
+    
+    def CommonName(nameList):
+        commonNames = []
+        allSubString = nameList[0].split(" ")
+        for i in range(len(allSubString)):
+            Found = True
+            for j in range(len(nameList)):
+                if not allSubString[i] in nameList[j].split(" "):
+                    Found = False 
+            if Found:
+                commonNames.append(allSubString[i])
+        return commonNames
+
+    for ProcessedData in MPXData:
+        recording = models.Recording(**{
+            "name": "", "type": "AOMPX", "date": ProcessedData["StartTime"], "metadata": {
+                "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
+                "Duration": ProcessedData["Duration"],
+                "ChannelNames": ProcessedData["ChannelNames"]
+            }
+        }, source=source_file)
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+            recording.delete()
+            continue
+
+        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+        hashed = Database.saveSourceFile(ProcessedData, filename)
+        # TODO: Error handling
+        if not hashed:
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue 
+        if models.Recording.include(hashed=hashed):
+            recording.delete()
+        else:
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.save()
+
+    os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
+    shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
+    source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = ""
+    source_file.owner = person
+    source_file.save()
+
+    person.last_update = models.current_time()
+    person.save()
+    
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    return True
+
 def UFMDATDecoder(source_file, person):
     rawBytes = loadCacheFile(source_file)
     TrignoData = decodeMDATData(rawBytes)
@@ -253,7 +394,6 @@ def UFMDATDecoder(source_file, person):
             recording.hashed = hashed
             recording.save()
 
-    
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
@@ -264,8 +404,9 @@ def UFMDATDecoder(source_file, person):
 
     person.last_update = models.current_time()
     person.save()
+    
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
     return True
-
 
 def ImportBRAVOExport(source_file):
     rawBytes = loadCacheFile(source_file)

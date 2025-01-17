@@ -106,6 +106,22 @@ class DataUploadHandler(RestViews.APIView):
                 return Response(status=400, data={"message": str(e)})
             source_file.delete()
             
+        elif request.data["DataType"] == "AlphaOmegaMPX":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                DataCurator.AlphaOmegaMPXDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         elif request.data["DataType"] == "UFMDAT":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
@@ -116,6 +132,41 @@ class DataUploadHandler(RestViews.APIView):
 
             try:
                 DataCurator.UFMDATDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
+        elif request.data["DataType"] == "HDFCSV":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                if "StartTime" in request.data.keys():
+                    DataCurator.HDFCSVDecoder(source_file, person, startTime=request.data["StartTime"])
+                else:
+                    DataCurator.HDFCSVDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
+        elif request.data["DataType"] == "NeuroImage":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                DataCurator.NeuroImageStorage(source_file, person)
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())
@@ -186,3 +237,64 @@ class TimeSeriesRecordingHandler(RestViews.APIView):
 
 
         return Response(status=400, data={"message": "Malformed Input"})
+
+class DataSourceFileHandler(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "All":
+            SourceFiles = Database.listSourceFiles(request.data["ParticipantId"])
+            return Response(status=200, data=SourceFiles)
+        
+        elif request.data["RequestType"] == "Delete":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)
+            if not source:
+                return Response(status=400, data={"message": "Source File not found."})
+            source.delete()
+            return Response(status=200)
+
+        return Response(status=400, data={"message": "Malformed Input"})
+        
+class NeuroImageFileHandler(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "ListAll":
+            SourceFiles = Database.listSourceFiles(request.data["ParticipantId"], file_type="NeuroImage")
+            return Response(status=200, data=SourceFiles)
+        
+        elif request.data["RequestType"] == "Delete":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)
+            if not source:
+                return Response(status=400, data={"message": "Source File not found."})
+            source.delete()
+            return Response(status=200)
+
+        return Response(status=400, data={"message": "Malformed Input"})
+        

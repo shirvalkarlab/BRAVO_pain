@@ -62,6 +62,15 @@ class SourceFile(models.Model):
     def purge(*args, **kwargs):
         return SourceFile.objects.filter(**kwargs).delete()
     
+    def get_info(self):
+        return {
+            "Id": self.uid,
+            "Name": self.name,
+            "Type": self.type,
+            "Date": self.date,
+            "Metadata": self.metadata
+        }
+    
 @receiver(pre_delete, sender=SourceFile)
 def on_sourcefile_delete(sender, instance, **kwargs):
     if len(instance.pointer) > 0:
