@@ -69,8 +69,38 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
 
             Analysis = DataAnalysis.processTherapeuticAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
             LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
+            Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            return Response(status=200, data=LimitedAnalysis)
+
+class QueryTimeseriesAnalysis(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "Overview":
+            Overview = DataAnalysis.queryAvailableAnalyses(request.data["ParticipantId"], "TimeSeriesAnalysis")
+            return Response(status=200, data=Overview)
+
+        elif request.data["RequestType"] == "RequestData":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "ActiveChannels"]):
+                return Response(status=400, data={"message": "Malformed Input"})
             
-            #Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            result = Database.getCachedResult("/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            if result:
+                return Response(status=200, data=result)
+
+            Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
+            LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
+            Database.saveCachedResult(LimitedAnalysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=LimitedAnalysis)
 
 class QueryNeuralActivitySnapshot(RestViews.APIView):
@@ -88,13 +118,12 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
         
         if request.data["RequestType"] == "RequestAll":
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
-            result = Database.getCachedResult("/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
+            result = Database.getCachedResult("/queryNeuralActivitySnapshot", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryNeuralActivitySnapshot(request.data["ParticipantId"], userConfig)
-            #LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
-            #Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            Database.saveCachedResult(Analysis, "/queryNeuralActivitySnapshot", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
         
 class QueryChronicNeuralActivity(RestViews.APIView):
@@ -117,8 +146,7 @@ class QueryChronicNeuralActivity(RestViews.APIView):
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryChronicNeuralActivity(request.data["ParticipantId"], userConfig)
-            #LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
-            #Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            Database.saveCachedResult(Analysis, "/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 
 class QueryCustomizedAnalysis(RestViews.APIView):

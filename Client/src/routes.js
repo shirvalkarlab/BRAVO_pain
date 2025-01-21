@@ -47,7 +47,6 @@ import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
 
 import { experimentalRoutes } from "views/Experimental/plugins";
-import TimeSeriesAnalysis from "views/Reports/TimeSeriesAnalysis";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
@@ -67,6 +66,7 @@ const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
 const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
+const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
@@ -145,7 +145,7 @@ const routes = {
         component: <TherapyHistory />,
       },
       {
-        key: "nerualactivitysnapshot",
+        key: "nerual-activity-snapshot",
         name: "Neural Activity Snapshot",
         icon: <PiWavesBold />,
         route: "/reports/nerual-activity-snapshot/:participant_uid",
@@ -157,6 +157,13 @@ const routes = {
         icon: <FaFileWaveform />,
         route: "/reports/therapeutic-effect/:participant_uid",
         component: <TherapeuticEffects />,
+      },
+      {
+        key: "time-series-analysis",
+        name: "Time-Series Analysis",
+        icon: <FaFileWaveform />,
+        route: "/reports/time-series-analysis/:participant_uid",
+        component: <TimeSeriesAnalysis />,
       },
       {
         key: "chronic-neural-activity",

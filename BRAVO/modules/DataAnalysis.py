@@ -106,6 +106,33 @@ def queryAvailableAnalyses(participant_uid, request_type):
             
             Overview["Analyses"].append(Analysis.get_info())
     
+    elif request_type == "TimeSeriesAnalysis":
+        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
+        
+        Overview["Recordings"] = []
+        for recording in Recordings:
+            Description = recording.get_info()
+            if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        Description["Device"] = device
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+            elif recording.type == "DelsysMDAT":
+                Description["Type"] = "Delsys MDT"
+
+            elif recording.type == "HDFCSV":
+                Description["Name"] = recording.metadata["SensorType"]
+                Description["Type"] = "Delsys CSV Format"
+            
+            elif recording.type == "AOMPX":
+                Description["Type"] = "Alpha Omega MPX"
+            
+            Overview["Recordings"].append(Description)
+
     return Overview
 
 def queryCustomizedAnalysis(participant_uid, analysis):
@@ -296,20 +323,20 @@ def handleButterworthFilter(Data, config):
     for data in Data["Data"]:
         if config["Configurations"][0]["Value"] == "Bandpass Filter":
             if config["Configurations"][1]["Value"] == "":
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'lowpass', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'lowpass', output='sos')
             elif config["Configurations"][2]["Value"] == "":
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'highpass', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'highpass', output='sos')
             else:
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bp', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bp', output='sos')
         elif config["Configurations"][0]["Value"] == "Bandstop Filter":
             if config["Configurations"][1]["Value"] == "":
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'highpass', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'highpass', output='sos')
             elif config["Configurations"][2]["Value"] == "":
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'lowpass', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][1]["Value"])])*2/data["SamplingRate"], 'lowpass', output='sos')
             else:
-                [b,a] = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bandstop', output='ba')
+                sos = signal.butter(5, np.array([float(config["Configurations"][1]["Value"]), float(config["Configurations"][2]["Value"])])*2/data["SamplingRate"], 'bandstop', output='sos')
 
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
     return Data
 
 ProcessingNodes.append({
@@ -335,6 +362,54 @@ def handleWienerFilter(Data, config):
             Errors = signal.wiener(data["Data"][:,i], mysize=size)
             data["Data"][:,i] = Errors
     return Data
+
+def processTimeseriesAnalysis(participant_uid, recording_uid, config):
+    recording = models.Recording.find(uid=recording_uid)
+    AnalysisStruct = {"Signal": [], "Annotations": []}
+    
+    if not recording.source.owner.pk == participant_uid:
+        raise Exception("Permission Denied. Accessing Denied Recordings")
+    
+    if recording.type in ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data["Data"] = Data["Data"].T
+        del Data["Missing"]
+        
+        DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+        for i in range(len(Data["ChannelNames"])):
+            Data["ChannelNames"][i] = DBSDevice["GenericName"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+
+        TimeShift = recording.adjusted_alignment
+        AnalysisStruct["Signal"].append({
+            "Type": "Signal",
+            "RecordingId": recording.uid,
+            "SignalSeries": Data,
+            "Alignment": TimeShift
+        })
+
+        Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
+        AnalysisStruct["Annotations"].extend(Annotations)
+
+    elif recording.type in ["AOMPX"]:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data["Data"] = Data["Data"].T
+        del Data["Missing"]
+        
+        TimeShift = recording.adjusted_alignment
+        AnalysisStruct["Signal"].append({
+            "Type": "Signal",
+            "RecordingId": recording.uid,
+            "SignalSeries": Data,
+            "Alignment": TimeShift
+        })
+
+        Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
+        AnalysisStruct["Annotations"].extend(Annotations)
+
+    AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
+    return AnalysisStruct
 
 def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
     Analysis = models.Analysis.find(uid=analysis_uid)
@@ -383,15 +458,15 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
 
 def processTimeDomainStreaming(recording, data, config):
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
-        [b,a] = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
 
     if config["TimeSeriesRecording"]["NotchFilter"]["value"] == "Notch 55-65Hz":
-        [b,a] = signal.butter(5, np.array([55,65])*2/data["SamplingRate"], 'bandstop', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([55,65])*2/data["SamplingRate"], 'bandstop', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
     elif config["TimeSeriesRecording"]["NotchFilter"]["value"] == "Notch 45-55Hz":
-        [b,a] = signal.butter(5, np.array([45,55])*2/data["SamplingRate"], 'bandstop', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([45,55])*2/data["SamplingRate"], 'bandstop', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
 
     for i in range(len(data["ChannelNames"])):
         if config["TimeSeriesRecording"]["WienerFilter"]["value"] == "Use Wiener Filter":
@@ -430,8 +505,8 @@ def handleCardiacFilter(recording, data, config):
             zScore = stats.zscore(data["Data"][:,i][KurtosisIndex[j]:KurtosisIndex[j]+Window])
             ExpectedKurtosis[j] = np.mean(np.power(zScore, 4))
 
-        [b,a] = signal.butter(3, np.array([0.5, 2])*2/data["SamplingRate"], "bandpass")
-        ExpectedKurtosis = signal.filtfilt(b,a,ExpectedKurtosis)
+        sos = signal.butter(3, np.array([0.5, 2])*2/data["SamplingRate"], "bandpass", output="sos")
+        ExpectedKurtosis = signal.sosfiltfilt(sos,ExpectedKurtosis)
         Peaks, _ = signal.find_peaks(ExpectedKurtosis, distance=125)
         Peaks += int(Window/2)
 
@@ -605,7 +680,10 @@ def selectRecordingChannel(analysis, channel_names=[]):
     AllChannels = []
     ActiveChannels = []
 
-    FilteredAnalysis = {"Signal": [], "Therapy": analysis["Therapy"], "Annotations": analysis["Annotations"]}
+    FilteredAnalysis = {"Signal": [], "Annotations": analysis["Annotations"]}
+    if "Therapy" in analysis.keys():
+        FilteredAnalysis["Therapy"] = analysis["Therapy"]
+        
     for trial in range(len(analysis["Signal"])):
         if len(ActiveChannels) == 0:
             if len(channel_names) == 0:
@@ -669,15 +747,15 @@ def processNeuralActivitySnapshot(recording, data, config):
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
-        [b,a] = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
 
     if config["TimeSeriesRecording"]["NotchFilter"]["value"] == "Notch 55-65Hz":
-        [b,a] = signal.butter(5, np.array([55,65])*2/data["SamplingRate"], 'bandstop', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([55,65])*2/data["SamplingRate"], 'bandstop', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
     elif config["TimeSeriesRecording"]["NotchFilter"]["value"] == "Notch 45-55Hz":
-        [b,a] = signal.butter(5, np.array([45,55])*2/data["SamplingRate"], 'bandstop', output='ba')
-        data["Data"] = signal.filtfilt(b, a, data["Data"], axis=0)
+        sos = signal.butter(5, np.array([45,55])*2/data["SamplingRate"], 'bandstop', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
 
     for i in range(len(data["ChannelNames"])):
         if config["TimeSeriesRecording"]["WienerFilter"]["value"] == "Use Wiener Filter":

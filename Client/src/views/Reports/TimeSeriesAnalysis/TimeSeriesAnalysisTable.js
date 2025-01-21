@@ -44,7 +44,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}) {
+function TimeSeriesAnalysisTable({data, getRecordingData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -56,21 +56,17 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
   const [displayData, setDisplayData] = React.useState([]);
 
   const tableHeader = [{
-    title: "StreamingTableDate",
+    title: "Recording Time",
     minWidth: 100,
-    width: "30%"
+    width: "40%"
   },{
-    title: "StreamingTableChannels", 
+    title: "Recording Channels", 
     minWidth: 200,
-    width: "25%"
+    width: "35%"
   },{
-    title: "StreamingTableTherapy", 
+    title: "Recording Duration", 
     minWidth: 200,
-    width: "25%"
-  },{
-    title: "StreamingTableRecordingDuration", 
-    minWidth: 200,
-    width: "15%"
+    width: "20%"
   }]
 
   React.useEffect(() => {
@@ -93,7 +89,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     }
 
     if (uniqueDates.length > 0) {
-      setAvailableDates(uniqueDates.sort((a,b) => a.Date - b.Date));
+      setAvailableDates(uniqueDates.sort((a,b) => a.value - b.value));
       setViewDate(uniqueDates[0]);
       setFilterOptions({TypeOptions: typeOptions, Type: "All", Keyword: ""})
     }
@@ -111,7 +107,6 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
 
       let filterState = dateString == selectedDate.label && (data[i].Type == filterOptions.Type || filterOptions.Type == "All");
       if (filterState) {
-        let recordingList = recordings.filter((a) => data[i].DataId.includes(a.Id))
         if (filterOptions.Keyword.length > 0) {
           let contents = filterOptions.Keyword.split(" ");
           for (let content of contents) {
@@ -119,16 +114,13 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
             filterState = filterState && (
               data[i].Type.toLowerCase().includes(optionLower) || 
               data[i].Name.toLowerCase().includes(optionLower) || 
-              data[i].Id.toLowerCase().includes(optionLower) || 
-              recordingList.filter((b) => b.Metadata.ChannelNames.filter((a) => a.toLowerCase().includes(optionLower)).length > 0).length > 0
+              data[i].Id.toLowerCase().includes(optionLower)
             );
-
           }
         }
         
         if (filterState) {
           collectiveData.push({...data[i], 
-            Recordings: recordingList,
           state: false});
         }
       }
@@ -148,15 +140,12 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
       })
 
       if (dateString == date.label) {
-        collectiveData.push({...data[i], 
-          Recordings: recordings.filter((a) => data[i].DataId.includes(a.Id)),
+        collectiveData.push({...data[i],
         state: false});
       }
     }
     setDisplayData(collectiveData);
   };
-
-  
 
   const setStimMode = (recordingID, index, event) => {
     for (var i in displayData) {
@@ -239,7 +228,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
                 {tableHeader.map((col) => (
                   <TableCell key={col.title} variant="head" style={{width: col.width, minWidth: col.minWidth, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
                     <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
-                      {col.title ? dictionary.TherapeuticAnalysis.Table[col.title][language] : "[]"}
+                      {col.title}
                     </MDTypography>
                   </TableCell>
                 ))}
@@ -251,16 +240,14 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
             <TableBody>
               {displayData.sort((a,b) => a.Date - b.Date).map((analysis) => {
                 for (let i in analysis.DataId) {
-                  const recording = recordings.filter((a) => a.Id == analysis.DataId[i])[0];
-                  if (recording.Therapy) {
-                    analysis.Therapy = recording.Therapy;
-                  } else {
-                    analysis.RecordingChannels = recording.Metadata.ChannelNames;
-                  }
+                  
                 }
                 return <TableRow key={analysis.Id}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                    <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
+                    <MDTypography variant="h5" style={{marginBottom: 0}} fontSize={18} fontWeight={"bold"}>
+                      {analysis.Name}
+                    </MDTypography>
+                    <MDTypography variant="h5" fontSize={13} style={{marginBottom: 0}}>
                       {new Date(analysis.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(analysis.Timezone),
                         hour: "2-digit",
                         minute: "2-digit",
@@ -269,36 +256,29 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
                       })}
                     </MDTypography>
                     <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
-                      {analysis.Name}
+                      {analysis.Type}
                     </MDTypography>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
-                    {analysis.RecordingChannels.map((a) => (
-                      <MDTypography key={a} variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                        {a}
-                      </MDTypography>
-                    ))} 
+                      {analysis.Metadata.ChannelNames.filter((a,i) => i < 3).map((a) => (
+                        <MDTypography key={a} variant="h6" fontSize={12} style={{marginBottom: 0}}>
+                          {a}
+                        </MDTypography>
+                      ))} 
+                      {analysis.Metadata.ChannelNames.length > 3 ? (
+                        <MDTypography variant="h6" fontSize={12} style={{marginBottom: 0}}>
+                          {"... Total "}{analysis.Metadata.ChannelNames.length.toFixed(0)}{" Channels"}
+                        </MDTypography>
+                      ) : null}
                     </MDBox>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
-                    {analysis.Therapy.map((a, i) => (
-                      <MDBox key={i} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
-                      <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
-                        {a.Contact}{": "}
+                      <MDTypography variant="p" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
+                        {analysis.Metadata.Duration.toFixed(0)}{" seconds"}
                       </MDTypography>
-                      <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                        {a.Frequency.toFixed(1)}{" Hz "}{a.Pulsewidth.toFixed(1)}{" μSec"}
-                      </MDTypography>
-                      </MDBox>
-                    ))} 
                     </MDBox>
-                  </TableCell>
-                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                    <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
-                      {analysis.Recordings[0].Metadata.Duration.toFixed(2)}{" " + dictionary.Time.Seconds[language]} <br/>
-                    </MDTypography>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDButton variant={"contained"} color="info" onClick={() => {
@@ -324,4 +304,4 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
   ), [data, showTable, displayData]);
 }
 
-export default TherapeuticAnalysisTable;
+export default TimeSeriesAnalysisTable;

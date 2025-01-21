@@ -90,8 +90,10 @@ def checkExistingSegments(segments, params):
     for i in range(len(segments)):
         if segments[i]["TherapyWindow"] == params["TherapyWindow"]:
             if segments[i]["TherapyNote"] == params["TherapyNote"]:
-                if segments[i]["Device"] == params["Device"]:
-                    return i
+                if segments[i]["RecordingString"] == params["RecordingString"]:
+                    if segments[i]["Device"] == params["Device"]:
+                        if segments[i]["ChannelNames"] == params["ChannelNames"]:
+                            return i
     return -1
 
 def extractChronicNeuralActivity(participant, devices, recordings, config):
@@ -120,7 +122,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
                         Activity = {
                             "Device": DBSDevice["Id"],
-                            "TherapyWindow": [Timestamps[j-1], Timestamps[j]],
+                            "TherapyWindow": [float(Timestamps[j-1]), float(Timestamps[j])],
                             "TherapyNote": TherapyNote,
                             "TherapyString": extractTherapyString(TherapyNote),
                             "RecordingString": extractSensingString(TherapyNote),

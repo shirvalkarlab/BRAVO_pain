@@ -88,15 +88,14 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
   }, [figGroup]);
 
   const getTherapyChanges = (key) => {
-
     let modifiedParameters = [];
     let previousState = {};
     let therapySeries = {};
+    let parameters = ["Amplitude", "Frequency", "Pulsewidth"];
     for (let i in dataToRender.Therapy) {
       for (let j in dataToRender.Therapy[i].TherapySeries) {
         if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key]) {
           if (dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key].Type == "StandardIPGStimulation") {
-            let parameters = ["Amplitude", "Frequency", "Pulsewidth"];
             for (let parameter of parameters) {
               if (previousState[parameter] === undefined) {
                 therapySeries[parameter] = [{time: dataToRender.Therapy[i].TherapySeries[j].Time, state: dataToRender.Therapy[i].TherapySeries[j].TherapyOverview[key][parameter]}]
@@ -113,6 +112,12 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
       }
     }
 
+    if (Object.keys(therapySeries).length == 0) {
+      for (let parameter of parameters) {
+        therapySeries[parameter] = [{time: 0, state: -1}]
+      }
+    }
+    
     return therapySeries;
   }
 
@@ -121,7 +126,7 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
     
     // Extract PSDs
     for (let i in dataToRender.Signal) {
-      const therapySeries = getTherapyChanges(therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] ? therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] : dataToRender.Signal[i].SignalSeries.ChannelNames)
+      const therapySeries = getTherapyChanges(therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] ? therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] : dataToRender.Signal[i].SignalSeries.ChannelNames);
       cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames] = JSON.parse(JSON.stringify(therapySeries));
       if (therapySeries[parameter].length > 1) {
         for (let stage = 0; stage < therapySeries[parameter].length; stage++) {
