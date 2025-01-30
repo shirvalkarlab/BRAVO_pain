@@ -1,0 +1,14 @@
+[Unit]
+After=network.target
+RestartLimitIntervalSec=0
+StartLimitBurst=100
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/BRAVO/Server/
+ExecStart=/root/BRAVO/Server/venv/bin/daphne -b 0.0.0.0 -p 3001 BRAVO.asgi:application
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
