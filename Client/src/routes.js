@@ -29,6 +29,7 @@ import MDAvatar from "components/MDAvatar";
 import Icon from "@mui/material/Icon";
 
 import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle, MdStorage, MdSdStorage } from "react-icons/md";
+import { IoWatch } from "react-icons/io5";
 import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
@@ -58,8 +59,7 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
-const FitbitAuth = lazy(() => import('views/Fitbit/Auth'));
-const FitbitDashboard = lazy(() => import('views/Fitbit/Dashboard'));
+const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
@@ -194,17 +194,10 @@ const routes = {
       }
     ]
   },
-  "FitbitReports": {
-    icon: <MdFitbit />,
-    name: "Fitbit Dashboard",
+  "ExternalSensorReports": {
+    icon: <IoWatch />,
+    name: "External Sensors",
     children: [
-      {
-        key: "FitbitAuth",
-        name: "Fitbit Request Authentication",
-        icon: <MdFitbit />,
-        route: "/fitbit/auth/:participant_uid",
-        component: <FitbitAuth />,
-      },
       {
         key: "FitbitDashboard",
         name: "Fitbit Dashboard",

@@ -67,7 +67,7 @@ def retrieveProcessingSettings(config=dict()):
             "BaselineCorrection": {
                 "name": "Baseline Correlation for Time-Frequency Analysis",
                 "description": "",
-                "options": ["No Correction", "Use Baseline Correction"],
+                "options": ["No Correction"],
                 "value": "No Correction"
             },
             "Normalization": {
@@ -177,6 +177,49 @@ def mergeParticipants(source, target):
     
     source.delete()
 
+def listRecordings(participant_uid):
+    Participant = models.Participant.find(uid=participant_uid)
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
+    
+    AllRecordings = []
+    for recording in Recordings:
+        Description = recording.get_info()
+        if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
+            for device in DBSDevices:
+                if device["Id"] == recording.source.metadata["Device"]:
+                    Description["Device"] = device
+                    for i in range(len(Description["Metadata"]["ChannelNames"])):
+                        Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+        elif recording.type == "MedtronicBrainSensePowerDomain":
+            for device in DBSDevices:
+                if device["Id"] == recording.source.metadata["Device"]:
+                    Description["Therapy"] = [{
+                        "Hemisphere": side,
+                        "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
+                        "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
+                        "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                        "Segment": ""
+                    } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
+                    Description["Device"] = device
+                    for i in range(len(Description["Metadata"]["ChannelNames"])):
+                        if Description["Metadata"]["ChannelNames"][i].endswith("Stimulation"):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Stimulation"
+                        else:
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Recording"
+
+        elif recording.type == "DelsysMDAT":
+            pass
+
+        elif recording.type == "HDFCSV":
+            Description["Name"] = recording.metadata["SensorType"]
+
+        AllRecordings.append(Description)
+        
+    return AllRecordings
+
 def listSourceFiles(participant_uid, file_type=None):
     Participant = models.Participant.find(uid=participant_uid)
     if not file_type:
@@ -243,7 +286,8 @@ def listSourceFiles(participant_uid, file_type=None):
             
             SourceFile["RecordingCount"] = 0
             for i in range(len(AllRecordings)):
-                SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
+                if "ChannelNames" in AllRecordings[i].metadata.keys():
+                    SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
 
             SourceFiles.append(SourceFile)
 
@@ -262,7 +306,8 @@ def listSourceFiles(participant_uid, file_type=None):
             
             SourceFile["RecordingCount"] = 0
             for i in range(len(AllRecordings)):
-                SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
+                if "ChannelNames" in AllRecordings[i].metadata.keys():
+                    SourceFile["RecordingCount"] += len(AllRecordings[i].metadata["ChannelNames"])
 
             SourceFiles.append(SourceFile)
 

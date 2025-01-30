@@ -56,6 +56,7 @@ import MDButton from "components/MDButton";
 import DatabaseLayout from "layouts/DatabaseLayout";
 import EditParticipantInfoView from "./EditParticipantInfoView";
 import EditDeviceInfoView from "./EditDeviceInfoView";
+import UploadDataView from "./UploadDataView";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
@@ -80,6 +81,7 @@ export default function ParticipantOverview() {
   const [participantInfo, setParticipantInfo] = useState(false);
   const [editParticipantInfo, setEditParticipantInfo] = useState(false);
   const [editDeviceInfo, setEditDeviceInfo] = useState({show: false});
+  const [uploadView, setUploadView] = useState({show: false});
   const [activeExperiment, setActiveExperiment] = useState({show: false, options: [], active: experiment});
   const [uploadNewJson, setUploadNewJson] = useState({show: false});
   const [mergeRecords, setMergeRecords] = useState({show: false});
@@ -246,10 +248,15 @@ export default function ParticipantOverview() {
                     </Grid>
                     <Grid item xs={12}>
                       <Divider variant="middle" />
-                      <MDButton variant="outlined" color="warning" fullWidth 
+                      <MDButton variant="contained" color="warning" fullWidth 
                         onClick={() => setEditParticipantInfo(true)}
                       >
                         {dictionary.ParticipantOverview.EditParticipantInfo[language]}
+                      </MDButton>
+                      <MDButton variant="contained" color="info" fullWidth 
+                        onClick={() => setUploadView({show: true, participant: participant_uid})}
+                      >
+                        {"Upload Data to Participant"}
                       </MDButton>
                     </Grid>
                   </Grid>
@@ -261,6 +268,11 @@ export default function ParticipantOverview() {
                 removeParticipant={removeParticipant}
                 onCancel={() => setEditParticipantInfo(false)} 
                 onUpdate={updateParticipantInformation} 
+              />
+              <UploadDataView 
+                show={uploadView.show}
+                participant_uid={participant_uid} 
+                onCancel={() => setUploadView({show: false})} 
               />
             </Grid>
             <Grid item xs={12} lg={8} display={"flex"} alignItems={"stretch"}>

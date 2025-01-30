@@ -52,7 +52,7 @@ import LoadingProgress from "components/LoadingProgress";
 export default function Profile() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
-  const { user, language, patientID } = controller;
+  const { user, language } = controller;
 
   const [deidentificationTable, setDeidentificationTable] = useState([]);
   const [profile, setProfile] = useState(false);
@@ -87,17 +87,20 @@ export default function Profile() {
               <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
                 <TextField
                   variant="standard"
-                  value={profile.key ? profile.key : "NOT AVAILABLE"}
+                  value={profile.APIKey}
                   label={"Rest API Secure Key (Individually Linked. DO NOT SHARE)"} type="text"
                   fullWidth disabled
                 />
                 <MDButton color={"info"} onClick={() => {
-                  SessionController.query("/api/requestSecureKey").then((response) => {
-                    setProfile({...profile, key: response.data.key})
+                  SessionController.query("/api/queryProfile", {
+                    RequestType: "RefreshAPIToken"
+                  }).then((response) => {
+                    setProfile(response.data);
+                    setAlert();
                   }).catch((error) => {
                     SessionController.displayError(error, setAlert);
                   });
-                }} style={{marginLeft: 15}}>{"Request New Key"}</MDButton>
+                }} style={{marginLeft: 15}}>{"Refresh API Token"}</MDButton>
               </Grid>
             </Grid>
           </MDBox>

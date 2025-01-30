@@ -154,7 +154,7 @@ def decodeHDFCSVData(mdatFile):
         else:
             i += 1
     
-    MinimumRecordingDuration = np.min([i["Time"][-1] for i in HPFCSV if not np.all(i["Data"] == 0)])
+    MinimumRecordingDuration = np.min([i["Time"][-1]-i["Time"][0] for i in HPFCSV if not np.all(i["Data"] == 0)])
     SamplingRates = np.unique([np.around(1/np.median(np.diff(i["Time"])),0) for i in HPFCSV if not np.all(i["Data"] == 0)])
 
     TrignoSensorList = []
@@ -165,11 +165,11 @@ def decodeHDFCSVData(mdatFile):
         for i in range(len(HPFCSV)):
             SamplingRate = np.around(1/np.median(np.diff(HPFCSV[i]["Time"])),0)
             if SamplingRate == fs and not np.all(HPFCSV[i]["Data"] == 0):
-                Data["Data"].append(np.interp(Data["Time"], HPFCSV[i]["Time"], HPFCSV[i]["Data"]))
+                Data["Data"].append(np.interp(Data["Time"] + HPFCSV[i]["Time"][0], HPFCSV[i]["Time"], HPFCSV[i]["Data"]))
                 Data["ChannelNames"].append(HPFCSV[i]["Name"])
         Data["Data"] = np.array(Data["Data"]).T
         Data["SamplingRate"] = fs
-        Data["StartTime"] = 0
+        Data["StartTime"] = HPFCSV[i]["Time"][0]
         Data["Missing"] = np.zeros(Data["Data"].shape)
         Data["Duration"] = MinimumRecordingDuration
         TrignoSensorList.append(Data)

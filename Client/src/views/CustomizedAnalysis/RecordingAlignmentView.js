@@ -104,7 +104,7 @@ function RecordingAlignmentView({nodes}) {
     for (let i in availableChannels.active) {
       if (!data[availableChannels.active[i].id]) {
         const ids = availableChannels.active[i].id.split("_");
-        SessionController.query("/api/queryTimeseriesRecording", {
+        SessionController.query("/api/queryRawTimeseries", {
           RequestType: "RawTimeseries",
           ParticipantId: participant_uid,
           RecordingId: ids[1],
@@ -129,11 +129,10 @@ function RecordingAlignmentView({nodes}) {
     for (let i in availableChannels.active) {
       if (data[availableChannels.active[i].id]) {
         const dataToRender = data[availableChannels.active[i].id];
-        var timeArray = Array(dataToRender.Data.length).fill(0).map((value, index) => new Date(dataToRender.StartTime*1000 + dataToRender.Alignment*1000 + (1000/dataToRender.SamplingRate)*index));
+        const timeArray = dataToRender.Time.map((value, index) => new Date(dataToRender.StartTime*1000 + dataToRender.Alignment*1000 + value*1000));
         graphSeries.push({
           type: "line",
           x: timeArray, y: dataToRender.Data,
-          ylim: Math.quantileSeq(Math.abs(Math.matrix(dataToRender.Data)), 0.99),
           xlim: [timeArray[0],timeArray[timeArray.length-1]], 
           options: {
             id: availableChannels.active[i].id,

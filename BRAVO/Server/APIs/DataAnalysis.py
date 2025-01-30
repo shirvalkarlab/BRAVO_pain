@@ -41,6 +41,29 @@ from modules import Database, DataCurator, DataAnalysis
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 
+class QueryAnalysisConfigurations(RestViews.APIView):
+    
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if request.data["RequestType"] == "QueryConfigurations":
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            return Response(status=200, data=userConfig)
+
+        elif request.data["RequestType"] == "UpdateConfigurations":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "Configurations"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["Configurations"]})
+            request.user.configuration["ProcessingConfiguration"] = userConfig
+            request.user.save()
+            return Response(status=200, data=userConfig)
+
 class QueryTherapeuticEffectAnalysis(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]
@@ -62,16 +85,31 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "ActiveChannels"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
-            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+
             result = Database.getCachedResult("/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
 
-            Analysis = DataAnalysis.processTherapeuticAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
-            LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
-            Database.saveCachedResult(LimitedAnalysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
-            return Response(status=200, data=LimitedAnalysis)
+            metadata = {**userConfig, **request.data, **{
+                "ActiveChannels": ""
+            }}
+            Analysis = Database.getCachedResult("/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], metadata)
+            if not Analysis:
+                Analysis = DataAnalysis.processTherapeuticAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
+                #Database.saveCachedResult(Analysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], metadata)
+                         
+            if not request.data["ActiveChannels"] == "RequestAllChannel":
+                Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
 
+            Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            return Response(status=200, data=Analysis)
+
+        return Response(status=400, data={"message": "Malformed Input"})
+    
 class QueryTimeseriesAnalysis(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]
@@ -93,15 +131,21 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "ActiveChannels"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
-            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+
             result = Database.getCachedResult("/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
-            LimitedAnalysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
-            Database.saveCachedResult(LimitedAnalysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
-            return Response(status=200, data=LimitedAnalysis)
+            if not request.data["ActiveChannels"] == "RequestAllChannel":
+                Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
+
+            Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            return Response(status=200, data=Analysis)
 
 class QueryNeuralActivitySnapshot(RestViews.APIView):
 
@@ -117,7 +161,11 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
             return Response(status=403)
         
         if request.data["RequestType"] == "RequestAll":
-            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+
             result = Database.getCachedResult("/queryNeuralActivitySnapshot", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
@@ -140,7 +188,11 @@ class QueryChronicNeuralActivity(RestViews.APIView):
             return Response(status=403)
         
         if request.data["RequestType"] == "RequestAll":
-            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+
             result = Database.getCachedResult("/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)

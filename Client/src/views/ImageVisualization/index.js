@@ -148,45 +148,58 @@ function ImageVisualization() {
 
   const checkItemIndex = (item) => {
     for (var i in availableItems) {
-      if (availableItems[i].file == item.file) return i; 
+      if (availableItems[i].Id == item.Id) return i; 
     }
   };
 
   const addModel = async (item, color) => {
-    if (!item.downloaded) {
-      const data = await retrieveModels(participant_uid, item, color);
-      if (item.type === "electrode") {
-        var electrodeCount = 0;
-        for (var i in controlItems) {
-          if (controlItems[i].type == "electrode") {
-            electrodeCount++;
+    for (let i in controlItems) {
+      if (controlItems[i].id == item.Id) {
+        controlItems[i].show = !controlItems[i].show;
+        return setControlItems([...controlItems]);
+      }
+    }
+  };
+
+  const addModels = async (items, colors) => {
+    const allItems = [];
+    for (let i in items) {
+      const item = items[i];
+
+      if (!item.Downloaded) {
+        const data = await retrieveModels(participant_uid, item);
+        if (item.DataType === "Electrode") {
+          let electrodeCount = 0;
+          for (let k in controlItems) {
+            if (controlItems[k].DataType == "Electrode") {
+              electrodeCount++;
+            }
+          }
+        }
+  
+        const index = checkItemIndex(item);
+        availableItems[index].Downloaded = true;
+        allItems.push(...data);
+      } else {
+        for (let k in controlItems) {
+          if (controlItems[k].Id == item.Id) {
+            controlItems[k].Show = !controlItems[k].Show;
           }
         }
       }
-
-      const index = checkItemIndex(item);
-      availableItems[index].downloaded = true;
-      setAvailableItems(availableItems);
-      setControlItems([...controlItems, ...data]);
-    } else {
-      for (var i in controlItems) {
-        if (controlItems[i].filename == item.file) {
-          controlItems[i].show = !controlItems[i].show;
-        }
-      }
-      setControlItems([...controlItems]);
     }
-    setAddItemModal({...addItemModal, show: false});
+    setAvailableItems(availableItems);
+    setControlItems([...controlItems, ...allItems]);
+    setShowRecordingList(false);
   };
 
-  const updateObjectColor = (filename, color) => {
-    for (var i in controlItems) {
-      if (controlItems[i].filename == filename) {
+  const updateObjectColor = (item, color) => {
+    for (let i in controlItems) {
+      if (controlItems[i].id == item.Id) {
         controlItems[i].color = color.hex;
-        break;
+        return setControlItems([...controlItems]);
       }
     }
-    setControlItems([...controlItems]);
   };
 
   const updateTargetPoints = () => {
@@ -235,7 +248,7 @@ function ImageVisualization() {
                         {availableItems.map((item) => {
                           let downloadedItem = null;
                           for (let i in controlItems) {
-                            if (controlItems[i].filename == item.file) {
+                            if (controlItems[i].id == item.Id) {
                               downloadedItem = controlItems[i]
                             }
                           }
@@ -264,12 +277,12 @@ function ImageVisualization() {
                                     }}
                                     PaperProps={{sx: {boxShadow: "none"}}}
                                   >
-                                    <TwitterPicker color={downloadedItem.color} onChange={(color) => updateObjectColor(item.file, color)}/>
+                                    <TwitterPicker color={downloadedItem.color} onChange={(color) => updateObjectColor(item, color)}/>
                                   </Popover>
                                 </>
                               ) : null}
                               <MDTypography variant="h6" fontSize={15} color={downloadedItem ? "dark" : "light"} style={{cursor: "pointer"}} onClick={() => addModel(item)}>
-                                {item.file}
+                                {item.Name}
                               </MDTypography>
                               {downloadedItem ? (<IconButton variant="contained" color={downloadedItem.show ? "info" : "light"} onClick={() => addModel(item)}>
                                 <i className="fa-solid fa-eye" style={{fontSize: 10}}></i>
@@ -297,7 +310,7 @@ function ImageVisualization() {
                           <group matrixAutoUpdate={false} matrix={worldMatrix}>
                             {controlItems.map((item) => {
                               if (item.data && item.show) {
-                                if (item.type === "stl") {
+                                if (item.type === "STL") {
                                   return <Model key={item.filename} geometry={item.data} material={{
                                     color: item.color,
                                     specular: 0x111111,
@@ -343,15 +356,13 @@ function ImageVisualization() {
             </Grid>
           </MDBox>
 
-          
           <Dialog open={showRecordingList} onClose={() => setShowRecordingList(false)} 
             PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
           >
             <ImagingSelect images={availableItems} onSelectRecording={(recordings) => {
-              
+              addModels(availableItems.filter((a) => recordings.includes(a.Id)))
             }} onClose={() => setShowRecordingList(false)} />
           </Dialog>
-
 
           <Dialog open={editTargetEntry.show} onClose={() => setEditTargetEntry({...editTargetEntry, show: false})}>
             <MDBox px={2} pt={2}>

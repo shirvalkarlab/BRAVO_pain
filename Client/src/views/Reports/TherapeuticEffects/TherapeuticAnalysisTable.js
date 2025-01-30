@@ -93,7 +93,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     }
 
     if (uniqueDates.length > 0) {
-      setAvailableDates(uniqueDates.sort((a,b) => a.Date - b.Date));
+      setAvailableDates(uniqueDates.sort((a,b) => a.value - b.value));
       setViewDate(uniqueDates[0]);
       setFilterOptions({TypeOptions: typeOptions, Type: "All", Keyword: ""})
     }
@@ -155,8 +155,6 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     }
     setDisplayData(collectiveData);
   };
-
-  
 
   const setStimMode = (recordingID, index, event) => {
     for (var i in displayData) {

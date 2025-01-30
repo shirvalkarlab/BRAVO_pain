@@ -23,6 +23,7 @@ import pickle, blosc
 import hashlib, hmac
 import shutil
 import copy
+import pandas as pd
 from filelock import Timeout, FileLock
 
 import numpy as np
@@ -408,9 +409,65 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
 
+    elif recording.type in ["HDFCSV"]:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data["Data"] = Data["Data"].T
+        del Data["Missing"]
+        
+        TimeShift = recording.adjusted_alignment
+        AnalysisStruct["Signal"].append({
+            "Type": "Signal",
+            "RecordingId": recording.uid,
+            "SignalSeries": Data,
+            "Alignment": TimeShift
+        })
+
+        Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
+        AnalysisStruct["Annotations"].extend(Annotations)
+
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
     return AnalysisStruct
 
+def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
+    Analysis = processTimeseriesAnalysis(participant_uid, recording_uid, config)
+    
+    Data = {}
+    for i in range(len(Analysis["Signal"])):
+        for j in range(len(Analysis["Signal"][i]["SignalSeries"]["ChannelNames"])):
+            Data["Time"] = np.arange(len(Analysis["Signal"][i]["SignalSeries"]["Data"][j,:])) / Analysis["Signal"][i]["SignalSeries"]["SamplingRate"]
+            Data[Analysis["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = Analysis["Signal"][i]["SignalSeries"]["Data"][j,:]
+
+    Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
+
+    df = pd.DataFrame(Data)
+    return df
+
+def getTherapyChanges(Analysis, key):
+    TherapySeries = {}
+    PreviousState = {}
+    parameters = ["Amplitude", "Frequency", "Pulsewidth"]
+    for i in range(len(Analysis["Therapy"])):
+        for j in range(len(Analysis["Therapy"][i]["TherapySeries"])):
+            if key in Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"].keys():
+                if Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"][key]["Type"] == "StandardIPGStimulation":
+                    for parameter in parameters:
+                        if not parameter in PreviousState.keys():
+                            TherapySeries[parameter] = [{"Time": Analysis["Therapy"][i]["TherapySeries"][j]["Time"], 
+                                                         "State": Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"][key][parameter]}]
+                        else:
+                            if not PreviousState[parameter] == Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"][key][parameter]:
+                                TherapySeries[parameter].append({"Time": Analysis["Therapy"][i]["TherapySeries"][j]["Time"], 
+                                                                 "State": Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"][key][parameter]})
+
+                        PreviousState[parameter] = Analysis["Therapy"][i]["TherapySeries"][j]["TherapyOverview"][key][parameter]
+
+    if len(TherapySeries.keys()) == 0:
+        for parameter in parameters:
+            TherapySeries[parameter] = [{"Time": 0, "State": -1}]
+    
+    return TherapySeries
+    
 def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
     Analysis = models.Analysis.find(uid=analysis_uid)
     AnalysisStruct = {"Signal": [], "Therapy": [], "Annotations": []}
@@ -454,7 +511,85 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
             })
 
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
+
+    AllTherapyLabels = []
+    for i in range(len(AnalysisStruct["Therapy"])):
+        for j in range(len(AnalysisStruct["Therapy"][i]["TherapySeries"])):
+            for key in AnalysisStruct["Therapy"][i]["TherapySeries"][j]["TherapyOverview"].keys():
+                if not key in AllTherapyLabels:
+                    AllTherapyLabels.append(key)
+    
+    parameters = ["Amplitude", "Frequency", "Pulsewidth"]
+    
+    StimulationPSDs = {}
+    for label in AllTherapyLabels:
+        StimulationPSDs[label] = {}
+        TherapyChanges = getTherapyChanges(AnalysisStruct, label)
+        for i in range(len(AnalysisStruct["Signal"])):
+            for j in range(len(AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"])):
+                StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = {}
+                Time = AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Time"] + AnalysisStruct["Signal"][i]["SignalSeries"]["StartTime"] + AnalysisStruct["Signal"][i]["Alignment"]
+
+                for parameter in parameters:
+                    UniqueStates = []
+                    for stage in range(len(TherapyChanges[parameter])):
+                        if not TherapyChanges[parameter][stage]["State"] in UniqueStates:
+                            UniqueStates.append(TherapyChanges[parameter][stage]["State"])
+                    UniqueStates = sorted(UniqueStates)
+                    StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter] = []
+
+                    if len(UniqueStates) > 1:
+                        for state in UniqueStates:
+                            TimeSelection = np.zeros(Time.shape, dtype=bool)
+                            for stage in range(len(TherapyChanges[parameter])-1):
+                                if TherapyChanges[parameter][stage]["State"] == state:
+                                    TimeSelection |= (
+                                        (Time > TherapyChanges[parameter][stage]["Time"]+2) & 
+                                        (Time < TherapyChanges[parameter][stage+1]["Time"]-2)
+                                    )
+                                
+                            if TherapyChanges[parameter][-1]["State"] == state:
+                                TimeSelection |= (
+                                    (Time > TherapyChanges[parameter][-1]["Time"]+2)
+                                )
+
+                            if np.sum(TimeSelection) > 0:
+                                StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter].append({
+                                    "Frequency": AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Frequency"],
+                                    "MeanPower": np.mean(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1),
+                                    "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1)/np.sqrt(np.sum(TimeSelection)),
+                                    "State": state
+                                })
+                                
+                    elif len(UniqueStates) == 1:
+                        StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter].append({
+                            "Frequency": AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Frequency"],
+                            "MeanPower": np.mean(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"],axis=1),
+                            "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1)/np.sqrt(np.sum(TimeSelection)),
+                            "State": UniqueStates[0]
+                        })
+                        
+    AnalysisStruct["TherapeuticEffects"] = StimulationPSDs
+    
     return AnalysisStruct
+
+def downloadTherapeuticAnalysis(participant_uid, analysis_uid, config):
+    Analysis = processTherapeuticAnalysis(participant_uid, analysis_uid, config)
+    
+    Data = {}
+    for i in range(len(Analysis["Signal"])):
+        for j in range(len(Analysis["Signal"][i]["SignalSeries"]["ChannelNames"])):
+            Data["Time"] = np.arange(len(Analysis["Signal"][i]["SignalSeries"]["Data"][j,:])) / Analysis["Signal"][i]["SignalSeries"]["SamplingRate"]
+            Data[Analysis["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = Analysis["Signal"][i]["SignalSeries"]["Data"][j,:]
+
+    Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
+
+    AllTherapyLabels = []
+    for i in range(len(Analysis["Therapy"])):
+        print(Analysis["Therapy"][i]["TherapySeries"][0])
+
+    df = pd.DataFrame(Data)
+    return df
 
 def processTimeDomainStreaming(recording, data, config):
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
@@ -561,12 +696,25 @@ def handleTimeFrequencyAnalysis(recording, data, config):
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
     data["Spectrum"] = []
+    if len(data["ChannelNames"]) == 1:
+        data["Data"] = data["Data"].reshape(-1,1)
+        data["Missing"] = data["Missing"].reshape(-1,1)
+
     for i in range(len(data["ChannelNames"])):
         if config["SpectrogramMethod"] == "Welch's Periodogram":
             Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
 
         elif config["SpectrogramMethod"] == "Short-time Fourier Transform":
             Spectrum = SPU.defaultSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
+
+        elif config["SpectrogramMethod"] == "Wavelet":
+            Spectrum = SPU.waveletTimeFrequency(data["Data"][:,i], freq=np.arange(0.5,data["SamplingRate"]/2,0.5), ma=int(data["SamplingRate"]/2), fs=data["SamplingRate"])
+            Spectrum["Missing"] = data["Missing"][:,i][::int(data["SamplingRate"]/2)]
+            Spectrum["Power"] = Spectrum["Power"][:,::int(data["SamplingRate"]/2)]
+            Spectrum["Time"] = Spectrum["Time"][::int(data["SamplingRate"]/2)] + 0.5
+
+        elif config["SpectrogramMethod"] == "Autoregressive Model (Yule-Walker)":
+            Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"], order=30)
 
         else: # Default Welch's Periodogram
             Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
@@ -584,7 +732,7 @@ def handleTimeFrequencyAnalysis(recording, data, config):
             Spectrum["logPower"] = Spectrum["logPower"][:, TimeSelection]
         
         if config["Normalization"] == "1/f PSD Trend Removal":
-            meanPSDs = np.nanmean(np.array(Spectrum["Power"]), axis=1)
+            meanPSDs = np.nanmedian(np.array(Spectrum["Power"]), axis=1)
             WindowRange = [1,data["SamplingRate"]/2 if data["SamplingRate"] < 200 else 100]
 
             FrequencyWindow = rangeSelection(Spectrum["Frequency"], WindowRange)
@@ -616,64 +764,18 @@ def handleTimeFrequencyAnalysis(recording, data, config):
     return data
 
 def handlePowerSpectralEstimation(recording, data, config):
-    ProcessedData = models.Recording.find(original=recording, type="PowerSpectralEstimation", metadata=config)
-    if ProcessedData:
-        return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
-    
+    Spectrum = handleTimeFrequencyAnalysis(recording, data, config)
+
     data["PSD"] = []
-    if len(data["ChannelNames"]) == 1:
-        data["Data"] = data["Data"].reshape(-1,1)
-        data["Missing"] = data["Missing"].reshape(-1,1)
-
-    for i in range(len(data["ChannelNames"])):
+    for i in range(len(Spectrum["Spectrum"])):
         PowerSpectralEstimation = {}
-        if config["SpectrogramMethod"] == "Welch's Periodogram":
-            Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
-
-        elif config["SpectrogramMethod"] == "Short-time Fourier Transform":
-            Spectrum = SPU.defaultSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
-
-        else: # Default Welch's Periodogram
-            Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
-
-        Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,i], window=1.0, overlap=0.5, fs=data["SamplingRate"])
-        TimeSelection = Spectrum["Missing"] == 0
-        Spectrum["Power"] = Spectrum["Power"][:, TimeSelection]
-
-        if config["Normalization"] == "1/f PSD Trend Removal":
-            meanPSDs = np.nanmean(np.array(Spectrum["Power"]), axis=1)
-            WindowRange = [1,data["SamplingRate"]/2 if data["SamplingRate"] < 200 else 100]
-
-            FrequencyWindow = rangeSelection(Spectrum["Frequency"], WindowRange)
-            fm = SpectralModel(peak_width_limits=[1,24])
-            fm.fit(np.array(Spectrum["Frequency"])[FrequencyWindow], meanPSDs[FrequencyWindow], WindowRange)
-            oof = fm.get_model("aperiodic", "linear")
-            
-            for j in range(Spectrum["Power"].shape[1]):
-                Spectrum["Power"][FrequencyWindow,j] = np.array(Spectrum["Power"][FrequencyWindow,j]) / oof
-
-            Spectrum["Power"] = Spectrum["Power"][FrequencyWindow,:]
-            Spectrum["Frequency"] = np.array(Spectrum["Frequency"])[FrequencyWindow]
-            
-        elif config["Normalization"] == "Gamma Band Normalize":
-            meanPSDs = np.nanmean(np.array(Spectrum["Power"]), axis=1)
-            FrequencyWindow = rangeSelection(Spectrum["Frequency"], [70,90])
-            MeanRefPower = np.nanmean(meanPSDs[FrequencyWindow])
-            for j in range(Spectrum["Power"].shape[1]):
-                Spectrum["Power"][:,j] = np.array(Spectrum["Power"][:,j]) / MeanRefPower
-        
-        PowerSpectralEstimation["Frequency"] = Spectrum["Frequency"]
-        PowerSpectralEstimation["Power"] = np.mean(Spectrum["Power"],axis=1)
-        PowerSpectralEstimation["stdPower"] = np.std(Spectrum["Power"],axis=1)
-        PowerSpectralEstimation["nObservation"] = np.sum(TimeSelection)
-        PowerSpectralEstimation["Config"] = {**Spectrum["Config"], **config}
+        PowerSpectralEstimation["Frequency"] = Spectrum["Spectrum"][i]["Frequency"]
+        PowerSpectralEstimation["Power"] = np.mean(Spectrum["Spectrum"][i]["Power"],axis=1)
+        PowerSpectralEstimation["stdPower"] = np.std(Spectrum["Spectrum"][i]["Power"],axis=1)
+        PowerSpectralEstimation["nObservation"] = Spectrum["Spectrum"][i]["Power"].shape[1]
+        PowerSpectralEstimation["Config"] = {**Spectrum["Spectrum"][i]["Config"], **config}
         data["PSD"].append(PowerSpectralEstimation)
     
-    ProcessedData = models.Recording.create(recording, "PowerSpectralEstimation")
-    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
-    ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
-    ProcessedData.metadata = config
-    ProcessedData.save()
     return data
 
 def selectRecordingChannel(analysis, channel_names=[]):
@@ -681,9 +783,10 @@ def selectRecordingChannel(analysis, channel_names=[]):
     ActiveChannels = []
 
     FilteredAnalysis = {"Signal": [], "Annotations": analysis["Annotations"]}
-    if "Therapy" in analysis.keys():
-        FilteredAnalysis["Therapy"] = analysis["Therapy"]
-        
+    for key in analysis.keys():
+        if not key in FilteredAnalysis.keys():
+            FilteredAnalysis[key] = analysis[key]
+            
     for trial in range(len(analysis["Signal"])):
         if len(ActiveChannels) == 0:
             if len(channel_names) == 0:
@@ -774,7 +877,7 @@ def processNeuralActivitySnapshot(recording, data, config):
         "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],
         "WienerFilter": config["TimeSeriesRecording"]["WienerFilter"]["value"],
         "CardiacFilter": config["TimeSeriesRecording"]["CardiacFilter"]["value"],
-        "SpectrogramMethod": config["PowerSpectralDensity"]["PSDMethod"]["value"],
+        "SpectrogramMethod": config["TimeSeriesRecording"]["SpectrogramMethod"]["value"],
         "BaselineCorrection": config["TimeSeriesRecording"]["BaselineCorrection"]["value"],
         "Normalization": config["TimeSeriesRecording"]["Normalization"]["value"]
     })

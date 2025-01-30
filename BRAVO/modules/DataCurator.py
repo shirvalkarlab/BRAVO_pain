@@ -148,7 +148,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     for survey in DatabaseEntries["SurveyRecordings"]:
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -158,7 +158,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename
@@ -167,7 +167,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     for stream in DatabaseEntries["StreamingRecordings"]:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -177,7 +177,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename
@@ -186,7 +186,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     for stream in DatabaseEntries["ChronicRecordings"]:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
             recording.delete()
             continue
 
@@ -197,7 +197,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename
@@ -209,7 +209,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             full_recording.delete()
 
     for event in DatabaseEntries["EventRecordings"]:
-        if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"]):
+        if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
         event_log = models.DBSEvent(**{key: event[key] for key in event.keys() if key in ["name", "type", "date"]}, source=source_file)
         event_log.save()
@@ -266,7 +266,7 @@ def HDFCSVDecoder(source_file, person, startTime=None):
         return commonNames
 
     for ProcessedData in TrignoData:
-        if startTime:
+        if startTime and ProcessedData["StartTime"] == 0:
             ProcessedData["StartTime"] = startTime
 
         recording = models.Recording(**{
@@ -276,7 +276,7 @@ def HDFCSVDecoder(source_file, person, startTime=None):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
             recording.delete()
             continue
 
@@ -431,7 +431,8 @@ def ImportBRAVOExport(source_file):
     person = models.Participant(uid=uuid.UUID(Header["Id"]).hex, name=Header["Name"], sex=Header["Gender"], date_of_birth=Header["DOB"],
                         diagnosis=Header["Diagnosis"], mrn=Header["MRN"], institute_id=source_file.metadata["Institute"])
     person.save()
-
+    
+    """
     DBSDevices = []
     for i in range(len(Header["Devices"])):
         device, _ = models.DBSDevice.find_or_create(Header["Devices"][i]["SerialNumber"], Header["Devices"][i]["Type"], source_file.metadata["Institute"])
@@ -442,7 +443,8 @@ def ImportBRAVOExport(source_file):
         device.device_bloodline = Header["Devices"][i]["Location"]
         device.save()
         DBSDevices.append(device)
-    
+    """
+
     currentIndex = 16+HeaderSize
     while currentIndex < len(rawBytes):
         PacketType = rawBytes[currentIndex:currentIndex+7].decode("utf-8")

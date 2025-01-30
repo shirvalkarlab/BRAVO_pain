@@ -24,17 +24,18 @@ from django.conf import settings
 from . import Auth, WebSession, Participants, FitbitDashboard, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy
 
 urlpatterns = [
-    path('getUserInfo', Auth.UserInfo.as_view()),
     path('register', Auth.UserRegister.as_view()),
     path('login', Auth.UserLogin.as_view()),
     path('logout', Auth.UserLogout.as_view()),
+    path('queryProfile', Auth.QueryProfile.as_view()),
     
     path('requestFitbitAuth', FitbitDashboard.FitbitAuthHandler.as_view()),
     path('queryFitbitData', FitbitDashboard.QueryFitbitData.as_view()),
 
+    path('downloadData', DataHandler.DataDownloadHandler.as_view()),
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
     path('setRecordingTimeShift', DataHandler.RecordingTimeShiftHandler.as_view()),
-    path('queryTimeseriesRecording', DataHandler.TimeSeriesRecordingHandler.as_view()),
+    path('queryRawTimeseries', DataHandler.TimeSeriesRecordingHandler.as_view()),
 
     path('querySourceFiles', DataHandler.DataSourceFileHandler.as_view()),
     path('queryImageSourceFiles', DataHandler.NeuroImageFileHandler.as_view()),
@@ -62,6 +63,7 @@ urlpatterns = [
     path('deleteDeviceInformation', Participants.DeleteDeviceInformation.as_view()),
     path('checkAccessPermission', Participants.CheckAccessPermission.as_view()),
 
+    path('queryAnalysisConfigurations', DataAnalysis.QueryAnalysisConfigurations.as_view()),
     path('queryTherapeuticEffectAnalysis', DataAnalysis.QueryTherapeuticEffectAnalysis.as_view()),
     path('queryNeuralActivitySnapshot', DataAnalysis.QueryNeuralActivitySnapshot.as_view()),
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),

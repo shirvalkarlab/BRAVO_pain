@@ -81,12 +81,6 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       return;
     };
 
-    SessionController.query("/api/queryProcessingQueue").then((response) => {
-      setQueueState({...queueState, queues: response.data, show: false});
-    }).catch((error) => {
-      SessionController.displayError(error, setAlert);
-    });
-
     let client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
     client.onerror = function() {
       console.log('Connection Error');
@@ -321,16 +315,6 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
                 disableRipple
                 color="inherit"
                 sx={navbarIconButton}
-                variant="contained"
-                onClick={(event) => getProcessingQueue()}
-              >
-                {queueState.queues.filter((item) => item.state === "InProgress" || item.state === "Processing").length > 0 ? <CircularProgress color={"info"} fontSize="large" /> : <PublishedWithChanges color={"info"} fontSize="large" />}
-              </IconButton>
-              <IconButton
-                size="small"
-                disableRipple
-                color="inherit"
-                sx={navbarIconButton}
                 aria-controls="notification-menu"
                 aria-haspopup="true"
                 variant="contained"
@@ -347,15 +331,6 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
         )}
       </Toolbar>
       
-      <Dialog
-        open={queueState.show}
-        PaperProps={{ sx: {minWidth: {
-          xs: "100vw", sm: 900
-        }} }}
-        onClose={() => setQueueState({...queueState, show: false})}
-      >
-        <ProcessingQueue queues={queueState.queues} clearQueue={clearQueue}/>
-      </Dialog>
     </AppBar>
   );
 }

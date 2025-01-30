@@ -44,21 +44,23 @@ import MuiAlertDialog from "components/MuiAlertDialog";
 import LoadingProgress from "components/LoadingProgress";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
+import FitbitScoreTimeline from "./FitbitScoreTimeline";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-export default function FitbitAuth() {
+export default function FitbitDashboard() {
   const [controller, dispatch] = usePlatformContext();
   const { user, language } = controller;
   const { participant_uid } = useParams();
 
   const [alert, setAlert] = useState(null);
-  const [OAuthURL, setOAuthURL] = useState(null);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [fitbitTokenURL, setFitbitTokenURL] = useState("");
+  const [data, setData] = useState(null);
 
+  const [authenticated, setAuthenticated] = useState(0);
+  const [OAuthURL, setOAuthURL] = useState(null);
+  const [fitbitTokenURL, setFitbitTokenURL] = useState("");
   const [authPeriod, setAuthPeriod] = useState([]);
 
   useEffect(() => {
@@ -67,7 +69,7 @@ export default function FitbitAuth() {
       ParticipantId: participant_uid
     }).then((response) => {
       if (!response.data.OAuthURL) {
-        setAuthenticated(true);
+        setAuthenticated((a) => a+1);
         setAuthPeriod(response.data.map((a) => a.map((b) => moment(new Date(b*1000+new Date().getTimezoneOffset()*60000)))))
       } else {
         setOAuthURL(response.data.OAuthURL);
@@ -76,6 +78,21 @@ export default function FitbitAuth() {
       SessionController.displayError(error, setAlert);
     });
   }, []);
+
+  useEffect(() => {
+    if (authenticated < 1) return;
+    
+    setAlert(<LoadingProgress />)
+    SessionController.query("/api/queryFitbitData", {
+      RequestType: "RequestOverview",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setData(response.data)
+      setAlert(null)
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }, [authenticated])
 
   useEffect(() => {
     if (!authenticated || !authPeriod) return;
@@ -96,64 +113,8 @@ export default function FitbitAuth() {
   return (
     <DatabaseLayout>
       {alert}
-      {!authenticated ? (
-        <MDBox>
-          <Card sx={{marginTop: 5}}>
-            <MDBox p={2}>
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <MDTypography variant="h3">
-                    {"Request Fitbit Web API Access"}
-                  </MDTypography>
-                </Grid>
-                <Grid item xs={12}>
-                  <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
-                    {"The Fitbit Dashboard Web API require OAuth 2.0 authentication for your account. Please use the Authentication Link provided below to request Authentication token. "}
-                    {"Once authentication is successful, please copy the redirect URL into the textbox below to extract authentication token. "}
-                  </MDTypography>
-                </Grid>
-                {OAuthURL ? (
-                <Grid item xs={12} sx={{lineHeight: 1}}>
-                  <Link href={OAuthURL} target="_blank">
-                    <MDTypography variant="p" fontWeight="regular" color={"info"} fontSize={12}>
-                      {OAuthURL}
-                    </MDTypography>
-                  </Link>
-                </Grid>
-                ) : null}
-
-                {OAuthURL ? (
-                <Grid item xs={12} sx={{lineHeight: 1}}>
-                  <MDBox display={"flex"} flexDirection={"row"}>
-                    <TextField
-                      variant="standard"
-                      margin="dense" id="fitbit_oauth_redirect"
-                      value={fitbitTokenURL}
-                      onChange={(event) => setFitbitTokenURL(event.target.value)}
-                      fullWidth
-                    />
-                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
-                      setAlert(<LoadingProgress />)
-                      SessionController.query("/api/requestFitbitAuth", {
-                        RequestType: "VerifyToken",
-                        ParticipantId: participant_uid,
-                        TokenURL: fitbitTokenURL
-                      }).then((response) => {
-                        setAlert(null);
-                      }).catch((error) => {
-                        SessionController.displayError(error, setAlert);
-                      });
-                    }}>
-                      {"Verify Token"} 
-                    </MDButton>
-                  </MDBox>
-                </Grid>
-                ) : null}
-              </Grid>
-            </MDBox>
-          </Card>
-        </MDBox>
-      ) : (
+      
+      {authenticated ? (
         <MDBox>
           <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
@@ -165,7 +126,7 @@ export default function FitbitAuth() {
                 </Grid>
                 <Grid item xs={12}>
                   <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
-                    {"If multiple participants are sharing the same device, please use this section to define time period of data collection. All dates are inclusive. If empty, full data range is available (Device is not shared across multiple participants). "}
+                    {"If multiple participants are sharing the same device, please use this section to define time period of data collection. All dates are inclusive. If empty, server will send error. "}
                   </MDTypography>
 
                   <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
@@ -174,6 +135,20 @@ export default function FitbitAuth() {
                     });
                   }}>
                     {"Add Date Periods"} 
+                  </MDButton>
+                  
+                  <MDButton variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
+                    SessionController.query("/api/requestFitbitAuth", {
+                      RequestType: "DeleteAuthentication",
+                      ParticipantId: participant_uid
+                    }).then((response) => {
+                      setAuthenticated(0);
+                      setAuthPeriod([])
+                    }).catch((error) => {
+                      SessionController.displayError(error, setAlert);
+                    });
+                  }}>
+                    {"Delete Authentication"} 
                   </MDButton>
                 </Grid>
                 {authPeriod.map((section, sectionIndex) => {
@@ -225,8 +200,107 @@ export default function FitbitAuth() {
               </Grid>
             </MDBox>
           </Card>
+          <Card sx={{marginTop: 5}}>
+            <MDBox p={2}>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <MDTypography variant="h3">
+                    {"Request Fitbit Data Update"}
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
+                    {"Fitbit Data API has a request data limit of 150 Request Per Hour (Reset at xx:00), therefore, the data will be be automatically requested unless user interaction. "}
+                    {"Please use the button below to request data update. Each refresh (depending on the duration of data acquisition) takes about 20 Requests to complete. "}
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                    setAlert(<LoadingProgress />)
+                    SessionController.query("/api/queryFitbitData", {
+                      RequestType: "RefreshFitbitData",
+                      ParticipantId: participant_uid
+                    }).then((response) => {
+                      setAuthenticated((a) => a+1);
+                      setAlert(null);
+                    }).catch((error) => {
+                      SessionController.displayError(error, setAlert);
+                    });
+                  }}>
+                    {"Refresh Fitbit Data"} 
+                  </MDButton>
+                </Grid>
+              </Grid>
+            </MDBox>
+            <MDBox p={2}>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <FitbitScoreTimeline dataToRender={data} figureTitle={"FitbitScoreTimeline"}/>
+                </Grid>
+              </Grid>
+            </MDBox>
+          </Card>
+        </MDBox>
+      ) : (
+        <MDBox>
+          <Card sx={{marginTop: 5}}>
+            <MDBox p={2}>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <MDTypography variant="h3">
+                    {"Request Fitbit Web API Access"}
+                  </MDTypography>
+                </Grid>
+                <Grid item xs={12}>
+                  <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
+                    {"The Fitbit Dashboard Web API require OAuth 2.0 authentication for your account. Please use the Authentication Link provided below to request Authentication token. "}
+                    {"Once authentication is successful, please copy the redirect URL into the textbox below to extract authentication token. "}
+                  </MDTypography>
+                </Grid>
+                {OAuthURL ? (
+                <Grid item xs={12} sx={{lineHeight: 1}}>
+                  <Link href={OAuthURL} target="_blank">
+                    <MDTypography variant="p" fontWeight="regular" color={"info"} fontSize={12}>
+                      {OAuthURL}
+                    </MDTypography>
+                  </Link>
+                </Grid>
+                ) : null}
+
+                {OAuthURL ? (
+                <Grid item xs={12} sx={{lineHeight: 1}}>
+                  <MDBox display={"flex"} flexDirection={"row"}>
+                    <TextField
+                      variant="standard"
+                      margin="dense" id="fitbit_oauth_redirect"
+                      value={fitbitTokenURL}
+                      onChange={(event) => setFitbitTokenURL(event.target.value)}
+                      fullWidth
+                    />
+                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
+                      setAlert(<LoadingProgress />)
+                      SessionController.query("/api/requestFitbitAuth", {
+                        RequestType: "VerifyToken",
+                        ParticipantId: participant_uid,
+                        TokenURL: fitbitTokenURL
+                      }).then((response) => {
+                        setAlert(null);
+                        setAuthenticated(true);
+                      }).catch((error) => {
+                        SessionController.displayError(error, setAlert);
+                      });
+                    }}>
+                      {"Verify Token"} 
+                    </MDButton>
+                  </MDBox>
+                </Grid>
+                ) : null}
+              </Grid>
+            </MDBox>
+          </Card>
         </MDBox>
       )}
+
     </DatabaseLayout>
   );
 };

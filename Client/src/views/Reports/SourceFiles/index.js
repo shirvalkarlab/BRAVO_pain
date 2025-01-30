@@ -44,6 +44,7 @@ import AOMPXFileTable from "./AOMPXFileTable";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
+import DefaultFileTable from "./DefaultFileTable";
 
 export default function SourceFiles() {
   const navigate = useNavigate();
@@ -208,6 +209,9 @@ export default function SourceFiles() {
             ) : null}
             {sourceFileType.active == "HDF CSV Format" ? (
               <HDFCSVFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
+            ) : null}
+            {["ChronicNeuralActivitySource","FitbitWebAPISource"].includes(sourceFileType.active) ? (
+              <DefaultFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
           </MDBox>
         </Card>

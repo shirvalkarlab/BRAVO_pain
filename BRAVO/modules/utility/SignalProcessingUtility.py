@@ -340,7 +340,7 @@ def MedtronicPSD(data, fs=250):
         power[:,i] = np.abs(np.fft.fft(windowed_data))
         maxIndex += packets[i % 4]
 
-    return {"Frequency": freq[:100], "Power": np.mean(power,axis=1)[:100], "StdErr": stats.sem(power,axis=1)[:100]}
+    return {"Frequency": freq[:100], "Power": power[:100,:], "logPower": 10*np.log10(power[:100,:]), "Config": {"Window": 256, "Overlap": 0}}
 
 def defaultSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, fs=100):
     configuration = {"Window": window, "Overlap": overlap}
@@ -378,6 +378,7 @@ def inertiaHilbertSpectrogram(data, frequency, freq_bandwidth=2, fs=100):
 def waveletTimeFrequency(data, freq, ma=1, w=6, fs=100):
     widths = w * fs / (2 * freq * np.pi)
     cwtm = signal.cwt(data, signal.morlet2, widths, w=w)
+    configuration = {"Window": widths, "Type": "morlet2", "MovingAverage": ma}
     power = np.abs(cwtm)
     if ma > 1:
         for i in range(len(data)):
@@ -387,7 +388,7 @@ def waveletTimeFrequency(data, freq, ma=1, w=6, fs=100):
                 power[:,i] = np.mean(power[:,i-ma:],axis=1)
             else:
                 power[:,i] = np.mean(power[:,i-ma:i+ma],axis=1)
-    return dict({"Time": np.array(range(len(data)))/fs,"Frequency": freq, "Power": power, "logPower": 10*np.log10(power)})
+    return dict({"Time": np.array(range(len(data)))/fs,"Frequency": freq, "Power": power, "logPower": 10*np.log10(power), "Config": configuration})
 
 def calculateMissingLabel(missing, threshold=0, window=2.0, overlap=1.0, fs=100):
     window = int(window * fs)

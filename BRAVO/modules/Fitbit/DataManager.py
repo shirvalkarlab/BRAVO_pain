@@ -26,6 +26,11 @@ def saveFitbitData(Participant, data):
     source.hashed = Database.saveSourceFile(data, source.pointer)
     source.save()
 
+def deleteFitbitData(Participant):
+    source = models.SourceFile.find(owner=Participant, type="FitbitWebAPISource")
+    if source:
+        source.delete()
+        
 def calculateDateKey(period):
     keys = []
     for day in np.arange(period[0], period[1]+1, 3600*24):

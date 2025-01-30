@@ -25,8 +25,9 @@ import { formatSegmentString, matchArray } from "database/helper-function";
 
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
+import { SessionController } from "database/session-control";
 
-function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, figureTitle}) {
+function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   
@@ -122,6 +123,16 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
   }
 
   useEffect(() => {
+    let duration = 0;
+    for (let i in dataToRender.Signal) {
+      duration += dataToRender.Signal[i].SignalSeries.Data.length
+    };
+
+    if (duration > 300*250) {
+      setCacheData({...dataToRender.TherapeuticEffects, type: "ServerSideRender"});
+      return;
+    }
+
     let cacheData = {};
     
     // Extract PSDs
@@ -141,11 +152,13 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
           if (selected_data[0].length > 0) {
             cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
             cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].power = math.matrix(selected_data);
+            cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].state = therapySeries[parameter][stage].state;
           }
         }
       } else if (therapySeries[parameter].length == 1) {
         cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][0].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
         cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][0].power = math.matrix(dataToRender.Signal[i].SignalSeries.Spectrum.Power);
+        cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][0].state = therapySeries[parameter][0].state;
       }
     }
 
@@ -153,69 +166,153 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
   }, [figGroup, parameter, therapyLabel, dataToRender]);
 
   useEffect(() => {
+    if (!cacheData) return;
+
+    const colors = colormap({
+      colormap: 'jet',
+      nshades: 101,
+      format: 'hex',
+      alpha: 1,
+    });
+
+    const getFrequencyIndex = (freq) => {
+      for (let i = 0; i < freq.length; i++) {
+        if (freq[i] >= centerFreq) return i;
+      }
+    }
+
     let graphSeries = [];
-
-    for (let key in cacheData) {
-      const therapySeries = cacheData[key];
-
-      // Calculate Average PSDs
-      for (let parameter in therapySeries) {
-        const colors = colormap({
-          colormap: 'jet',
-          nshades: 101,
-          format: 'hex',
-          alpha: 1,
-        });
-
-        const maxColor = math.max(therapySeries[parameter].map((a) => a.state*10));
-        const colorMapper = (level) => colors[Math.floor(level/maxColor*100)];
-        for (let stage in therapySeries[parameter]) {
-          if (therapySeries[parameter][stage].freq) {
+    if (cacheData.type === "ServerSideRender") {
+      for (let label in cacheData) {
+        for (let channel in cacheData[label]) {
+          if (channel == label) {
+            const maxColor = math.max(cacheData[label][channel][parameter].map((a) => a.State*10));
+            const colorMapper = (level) => colors[Math.floor(level/maxColor*100)];
             
-            graphSeries.push({
-              type: "line",
-              x: therapySeries[parameter][stage].freq, y: math.mean(therapySeries[parameter][stage].power, 1)._data,
-              options: {
-                id: parameter + ": " + therapySeries[parameter][stage].state,
-                name: parameter + ": " + therapySeries[parameter][stage].state.toFixed(1),
-                color: colorMapper(therapySeries[parameter][stage].state*10),
-                linewidth: 2,
-                hovertemplate: `  ${parameter + ": " + therapySeries[parameter][stage].state.toFixed(1)}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
-                showlegend: true
-              }, 
-              figName: key
-            });
+
+            for (let stage in cacheData[label][channel][parameter]) {
+              const stageColor = colorMapper(parseFloat(cacheData[label][channel][parameter][stage].State)*10);
+
+              graphSeries.push({
+                type: "line",
+                x: cacheData[label][channel][parameter][stage].Frequency, y: cacheData[label][channel][parameter][stage].MeanPower, error_y: cacheData[label][channel][parameter][stage].StdErrPower,
+                line_options: {
+                  id: parameter + ": " + cacheData[label][channel][parameter][stage].State,
+                  name: parameter + ": " + cacheData[label][channel][parameter][stage].State,
+                  legendgroup: parameter + ": " + cacheData[label][channel][parameter][stage].State,
+                  color: stageColor,
+                  linewidth: 2,
+                  hovertemplate: `  ${parameter + ": " + cacheData[label][channel][parameter][stage].State}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
+                  showlegend: true
+                }, 
+                shade_options: {
+                  color: stageColor,
+                  alpha: 0.3,
+                  legendgroup: parameter + ": " + cacheData[label][channel][parameter][stage].State,
+                  showlegend: false
+                }, 
+                figName: channel
+              });
+
+              const index = getFrequencyIndex(cacheData[label][channel][parameter][stage].Frequency);
+              graphSeries.push({
+                type: "bar", x: [cacheData[label][channel][parameter][stage].State], y: [cacheData[label][channel][parameter][stage].MeanPower[index]], 
+                options: {
+                  error_y: {
+                    type: "data",
+                    array: [cacheData[label][channel][parameter][stage].StdErrPower[index]],
+                    visible: true
+                  },
+                  width: 0.5,
+                  facecolor: stageColor,
+                  hovertemplate: `  %{y:.2f} <extra></extra>`,
+                  showlegend: false,
+                },
+                figName: channel + "Boxplot"
+              })
+            }
           }
         }
       }
-      
-      const getFrequencyIndex = (freq) => {
-        for (let i = 0; i < freq.length; i++) {
-          if (freq[i] >= centerFreq) return i;
-        }
-      }
 
-      for (let parameter in therapySeries) {
-        let xData = [], yData = [];
-        for (let stage in therapySeries[parameter]) {
-          if (therapySeries[parameter][stage].freq) {
-            const centerIndex = getFrequencyIndex(therapySeries[parameter][stage].freq);
-            xData.push(...therapySeries[parameter][stage].power._data[centerIndex].map((a) => therapySeries[parameter][stage].state));
-            yData.push(...therapySeries[parameter][stage].power._data[centerIndex]);
+    } else {
+      for (let key in cacheData) {
+        const therapySeries = cacheData[key];
+
+        // Calculate Average PSDs
+        for (let parameter in therapySeries) {
+
+          const maxColor = math.max(therapySeries[parameter].map((a) => a.state*10));
+          const colorMapper = (level) => colors[Math.floor(level/maxColor*100)];
+
+          let uniqueValues = [];
+          for (let stage in therapySeries[parameter]) {
+            if (!uniqueValues.includes(therapySeries[parameter][stage].state)) {
+              uniqueValues.push(therapySeries[parameter][stage].state);
+            }
+          }
+
+          for (let value of uniqueValues.sort((a,b) => a-b)) {
+            let matrix = null
+            let frequency = null;
+            for (let stage in therapySeries[parameter]) {
+              if (therapySeries[parameter][stage].state == value && therapySeries[parameter][stage].freq) {
+                if (!matrix) {
+                  matrix = therapySeries[parameter][stage].power;
+                  frequency = therapySeries[parameter][stage].freq;
+                } else {
+                  matrix = math.concat(matrix, therapySeries[parameter][stage].power, 1);
+                }
+              }
+            }
+
+            if (matrix && frequency) {
+              graphSeries.push({
+                type: "line",
+                x: frequency, y: math.mean(matrix, 1)._data, error_y: math.std(matrix, 1)._data.map((a) => a/math.sqrt(math.size(matrix)._data[1])),
+                line_options: {
+                  id: parameter + ": " + value,
+                  name: parameter + ": " + value,
+                  legendgroup: parameter + ": " + value,
+                  color: colorMapper(parseFloat(value)*10),
+                  linewidth: 2,
+                  hovertemplate: `  ${parameter + ": " + value}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
+                  showlegend: true
+                }, 
+                shade_options: {
+                  color: colorMapper(parseFloat(value)*10),
+                  alpha: 0.3,
+                  legendgroup: parameter + ": " + value,
+                  showlegend: false
+                }, 
+                figName: key
+              });
+            }
           }
         }
         
-        if (yData.length > 0) {
-          graphSeries.push({
-            type: "box",
-            x: xData, y: yData, 
-            parameter: parameter,
-            options: {
-              width: 0.2,
-              hovertemplate: `<extra></extra>`,
-            },
-            figName: key + "Boxplot"
-          });
+        for (let parameter in therapySeries) {
+          let xData = [], yData = [];
+          for (let stage in therapySeries[parameter]) {
+            if (therapySeries[parameter][stage].freq) {
+              const centerIndex = getFrequencyIndex(therapySeries[parameter][stage].freq);
+              xData.push(...therapySeries[parameter][stage].power._data[centerIndex].map((a) => therapySeries[parameter][stage].state));
+              yData.push(...therapySeries[parameter][stage].power._data[centerIndex]);
+            }
+          }
+          
+          if (yData.length > 0) {
+            graphSeries.push({
+              type: "box",
+              x: xData, y: yData, 
+              parameter: parameter,
+              options: {
+                width: 0.2,
+                hovertemplate: `<extra></extra>`,
+              },
+              figName: key + "Boxplot"
+            });
+          }
         }
       }
     }
@@ -224,15 +321,24 @@ function StimulationPSD({dataToRender, activeChannels, onCenterFrequencyChange, 
   }, [cacheData, centerFreq]);
 
   const refreshRender = (fig, figName) => {
+    let maxYlim = 0;
     for (let i in renderData) {
       if (renderData[i].figName == figName) {
         if (renderData[i].type === "line") {
-          fig.plot(renderData[i].x, renderData[i].y, renderData[i].options);
+          fig.shadedErrorBar(renderData[i].x, renderData[i].y, renderData[i].error_y, renderData[i].line_options, renderData[i].shade_options);
         } else if (renderData[i].type === "box") {
           fig.box(renderData[i].x, renderData[i].y, renderData[i].options);
           fig.setSubtitle("Spectral Features @ " + centerFreq.toFixed(1) + " Hz");
           fig.setXlabel(renderData[i].parameter, {fontSize: 15});
           fig.setYlim([0, math.max(renderData[i].y)*1.1]);
+        } else if (renderData[i].type === "bar") {
+          fig.bar(renderData[i].x, renderData[i].y, renderData[i].options);
+          fig.setSubtitle("Spectral Features @ " + centerFreq.toFixed(1) + " Hz");
+          fig.setXlabel(renderData[i].parameter, {fontSize: 15});
+          if (math.max(renderData[i].y)*1.1 > maxYlim) {
+            maxYlim = math.max(renderData[i].y)*1.1+renderData[i].options.error_y.array[0];
+            fig.setYlim([0, maxYlim]);
+          }
         }
       }
     }

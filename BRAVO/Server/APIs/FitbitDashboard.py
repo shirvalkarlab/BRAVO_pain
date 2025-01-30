@@ -102,6 +102,11 @@ class FitbitAuthHandler(RestViews.APIView):
             device.save()
             return Response(status=200)
             
+        elif request.data["RequestType"] == "DeleteAuthentication":
+            DataManager.deleteFitbitData(Participant)
+            device.delete()
+            return Response(status=200)
+            
         elif request.data["RequestType"] == "SetAuthPeriod":
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "DatePeriods"]):
                 return Response(status=400, data={"message": "Malformed Input"})
@@ -151,8 +156,5 @@ class QueryFitbitData(RestViews.APIView):
             Data = DataManager.refreshFitbitData(device)
             DataManager.saveFitbitData(Participant, Data)
             return Response(status=200, data=Data)
-
-        #Data = DataQuery.queryAllData(device, 0, 0)
-        #DataManager.saveFitbitData(Participant, Data)
 
         return Response(status=200)

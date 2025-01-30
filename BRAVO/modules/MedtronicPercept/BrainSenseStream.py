@@ -228,7 +228,7 @@ def createDefaultAnalysis(TimeDomainRecordings, PowerDomainRecordings):
             ShortestDuration = np.min((PowerDomainRecordings[j]["Metadata"]["Duration"], TimeDomainRecordings[i]["Metadata"]["Duration"]))
             if LatestStartTime <= EarliestEndTime:
                 Overlap = (EarliestEndTime - LatestStartTime) / ShortestDuration
-                if Overlap > 0.7 and Overlap < 1.3 and np.abs(PowerDomainRecordings[j]["Metadata"]["Duration"] - TimeDomainRecordings[i]["Metadata"]["Duration"]) < 30:
+                if Overlap > 0.7 and Overlap < 1.3 and np.abs(PowerDomainRecordings[j]["Metadata"]["Duration"] - TimeDomainRecordings[i]["Metadata"]["Duration"]) < 180:
                     AllAnalyses.append({
                         "Type": "DefaultTherapeuticAnalysis",
                         "Name": "",

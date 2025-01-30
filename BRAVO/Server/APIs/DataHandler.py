@@ -24,19 +24,23 @@ import traceback
 from copy import deepcopy
 from pathlib import Path
 import hmac, hashlib
+from io import BytesIO
+import pandas as pd
+import numpy as np
 
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
+from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none
-from modules import Database, DataCurator
+from modules import Database, DataCurator, DataAnalysis, ImageDatabase
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -176,6 +180,75 @@ class DataUploadHandler(RestViews.APIView):
         get_or_none(os.remove)(lockFile)
         return Response(status=200)
 
+class DataDownloadHandler(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def get(self, request):
+        ParticipantId = self.request.query_params.get('ParticipantId')
+        CacheType = self.request.query_params.get('CacheType')
+
+        if not Database.checkAccessPermission(request.user, ParticipantId):
+            return Response(status=403)
+
+        if CacheType == "queryTherapeuticEffectAnalysis":
+            AnalysisId = self.request.query_params.get('AnalysisId')
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            FilePointer = DataAnalysis.downloadTherapeuticAnalysis(ParticipantId, AnalysisId, userConfig)
+            
+            with BytesIO() as fp:
+                FilePointer.to_csv(fp, index=False)
+                filename = "TherapeuticEffectAnalysis_" + ParticipantId + "_" + AnalysisId + ".csv"
+                response = HttpResponse( fp.getvalue(), content_type="text/csv" )
+                response["Content-Disposition"] = "attachment; filename=" + filename
+                return response
+
+        elif CacheType == "queryTimeseriesAnalysis":
+            RecordingId = self.request.query_params.get('RecordingId')
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            FilePointer = DataAnalysis.downloadTimeseriesAnalysis(ParticipantId, RecordingId, userConfig)
+            
+            with BytesIO() as fp:
+                FilePointer.to_csv(fp, index=False)
+                filename = "Timeseries_" + ParticipantId + "_" + RecordingId + ".csv"
+                response = HttpResponse( fp.getvalue(), content_type="text/csv" )
+                response["Content-Disposition"] = "attachment; filename=" + filename
+                return response
+
+        elif CacheType == "queryImageModel":
+            RecordingId = self.request.query_params.get('RecordingId')
+            file_data = ImageDatabase.stlReader(ParticipantId, RecordingId)
+            if not file_data:
+                return Response(status=400, data={"message": "Recording does not exist."})
+
+            return HttpResponse(bytes(file_data), status=200, headers={
+                "Content-Type": "application/octet-stream"
+            })
+        return Response(status=200)
+        
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "CacheType", "DataId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+            return Response(status=403)
+
+        if request.data["CacheType"] == "queryImageModel":
+            file = models.SourceFile.find(uid=request.data["DataId"])
+            if not file.owner.uid == request.data["ParticipantId"]:
+                return Response(status=403)
+            
+            if file.metadata["FileType"] == "STL":
+                file_data = DataCurator.loadCacheFile(file)
+                return HttpResponse(bytes(file_data), status=200, headers={
+                    "Content-Type": "application/octet-stream"
+                })
+
+        return Response(status=400, data={"message": "Malformed Input"})
+        
 class RecordingTimeShiftHandler(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]
@@ -216,26 +289,34 @@ class TimeSeriesRecordingHandler(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
             return Response(status=403)
         
-        recording = models.Recording.find(uid=request.data["RecordingId"])
-        if not recording.source.owner.uid == request.data["ParticipantId"]:
-            return Response(status=403)
+        if request.data["RequestType"] == "Overview":
+            Recordings = Database.listRecordings(request.data["ParticipantId"])
+            return Response(status=200, data=Recordings)
+
+        elif request.data["RequestType"] == "RawTimeseries":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
         
-        if request.data["RequestType"] == "RawTimeseries":
+            recording = models.Recording.find(uid=request.data["RecordingId"])
+            if not recording.source.owner.uid == request.data["ParticipantId"]:
+                return Response(status=403)
+        
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
             Data["Alignment"] = recording.adjusted_alignment
             if "ChannelIndex" in request.data.keys():
                 Data["Data"] = Data["Data"][:,int(request.data["ChannelIndex"])]
                 Data["Missing"] = Data["Missing"][:,int(request.data["ChannelIndex"])]
+            
+            if not "Time" in Data.keys():
+                Data["Time"] = np.arange(len(Data["Data"]))/Data["SamplingRate"]
 
             return Response(status=200, data=Data)
-
-
         return Response(status=400, data={"message": "Malformed Input"})
 
 class DataSourceFileHandler(RestViews.APIView):

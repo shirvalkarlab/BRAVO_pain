@@ -157,6 +157,17 @@ export const SessionController = (function () {
     };
   };
 
+  const getDownloadLink = (url, form) => {
+    let href = url;
+    href += "?";
+    for (let key in form) {
+      href += key + "=";
+      href += form[key] + "&"
+    }
+    
+    return href.slice(0,-1);
+  };
+
   const query = (url, form, config, timeout, responseType) => {
     let csrftoken = ""
     if (document.querySelector('[name=csrfmiddlewaretoken]')) {
@@ -322,6 +333,7 @@ export const SessionController = (function () {
     decodeMessage: decodeMessage,
     getConnectionStatus: getConnectionStatus,
 
+    getDownloadLink: getDownloadLink,
     query: query,
     displayError: displayError,
     syncSession: syncSession,

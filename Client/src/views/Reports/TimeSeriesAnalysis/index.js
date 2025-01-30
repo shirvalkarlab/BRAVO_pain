@@ -46,6 +46,7 @@ import FormField from "components/MDInput/FormField";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 import LayoutOptions from "./LayoutOptions";
+import ConfigurationDialog from "components/ConfigurationDialog";
 
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
@@ -103,7 +104,6 @@ function TimeSeriesAnalysis() {
       RequestType: "Overview",
       ParticipantId: participant_uid
     }).then((response) => {
-      console.log(response.data)
       setAvailableAnalysis(response.data);
       setAlert(null);
     }).catch((error) => {
@@ -130,8 +130,6 @@ function TimeSeriesAnalysis() {
           ActiveChannels: newQueryChannel
         })
 
-        console.log(response.data)
-        
         if (!channel) {
           setAnnotations(response.data.Annotations);
           setData({...response.data, CachedChannel: response.data.ActiveChannel, Analysis: analysis});
@@ -166,7 +164,14 @@ function TimeSeriesAnalysis() {
   };
   
   const exportCurrentStream = () => {
-    
+    let downloader = document.createElement('a');
+    downloader.href = SessionController.getDownloadLink("/api/downloadData", {
+      ParticipantId: participant_uid,
+      CacheType: "queryTimeseriesAnalysis",
+      RecordingId: data.Analysis.Id
+    });
+    downloader.target = '_blank';
+    downloader.click();
   };
 
   const handleAddEvent = async (eventInfo) => {
@@ -333,87 +338,7 @@ function TimeSeriesAnalysis() {
               </Grid>
             ) : null}
           </Grid>
-          <Drawer
-            sx={{
-              width: 300,
-              flexShrink: 0,
-              '& .MuiDrawer-paper': {
-                width: 300,
-                boxSizing: 'border-box',
-              },
-            }}
-            PaperProps={{
-              sx: {
-                borderWidth: "2px",
-                borderColor: "black",
-                borderStyle: "none",
-                boxShadow: "-2px 0px 5px gray",
-              }
-            }}
-            variant="persistent"
-            anchor="right"
-            open={drawerOpen.open}
-          >
-          <MDBox>
-            <IconButton onClick={() => setDrawerOpen({...drawerOpen, open: false})}>
-              <ChevronRightIcon />
-              <MDTypography>
-                {"Close"}
-              </MDTypography>
-            </IconButton>
-          </MDBox>
-          <MDBox>
-          <Grid container spacing={2} sx={{paddingLeft: 2, paddingRight: 2}}>
-            {Object.keys(drawerOpen.config).map((key) => {
-              return <Grid item xs={12} key={key} sx={{
-                wordWrap: "break-word",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word"
-              }}>
-                <MDTypography fontSize={18} fontWeight={"bold"}>
-                  {drawerOpen.config[key].name}
-                </MDTypography>
-                <MDTypography fontSize={15} fontWeight={"regular"}>
-                  {drawerOpen.config[key].description}
-                </MDTypography>
-                <Autocomplete
-                  options={drawerOpen.config[key].options}
-                  value={drawerOpen.config[key].value}
-                  onChange={(event, value) => setDrawerOpen((option) => {
-                    option.config[key].value = value;
-                    return {...option};
-                  })}
-                  renderInput={(params) => (
-                    <FormField
-                      {...params}
-                      InputLabelProps={{ shrink: true }}
-                    />
-                  )}
-                  disableClearable
-                />
-                <Divider variant="middle" />
-              </Grid>
-            })}
-          </Grid>
-          </MDBox>
-          <MDBox p={3}>
-            <MDButton variant={"gradient"} color={"success"} onClick={() => {
-              setAlert(<LoadingProgress/>);
-              SessionController.query("/api/updateSession", {
-                "RealtimeStream": drawerOpen.config
-              }).then(() => {
-                setDrawerOpen({...drawerOpen, open: false});
-                setAlert(null);
-              }).catch((error) => {
-                SessionController.displayError(error, setAlert);
-              });
-            }} fullWidth>
-              <MDTypography color={"light"}>
-                {"Update"}
-              </MDTypography>
-            </MDButton>
-          </MDBox>
-          </Drawer>
+          <ConfigurationDialog show={drawerOpen.open} setShow={(state) => setDrawerOpen({open: false})} setAlert={setAlert} />
           <MDBox style={{
             position: 'sticky',
             bottom: 32,

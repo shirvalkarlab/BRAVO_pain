@@ -29,7 +29,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
-from modules.HelperFunctions import sanitize_input, get_or_none
+from modules.HelperFunctions import sanitize_input, get_or_none, get_token
 from modules import Database, Auth
 from Server import models
 
@@ -100,13 +100,22 @@ class FetchAuthorizedInstitute(RestViews.APIView):
     def post(self, request):
         return Response(status=404)
 
-class UserInfo(RestViews.APIView):
+class QueryProfile(RestViews.APIView):
 
     permission_classes = [IsAuthenticated,]
     parser_classes = [RestParsers.JSONParser]
     
     def post(self, request):
-        return Response(status=200, data=request.user.get_info())
+        userInfo = request.user.get_info()
+        userInfo["APIKey"] = request.user.api_token
+
+        if "RequestType" in request.data.keys():
+            if request.data["RequestType"] == "RefreshAPIToken":
+                request.user.api_token = get_token(64)
+                request.user.save()
+                userInfo["APIKey"] = request.user.api_token
+
+        return Response(status=200, data=userInfo)
 
 class UserLogout(RestViews.APIView):
     
