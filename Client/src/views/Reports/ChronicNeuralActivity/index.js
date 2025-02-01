@@ -34,6 +34,7 @@ import MuiAlertDialog from "components/MuiAlertDialog";
 import ChronicTimeline from "./ChronicTimeline";
 import CircadianRhythm from "./CircadianRhythm";
 import EventPowerSpectrum from "./EventPowerSpectrum";
+import EventRelatedPower from "./EventRelatedPower";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -55,9 +56,10 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const [showEventCountOnCircadian, setShowEventCountOnCircadian] = useState(false);
   const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
  
-  const [eventList, setEventList] = useState([]);
+  const [annotationState, setAnnotationState] = useState({});
   const [circadianData, setCircadianData] = useState({});
   const [eventPSDData, setEventPSDData] = useState(false);
+  const [eventRelatedPower, setEventRelatedPower] = useState(false)
   const [eventLockedPowerData, setEventLockedPowerData] = useState(false);
   const [normalizeCircadianRhythm, setNormalizeCircadianRhythm] = useState(false);
 
@@ -123,28 +125,8 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
   }, [participant_uid]);
   
-  const populateEventPSDSelector = (data) => {
-    const options = [];
-    if (data) {
-      for (var i = 0; i < data.length; i++) {
-        for (var j = 0; j < data[i]["Render"].length; j++) {
-          if (data[i]["Render"][j].hasOwnProperty("Events")) {
-            options.push({
-              label: data[i]["Device"] + " " + data[i]["Hemisphere"] + " " + data[i]["Render"][j]["Therapy"],
-              hemisphere: data[i]["Device"] + " " + data[i]["Hemisphere"],
-              therapyName: data[i]["Render"][j]["Therapy"],
-              value: data[i]["Device"] + " " + data[i]["Hemisphere"] + " " + data[i]["Render"][j]["Therapy"]
-            });
-          }
-        }
-      }
-    }
-
-    if (options.length > 0) {
-      setEventPSDData({...eventPSDData, selector: options, currentValue: options[0]});
-    } else {
-      setEventPSDData({});
-    }
+  const updateAnnotationColor = (data) => {
+    setAnnotationState({...data})
   };
   
   useEffect(() => {
@@ -229,26 +211,12 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   }
 
   const exportCurrentStream = () => {
-    var csvData = "Time,Power,Therapy,Amplitude,Device,Hemisphere";
-    csvData += "\n";
-
-    for (let i = 0; i < data.ChronicData.length; i++) {
-      for (let j = 0; j < data.ChronicData[i].Power.length; j++) {
-        for (let k = 0; k < data.ChronicData[i].Power[j].length; k++) {
-          csvData += data.ChronicData[i].Timestamp[j][k] + ",";
-          csvData += data.ChronicData[i].Power[j][k] + ",";
-          csvData += data.ChronicData[i].Therapy[j].TherapyOverview + ",";
-          csvData += data.ChronicData[i].Amplitude[j][k] + ",";
-          csvData += data.ChronicData[i].Device + ",";
-          csvData += data.ChronicData[i].Hemisphere + "\n";
-        }
-      }
-    }
-
-    var downloader = document.createElement('a');
-    downloader.href = 'data:text/csv;charset=utf-8,' + encodeURI(csvData);
+    let downloader = document.createElement('a');
+    downloader.href = SessionController.getDownloadLink("/api/downloadData", {
+      ParticipantId: participant_uid,
+      CacheType: "queryChronicNeuralActivity"
+    });
     downloader.target = '_blank';
-    downloader.download = 'ChronicBrainSense.csv';
     downloader.click();
   };
 
@@ -292,7 +260,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                           </MDBox>
                         </Grid>
                         <Grid item xs={12} lg={12}>
-                          <ChronicTimeline data={data} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} figureTitle={"ChronicTimeline"}/>
+                          <ChronicTimeline data={data} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
                         </Grid>
                       </>
                     ) : (
@@ -342,6 +310,36 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                       </Grid>
                       <Grid item xs={12}>
                         <CircadianRhythm data={data} activeChannel={availableTherapy.active} annotations={annotations} showEventCount={showEventCountOnCircadian} figureTitle={"CircadianRhythm"}/>
+                      </Grid>
+                    </Grid>
+                  </Card>
+                </Grid>
+              ) : null}
+              {data ? (
+                <Grid item xs={12} lg={6}>
+                  <Card sx={{width: "100%"}}>
+                    <Grid container>
+                      <Grid item xs={12}>
+                        <MDBox p={2} lineHeight={1}>
+                          <Autocomplete
+                            value={availableTherapy.active}
+                            options={availableTherapy.options}
+                            onChange={(event, value) => {
+                              setAvailableTherapy({...availableTherapy, active: value})
+                            }}
+                            renderInput={(params) => (
+                              <FormField
+                                {...params}
+                                label={dictionary.ChronicBrainSense.Select.Therapy[language]}
+                                InputLabelProps={{ shrink: true }}
+                              />
+                            )}
+                            disableClearable
+                          />
+                        </MDBox>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <EventRelatedPower data={data} activeChannel={availableTherapy.active} annotations={annotations} annotationState={annotationState} figureTitle={"EventRelatedPower"}/>
                       </Grid>
                     </Grid>
                   </Card>

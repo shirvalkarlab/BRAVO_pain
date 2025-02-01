@@ -186,12 +186,70 @@ function TherapeuticEffects() {
     }
   };
 
+  const updateRecordingData = async (analysisUpdate) => {
+    setAlert(<LoadingProgress />)
+    try {
+      const response = await SessionController.query("/api/queryTherapeuticEffectAnalysis", {
+        RequestType: "UpdateData",
+        ParticipantId: participant_uid,
+        AnalysisId: analysisUpdate.analysisId,
+        RecordingName: analysisUpdate.name,
+        StimulationLabel: analysisUpdate.therapy.map((a) => a.SegmentMode ? a.SegmentMode : "Ring")
+      });
+      
+      setAvailableAnalysis((availableAnalysis) => {
+        for (let i in availableAnalysis.Analyses) { 
+          if (availableAnalysis.Analyses[i].Id == analysisUpdate.analysisId) {
+            availableAnalysis.Analyses[i].Name = analysisUpdate.name;
+            for (let j in availableAnalysis.Recordings) {
+              if (availableAnalysis.Analyses[i].DataId.includes(availableAnalysis.Recordings[j].Id) && availableAnalysis.Recordings[j].Metadata.Therapy) {
+                availableAnalysis.Recordings[j].Metadata.Therapy = analysisUpdate.therapy;
+                availableAnalysis.Recordings[j].Name = analysisUpdate.name;
+                break;
+              }
+            }
+            break;
+          }
+        }
+        return {...availableAnalysis};
+      });
+      setAlert(null);
+    } catch (error) {
+      SessionController.displayError(error, setAlert);
+    }
+  };
+
   const handleRequestServerAnalysis = async () => {
     
   }
   
-  const onCenterFrequencyChange = (side, freq) => {
-    
+  const addNewAnalysis = (newGroupView) => {
+    setAlert(<LoadingProgress />)
+    SessionController.query("/api/queryTherapeuticEffectAnalysis", {
+      RequestType: "AddNewAnalysis",
+      ParticipantId: participant_uid,
+      TherapyIds: newGroupView.therapies.map((a) => a.Id),
+      RecordingIds: newGroupView.timeseries.map((a) => a.Id)
+    }).then((response) => {
+      setAvailableAnalysis({...availableAnalysis, Analyses: [...availableAnalysis.Analyses, response.data]});
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
+
+  const deleteAnalysis = (analysisId) => {
+    setAlert(<LoadingProgress />)
+    SessionController.query("/api/queryTherapeuticEffectAnalysis", {
+      RequestType: "DeleteAnalysis",
+      ParticipantId: participant_uid,
+      AnalysisId: analysisId,
+    }).then((response) => {
+      setAvailableAnalysis({...availableAnalysis, Analyses: [...availableAnalysis.Analyses.filter((a) => a.Id != analysisId)]});
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
   };
 
   const toggleCardiacFilter = () => {
@@ -327,7 +385,9 @@ function TherapeuticEffects() {
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
                       {availableAnalysis.Analyses.length > 0 ? (
-                        <TherapeuticAnalysisTable data={availableAnalysis.Analyses} recordings={availableAnalysis.Recordings} getRecordingData={getRecordingData}/>
+                        <TherapeuticAnalysisTable data={availableAnalysis.Analyses} recordings={availableAnalysis.Recordings} getRecordingData={getRecordingData} updateRecordingData={updateRecordingData}
+                          addNewAnalysis={addNewAnalysis} deleteAnalysis={deleteAnalysis}
+                        />
                       ) : (
                         <MDTypography variant="h6" fontSize={24}>
                           {dictionary.WarningMessage.NoData[language]}

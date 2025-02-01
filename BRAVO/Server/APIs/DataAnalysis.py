@@ -81,6 +81,33 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             Overview = DataAnalysis.queryAvailableAnalyses(request.data["ParticipantId"], "TherapeuticAnalysis")
             return Response(status=200, data=Overview)
 
+        elif request.data["RequestType"] == "AddNewAnalysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "TherapyIds", "RecordingIds"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            if len(request.data["RecordingIds"]) == 0 or len(request.data["TherapyIds"]) == 0:
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            AllRecordings = []
+            AllRecordings.extend(request.data["RecordingIds"])
+            AllRecordings.extend(request.data["TherapyIds"])
+            result = DataAnalysis.createAnalysis(request.data["ParticipantId"], "TherapeuticAnalysis", AllRecordings)
+            if result:
+                return Response(status=200, data=result.get_info())
+            else:
+                return Response(status=400, data={"message": "Fail to create analysis"})
+                
+
+        elif request.data["RequestType"] == "DeleteAnalysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            result = DataAnalysis.deleteAnalysis(request.data["ParticipantId"], request.data["AnalysisId"])
+            if result:
+                return Response(status=200)
+            else:
+                return Response(status=400, data={"message": "Fail to delete analysis"})
+
         elif request.data["RequestType"] == "RequestData":
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "ActiveChannels"]):
                 return Response(status=400, data={"message": "Malformed Input"})
@@ -107,6 +134,30 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
 
             Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
+
+        elif request.data["RequestType"] == "UpdateData":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingName", "StimulationLabel"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"])
+            for recording in analysis.recordings.all():
+                if not recording.source.owner.uid == request.data["ParticipantId"]:
+                    return Response(status=400, data={"message": "Permission Denied"})
+
+                if recording.type == "MedtronicBrainSenseTimeDomain":
+                    recording.name = request.data["RecordingName"]
+                    recording.save()
+                elif recording.type == "MedtronicBrainSensePowerDomain":
+                    recording.name = request.data["RecordingName"]
+                    sideN = 0
+                    for side in ["Left", "Right"]:
+                        if side in recording.metadata["Therapy"].keys():
+                            recording.metadata["Therapy"][side]["SegmentMode"] = request.data["StimulationLabel"][sideN]
+                            sideN += 1
+                    recording.save()
+            analysis.name = request.data["RecordingName"]
+            analysis.save()
+            return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
     

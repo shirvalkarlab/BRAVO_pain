@@ -39,6 +39,7 @@ import AlphaOmegaMPXUploader from "../UploadDataView/AlphaOmegaMPXUploader";
 import HDFCSVUploader from "../UploadDataView/HDFCSVUploader";
 import UFMDATUploader from "../UploadDataView/UFMDATUploader";
 import NeuroimageUploader from "../UploadDataView/NeuroimageUploader";
+import EventCSVUploader from "../UploadDataView/EventCSVUploader";
 
 import { FaCopy } from "react-icons/fa";
 
@@ -81,7 +82,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
               }}
               renderOption={(props, option) => <li {...props}>{option}</li>}
               value={uploadDataType}
-              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "UF MDAT Files", "3D Images"]}
+              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", "3D Images"]}
               onChange={(event, newValue) => setUploadDataType(newValue)}
             />
           </Grid>
@@ -94,6 +95,9 @@ function UploadDataView({show, participant_uid, onCancel}) {
             ) : null}
             {uploadDataType === "HDF CSV Format" ? (
               <HDFCSVUploader institute={user.Institute}  participant={participant_uid}/>
+            ) : null}
+            {uploadDataType === "Event Annotation CSV" ? (
+              <EventCSVUploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
             {uploadDataType === "UF MDAT Files" ? (
               <UFMDATUploader institute={user.Institute}  participant={participant_uid}/>

@@ -60,6 +60,7 @@ class QueryTherapyHistory(RestViews.APIView):
 
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         TherapyHistory = Therapy.queryTherapyHistory(Participant)
+        TherapyHistory["DeviceImpedance"] = Therapy.queryElectrodeImpedances(Participant)
         
         Database.saveCachedResult(TherapyHistory, "/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
         return Response(status=200, data=TherapyHistory)

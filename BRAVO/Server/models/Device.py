@@ -25,6 +25,22 @@ import datetime
 
 from modules.HelperFunctions import current_time, get_token, uuid4_hex, PKCE_code_verifier
 
+def matchDevice(device, leads):
+    if not device.electrodes.count() == len(leads):
+        return False 
+
+    for lead in leads:
+        lead_exist = False
+        for electrode in device.electrodes.all():
+            if electrode.type == lead["type"]:
+                if electrode.target == lead["name"]:
+                    lead_exist = True
+        
+        if not lead_exist:
+            return False
+    
+    return True
+
 class DBSDevice(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
     name = models.CharField(max_length=128, default="")
@@ -52,10 +68,12 @@ class DBSDevice(models.Model):
     def find_all(*args, **kwargs):
         return DBSDevice.objects.select_related("owner").filter(**kwargs).all()
 
-    def find_or_create(serial_number, type, institute):
-        device = DBSDevice.objects.select_related("owner").filter(serial_number=serial_number, type=type, owner__institute__pk=institute).first()
-        if device:
-            return device, False
+    def find_or_create(serial_number, leads, type, institute):
+        devices = DBSDevice.objects.select_related("owner").filter(serial_number=serial_number, type=type, owner__institute__pk=institute).all()
+        if len(devices) > 0:
+            for device in devices:
+                if matchDevice(device, leads):
+                    return device, False
         
         device = DBSDevice(serial_number=serial_number, type=type)
         return device, True

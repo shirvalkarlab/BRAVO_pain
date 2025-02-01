@@ -101,29 +101,13 @@ export default function DashboardOverview() {
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
-    setContextState(dispatch, "report", "");
+    //setContextState(dispatch, "report", "");
   }, []);
 
   const handleParticipantFilter = (event) => {
     setFilterOptions({value: event.currentTarget.value});
   };
 
-  const onEncryptionUpdated = (password) => {
-    SessionController.query("/api/getFernetKey", {password: password}).then((response) => {
-      SessionController.setDecryptionPassword(response.data.key, response.data.shift);
-      setShowDecryptionPassword(false);
-
-      setAvailableParticipants((availableParticipants) => {
-        for (let i in availableParticipants.studies) {
-          for (let j in availableParticipants.participants[availableParticipants.studies[i].uid]) {
-            availableParticipants.participants[availableParticipants.studies[i].uid][j].name = SessionController.decodeMessage(availableParticipants.participants[availableParticipants.studies[i].uid][j].name);
-          }
-        }
-        return {...availableParticipants};
-      });
-    })
-  };
-  
   useEffect(() => {
     const filterTimer = setTimeout(() => {
       if (availableParticipants.length == 0) return;
@@ -139,7 +123,15 @@ export default function DashboardOverview() {
               participant.MRN.toLowerCase().includes(optionLower) || 
               participant.Name.toLowerCase().includes(optionLower) || 
               participant.Diagnosis.toLowerCase().includes(optionLower) || 
-              participant.Tags.filter((tag) => tag.toLowerCase().includes(optionLower)).length > 0
+              participant.Tags.filter((tag) => tag.toLowerCase().includes(optionLower)).length > 0 || 
+              participant.DBSDevices.filter((device) => {
+                if (device.Type.toLowerCase().includes(optionLower)) return true;
+                if (device.Id.toLowerCase().includes(optionLower)) return true;
+                if (device.Electrodes.filter((electrode) => {
+                  if (electrode.CustomName.toLowerCase().includes(optionLower)) return true;
+                  if (electrode.Type.toLowerCase().includes(optionLower)) return true;
+                }).length > 0) return true;
+              }).length > 0
             );
           }
           return state;

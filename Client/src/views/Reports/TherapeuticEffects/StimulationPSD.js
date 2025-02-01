@@ -185,11 +185,10 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
     if (cacheData.type === "ServerSideRender") {
       for (let label in cacheData) {
         for (let channel in cacheData[label]) {
-          if (channel == label) {
+          if ((channel == label && !therapyLabel[channel]) || (therapyLabel[channel] == label && therapyLabel[channel])) {
             const maxColor = math.max(cacheData[label][channel][parameter].map((a) => a.State*10));
             const colorMapper = (level) => colors[Math.floor(level/maxColor*100)];
             
-
             for (let stage in cacheData[label][channel][parameter]) {
               const stageColor = colorMapper(parseFloat(cacheData[label][channel][parameter][stage].State)*10);
 
@@ -318,7 +317,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
     }
 
     setRenderData(graphSeries);
-  }, [cacheData, centerFreq]);
+  }, [cacheData, therapyLabel, centerFreq]);
 
   const refreshRender = (fig, figName) => {
     let maxYlim = 0;
@@ -425,14 +424,15 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
       </Grid>
       {dataToRender.AllChannels.map((a, thatIndex) => {
         let visibility = activeChannels.includes(a) && (figGroup[a] && figGroup[a].traces.length > 0);
+        let otherIndex = thatIndex === 0 ? 1 : 0;
         return [
           <Grid key={figureTitle + "_SwitchControl"} item xs={12}>
             <MDBox px={3}>
               <FormControlLabel control={<Switch value={therapyLabel[a] != a} onChange={(event, value) => {
                 if (dataToRender.AllChannels.length == 2) {
-                  setTherapyLabel({...therapyLabel, [a]: therapyLabel[a] == dataToRender.AllChannels[0] ? dataToRender.AllChannels[1] : dataToRender.AllChannels[0]})
+                  setTherapyLabel({...therapyLabel, [a]: therapyLabel[a] === dataToRender.AllChannels[otherIndex] ? dataToRender.AllChannels[thatIndex] : dataToRender.AllChannels[otherIndex]})
                 }
-              }} />} label="Contralateral Stimulation Label" />
+              }} />} label="Use Other Electrode as Stimulation Reference" />
             </MDBox>
           </Grid>,
           <Grid key={figureTitle + "_" + a} item xs={12} sm={6}>

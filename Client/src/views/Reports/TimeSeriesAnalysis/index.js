@@ -163,6 +163,10 @@ function TimeSeriesAnalysis() {
     }
   };
   
+  const addRecordingData = async (analysis, channel) => {
+    console.log(data.ActiveChannel)
+  };
+  
   const exportCurrentStream = () => {
     let downloader = document.createElement('a');
     downloader.href = SessionController.getDownloadLink("/api/downloadData", {
@@ -280,7 +284,7 @@ function TimeSeriesAnalysis() {
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
                       {availableAnalysis.Recordings.length > 0 ? (
-                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData}/>
+                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData} addRecordingData={addRecordingData}/>
                       ) : (
                         <MDTypography variant="h6" fontSize={24}>
                           {dictionary.WarningMessage.NoData[language]}

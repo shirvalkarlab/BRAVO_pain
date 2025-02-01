@@ -27,6 +27,7 @@ import hmac, hashlib
 from io import BytesIO
 import pandas as pd
 import numpy as np
+from filelock import Timeout, FileLock
 
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
@@ -81,6 +82,7 @@ class DataUploadHandler(RestViews.APIView):
         
         lockFile = source_file.pointer + ".lock"
         if request.data["DataType"] == "MedtronicJSON":
+            lock = FileLock(DATABASE_PATH + "MedtronicJSON.lock")
             try:
                 if not request.data["ParticipantId"] == "batch-upload":
                     if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
@@ -90,9 +92,11 @@ class DataUploadHandler(RestViews.APIView):
                     if not person:
                         return Response(status=400, data={"message": "Participant not found."})
                     
-                    DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
+                    with lock.acquire(timeout=180):
+                        DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
                 else:
-                    DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    with lock.acquire(timeout=180):
+                        DataCurator.MedtronicPerceptJSONDecoder(source_file)
                     
             except Exception as e:
                 print(request.data["File"].name)
@@ -161,6 +165,24 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
+        elif request.data["DataType"] == "EventCSV":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                DataCurator.EventCSVDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
+            source_file.delete()
+            
         elif request.data["DataType"] == "NeuroImage":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
@@ -226,6 +248,18 @@ class DataDownloadHandler(RestViews.APIView):
             return HttpResponse(bytes(file_data), status=200, headers={
                 "Content-Type": "application/octet-stream"
             })
+        
+        elif CacheType == "queryChronicNeuralActivity":
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            FilePointer = DataAnalysis.downloadChronicNeuralActivity(ParticipantId, userConfig)
+            
+            with BytesIO() as fp:
+                FilePointer.to_csv(fp, index=False)
+                filename = "ChronicNeuralActivity_" + ParticipantId + ".csv"
+                response = HttpResponse( fp.getvalue(), content_type="text/csv" )
+                response["Content-Disposition"] = "attachment; filename=" + filename
+                return response
+
         return Response(status=200)
         
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)

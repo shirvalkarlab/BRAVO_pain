@@ -119,7 +119,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             GroupId = TherapyHistory["TherapyModification"][i]["History"][j]["Previous"]
                             ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
                             TherapyNote = Therapy.findClosestAdaptiveTherapy(Data["Time"][WindowSelected][0], ClosestTherapy)
-
+                            
                         Activity = {
                             "Device": DBSDevice["Id"],
                             "TherapyWindow": [float(Timestamps[j-1]), float(Timestamps[j])],
@@ -134,9 +134,9 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
                         duplicates = checkExistingSegments(ChronicNeuralActivity, Activity)
                         if duplicates > -1:
-                            if len(Activity["Data"]) > len(ChronicNeuralActivity[duplicates]["Data"]):
+                            if Activity["Data"].shape[1] > ChronicNeuralActivity[duplicates]["Data"].shape[1]:
                                 ChronicNeuralActivity[duplicates] = Activity
-
+                            
                         else:
                             ChronicNeuralActivity.append(Activity)
 

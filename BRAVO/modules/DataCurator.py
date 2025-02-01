@@ -27,12 +27,14 @@ from cryptography.fernet import Fernet
 import hmac, hashlib
 import pickle
 import numpy as np
+import pandas as pd
+from io import BytesIO
 
 from Server import models
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHDFCSVData
 from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
-from modules import Database, Therapy
+from modules import Database, Therapy, Event
 
 import time
 
@@ -62,7 +64,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Process Patient/Device/Electrode Information for Storage and Query
     if not device:
-        device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
+        device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
         if not device_created and device.owner.institute_id == source_file.metadata["Institute"]:
             if not person:
                 person = device.owner
@@ -248,6 +250,21 @@ def NeuroImageStorage(source_file, person):
     source_file.metadata["Device"] = ""
     source_file.owner = person
     source_file.save()
+
+def EventCSVDecoder(source_file, person):
+    rawBytes = loadCacheFile(source_file)
+    CSV = pd.read_csv(BytesIO(rawBytes), skiprows=0)
+
+    if not "Time" in CSV.keys() or not "Annotation" in CSV.keys() or not "Type" in CSV.keys() or not "Duration" in CSV.keys():
+        raise Exception("CSV Format Error")
+    
+    for i in CSV.index:
+        Timestamp = 0
+        try:
+            Timestamp = datetime.datetime.fromisoformat(CSV["Time"][i]).timestamp()
+        except:
+            Timestamp = float(CSV["Time"][i])
+        Event.addAnnotation(person.uid, CSV["Type"][i], CSV["Annotation"][i], Timestamp, CSV["Duration"][i])
 
 def HDFCSVDecoder(source_file, person, startTime=None):
     rawBytes = loadCacheFile(source_file)

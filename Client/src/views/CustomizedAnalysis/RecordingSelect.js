@@ -69,9 +69,10 @@ function RecordingSelect({recordings, onClose, onSelectRecording}) {
   useEffect(() => {
     setRecordingDate(() => {
       let recordingDates = [];
-      for (let i in recordings) {
-        if (recordings[i].Type == recordingType.active) {
-          const dateString = new Date(recordings[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recordings[i].Timezone),
+      const recordingsSorted = recordings.sort((a,b) => a.Date - b.Date);
+      for (let i in recordingsSorted) {
+        if (recordingsSorted[i].Type == recordingType.active) {
+          const dateString = new Date(recordingsSorted[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recordingsSorted[i].Timezone),
             year: "numeric",
             month: "2-digit",
             day: "2-digit",

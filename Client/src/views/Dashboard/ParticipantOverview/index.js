@@ -277,11 +277,6 @@ export default function ParticipantOverview() {
             </Grid>
             <Grid item xs={12} lg={8} display={"flex"} alignItems={"stretch"}>
               <Card sx={{width: "100%", overflowX: "auto"}}>
-                <Grid container spacing={2}>
-                  <Grid item xs={3}>
-                          
-                  </Grid>
-                </Grid>
                 <MDBox style={{overflowX: "auto", maxHeight: 200}}>
                   <Table size="large" style={{marginTop: 10, display: "block", height: "fit-content"}}>
                     <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>

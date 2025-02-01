@@ -18,6 +18,10 @@ import {
   Autocomplete,
   Box,
   FormControl,
+  Grid,
+  Dialog,
+  DialogActions,
+  DialogContent,
   Table,
   TableHead,
   TableBody,
@@ -44,7 +48,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function TimeSeriesAnalysisTable({data, getRecordingData, children}) {
+function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -286,6 +290,12 @@ function TimeSeriesAnalysisTable({data, getRecordingData, children}) {
                       setShowTable(false);
                     }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
                       {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
+                    </MDButton>
+                    <MDButton variant={"contained"} color="warning" onClick={() => {
+                      //addRecordingData(analysis);
+                      //setShowTable(false);
+                    }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
+                      {"Add To View"}
                     </MDButton>
                     
                   </TableCell>

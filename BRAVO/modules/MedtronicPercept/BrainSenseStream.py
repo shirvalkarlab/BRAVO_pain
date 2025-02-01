@@ -139,7 +139,8 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
                 if StreamingTD[i]["FirstPacketDateTime"] == TimeDomainRecordings[n]["StartTime"]:
                     for j in range(len(StreamingTD[i]["Ticks"])):
                         if StreamingTD[i]["Sequences"][j] == (StreamingPower[n]["Sequences"][0] - 1):
-                            PowerDomainRecordings[n]["StartTime"] = TimeDomainRecordings[n]["StartTime"] + (StreamingTD[i]["Ticks"][j] - StreamingTD[i]["Ticks"][0]) / 1000
+                            #PowerDomainRecordings[n]["StartTime"] = TimeDomainRecordings[n]["StartTime"] + (StreamingTD[i]["Ticks"][j] - StreamingTD[i]["Ticks"][0]) / 1000
+                            pass # NEED VERIFICATION
 
         # Fix Breaking TimeDomain Recording based on PowerDomain Recordings (Therapy) Descriptor
         i = 1

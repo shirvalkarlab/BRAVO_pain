@@ -106,7 +106,7 @@ function TherapyHistoryTable({therapyHistory, viewConfigurationTable}) {
                   <Card>
                     <MDBox px={2} pt={1}>
                       <MDTypography variant={"h5"} >
-                        {config.GroupName ? config.GroupName : config.GroupId}
+                        {config.GroupName ? config.GroupName : config.GroupId}{config.Percent ? (" ("+(config.Percent*100).toFixed(1)+"%)") : ""}
                       </MDTypography>
                       <MDTypography variant={"subtitle1"} color={"secondary"} fontSize={15} fontWeight={"medium"} lineHeight={1} style={{cursor: "pointer"}} onClick={() => viewConfigurationTable(config)}>
                         {new Date(config.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(config.Timezone),

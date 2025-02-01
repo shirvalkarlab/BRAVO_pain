@@ -142,6 +142,9 @@ def extractParticipantInformation(participant_uid):
     ParticipantInfo["DBSDevices"] = [i.get_info() for i in models.DBSDevice.find_all(owner=Participant)]
     return ParticipantInfo
 
+def extractParticipantDevices(participant):
+    return [i.get_info() for i in models.DBSDevice.find_all(owner=participant)]
+
 def mergeParticipants(source, target):
     for entry in models.DBSDevice.find_all(owner=source):
         entry.owner = target

@@ -83,7 +83,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
                             "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
                             "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
                             "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
-                            "Segment": ""
+                            "SegmentMode": recording.metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in recording.metadata["Therapy"][side].keys() else "Ring"
                         } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
                         Description["Device"] = device
                         for i in range(len(Description["Metadata"]["ChannelNames"])):
@@ -107,6 +107,10 @@ def queryAvailableAnalyses(participant_uid, request_type):
             
             Overview["Analyses"].append(Analysis.get_info())
     
+        AnalysisList = models.Analysis.find_all(type=request_type, metadata__ParticipantId=participant_uid)
+        for analysis in AnalysisList:
+            Overview["Analyses"].append(analysis.get_info())
+        
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
@@ -122,6 +126,8 @@ def queryAvailableAnalyses(participant_uid, request_type):
                         for i in range(len(Description["Metadata"]["ChannelNames"])):
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
 
+                Description["Type"] = "DBS TimeDomain Recordings"
+
             elif recording.type == "DelsysMDAT":
                 Description["Type"] = "Delsys MDT"
 
@@ -136,6 +142,41 @@ def queryAvailableAnalyses(participant_uid, request_type):
 
     return Overview
 
+def createAnalysis(participant_uid, type, recording_ids):
+    Recordings = models.Recording.find_all(uid__in=recording_ids)
+    if len(Recordings) == 0:
+        return None
+
+    for recording in Recordings:
+        if not recording.source.owner.uid == participant_uid:
+            return None
+
+    Analysis = models.Analysis.find(type=type, metadata__DataId=recording_ids)
+    if Analysis:
+        return Analysis
+
+    Analysis = models.Analysis.create(type=type, name="")
+    Analysis.metadata = {"DataId": [], "Timezone": "", "ParticipantId": participant_uid}
+    Analysis.save()
+    for recording in Recordings:
+        if recording.date < Analysis.date:
+            Analysis.date = recording.date
+            Analysis.metadata["Timezone"] = recording.get_info()["Timezone"]
+        Analysis.metadata["DataId"].append(recording.uid)
+        Analysis.add_recording(recording)
+    Analysis.save()
+    return Analysis
+
+def deleteAnalysis(participant_uid, analysis_uid):
+    Analysis = models.Analysis.find(uid=analysis_uid)
+    if Analysis:
+        for recording in Analysis.recordings.all():
+            if not recording.source.owner.uid == participant_uid:
+                return None
+
+        Analysis.delete()
+        return True
+    
 def queryCustomizedAnalysis(participant_uid, analysis):
     Overview = {"Analysis": analysis.get_info(), "Configurations": {}, "Recordings": []}
     Participant = models.Participant.find(uid=participant_uid)
@@ -153,7 +194,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
                     Description["Device"] = device
                     for i in range(len(Description["Metadata"]["ChannelNames"])):
                         Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
-
+            Description["Type"] = "DBS TimeDomain Recording"
         elif recording.type == "MedtronicBrainSensePowerDomain":
             for device in DBSDevices:
                 if device["Id"] == recording.source.metadata["Device"]:
@@ -162,7 +203,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
                         "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
                         "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
                         "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
-                        "Segment": ""
+                        "SegmentMode": recording.metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in recording.metadata["Therapy"][side].keys() else "Ring"
                     } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
                     Description["Device"] = device
                     for i in range(len(Description["Metadata"]["ChannelNames"])):
@@ -170,6 +211,8 @@ def queryCustomizedAnalysis(participant_uid, analysis):
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Stimulation"
                         else:
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Recording"
+
+            Description["Type"] = "DBS Therapy Labels"
 
         elif recording.type == "DelsysMDAT":
             pass
@@ -443,6 +486,28 @@ def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
     df = pd.DataFrame(Data)
     return df
 
+def downloadChronicNeuralActivity(participant_uid, config):
+    Analysis = queryChronicNeuralActivity(participant_uid, config)
+    
+    Data = {"Time": [], "Power": [], "Amplitude": [], "ChannelName": [], "TherapyConfig": [], "RecordingConfig": []}
+    for i in range(len(Analysis["ChronicNeuralActivity"])):
+        Data["Time"].extend(Analysis["ChronicNeuralActivity"][i]["Time"])
+        ChannelName = Analysis["ChronicNeuralActivity"][i]["Device"]["Heritage"] + ": " + Analysis["ChronicNeuralActivity"][i]["ChannelNames"][0]
+        for j in range(len(Analysis["ChronicNeuralActivity"][i]["ChannelNames"])):
+            print(Analysis["ChronicNeuralActivity"][i]["TherapyString"])
+            if Analysis["ChronicNeuralActivity"][i]["ChannelNames"][j].endswith("Amplitude"):
+                Data["Amplitude"].extend(Analysis["ChronicNeuralActivity"][i]["Data"][j])
+            else:
+                Data["Power"].extend(Analysis["ChronicNeuralActivity"][i]["Data"][j])
+        Data["ChannelName"].extend([ChannelName for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
+        Data["TherapyConfig"].extend([Analysis["ChronicNeuralActivity"][i]["TherapyString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
+        Data["RecordingConfig"].extend([Analysis["ChronicNeuralActivity"][i]["RecordingString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
+
+    print(len(Data["Time"]))
+    print(len(Data["RecordingConfig"]))
+    df = pd.DataFrame(Data)
+    return df
+
 def getTherapyChanges(Analysis, key):
     TherapySeries = {}
     PreviousState = {}
@@ -527,7 +592,8 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
         TherapyChanges = getTherapyChanges(AnalysisStruct, label)
         for i in range(len(AnalysisStruct["Signal"])):
             for j in range(len(AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"])):
-                StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = {}
+                if not AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j] in StimulationPSDs[label].keys():
+                    StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = {}
                 Time = AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Time"] + AnalysisStruct["Signal"][i]["SignalSeries"]["StartTime"] + AnalysisStruct["Signal"][i]["Alignment"]
 
                 for parameter in parameters:
@@ -536,7 +602,8 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                         if not TherapyChanges[parameter][stage]["State"] in UniqueStates:
                             UniqueStates.append(TherapyChanges[parameter][stage]["State"])
                     UniqueStates = sorted(UniqueStates)
-                    StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter] = []
+                    if not parameter in StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]].keys():
+                        StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter] = []
 
                     if len(UniqueStates) > 1:
                         for state in UniqueStates:
@@ -565,7 +632,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                         StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter].append({
                             "Frequency": AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Frequency"],
                             "MeanPower": np.mean(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"],axis=1),
-                            "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1)/np.sqrt(np.sum(TimeSelection)),
+                            "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"],axis=1)/np.sqrt(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"].shape[1]),
                             "State": UniqueStates[0]
                         })
                         
@@ -583,11 +650,6 @@ def downloadTherapeuticAnalysis(participant_uid, analysis_uid, config):
             Data[Analysis["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = Analysis["Signal"][i]["SignalSeries"]["Data"][j,:]
 
     Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
-
-    AllTherapyLabels = []
-    for i in range(len(Analysis["Therapy"])):
-        print(Analysis["Therapy"][i]["TherapySeries"][0])
-
     df = pd.DataFrame(Data)
     return df
 

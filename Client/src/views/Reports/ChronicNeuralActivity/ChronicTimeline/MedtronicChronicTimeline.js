@@ -31,7 +31,7 @@ import { usePlatformContext } from "context";
 
 const filter = createFilterOptions();
 
-export default function MedtronicChronicTimeline({data, availableChannels, annotations, handleAddEvent, handleDeleteEvent, figureTitle}) {
+export default function MedtronicChronicTimeline({data, availableChannels, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -160,6 +160,10 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
   }, [fig, annotationState]);
 
   useEffect(() => {
+    updateColor(annotationState);
+  }, [annotationState]);
+
+  useEffect(() => {
     if (!fig || !renderData) return;
 
     fig.traces = [];
@@ -226,7 +230,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
       <Grid item xs={12} sx={{marginLeft: 5, marginRight: 5}}>
         <Grid container spacing={2}>
           {Object.keys(annotationState).map((name) => {
-            return <Grid item xs={6} sm={4} md={3} lg={2}>
+            return <Grid item key={name} xs={6} sm={4} md={3} lg={2}>
               <Card sx={{background: annotationState[name].show ? "" : "darkgrey"}}>
               <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
                 <IconButton

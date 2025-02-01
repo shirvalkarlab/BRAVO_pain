@@ -49,9 +49,13 @@ class QueryParticipants(RestViews.APIView):
             study = models.Study.find(uid=request.data["ParticipantGroupId"])
             if study:
                 AllParticipants = study.participants
-        
-        AllParticipants = [i.get_info() for i in AllParticipants]
-        return Response(status=200, data=AllParticipants)
+
+        AllParticipantInfos = []
+        for i in range(len(AllParticipants)):
+            ParticipantInfo = AllParticipants[i].get_info()
+            ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
+            AllParticipantInfos.append(ParticipantInfo)
+        return Response(status=200, data=AllParticipantInfos)
 
 class QueryParticipantInformation(RestViews.APIView):
     

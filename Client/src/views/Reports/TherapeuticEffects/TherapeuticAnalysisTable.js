@@ -18,6 +18,11 @@ import {
   Autocomplete,
   Box,
   FormControl,
+  Dialog, 
+  DialogContent,
+  Grid,
+  TextField,
+  DialogActions,
   Table,
   TableHead,
   TableBody,
@@ -44,7 +49,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}) {
+function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRecordingData, addNewAnalysis, deleteAnalysis, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -54,6 +59,9 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
   
   const [filterOptions, setFilterOptions] = React.useState({Type: "", Keyword: "", TypeOptions: []});
   const [displayData, setDisplayData] = React.useState([]);
+  const [editRecordingName, setEditRecordingName] = React.useState({show: false, name: "", therapy: [], analysisId: ""});
+
+  const [newGroupView, setNewGroupView] = React.useState({show: false, timeseries: [], therapies: []});
 
   const tableHeader = [{
     title: "StreamingTableDate",
@@ -77,7 +85,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     var uniqueDates = [];
     let typeOptions = ["All"]; 
     for (var i = 0; i < data.length; i++) {
-      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Metadata.Timezone),
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -102,7 +110,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
   React.useEffect(() => {
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
-      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Metadata.Timezone),
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -133,14 +141,15 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
         }
       }
     }
+    
     setDisplayData(collectiveData);
-  }, [filterOptions]);
+  }, [data, filterOptions]);
   
   const setViewDate = (date) => {
     setSelectedDate(date);
     var collectiveData = [];
     for (var i = 0; i < data.length; i++) {
-      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
+      const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Metadata.Timezone),
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -156,24 +165,6 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
     setDisplayData(collectiveData);
   };
 
-  const setStimMode = (recordingID, index, event) => {
-    for (var i in displayData) {
-      if (displayData[i].RecordingIDs == recordingID) {
-        displayData[i].ContactType[index] = event.target.value;
-        SessionController.query("/api/updateBrainSenseStream", {
-          requestData: displayData[i].DeviceID,
-          updateRecordingContactType: recordingID,
-          contactIndex: index,
-          contactType: event.target.value
-        }).then((response) => {
-          setDisplayData([...displayData]);
-        }).catch((error) => {
-          console.log(error);
-        });
-      }
-    }
-  }
-  
   const toggleSelection = (value, timestamp) => {
     for (var i in displayData) {
       if (displayData[i].Timestamp == timestamp || !timestamp) {
@@ -248,27 +239,36 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
             </TableHead>
             <TableBody>
               {displayData.sort((a,b) => a.Date - b.Date).map((analysis) => {
+                analysis.RecordingChannels = []
+                analysis.Therapy = []
                 for (let i in analysis.DataId) {
                   const recording = recordings.filter((a) => a.Id == analysis.DataId[i])[0];
                   if (recording.Therapy) {
-                    analysis.Therapy = recording.Therapy;
+                    analysis.Therapy.push(...recording.Therapy);
                   } else {
-                    analysis.RecordingChannels = recording.Metadata.ChannelNames;
+                    analysis.RecordingChannels.push(...recording.Metadata.ChannelNames);
                   }
                 }
+                analysis.RecordingChannels = [...new Set(analysis.RecordingChannels)];
+                analysis.Therapy = [...new Set(analysis.Therapy)];
                 return <TableRow key={analysis.Id}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
-                    <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
-                      {new Date(analysis.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(analysis.Timezone),
+                    <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={18} fontWeight={"bold"}>
+                      {analysis.Name}
+                    </MDTypography>
+                    <MDTypography variant="h5" fontSize={13} style={{marginBottom: 0}}>
+                      {new Date(analysis.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(analysis.Metadata.Timezone),
                         hour: "2-digit",
                         minute: "2-digit",
                         second: "2-digit",
                         timeZoneName: "longGeneric"
                       })}
                     </MDTypography>
-                    <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
-                      {analysis.Name}
-                    </MDTypography>
+                    <MDButton variant={"contained"} color="secondary" onClick={() => {
+                      setEditRecordingName({show: true, analysisId: analysis.Id, therapy: analysis.Therapy, name: analysis.Name})
+                    }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
+                      {"Rename Recording"}
+                    </MDButton>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
@@ -284,7 +284,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
                     {analysis.Therapy.map((a, i) => (
                       <MDBox key={i} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
                       <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
-                        {a.Contact}{": "}
+                        {a.Contact}{" "}{a.SegmentMode}{": "}
                       </MDTypography>
                       <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
                         {a.Frequency.toFixed(1)}{" Hz "}{a.Pulsewidth.toFixed(1)}{" μSec"}
@@ -305,21 +305,184 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, children}
                     }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
                       {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
                     </MDButton>
-                    
+                    {analysis.Type == "TherapeuticAnalysis" ? (
+                      <MDButton variant={"contained"} color="primary" onClick={() => {
+                        deleteAnalysis(analysis.Id)
+                      }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
+                        {"Remove"}
+                      </MDButton>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               })}
             </TableBody>
           </Table>
+          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+            <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
+              <MDTypography variant="h5">
+                {"Edit Recording Information"}
+              </MDTypography>
+            </MDBox>
+            <DialogContent>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <TextField
+                    id="recording-name"
+                    name="recording-name"
+                    variant="standard"
+                    margin="dense"
+                    label="Recording Name"
+                    placeholder="Recording Name"
+                    value={editRecordingName.name}
+                    onChange={(event) => setEditRecordingName({...editRecordingName, name: event.target.value})}
+                    fullWidth
+                  />
+                </Grid>
+                {editRecordingName.therapy.map((lead, index) => (
+                  <Grid key={lead.Contact} item xs={6}>
+                    <Autocomplete
+                      fullWidth value={lead.SegmentMode}
+                      options={["Ring", "Segment A", "Segment B", "Segment C", "Segment AB", "Segment BC", "Segment AC"]}
+                      onChange={(event, value) => setEditRecordingName((editRecordingName) => {
+                        editRecordingName.therapy[index].SegmentMode = value;
+                        return {...editRecordingName};
+                      })}
+                      renderInput={(params) => (
+                        <FormField
+                          {...params}
+                          label={lead.Contact + " (Default Ring)"}
+                          InputLabelProps={{ shrink: true }}
+                        />
+                      )}
+                    />
+                  </Grid>
+                ))}
+              </Grid>
+            </DialogContent>
+            <DialogActions>
+              <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
+                <MDButton color={"secondary"} onClick={() => setEditRecordingName({...editRecordingName, show: false})}>
+                  {"Cancel"}
+                </MDButton>
+                <MDButton color={"info"} onClick={() => updateRecordingData(editRecordingName).then(() => {
+                  setFilterOptions({...filterOptions})
+                  setEditRecordingName({...editRecordingName, show: false});
+                })} style={{marginLeft: 10}}>
+                  {"Update"}
+                </MDButton>
+              </MDBox>
+            </DialogActions>
+          </Dialog>
         </MDBox>
       </Collapse>
       <MDBox p={2}>
         <MDButton variant={"contained"} color="info" onClick={() => setShowTable(!showTable)} >
           {showTable ? "Hide Table" : "Show Table"}
         </MDButton>
+        <MDButton variant={"contained"} color="primary" onClick={() => setNewGroupView({show: true, timeseries: [], therapies: []})} style={{marginLeft: 5}}>
+          {"Multi-Recording View"}
+        </MDButton>
       </MDBox>
+
+      <Dialog open={newGroupView.show} onClose={() => setNewGroupView({...newGroupView, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+        <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
+          <MDTypography variant="h5">
+            {"New Therapeutic Analysis"}
+          </MDTypography>
+        </MDBox>
+        <DialogContent>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Autocomplete
+                fullWidth multiple value={newGroupView.timeseries}
+                options={recordings.filter((recording) => {
+                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    timeZoneName: "longGeneric"
+                  });
+                  return dateString == selectedDate.label && !recording.Therapy;
+                }).map((recording) => {
+                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    timeZoneName: "longGeneric"
+                  })
+                  return {
+                    Id: recording.Id,
+                    Label: "["+dateString+"] " + (recording.Name ? recording.Name : recording.Id)
+                  }
+                })}
+                getOptionLabel={(option) => {
+                  return option.Label || "";
+                }}
+                onChange={(event, value) => setNewGroupView({...newGroupView, timeseries: value})}
+                renderInput={(params) => (
+                  <FormField
+                    {...params}
+                    label={"Recordings as Time-Series of Interest"}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                )}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Autocomplete
+                fullWidth multiple value={newGroupView.therapies}
+                options={recordings.filter((recording) => {
+                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    timeZoneName: "longGeneric"
+                  });
+                  return dateString == selectedDate.label && recording.Therapy;
+                }).map((recording) => {
+                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    timeZoneName: "longGeneric"
+                  })
+
+                  return {
+                    Id: recording.Id,
+                    Label: "["+dateString+"] " + (recording.Name ? recording.Name : recording.Id)
+                  }
+                })}
+                getOptionLabel={(option) => {
+                  return option.Label || "";
+                }}
+                onChange={(event, value) => setNewGroupView({...newGroupView, therapies: value})}
+                renderInput={(params) => (
+                  <FormField
+                    {...params}
+                    label={"Recordings as Therapy Labels"}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                )}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
+            <MDButton color={"secondary"} onClick={() => setNewGroupView({...newGroupView, show: false})}>
+              {"Cancel"}
+            </MDButton>
+            <MDButton color={"info"} onClick={() => {
+              addNewAnalysis(newGroupView);
+              setNewGroupView({...newGroupView, show: false});
+            }} style={{marginLeft: 10}}>
+              {"Update"}
+            </MDButton>
+          </MDBox>
+        </DialogActions>
+      </Dialog>
     </>
-  ), [data, showTable, displayData]);
+  ), [data, showTable, displayData, newGroupView, editRecordingName]);
 }
 
 export default TherapeuticAnalysisTable;

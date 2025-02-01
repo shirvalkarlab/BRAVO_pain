@@ -61,6 +61,7 @@ import { usePlatformContext, setContextState } from "context";
 
 import colors from "assets/theme/base/colors";
 import AlphaOmegaMPXUploader from "./AlphaOmegaMPXUploader";
+import EventCSVUploader from "./EventCSVUploader";
 
 const filter = createFilterOptions();
 
@@ -365,7 +366,7 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "UF MDAT Files", "3D Images"]}
+                    options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
@@ -376,6 +377,9 @@ function UploadDeidentifiedDataView() {
                   ) : null}
                   {uploadDataType === "HDF CSV Format" ? (
                     <HDFCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "Event Annotation CSV" ? (
+                    <EventCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "UF MDAT Files" ? (
                     <UFMDATUploader institute={user.Institute}  participant={activeParticipant.value}/>

@@ -65,6 +65,7 @@ class Participant(models.Model):
             return person, False
         
         person = Participant(name=name, mrn=mrn, institute_id=institute)
+        person.save()
         return person, True
     
     def from_institute(institute):

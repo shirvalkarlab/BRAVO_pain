@@ -73,10 +73,20 @@ def addAnnotation(participant_uid, type, name, date, duration=0):
     Participant = models.Participant.find(uid=participant_uid)
     Annotation = models.Annotation(name=name, date=date, duration=duration, type=type, owner=Participant)
     Annotation.save()
+    if Annotation.type == "ChronicCustomEvent":
+        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryChronicNeuralActivity", metadata__Participant=participant_uid)
+    elif Annotation.type == "RecordingCustomEvent":
+        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTimeseriesAnalysis", metadata__Participant=participant_uid)
+        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTherapeuticEffectAnalysis", metadata__Participant=participant_uid)
     return Annotation
 
 def deleteAnnotation(participant_uid, annotation_uid):
     Participant = models.Participant.find(uid=participant_uid)
     Annotation = models.Annotation.find(uid=annotation_uid, owner=Participant)
     if Annotation:
+        if Annotation.type == "ChronicCustomEvent":
+            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryChronicNeuralActivity", metadata__Participant=participant_uid)
+        elif Annotation.type == "RecordingCustomEvent":
+            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTimeseriesAnalysis", metadata__Participant=participant_uid)
+            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTherapeuticEffectAnalysis", metadata__Participant=participant_uid)
         Annotation.delete()

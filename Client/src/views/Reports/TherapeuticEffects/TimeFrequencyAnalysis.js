@@ -136,7 +136,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         }
       }
     }
-    
+
     let stimulationLineColor = ["#253EF7", "#FCA503", "#8bc34a", "#9c27b0"]
     for (let trial in dataToRender.Therapy) {
       for (let chan in dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview) {
@@ -150,8 +150,8 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             id: dataToRender.Therapy[trial].RecordingId,
             current_alignment: dataToRender.Therapy[trial].Alignment*1000,
             name: "Stimulation Waveform",
-            linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[0],
-            hovertemplate: ` %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)}<br>  %{x} <extra></extra>`,
+            linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[chan],
+            hovertemplate: ` ${dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)}<br>  %{x} <extra></extra>`,
             name: chan, showlegend: false
           }, 
           axName: "Stimulation"

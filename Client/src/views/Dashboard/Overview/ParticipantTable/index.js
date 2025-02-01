@@ -127,7 +127,7 @@ const ParticipantTable = ({data}) => {
       <Table size="small">
         <TableHead sx={{display: "table-header-group"}}>
           <TableRow>
-            {["ParticipantTableName", "ParticipantTableDiagnosis", "ParticipantTableLastModified"].map((col) => {
+            {["ParticipantTableName", "ParticipantTableDiagnosis", "Devices", "ParticipantTableLastModified"].map((col) => {
               return (
                 <TableCell key={col} variant="head" style={{width: "30%", minWidth: 200, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
                   <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>sortParticipantList(col)}>
@@ -150,6 +150,15 @@ const ParticipantTable = ({data}) => {
                   <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
                     {participant.Diagnosis}
                   </MDTypography>
+                </TableCell>
+                <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)"}}>
+                    {participant.DBSDevices.map((a) => {
+                      return <MDBox key={a.Id}>
+                        <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
+                          {a.GenericName}{" "}{a.Type}
+                        </MDTypography>
+                      </MDBox>
+                    })}
                 </TableCell>
                 <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)"}}>
                   <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
