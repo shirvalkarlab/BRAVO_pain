@@ -123,7 +123,7 @@ class DataUploadHandler(RestViews.APIView):
                 return Response(status=403)
 
             try:
-                DataCurator.AlphaOmegaMPXDecoder(source_file, person)
+                DataCurator.AlphaOmegaMPXDecoder(source_file, person, name=request.data["File"].name)
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())

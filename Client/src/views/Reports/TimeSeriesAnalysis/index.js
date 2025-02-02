@@ -51,6 +51,7 @@ import ConfigurationDialog from "components/ConfigurationDialog";
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
 import StimulationPSD from "./StimulationPSD";
+import EventPSDs from "../TherapeuticEffects/EventPSDs";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
@@ -336,6 +337,19 @@ function TimeSeriesAnalysis() {
                       <TimeFrequencyAnalysis dataToRender={data} activeChannels={channel.active} annotations={annotations}
                         handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} 
                         figureTitle={"TimeFrequencyAnalysis"} height={700}/>
+                    </Grid>
+                  </Grid>
+                </Card>
+              </Grid>
+            ) : null}
+            {annotations.length > 0 ? (
+              <Grid item xs={12} lg={6}>
+                <Card>
+                  <Grid container>
+                    <Grid item xs={12}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        <EventPSDs dataToRender={data} annotations={annotations} figureTitle={"Event PSDs"} />
+                      </MDBox>
                     </Grid>
                   </Grid>
                 </Card>

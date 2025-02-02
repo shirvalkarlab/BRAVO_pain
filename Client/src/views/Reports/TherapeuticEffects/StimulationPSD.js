@@ -143,7 +143,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
         for (let stage = 0; stage < therapySeries[parameter].length; stage++) {
           const selected_data = dataToRender.Signal[i].SignalSeries.Spectrum.Power.map((a) => {
             return a.filter((b,t) => {
-              const currentTime = dataToRender.Signal[i].SignalSeries.Spectrum.Time[t] + dataToRender.Signal[i].SignalSeries.StartTime;
+              const currentTime = dataToRender.Signal[i].SignalSeries.Spectrum.Time[t] + dataToRender.Signal[i].SignalSeries.StartTime + dataToRender.Signal[i].Alignment;
               return (currentTime > therapySeries[parameter][stage].time+2) && (
                 (stage+1 >= therapySeries[parameter].length) ? true : (currentTime < therapySeries[parameter][stage+1].time-2)
               );

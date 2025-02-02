@@ -50,6 +50,7 @@ import LayoutOptions from "./LayoutOptions";
 import TherapeuticAnalysisTable from "./TherapeuticAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
 import StimulationPSD from "./StimulationPSD";
+import EventPSDs from "./EventPSDs";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
@@ -451,6 +452,19 @@ function TherapeuticEffects() {
                     <Grid item xs={12}>
                       <MDBox display={"flex"} flexDirection={"column"}>
                         <StimulationPSD dataToRender={data} activeChannels={channel.active} onRequestServerAnalysis={handleRequestServerAnalysis} figureTitle={"StimulationPSDs"} />
+                      </MDBox>
+                    </Grid>
+                  </Grid>
+                </Card>
+              </Grid>
+            ) : null}
+            {annotations.length > 0 ? (
+              <Grid item xs={12} lg={6}>
+                <Card>
+                  <Grid container>
+                    <Grid item xs={12}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        <EventPSDs dataToRender={data} annotations={annotations} figureTitle={"Event PSDs"} />
                       </MDBox>
                     </Grid>
                   </Grid>

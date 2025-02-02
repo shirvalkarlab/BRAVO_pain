@@ -400,18 +400,19 @@ def decodeMPX(rawBytes, StreamToParse=list()):
 
 def extractAlphaOmegaRecordings(rawBytes):
     MPXData = decodeMPX(rawBytes)
-    SamplingRates = np.unique([MPXData["Data"][chan_id]["SamplingRate"] for chan_id in MPXData["Data"].keys()])
+    SamplingRates = np.unique([MPXData["Data"][chan_id]["SamplingRate"] for chan_id in MPXData["Data"].keys() if "SamplingRate" in MPXData["Data"][chan_id].keys()])
 
     MPXRecordingList = []
     for fs in SamplingRates:
         Data = {"ChannelNames": []}
         Data["Data"] = []
         for chan_id in MPXData["Data"].keys():
-            if MPXData["Data"][chan_id]["SamplingRate"] == fs and "SampleValues" in MPXData["Data"][chan_id].keys():
-                Data["Data"].append(MPXData["Data"][chan_id]["SampleValues"])
-                Data["ChannelNames"].append(MPXData["Data"][chan_id]["ChannelName"])
-                Data["Duration"] = len(MPXData["Data"][chan_id]["SampleValues"]) / float(fs)
-                Data["Time"] = np.arange(len(MPXData["Data"][chan_id]["SampleValues"])) / float(fs)
+            if "SamplingRate" in MPXData["Data"][chan_id].keys():
+                if MPXData["Data"][chan_id]["SamplingRate"] == fs and "SampleValues" in MPXData["Data"][chan_id].keys():
+                    Data["Data"].append(MPXData["Data"][chan_id]["SampleValues"])
+                    Data["ChannelNames"].append(MPXData["Data"][chan_id]["ChannelName"])
+                    Data["Duration"] = len(MPXData["Data"][chan_id]["SampleValues"]) / float(fs)
+                    Data["Time"] = np.arange(len(MPXData["Data"][chan_id]["SampleValues"])) / float(fs)
         Data["Data"] = np.array(Data["Data"]).T
         Data["SamplingRate"] = float(fs)
         Data["StartTime"] = MPXData["Header"]["SessionDateTime"].timestamp()

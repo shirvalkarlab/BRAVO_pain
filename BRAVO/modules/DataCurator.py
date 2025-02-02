@@ -325,7 +325,7 @@ def HDFCSVDecoder(source_file, person, startTime=None):
     models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
     return True
 
-def AlphaOmegaMPXDecoder(source_file, person):
+def AlphaOmegaMPXDecoder(source_file, person, name=""):
     rawBytes = loadCacheFile(source_file)
     MPXData = extractAlphaOmegaRecordings(rawBytes)
     
@@ -343,7 +343,7 @@ def AlphaOmegaMPXDecoder(source_file, person):
 
     for ProcessedData in MPXData:
         recording = models.Recording(**{
-            "name": "", "type": "AOMPX", "date": ProcessedData["StartTime"], "metadata": {
+            "name": name, "type": "AOMPX", "date": ProcessedData["StartTime"], "metadata": {
                 "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
                 "Duration": ProcessedData["Duration"],
                 "ChannelNames": ProcessedData["ChannelNames"]

@@ -410,7 +410,7 @@ def handleWienerFilter(Data, config):
 def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     recording = models.Recording.find(uid=recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
-    
+
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
     
@@ -437,6 +437,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 
     elif recording.type in ["AOMPX"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = downsampleTimeDomainStreaming(Data)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
         del Data["Missing"]
@@ -494,7 +495,6 @@ def downloadChronicNeuralActivity(participant_uid, config):
         Data["Time"].extend(Analysis["ChronicNeuralActivity"][i]["Time"])
         ChannelName = Analysis["ChronicNeuralActivity"][i]["Device"]["Heritage"] + ": " + Analysis["ChronicNeuralActivity"][i]["ChannelNames"][0]
         for j in range(len(Analysis["ChronicNeuralActivity"][i]["ChannelNames"])):
-            print(Analysis["ChronicNeuralActivity"][i]["TherapyString"])
             if Analysis["ChronicNeuralActivity"][i]["ChannelNames"][j].endswith("Amplitude"):
                 Data["Amplitude"].extend(Analysis["ChronicNeuralActivity"][i]["Data"][j])
             else:
@@ -503,8 +503,6 @@ def downloadChronicNeuralActivity(participant_uid, config):
         Data["TherapyConfig"].extend([Analysis["ChronicNeuralActivity"][i]["TherapyString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
         Data["RecordingConfig"].extend([Analysis["ChronicNeuralActivity"][i]["RecordingString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
 
-    print(len(Data["Time"]))
-    print(len(Data["RecordingConfig"]))
     df = pd.DataFrame(Data)
     return df
 
@@ -652,6 +650,18 @@ def downloadTherapeuticAnalysis(participant_uid, analysis_uid, config):
     Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
     df = pd.DataFrame(Data)
     return df
+
+def downsampleTimeDomainStreaming(data):
+    if data["SamplingRate"] > 1000:
+        sos = signal.butter(5, np.array([1,500])*2/data["SamplingRate"], 'bp', output='sos')
+        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
+        
+        skipIndexes = int(np.floor(data["SamplingRate"] / 1000))
+        data["Data"] = data["Data"][::skipIndexes, :]
+        data["Time"] = data["Time"][::skipIndexes]
+        data["Missing"] = data["Missing"][::skipIndexes, :]
+        data["SamplingRate"] /= skipIndexes
+    return data
 
 def processTimeDomainStreaming(recording, data, config):
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
