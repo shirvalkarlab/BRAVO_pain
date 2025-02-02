@@ -5,33 +5,53 @@
 =========================================================
 
 * Copyright 2025 by Jackson Cagle, Fixel Institute
-* The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
+* The source code is made available under Open Source GPL-3.0 License
 
  =========================================================
 
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 """
 """
-Medical Images Processing Module
+Database Interaction 
 ===================================================
 @author: Jackson Cagle, University of Florida
 @email: jackson.cagle@neurology.ufl.edu
 """
 
+from pathlib import Path
 import os, sys, pathlib
-RESOURCES = str(pathlib.Path(__file__).parent.parent.resolve())
-
-from datetime import datetime, date, timedelta
-import pickle, joblib
-import json
-import dateutil, pytz
+import pickle, blosc
+import hashlib, hmac
+import shutil
+from filelock import Timeout, FileLock
 import numpy as np
-import pandas as pd
-import nibabel as nib
 
+from Server import models
 from modules import Database
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
+HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+def createElectrodeSourceFile(participant_uid, electrode):
+    Participant = models.Participant.find(uid=participant_uid)
+    source = models.SourceFile(name=electrode, type="NeuroImage", owner=Participant, metadata={
+        "FileType": "Electrodes",
+        "TargetPoint": [0,0,0],
+        "EntryPoint": [0,0,1]
+    })
+    source.save()
+
+    segment_files = os.listdir(str(BASE_DIR) + os.path.sep + "modules" + os.path.sep + "DefaultImagingModels" + os.path.sep + electrode)
+    for file in segment_files:
+        with open(str(BASE_DIR) + os.path.sep + "modules" + os.path.sep + "DefaultImagingModels" + os.path.sep + electrode + os.path.sep + file, "rb") as fid:
+            rawBytes = fid.read()
+        recording = models.Recording(name=file, type="ElectrodeModelSegments", source=source)
+        recording.pointer = DATABASE_PATH + "imaging" + os.path.sep + recording.source.owner.uid + os.path.sep + recording.uid + ".bdat"
+        recording.hashed = Database.saveSourceFile(rawBytes, recording.pointer, bytes=True)
+        recording.save()
+    
+    return source
 
 def extractAvailableModels(patient_id, authority):
     """ Extract available image models from patient directory
@@ -135,8 +155,6 @@ def stlReader(source_file, color="#FFFFFF"):
     Returns:
       Raw byte array of binary STL file.
     """
-
-    Data
 
     if not os.path.exists(DATABASE_PATH + 'imaging/' + directory + "/" + filename):
         return False 

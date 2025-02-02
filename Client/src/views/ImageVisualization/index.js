@@ -35,6 +35,7 @@ import { TwitterPicker, BlockPicker } from "react-color";
 import React from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from '@react-three/fiber';
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
 import colormap from "colormap";
 
@@ -81,7 +82,7 @@ function ImageVisualization() {
 
   const [addItemModal, setAddItemModal] = useState({show: false});
   const [popup, setPopupState] = React.useState({item: ""});
-  const [editTargetEntry, setEditTargetEntry] = React.useState({show: false, item: "", targetPoint: [0,0,0], entryPoint: [10,10,10]});
+  const [editTargetEntry, setEditTargetEntry] = React.useState({show: false, item: "", name: "", targetPoint: [0,0,0], entryPoint: [10,10,10]});
 
   const [cameraLock, setCameraLock] = React.useState(false);
   const [worldMatrix, setWorldMatrx] = React.useState(null);
@@ -165,21 +166,34 @@ function ImageVisualization() {
     const allItems = [];
     for (let i in items) {
       const item = items[i];
-
       if (!item.Downloaded) {
-        const data = await retrieveModels(participant_uid, item);
-        if (item.DataType === "Electrode") {
-          let electrodeCount = 0;
-          for (let k in controlItems) {
-            if (controlItems[k].DataType == "Electrode") {
-              electrodeCount++;
-            }
-          }
+        const data = await retrieveModels(participant_uid, item, item.Color);
+        if (item.DataType == "Blender Scene") {
+          const loader = new GLTFLoader();
+          loader.load(data[0].data, (gltf) => {
+            const newItems = gltf.scene.children.map((mesh) => {
+              return { id: mesh.name, filename: mesh.name, type: "GLB", downloaded: true, data: mesh, show: true, isMesh: mesh.isMesh };
+            })
+            setControlItems((controlItems) => [...controlItems, ...newItems]);
+            setAvailableItems((availableItems) => [...availableItems, ...newItems.map((a) => ({...a, Id: a.id, Name: a.id, DataType: a.type}))]);
+            setAlert(null);
+          }, (xhr) => {
+            setAlert(<LoadingProgress message={"Loaded " + (xhr.loaded/1000000).toFixed(2) + " MB"}/>);
+          }, (error) => {
+            console.log(error);
+          })
+        } else if (item.Id.startsWith("TemplateElectrode_")) {
+          item.Downloaded = true
+          availableItems.push({...item, 
+            Id: data[0].id,
+            DataType: "Electrodes"
+          });
+          allItems.push(...data);
+        } else {
+          const index = checkItemIndex(item);
+          availableItems[index].Downloaded = true;
+          allItems.push(...data);
         }
-  
-        const index = checkItemIndex(item);
-        availableItems[index].Downloaded = true;
-        allItems.push(...data);
       } else {
         for (let k in controlItems) {
           if (controlItems[k].Id == item.Id) {
@@ -197,20 +211,52 @@ function ImageVisualization() {
     for (let i in controlItems) {
       if (controlItems[i].id == item.Id) {
         controlItems[i].color = color.hex;
+        SessionController.query("/api/queryImageSourceFiles", {
+          RequestType: "UpdateModel",
+          ParticipantId: participant_uid,
+          SourceId: item.Id,
+          Metadata: {
+            Color: color.hex
+          }
+        });
         return setControlItems([...controlItems]);
       }
     }
   };
 
   const updateTargetPoints = () => {
+    setAlert(<LoadingProgress/>);
     setControlItems((controlItems) => {
       for (let i in controlItems) {
-        if (controlItems[i].filename == editTargetEntry.file) {
-          controlItems[i].targetPts = editTargetEntry.targetPoint.map((value) => parseFloat(value));
-          controlItems[i].entryPts = editTargetEntry.entryPoint.map((value) => parseFloat(value));
+        if (controlItems[i].id == editTargetEntry.item) {
+          controlItems[i].filename = editTargetEntry.name;
+          controlItems[i].targetPt = editTargetEntry.targetPoint.map((value) => parseFloat(value));
+          controlItems[i].entryPt = editTargetEntry.entryPoint.map((value) => parseFloat(value));
         }
       }
       return [...controlItems];
+    });
+    SessionController.query("/api/queryImageSourceFiles", {
+      RequestType: "UpdateModel",
+      ParticipantId: participant_uid,
+      SourceId: editTargetEntry.item,
+      Metadata: {
+        Name: editTargetEntry.name,
+        EntryPoint: editTargetEntry.entryPoint.map((value) => parseFloat(value)),
+        TargetPoint: editTargetEntry.targetPoint.map((value) => parseFloat(value))
+      }
+    }).then((response) => {
+      setAvailableItems((availableItems) => {
+        for (let i in availableItems) {
+          if (availableItems[i].Id == editTargetEntry.item) {
+            availableItems[i].Name = editTargetEntry.name;
+          }
+        }
+        return [...availableItems];
+      });
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
     });
     setEditTargetEntry({...editTargetEntry, show: false});
   };
@@ -259,12 +305,12 @@ function ImageVisualization() {
                                 <>
                                   <IconButton
                                     style={{padding: 0, marginRight: 3, borderStyle: "solid", borderColor: "#000000", borderWidth: 1, height: "100%"}} 
-                                    onClick={(event) => setPopupState({item: item.file, anchorEl: event.currentTarget})}
+                                    onClick={(event) => setPopupState({item: item.Id, anchorEl: event.currentTarget})}
                                   >
                                     <img style={{background: downloadedItem.color, padding: 8, borderRadius: "50%"}}/>
                                   </IconButton>
                                   <Popover 
-                                    open={popup.item == item.file}
+                                    open={popup.item == item.Id}
                                     onClose={() => setPopupState({item: "", anchorEl: null})}
                                     anchorEl={popup.anchorEl}
                                     anchorOrigin={{
@@ -287,7 +333,7 @@ function ImageVisualization() {
                               {downloadedItem ? (<IconButton variant="contained" color={downloadedItem.show ? "info" : "light"} onClick={() => addModel(item)}>
                                 <i className="fa-solid fa-eye" style={{fontSize: 10}}></i>
                               </IconButton>) : null}
-                              {downloadedItem && item.type === "electrode" ? (<IconButton variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.file, targetPoint: item.targetPt, entryPoint: item.entryPt, show: true})}>
+                              {downloadedItem && item.DataType === "Electrodes" ? (<IconButton variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.Id, name: item.Name, targetPoint: downloadedItem.targetPt, entryPoint: downloadedItem.entryPt, show: true})}>
                                 <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
                               </IconButton>) : null}
                               {downloadedItem && item.type === "volume" ? (<IconButton variant="contained" color={cameraLock ? "light" : "info"} onClick={lockCamera}>
@@ -317,8 +363,8 @@ function ImageVisualization() {
                                     shininess: 200,
                                     opacity: 0.8
                                   }} matrix={item.matrix}></Model>
-                                } else if (item.type === "electrode") {
-                                  let matrix = computeElectrodePlacement(item.targetPts, item.entryPts);
+                                } else if (item.type === "Electrodes") {
+                                  let matrix = computeElectrodePlacement(item.targetPt, item.entryPt);
                                   return <group key={item.filename}>
                                     {item.data.map((value, index) => {
                                       return <Model key={item.subname[index]} geometry={value} material={{
@@ -347,6 +393,15 @@ function ImageVisualization() {
                               }
                             })}
                           </group>
+                          {controlItems.map((item) => {
+                            if (item.data && item.show) {
+                              if (item.type === "GLB") {
+                                if (item.isMesh) {
+                                  return <primitive key={item.filename} object={item.data} scale={1} />
+                                }
+                              }
+                            }
+                          })}
                         </Canvas>
                       </MDBox>
                     </Grid>
@@ -374,6 +429,20 @@ function ImageVisualization() {
               </MDTypography>
             </MDBox>
             <DialogContent style={{minWidth: 500}} >
+              <MDBox style={{display: "flex", flexDirection: "row"}}>
+                <TextField
+                  variant="standard"
+                  margin="dense"
+                  value={editTargetEntry.name}
+                  onChange={(event) => setEditTargetEntry((editTargetEntry) => {
+                    editTargetEntry.name = event.target.value;
+                    return {...editTargetEntry};
+                  })}
+                  label={"Electrode Name"} type={"text"}
+                  autoComplete={"off"}
+                  fullWidth
+                />
+              </MDBox>
               <MDBox style={{display: "flex", flexDirection: "row"}}>
                 {editTargetEntry.targetPoint.map((value, index) => {
                   let coordinate = ["x", "y", "z"];

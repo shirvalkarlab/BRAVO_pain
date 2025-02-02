@@ -40,7 +40,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
-from modules.HelperFunctions import sanitize_input, get_or_none
+from modules.HelperFunctions import sanitize_input, get_or_none, current_time
 from modules import Database, DataCurator, DataAnalysis, ImageDatabase
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -241,10 +241,11 @@ class DataDownloadHandler(RestViews.APIView):
 
         elif CacheType == "queryImageModel":
             RecordingId = self.request.query_params.get('RecordingId')
-            file_data = ImageDatabase.stlReader(ParticipantId, RecordingId)
-            if not file_data:
-                return Response(status=400, data={"message": "Recording does not exist."})
-
+            file = models.SourceFile.find(uid=RecordingId)
+            if not file.owner.uid == ParticipantId:
+                return Response(status=403)
+            
+            file_data = DataCurator.loadCacheFile(file)
             return HttpResponse(bytes(file_data), status=200, headers={
                 "Content-Type": "application/octet-stream"
             })
@@ -280,7 +281,24 @@ class DataDownloadHandler(RestViews.APIView):
                 return HttpResponse(bytes(file_data), status=200, headers={
                     "Content-Type": "application/octet-stream"
                 })
+            
+            elif file.metadata["FileType"] == "Blender Scene":
+                file_data = DataCurator.loadCacheFile(file)
+                return HttpResponse(bytes(file_data), status=200, headers={
+                    "Content-Type": "application/octet-stream"
+                })
 
+            elif file.metadata["FileType"] == "Electrodes":
+                if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "CacheType", "DataId", "RecordingId"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+                
+                recording = models.Recording.find(uid=request.data["RecordingId"], source=file)
+                if recording:
+                    file_data = Database.loadSourceFile(recording.pointer, recording.hashed, bytes=True)
+                    return HttpResponse(bytes(file_data), status=200, headers={
+                        "Content-Type": "application/octet-stream"
+                    })
+        
         return Response(status=400, data={"message": "Malformed Input"})
         
 class RecordingTimeShiftHandler(RestViews.APIView):
@@ -398,6 +416,16 @@ class NeuroImageFileHandler(RestViews.APIView):
         
         if request.data["RequestType"] == "ListAll":
             SourceFiles = Database.listSourceFiles(request.data["ParticipantId"], file_type="NeuroImage")
+            SourceFiles.append({
+                "Id": "TemplateElectrode_Medtronic_B33015",
+                "Name": "Medtronic_B33015",
+                "Timezone": "",
+                "Type": "NeuroImaging Data",
+                "DateOfUpload": current_time(),
+                "DateOfRecording": current_time(),
+                "DataSize": 0,
+                "DataType": "TemplateElectrodes"
+            })
             return Response(status=200, data=SourceFiles)
         
         elif request.data["RequestType"] == "Delete":
@@ -409,6 +437,60 @@ class NeuroImageFileHandler(RestViews.APIView):
             if not source:
                 return Response(status=400, data={"message": "Source File not found."})
             source.delete()
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "UpdateModel":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId", "Metadata"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)
+            if not source:
+                return Response(status=400, data={"message": "Source File not found."})
+            
+            for key in request.data["Metadata"].keys():
+                if key == "Name":
+                    source.name = request.data["Metadata"]["Name"]
+                else:
+                    source.metadata[key] = request.data["Metadata"][key]
+            
+            source.save()
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "GetPagination":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            if request.data["SourceId"].startswith("TemplateElectrode"):
+                if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId", "ElectrodeName"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+
+                if request.data["ElectrodeName"] == "Medtronic_B33015":
+                    model = ImageDatabase.createElectrodeSourceFile(request.data["ParticipantId"], request.data["ElectrodeName"])
+                    recordings = models.Recording.find_all(source=model)
+                    return Response(status=200, data=[{
+                        "RecordingId": recording.uid,
+                        "SourceId": model.uid,
+                        "Name": recording.name,
+                        "TargetPoint": model.metadata["TargetPoint"],
+                        "EntryPoint": model.metadata["EntryPoint"]
+                    } for recording in recordings])
+            
+            else:
+                file = models.SourceFile.find(uid=request.data["SourceId"])
+                if not file.owner.uid == request.data["ParticipantId"]:
+                    return Response(status=403)
+                
+                if file.metadata["FileType"] == "Electrodes":
+                    recordings = models.Recording.find_all(source=file)
+                    return Response(status=200, data=[{
+                        "RecordingId": recording.uid,
+                        "SourceId": file.uid,
+                        "Name": recording.name,
+                        "TargetPoint": file.metadata["TargetPoint"],
+                        "EntryPoint": file.metadata["EntryPoint"]
+                    } for recording in recordings])
+
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})

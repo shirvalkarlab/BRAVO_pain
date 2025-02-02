@@ -48,6 +48,98 @@ const retrieveModels = async (participant_uid, item, color) => {
       show: true,
     });
   
+  } else if (item.DataType == "Electrodes") {
+    const response = await SessionController.query("/api/queryImageSourceFiles", {
+      RequestType: "GetPagination",
+      ParticipantId: participant_uid,
+      SourceId: item.Id,
+      ElectrodeName: item.Name
+    });
+
+    const targetPt = response.data[0].TargetPoint || [0,0,0];
+    const entryPt = response.data[0].EntryPoint || [0,0,50];
+
+    const electrode_data = {
+      id: item.Id,
+      filename: item.Name,
+      type: item.DataType,
+      downloaded: true,
+      subname: [],
+      data: [],
+      color: color,
+      opacity: 1,
+      targetPt: targetPt,
+      entryPt: entryPt,
+      matrix: computeElectrodePlacement(targetPt, entryPt),
+      show: true,
+    };
+    
+    for (let segment of response.data) {
+      const response = await SessionController.query("/api/downloadData", {
+        "ParticipantId": participant_uid,
+        "CacheType": "queryImageModel",
+        "DataId": segment.SourceId,
+        "RecordingId": segment.RecordingId
+      }, {}, null, "arraybuffer");
+      const data = parseBinarySTL(response.data);
+      electrode_data.subname.push(segment.Name);
+      electrode_data.data.push(data);
+    }
+    return [electrode_data]
+
+  } else if (item.DataType == "TemplateElectrodes") {
+    const response = await SessionController.query("/api/queryImageSourceFiles", {
+      RequestType: "GetPagination",
+      ParticipantId: participant_uid,
+      SourceId: item.Id,
+      ElectrodeName: item.Name
+    });
+
+    const targetPt = response.data[0].TargetPoint || [0,0,0];
+    const entryPt = response.data[0].EntryPoint || [0,0,50];
+
+    const electrode_data = {
+      id: response.data[0].SourceId,
+      filename: item.Name,
+      type: "Electrodes",
+      downloaded: true,
+      subname: [],
+      data: [],
+      color: color,
+      opacity: 1,
+      targetPt: targetPt,
+      entryPt: entryPt,
+      matrix: computeElectrodePlacement(targetPt, entryPt),
+      show: true,
+    };
+    
+    for (let segment of response.data) {
+      const response = await SessionController.query("/api/downloadData", {
+        "ParticipantId": participant_uid,
+        "CacheType": "queryImageModel",
+        "DataId": segment.SourceId,
+        "RecordingId": segment.RecordingId
+      }, {}, null, "arraybuffer");
+      const data = parseBinarySTL(response.data);
+      electrode_data.subname.push(segment.Name);
+      electrode_data.data.push(data);
+    }
+    return [electrode_data]
+
+  } else if (item.DataType == "Blender Scene") {
+    controlledItems.push({
+      id: item.Id,
+      filename: item.Name,
+      type: item.DataType,
+      downloaded: false,
+      data: SessionController.getDownloadLink("/api/downloadData", {
+        ParticipantId: participant_uid,
+        CacheType: "queryImageModel",
+        RecordingId: item.Id
+      }),
+      show: true,
+    });
+
   } else if (item.type == "volume") {
     const response = await SessionController.query("/api/queryImageModel", {
       "Directory": participant_uid,
@@ -102,21 +194,6 @@ const retrieveModels = async (participant_uid, item, color) => {
       color: color ? color : "#FFFFFF",
       matrix: identityMatrix(),
       show: true,
-    });
-
-  } else if (item.type == "electrode") {
-    const response = await SessionController.query("/api/queryImageModel", {
-      "Directory": participant_uid,
-      "ElectrodeName": item.electrode,
-      "FileName": item.file,
-      "FileMode": item.mode,
-      "FileType": item.type
-    }, {}, null, "arraybuffer");
-    const data = parseBinarySTL(response.data);
-    controlledItems.push({
-      filename: item.file,
-      data: data,
-      color: color ? color : data.color,
     });
 
   }

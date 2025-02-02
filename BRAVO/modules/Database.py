@@ -269,8 +269,12 @@ def listSourceFiles(participant_uid, file_type=None):
                 "DateOfRecording": source.date,
                 "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else "",
                 "DataType": source.metadata["FileType"],
-                "DataSize": os.path.getsize(source.pointer)
+                "Color": source.metadata["Color"] if "Color" in source.metadata.keys() else None,
             }
+            try:
+                SourceFile["DataSize"] = os.path.getsize(source.pointer)
+            except:
+                SourceFile["DataSize"] = 0
 
             SourceFiles.append(SourceFile)
 
