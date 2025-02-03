@@ -1,2 +1,3 @@
 BRAVO/.env
 BRAVO/db.sqlite3
+BRAVO/mysql.config

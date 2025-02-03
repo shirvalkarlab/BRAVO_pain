@@ -1,0 +1,14 @@
+[Unit]
+After=network.target
+RestartLimitIntervalSec=0
+StartLimitBurst=100
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/BRAVO/BRAVO/
+ExecStart=/root/BRAVO/BRAVO/venv/bin/python3 manage.py runserver 0:27286
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
