@@ -29,6 +29,87 @@ def processInput(argv):
                         fileout.write(line.replace('</head><body>', '</head>{% csrf_token %}<body>'))
 
             return True
+        
+        elif argv[1] == "SetupBRAVO":
+            import socket
+            import json
+            from cryptography import fernet
+
+            BASE_DIR = Path(__file__).resolve().parent
+            if os.path.exists(os.path.join(BASE_DIR, '.env')):
+                print("Environment Variable Exist, cannot perform fresh installation.")
+                return True
+        
+            config = dict()
+            databasePath = input("Please enter the full path to the desired folder as database storage [Default: $SCRIPT_DIR/BRAVO/BRAVOStorage/]: ")
+            if not databasePath == "":
+                config["DATASERVER_PATH"] = databasePath
+            else:
+                config["DATASERVER_PATH"] = os.path.join(BASE_DIR, 'BRAVOStorage')
+            print(config["DATASERVER_PATH"].endswith(os.path.sep))
+            if not config["DATASERVER_PATH"].endswith(os.path.sep):
+                config["DATASERVER_PATH"] += os.path.sep
+            os.makedirs(config["DATASERVER_PATH"], exist_ok=True)
+
+            config["DATASERVER_ENCRYPTION"] = fernet.Fernet.generate_key().decode("utf-8")
+            config["DATASERVER_HASHKEY"] = "BRAVOServerHashkey"
+            config["DJANGO_SECRET_KEY"] = "django-insecure-" + fernet.Fernet.generate_key().decode("utf-8")
+
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                localAddress = s.getsockname()[0]
+                s.close()
+            except:
+                localAddress = "127.0.1.1"
+
+            serverAddress = input(f"Please enter the public IP address if available [Default: Local Address {localAddress}]: ")
+            if not serverAddress == "":
+                config["SERVER_HOST"] = serverAddress
+                config["SERVER_ADDRESS"] = "https://" + serverAddress
+            else:
+                config["SERVER_HOST"] = localAddress
+                config["SERVER_ADDRESS"] = "http://" + localAddress + ":27286"
+
+            config["DJANGO_MODE"] = "DEBUG"
+        
+            config["FIBIT_CLIENT_SECRET"] = ""
+            config["FIBIT_CLIENT_ID"] = ""
+            
+            with open(os.path.join(BASE_DIR, '.env'), "w+") as file:
+                json.dump(config, file)
+
+            import re, subprocess
+            with open("mysql.config", "r") as fid:
+                info = fid.readlines()
+        
+            databaseName = "BRAVOServer"
+            userName = "BRAVOAdmin"
+            hostName = "localhost"
+            dbPassword = "AdminPassword"
+
+            for line in info:
+                if "=" in line:
+                    line = line.replace(" ","")
+                    content = re.split("[\s]?=[\s]?", line)
+                    print(content)
+                
+                    if len(content) == 2:
+                        if content[0] == "database":
+                            databaseName = content[1].replace("\n","")
+                        elif content[0] == "user":
+                            userName = content[1].replace("\n","")
+                        elif content[0] == "host":
+                            hostName = content[1].replace("\n","")
+                        elif content[0] == "password":
+                            dbPassword = content[1].replace("\n","")
+                
+            subprocess.run(["sudo","mysql", "-uroot", "-e", f"CREATE DATABASE {databaseName}"])
+            subprocess.run(["sudo","mysql", "-uroot", "-e", f"CREATE USER '{userName}'@'{hostName}' IDENTIFIED BY '{dbPassword}'"])
+            subprocess.run(["sudo","mysql", "-uroot", "-e", f"GRANT ALL PRIVILEGES ON {databaseName}.* TO '{userName}'@'{hostName}'"])
+            subprocess.run(["sudo","mysql", "-uroot", "-e", f"FLUSH PRIVILEGES"])
+
+            return True
 
 if __name__ == '__main__':
     if not processInput(sys.argv):
