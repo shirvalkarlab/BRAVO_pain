@@ -1,3 +1,4 @@
+#!/bin/bash
 # Default Installation Script was created for Ubuntu 20.04 which is now outdated. This is a new installation script based on Ubuntu 24.04 Distribution
 
 # Set our current working directory as the SCRIPT_DIR
@@ -26,7 +27,6 @@ pip3 install -r requirements.txt
 
 # Setup Script 
 python3 manage.py SetupBRAVO
-python3 manage.py makemigrations Backend
 python3 manage.py migrate
 
 # Build Clients 
