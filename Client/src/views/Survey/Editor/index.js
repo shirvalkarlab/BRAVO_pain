@@ -323,7 +323,19 @@ export default function FormEditor({match}) {
   }
 
   const setCumulativeScoreInclusion = (index, questionId, value) => {
-    contents.contents[index].questions[questionId].list = value;
+    if (value.includes("All Scores")) {
+      contents.contents.map((a) => {
+        a.questions.map((b) => {
+          if (b.type == "score") {
+            if (!contents.contents[index].questions[questionId].list.includes(b.text)) {
+              contents.contents[index].questions[questionId].list.push(b.text);
+            }
+          }
+        })
+      })
+    } else {
+      contents.contents[index].questions[questionId].list = value;
+    }
     setContents({...contents});
   }
 
@@ -503,7 +515,7 @@ export default function FormEditor({match}) {
                                 multiple value={question.list} options={contents.contents.reduce((cumulative, value) => {
                                   cumulative.push(...value.questions.filter((a) => a.type == "score").map((a) => a.text));
                                   return cumulative;
-                                }, [])}
+                                }, ["All Scores"])}
                                 onChange={(event, value) => { setCumulativeScoreInclusion(index, questionId, value) }}
                                 renderOption={(props, option) => <li {...props}>{option}</li>}
                                 renderInput={(params) => (

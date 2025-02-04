@@ -156,6 +156,7 @@ function MedtronicJSONUploader({institute, participant}) {
           acceptedFileTypes={[".json"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
+          maxParallelUploads={10}
           server={{
             url: SessionController.getServer(),
             process: handleFileUpload

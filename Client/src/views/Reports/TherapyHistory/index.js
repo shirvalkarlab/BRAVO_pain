@@ -103,7 +103,8 @@ function TherapyHistory() {
 
   React.useEffect(() => {
     let UniqueDateStrings = [];
-    let TherapyConfigurations = {}
+    let TherapyConfigurations = {};
+    let DuplicateCheck = {};
     for (let i in therapyHistory.TherapyConfiguration) {
       for (let j in therapyHistory.TherapyConfiguration[i].History) {
         const dateString = new Date(therapyHistory.TherapyConfiguration[i].History[j].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(therapyHistory.TherapyConfiguration[i].History[j].Timezone),
@@ -118,15 +119,26 @@ function TherapyHistory() {
             value: therapyHistory.TherapyConfiguration[i].History[j].Date
           });
           TherapyConfigurations[dateString] = [];
+          DuplicateCheck[dateString] = [];
         }
 
-        TherapyConfigurations[dateString].push({
+        const fullDescriptor = JSON.stringify({
           ...therapyHistory.TherapyConfiguration[i].History[j],
-          Device: therapyHistory.TherapyConfiguration[i].Device
-        })
+          Id: "", Date: "", Percent: ""
+        });
+
+        if (!DuplicateCheck[dateString].includes(fullDescriptor)) {
+          DuplicateCheck[dateString].push(fullDescriptor);
+          TherapyConfigurations[dateString].push({
+            ...therapyHistory.TherapyConfiguration[i].History[j],
+            Device: therapyHistory.TherapyConfiguration[i].Device,
+          })
+        }
+        
       }
     }
     UniqueDateStrings = UniqueDateStrings.sort((a,b) => b.value - a.value).map((a) => a.label)
+    
 
     if (UniqueDateStrings.length > 0) {
       setTherapyConfigurations(TherapyConfigurations)

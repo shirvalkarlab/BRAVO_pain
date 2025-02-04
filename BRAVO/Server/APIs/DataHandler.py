@@ -75,14 +75,15 @@ class DataUploadHandler(RestViews.APIView):
         }, **json.loads(request.data["Metadata"])}
 
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
-        if models.SourceFile.objects.exclude(pk=source_file.pk).filter(metadata__Institute=institute.pk, metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
-            print("Duplicate File Found")
-            source_file.delete()
-            return Response(status=301)
+        lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
+        with lock.acquire(timeout=60):
+            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(metadata__Institute=institute.pk, metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+                print("Duplicate File Found")
+                source_file.delete()
+                return Response(status=301)
         
         lockFile = source_file.pointer + ".lock"
         if request.data["DataType"] == "MedtronicJSON":
-            lock = FileLock(DATABASE_PATH + "MedtronicJSON.lock")
             try:
                 if not request.data["ParticipantId"] == "batch-upload":
                     if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
@@ -92,11 +93,9 @@ class DataUploadHandler(RestViews.APIView):
                     if not person:
                         return Response(status=400, data={"message": "Participant not found."})
                     
-                    with lock.acquire(timeout=180):
-                        DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
+                    DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
                 else:
-                    with lock.acquire(timeout=180):
-                        DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    DataCurator.MedtronicPerceptJSONDecoder(source_file)
                     
             except Exception as e:
                 print(request.data["File"].name)

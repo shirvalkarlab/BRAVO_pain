@@ -29,6 +29,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from io import BytesIO
+from filelock import Timeout, FileLock
 
 from Server import models
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
@@ -63,52 +64,53 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     DatabaseEntries = decodeMedtronicJSON(JSON)
 
     # Process Patient/Device/Electrode Information for Storage and Query
-    if not device:
-        device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
-        if not device_created and device.owner.institute_id == source_file.metadata["Institute"]:
-            if not person:
-                person = device.owner
+    lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
+    with lock.acquire(timeout=180):
+        if not device:
+            device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
+            if not device_created and device.owner.institute_id == source_file.metadata["Institute"]:
+                if not person:
+                    person = device.owner
+                else:
+                    if not person.uid == device.owner.uid:
+                        raise Exception("Attempting to upload data of another Participant. Please merge record before attempt so")
             else:
-                if not person.uid == device.owner.uid:
-                    raise Exception("Attempting to upload data of another Participant. Please merge record before attempt so")
+                if not person:
+                    person, person_created = models.Participant.find_or_create(DatabaseEntries["SessionOverview"]["Name"], DatabaseEntries["SessionOverview"]["MRN"], source_file.metadata["Institute"])
+                    if person_created:
+                        person.date_of_birth = DatabaseEntries["SessionOverview"]["DOB"]
+                        person.sex = DatabaseEntries["SessionOverview"]["Sex"]
+                        person.diagnosis = DatabaseEntries["SessionOverview"]["Diagnosis"]
+                        person.institute_id = source_file.metadata["Institute"]
+                        person.save()
+                
+                device.owner = person
+                device.name = DatabaseEntries["SessionOverview"]["Device"]["Name"]
+                device.implanted_date = DatabaseEntries["SessionOverview"]["Device"]["ImplantDate"]
+                device.implanted_location = DatabaseEntries["SessionOverview"]["Device"]["Location"]
+                device.estimated_eol = DatabaseEntries["SessionOverview"]["Device"]["EOL"]
+                device.device_bloodline = DatabaseEntries["SessionOverview"]["Device"]["Location"]
+                device.save()
+        
+        elif not person:
+            person = device.owner
 
-        else:
-            if not person:
-                person, person_created = models.Participant.find_or_create(DatabaseEntries["SessionOverview"]["Name"], DatabaseEntries["SessionOverview"]["MRN"], source_file.metadata["Institute"])
-                if person_created:
-                    person.date_of_birth = DatabaseEntries["SessionOverview"]["DOB"]
-                    person.sex = DatabaseEntries["SessionOverview"]["Sex"]
-                    person.diagnosis = DatabaseEntries["SessionOverview"]["Diagnosis"]
-                    person.institute_id = source_file.metadata["Institute"]
-                    person.save()
+        # This method is designed in a way that Electroe remain the same even with new DBS device. 
+        for lead in DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"]:
+            electrode, electrode_created = models.Electrode.find_or_create(person, lead["name"])
+            if electrode_created:
+                electrode.type = lead["type"]
+                electrode.custom_name = lead["custom_name"]
+                electrode.channel_count = lead["channel_count"]
+                electrode.channel_names = lead["channel_names"]
+                electrode.save()
             
-            device.owner = person
-            device.name = DatabaseEntries["SessionOverview"]["Device"]["Name"]
-            device.implanted_date = DatabaseEntries["SessionOverview"]["Device"]["ImplantDate"]
-            device.implanted_location = DatabaseEntries["SessionOverview"]["Device"]["Location"]
-            device.estimated_eol = DatabaseEntries["SessionOverview"]["Device"]["EOL"]
-            device.device_bloodline = DatabaseEntries["SessionOverview"]["Device"]["Location"]
-            device.save()
-    
-    elif not person:
-        person = device.owner
-
-    # This method is designed in a way that Electroe remain the same even with new DBS device. 
-    for lead in DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"]:
-        electrode, electrode_created = models.Electrode.find_or_create(person, lead["name"])
-        if electrode_created:
-            electrode.type = lead["type"]
-            electrode.custom_name = lead["custom_name"]
-            electrode.channel_count = lead["channel_count"]
-            electrode.channel_names = lead["channel_names"]
-            electrode.save()
-        
-        if not device.electrodes.filter(uid=electrode.uid).exists():
-            device.electrodes.add(electrode)
-        
-        if DatabaseEntries["SessionOverview"]["SessionTimestamp"] < electrode.implanted_date:
-            electrode.implanted_date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
-            electrode.save()
+            if not device.electrodes.filter(uid=electrode.uid).exists():
+                device.electrodes.add(electrode)
+            
+            if DatabaseEntries["SessionOverview"]["SessionTimestamp"] < electrode.implanted_date:
+                electrode.implanted_date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
+                electrode.save()
     
     # Therapy History Storage
     for therapy in DatabaseEntries["Therapies"]:
