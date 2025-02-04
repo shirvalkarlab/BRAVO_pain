@@ -47,17 +47,10 @@ import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 
-import { FaPerson, FaPeopleGroup } from "react-icons/fa6";
-import { HiIdentification } from "react-icons/hi2"
-
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
-
-import colors from "assets/theme/base/colors";
-import AlphaOmegaMPXUploader from "./AlphaOmegaMPXUploader";
-import EventCSVUploader from "./EventCSVUploader";
 
 const filter = createFilterOptions();
 
