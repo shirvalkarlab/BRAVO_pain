@@ -85,6 +85,8 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
         cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames] = {};
       }
       for (let i in annotations) {
+        if (annotations[i].Duration == 0) continue;
+        
         if (!cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name]) {
           cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name] = {freq: dataToRender.Signal[trial].SignalSeries.Spectrum.Frequency}
         }

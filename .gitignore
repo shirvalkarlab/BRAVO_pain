@@ -311,9 +311,9 @@ packages/react-devtools-timeline/dist
 
 Client/package-lock.json
 
-Server/mysql.config
-DataStorage
-Server/Certificates
+BRAVO/mysql.config
+BRAVO/BRAVOStorage
+BRAVO/Certificates
 
 *.sql
 

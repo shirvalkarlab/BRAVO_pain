@@ -214,6 +214,96 @@ class CreateParticipantInformation(RestViews.APIView):
         
         return Response(status=200, data=person.get_info())
 
+class StudyHandler(RestViews.APIView):
+
+    permission_classes = [IsAuthenticated,]
+    parser_classes = [RestParsers.JSONParser]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        if request.data["RequestType"] == "GetStudies":
+            studies = models.Study.find_all(members=request.user)
+            Studies = []
+            for study in studies:
+                Studies.append(study.get_info(request.user))
+                
+            return Response(status=200, data=Studies)
+
+        elif request.data["RequestType"] == "CreateStudy":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyName"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.create(request.data["StudyName"])
+            rel = models.StudyRel.create(study=study, member=request.user, permission={
+                "Position": "Admin"
+            })
+            rel.save()
+            
+            return Response(status=200, data=study.get_info(request.user))
+
+        elif request.data["RequestType"] == "JoinStudy":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(invite_code=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Invitation Code"})
+            
+            rel = models.StudyRel.create(study=study, member=request.user, permission={
+                "Position": "Member"
+            })
+            rel.save()
+            
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "LeaveStudy":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            study.members.remove(request.user)
+            if study.members.count() == 0:
+                study.delete()
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "AddParticipant":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId", "ParticipantId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                return Response(status=403)
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            study.participants.add(Participant)
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "RemoveParticipant":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId", "ParticipantId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                return Response(status=403)
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            study.participants.remove(Participant)
+            return Response(status=200)
+        
+        return Response(status=400, data={"message": "Malformed Input"})
+
 class CheckAccessPermission(RestViews.APIView):
     
     permission_classes = [IsAuthenticated,]

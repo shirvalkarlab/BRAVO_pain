@@ -51,6 +51,7 @@ import { experimentalRoutes } from "views/Experimental/plugins";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
+const StudyManagement = lazy(() => import('views/Dashboard/StudyManagement'));
 const UploadDataView = lazy(() => import('views/Dashboard/UploadDataView'));
 const ResearchAccessView = lazy(() => import('views/Dashboard/ShareResearchAccess'));
 const ParticipantOverview = lazy(() => import('views/Dashboard/ParticipantOverview'));
@@ -80,6 +81,15 @@ const routes = {
         component: <DashboardOverview />,
         route: "/dashboard",
         icon: <DashboardIcon/>,
+        noCollapse: true,
+      },
+      {
+        type: "collapse",
+        name: "StudyManagement",
+        key: "study-management",
+        component: <StudyManagement />,
+        route: "/study-management",
+        icon: <IosShare/>,
         noCollapse: true,
       },
       {

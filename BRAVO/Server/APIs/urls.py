@@ -62,6 +62,7 @@ urlpatterns = [
     path('updateDeviceInformation', Participants.UpdateDeviceInformation.as_view()),
     path('deleteDeviceInformation', Participants.DeleteDeviceInformation.as_view()),
     path('checkAccessPermission', Participants.CheckAccessPermission.as_view()),
+    path('manageStudyInformation', Participants.StudyHandler.as_view()),
 
     path('queryAnalysisConfigurations', DataAnalysis.QueryAnalysisConfigurations.as_view()),
     path('queryTherapeuticEffectAnalysis', DataAnalysis.QueryTherapeuticEffectAnalysis.as_view()),

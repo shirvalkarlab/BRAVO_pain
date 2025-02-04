@@ -77,13 +77,31 @@ class PlatformUser(AbstractBaseUser):
         return user
     
     def get_info(self):
-        return {"Email": self.email, "Name": self.user_name, "Institute": self.institute.name if self.institute else "", "InstituteId": self.institute.uid if self.institute else ""}
+        Studies = [study.get_info(self) for study in Study.find_all(members=self)]
+        return {"Email": self.email, "Name": self.user_name, 
+                "Institute": self.institute.name if self.institute else "", "InstituteId": self.institute.uid if self.institute else "", 
+                "Study": Studies}
 
+class InstituteRel(models.Model):
+    institute = models.ForeignKey("Institute", on_delete=models.CASCADE)
+    member = models.ForeignKey("PlatformUser", on_delete=models.CASCADE)
+    permission = models.JSONField(default=dict)
+
+    def find(*args, **kwargs):
+        return InstituteRel.objects.prefetch_related("institute", "member").filter(**kwargs).first()
+
+    def get_info(self):
+        return {
+            "Institute": self.institute.uid,
+            "Member": self.member.uid,
+            "Permission": self.permission
+        }
+    
 class Institute(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
     invite_code = models.CharField(max_length=512, default="")
     name = models.CharField(max_length=512, default="")
-    members = models.ManyToManyField("PlatformUser", related_name="institute_has_member")
+    members = models.ManyToManyField("PlatformUser", related_name="institute_has_member", through="InstituteRel")
 
     def include(*args, **kwargs):
         return Institute.objects.filter(**kwargs).exists()
@@ -115,11 +133,30 @@ class Institute(models.Model):
     def has_permission(self, user):
         return self.members.filter(uid=user.uid).exists()
     
+class StudyRel(models.Model):
+    study = models.ForeignKey("Study", on_delete=models.CASCADE)
+    member = models.ForeignKey("PlatformUser", on_delete=models.CASCADE)
+    permission = models.JSONField(default=dict)
+
+    def find(*args, **kwargs):
+        return StudyRel.objects.prefetch_related("study", "member").filter(**kwargs).first()
+
+    def create(*args, **kwargs):
+        return StudyRel(**kwargs)
+
+    def get_info(self):
+        return {
+            "Study": self.study.uid,
+            "Member": self.member.uid,
+            "Permission": self.permission
+        }
+    
 class Study(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
     name = models.CharField(max_length=512, default="")
     
-    members = models.ManyToManyField("PlatformUser", related_name="study_has_member")
+    invite_code = models.CharField(max_length=512, default="")
+    members = models.ManyToManyField("PlatformUser", related_name="study_has_member", through="StudyRel")
     participants = models.ManyToManyField("Participant", related_name="has_participant")
 
     def include(*args, **kwargs):
@@ -127,6 +164,9 @@ class Study(models.Model):
 
     def find(*args, **kwargs):
         return Study.objects.prefetch_related("members", "participants").filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return Study.objects.prefetch_related("members", "participants").filter(**kwargs).all()
 
     def has_permission(self, user):
         return self.members.filter(uid=user.uid).exists()
@@ -142,3 +182,13 @@ class Study(models.Model):
         study = Study(uid=uid, name=name)
         study.save()
         return study
+
+    def get_info(self, user):
+        rel = StudyRel.find(study=self, member=user)
+        return {
+            "Id": self.uid, 
+            "Name": self.name,
+            "Permission": rel.permission["Position"],
+            "Members": [{"Name": member.user_name} for member in self.members.all()],
+            "Participants": [{"Id": participant.uid, "Name": participant.name if rel.permission["Position"] == "Admin" else participant.uid} for participant in self.participants.all()]
+        }

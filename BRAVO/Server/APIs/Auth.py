@@ -64,8 +64,9 @@ class UserRegister(RestViews.APIView):
             except Exception as e:
                 return Response(status=400, data={"message": str(e)})
             
-            institute.invite_code = ""
-            institute.save()
+            user.save()
+            #institute.invite_code = ""
+            #institute.save()
 
         user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
         login(request, user)
@@ -108,12 +109,30 @@ class QueryProfile(RestViews.APIView):
     def post(self, request):
         userInfo = request.user.get_info()
         userInfo["APIKey"] = request.user.api_token
+        userInfo["Institutes"] = [{"Id": institute.uid, "Name": institute.name} for institute in models.Institute.find_all(members=request.user)]
+        userInfo["Studies"] = [{"Id": study.uid, "Name": study.name} for study in models.Study.find_all(members=request.user)]
 
         if "RequestType" in request.data.keys():
             if request.data["RequestType"] == "RefreshAPIToken":
                 request.user.api_token = get_token(64)
                 request.user.save()
                 userInfo["APIKey"] = request.user.api_token
+
+            elif request.data["RequestType"] == "ChangeMainInstitute":
+                if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "InstituteId"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+
+                institute = models.Institute.find(uid=request.data["InstituteId"])
+                if not institute:
+                    return Response(status=400, data={"message": "Permission Denied"})
+
+                if not institute.has_permission(request.user):
+                    return Response(status=400, data={"message": "Permission Denied"})
+                
+                request.user.institute = institute
+                request.user.save()
+                print(institute)
+                return Response(status=200)
 
         return Response(status=200, data=userInfo)
 

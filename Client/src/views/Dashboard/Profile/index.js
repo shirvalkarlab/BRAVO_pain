@@ -15,6 +15,7 @@ import { useEffect, useState, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import {
+  Autocomplete,
   Card,
   Divider,
   Dialog,
@@ -56,6 +57,7 @@ export default function Profile() {
 
   const [deidentificationTable, setDeidentificationTable] = useState([]);
   const [profile, setProfile] = useState(false);
+  const [activeInstitute, setActiveInstitute] = useState({Id: user.InstituteId, Name: user.Institute});
   const [tableDialog, setTableDialog] = useState({passcode: "", show: false});
   const inputFile = useRef(null) 
 
@@ -71,6 +73,9 @@ export default function Profile() {
     });
   }, []);
 
+  useEffect(() => {
+  }, [activeInstitute]);
+
   return (
     <DatabaseLayout>
       <MDBox py={3}>
@@ -81,8 +86,48 @@ export default function Profile() {
             <Grid container spacing={2}>
               <Grid item sm={12} md={12}>
                 <MDTypography variant="h3">
-                  {"Profile"}
+                  {"Profile for "}{user.Name}
                 </MDTypography>
+              </Grid>
+              <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+                <Autocomplete selectOnFocus clearOnBlur fullWidth
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      variant="standard"
+                      label={"Select Active Institute for Data Viewing"}
+                      placeholder={"Select Active Institute for Data Viewing"}
+                    />
+                  )}
+                  isOptionEqualToValue={(option, value) => {
+                    return option.Id === activeInstitute.Id;
+                  }}
+                  getOptionLabel={(option) => {
+                    if (typeof option === 'string') { return option; }
+                    if (!option.Name) { return "Not Available" }
+                    return option.Name;
+                  }}
+                  renderOption={(props, option) => <li {...props}>{option.Name}</li>}
+                  value={activeInstitute}
+                  options={profile.Institutes}
+                  onChange={(event, newValue) => {
+                    setAlert(<LoadingProgress />);
+                    SessionController.query("/api/queryProfile", {
+                      RequestType: "ChangeMainInstitute",
+                      InstituteId: newValue.Id
+                    }).then((response) => {
+                      setActiveInstitute(newValue);
+                      setContextState(dispatch, "user", {
+                        ...user,
+                        Institute: newValue.Name,
+                        InstituteId: newValue.Id
+                      })
+                      setAlert();
+                    }).catch((error) => {
+                      SessionController.displayError(error, setAlert);
+                    });
+                  }}
+                />
               </Grid>
               <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
                 <TextField

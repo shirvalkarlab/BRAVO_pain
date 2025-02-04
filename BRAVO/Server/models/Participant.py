@@ -45,6 +45,8 @@ class Participant(models.Model):
     institute = models.ForeignKey('Institute', models.CASCADE, null=True)
 
     last_update = models.FloatField(default=current_time)
+    
+    original = models.ForeignKey('Participant', models.CASCADE, null=True)
 
     def include(*args, **kwargs):
         return Participant.objects.filter(**kwargs).exists()

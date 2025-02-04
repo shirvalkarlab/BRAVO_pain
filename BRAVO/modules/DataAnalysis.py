@@ -49,6 +49,12 @@ def queryProcessingNodes(type=None):
         if type == ProcessingNodes[i]["Type"]:
             return ProcessingNodes[i]
 
+def deleteProcessedData(recording, type=None):
+    if not type:
+        models.Recording.find_all(original=recording).delete()
+    else:
+        models.Recording.find_all(original=recording, type=type).delete()
+
 def saveAnalysisProcessedData(Data, type, metadata, recording):
     ProcessedData = models.Recording.create(recording, type)
     ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
@@ -893,12 +899,21 @@ def queryNeuralActivitySnapshot(participant_uid, config):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
+    DBSDeviceDictionary = {}
+    for i in range(len(DBSDevices)):
+        DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
+
     for recording in Recordings:
         Description = recording.get_info()
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processNeuralActivitySnapshot(recording, Data, config)
         
-        DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+        if recording.source.metadata["Device"] in DBSDeviceDictionary.keys():
+            DBSDevice = DBSDeviceDictionary[recording.source.metadata["Device"]]
+        else:
+            raise Exception("Neural Activity Snapshot Query found a recording whose DeviceId does not belongs to the Participant")
+
         for i in range(len(Data["ChannelNames"])):
             ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
             if ElectrodeIdentifier.startswith("Left"):

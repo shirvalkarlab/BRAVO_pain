@@ -401,3 +401,14 @@ def saveCachedResult(data, url, participant_uid, config):
     result.pointer = DATABASE_PATH + "visualization" + os.path.sep + participant_uid + os.path.sep + result.uid + ".bdat"
     result.hashed = saveSourceFile(data, DATABASE_PATH + "visualization" + os.path.sep + participant_uid + os.path.sep + result.uid + ".bdat")
     result.save()
+
+def deleteCachedResult(participant_uid=None, url=None):
+    if participant_uid and url:
+        models.SourceFile.purge(type="CachedResult", metadata__Participant=participant_uid, metadata__URL=url)
+    elif participant_uid:
+        models.SourceFile.purge(type="CachedResult", metadata__Participant=participant_uid)
+    elif url:
+        models.SourceFile.purge(type="CachedResult", metadata__URL=url)
+    else:
+        models.SourceFile.purge(type="CachedResult")
+        
