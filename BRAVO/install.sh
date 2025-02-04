@@ -34,8 +34,8 @@ sudo apt-get install npm -y
 npm install --prefix $SCRIPT_DIR/../Client
 npm run build --prefix $SCRIPT_DIR/../Client
 python3 $SCRIPT_DIR/manage.py create_template
-cp -r $SCRIPT_DIR/../Client/build/* /usr/share/nginx/html/
-cp $SCRIPT_DIR/bravo_nginx.conf /etc/nginx/sites-enabled/default
+sudo cp -r $SCRIPT_DIR/../Client/build/* /usr/share/nginx/html/
+sudo cp $SCRIPT_DIR/bravo_nginx.conf /etc/nginx/sites-enabled/default
 
 sudo cp bravo_server.service /etc/systemd/system/bravo_server.service
 sudo systemctl start bravo_server
