@@ -120,7 +120,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -137,7 +137,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
             elif recording.type == "DelsysMDAT":
                 Description["Type"] = "Delsys MDT"
 
-            elif recording.type == "HDFCSV":
+            elif recording.type == "HPFCSV":
                 Description["Name"] = recording.metadata["SensorType"]
                 Description["Type"] = "Delsys CSV Format"
             
@@ -189,7 +189,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
     
     Overview["Recordings"] = []
     for recording in Recordings:
@@ -223,7 +223,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
         elif recording.type == "DelsysMDAT":
             pass
 
-        elif recording.type == "HDFCSV":
+        elif recording.type == "HPFCSV":
             Description["Name"] = recording.metadata["SensorType"]
 
         Overview["Recordings"].append(Description)
@@ -459,7 +459,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
 
-    elif recording.type in ["HDFCSV"]:
+    elif recording.type in ["HPFCSV"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T

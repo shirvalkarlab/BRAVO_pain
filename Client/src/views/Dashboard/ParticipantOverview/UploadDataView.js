@@ -36,7 +36,7 @@ import DropzoneUploader from "components/DropzoneUploader";
 
 import MedtronicJSONUploader from "../UploadDataView/MedtronicJSONUploader";
 import AlphaOmegaMPXUploader from "../UploadDataView/AlphaOmegaMPXUploader";
-import HDFCSVUploader from "../UploadDataView/HDFCSVUploader";
+import HPFCSVUploader from "../UploadDataView/HPFCSVUploader";
 import UFMDATUploader from "../UploadDataView/UFMDATUploader";
 import NeuroimageUploader from "../UploadDataView/NeuroimageUploader";
 import EventCSVUploader from "../UploadDataView/EventCSVUploader";
@@ -94,7 +94,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
               <AlphaOmegaMPXUploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
             {uploadDataType === "HDF CSV Format" ? (
-              <HDFCSVUploader institute={user.Institute}  participant={participant_uid}/>
+              <HPFCSVUploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
             {uploadDataType === "Event Annotation CSV" ? (
               <EventCSVUploader institute={user.Institute}  participant={participant_uid}/>

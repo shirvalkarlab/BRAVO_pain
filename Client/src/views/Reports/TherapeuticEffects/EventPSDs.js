@@ -149,7 +149,7 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
     }
     
     setRenderData(graphSeries);    
-  }, [fig, options.value]);
+  }, [fig, cacheData, options.value]);
 
   const refreshRender = (fig) => {
     for (let i in renderData) {

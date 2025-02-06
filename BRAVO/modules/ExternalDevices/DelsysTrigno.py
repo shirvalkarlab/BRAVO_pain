@@ -134,7 +134,7 @@ def decodeMDATData(mdatFile):
 
     return TrignoSensorList
 
-def decodeHDFCSVData(mdatFile):
+def decodeHPFCSVData(mdatFile):
     CSV = pd.read_csv(BytesIO(mdatFile), skiprows=0)
     keys = list(CSV.keys())
 

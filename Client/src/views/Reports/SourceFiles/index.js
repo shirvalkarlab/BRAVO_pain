@@ -38,7 +38,7 @@ import MuiAlertDialog from "components/MuiAlertDialog";
 import DatabaseLayout from "layouts/DatabaseLayout";
 import MedtronicSourceFileTable from "./MedtronicSourceFileTable";
 import NeuroImageFileTable from "./NeuroImageFileTable";
-import HDFCSVFileTable from "./HDFCSVFileTable";
+import HPFCSVFileTable from "./HPFCSVFileTable";
 import AOMPXFileTable from "./AOMPXFileTable";
 
 import { SessionController } from "database/session-control";
@@ -208,7 +208,7 @@ export default function SourceFiles() {
               <AOMPXFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
             {sourceFileType.active == "HDF CSV Format" ? (
-              <HDFCSVFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
+              <HPFCSVFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
             {["ChronicNeuralActivitySource","FitbitWebAPISource"].includes(sourceFileType.active) ? (
               <DefaultFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />

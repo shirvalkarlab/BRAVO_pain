@@ -44,7 +44,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function HDFCSVFileTable({data, deleteData, children}) {
+function HPFCSVFileTable({data, deleteData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -119,4 +119,4 @@ function HDFCSVFileTable({data, deleteData, children}) {
   ), [data]);
 }
 
-export default HDFCSVFileTable;
+export default HPFCSVFileTable;

@@ -42,7 +42,7 @@ import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
-function HDFCSVUploader({institute, participant}) {
+function HPFCSVUploader({institute, participant}) {
   const [files, setFiles] = useState([]);
   const [metadata, setMetadata] = useState({});
 
@@ -59,7 +59,7 @@ function HDFCSVUploader({institute, participant}) {
 
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("DataType", "HDFCSV");  
+    formData.append("DataType", "HPFCSV");  
     formData.append("ParticipantId", participant);  
     formData.append("Institute", institute);
     formData.append("Metadata", JSON.stringify({
@@ -171,6 +171,7 @@ function HDFCSVUploader({institute, participant}) {
           acceptedFileTypes={[".csv"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
+          maxParallelUploads={10}
           server={{
             url: SessionController.getServer(),
             process: handleFileUpload
@@ -185,4 +186,4 @@ function HDFCSVUploader({institute, participant}) {
   )
 };
 
-export default memo(HDFCSVUploader);
+export default memo(HPFCSVUploader);

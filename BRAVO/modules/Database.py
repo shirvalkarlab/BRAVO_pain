@@ -184,7 +184,7 @@ def listRecordings(participant_uid):
     Participant = models.Participant.find(uid=participant_uid)
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HDFCSV", "AOMPX"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
     
     AllRecordings = []
     for recording in Recordings:
@@ -216,7 +216,7 @@ def listRecordings(participant_uid):
         elif recording.type == "DelsysMDAT":
             pass
 
-        elif recording.type == "HDFCSV":
+        elif recording.type == "HPFCSV":
             Description["Name"] = recording.metadata["SensorType"]
 
         AllRecordings.append(Description)
@@ -278,7 +278,7 @@ def listSourceFiles(participant_uid, file_type=None):
 
             SourceFiles.append(SourceFile)
 
-        elif source.type == "HDFCSV":
+        elif source.type == "HPFCSV":
             SourceFile = {
                 "Id": source.uid,
                 "Name": source.name,

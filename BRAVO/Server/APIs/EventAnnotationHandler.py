@@ -237,6 +237,7 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
                 form = models.ScaleForms.find(uid=request.data["FormId"])
                 AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
                 AllRecords = [i.get_info() for i in AllRecords]
+                AllRecords.sort(key=lambda x: x["Date"])
 
             except Exception as e:
                 print(traceback.format_exc())

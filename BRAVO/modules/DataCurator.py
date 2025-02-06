@@ -33,7 +33,7 @@ from filelock import Timeout, FileLock
 
 from Server import models
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
-from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHDFCSVData
+from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
 from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
 from modules import Database, Therapy, Event
 
@@ -268,9 +268,9 @@ def EventCSVDecoder(source_file, person):
             Timestamp = float(CSV["Time"][i])
         Event.addAnnotation(person.uid, CSV["Type"][i], CSV["Annotation"][i], Timestamp, CSV["Duration"][i])
 
-def HDFCSVDecoder(source_file, person, startTime=None):
+def HPFCSVDecoder(source_file, person, startTime=None):
     rawBytes = loadCacheFile(source_file)
-    TrignoData = decodeHDFCSVData(rawBytes)
+    TrignoData = decodeHPFCSVData(rawBytes)
 
     def CommonName(nameList):
         commonNames = []
@@ -289,7 +289,7 @@ def HDFCSVDecoder(source_file, person, startTime=None):
             ProcessedData["StartTime"] = startTime
 
         recording = models.Recording(**{
-            "name": "", "type": "HDFCSV", "date": ProcessedData["StartTime"], "metadata": {
+            "name": "", "type": "HPFCSV", "date": ProcessedData["StartTime"], "metadata": {
                 "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
                 "Duration": ProcessedData["Duration"],
                 "ChannelNames": ProcessedData["ChannelNames"]

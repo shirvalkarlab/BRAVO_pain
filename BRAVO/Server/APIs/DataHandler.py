@@ -145,7 +145,7 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
-        elif request.data["DataType"] == "HDFCSV":
+        elif request.data["DataType"] == "HPFCSV":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
                 return Response(status=400, data={"message": "Participant not found."})
@@ -155,9 +155,9 @@ class DataUploadHandler(RestViews.APIView):
 
             try:
                 if "StartTime" in request.data.keys():
-                    DataCurator.HDFCSVDecoder(source_file, person, startTime=request.data["StartTime"])
+                    DataCurator.HPFCSVDecoder(source_file, person, startTime=request.data["StartTime"])
                 else:
-                    DataCurator.HDFCSVDecoder(source_file, person)
+                    DataCurator.HPFCSVDecoder(source_file, person)
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())

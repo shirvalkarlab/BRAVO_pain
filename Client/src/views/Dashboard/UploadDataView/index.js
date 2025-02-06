@@ -54,7 +54,7 @@ import BRAVOExportUploader from "./BRAVOExportUploader";
 import NeuroimageUploader from "./NeuroimageUploader";
 import ExternalCSVUploader from "./ExternalCSVUploader";
 import UFMDATUploader from "./UFMDATUploader";
-import HDFCSVUploader from "./HDFCSVUploader";
+import HPFCSVUploader from "./HPFCSVUploader";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
@@ -376,7 +376,7 @@ function UploadDeidentifiedDataView() {
                     <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "HDF CSV Format" ? (
-                    <HDFCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                    <HPFCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "Event Annotation CSV" ? (
                     <EventCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>
