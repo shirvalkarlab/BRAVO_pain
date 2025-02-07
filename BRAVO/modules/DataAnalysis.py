@@ -594,6 +594,9 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                 if not key in AllTherapyLabels:
                     AllTherapyLabels.append(key)
     
+    if config["APIAccess"]:
+        return AnalysisStruct
+
     parameters = ["Amplitude", "Frequency", "Pulsewidth"]
     
     StimulationPSDs = {}
