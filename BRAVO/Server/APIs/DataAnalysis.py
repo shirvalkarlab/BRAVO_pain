@@ -116,6 +116,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             else:
                 userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
 
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
             result = Database.getCachedResult("/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
@@ -167,6 +168,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
                 if not recording.source.owner.uid == request.data["ParticipantId"]:
                     return Response(status=400, data={"message": "Permission Denied"})
                 
+                Database.deleteCachedResult(request.data["ParticipantId"], url="/queryTherapeuticEffectAnalysis")
                 DataAnalysis.deleteProcessedData(recording=recording)
 
             return Response(status=200)
@@ -220,6 +222,7 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
                 return Response(status=400, data={"message": "Permission Denied"})
             
             DataAnalysis.deleteProcessedData(recording=recording)
+            Database.deleteCachedResult(request.data["ParticipantId"], url="/queryTimeseriesAnalysis")
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
@@ -290,6 +293,10 @@ class QueryChronicNeuralActivity(RestViews.APIView):
             Analysis = DataAnalysis.queryChronicNeuralActivity(request.data["ParticipantId"], userConfig)
             Database.saveCachedResult(Analysis, "/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
+
+        elif request.data["RequestType"] == "DeleteCache":
+            Database.deleteCachedResult(request.data["ParticipantId"], url="/queryChronicNeuralActivity")
+            return Response(status=200)
 
 class QueryCustomizedAnalysis(RestViews.APIView):
 

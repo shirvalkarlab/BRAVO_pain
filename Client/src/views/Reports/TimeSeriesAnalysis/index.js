@@ -307,9 +307,20 @@ function TimeSeriesAnalysis() {
                             {"Time-Series Analysis"}
                           </MDTypography>
                         </MDBox>
-                        <MDBox display={"flex"} flexDirection={"column"}>
+                        <MDBox display={"flex"} flexDirection={"row"}>
                           <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
                             {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
+                          </MDButton>
+                          <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
+                            SessionController.query("/api/queryTimeseriesAnalysis", {
+                              RequestType: "DeleteCache",
+                              ParticipantId: participant_uid,
+                              AnalysisId: data.Analysis.Id,
+                            }).then((response) => {
+                              getRecordingData(data.Analysis)
+                            });
+                          }}>
+                            {"Clear Cache"}
                           </MDButton>
                         </MDBox>
                       </MDBox>

@@ -237,9 +237,21 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                             <MDTypography variant={"h6"} fontSize={24}>
                               {dictionary.ChronicBrainSense.Figure.FigureTitle[language]}
                             </MDTypography>
-                            <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
-                              {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
-                            </MDButton>
+                            <MDBox>
+                              <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
+                                {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
+                              </MDButton>
+                              <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
+                                SessionController.query("/api/queryChronicNeuralActivity", {
+                                  ParticipantId: participant_uid, 
+                                  RequestType: "DeleteCache"
+                                }).then((response) => {
+                                  window.location.reload()
+                                });
+                              }}>
+                                {"Clear Cache"}
+                              </MDButton>
+                            </MDBox>
                           </MDBox>
                         </Grid>
                         <Grid item xs={12}>
