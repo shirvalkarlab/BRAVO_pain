@@ -29,7 +29,7 @@ from modules.MedtronicPercept import Percept
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
 
-def saveBrainSenseStreams(StreamingTD, StreamingPower):
+def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
     """ Save BrainSense Streaming Data in Database Storage
 
     Args:
@@ -141,82 +141,84 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower):
                         if StreamingTD[i]["Sequences"][j] == (StreamingPower[n]["Sequences"][0] - 1):
                             #PowerDomainRecordings[n]["StartTime"] = TimeDomainRecordings[n]["StartTime"] + (StreamingTD[i]["Ticks"][j] - StreamingTD[i]["Ticks"][0]) / 1000
                             pass # NEED VERIFICATION
-
-        # Fix Breaking TimeDomain Recording based on PowerDomain Recordings (Therapy) Descriptor
-        i = 1
-        while i < len(TimeDomainRecordings):
-            # if Channel Name is not matching:
-            if not TimeDomainRecordings[i]["ChannelNames"] == TimeDomainRecordings[i-1]["ChannelNames"] or not PowerDomainRecordings[i]["ChannelNames"] == PowerDomainRecordings[i-1]["ChannelNames"]:
-                i += 1
-                continue
-
-            # if Therapy is not matching
-            # First, we will remove LowerLimitInMilliAmps and UpperLimitInMilliAmps from comparison.
-            # Because adjustment of amplitude could change such limit. 
-            for ChannelName in TimeDomainRecordings[i]["ChannelNames"]:
-                channels, hemisphere = Percept.reformatChannelName(ChannelName)
-
-            PowerDomainRecordings[i]["Descriptor"]["Therapy"][hemisphere]["LowerLimitInMilliAmps"] = 0
-            PowerDomainRecordings[i]["Descriptor"]["Therapy"][hemisphere]["UpperLimitInMilliAmps"] = 0
-            PowerDomainRecordings[i-1]["Descriptor"]["Therapy"][hemisphere]["LowerLimitInMilliAmps"] = 0
-            PowerDomainRecordings[i-1]["Descriptor"]["Therapy"][hemisphere]["UpperLimitInMilliAmps"] = 0 
-            
-            if not Percept.dictionaryCompare(PowerDomainRecordings[i]["Descriptor"]["Therapy"], PowerDomainRecordings[i-1]["Descriptor"]["Therapy"]):
-                i += 1
-                continue
-
-            # Now that we know they are supposed to be identical. There is still the concern that "Segmented Stimulation" is not stored in SenSight Leads.
-            # Our Criteria should be the following:
-            #       1) 2nd Stream start stimulation amplitude = 1st Stream
-            #       2) If both end/start are 0, the 1st Stream does not contain high stimulation amplitude.
-            StimulationChannelIndexes = [n for n in range(len(PowerDomainRecordings[i]["ChannelNames"])) if PowerDomainRecordings[i]["ChannelNames"][n].endswith("Stimulation")]
-            StartAmplitude = PowerDomainRecordings[i]["Data"][0, StimulationChannelIndexes].tolist()
-            EndAmplitude = PowerDomainRecordings[i-1]["Data"][-1, StimulationChannelIndexes].tolist()
-            if not StartAmplitude == EndAmplitude: 
-                i += 1
-                continue
-
-            if np.max(StartAmplitude) == 0:
-                PreviousUniqueAmplitudes = []
-                for n in StimulationChannelIndexes:
-                    PreviousUniqueAmplitudes.extend(np.unique(PowerDomainRecordings[i-1]["Data"][:, n]).tolist())
-
-                # Stimulation Unchanged
-                if not len(PreviousUniqueAmplitudes) == len(StimulationChannelIndexes): 
+        
+        if FixBreaking:
+            print("Fix Breaking")
+            # Fix Breaking TimeDomain Recording based on PowerDomain Recordings (Therapy) Descriptor
+            i = 1
+            while i < len(TimeDomainRecordings):
+                # if Channel Name is not matching:
+                if not TimeDomainRecordings[i]["ChannelNames"] == TimeDomainRecordings[i-1]["ChannelNames"] or not PowerDomainRecordings[i]["ChannelNames"] == PowerDomainRecordings[i-1]["ChannelNames"]:
                     i += 1
                     continue
-            
-            Timeskip = TimeDomainRecordings[i]["StartTime"] - (TimeDomainRecordings[i-1]["StartTime"] + TimeDomainRecordings[i-1]["Duration"])
-            if Timeskip > 30: # This has been updated to 30 seconds break only in favor of AnalysisBuilder customized inclusion
-                i += 1
-                continue
 
-            if Timeskip < -1:
-                print("Timeskip is negative. Failure in identifying StartTime?")
-                i += 1
-                continue
+                # if Therapy is not matching
+                # First, we will remove LowerLimitInMilliAmps and UpperLimitInMilliAmps from comparison.
+                # Because adjustment of amplitude could change such limit. 
+                for ChannelName in TimeDomainRecordings[i]["ChannelNames"]:
+                    channels, hemisphere = Percept.reformatChannelName(ChannelName)
 
-            # To Merge
-            nSampleSkipped = int(Timeskip * TimeDomainRecordings[i]["SamplingRate"])
-            if nSampleSkipped < 0: 
-                nSampleSkipped = 0
+                PowerDomainRecordings[i]["Descriptor"]["Therapy"][hemisphere]["LowerLimitInMilliAmps"] = 0
+                PowerDomainRecordings[i]["Descriptor"]["Therapy"][hemisphere]["UpperLimitInMilliAmps"] = 0
+                PowerDomainRecordings[i-1]["Descriptor"]["Therapy"][hemisphere]["LowerLimitInMilliAmps"] = 0
+                PowerDomainRecordings[i-1]["Descriptor"]["Therapy"][hemisphere]["UpperLimitInMilliAmps"] = 0 
                 
-            TimeDomainRecordings[i-1]["Data"] = np.concatenate((TimeDomainRecordings[i-1]["Data"], np.zeros((nSampleSkipped, TimeDomainRecordings[i-1]["Data"].shape[1])), TimeDomainRecordings[i]["Data"]))
-            TimeDomainRecordings[i-1]["Missing"] = np.concatenate((TimeDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, TimeDomainRecordings[i-1]["Missing"].shape[1])), TimeDomainRecordings[i]["Missing"]))
-            TimeDomainRecordings[i-1]["Duration"] = TimeDomainRecordings[i]["StartTime"] + TimeDomainRecordings[i]["Duration"] - TimeDomainRecordings[i-1]["StartTime"]
+                if not Percept.dictionaryCompare(PowerDomainRecordings[i]["Descriptor"]["Therapy"], PowerDomainRecordings[i-1]["Descriptor"]["Therapy"]):
+                    i += 1
+                    continue
 
-            nSampleSkipped = int(Timeskip * PowerDomainRecordings[i]["SamplingRate"])
-            if nSampleSkipped < 0: 
-                nSampleSkipped = 0
+                # Now that we know they are supposed to be identical. There is still the concern that "Segmented Stimulation" is not stored in SenSight Leads.
+                # Our Criteria should be the following:
+                #       1) 2nd Stream start stimulation amplitude = 1st Stream
+                #       2) If both end/start are 0, the 1st Stream does not contain high stimulation amplitude.
+                StimulationChannelIndexes = [n for n in range(len(PowerDomainRecordings[i]["ChannelNames"])) if PowerDomainRecordings[i]["ChannelNames"][n].endswith("Stimulation")]
+                StartAmplitude = PowerDomainRecordings[i]["Data"][0, StimulationChannelIndexes].tolist()
+                EndAmplitude = PowerDomainRecordings[i-1]["Data"][-1, StimulationChannelIndexes].tolist()
+                if not StartAmplitude == EndAmplitude: 
+                    i += 1
+                    continue
 
-            FillingData = np.zeros((nSampleSkipped, PowerDomainRecordings[i-1]["Data"].shape[1]))
-            FillingData[:, StimulationChannelIndexes] = StartAmplitude
-            PowerDomainRecordings[i-1]["Data"] = np.concatenate((PowerDomainRecordings[i-1]["Data"], FillingData, PowerDomainRecordings[i]["Data"]))
-            PowerDomainRecordings[i-1]["Missing"] = np.concatenate((PowerDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, PowerDomainRecordings[i-1]["Missing"].shape[1])), PowerDomainRecordings[i]["Missing"]))
-            PowerDomainRecordings[i-1]["Duration"] = PowerDomainRecordings[i]["StartTime"] + PowerDomainRecordings[i]["Duration"] - PowerDomainRecordings[i-1]["StartTime"]
+                if np.max(StartAmplitude) == 0:
+                    PreviousUniqueAmplitudes = []
+                    for n in StimulationChannelIndexes:
+                        PreviousUniqueAmplitudes.extend(np.unique(PowerDomainRecordings[i-1]["Data"][:, n]).tolist())
 
-            del(PowerDomainRecordings[i])
-            del(TimeDomainRecordings[i])
+                    # Stimulation Unchanged
+                    if not len(PreviousUniqueAmplitudes) == len(StimulationChannelIndexes): 
+                        i += 1
+                        continue
+                
+                Timeskip = TimeDomainRecordings[i]["StartTime"] - (TimeDomainRecordings[i-1]["StartTime"] + TimeDomainRecordings[i-1]["Duration"])
+                if Timeskip > 30: # This has been updated to 30 seconds break only in favor of AnalysisBuilder customized inclusion
+                    i += 1
+                    continue
+
+                if Timeskip < -1:
+                    print("Timeskip is negative. Failure in identifying StartTime?")
+                    i += 1
+                    continue
+
+                # To Merge
+                nSampleSkipped = int(Timeskip * TimeDomainRecordings[i]["SamplingRate"])
+                if nSampleSkipped < 0: 
+                    nSampleSkipped = 0
+                    
+                TimeDomainRecordings[i-1]["Data"] = np.concatenate((TimeDomainRecordings[i-1]["Data"], np.zeros((nSampleSkipped, TimeDomainRecordings[i-1]["Data"].shape[1])), TimeDomainRecordings[i]["Data"]))
+                TimeDomainRecordings[i-1]["Missing"] = np.concatenate((TimeDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, TimeDomainRecordings[i-1]["Missing"].shape[1])), TimeDomainRecordings[i]["Missing"]))
+                TimeDomainRecordings[i-1]["Duration"] = TimeDomainRecordings[i]["StartTime"] + TimeDomainRecordings[i]["Duration"] - TimeDomainRecordings[i-1]["StartTime"]
+
+                nSampleSkipped = int(Timeskip * PowerDomainRecordings[i]["SamplingRate"])
+                if nSampleSkipped < 0: 
+                    nSampleSkipped = 0
+
+                FillingData = np.zeros((nSampleSkipped, PowerDomainRecordings[i-1]["Data"].shape[1]))
+                FillingData[:, StimulationChannelIndexes] = StartAmplitude
+                PowerDomainRecordings[i-1]["Data"] = np.concatenate((PowerDomainRecordings[i-1]["Data"], FillingData, PowerDomainRecordings[i]["Data"]))
+                PowerDomainRecordings[i-1]["Missing"] = np.concatenate((PowerDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, PowerDomainRecordings[i-1]["Missing"].shape[1])), PowerDomainRecordings[i]["Missing"]))
+                PowerDomainRecordings[i-1]["Duration"] = PowerDomainRecordings[i]["StartTime"] + PowerDomainRecordings[i]["Duration"] - PowerDomainRecordings[i-1]["StartTime"]
+
+                del(PowerDomainRecordings[i])
+                del(TimeDomainRecordings[i])
     
     return TimeDomainRecordings, PowerDomainRecordings
 

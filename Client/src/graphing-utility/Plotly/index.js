@@ -711,6 +711,11 @@ class PlotlyRenderManager {
     }
 
     return colorAxisID;
+  };
+
+  setClim(limit, colorAxisID) {
+    this.layout[colorAxisID].cmin = limit[0];
+    this.layout[colorAxisID].cmax = limit[1];
   }
 
   /**

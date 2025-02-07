@@ -131,7 +131,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
 
-            Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
+            Database.saveCachedResult(Analysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 
         elif request.data["RequestType"] == "UpdateData":
@@ -199,10 +199,11 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             else:
                 userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
 
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
             result = Database.getCachedResult("/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
-
+            
             Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])

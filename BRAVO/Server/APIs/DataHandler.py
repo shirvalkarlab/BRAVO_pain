@@ -145,6 +145,25 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
+        elif request.data["DataType"] == "MATFile":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+
+            try:
+                if "StartTime" in metadata.keys():
+                    DataCurator.MATFileDecoder(source_file, person, startTime=metadata["StartTime"])
+                else:
+                    DataCurator.MATFileDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         elif request.data["DataType"] == "HPFCSV":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
@@ -154,8 +173,8 @@ class DataUploadHandler(RestViews.APIView):
                 return Response(status=403)
 
             try:
-                if "StartTime" in request.data.keys():
-                    DataCurator.HPFCSVDecoder(source_file, person, startTime=request.data["StartTime"])
+                if "StartTime" in metadata.keys():
+                    DataCurator.HPFCSVDecoder(source_file, person, startTime=metadata["StartTime"])
                 else:
                     DataCurator.HPFCSVDecoder(source_file, person)
             except Exception as e:

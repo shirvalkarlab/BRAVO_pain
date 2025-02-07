@@ -131,7 +131,6 @@ class QueryProfile(RestViews.APIView):
                 
                 request.user.institute = institute
                 request.user.save()
-                print(institute)
                 return Response(status=200)
 
         return Response(status=200, data=userInfo)

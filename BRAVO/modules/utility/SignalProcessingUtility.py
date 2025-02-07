@@ -350,13 +350,18 @@ def defaultSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, 
     frequency, time, spectrum = signal.spectrogram(data, window="hamming", nperseg=window, noverlap=overlap, nfft=NFFT, fs=fs)
     return dict({"Time": time, "Frequency": frequency, "Power": np.abs(spectrum), "logPower": 10*np.log10(np.abs(spectrum)), "Config": configuration})
 
-def welchSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, fs=100):
+def welchSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, max_frequency=100, fs=100):
     configuration = {"Window": window, "Overlap": overlap}
     window = int(window * fs)
     overlap = int(overlap * fs)
     NFFT = int(fs / frequency_resolution)
     epochs = getIndices(len(data),window,overlap)
-    frequency, pxx = signal.welch(data, fs=fs, nfft=NFFT)
+    
+    if len(data) > NFFT:
+        frequency, pxx = signal.welch(data[:NFFT], fs=fs, nfft=NFFT)
+    else:
+        frequency, pxx = signal.welch(data, fs=fs, nfft=NFFT)
+
     spectrum = np.ndarray((len(frequency), len(epochs)))
     for index in range(len(epochs)):
         (frequency, p) = signal.welch(data[epochs[index]:epochs[index]+window], fs=fs, nfft=NFFT)

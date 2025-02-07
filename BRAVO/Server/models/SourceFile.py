@@ -62,6 +62,9 @@ class SourceFile(models.Model):
     def purge(*args, **kwargs):
         return SourceFile.objects.filter(**kwargs).delete()
     
+    def purge_cache():
+        return SourceFile.objects.filter(type="CachedResult").delete()
+    
     def get_info(self):
         return {
             "Id": self.uid,

@@ -46,7 +46,6 @@ def processInput(argv):
                 config["DATASERVER_PATH"] = databasePath
             else:
                 config["DATASERVER_PATH"] = os.path.join(BASE_DIR, 'BRAVOStorage')
-            print(config["DATASERVER_PATH"].endswith(os.path.sep))
             if not config["DATASERVER_PATH"].endswith(os.path.sep):
                 config["DATASERVER_PATH"] += os.path.sep
             os.makedirs(config["DATASERVER_PATH"], exist_ok=True)
@@ -92,7 +91,6 @@ def processInput(argv):
                 if "=" in line:
                     line = line.replace(" ","")
                     content = re.split("[\s]?=[\s]?", line)
-                    print(content)
                 
                     if len(content) == 2:
                         if content[0] == "database":

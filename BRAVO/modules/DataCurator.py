@@ -34,6 +34,7 @@ from filelock import Timeout, FileLock
 from Server import models
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
+from modules.ExternalDevices.MATLAB import decodeMATLABFile
 from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
 from modules import Database, Therapy, Event
 
@@ -61,6 +62,11 @@ def saveCacheFile(filename, metadata, raw_bytes):
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     rawBytes = loadCacheFile(source_file)
     JSON = json.loads(rawBytes)
+    if source_file.metadata["automatic_concatenation"]:
+        JSON["AutomaticStreamingFix"] = True
+    else:
+        JSON["AutomaticStreamingFix"] = False
+    
     DatabaseEntries = decodeMedtronicJSON(JSON)
 
     # Process Patient/Device/Electrode Information for Storage and Query
@@ -268,6 +274,65 @@ def EventCSVDecoder(source_file, person):
             Timestamp = float(CSV["Time"][i])
         Event.addAnnotation(person.uid, CSV["Type"][i], CSV["Annotation"][i], Timestamp, CSV["Duration"][i])
 
+def MATFileDecoder(source_file, person, startTime=None):
+    rawBytes = loadCacheFile(source_file)
+    MATFile = decodeMATLABFile(rawBytes)
+
+    def CommonName(nameList):
+        commonNames = []
+        allSubString = nameList[0].split(" ")
+        for i in range(len(allSubString)):
+            Found = True
+            for j in range(len(nameList)):
+                if not allSubString[i] in nameList[j].split(" "):
+                    Found = False
+            if Found:
+                commonNames.append(allSubString[i])
+        return commonNames
+
+    for ProcessedData in MATFile:
+        if startTime and ProcessedData["StartTime"] == 0:
+            ProcessedData["StartTime"] = startTime
+
+        recording = models.Recording(**{
+            "name": "", "type": "MATFile", "date": ProcessedData["StartTime"], "metadata": {
+                "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
+                "Duration": ProcessedData["Duration"],
+                "ChannelNames": ProcessedData["ChannelNames"]
+            }
+        }, source=source_file)
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+            recording.delete()
+            continue
+
+        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+        hashed = Database.saveSourceFile(ProcessedData, filename)
+        # TODO: Error handling
+        if not hashed:
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue 
+        if models.Recording.include(hashed=hashed):
+            recording.delete()
+        else:
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.save()
+
+    os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
+    shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
+    source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = ""
+    source_file.owner = person
+    source_file.save()
+
+    person.last_update = models.current_time()
+    person.save()
+    
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    return True
+
 def HPFCSVDecoder(source_file, person, startTime=None):
     rawBytes = loadCacheFile(source_file)
     TrignoData = decodeHPFCSVData(rawBytes)
@@ -451,19 +516,6 @@ def ImportBRAVOExport(source_file):
                         diagnosis=Header["Diagnosis"], mrn=Header["MRN"], institute_id=source_file.metadata["Institute"])
     person.save()
     
-    """
-    DBSDevices = []
-    for i in range(len(Header["Devices"])):
-        device, _ = models.DBSDevice.find_or_create(Header["Devices"][i]["SerialNumber"], Header["Devices"][i]["Type"], source_file.metadata["Institute"])
-        device.owner = person
-        device.name = Header["Devices"][i]["Name"]
-        device.implanted_date = Header["Devices"][i]["ImplantDate"]
-        device.implanted_location = Header["Devices"][i]["Location"]
-        device.device_bloodline = Header["Devices"][i]["Location"]
-        device.save()
-        DBSDevices.append(device)
-    """
-
     currentIndex = 16+HeaderSize
     while currentIndex < len(rawBytes):
         PacketType = rawBytes[currentIndex:currentIndex+7].decode("utf-8")

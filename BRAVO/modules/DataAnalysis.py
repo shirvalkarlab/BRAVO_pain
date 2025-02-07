@@ -120,7 +120,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -143,6 +143,9 @@ def queryAvailableAnalyses(participant_uid, request_type):
             
             elif recording.type == "AOMPX":
                 Description["Type"] = "Alpha Omega MPX"
+            
+            elif recording.type == "MATFile":
+                Description["Type"] = "MATLAB File"
             
             Overview["Recordings"].append(Description)
 
@@ -189,7 +192,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
     
     Overview["Recordings"] = []
     for recording in Recordings:
@@ -443,7 +446,8 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 
     elif recording.type in ["AOMPX"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-        Data = downsampleTimeDomainStreaming(Data)
+        if not config["APIAccess"]:
+            Data = downsampleTimeDomainStreaming(Data)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
         del Data["Missing"]
@@ -459,8 +463,10 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
 
-    elif recording.type in ["HPFCSV"]:
+    elif recording.type in ["HPFCSV", "MATFile"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        if not config["APIAccess"]:
+            Data = downsampleTimeDomainStreaming(Data)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
         del Data["Missing"]
@@ -693,6 +699,9 @@ def processTimeDomainStreaming(recording, data, config):
             "CardiacFilter": config["TimeSeriesRecording"]["CardiacFilter"]["value"]
         })
     
+    if config["APIAccess"]:
+        return data
+
     data = handleTimeFrequencyAnalysis(recording, data, {
         "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
         "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],

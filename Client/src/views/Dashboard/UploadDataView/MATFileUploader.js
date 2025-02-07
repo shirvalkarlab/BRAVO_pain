@@ -30,27 +30,41 @@ import 'filepond/dist/filepond.min.css'
 
 import { v4 as uuidv4 } from 'uuid';
 
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
+
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
-function MedtronicJSONUploader({institute, participant}) {
-  const [metadata, setMetadata] = useState({device_location: "", infer_from_device: true, automatic_concatenation: true});
+function MATFileUploader({institute, participant}) {
   const [files, setFiles] = useState([]);
+  const [metadata, setMetadata] = useState({date: moment(new Date()), time: moment(new Date())});
 
   useEffect(() => {
-    setFiles([])
+    setFiles([]);
   }, [participant]);
 
-  const handleFileUpload = (fieldName, file, file_metadata, load, error, progress, abort, transfer, options) => {
+  const handleFileUpload = (fieldName, file, upload_metadata, load, error, progress, abort, transfer, options) => {
+    let date = 0;
+    if (metadata.date && metadata.time) {
+      date = new Date(metadata.date.toISOString().split("T")[0] + "T" + metadata.time.toISOString().split("T")[1]).getTime();
+      date -= (metadata.date.utcOffset() - metadata.time.utcOffset()) * 60000;
+    }
+
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("DataType", "MedtronicJSON");  
+    formData.append("DataType", "MATFile");  
     formData.append("ParticipantId", participant);  
     formData.append("Institute", institute);
-    formData.append("Metadata", JSON.stringify(metadata));
+    formData.append("Metadata", JSON.stringify({
+      StartTime: date/1000
+    }));
 
     const request = new XMLHttpRequest();
     request.open('POST', "/api/uploadData");
@@ -105,64 +119,59 @@ function MedtronicJSONUploader({institute, participant}) {
   return (
     <MDBox pt={2}>
       <Divider variant="insert" />
-      {participant === "batch-upload" ? null : <>
-        <MDTypography variant="h6">
-          {"Metadata"}
+      <MDTypography variant="h5" fontSize={15} lineHeight={1}>
+        {"Accept .mat File from MATLAB. We utilize a similar format that Delsys converted .mat use, which uses three variables: 1) Fs, 2) Channels, and 3) Data. "}
+        {"The Fs is an array of sampling rate for each channel. The Channels is an array of name for each channel. The Data is a matrix of size (nChannels, nSamples)."}
+        {"If there are difference in sampling rate, non-existing data should be filled with 0s. "}
+      </MDTypography>
+
+      <Divider variant="insert" />
+      <MDTypography variant="h6">
+        {"Metadata"}
+      </MDTypography>
+      <MDBox pt={2}>
+        <MDTypography variant="h5" fontSize={15} style={{marginBottom: 15}}>
+          {"Recording Time: "}
         </MDTypography>
-        <MDBox pt={2} px={3}>
-          <Autocomplete selectOnFocus clearOnBlur
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                variant="standard"
-                placeholder={"Device Location"}
-              />
-            )}
-            isOptionEqualToValue={(option, value) => {
-              return option === value;
-            }}
-            renderOption={(props, option) => <li {...props}>{option}</li>}
-            value={metadata.device_location}
-            options={["Right IPG", "Left IPG"]}
-            onChange={(event, newValue) => {
-              if (typeof newValue === 'string') {
-                setMetadata({...metadata, device_location: newValue});
-              } else if (newValue && newValue.inputValue) {
-                setMetadata({...metadata, device_location: newValue.inputValue});
-              }
-            }}
-          />
-          <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
-            <Checkbox checked={metadata.infer_from_device} onClick={() => setMetadata({...metadata, infer_from_device: !metadata.infer_from_device})} />
-            <MDTypography variant="h6">
-              {"Infer Metadata from JSON Contents"}
-            </MDTypography>
-          </MDBox>
-          <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
-            <Checkbox checked={metadata.automatic_concatenation} onClick={() => setMetadata({...metadata, automatic_concatenation: !metadata.automatic_concatenation})} />
-            <MDTypography variant="h6">
-              {"Automatic Concatenating Multiple Streams"}
-            </MDTypography>
-          </MDBox>
+        <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
+          <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+            <DatePicker
+              style={{marginRight: 3}}
+              label="Date"
+              value={metadata.date}
+              onChange={(newDate) => {
+                setMetadata({...metadata, date: newDate});
+              }}
+              renderInput={(params) => <TextField {...params} />}
+            />
+          </LocalizationProvider>
+          <LocalizationProvider dateAdapter={AdapterMoment}>
+            <TimePicker
+              label="Time"
+              value={metadata.time}
+              onChange={(newDate) => {
+                setMetadata({...metadata, time: newDate});
+              }}
+              renderInput={(params) => <TextField {...params} />}
+            />
+          </LocalizationProvider>
         </MDBox>
-        <Divider variant="insert" />
-      </>}
+      </MDBox>
+      <Divider variant="insert" />
+      
       <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
         <MDTypography variant="h6">
           {"Data Uploader"}
         </MDTypography>
-
         <MDButton color="info" onClick={() => setFiles([])} style={{marginLeft: "auto"}}>{"Clear Upload Queue"}</MDButton>
       </MDBox>
-      
       <MDBox pt={2}>
         <FilePond
           name="File" 
           files={files} allowMultiple allowRevert={false}
-          acceptedFileTypes={[".json"]}
+          acceptedFileTypes={[".mat"]}
           onupdatefiles={setFiles}
           maxFiles={1000}
-          maxParallelUploads={10}
           server={{
             url: SessionController.getServer(),
             process: handleFileUpload
@@ -177,4 +186,4 @@ function MedtronicJSONUploader({institute, participant}) {
   )
 };
 
-export default memo(MedtronicJSONUploader);
+export default memo(MATFileUploader);

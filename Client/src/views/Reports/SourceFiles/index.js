@@ -210,7 +210,7 @@ export default function SourceFiles() {
             {sourceFileType.active == "HDF CSV Format" ? (
               <HPFCSVFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
-            {["ChronicNeuralActivitySource","FitbitWebAPISource"].includes(sourceFileType.active) ? (
+            {["ChronicNeuralActivitySource","FitbitWebAPISource","MATFile"].includes(sourceFileType.active) ? (
               <DefaultFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
           </MDBox>

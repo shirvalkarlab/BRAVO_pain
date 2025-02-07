@@ -403,7 +403,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                     timeZoneName: "longGeneric"
                   });
                   return dateString == selectedDate.label && !recording.Therapy;
-                }).map((recording) => {
+                }).sort((a,b) => a.Date - b.Date).map((recording) => {
                   const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
                     hour: "2-digit",
                     minute: "2-digit",
@@ -439,7 +439,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                     timeZoneName: "longGeneric"
                   });
                   return dateString == selectedDate.label && recording.Therapy;
-                }).map((recording) => {
+                }).sort((a,b) => a.Date - b.Date).map((recording) => {
                   const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
                     hour: "2-digit",
                     minute: "2-digit",

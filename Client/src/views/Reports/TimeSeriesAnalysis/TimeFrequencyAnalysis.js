@@ -75,6 +75,14 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
   useEffect(() => {
     if (!fig) return;
 
+    const caxis = fig.createColorAxis({
+      colorscale: "Jet",
+      colorbar: {y: 0.5, len: 1},
+      clim: [-20, 20],
+    });
+
+    let clim = [-20, 20];
+
     let graphSeries = [];
     for (let i in activeChannels) {
       for (let trial in dataToRender.Signal) {
@@ -102,16 +110,21 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
               return a.map((b) => 10*Math.log10(b));
             }),
             options: {
-              zlim: [-20, 20],
+              zlim: [-20 , 20],
               hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)}<br>  %{x} <br>  %{z:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)} <extra></extra>`,
-              coloraxis: fig.createColorAxis({
-                colorscale: "Jet",
-                colorbar: {y: 0.75, len: 0.5},
-                clim: [-20,20],
-              }),
+              coloraxis: caxis,
             }, 
             axName: activeChannels[i] + " " + "TimeFrequencyAnalysis"
           });
+          
+          const meanPower = 10*Math.log10(Math.mean(dataToRender.Signal[trial].SignalSeries.Spectrum.Power));
+          if (clim[0] > meanPower-20) {
+            clim[0] = meanPower-20;
+            clim[1] = meanPower+20;
+          } else if (clim[1] < meanPower+20) {
+            clim[0] = meanPower-20;
+            clim[1] = meanPower+20;
+          }
           
           if (dataToRender.Signal[trial].Alignment != 0) {
             graphSeries.push({
@@ -133,6 +146,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         }
       }
     }
+    fig.setClim(clim, caxis);
     
     for (let j in activeChannels) {
       for (let i in annotations) {

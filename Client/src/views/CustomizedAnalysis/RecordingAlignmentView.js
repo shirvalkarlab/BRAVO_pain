@@ -267,18 +267,30 @@ function RecordingAlignmentView({nodes}) {
           }}>{"Set Alignment Anchor"}</MenuItem>
           <MenuItem onClick={() => {
             setContextMenu(null);
+            const DataId = eventInfo.channel.split("_")[1];
             for (let i in nodes) {
-              for (let k in nodes[i].data.Metadata.ChannelNames) {
-                const channelId = nodes[i].id + "_" + nodes[i].data.Id + "_" + k;
-                if (channelId == eventInfo.channel) {
-                  setData((data) => {
-                    data[channelId].Alignment += (dataAlignment.alignment - eventInfo.time/1000);
-                    return {...data}
-                  });
-                  nodes[i].data.Alignment += (dataAlignment.alignment - eventInfo.time/1000);
-                }
+              if (nodes[i].data.Id == DataId) {
+                nodes[i].data.Alignment += (dataAlignment.alignment - eventInfo.time/1000);
               }
             }
+            setData((data) => {
+              for (let key in data) {
+                if (key.split("_")[1] == DataId) {
+                  data[key].Alignment += (dataAlignment.alignment - eventInfo.time/1000);
+                }
+              }
+              return {...data}
+            });
+            /*
+            setAvailableChannels((availableChannels) => {
+              for (let i in availableChannels.options) {
+                if (availableChannels.options[i].id.split("_")[1] == DataId) {
+                  availableChannels.options[i].alignment += (dataAlignment.alignment - eventInfo.time/1000);
+                }
+              }
+              return {...availableChannels};
+            });
+            */
           }}>{"Set Alignment"}</MenuItem>
         </Menu>
       </MDBox>

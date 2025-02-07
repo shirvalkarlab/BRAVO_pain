@@ -226,7 +226,7 @@ def decodeMedtronicJSON(JSON):
     TimeDomainRecordings = []
     PowerDomainRecordings = []
     if "StreamingTD" in Data.keys() and "StreamingPower" in Data.keys():
-        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(Data["StreamingTD"], Data["StreamingPower"])
+        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(Data["StreamingTD"], Data["StreamingPower"], FixBreaking=JSON["AutomaticStreamingFix"])
         StreamingRecordings += [{
             "name": "",
             "type": "MedtronicBrainSenseTimeDomain",
