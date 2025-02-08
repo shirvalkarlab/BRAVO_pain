@@ -120,7 +120,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -133,6 +133,15 @@ def queryAvailableAnalyses(participant_uid, request_type):
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
 
                 Description["Type"] = "DBS TimeDomain Recordings"
+
+            elif recording.type == "MedtronicBaselineMontages" or recording.type == "MedtronicBrainSenseSurvey":
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        Description["Device"] = device
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+                Description["Type"] = "DBS Snapshots"
 
             elif recording.type == "DelsysMDAT":
                 Description["Type"] = "Delsys MDT"
@@ -423,7 +432,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
     
-    if recording.type in ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
+    if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
@@ -679,6 +688,9 @@ def downsampleTimeDomainStreaming(data):
     return data
 
 def processTimeDomainStreaming(recording, data, config):
+    if len(data["Data"].shape) == 1:
+        data["Data"] = data["Data"].reshape(-1,1)
+
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
         sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
         data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
@@ -702,9 +714,6 @@ def processTimeDomainStreaming(recording, data, config):
             "CardiacFilter": config["TimeSeriesRecording"]["CardiacFilter"]["value"]
         })
     
-    if config["APIAccess"]:
-        return data
-
     data = handleTimeFrequencyAnalysis(recording, data, {
         "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
         "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],
@@ -948,6 +957,9 @@ def processNeuralActivitySnapshot(recording, data, config):
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
+    if len(data["Data"].shape) == 1:
+        data["Data"] = data["Data"].reshape(-1,1)
+
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
         sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
         data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
@@ -963,14 +975,6 @@ def processNeuralActivitySnapshot(recording, data, config):
         if config["TimeSeriesRecording"]["WienerFilter"]["value"] == "Use Wiener Filter":
             data["Data"][:,i] -= signal.wiener(data["Data"][:,i], mysize=int(data["SamplingRate"] / 2))
 
-    if config["TimeSeriesRecording"]["CardiacFilter"]["value"] == "Use Adaptive Template Matching":
-        data = handleCardiacFilter(recording, data, {
-            "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
-            "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],
-            "WienerFilter": config["TimeSeriesRecording"]["WienerFilter"]["value"],
-            "CardiacFilter": config["TimeSeriesRecording"]["CardiacFilter"]["value"]
-        })
-    
     data = handlePowerSpectralEstimation(recording, data, {
         "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
         "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],

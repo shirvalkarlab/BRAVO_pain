@@ -132,6 +132,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
 
+            Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 
@@ -210,6 +211,7 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
 
+            Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 
@@ -251,18 +253,20 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryNeuralActivitySnapshot(request.data["ParticipantId"], userConfig)
+
+            Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryNeuralActivitySnapshot", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
         
         elif request.data["RequestType"] == "DeleteCache":
-            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId"]):
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
-            recording = models.Recording.find(uid=request.data["AnalysisId"])
-            if not recording.source.owner.uid == request.data["ParticipantId"]:
-                return Response(status=400, data={"message": "Permission Denied"})
-            
-            DataAnalysis.deleteProcessedData(recording=recording)
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            SourceFiles = models.SourceFile.find_all(owner=Participant)
+            Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+            DataAnalysis.deleteProcessedData(recording=Recordings, type="NeuralActivitySnapshot")
+            Database.deleteCachedResult(request.data["ParticipantId"], url="/queryNeuralActivitySnapshot")
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
@@ -291,6 +295,8 @@ class QueryChronicNeuralActivity(RestViews.APIView):
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryChronicNeuralActivity(request.data["ParticipantId"], userConfig)
+
+            Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 

@@ -5,6 +5,67 @@ import os
 import pickle as pkl
 import datetime
 
+DefaultConfigurations = {
+    "TimeSeriesRecording": {
+        "StandardFilter": {
+            "name": "Standard Bandpass Filter",
+            "description": "",
+            "options": ["No Filter","Butterworth 1-100Hz"],
+            "value": "No Filter"
+        },
+        "NotchFilter": {
+            "name": "Powerline Noise Notch Filter",
+            "description": "",
+            "options": ["No Filter","Notch 55-65Hz","Notch 45-55Hz"],
+            "value": "No Filter"
+        },
+        "WienerFilter": {
+            "name": "Wiener Filter for Artifact Removals",
+            "description": "",
+            "options": ["No Filter","Use Wiener Filter"],
+            "value": "No Filter"
+        },
+        "CardiacFilter": {
+            "name": "Cardiac Filter for EKG Removals",
+            "description": "",
+            "options": ["No Filter","Use Adaptive Template Matching"],
+            "value": "No Filter"
+        },
+        "SpectrogramMethod": {
+            "name": "Time-Frequency Analysis Algorithm",
+            "description": "",
+            "options": ["Welch's Periodogram","Short-time Fourier Transform","Wavelet","Autoregressive Model (Yule-Walker)"],
+            "value": "Welch's Periodogram"
+        },
+        "BaselineCorrection": {
+            "name": "Baseline Correlation for Time-Frequency Analysis",
+            "description": "",
+            "options": ["No Correction"],
+            "value": "No Correction"
+        },
+        "Normalization": {
+            "name": "Normalization for Time-Frequency Analysis",
+            "description": "",
+            "options": ["No Normalization", "1/f PSD Trend Removal"],
+            "value": "No Normalization"
+        },
+    },
+    "PowerSpectralDensity": {
+        "PSDMethod": {
+            "name": "Power Spectrum Estimation Algorithm",
+            "description": "",
+            "options": ["Estimated Medtronic PSD","Welch's Periodogram","Autoregressive Model (Yule-Walker)","Short-time Fourier Transform"],
+            "value": "Welch's Periodogram"
+        },
+        "MonopolarEstimation": {
+            "name": "Monopolar Estimation Algorithm",
+            "description": "",
+            "options": ["No Estimation", "DETEC Algorithm (Strelow et. al., 2022)"],
+            "value": "No Estimation"
+        },
+    }
+}
+
 class BRAVOPlatformRequest:
     def __init__(self, api_key, server="http://localhost"):
         self.__Server = server
@@ -52,7 +113,7 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
-    def QueryTherapeuticEffectAnalysis(self, participant_uid, analysis_uid=None, config=None ):
+    def QueryTherapeuticEffectAnalysis(self, participant_uid, analysis_uid=None, config=None):
         form = {"ParticipantId": participant_uid, "RequestType": "Overview"}
         if analysis_uid:
             form["RequestType"] = "RequestData"

@@ -236,6 +236,7 @@ class DataDownloadHandler(RestViews.APIView):
         if CacheType == "queryTherapeuticEffectAnalysis":
             AnalysisId = self.request.query_params.get('AnalysisId')
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
             FilePointer = DataAnalysis.downloadTherapeuticAnalysis(ParticipantId, AnalysisId, userConfig)
             
             with BytesIO() as fp:
@@ -248,6 +249,7 @@ class DataDownloadHandler(RestViews.APIView):
         elif CacheType == "queryTimeseriesAnalysis":
             RecordingId = self.request.query_params.get('RecordingId')
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
             FilePointer = DataAnalysis.downloadTimeseriesAnalysis(ParticipantId, RecordingId, userConfig)
             
             with BytesIO() as fp:
@@ -270,6 +272,7 @@ class DataDownloadHandler(RestViews.APIView):
         
         elif CacheType == "queryChronicNeuralActivity":
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
             FilePointer = DataAnalysis.downloadChronicNeuralActivity(ParticipantId, userConfig)
             
             with BytesIO() as fp:
