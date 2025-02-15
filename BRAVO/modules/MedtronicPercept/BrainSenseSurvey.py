@@ -39,17 +39,48 @@ def saveBrainSenseSurvey(streamList):
     """
 
     NewRecordings = []
+    StreamDates = list()
     for stream in streamList:
+        StreamDates.append(stream["FirstPacketDateTime"])
+    UniqueSessionDates = np.unique(StreamDates)
+
+    for date in UniqueSessionDates:
         Recording = dict()
-        Recording["SamplingRate"] = stream["SamplingRate"]
-        Recording["ChannelNames"] = [stream["Channel"]]
-        Recording["Data"] = stream["Data"]
-        Recording["Missing"] = stream["Missing"]
-        Recording["StartTime"] = stream["FirstPacketDateTime"]
-        Recording["Descriptor"] = {}
-        if "PSD" in stream.keys():
-            Recording["Descriptor"]["MedtronicPSD"] = stream["PSD"]
+        Recording["SamplingRate"] = streamList[0]["SamplingRate"]
+        StreamGroupIndexes = [stream["FirstPacketDateTime"] == date for stream in streamList]
+        Recording["ChannelNames"] = [streamList[i]["Channel"] for i in range(len(streamList)) if StreamGroupIndexes[i]]
+        Recording["StartTime"] = date
+        Recording["Descriptor"] = {"MedtronicPSD": []}
+        
+        RecordingSize = [len(streamList[i]["Data"]) for i in range(len(streamList)) if StreamGroupIndexes[i]]
+        if len(np.unique(RecordingSize)) > 1:
+            print("Inconsistent Recording Size for Survey Stream")
+            maxSize = np.max(RecordingSize)
+            Recording["Data"] = np.zeros((maxSize, len(RecordingSize)))
+            Recording["Missing"] = np.ones((maxSize, len(RecordingSize)))
+            n = 0
+            for i in range(len(streamList)): 
+                if StreamGroupIndexes[i]:
+                    Recording["Data"][:RecordingSize[n], n] = streamList[i]["Data"]
+                    Recording["Missing"][:RecordingSize[n], n] = streamList[i]["Missing"]
+                    n += 1
+        else:
+            Recording["Data"] = np.zeros((RecordingSize[0], len(RecordingSize)))
+            Recording["Missing"] = np.ones((RecordingSize[0], len(RecordingSize)))
+            n = 0
+            for i in range(len(streamList)): 
+                if StreamGroupIndexes[i]:
+                    Recording["Data"][:, n] = streamList[i]["Data"]
+                    Recording["Missing"][:, n] = streamList[i]["Missing"]
+                    n += 1
+        
+        for i in range(len(streamList)): 
+            if "PSD" in streamList[i].keys():
+                Recording["Descriptor"]["MedtronicPSD"].append(streamList[i]["PSD"])
+            else:
+                Recording["Descriptor"]["MedtronicPSD"].append(None)
+
         Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
         NewRecordings.append(Recording)
-
+        
     return NewRecordings

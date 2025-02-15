@@ -151,13 +151,31 @@ class StudyRel(models.Model):
             "Permission": self.permission
         }
     
+class StudyDataRel(models.Model):
+    study = models.ForeignKey("Study", on_delete=models.CASCADE)
+    participant = models.ForeignKey("Participant", on_delete=models.CASCADE)
+    permission = models.JSONField(default=dict)
+
+    def find(*args, **kwargs):
+        return StudyDataRel.objects.prefetch_related("study", "participant").filter(**kwargs).first()
+
+    def create(*args, **kwargs):
+        return StudyDataRel(**kwargs)
+
+    def get_info(self):
+        return {
+            "Study": self.study.uid,
+            "Participant": self.participant.uid,
+            "Permission": self.permission
+        }
+    
 class Study(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
     name = models.CharField(max_length=512, default="")
     
     invite_code = models.CharField(max_length=512, default="")
     members = models.ManyToManyField("PlatformUser", related_name="study_has_member", through="StudyRel")
-    participants = models.ManyToManyField("Participant", related_name="has_participant")
+    participants = models.ManyToManyField("Participant", related_name="has_participant", through="StudyDataRel")
 
     def include(*args, **kwargs):
         return Study.objects.prefetch_related("members", "participants").filter(**kwargs).exists()

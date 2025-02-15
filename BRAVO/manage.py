@@ -90,7 +90,7 @@ def processInput(argv):
             for line in info:
                 if "=" in line:
                     line = line.replace(" ","")
-                    content = re.split("[\s]?=[\s]?", line)
+                    content = re.split(r"[\s]?=[\s]?", line)
                 
                     if len(content) == 2:
                         if content[0] == "database":

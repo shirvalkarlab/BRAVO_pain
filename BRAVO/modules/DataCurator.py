@@ -25,6 +25,7 @@ import datetime
 import json
 from cryptography.fernet import Fernet
 import hmac, hashlib
+import base64
 import pickle
 import numpy as np
 import pandas as pd
@@ -68,6 +69,12 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         JSON["AutomaticStreamingFix"] = False
     
     DatabaseEntries = decodeMedtronicJSON(JSON)
+    
+    if source_file.metadata["automatic_deidentification"]:
+        DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
+        DatabaseEntries["SessionOverview"]["DOB"] = DatabaseEntries["SessionOverview"]["DOB"] + int.from_bytes(base64.b64encode(DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"))[8:13], "little") / 1000
+        DatabaseEntries["SessionOverview"]["MRN"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["MRN"].encode("utf-8"), hashlib.sha256).hexdigest()
+        DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"].encode("utf-8"), hashlib.sha256).hexdigest()
 
     # Process Patient/Device/Electrode Information for Storage and Query
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
@@ -501,6 +508,13 @@ def ImportBRAVOExport(source_file):
 
     HeaderSize = int.from_bytes(rawBytes[12:16], "little")
     Header = json.loads(FernetEncoder.decrypt(rawBytes[16:16+HeaderSize].decode("utf-8")))
+    
+    if source_file.metadata["automatic_deidentification"]:
+        Header["Name"] = hmac.new(HASH_KEY.encode("utf8"), Header["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
+        Header["DOB"] = Header["DOB"] + int.from_bytes(base64.b64encode(Header["Name"].encode("utf-8"))[8:13], "little") / 1000
+        Header["MRN"] = hmac.new(HASH_KEY.encode("utf8"), Header["MRN"].encode("utf-8"), hashlib.sha256).hexdigest()
+        for i in range(len(Header["Devices"])):
+            Header["Devices"][i]["SerialNumber"] = hmac.new(HASH_KEY.encode("utf8"), Header["Devices"][i]["SerialNumber"].encode("utf-8"), hashlib.sha256).hexdigest()
 
     # Process Patient/Device/Electrode Information for Storage and Query
     person = models.Participant.find(uid=uuid.UUID(Header["Id"]).hex)
@@ -514,6 +528,7 @@ def ImportBRAVOExport(source_file):
     
     person = models.Participant(uid=uuid.UUID(Header["Id"]).hex, name=Header["Name"], sex=Header["Gender"], date_of_birth=Header["DOB"],
                         diagnosis=Header["Diagnosis"], mrn=Header["MRN"], institute_id=source_file.metadata["Institute"])
+    
     person.save()
     
     currentIndex = 16+HeaderSize
@@ -522,12 +537,11 @@ def ImportBRAVOExport(source_file):
         if PacketType == "NVMSEDA":
             PacketSize = int.from_bytes(rawBytes[currentIndex+7:currentIndex+11], "little")
             PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+11:currentIndex+11+PacketSize])
-            metadata = {
+            metadata = {**source_file.metadata, **{
                 "UploadType": "MedtronicJSON",
-                "Institute": source_file.metadata["Institute"],
-                "Uploader": source_file.metadata["Uploader"],
                 "UniqueHashed": hmac.new(HASH_KEY.encode("utf8"), PacketContent, hashlib.sha256).hexdigest()
-            }
+            }}
+
             json_file = saveCacheFile(person.uid + "_" + uuid.uuid4().hex + ".json", metadata, PacketContent)
             #lockFile = json_file.pointer + ".lock"
             if models.SourceFile.objects.exclude(pk=json_file.pk).filter(metadata__Institute=metadata["Institute"], metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
