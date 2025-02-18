@@ -24,6 +24,32 @@ import hashlib, base64
 key = os.environ.get('DATASERVER_ENCRYPTION')
 secureEncoder = Fernet(key)
 
+PermissionDefinitions = {
+    "Admin": {
+        "AddEvent": True,
+        "Edit": True,
+        "Upload": True,
+        "Delete": True,
+    },
+    "Member": {
+        "AddEvent": True,
+        "Edit": False,
+        "Upload": True,
+        "Delete": False,
+    }
+}
+
+def get_permission(permission_dict, permit):
+    position = permission_dict["Position"]
+
+    if not position in PermissionDefinitions.keys():
+        return False
+    
+    if not permit in PermissionDefinitions[position].keys():
+        return False 
+    
+    return PermissionDefinitions[position][permit]
+
 def get_or_none(func):
     def wrapped_func(*args, **kwargs):
         try:

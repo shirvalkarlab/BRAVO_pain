@@ -120,26 +120,49 @@ def checkConfiguration(metadata, config):
     
     return True
 
-def checkAccessPermission(user, participant_uid):
+def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=None):
+    Permission = {
+        "Deidentified": True,
+    }
+
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return False 
     
     if Participant.institute.has_permission(user):
-        return True
+        Permission["Deidentified"] = False
+        return Permission
     
-    return models.Study.include(members=user, participant__pk=participant_uid)
+    if not study_uid:
+        return False 
+    
+    study = models.Study.find(uid=study_uid)
+    rel = models.StudyDataRel.find(study=study, participant=Participant)
+    if rel:
+        if "PHIAllowed" in rel.permission.keys():
+            Permission["Deidentified"] = False
+            return Permission
+        else:
+            Permission["Deidentified"] = True
+            return Permission
+    
+    return False
 
-def checkManagePermission(user, participant_uid):
+def checkManagePermission(user, participant_uid, type="View"):
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return False
-    return Participant.institute.has_permission(user)
+    return Participant.institute.has_permission(user, type)
 
-def extractParticipantInformation(participant_uid):
+def extractParticipantInformation(participant_uid, deidentified=False):
     Participant = models.Participant.find(uid=participant_uid)
     ParticipantInfo = Participant.get_info()
     ParticipantInfo["DBSDevices"] = [i.get_info() for i in models.DBSDevice.find_all(owner=Participant)]
+    if deidentified:
+        ParticipantInfo["Name"] = ParticipantInfo["Id"]
+        ParticipantInfo["MRN"] = ""
+        ParticipantInfo["DOB"] = 0
+
     return ParticipantInfo
 
 def extractParticipantDevices(participant):
