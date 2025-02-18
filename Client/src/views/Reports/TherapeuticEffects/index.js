@@ -195,6 +195,7 @@ function TherapeuticEffects() {
         ParticipantId: participant_uid,
         AnalysisId: analysisUpdate.analysisId,
         RecordingName: analysisUpdate.name,
+        RecordingTags: analysisUpdate.tags ? analysisUpdate.tags : [],
         StimulationLabel: analysisUpdate.therapy.map((a) => a.SegmentMode ? a.SegmentMode : "Ring")
       });
       
@@ -209,6 +210,7 @@ function TherapeuticEffects() {
                 break;
               }
             }
+            availableAnalysis.Analyses[i].Metadata.Tags = analysisUpdate.tags ? analysisUpdate.tags : [];
             break;
           }
         }

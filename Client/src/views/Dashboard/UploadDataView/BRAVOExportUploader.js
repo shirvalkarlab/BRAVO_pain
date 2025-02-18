@@ -38,12 +38,12 @@ import DropzoneUploader from "components/DropzoneUploader";
 import { SessionController } from "database/session-control";
 
 function BRAVOExportUploader({institute, version}) {
-  const [metadataField, setMetadataField] = useState({"Password": ""})
+  const [metadataField, setMetadataField] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true, Password: ""})
   const [files, setFiles] = useState([]);
 
   useEffect(() => {
     setFiles([]);
-    setMetadataField({"Password": ""});
+    setMetadataField({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true, Password: ""});
   }, [institute]);
 
   const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
@@ -119,8 +119,24 @@ function BRAVOExportUploader({institute, version}) {
           label={"Decryption Password (Required)"} type="text"
           fullWidth
         />
+        
       </MDBox>
       
+      <MDBox pt={2} px={3}>
+        <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
+          <Checkbox checked={metadataField.automatic_deidentification} onClick={() => setMetadataField({...metadataField, automatic_deidentification: !metadataField.automatic_deidentification})} />
+          <MDTypography variant="h6">
+            {"Automatic Deidentification"}
+          </MDTypography>
+        </MDBox>
+        <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
+          <Checkbox checked={metadataField.automatic_concatenation} onClick={() => setMetadataField({...metadataField, automatic_concatenation: !metadataField.automatic_concatenation})} />
+          <MDTypography variant="h6">
+            {"Automatic Concatenating Multiple Streams"}
+          </MDTypography>
+        </MDBox>
+      </MDBox>
+      <Divider variant="insert" />
       <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
         
         <MDTypography variant="h6">

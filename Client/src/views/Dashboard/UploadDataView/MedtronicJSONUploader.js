@@ -37,11 +37,12 @@ import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
 function MedtronicJSONUploader({institute, participant}) {
-  const [metadata, setMetadata] = useState({device_location: "", infer_from_device: true, automatic_concatenation: true});
+  const [metadata, setMetadata] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true});
   const [files, setFiles] = useState([]);
 
   useEffect(() => {
-    setFiles([])
+    setFiles([]);
+    setMetadata({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true});
   }, [participant]);
 
   const handleFileUpload = (fieldName, file, file_metadata, load, error, progress, abort, transfer, options) => {
@@ -105,7 +106,26 @@ function MedtronicJSONUploader({institute, participant}) {
   return (
     <MDBox pt={2}>
       <Divider variant="insert" />
-      {participant === "batch-upload" ? null : <>
+      {participant === "batch-upload" ? <>
+        <MDTypography variant="h6">
+          {"Metadata"}
+        </MDTypography>
+        <MDBox pt={2} px={3}>
+          <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
+            <Checkbox checked={metadata.automatic_deidentification} onClick={() => setMetadata({...metadata, automatic_deidentification: !metadata.automatic_deidentification})} />
+            <MDTypography variant="h6">
+              {"Automatic Deidentification"}
+            </MDTypography>
+          </MDBox>
+          <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
+            <Checkbox checked={metadata.automatic_concatenation} onClick={() => setMetadata({...metadata, automatic_concatenation: !metadata.automatic_concatenation})} />
+            <MDTypography variant="h6">
+              {"Automatic Concatenating Multiple Streams"}
+            </MDTypography>
+          </MDBox>
+        </MDBox>
+        <Divider variant="insert" />
+      </> : <>
         <MDTypography variant="h6">
           {"Metadata"}
         </MDTypography>

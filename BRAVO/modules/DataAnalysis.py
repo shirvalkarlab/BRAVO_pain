@@ -63,6 +63,103 @@ def saveAnalysisProcessedData(Data, type, metadata, recording):
     ProcessedData.save()
     return ProcessedData
 
+def queryAllRecordings(participant_uid, request_type=None):
+    Overview = {"Recordings": [], "Surveys": []}
+    Participant = models.Participant.find(uid=participant_uid)
+    if request_type == "Timeseries":
+        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
+        
+        Overview["Recordings"] = []
+        for recording in Recordings:
+            Description = recording.get_info()
+            if recording.type == "MedtronicBrainSenseTimeDomain" or recording.type == "MedtronicIndefiniteStream":
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        Description["Device"] = device
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+            elif recording.type == "MedtronicBrainSensePowerDomain":
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        Description["Therapy"] = [{
+                            "Hemisphere": side,
+                            "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
+                            "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
+                            "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                            "SegmentMode": recording.metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in recording.metadata["Therapy"][side].keys() else "Ring"
+                        } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
+                        Description["Device"] = device
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            if Description["Metadata"]["ChannelNames"][i].endswith("Stimulation"):
+                                Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Stimulation"
+                            else:
+                                Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"]) + " Recording"
+
+            elif recording.type == "MedtronicBaselineMontages" or recording.type == "MedtronicBrainSenseSurvey":
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        Description["Device"] = device
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
+
+                Description["Type"] = "DBS Snapshots"
+
+            elif recording.type == "DelsysMDAT":
+                Description["Type"] = "Delsys MDT"
+
+            elif recording.type == "HPFCSV":
+                Description["Name"] = recording.metadata["SensorType"]
+                Description["Type"] = "Delsys CSV Format"
+            
+            elif recording.type == "AOMPX":
+                Description["Type"] = "Alpha Omega MPX"
+            
+            elif recording.type == "MATFile":
+                Description["Type"] = "MATLAB File"
+            
+            elif recording.type == "MedtronicChronicBrainSense":
+                Description["Type"] = "Timeline"
+                for device in DBSDevices:
+                    if device["Id"] == recording.source.metadata["Device"]:
+                        for i in range(len(Description["Metadata"]["ChannelNames"])):
+                            for k in range(len(device["Electrodes"])):
+                                if Description["Metadata"]["ChannelNames"][i].startswith(device["Electrodes"][k]["Target"].split(" ")[0]):
+                                    Description["Metadata"]["ChannelNames"][i] = device["Electrodes"][k]["CustomName"] + " " + Description["Metadata"]["ChannelNames"][i].split(" ")[-1]
+
+            Description["RawType"] = recording.type
+            Overview["Recordings"].append(Description)
+
+    elif request_type == "Surveys":
+        AllRecords = models.ScaleRecord.find_all(participant=Participant)
+        for record in AllRecords:
+            Description = {
+                "Id": record.uid,
+                "Date": record.date,
+                "FormId": record.source.uid,
+                "FormName": record.source.name,
+            }
+            Overview["Surveys"].append(Description)
+
+    elif request_type == "ChronicTimeline":
+        AllRecords = models.ScaleRecord.find_all(participant=Participant)
+        for record in AllRecords:
+            Description = {
+                "Id": record.uid,
+                "Date": record.date,
+                "FormId": record.source.uid,
+                "FormName": record.source.name,
+            }
+            Overview["Surveys"].append(Description)
+
+    elif not request_type:
+        Overview["Recordings"].extend(queryAllRecordings(participant_uid, "Timeseries")["Recordings"])
+        Overview["Surveys"].extend(queryAllRecordings(participant_uid, "Surveys")["Surveys"])
+
+    return Overview
+
 def queryAvailableAnalyses(participant_uid, request_type):
     Overview = {"Analyses": [], "Recordings": []}
     Participant = models.Participant.find(uid=participant_uid)

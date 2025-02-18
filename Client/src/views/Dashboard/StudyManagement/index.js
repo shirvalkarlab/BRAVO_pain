@@ -47,10 +47,15 @@ import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 
+import { FaCircleInfo, FaXmark } from "react-icons/fa6";
+
+import RecordingSelect from "./RecordingSelect";
+import AddStudy from "./AddStudy";
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
+import LoadingProgress from "components/LoadingProgress";
 
 const filter = createFilterOptions();
 
@@ -61,10 +66,12 @@ export default function StudyManagement() {
   const [alert, setAlert] = useState(null);
   const [availableStudies, setAvailableStudies] = useState([]);
   const [availableParticipants, setAvailableParticipants] = useState([]);
-  const [activeStudy, setActiveStudy] = useState({Participants: []});
+  const [activeStudy, setActiveStudy] = useState({Participants: [], InviteCode: "", Members: []});
   const [activeParticipant, setActiveParticipant] = useState({});
   const [studyInformation, setStudyInformation] = useState({});
-  const [participantInformation, setParticipantInformation] = useState({});
+  const [participantInformation, setParticipantInformation] = useState({show: false});
+  const [addStudyInterface, setAddStudyInterface] = useState(false);
+
   const [uploadDataType, setUploadDataType] = useState("");
   
   useEffect(() => {
@@ -167,12 +174,19 @@ export default function StudyManagement() {
           <MDBox p={2}>
             <Grid container spacing={2}>
               <Grid item xs={12}>
-                <MDTypography variant="h3">
-                  {"Study Manager"}
-                </MDTypography>
-                <MDTypography variant="h6">
-                  {"Current Active Institute: " + user.Institute}
-                </MDTypography>
+                <MDBox display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
+                  <MDBox>
+                    <MDTypography variant="h3">
+                      {"Study Manager"}
+                    </MDTypography>
+                    <MDTypography variant="h6">
+                      {"Current Active Institute: " + user.Institute}
+                    </MDTypography>
+                  </MDBox>
+                  <MDButton variant={"contained"} color={"success"} style={{marginLeft: "auto"}} onClick={() => setAddStudyInterface(true)}>
+                    {"Join Study"}
+                  </MDButton>
+                </MDBox>
               </Grid>
               <Grid item sm={12}>
                 <Autocomplete 
@@ -187,6 +201,7 @@ export default function StudyManagement() {
                       })
                     }
                     setActiveStudy(newValue);
+                    setActiveParticipant({});
                   }}
                   getOptionLabel={(option) => {
                     if (typeof option === 'string') { return option; }
@@ -242,6 +257,82 @@ export default function StudyManagement() {
               ) : (
                 <Grid item sm={12}>
                   <Grid container spacing={2}>
+                    <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+                      <TextField
+                        variant="standard"
+                        value={activeStudy.InviteCode}
+                        label={"Study Invite Code"} type="text"
+                        fullWidth disabled
+                      />
+                      <MDButton color={"info"} onClick={() => {
+                        SessionController.query("/api/manageStudyInformation", {
+                          RequestType: "ResetStudyCode",
+                          StudyId: activeStudy.Id,
+                        }).then((response) => {
+                          setActiveStudy((activeStudy) => {
+                            activeStudy.InviteCode = response.data;
+                            setAvailableStudies((availableStudies) => {
+                              for (let i in availableStudies) {
+                                if (availableStudies[i].Id == activeStudy.Id) {
+                                  availableStudies[i] = activeStudy;
+                                }
+                              }
+                              return [...availableStudies];
+                            });
+                            return {...activeStudy};
+                          });
+                        }).catch((error) => {
+                          SessionController.displayError(error, setAlert);
+                        });
+                      }} style={{marginLeft: 15}}>{"Refresh Invite Code"}</MDButton>
+                    </Grid>
+
+                    <Grid item sm={12}>
+                      <MDTypography variant="h5">
+                        {"Current Study Members"}
+                      </MDTypography>
+                    </Grid>
+                    <Grid item sm={12}>
+                      {activeStudy.Members.map((a, i) => {
+                        return <MDBox key={a.Email} display={"flex"} flexDirection={"row"}>
+                          <IconButton size="small" aria-label="close" color="inherit" onClick={() => {
+                            
+                          }}>
+                            <FaCircleInfo />
+                          </IconButton>
+                          <MDTypography variant="h5">
+                            {a.Name}{" ("}{a.Email}{")"}
+                          </MDTypography>
+                          <IconButton size="small" aria-label="close" color="error" onClick={() => {
+                            SessionController.query("/api/manageStudyInformation", {
+                              RequestType: "RemoveMember",
+                              StudyId: activeStudy.Id,
+                              Member: a.Email,
+                            }).then((response) => {
+                              setActiveStudy((activeStudy) => {
+                                activeStudy.Members = activeStudy.Members.filter((b) => b.Email != a.Email);
+                                setAvailableStudies((availableStudies) => {
+                                  for (let i in availableStudies) {
+                                    if (availableStudies[i].Id == activeStudy.Id) {
+                                      availableStudies[i] = activeStudy;
+                                    }
+                                  }
+                                  return [...availableStudies];
+                                });
+                                return {...activeStudy};
+                              });
+                            }).catch((error) => {
+                              SessionController.displayError(error, setAlert);
+                            });
+                          }}>
+                            <FaXmark />
+                          </IconButton>
+                        </MDBox>
+                      })}
+                    </Grid>
+                    <Grid item sm={12}>
+                      <Divider variant="middle" />
+                    </Grid>
                     <Grid item sm={12}>
                       <MDTypography variant="h5">
                         {"Current Study Participant"}
@@ -255,7 +346,7 @@ export default function StudyManagement() {
                         onChange={(event, newValue) => {
                           setActiveStudy((activeStudy) => {
                             if (activeStudy.Participants.filter((a)=>a.Id == newValue.Id).length == 0) {
-                              activeStudy.Participants.push({
+                              activeStudy.Participants.unshift({
                                 Id: newValue.Id, Name: newValue.Name
                               });
                               handleAddParticipant(activeStudy.Id, newValue.Id);
@@ -294,18 +385,34 @@ export default function StudyManagement() {
                     </Grid>
                     <Grid item sm={12}>
                       {activeStudy.Participants.map((a, i) => {
-                        return <MDBox key={a.Id}>
-                          <MDTypography variant="p">
-                            {(i+1).toFixed(0)}{": "}{a.Name}
-                          </MDTypography>
+                        return <MDBox key={a.Id} display={"flex"} flexDirection={"row"}>
                           <IconButton size="small" aria-label="close" color="inherit" onClick={() => {
+                            setParticipantInformation({
+                              Participant: a,
+                              show: true
+                            })
+                          }}>
+                            <FaCircleInfo />
+                          </IconButton>
+                          <MDTypography variant="h5">
+                            {a.Name}
+                          </MDTypography>
+                          <IconButton size="small" aria-label="close" color="error" onClick={() => {
                             setActiveStudy((activeStudy) => {
-                              activeStudy.Participants = activeStudy.Participants.filter((b) => b.Id != a.Id);
+                              activeStudy.Participants = [...activeStudy.Participants.filter((b) => b.Id != a.Id)];
                               handleRemoveParticipant(activeStudy.Id, a.Id);
+                              setAvailableStudies((availableStudies) => {
+                                for (let i in availableStudies) {
+                                  if (availableStudies[i].Id == activeStudy.Id) {
+                                    availableStudies[i] = activeStudy;
+                                  }
+                                }
+                                return [...availableStudies];
+                              });
                               return {...activeStudy};
                             });
                           }}>
-                            <Icon fontSize="small">close</Icon>
+                            <FaXmark />
                           </IconButton>
                         </MDBox>
                       })}
@@ -318,11 +425,64 @@ export default function StudyManagement() {
                   </Grid>
                 </Grid>
               )}
-
             </Grid>
           </MDBox>
         </Card>
       </MDBox>
+      
+      <Dialog open={participantInformation.show} onClose={() => setParticipantInformation({...participantInformation, show: false})} 
+        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1200 }} }}
+      >
+        <RecordingSelect participant={participantInformation.Participant} onSelectRecording={(recordings) => {
+          setAlert(<LoadingProgress />)
+          SessionController.query("/api/manageStudyInformation", {
+            RequestType: "EditStudyAccessPermission",
+            StudyId: activeStudy.Id,
+            ParticipantId: participantInformation.Participant.Id,
+            Permissions: recordings
+          }).then((response) => {
+            setActiveStudy((activeStudy) => {
+              for (let b in activeStudy.Participants) {
+                if (activeStudy.Participants[b].Id == participantInformation.Participant.Id) {
+                  activeStudy.Participants[b].Permissions = recordings;
+                }
+              }
+              setAvailableStudies((availableStudies) => {
+                for (let i in availableStudies) {
+                  if (availableStudies[i].Id == activeStudy.Id) {
+                    availableStudies[i] = activeStudy;
+                  }
+                }
+                return [...availableStudies];
+              });
+              return {...activeStudy};
+            });
+            setAlert(null);
+          }).catch((error) => {
+            SessionController.displayError(error, setAlert);
+          });
+        }} onClose={() => setParticipantInformation({...participantInformation, show: false})} setAlert={setAlert} />
+      </Dialog>
+
+      <Dialog open={addStudyInterface} onClose={() => setAddStudyInterface(false)} 
+        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 600 }} }}
+      >
+        <AddStudy onAddStudy={(code) => {
+          SessionController.query("/api/manageStudyInformation", {
+            RequestType: "JoinStudy",
+            StudyId: code,
+          }).then((response) => {
+            setAvailableStudies((availableStudies) => [...availableStudies, response.data]);
+            setActiveStudy({
+              ...response.data,
+              value: response.data.Id, label: response.data.Name
+            });
+          }).catch((error) => {
+            SessionController.displayError(error, setAlert);
+          });
+        }} onClose={() => setAddStudyInterface(false)} setAlert={setAlert} />
+      </Dialog>
+
     </DatabaseLayout>
   );
 }

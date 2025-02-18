@@ -74,7 +74,9 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "Overview":
@@ -137,7 +139,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             return Response(status=200, data=Analysis)
 
         elif request.data["RequestType"] == "UpdateData":
-            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingName", "StimulationLabel"]):
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingName", "RecordingTags", "StimulationLabel"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
             analysis = models.Analysis.find(uid=request.data["AnalysisId"])
@@ -156,7 +158,9 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
                             recording.metadata["Therapy"][side]["SegmentMode"] = request.data["StimulationLabel"][sideN]
                             sideN += 1
                     recording.save()
+
             analysis.name = request.data["RecordingName"]
+            analysis.metadata["Tags"] = request.data["RecordingTags"]
             analysis.save()
             return Response(status=200)
 
@@ -186,7 +190,9 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "Overview":
@@ -239,7 +245,9 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "RequestAll":
@@ -281,7 +289,9 @@ class QueryChronicNeuralActivity(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "RequestAll":
@@ -314,7 +324,9 @@ class QueryCustomizedAnalysis(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "RequestList":

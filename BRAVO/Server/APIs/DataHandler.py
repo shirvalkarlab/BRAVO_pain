@@ -60,7 +60,7 @@ class DataUploadHandler(RestViews.APIView):
         if not institute:
             return Response(status=403)
         
-        if not institute.has_permission(request.user):
+        if not institute.has_permission(request.user, "Upload"):
             return Response(status=403)
         
         if ".." in request.data["File"].name or os.path.sep in request.data["File"].name:
@@ -86,7 +86,7 @@ class DataUploadHandler(RestViews.APIView):
         if request.data["DataType"] == "MedtronicJSON":
             try:
                 if not request.data["ParticipantId"] == "batch-upload":
-                    if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                    if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Upload"):
                         return Response(status=403)
 
                     person = models.Participant.find(uid=request.data["ParticipantId"])
@@ -230,7 +230,9 @@ class DataDownloadHandler(RestViews.APIView):
         ParticipantId = self.request.query_params.get('ParticipantId')
         CacheType = self.request.query_params.get('CacheType')
 
-        if not Database.checkAccessPermission(request.user, ParticipantId):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
 
         if CacheType == "queryTherapeuticEffectAnalysis":
@@ -289,7 +291,9 @@ class DataDownloadHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "CacheType", "DataId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
 
         if request.data["CacheType"] == "queryImageModel":
@@ -332,7 +336,9 @@ class RecordingTimeShiftHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingId", "Alignment"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         Analysis = models.Analysis.find(uid=request.data["AnalysisId"])
@@ -365,7 +371,9 @@ class TimeSeriesRecordingHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         if request.data["RequestType"] == "Overview":
@@ -402,9 +410,11 @@ class DataSourceFileHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
-        
+
         if request.data["RequestType"] == "All":
             SourceFiles = Database.listSourceFiles(request.data["ParticipantId"])
             return Response(status=200, data=SourceFiles)
@@ -413,6 +423,9 @@ class DataSourceFileHandler(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Delete"):
+                return Response(status=403)
+        
             Participant = models.Participant.find(uid=request.data["ParticipantId"])
             source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)
             if not source:
@@ -432,9 +445,11 @@ class NeuroImageFileHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
-        
+
         if request.data["RequestType"] == "ListAll":
             SourceFiles = Database.listSourceFiles(request.data["ParticipantId"], file_type="NeuroImage")
             SourceFiles.append({
@@ -453,6 +468,9 @@ class NeuroImageFileHandler(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Delete"):
+                return Response(status=403)
+            
             Participant = models.Participant.find(uid=request.data["ParticipantId"])
             source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)
             if not source:
@@ -463,6 +481,9 @@ class NeuroImageFileHandler(RestViews.APIView):
         elif request.data["RequestType"] == "UpdateModel":
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "SourceId", "Metadata"]):
                 return Response(status=400, data={"message": "Malformed Input"})
+            
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
+                return Response(status=403)
             
             Participant = models.Participant.find(uid=request.data["ParticipantId"])
             source = models.SourceFile.find(uid=request.data["SourceId"], owner=Participant)

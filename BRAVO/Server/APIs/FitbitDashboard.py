@@ -53,7 +53,9 @@ class FitbitAuthHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
@@ -87,6 +89,9 @@ class FitbitAuthHandler(RestViews.APIView):
             if not request.data["TokenURL"].startswith("https://bravo-api.jcagle.solutions/oath/fitbit_redirect?"):
                 return Response(status=400, data={"message": "Malformed Input"})
 
+            if not Participant.institute.has_permission(request.user, "Upload"):
+                return Response(status=403)
+            
             tokenURL = parse_qs(request.data["TokenURL"].replace("https://bravo-api.jcagle.solutions/oath/fitbit_redirect?",""))
             if not len(tokenURL.keys()) == 2:
                 return Response(status=400, data={"message": "Malformed Input"})
@@ -114,6 +119,9 @@ class FitbitAuthHandler(RestViews.APIView):
             if len(device.auth.keys()) == 0:
                 return Response(status=400, data={"message": "Verification Failed"})
 
+            if not Participant.institute.has_permission(request.user, "Upload"):
+                return Response(status=403)
+            
             if not type(request.data["DatePeriods"]) == list:
                 return Response(status=400, data={"message": "Malformed Input"})
             for i in range(len(request.data["DatePeriods"])):
@@ -138,7 +146,9 @@ class QueryFitbitData(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])

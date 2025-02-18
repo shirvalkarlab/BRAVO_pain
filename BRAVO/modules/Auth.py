@@ -37,7 +37,7 @@ def registerUser(email, password, user_name="", institute="Independent"):
 
     if not institute == "Independent":
         if not institute.has_permission(user):
-            institute.join(user)
+            institute.join(user, "Member")
         user.institute = institute
 
     return user

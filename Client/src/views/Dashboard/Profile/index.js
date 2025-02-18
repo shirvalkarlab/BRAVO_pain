@@ -58,6 +58,7 @@ export default function Profile() {
   const [deidentificationTable, setDeidentificationTable] = useState([]);
   const [profile, setProfile] = useState(false);
   const [activeInstitute, setActiveInstitute] = useState({Id: user.InstituteId, Name: user.Institute});
+  const [activeStudy, setActiveStudy] = useState({Id: user.StudyId, Name: user.StudyName});
   const [tableDialog, setTableDialog] = useState({passcode: "", show: false});
   const inputFile = useRef(null) 
 
@@ -123,6 +124,57 @@ export default function Profile() {
                         InstituteId: newValue.Id
                       })
                       setAlert();
+                    }).catch((error) => {
+                      SessionController.displayError(error, setAlert);
+                    });
+                  }}
+                />
+              </Grid>
+              <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+                <Autocomplete selectOnFocus clearOnBlur fullWidth
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      variant="standard"
+                      label={"Select Active Study for Data Viewing"}
+                      placeholder={"Select Active Study for Data Viewing"}
+                    />
+                  )}
+                  isOptionEqualToValue={(option, value) => {
+                    return option.Id === activeStudy.Id;
+                  }}
+                  getOptionLabel={(option) => {
+                    if (typeof option === 'string') { return option; }
+                    if (!option.Name) { return "Not Available" }
+                    return option.Name;
+                  }}
+                  renderOption={(props, option) => <li {...props}>{option.Name}</li>}
+                  value={activeStudy}
+                  options={profile.Studies}
+                  onChange={(event, newValue) => {
+                    setAlert(<LoadingProgress />);
+                    SessionController.query("/api/queryProfile", {
+                      RequestType: "ChangeActiveStudy",
+                      StudyId: newValue ? newValue.Id : ""
+                    }).then((response) => {
+                      if (newValue) {
+                        setContextState(dispatch, "user", {
+                          ...user,
+                          StudyName: response.data.Name,
+                          StudyId: response.data.Id
+                        })
+                        setActiveStudy(newValue);
+                      } else {
+                        setContextState(dispatch, "user", {
+                          ...user,
+                          StudyName: "Disabled",
+                          StudyId: ""
+                        })
+                        setActiveStudy({
+                          Id: "", Name: "Disabled"
+                        });
+                      }
+                      setAlert(null);
                     }).catch((error) => {
                       SessionController.displayError(error, setAlert);
                     });

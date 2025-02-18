@@ -23,7 +23,7 @@ from django.contrib.auth.models import BaseUserManager, AbstractBaseUser
 import json
 import datetime
 
-from modules.HelperFunctions import current_time, get_token, uuid4_hex
+from modules.HelperFunctions import current_time, get_token, uuid4_hex, get_permission
 
 def newToken():
     return get_token(64)
@@ -74,13 +74,26 @@ class PlatformUser(AbstractBaseUser):
         user.institute = institute
         user.save()
         institute.members.add(user)
+        rel = InstituteRel.find(member=user, institute=institute)
+        rel.permission = {
+            "Position": "Admin"
+        }
+        rel.save()
         return user
     
     def get_info(self):
         Studies = [study.get_info(self) for study in Study.find_all(members=self)]
-        return {"Email": self.email, "Name": self.user_name, 
+        info = {"Email": self.email, "Name": self.user_name, 
                 "Institute": self.institute.name if self.institute else "", "InstituteId": self.institute.uid if self.institute else "", 
-                "Study": Studies}
+                "Studies": Studies, "StudyName": "Disabled", "StudyId": ""}
+        
+        if "ActiveStudy" in self.configuration.keys():
+            study = Study.find(uid=self.configuration["ActiveStudy"], members=self)
+            if study:
+                info["StudyName"] = study.name
+                info["StudyId"] = study.uid
+        
+        return info
 
 class InstituteRel(models.Model):
     institute = models.ForeignKey("Institute", on_delete=models.CASCADE)
@@ -96,7 +109,7 @@ class InstituteRel(models.Model):
             "Member": self.member.uid,
             "Permission": self.permission
         }
-    
+
 class Institute(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
     invite_code = models.CharField(max_length=512, default="")
@@ -124,15 +137,22 @@ class Institute(models.Model):
         institute.save()
         return institute
 
-    def join(self, user):
-        self.members.add(user)
+    def join(self, user, permission):
+        rel = InstituteRel(institute=self, member=user, permission={
+            "Position": permission
+        })
+        rel.save()
 
     def leave(self, user):
         self.members.remove(user)
 
-    def has_permission(self, user):
-        return self.members.filter(uid=user.uid).exists()
-    
+    def has_permission(self, user, type="View"):
+        if type == "View":
+            return self.members.filter(uid=user.uid).exists()
+        else:
+            rel = InstituteRel.find(institute=self, member=user)
+            return get_permission(rel.permission, type)
+
 class StudyRel(models.Model):
     study = models.ForeignKey("Study", on_delete=models.CASCADE)
     member = models.ForeignKey("PlatformUser", on_delete=models.CASCADE)
@@ -198,15 +218,29 @@ class Study(models.Model):
             uid = uuid4_hex()
             
         study = Study(uid=uid, name=name)
+        study.invite_code = get_token(64)
         study.save()
         return study
 
     def get_info(self, user):
         rel = StudyRel.find(study=self, member=user)
-        return {
+
+        info = {
             "Id": self.uid, 
             "Name": self.name,
+            "InviteCode": self.invite_code,
             "Permission": rel.permission["Position"],
-            "Members": [{"Name": member.user_name} for member in self.members.all()],
-            "Participants": [{"Id": participant.uid, "Name": participant.name if rel.permission["Position"] == "Admin" else participant.uid} for participant in self.participants.all()]
+            "Members": [{"Name": member.user_name, "Email": member.email} for member in self.members.all()],
+            "Participants": []
         }
+
+        for participant in self.participants.all():
+            data_rel = StudyDataRel.find(study=self, participant=participant)
+            info["Participants"].append({
+                "Id": participant.uid, 
+                "Name": participant.name if rel.permission["Position"] == "Admin" else participant.uid,
+                "Permissions": data_rel.permission
+            })
+        
+        return info
+            

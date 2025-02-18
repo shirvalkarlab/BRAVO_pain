@@ -81,7 +81,7 @@ class DBSDevice(models.Model):
     def get_info(self):
         return {
             "Id": self.uid,
-            "Name": self.name if self.name else self.serial_number,
+            "Name": self.name if self.name else self.device_bloodline,
             "GenericName": self.get_name(),
             "Type": self.type,
             "Location": self.implanted_location,

@@ -88,7 +88,7 @@ class QuerySurveyForms(RestViews.APIView):
                 return Response(status=403)
 
             Form = form.get_info()
-            Form["Editable"] = form.institute.has_permission(request.user)
+            Form["Editable"] = form.institute.has_permission(request.user, "Edit")
             return Response(status=200, data=Form)
 
         elif request.data["RequestType"] == "SubmitForm":
@@ -130,7 +130,7 @@ class SetSurveyForms(RestViews.APIView):
             Institute = models.Institute.find(uid=request.data["Institute"])
             if not Institute:
                 return Response(status=403)
-            if not Institute.has_permission(request.user):
+            if not Institute.has_permission(request.user, "Edit"):
                 return Response(status=403)
 
             try:
@@ -148,7 +148,7 @@ class SetSurveyForms(RestViews.APIView):
             form = models.ScaleForms.find(short_link=request.data["FormLink"])
             if not form:
                 return Response(status=403)
-            if not form.institute.has_permission(request.user):
+            if not form.institute.has_permission(request.user, "Edit"):
                 return Response(status=403)
 
             try:
@@ -176,7 +176,7 @@ class DeleteSurveyForms(RestViews.APIView):
         form = models.ScaleForms.find(uid=request.data["FormId"])
         if not form:
             return Response(status=403)
-        if not form.institute.has_permission(request.user):
+        if not form.institute.has_permission(request.user, "Delete"):
             return Response(status=403)
         
         form.delete()
@@ -192,7 +192,9 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
@@ -219,6 +221,9 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "FormId"]):
                 return Response(status=400, data={"message": "Malformed Input"})
 
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
+                return Response(status=403)
+            
             try:
                 form = models.ScaleForms.find(uid=request.data["FormId"])
                 rel = models.ParticipantLinkRel.create(Participant, form)
@@ -257,7 +262,9 @@ class QueryEventHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         AllEvents = []
@@ -282,7 +289,9 @@ class QueryAnnotationHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         AllEvents = []
@@ -305,7 +314,9 @@ class InsertAnnotationHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "EventType", "EventName", "EventTime", "EventDuration"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         try:
@@ -326,7 +337,9 @@ class DeleteAnnotationHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "EventId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
         try:

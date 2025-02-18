@@ -48,6 +48,7 @@ import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
+import MDBadge from "components/MDBadge";
 
 function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRecordingData, addNewAnalysis, deleteAnalysis, children}) {
   const [controller, dispatch] = usePlatformContext();
@@ -59,18 +60,22 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
   
   const [filterOptions, setFilterOptions] = React.useState({Type: "", Keyword: "", TypeOptions: []});
   const [displayData, setDisplayData] = React.useState([]);
-  const [editRecordingName, setEditRecordingName] = React.useState({show: false, name: "", therapy: [], analysisId: ""});
+  const [editRecordingName, setEditRecordingName] = React.useState({show: false, name: "", tags: [], therapy: [], analysisId: ""});
 
   const [newGroupView, setNewGroupView] = React.useState({show: false, timeseries: [], therapies: []});
 
   const tableHeader = [{
     title: "StreamingTableDate",
     minWidth: 100,
-    width: "30%"
+    width: "25%"
+  },{
+    title: "Recording Tags", 
+    minWidth: 200,
+    width: "20%"
   },{
     title: "StreamingTableChannels", 
     minWidth: 200,
-    width: "25%"
+    width: "15%"
   },{
     title: "StreamingTableTherapy", 
     minWidth: 200,
@@ -123,12 +128,17 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
         if (filterOptions.Keyword.length > 0) {
           let contents = filterOptions.Keyword.split(" ");
           for (let content of contents) {
+            if (!data[i].Metadata.Tags) {
+              data[i].Metadata.Tags = [];
+            }
+
             const optionLower = content.toLowerCase();
             filterState = filterState && (
               data[i].Type.toLowerCase().includes(optionLower) || 
               data[i].Name.toLowerCase().includes(optionLower) || 
               data[i].Id.toLowerCase().includes(optionLower) || 
-              recordingList.filter((b) => b.Metadata.ChannelNames.filter((a) => a.toLowerCase().includes(optionLower)).length > 0).length > 0
+              recordingList.filter((b) => b.Metadata.ChannelNames.filter((a) => a.toLowerCase().includes(optionLower)).length > 0).length > 0 || 
+              data[i].Metadata.Tags.filter((b) => b.toLowerCase().includes(optionLower)).length > 0
             );
 
           }
@@ -228,7 +238,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                 {tableHeader.map((col) => (
                   <TableCell key={col.title} variant="head" style={{width: col.width, minWidth: col.minWidth, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
                     <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>console.log({col})}>
-                      {col.title ? dictionary.TherapeuticAnalysis.Table[col.title][language] : "[]"}
+                      {dictionary.TherapeuticAnalysis.Table[col.title] ? dictionary.TherapeuticAnalysis.Table[col.title][language] : col.title}
                     </MDTypography>
                   </TableCell>
                 ))}
@@ -265,10 +275,17 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                       })}
                     </MDTypography>
                     <MDButton variant={"contained"} color="secondary" onClick={() => {
-                      setEditRecordingName({show: true, analysisId: analysis.Id, therapy: analysis.Therapy, name: analysis.Name})
+                      setEditRecordingName({show: true, analysisId: analysis.Id, tags: analysis.Metadata.Tags, therapy: analysis.Therapy, name: analysis.Name})
                     }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
-                      {"Rename Recording"}
+                      {"Edit Recording"}
                     </MDButton>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column"}}>
+                    {analysis.Metadata.Tags ? analysis.Metadata.Tags.map((a) => (
+                      <MDBadge badgeContent={a} color={"success"} size={"sm"} container sx={{marginLeft: 1}} />
+                    )) : null} 
+                    </MDBox>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
@@ -336,6 +353,21 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                     value={editRecordingName.name}
                     onChange={(event) => setEditRecordingName({...editRecordingName, name: event.target.value})}
                     fullWidth
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <Autocomplete
+                    multiple freeSolo
+                    value={editRecordingName.tags}
+                    options={[]}
+                    onChange={(event, newValue) => setEditRecordingName({...editRecordingName, tags: newValue})}
+                    renderInput={(params) => {
+                      return <TextField
+                        {...params}
+                        variant="standard" id="recording_tags"
+                        placeholder={dictionary.ParticipantOverview.TagNames[language]}
+                      />
+                    }}
                   />
                 </Grid>
                 {editRecordingName.therapy.map((lead, index) => (

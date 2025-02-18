@@ -51,16 +51,19 @@ class QueryTherapyHistory(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
         
+        """
         result = Database.getCachedResult("/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
         if result:
             return Response(status=200, data=result)
-
+        """
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         TherapyHistory = Therapy.queryTherapyHistory(Participant)
         TherapyHistory["DeviceImpedance"] = Therapy.queryElectrodeImpedances(Participant)
-        
+
         Database.saveCachedResult(TherapyHistory, "/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
         return Response(status=200, data=TherapyHistory)

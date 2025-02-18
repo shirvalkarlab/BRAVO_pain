@@ -29,8 +29,8 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
-from modules.HelperFunctions import sanitize_input, get_or_none
-from modules import Database, Auth
+from modules.HelperFunctions import sanitize_input, get_or_none, get_token
+from modules import Database, DataAnalysis
 from Server import models
 
 class QueryParticipants(RestViews.APIView):
@@ -41,20 +41,39 @@ class QueryParticipants(RestViews.APIView):
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
         AllParticipants = []
-        institute = request.user.institute
-        if institute:
-            AllParticipants = models.Participant.from_institute(institute)
-
-        if "ParticipantGroupId" in request.data.keys():
-            study = models.Study.find(uid=request.data["ParticipantGroupId"])
-            if study:
-                AllParticipants = study.participants
-
         AllParticipantInfos = []
-        for i in range(len(AllParticipants)):
-            ParticipantInfo = AllParticipants[i].get_info()
-            ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
-            AllParticipantInfos.append(ParticipantInfo)
+
+        if "ActiveStudy" in request.user.configuration.keys():
+            study = models.Study.find(uid=request.user.configuration["ActiveStudy"])
+            if not study:
+                request.user.configuration["ActiveStudy"] = ""
+            else:
+                rel = models.StudyRel.find(member=request.user, study=study)
+                if rel:
+                    deidentified = True
+                    if rel.permission["Position"] == "Admin" or "PHIAllowed" in rel.permission.keys():
+                        deidentified = False
+
+                    AllParticipants = study.participants.all()
+                    for i in range(len(AllParticipants)):
+                        ParticipantInfo = AllParticipants[i].get_info()
+                        ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
+                        if deidentified:
+                            ParticipantInfo["Name"] = ParticipantInfo["Id"]
+                            ParticipantInfo["MRN"] = ""
+                            ParticipantInfo["DOB"] = 0
+                                
+                        AllParticipantInfos.append(ParticipantInfo)
+
+        else:
+            institute = request.user.institute
+            if institute:
+                AllParticipants = models.Participant.from_institute(institute)
+                for i in range(len(AllParticipants)):
+                    ParticipantInfo = AllParticipants[i].get_info()
+                    ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
+                    AllParticipantInfos.append(ParticipantInfo)
+
         return Response(status=200, data=AllParticipantInfos)
 
 class QueryParticipantInformation(RestViews.APIView):
@@ -67,10 +86,12 @@ class QueryParticipantInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                            study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
             return Response(status=403)
-        
-        ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"])
+
+        ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"], deidentified=Permissions["Deidentified"])
         return Response(status=200, data=ParticipantInfo)
 
 class UpdateParticipantInformation(RestViews.APIView):
@@ -83,13 +104,13 @@ class UpdateParticipantInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId", "MergeWith", "Name", "DOB", "Sex", "Diagnosis", "DiagnosisStartTime", "Tags"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
 
         if "MergeWith" in request.data.keys():
-            if not Database.checkManagePermission(request.user, request.data["MergeWith"]):
+            if not Database.checkManagePermission(request.user, request.data["MergeWith"], "Delete"):
                 return Response(status=403)
 
             TargetParticipant = models.Participant.find(uid=request.data["MergeWith"])
@@ -127,7 +148,7 @@ class DeleteParticipantInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Delete"):
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
@@ -144,7 +165,7 @@ class UpdateDeviceInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "DeviceId"], accepted_keys=["ParticipantId", "DeviceId", "Name", "Electrodes"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
@@ -174,7 +195,7 @@ class DeleteDeviceInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "DeviceId"], accepted_keys=["ParticipantId", "DeviceId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Delete"):
             return Response(status=403)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
@@ -244,6 +265,21 @@ class StudyHandler(RestViews.APIView):
             
             return Response(status=200, data=study.get_info(request.user))
 
+        elif request.data["RequestType"] == "ResetStudyCode":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            if not models.StudyRel.find(member=request.user, study=study, permission__Position="Admin"):
+                return Response(status=403)
+            
+            study.invite_code = get_token(64)
+            study.save()
+            return Response(status=200, data=study.invite_code)
+
         elif request.data["RequestType"] == "JoinStudy":
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId"]):
                 return Response(status=400, data={"message": "Malformed Input"})
@@ -257,6 +293,22 @@ class StudyHandler(RestViews.APIView):
             })
             rel.save()
             
+            return Response(status=200, data=study.get_info(request.user))
+
+        elif request.data["RequestType"] == "RemoveMember":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId", "Member"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            if not models.StudyRel.find(member=request.user, study=study, permission__Position="Admin"):
+                return Response(status=403)
+            
+            tagetUser = models.PlatformUser.find(email=request.data["Member"])
+            study.members.remove(tagetUser)
+
             return Response(status=200)
 
         elif request.data["RequestType"] == "LeaveStudy":
@@ -270,6 +322,44 @@ class StudyHandler(RestViews.APIView):
             study.members.remove(request.user)
             if study.members.count() == 0:
                 study.delete()
+            return Response(status=200)
+
+        elif request.data["RequestType"] == "RequestRecordingList":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                return Response(status=403)
+            
+            Overview = DataAnalysis.queryAllRecordings(request.data["ParticipantId"])
+            return Response(status=200, data=Overview)
+        
+        elif request.data["RequestType"] == "EditStudyAccessPermission":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "StudyId", "Permissions"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            study = models.Study.find(uid=request.data["StudyId"])
+            if not study:
+                return Response(status=400, data={"message": "Incorrect Study Id"})
+            
+            if not models.StudyRel.find(member=request.user, study=study, permission__Position="Admin"):
+                return Response(status=403)
+            
+            if not study.participants.filter(uid=request.data["ParticipantId"]).exists():
+                return Response(status=403)
+
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"]):
+                return Response(status=403)
+            
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            rel = models.StudyDataRel.find(study=study, participant=Participant)
+            if len(request.data["Permissions"]["Recordings"]) == 0 and len(request.data["Permissions"]["Surveys"]) == 0:
+                rel.permission = {}
+            else:
+                rel.permission["Recordings"] = request.data["Permissions"]["Recordings"]
+                rel.permission["Surveys"] = request.data["Permissions"]["Surveys"]
+            rel.save()
+
             return Response(status=200)
 
         elif request.data["RequestType"] == "AddParticipant":
@@ -314,7 +404,10 @@ class CheckAccessPermission(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if Database.checkAccessPermission(request.user, request.data["ParticipantId"]):
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        
+        if Permissions:
             return Response(status=200)
         
         return Response(status=403)

@@ -133,6 +133,27 @@ class QueryProfile(RestViews.APIView):
                 request.user.save()
                 return Response(status=200)
 
+            elif request.data["RequestType"] == "ChangeActiveStudy":
+                if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "StudyId"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+
+                if request.data["StudyId"] == "":
+                    if "ActiveStudy" in request.user.configuration.keys():
+                        del request.user.configuration["ActiveStudy"]
+                        request.user.save()
+                    return Response(status=200)
+
+                study = models.Study.find(uid=request.data["StudyId"])
+                if not study:
+                    return Response(status=403)
+
+                if not models.StudyRel.find(member=request.user, study=study):
+                    return Response(status=403)
+                
+                request.user.configuration["ActiveStudy"] = request.data["StudyId"]
+                request.user.save()
+                return Response(status=200)
+
         return Response(status=200, data=userInfo)
 
 class UserLogout(RestViews.APIView):
