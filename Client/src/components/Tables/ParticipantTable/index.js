@@ -26,6 +26,8 @@ import {
   Chip,
 } from "@mui/material"
 
+import { FaEye } from "react-icons/fa6";
+
 import { SessionController } from "database/session-control.js";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary, dictionaryLookup } from "assets/translation.js";
@@ -164,7 +166,7 @@ const ParticipantTable = ({data}) => {
                 <TableCell style={{paddingBottom: 1, borderBottom: "0px solid rgba(224, 224, 224, 0.4)", display: "flex"}}>
                   <Tooltip title="View Participant" placement="top">
                     <MDButton variant="contained" color="info" size="small" onClick={() => viewParticipantData(participant.Id)} style={{marginLeft: "auto"}}>
-                      <i className="fa-solid fa-eye"></i>
+                      <FaEye />
                     </MDButton>
                   </Tooltip>
                 </TableCell>

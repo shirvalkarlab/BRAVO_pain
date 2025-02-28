@@ -29,6 +29,8 @@ import {
   Tooltip,
 } from "@mui/material"
 
+import { FaXmark, FaCircleInfo, FaEye, FaPen } from "react-icons/fa6";
+
 import { SessionController } from "database/session-control.js";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary, dictionaryLookup } from "assets/translation.js";
@@ -162,22 +164,22 @@ const SurveyTable = ({data, onDelete}) => {
               <TableCell style={{flex: true, flexDirection: "row", justifyContent: "space-between", borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                 <Tooltip title="View Survey" placement="top">
                   <IconButton color="info" size="small" onClick={() => viewSurvey(survey.url)} sx={{paddingX: 1}}>
-                    <i className="fa-solid fa-eye"></i>
+                    <FaEye fontSize={10} />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title="View Survey" placement="top">
                   <IconButton color="info" size="small" onClick={() => viewAccessCode(survey.id)} sx={{paddingX: 1}}>
-                    <i className="fa-solid fa-circle-info"></i>
+                    <FaCircleInfo fontSize={10} />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title="Edit Survey" placement="top">
                   <IconButton color="secondary" size="small" onClick={() => editSurvey(survey.url)} sx={{paddingX: 1}}>
-                    <i className="fa-solid fa-pen"></i>
+                    <FaPen fontSize={10} />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title="Delete Survey" placement="top">
                   <IconButton color="error" size="small" onClick={() => deleteSurvey(survey.url)} sx={{paddingX: 1}}>
-                    <i className="fa-solid fa-xmark"></i>
+                    <FaXmark fontSize={10} />
                   </IconButton>
                 </Tooltip>
               </TableCell>

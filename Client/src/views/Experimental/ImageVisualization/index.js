@@ -36,6 +36,8 @@ import React from "react";
 import * as THREE from "three";
 import { Canvas, useThree } from '@react-three/fiber';
 
+import { FaPen, FaEye } from "react-icons/fa6";
+
 import colormap from "colormap";
 
 import MDBox from "components/MDBox";
@@ -306,13 +308,13 @@ function ImageVisualization() {
                                 {item.file}
                               </MDTypography>
                               {downloadedItem ? (<IconButton variant="contained" color={downloadedItem.show ? "info" : "light"} onClick={() => addModel(item)}>
-                                <i className="fa-solid fa-eye" style={{fontSize: 10}}></i>
+                                <FaEye fontSize={10} />
                               </IconButton>) : null}
                               {downloadedItem && item.type === "electrode" ? (<IconButton variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.file, targetPoint: item.targetPt, entryPoint: item.entryPt, show: true})}>
-                                <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                <FaPen fontSize={10} />
                               </IconButton>) : null}
                               {downloadedItem && item.type === "volume" ? (<IconButton variant="contained" color={cameraLock ? "light" : "info"} onClick={lockCamera}>
-                                <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                <FaPen fontSize={10} />
                               </IconButton>) : null}
                             </MDBox>
                           </Grid>

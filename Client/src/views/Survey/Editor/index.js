@@ -42,6 +42,8 @@ import {
   Add as AddIcon
 } from "@mui/icons-material";
 
+import { FaPen, FaXmark } from "react-icons/fa6";
+
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
@@ -396,10 +398,10 @@ export default function FormEditor({match}) {
                             </MDTypography>
                           )}
                           <IconButton onClick={() => editText === `page${index}Header` ? setEditText(false) : setEditText(`page${index}Header`)}>
-                            <i className="fa-solid fa-pen"></i>
+                            <FaPen />
                           </IconButton>
                           <IconButton color={"error"} onClick={() => deletePage(index)}>
-                            <i className="fa-solid fa-xmark"></i>
+                            <FaXmark />
                           </IconButton>
                         </MDBox>
                       </Grid>
@@ -413,7 +415,7 @@ export default function FormEditor({match}) {
                               <TextField variant={"standard"} value={question.text} onChange={(event) => setQuestionText(index, questionId, event.target.value)} sx={{marginX: 1}} fullWidth>
                               </TextField>
                               <IconButton color={"error"} onClick={() => deleteQuestion(index, questionId)}>
-                                <i className="fa-solid fa-xmark"></i>
+                                <FaXmark />
                               </IconButton>
                             </MDBox>
                             <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginY: 1}}>
@@ -499,10 +501,10 @@ export default function FormEditor({match}) {
                                     </MDButton>
                                   )}
                                   <IconButton onClick={() => editText === `page${index}question${questionId}option${letter}` ? setEditText(false) : setEditText(`page${index}question${questionId}option${letter}`)}>
-                                    <i className="fa-solid fa-pen"></i>
+                                    <FaPen />
                                   </IconButton>
                                   <IconButton color={"error"} onClick={() => deleteChoiceQuestionOption(index, questionId, letter)}>
-                                    <i className="fa-solid fa-xmark"></i>
+                                    <FaXmark />
                                   </IconButton>
                                 </MDBox>
                               })}

@@ -46,7 +46,7 @@ import PhotoIcon from "@mui/icons-material/Photo";
 import WatchIcon from "@mui/icons-material/Watch";
 import ArticleIcon from '@mui/icons-material/Article';
 
-import { FaBrain } from "react-icons/fa6";
+import { FaBrain, FaXmark, FaPen } from "react-icons/fa6";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -329,12 +329,12 @@ export default function ParticipantOverview() {
                             <MDBox style={{display: "flex", flexDirection: "row"}}>
                               <Tooltip title="Delete Device" placement="top">
                                 <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
-                                  <i className="fa-solid fa-xmark" style={{fontSize: 10}}></i>
+                                  <FaXmark fontSize={10} />
                                 </IconButton>
                               </Tooltip>
                               <Tooltip title="Edit Device" placement="top">
                                 <IconButton variant="contained" color="info" onClick={() => setEditDeviceInfo({deviceInfo: device, show: true})}>
-                                  <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                  <FaPen fontSize={10} />
                                 </IconButton>
                               </Tooltip>
                             </MDBox>

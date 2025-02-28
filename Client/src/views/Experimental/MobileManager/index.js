@@ -34,6 +34,7 @@ import {
 } from "@mui/material";
 
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import { FaEye } from "react-icons/fa6";
 
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
@@ -283,7 +284,7 @@ function MobileManager() {
                       autoComplete={"new-password"}
                       endAdornment={
                         <IconButton color="secondary" size="small" onClick={() => setEditMobileAccount({...editMobileAccount, showPassword: !editMobileAccount.showPassword})} sx={{paddingX: 1}}>
-                          <i className="fa-solid fa-eye"></i>
+                          <FaEye />
                         </IconButton>
                       }
                       fullWidth

@@ -36,6 +36,8 @@ import {
   PublishedWithChanges
 } from '@mui/icons-material';
 
+import { FaArrowRightFromBracket, FaUser } from "react-icons/fa6";
+
 import MDBox from "components/MDBox";
 import MDInput from "components/MDInput";
 import MDBadge from "components/MDBadge";
@@ -187,14 +189,14 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
     >
       <Link to="/profile">
         <MenuItem>
-          <i className="fa-solid fa-user" style={{color: "black", paddingRight: 15}}></i>
+          <FaUser fontSize={10} style={{paddingRight: 15}} />
           <MDTypography variant="button" fontWeight="regular" color="text">
             {"Profile"}
           </MDTypography>
         </MenuItem>
       </Link>
       <MenuItem onClick={() => logoutUser()}>
-        <i className="fa-solid fa-arrow-right-from-bracket" style={{paddingRight: 15}}></i>
+        <FaArrowRightFromBracket fontSize={10} style={{paddingRight: 15}} />
         <MDTypography variant="button" fontWeight="regular" color="text">
           {dictionary.SimplifiedNavbar.Logout[language]}
         </MDTypography>

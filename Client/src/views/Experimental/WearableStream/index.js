@@ -32,6 +32,7 @@ import {
 } from "@mui/material";
 
 import { ViewInAr, Timeline } from "@mui/icons-material";
+import { FaEye, FaXmark } from "react-icons/fa6";
 
 import React from "react";
 import * as THREE from "three";
@@ -282,12 +283,12 @@ function WearableStream() {
                                       setStreamingDevice({state: true, deviceId: device.DeviceMac});
                                     }
                                   }}>
-                                    <i className="fa-solid fa-eye" style={{fontSize: 25}}></i>
+                                    <FaEye fontSize={25} />
                                   </IconButton>
                                 </Tooltip>
                                 <Tooltip title="Remove Pairing" placement="top">
                                   <IconButton variant="contained" color="error" onClick={() => {}}>
-                                    <i className="fa-solid fa-xmark" style={{fontSize: 25}}></i>
+                                    <FaXmark fontSize={25} />
                                   </IconButton>
                                 </Tooltip>
                               </MDBox>

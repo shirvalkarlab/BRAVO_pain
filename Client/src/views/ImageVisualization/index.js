@@ -67,6 +67,7 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary, dictionaryLookup } from "assets/translation.js";
+import { FaEye, FaPen } from "react-icons/fa6";
 
 function ImageVisualization() {
   const navigate = useNavigate();
@@ -331,13 +332,13 @@ function ImageVisualization() {
                                 {item.Name}
                               </MDTypography>
                               {downloadedItem ? (<IconButton variant="contained" color={downloadedItem.show ? "info" : "light"} onClick={() => addModel(item)}>
-                                <i className="fa-solid fa-eye" style={{fontSize: 10}}></i>
+                                <FaEye fontSize={10} />
                               </IconButton>) : null}
                               {downloadedItem && item.DataType === "Electrodes" ? (<IconButton variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.Id, name: item.Name, targetPoint: downloadedItem.targetPt, entryPoint: downloadedItem.entryPt, show: true})}>
-                                <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                <FaPen fontSize={10} />
                               </IconButton>) : null}
                               {downloadedItem && item.type === "volume" ? (<IconButton variant="contained" color={cameraLock ? "light" : "info"} onClick={lockCamera}>
-                                <i className="fa-solid fa-pen" style={{fontSize: 10}}></i>
+                                <FaPen fontSize={10} />
                               </IconButton>) : null}
                             </MDBox>
                           </Grid>
