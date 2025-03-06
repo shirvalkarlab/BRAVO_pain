@@ -26,7 +26,28 @@ def processInput(argv):
             with open(BASE_DIR / "Server/templates/index.html", "w+") as fileout:
                 with open(BASE_DIR / "../Client/build/index.html", "r+") as filein:
                     for line in filein:
-                        fileout.write(line.replace('</head><body>', '</head>{% csrf_token %}<body>'))
+                        text = line
+                        text = text.replace('</head><body>', '</head>{% csrf_token %}<body>')
+                        text = text.replace('<!doctype html>', '{% load static %}<!doctype html>')
+                        fileout.write()
+
+            return True
+        
+        elif argv[1] == "make_staticfile":
+            # Build paths inside the project like this: BASE_DIR / 'subdir'.
+            BASE_DIR = Path(__file__).resolve().parent
+            with open(BASE_DIR / "Server/templates/index.html", "w+") as fileout:
+                with open(BASE_DIR / "../Client/build/index.html", "r+") as filein:
+                    for line in filein:
+                        text = line
+                        text = text.replace('<!doctype html>', '{% load static %}<!doctype html>')
+                        text = text.replace('</head><body>', '</head>{% csrf_token %}<body>')
+                        text = text.replace('"/static/', '\"{% static \'')
+                        text = text.replace('.js"', '.js\' %}\"')
+                        text = text.replace('.png"', '.png\' %}\"')
+                        text = text.replace('.json"', '.json\' %}\"')
+                        text = text.replace('.css" rel=', '.css\' %}\" rel=')
+                        fileout.write(text)
 
             return True
         

@@ -79,7 +79,10 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'BRAVO.urls'
-STATIC_URL = 'resources/'
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+]
 
 # Template Engine for Server-Side Rendering
 TEMPLATES = [
