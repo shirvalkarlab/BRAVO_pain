@@ -140,7 +140,6 @@ function AnalysisBuilder({analysisId}) {
       Edges: edges,
       StartProcessing: startProcess
     }).then((response) => {
-      console.log(response.data)
       setAnalysis(response.data.Analysis);
       setAvailableRecordings(response.data.Recordings);
       if (response.data.Configurations.Edges) {
@@ -281,7 +280,6 @@ function AnalysisBuilder({analysisId}) {
           </Grid>
           <Grid item xs={12} sx={{display: "flex", flexDirection: "row", overflowX: "auto"}}>
             {nodes.map((nodeGroup, nodeIndex) => {
-              console.log(nodeGroup)
               return (
                 <Card key={nodeGroup[0].id} style={{width: 300, minHeight: 600, marginRight: 15, marginTop: 5, marginBottom: 5}}>
                   <MDBox

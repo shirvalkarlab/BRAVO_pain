@@ -60,7 +60,7 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
       RequestType: "RequestAll",
       ParticipantId: participant_uid
     }).then((response) => {
-      console.log(response);
+      console.log(response.data);
     });
   }, []);
 
@@ -102,7 +102,7 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
       if (recordingType.active == "Processed Output") {
         recordingDates.push("All");
         for (let i in existingGroups) {
-          console.log(existingGroups[i])
+          
         }
       }
 

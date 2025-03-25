@@ -131,7 +131,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
         }
       }
     }
-    console.log(graphSeries)
+    
     setRenderData(graphSeries);
   }, [availableChannels.active, data]);
 

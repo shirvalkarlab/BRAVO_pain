@@ -79,7 +79,7 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
   }, [fig, availableChannels]);
 
   useEffect(() => {
-    console.log(availableChannels.active)
+    
   }, [availableChannels])
 
   useEffect(() => {

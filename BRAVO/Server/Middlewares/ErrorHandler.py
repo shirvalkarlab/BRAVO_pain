@@ -23,6 +23,9 @@ import json
 import traceback
 
 from django.views.debug import ExceptionReporter
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARD_FOR')
@@ -39,17 +42,30 @@ class ErrorHandlingMiddleware:
     def __call__(self, request):
         try:
             response = self.get_response(request)
+            User = str(request.user)
+            
             if response.status_code >= 400:
-                message = "Request From " + get_client_ip(request) + " | Request URL: " + request.path + " | Error Code: " + str(response.status_code)
+                message = "Request From " + get_client_ip(request) + " | " + "Request From " + User + " | Request URL: " + request.path + " | Error Code: " + str(response.status_code)
+                logger.critical(message)
                 print(message)
+                
+            else:
+                message = "Request From " + get_client_ip(request) + " | " + "Request From " + User + " | Request URL: " + request.path
+                logger.info(message)
+                
             return response
         
         except Exception as e:
             message = "Request From " + get_client_ip(request) + " | Request URL: " + request.path + "\n"
+            logger.critical(message)
             print(message)
 
     # This is the error thrown for 500 (Python Script Error)
     def process_exception(self, request, exception):
         message = "Request From " + get_client_ip(request) + " | Request URL: " + request.path + "\n"
+        formattedError = traceback.format_exc()
         print(message)
-        print(traceback.format_exc())
+        print(formattedError)
+        logger.critical(message)
+        logger.critical(formattedError)
+            

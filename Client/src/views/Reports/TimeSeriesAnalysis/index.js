@@ -165,7 +165,7 @@ function TimeSeriesAnalysis() {
   };
   
   const addRecordingData = async (analysis, channel) => {
-    console.log(data.ActiveChannel)
+    
   };
   
   const exportCurrentStream = () => {

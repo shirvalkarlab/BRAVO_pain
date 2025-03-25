@@ -42,7 +42,6 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
       AnalysisId: analysisId,
       ResultId: node.result
     }).then((response) => {
-      console.log(response.data)
       setResult(response.data);
       setAlert(null);
     }).catch((error) => {
@@ -57,7 +56,7 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
         {result.Type === "TimeSeries" ? (
           <TimeDomainFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"TimeDomainFigure"} />
         ) : null}
-        {result.Spectrum.length > 0 ? (
+        {result.Type === "Spectrum" ? (
           <SpectrumFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />
         ) : null}
         {result.Type === "Distribution" ? (

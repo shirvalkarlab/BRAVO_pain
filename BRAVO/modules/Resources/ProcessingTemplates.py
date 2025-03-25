@@ -40,4 +40,19 @@ ProcessingNodes = [{
             ],
         }
     ]
+},{
+    "Group": "Processing Template",
+    "Type": "Compare Power Band Distribution",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "Epoch by Annotations",
+            "Configurations": [],
+        },
+        {
+            "Id": "Compute Distribution",
+            "Configurations": [],
+        }
+    ]
 }]
