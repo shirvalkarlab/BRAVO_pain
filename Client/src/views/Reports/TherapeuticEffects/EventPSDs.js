@@ -98,12 +98,17 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
           })
         });
 
-        if (!cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power) {
-          cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power = math.matrix(selected_data);
+        if (selected_data.filter((a) => a.length > 0).length != 0) {
+          if (!cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power) {
+            cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power = math.matrix(selected_data);
+          } else {
+            cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power = math.concat(cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power, 
+              selected_data, 1);
+          }
         } else {
-          cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power = math.concat(cacheData[dataToRender.Signal[trial].SignalSeries.ChannelNames][annotations[i].Name].power, 
-            selected_data, 1);
+
         }
+
       }
     }
     setCacheData(cacheData);    
@@ -124,25 +129,27 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
           let counter = 0;
           const colorMapper = (level) => colors[Math.floor(level/Object.keys(cacheData[channel]).length*100)];
           for (let annotation in cacheData[channel]) {
-            counter += 1;
-            graphSeries.push({
-              type: "line",
-              x: cacheData[channel][annotation].freq, y: math.mean(cacheData[channel][annotation].power, 1)._data, error_y: math.std(cacheData[channel][annotation].power, 1)._data.map((a) => a/math.sqrt(cacheData[channel][annotation].power._size[1])),
-              line_options: {
-                name: annotation,
-                legendgroup: annotation,
-                color: colorMapper(counter),
-                linewidth: 2,
-                hovertemplate: `  ${annotation}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
-                showlegend: true
-              }, 
-              shade_options: {
-                color: colorMapper(counter),
-                alpha: 0.3,
-                legendgroup: annotation,
-                showlegend: false
-              },
-            });
+            if (cacheData[channel][annotation].power) {
+              counter += 1;
+              graphSeries.push({
+                type: "line",
+                x: cacheData[channel][annotation].freq, y: math.mean(cacheData[channel][annotation].power, 1)._data, error_y: math.std(cacheData[channel][annotation].power, 1)._data.map((a) => a/math.sqrt(cacheData[channel][annotation].power._size[1])),
+                line_options: {
+                  name: annotation,
+                  legendgroup: annotation,
+                  color: colorMapper(counter),
+                  linewidth: 2,
+                  hovertemplate: `  ${annotation}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
+                  showlegend: true
+                }, 
+                shade_options: {
+                  color: colorMapper(counter),
+                  alpha: 0.3,
+                  legendgroup: annotation,
+                  showlegend: false
+                },
+              });
+            }
           }
         }
       }

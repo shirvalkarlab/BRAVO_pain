@@ -25,6 +25,7 @@ import {
   SpeedDialAction,
   SpeedDialIcon,
   Grid,
+  List,
   ListItem,
   ListItemButton,
   ListItemIcon,
@@ -35,22 +36,6 @@ import {
   Input,
 } from "@mui/material"
 
-import { 
-  ReactFlow,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-  applyNodeChanges,
-  Controls,
-  MiniMap,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import './FlowchartNodes/flowchart.css';
-
-import RecordingNode from "./FlowchartNodes/RecordingNode";
-import RecordingGroupNode from "./FlowchartNodes/RecordingGroupNode";
-import SingleInputProcessingNode from "./FlowchartNodes/SingleInputProcessingNode"
-
 import { v4 as uuidv4 } from 'uuid';
 
 import { createFilterOptions } from "@mui/material/Autocomplete";
@@ -60,7 +45,7 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 import MuiAlertDialog from "components/MuiAlertDialog";
 import LoadingProgress from "components/LoadingProgress";
-import SettingsIcon from "@mui/icons-material/Settings";
+import TimelineItem from "components/Timeline/TimelineItem";
 
 // core components
 import RecordingSelect from "./RecordingSelect";
@@ -70,18 +55,14 @@ import ProcessingEdit from "./ProcessingEdit";
 import RecordingAlignmentView from "./RecordingAlignmentView";
 
 import { FaCirclePlay } from "react-icons/fa6";
+import { MdAddBox, MdClose, MdEdit, MdOutlineMenu } from "react-icons/md";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary } from "assets/translation.js";
+import ResultViewer from "./ResultViewers";
 
 const filter = createFilterOptions();
-const flowchartNodeTypes = {
-  RecordingNode: RecordingNode, 
-  RecordingGroupNode: RecordingGroupNode, 
-  SingleInputProcessingNode: SingleInputProcessingNode,
-};
-
 
 function AnalysisBuilder({analysisId}) {
   const navigate = useNavigate();
@@ -89,6 +70,7 @@ function AnalysisBuilder({analysisId}) {
   const { language } = controller;
   const { participant_uid } = useParams();
 
+  const [analysisDrawerOpen, setAnalysisDrawerOpen] = useState(false);
   const [analysis, setAnalysis] = useState(false);
   const [data, setData] = useState(false);
   const [availableRecordings, setAvailableRecordings] = useState([]);
@@ -96,19 +78,16 @@ function AnalysisBuilder({analysisId}) {
   const [configureRecording, setConfigureRecording] = useState({ configuration: {}, show: false });
   const [editChannelName, setEditChannelName] = useState({ show: false, name: "", id: "" });
 
-  const [showRecordingList, setShowRecordingList] = useState(false);
-  const [showProcessingList, setShowProcessingList] = useState(false);
+  const [showRecordingList, setShowRecordingList] = useState({current: [], show: false});
+  const [showProcessingList, setShowProcessingList] = useState({id: "", current: null, show: false});
 
   const [editRecording, setEditRecording] = useState({show: false});
   const [editProcessing, setEditProcessing] = useState({show: false});
   const [editAlignment, setEditAlignment] = useState({show: false});
+  const [resultDialog, setResultDialog] = useState({show: false});
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const onConnect = useCallback((params) => {
-    setEdges((eds) => addEdge(params, eds));
-  }, [setEdges]);
-
+  const [nodes, setNodes] = useState([]);
+  const [edges, setEdges] = useState([]);
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -161,6 +140,7 @@ function AnalysisBuilder({analysisId}) {
       Edges: edges,
       StartProcessing: startProcess
     }).then((response) => {
+      console.log(response.data)
       setAnalysis(response.data.Analysis);
       setAvailableRecordings(response.data.Recordings);
       if (response.data.Configurations.Edges) {
@@ -198,169 +178,250 @@ function AnalysisBuilder({analysisId}) {
   return analysis ? (
     <Card width={"100%"} style={{paddingTop: 15, paddingBottom: 15, paddingLeft: 15, paddingRight: 15}}>
       {alert}
-      <MDBox>
+      <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
         <MDTypography variant={"h5"} fontWeight={"bold"} fontSize={24}>
           {analysis.Name}
         </MDTypography>
+        <IconButton onClick={() => setAnalysisDrawerOpen((a) => !a)}>
+          <MdOutlineMenu />
+        </IconButton>
       </MDBox>
-      <MDBox pt={2}>
-        <Grid container spacing={3}>
-          <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
-            <MDBox>
-              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
-                {"Add Source Data"}
-              </MDTypography>
-              <MDButton color={"error"} onClick={() => setShowRecordingList(true)}>
-                {"Add Recording for Analysis"}
-              </MDButton>
-              <MDButton color={"error"} onClick={() => {}}  style={{marginLeft: 10}}>
-                {"Add Questionnaire Scores"}
-              </MDButton>
-            </MDBox>
-          </Grid>
-          <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
-            <MDBox>
-              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
-                {"Edit Data Alignments"}
-              </MDTypography>
-              <MDButton color={"error"} onClick={() => {
+      
+      <Drawer open={analysisDrawerOpen} onClose={() => setAnalysisDrawerOpen(false)} style={{position: "relative"}}>
+        <MDBox>
+          <MDBox px={3} pt={2}>
+            <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
+              {"Add Source Data"}
+            </MDTypography>
+          </MDBox>
+          <List>
+            <ListItem disablePadding>
+              <ListItemButton onClick={() => setShowRecordingList({name: "", current: [], show: true})}>
+                <ListItemIcon style={{minWidth: 36}}>
+                  <MdAddBox color={"#FF0000"} />
+                </ListItemIcon>
+                <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={15}>
+                  {"Add Recordings"}
+                </MDTypography>
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton>
+                <ListItemIcon style={{minWidth: 36}}>
+                  <MdAddBox color={"#FF0000"} />
+                </ListItemIcon>
+                <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={15}>
+                  {"Add Questionnaire Scores"}
+                </MDTypography>
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton onClick={() => {
                 let connectedNodes = [];
                 for (let i in nodes) {
-                  if (nodes[i].type == "RecordingNode") {
-                    connectedNodes.push(nodes[i]);
+                  for (let j in nodes[i]) {
+                    if (nodes[i][j].type == "RecordingNode") {
+                      connectedNodes.push(nodes[i][j]);
+                    }
                   }
                 }
                 setEditAlignment({nodes: connectedNodes, show: true})
               }}>
-                {"Open Alignment Edit Window"}
-              </MDButton>
-            </MDBox>
-          </Grid>
+                <ListItemIcon style={{minWidth: 36}}>
+                  <MdAddBox color={"#FF0000"} />
+                </ListItemIcon>
+                <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={15}>
+                  {"Edit Recording Alignments"}
+                </MDTypography>
+              </ListItemButton>
+            </ListItem>
+          </List>
+          
+          <MDBox px={3} pt={2}>
+            <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
+              {"Processing Pipeline"}
+            </MDTypography>
+          </MDBox>
+          <List>
+            <ListItem disablePadding>
+              <ListItemButton>
+                <ListItemIcon style={{minWidth: 36}}>
+                  <MdAddBox color={"#FF0000"} />
+                </ListItemIcon>
+                <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={15}>
+                  {"Use Processing Template"}
+                </MDTypography>
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton onClick={() => setShowProcessingList(true)}>
+                <ListItemIcon style={{minWidth: 36}}>
+                  <MdAddBox color={"#FF0000"} />
+                </ListItemIcon>
+                <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={15}>
+                  {"Add Processing Node"}
+                </MDTypography>
+              </ListItemButton>
+            </ListItem>
+          </List>
+        </MDBox>
+      </Drawer>
+
+      <MDBox pt={2}>
+        <Grid container spacing={3}>
           <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
             <MDBox>
-              <MDTypography variant={"h6"} fontWeight={"bold"} fontSize={18}>
-                {"Edit Processing Pipeline"}
-              </MDTypography>
-              <MDButton color={"info"} onClick={() => setShowProcessingList(true)}>
-                {"Add Processing Node"}
-              </MDButton>
-              <MDButton color={"info"} onClick={() => {}} style={{marginLeft: 10}}>
-                {"Use Processing Template"}
-              </MDButton>
-              <MDButton color={"success"} onClick={() => saveProcessingPipeline(false)} style={{marginLeft: 10}}>
+              <MDButton color={"info"} onClick={() => saveProcessingPipeline(false)} style={{marginLeft: 5}}>
                 {"Save Analysis Pipeline"}
               </MDButton>
-            </MDBox>
-          </Grid>
-          <Grid item xs={12} sx={{minHeight: 600}}>
-            <ReactFlow fitView
-              nodeTypes={flowchartNodeTypes} nodes={nodes} edges={edges}
-              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
-              onNodeClick={(event, node) => {
-                if (node.type == "RecordingNode") {
-                  setEditRecording({show: true, node: node});
-                } else if (node.type == "RecordingGroupNode") {
-
-                } else {
-                  setEditProcessing({show: true, node: node});
-                }
-              }}
-            >
-              <Controls />
-              <MiniMap />
-            </ReactFlow>
-          </Grid>
-          <Grid item xs={12} sx={{display: "flex", justifyContent: "space-between"}}>
-            <MDBox>
-              <MDButton color={"success"} onClick={() => saveProcessingPipeline(true)}>
-                <FaCirclePlay size={15} style={{marginRight: 5}}/>
-                {"Run Processing"}
+              <MDButton color={"success"} onClick={() => saveProcessingPipeline(true)} style={{marginLeft: 10}}>
+                <FaCirclePlay size={15} style={{marginRight: 5}}/> {"Run Processing"}
               </MDButton>
             </MDBox>
+          </Grid>
+          <Grid item xs={12} sx={{display: "flex", flexDirection: "row", overflowX: "auto"}}>
+            {nodes.map((nodeGroup, nodeIndex) => {
+              console.log(nodeGroup)
+              return (
+                <Card key={nodeGroup[0].id} style={{width: 300, minHeight: 600, marginRight: 15, marginTop: 5, marginBottom: 5}}>
+                  <MDBox
+                    bgColor={"white"}
+                    variant="gradient"
+                    borderRadius="sm"
+                    sx={{ background: ({ palette: { background } }) => background.card }}
+                  >
+                    <MDBox pt={3} px={3} display={"flex"} flexDirection={"row"} alignItems={"center"}>
+                      <MDTypography variant="h6" fontWeight="medium" color={"dark"}>
+                        {nodeGroup[0].name}
+                      </MDTypography>
+                      <IconButton color="info" onClick={() => {
+                        setShowRecordingList({name: nodeGroup[0].name, id: nodeGroup[0].id, current: nodeGroup[0].data.map((a) => a.Id), show: true})
+                      }}>
+                        <MdEdit />
+                      </IconButton>
+                      <IconButton color="error" onClick={() => {
+                        setNodes((nodes) => {
+                          nodes.splice(nodeIndex, 1);
+                          return [...nodes];
+                        });
+                      }}>
+                        <MdClose />
+                      </IconButton>
+                    </MDBox>
+                    <MDBox p={2}>
+                      <TimelineItem color={"info"} title={"Step 1"} description={nodeGroup[0].data[0].Type}
+                        onClick={() => {
+                          if (nodeGroup[0].data[0].Type != "Processed Output") {
+                            setEditRecording({show: true, node: nodeGroup[0]});
+                          }
+                        }} />
+                      {nodeGroup.map((a,i) => {
+                        if (i > 0) {
+                          return <TimelineItem key={a.id} color={"info"} title={a.data.Type} description={a.data.Description} result={a.result} onViewResult={() => {
+                            setResultDialog({show: true, node: a});
+                          }} onClick={() => setEditProcessing({node: a, show: true})} />
+                        }
+                      })}
+                      <TimelineItem color={"info"} icon={<MdAddBox />} title={"Add Processing Step"} onClick={() => setShowProcessingList({id: nodeGroup[0].id, show: true})} lastItem />
+                    </MDBox>
+                  </MDBox>
+                </Card>
+              );
+            })}
           </Grid>
         </Grid>
       </MDBox>
       
-      <Dialog open={showRecordingList} onClose={() => setShowRecordingList(false)} 
+      <Dialog open={showRecordingList.show} onClose={() => setShowRecordingList({current: [], show: false})} 
         PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
       >
-        <RecordingSelect recordings={availableRecordings} onSelectRecording={(recordings) => {
-          
-          const groupNode = {
-            id: uuidv4(),
-            type: "RecordingGroupNode",
-            data: { Name: "Recording Group", List: recordings },
-            position: {x: 0, y: 0}
-          };
-
-          let newNodes = [];
+        <RecordingSelect recordings={availableRecordings} existingGroups={nodes.map((a) => a[0])} name={showRecordingList.name} currentSelect={showRecordingList.current} onSelectRecording={(recordings, name) => {
           const selectedRecording = availableRecordings.filter((a) => recordings.includes(a.Id));
-          for (let i in selectedRecording) {
-            newNodes.push({
+          selectedRecording.push(...nodes.map((a) => ({
+            Id: a[0].id,
+            Name: a[0].name,
+            Type: "Processed Output"
+          })).filter((a) => recordings.includes(a.Id)));
+          if (!showRecordingList.id) {
+            const newNode = {
               id: uuidv4(),
+              name: name,
               type: "RecordingNode",
-              data: selectedRecording[i],
-              position: {x: 0, y: 0}
+              data: selectedRecording,
+            };
+            setNodes((nodes) => {
+              nodes.push([newNode]);
+              return [...nodes];
+            });
+          } else {
+            setNodes((nodes) => {
+              for (let i in nodes) {
+                if (nodes[i][0].id == showRecordingList.id) {
+                  nodes[i][0].data = selectedRecording;
+                  nodes[i][0].name = name;
+                }
+              }
+              return [...nodes];
             });
           }
-          newNodes.push(groupNode);
-
-          setNodes((nds) => nds.concat(newNodes));
-          setEdges((eds) => {
-            for (let i in newNodes) {
-              if (groupNode.id != newNodes[i].id) {
-                eds = addEdge({
-                  id: newNodes[i].id + "-" + groupNode.id,
-                  source: newNodes[i].id, 
-                  target: groupNode.id,
-                }, eds);
-              }
-            }
-            return eds;
-          });
-          
-          setShowRecordingList(false);
-        }} onClose={() => setShowRecordingList(false)} />
+          setShowRecordingList({current: [], show: false});
+        }} onClose={() => setShowRecordingList({current: [], show: false})} />
       </Dialog>
 
       <Dialog open={editRecording.show} onClose={() => setEditRecording({...editRecording, show: false})} 
         PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
       >
         <RecordingEdit editNode={editRecording.node} onSetRecordingNode={(node) => {
-          setNodes((nds) => {
-            for (let i in nds) {
-              if (nds[i].id == node.id) {
-                nds[i] = node;
+          setNodes((nodes) => {
+            for (let i in nodes) {
+              if (nodes[i][0].id == showRecordingList.id) {
+                nodes[i][0] = node;
               }
             }
-            return [...nds];
+            return [...nodes];
           });
           setEditRecording({...editRecording, show: false});
         }} onClose={() => setEditRecording({...editRecording, show: false})} />
       </Dialog>
 
-      <Dialog open={showProcessingList} onClose={() => setShowProcessingList(false)} 
+      <Dialog open={showProcessingList.show} onClose={() => setShowProcessingList({id: "", show: false})} 
         PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
       >
         <ProcessingSelect processingNodes={availableProcessingNodes} onSetProcessingNode={(node) => {
-          setNodes((nds) => {
-            return nds.concat([{
-              id: node.Id,
-              type: node.NodeType,
-              data: node,
-              position: {x: 0, y: 0}
-            }]);
+          setNodes((nodes) => {
+            for (let i in nodes) {
+              if (nodes[i][0].id == showProcessingList.id) {
+                nodes[i].push(...node.map((a) => ({
+                  id: a.Id,
+                  type: a.NodeType,
+                  data: a,
+                  position: {x: 0, y: 0}
+                })));
+              }
+            }
+            return [...nodes];
           });
-          setShowProcessingList(false);
-        }} onClose={() => setShowProcessingList(false)} />
+          setShowProcessingList({id: "", show: false});
+        }} onClose={() => setShowProcessingList({id: "", show: false})} />
       </Dialog>
 
       <Dialog open={editProcessing.show} onClose={() => setEditProcessing({...editProcessing, show: false})} 
         PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
       >
         <ProcessingEdit editNode={editProcessing.node} onSetProcessingNode={(node) => {
-          setNodes((nds) => {
-            return nds;
+          setNodes((nodes) => {
+            for (let i in nodes) {
+              for (let j in nodes[i]) {
+                if (nodes[i][j].id == editProcessing.node.id) {
+                  if (!node) {
+                    nodes[i].splice(j, 1);
+                  } else {
+                    nodes[i][j] = node;
+                  }
+                }
+              }
+            }
+            return [...nodes];
           });
           setEditProcessing({...editProcessing, show: false});
         }} onClose={() => setEditProcessing({...editProcessing, show: false})} />
@@ -370,6 +431,12 @@ function AnalysisBuilder({analysisId}) {
         PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
       >
         <RecordingAlignmentView nodes={editAlignment.nodes} />
+      </Dialog>
+
+      <Dialog open={resultDialog.show} onClose={() => {}} 
+        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
+      >
+        <ResultViewer analysisId={analysisId} participant_uid={participant_uid} node={resultDialog.node} onClose={() => setResultDialog({...resultDialog, show: false})} />
       </Dialog>
 
     </Card>

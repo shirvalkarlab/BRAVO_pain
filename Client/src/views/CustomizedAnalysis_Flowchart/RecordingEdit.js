@@ -44,40 +44,26 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 import MuiAlertDialog from "components/MuiAlertDialog";
 
+import { v4 as uuidv4 } from 'uuid';
+
 import { SessionController } from "database/session-control";
 
 function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
 
-  const [nodeGroup, setNodeGroup] = useState([]);
-  const [nodeConfig, setNodeConfig] = useState({Id: "Unknown", Alignment: 0, Metadata: {ChannelNames: []}});
+  const [nodeConfig, setNodeConfig] = useState({Alignment: 0, Metadata: {ChannelNames: []}});
   const [channelNameEdit, setChannelNameEdit] = useState({index: -1, name: ""})
 
   useEffect(() => {
     if (!editNode) return;
-    setNodeGroup(editNode.data);
+    setNodeConfig(editNode.data);
   }, [editNode]);
-
-  useEffect(() => {
-    if (nodeConfig.Id !== "Unknown") return;
-    if (nodeGroup.length > 0) setNodeConfig(nodeGroup[0]);
-    else setNodeConfig({Id: "Unknown", Alignment: 0, Metadata: {ChannelNames: []}})
-  }, [nodeGroup])
   
   const renderChannelLists = ({index, style}) => {
-    if (!nodeConfig.Metadata.Hidden) {
-      nodeConfig.Metadata.Hidden = {};
-    }
+    let show = true;
     let customName = nodeConfig.Metadata.ChannelNames[index];
-    let show = !nodeConfig.Metadata.Hidden[customName];
     
     const handleToggleSingle = () => {
-      setNodeConfig((nodeConfig) => {
-        if (!nodeConfig.Metadata.Hidden) {
-          nodeConfig.Metadata.Hidden = {};
-        }
-        nodeConfig.Metadata.Hidden[customName] = !nodeConfig.Metadata.Hidden[customName];
-        return {...nodeConfig};
-      })
+      
     };
 
     const handleDoubleClick = () => {
@@ -129,37 +115,9 @@ function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
     <DialogContent>
       <MDBox px={2} pt={2}>
         <MDTypography variant="h5">
-          
+          {"Edit "}{nodeConfig.Name ? nodeConfig.Name : nodeConfig.Id}
         </MDTypography>
       </MDBox>
-
-      <Autocomplete selectOnFocus clearOnBlur disableClearable
-        renderInput={(params) => (
-          <TextField {...params} variant="standard" label={"Choose Active Recording"}/>
-        )}
-        isOptionEqualToValue={(option, value) => {
-          return option.Id === value.Id;
-        }}
-        getOptionLabel={(option) => {
-          return option.Name || option.Id;
-        }}
-        renderOption={(props, option) => <li {...props}>{option.Name || option.Id}</li>}
-        value={nodeConfig}
-        options={nodeGroup}
-        onChange={(event, newValue) => {
-          setNodeConfig((nodeConfig) => {
-            setNodeGroup((nodeGroup) => {
-              for (let i in nodeGroup) {
-                if (nodeGroup[i].Id == nodeConfig.Id) {
-                  nodeGroup[i] = {...nodeConfig};
-                }
-              }
-              return [...nodeGroup];
-            })
-            return newValue;
-          });
-        }}
-      />
       
       <MDBox>
         <TextField
@@ -238,15 +196,7 @@ function RecordingEdit({editNode, onClose, onSetRecordingNode}) {
       <MDBox p={2}>
         <MDButton color={"success"} 
           onClick={() => {
-            for (let i in nodeGroup) {
-              if (nodeGroup[i].Id == nodeConfig.Id) {
-                nodeGroup[i] = {...nodeConfig};
-              }
-            }
-            onSetRecordingNode({
-              ...editNode,
-              data: nodeGroup
-            });
+            onSetRecordingNode({...editNode, data: {...nodeConfig}});
           }}
         >
           Update

@@ -28,7 +28,7 @@ import { usePlatformContext } from "context";
 import { SessionController } from "database/session-control";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
+function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   const { participant_uid } = useParams();
@@ -37,7 +37,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
 
   const [fig, setFig] = useState(null);
   const [cachedData, setCachedData] = useState([]);
-  const [availableChannels, setAvailableChannels] = useState({active: [], options: []});
+  const [availableChannels, setAvailableChannels] = useState({active: "", options: []});
   const [data, setData] = useState({});
   const [renderData, setRenderData] = useState([]);
   
@@ -56,8 +56,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
 
   useEffect(() => {
     setData({...dataToRender});
-    setAvailableChannels({active: dataToRender.ActiveChannel, options: dataToRender.AllChannels});
-    setCachedData(dataToRender.ActiveChannel)
+    setAvailableChannels({active: "", options: dataToRender.AllChannels})
   }, [dataToRender]);
 
   useEffect(() => {
@@ -67,81 +66,74 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
       fig.clearData();
     }
 
-    const ax = fig.subplots(availableChannels.active.length, 1, {sharex: true, sharey: true});
-    let subplotIds = [];
-    for (let i in availableChannels.active) {
-      subplotIds.push(`${availableChannels.active[i]}`);
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)}`, {fontSize: 15}, ax[i]);
-      fig.setSubtitle(`${availableChannels.active[i]}`,ax[i]);
-    }
-    fig.setSubplotId(subplotIds);
+    const ax = fig.subplots(1, 1, {sharex: true, sharey: true});
+    fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)}`, {fontSize: 15}, ax);
+    fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)}`, {fontSize: 15}, ax);
     
-    fig.setLegend({ tracegroupgap: 5, xanchor: "left", y: 0.5, });
+    fig.setScaleType("log", "y");
+    fig.setTickValue([0.001, 0.01, 0.1, 1, 10, 100, 1000], "y");
+    fig.setYlim([-3, 2]);
     fig.setLayoutProps({ hovermode: "x", hoverdistance: 1 });
+    fig.setLegend({ tracegroupgap: 5, xanchor: "right", y: 1 });
 
   }, [fig, availableChannels]);
 
   useEffect(() => {
-    for (let i in availableChannels.active) {
-      if (!cachedData.includes(availableChannels.active[i])) {
-        SessionController.query("/api/queryCustomizedAnalysis", {
-          RequestType: "AnalysisOutput",
-          ParticipantId: participant_uid,
-          AnalysisId: analysisId,
-          ResultId: resultId,
-          ActiveChannels: [availableChannels.active[i]]
-        }).then((response) => {
-          setCachedData((cachedData) => [...cachedData, availableChannels.active[i]]);
-          setData((data) => {
-            data.Signal.push(...response.data.Signal);
-            return {...data};
-          });
-        }).catch((error) => {
-          SessionController.displayError(error, setAlert);
-        });
-      }
-    }
-  }, [availableChannels.active])
+    console.log(availableChannels.active)
+  }, [availableChannels])
 
   useEffect(() => {
     if (!fig) return;
 
-    let graphSeries = [];
-    for (let j in availableChannels.active) {
-      for (let i in data.Signal) {
-        if (data.Signal[i].SignalSeries.ChannelNames == availableChannels.active[j]) {
-          let timeArray = [];
-          if (data.Signal[i].SignalSeries.Time) {
-            timeArray = data.Signal[i].SignalSeries.Time.map((value, index) => new Date(data.Signal[i].SignalSeries.StartTime*1000 + value*1000));
-          } else {
-            timeArray = data.Signal[i].SignalSeries.Data.map((value, index) => new Date(data.Signal[i].SignalSeries.StartTime*1000 + index*1000 / data.Signal[i].SignalSeries.SamplingRate));
+    let uniqueLabels = [];
+    for (let i in data.Spectrum) {
+      for (let j in data.Spectrum[i].PSDSeries.Spectrum) {
+        if (availableChannels.active == data.Spectrum[i].PSDSeries.Spectrum[j].Channel) {
+          if (!uniqueLabels.includes(data.Spectrum[i].PSDSeries.Spectrum[j].Label)) {
+            uniqueLabels.push(data.Spectrum[i].PSDSeries.Spectrum[j].Label);
           }
+        }
+      }
+    }
+
+    const colors = colormap({
+      colormap: 'rainbow',
+      nshades: uniqueLabels.length > 9 ? uniqueLabels.length : 9,
+      format: 'hex',
+      alpha: 1,
+    });
+
+    let graphSeries = [];
+    for (let i in data.Spectrum) {
+      for (let j in data.Spectrum[i].PSDSeries.Spectrum) {
+        if (availableChannels.active == data.Spectrum[i].PSDSeries.Spectrum[j].Channel) {
+          const nShades = uniqueLabels.indexOf(data.Spectrum[i].PSDSeries.Spectrum[j].Label);
           graphSeries.push({
             type: "line",
-            x: timeArray, y: data.Signal[i].SignalSeries.Data,
-            xlim: [timeArray[0],timeArray[timeArray.length-1]], 
+            x: data.Spectrum[i].PSDSeries.Spectrum[j].Frequency, y: data.Spectrum[i].PSDSeries.Spectrum[j].Power,
+            xlim: [data.Spectrum[i].PSDSeries.Spectrum[j].Frequency[0],data.Spectrum[i].PSDSeries.Spectrum[j].Frequency[data.Spectrum[i].PSDSeries.Spectrum[j].Frequency.length-1]], 
             options: {
-              id: availableChannels.active[j],
-              name: availableChannels.active[j],
-              linewidth: 0.5,
-              hovertemplate: `  %{y:.2f} ${data.Signal[i].SignalSeries.Unit}<extra></extra>`,
-            }, 
-            axName: availableChannels.active[j]
+              id: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
+              name: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
+              legendgroup: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
+              linewidth: 2,
+              color: colors[nShades],
+              showlegend: Boolean(data.Spectrum[i].PSDSeries.Spectrum[j].Label),
+              hovertemplate: `  %{y:.2f} ${""}<extra></extra>`,
+            },
           });
         }
       }
     }
-    console.log(graphSeries)
     setRenderData(graphSeries);
   }, [availableChannels.active, data]);
 
   const refreshRender = () => {
+    const ax = fig.getAxes();
     for (let i in renderData) {
-      const subAx = fig.getAxes(renderData[i].axName);
-      if (subAx) {
-        if (renderData[i].type === "line") {
-          fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
-        }
+      if (renderData[i].type === "line") {
+        fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
+        fig.setXlim(renderData[i].xlim);
       }
     }
     fig.render();
@@ -192,7 +184,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
   return (
     <MDBox>
       <MDBox>
-        <Autocomplete selectOnFocus clearOnBlur multiple
+        <Autocomplete selectOnFocus clearOnBlur
           renderInput={(params) => (
             <TextField {...params} variant="standard" label={"Channel Selection"}/>
           )}
@@ -203,15 +195,15 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
           value={availableChannels.active}
           options={availableChannels.options}
           onChange={(event, newValue) => {
-            if (newValue.length <= 2) setAvailableChannels({...availableChannels, active: newValue});
+            setAvailableChannels({...availableChannels, active: newValue});
           }}
         />
       </MDBox>
-      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 400*availableChannels.active.length, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}
+      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 400, width: "100%", display: ""}}
         onContextMenu={onContextMenu}
       />
     </MDBox>
   );
 }
 
-export default TimeDomainFigure;
+export default SpectrumFigure;

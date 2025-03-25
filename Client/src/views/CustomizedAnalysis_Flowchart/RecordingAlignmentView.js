@@ -63,20 +63,16 @@ function RecordingAlignmentView({nodes}) {
   useEffect(() => {
     let channelOptions = [];
     for (let i in nodes) {
-      for (let j in nodes[i].data) {
-        if (nodes[i].data[j].Type !== "Processed Output") {
-          let nodeName = nodes[i].data[j].Name.length > 0 ? nodes[i].data[j].Name : nodes[i].data[j].Id;
-          for (let k in nodes[i].data[j].Metadata.ChannelNames) {
-            const channelName = nodeName + " " + nodes[i].data[j].Device.Heritage + ": " + nodes[i].data[j].Metadata.ChannelNames[k];
-            const channelId = nodes[i].id + "_" + nodes[i].data[j].Id + "_" + k;
-            if (!channelOptions.map((a) => a.id).includes(channelId)) {
-              channelOptions.push({
-                label: channelName,
-                id: channelId,
-                alignment: nodes[i].data[j].Alignment
-              });
-            }
-          }
+      let nodeName = nodes[i].data.Name.length > 0 ? nodes[i].data.Name : nodes[i].data.Id;
+      for (let k in nodes[i].data.Metadata.ChannelNames) {
+        const channelName = nodeName + " " + nodes[i].data.Device.Heritage + ": " + nodes[i].data.Metadata.ChannelNames[k];
+        const channelId = nodes[i].id + "_" + nodes[i].data.Id + "_" + k;
+        if (!channelOptions.map((a) => a.id).includes(channelId)) {
+          channelOptions.push({
+            label: channelName,
+            id: channelId,
+            alignment: nodes[i].data.Alignment
+          });
         }
       }
     }
@@ -273,10 +269,8 @@ function RecordingAlignmentView({nodes}) {
             setContextMenu(null);
             const DataId = eventInfo.channel.split("_")[1];
             for (let i in nodes) {
-              for (let j in nodes[i].data) {
-                if (nodes[i].data[j].Id == DataId) {
-                  nodes[i].data[j].Alignment += (dataAlignment.alignment - eventInfo.time/1000);
-                }
+              if (nodes[i].data.Id == DataId) {
+                nodes[i].data.Alignment += (dataAlignment.alignment - eventInfo.time/1000);
               }
             }
             setData((data) => {

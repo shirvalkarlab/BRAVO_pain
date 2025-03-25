@@ -31,7 +31,7 @@ import { usePlatformContext } from "context";
 
 const filter = createFilterOptions();
 
-export default function MedtronicChronicTimeline({data, availableChannels, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
+export default function MedtronicChronicTimeline({data, availableChannels, showAdaptiveMode, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -62,7 +62,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
       subplotIds.push(`${availableChannels.active[i]} Stimulation`);
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)}`, {fontSize: 15}, ax[i*2]);
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)}`, {fontSize: 15}, ax[i*2+1]);
-      fig.setYlim([0, 5], ax[i*2+1]);
+      fig.setYlim(showAdaptiveMode ? [0, 100] : [0, 5], ax[i*2+1]);
       fig.setSubtitle(`${availableChannels.active[i]}`,ax[i*2]);
       fig.setSubtitle(`${availableChannels.active[i]} Stimulation`,ax[i*2+1]);
     }
@@ -83,6 +83,27 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
 
   }, [fig, availableChannels]);
 
+  const getAdaptiveParameters = (therapyNote) => {
+    if (!therapyNote) return { "Mode": "Unknown" };
+    const Recordings = therapyNote.Adaptive.RecordingConfiguration.Config;
+
+    let AdaptiveParameters = {};
+    if (Recordings.Thresholds) {
+      if (Recordings.Thresholds.LFPThresholds[0] !== 20 && Recordings.Thresholds.LFPThresholds[1] !== 30) {
+        AdaptiveParameters["LFPThresholds"] = Recordings.Thresholds.LFPThresholds;
+        if (AdaptiveParameters["LFPThresholds"][0] == AdaptiveParameters["LFPThresholds"][1]) {
+          AdaptiveParameters["LFPThresholds"] = [AdaptiveParameters["LFPThresholds"][0]];
+        }
+      }
+    }
+
+    if (therapyNote.Adaptive.StimulationConfiguration.Type == "Medtronic Adaptive") {
+      AdaptiveParameters["StimulationLimits"] = Recordings.Thresholds.AmplitudeThreshold;
+    }
+
+    return AdaptiveParameters;
+  }
+
   useEffect(() => {
     if (!fig) return;
 
@@ -92,17 +113,66 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
       for (let j in data[i].ChannelNames) {
         const channelName = data[i].Device.Heritage + ": " + (data[i].ChannelNames[j].endsWith("Amplitude") ? data[i].ChannelNames[j].replace(" Amplitude", " Stimulation") : data[i].ChannelNames[j].replace(" LFP", ""));
         if (!data[i].RecordingString.endsWith("Bypassed") || channelName.endsWith("Stimulation")) {
-          lineSeries.push({
-            type: "lineseries",
-            x: timeArray, y: data[i]["Data"][j],
-            options: {
-              id: channelName,
-              linewidth: 2,
-              color: channelName.endsWith("Stimulation") ? "#FF0000" : "#000000" ,
-              hovertemplate: "  %{x} <br>  " + data[i].TherapyString + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}" + data[i].ChannelUnits[j] + " <extra></extra>"
-            }, 
-            axName: channelName
-          });
+          const AdaptiveParameters = getAdaptiveParameters(data[i].TherapyNote);
+          if (channelName.endsWith("Stimulation")) {
+            if (AdaptiveParameters.StimulationLimits && showAdaptiveMode) {
+              if (AdaptiveParameters.StimulationLimits[1] !== 0) {
+                lineSeries.push({
+                  type: "lineseries",
+                  x: timeArray, y: data[i]["Data"][j].map((a) => 100 * (a - AdaptiveParameters.StimulationLimits[0]) / (AdaptiveParameters.StimulationLimits[1] - AdaptiveParameters.StimulationLimits[0]) ),
+                  options: {
+                    id: channelName,
+                    linewidth: 1,
+                    color: "#FF0000",
+                    hovertemplate: "  %{x} <br>  " + data[i].TherapyString + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}% [" + AdaptiveParameters.StimulationLimits[0].toFixed(1) + " - " + AdaptiveParameters.StimulationLimits[1].toFixed(1) + "] <extra></extra>"
+                  }, 
+                  axName: channelName
+                });
+                continue
+              }
+            }
+            lineSeries.push({
+              type: "lineseries",
+              x: timeArray, y: showAdaptiveMode ? data[i]["Data"][j].map((a) => a > 0 ? 100: 0) : data[i]["Data"][j],
+              options: {
+                id: channelName,
+                linewidth: 1,
+                color: "#FF0000",
+                hovertemplate: showAdaptiveMode ? ("  %{x} <br>  " + data[i].TherapyString + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}% <extra></extra>") :
+                ("  %{x} <br>  " + data[i].TherapyString + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f} " + data[i].ChannelUnits[j] + " <extra></extra>")
+              }, 
+              axName: channelName
+            });
+          } else {
+            lineSeries.push({
+              type: "lineseries",
+              x: timeArray, y: data[i]["Data"][j],
+              ylim: [0,Math.max(data[i]["Data"][j])],
+              options: {
+                id: channelName,
+                linewidth: 1,
+                color: channelName.endsWith("Stimulation") ? "#FF0000" : "#000000" ,
+                hovertemplate: "  %{x} <br>  " + data[i].TherapyString + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}" + data[i].ChannelUnits[j] + " <extra></extra>"
+              }, 
+              axName: channelName
+            });
+
+            if (AdaptiveParameters.LFPThresholds) {
+              for (let k in AdaptiveParameters.LFPThresholds) {
+                lineSeries.push({
+                  type: "lineseries",
+                  x: [timeArray[0], timeArray[timeArray.length-1]], y: [AdaptiveParameters.LFPThresholds[k], AdaptiveParameters.LFPThresholds[k]],
+                  options: {
+                    linewidth: 2,
+                    color: "#FFAA00",
+                    hovertemplate: "<extra></extra>",
+                    showlegend: false,
+                  }, 
+                  axName: channelName
+                });
+              }
+            }
+          }
         }
       }
     }
@@ -125,7 +195,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, annot
     }
 
     setRenderData(lineSeries);
-  }, [fig, data, annotations]);
+  }, [fig, data, showAdaptiveMode, annotations]);
 
   useEffect(() => {
     setAnnotationState((annotationState) => {

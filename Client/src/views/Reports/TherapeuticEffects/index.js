@@ -356,6 +356,12 @@ function TherapeuticEffects() {
       setAlert(null);
       
       if (response.status == 200) {
+        SessionController.query("/api/queryTherapeuticEffectAnalysis", {
+          RequestType: "DeleteCache",
+          ParticipantId: participant_uid,
+          AnalysisId: data.Analysis.Id,
+        });
+
         setData((data) => {
           for (let i in data.Signal) {
             if (data.Signal[i].RecordingId == eventInfo.channel) {

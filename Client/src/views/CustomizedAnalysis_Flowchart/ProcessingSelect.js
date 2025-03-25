@@ -124,32 +124,10 @@ function ProcessingSelect({processingNodes, onClose, onSetProcessingNode}) {
           onClick={() => {
             for (let i in processingNodes) {
               if (processingNodes[i].Type == nodeType.active) {
-                if (processingNodes[i].Group === "Processing Template") {
-                  let sequences = processingNodes[i].Configurations.map((a) => {
-                    for (let j in processingNodes) {
-                      if (processingNodes[j].Type == a.Id) {
-                        let sequence = JSON.parse(JSON.stringify({
-                          ...processingNodes[j],
-                          Id: uuidv4(),
-                        }));
-                        for (let k in sequence.Configurations) {
-                          for (let l in a.Configurations) {
-                            if (a.Configurations[l].Id == sequence.Configurations[k].Id) {
-                              sequence.Configurations[k].Value = a.Configurations[l].Value;
-                            }
-                          }
-                        }
-                        return sequence;
-                      }
-                    }
-                  });
-                  onSetProcessingNode([...sequences]);
-                } else {
-                  onSetProcessingNode([JSON.parse(JSON.stringify({
-                    ...processingNodes[i],
-                    Id: uuidv4(),
-                  }))]);
-                }
+                onSetProcessingNode(JSON.parse(JSON.stringify({
+                  ...processingNodes[i],
+                  Id: uuidv4(),
+                })));
               }
             }
           }} style={{marginLeft: 10}}

@@ -23,11 +23,11 @@ import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import MedtronicChronicTimeline from "./MedtronicChronicTimeline";
 
-export default function ChronicTimeline({data, availableChannels, annotations, ...rest}) {
+export default function ChronicTimeline({data, availableChannels, showAdaptiveMode, annotations, ...rest}) {
   return useMemo(() => {
     if (data.AnalysisType === "MedtronicChronicBrainSense") {
-      return <MedtronicChronicTimeline data={data.ChronicNeuralActivity} availableChannels={availableChannels} annotations={annotations} {...rest} />
+      return <MedtronicChronicTimeline data={data.ChronicNeuralActivity} showAdaptiveMode={showAdaptiveMode} availableChannels={availableChannels} annotations={annotations} {...rest} />
     }
-  }, [data, annotations, availableChannels]);
+  }, [data, annotations, showAdaptiveMode, availableChannels]);
 };
 

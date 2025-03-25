@@ -61,7 +61,7 @@ def retrieveProcessingSettings(config=dict()):
             "SpectrogramMethod": {
                 "name": "Time-Frequency Analysis Algorithm",
                 "description": "",
-                "options": ["Welch's Periodogram","Short-time Fourier Transform","Wavelet","Autoregressive Model (Yule-Walker)"],
+                "options": ["Welch's Periodogram","Short-time Fourier Transform","Medtronic Percept PSD","Wavelet","Autoregressive Model (Yule-Walker)"],
                 "value": "Welch's Periodogram"
             },
             "BaselineCorrection": {

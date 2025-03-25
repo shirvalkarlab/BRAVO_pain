@@ -99,33 +99,22 @@ function ProcessingEdit({editNode, onClose, onSetProcessingNode}) {
         }
       })}
       
-      <MDBox p={2} display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
-        <MDBox p={2} display={"flex"} flexDirection={"row"}>
-          <MDButton color={"secondary"} 
-            onClick={onClose}
-          >
-            Cancel
-          </MDButton>
-          <MDButton color={"info"} 
-            onClick={() => {
-              onSetProcessingNode({
-                ...editNode,
-                data: nodeConfig
-              });
-            }} style={{marginLeft: 10}}
-          >
-            Update
-          </MDButton>
-        </MDBox>
-        <MDBox p={2} display={"flex"} flexDirection={"row"}>
-        <MDButton color={"error"} 
-          onClick={() => {
-            onSetProcessingNode(null);
-          }}
+      <MDBox p={2}>
+        <MDButton color={"secondary"} 
+          onClick={onClose}
         >
-          Delete
+          Cancel
         </MDButton>
-        </MDBox>
+        <MDButton color={"info"} 
+          onClick={() => {
+            onSetProcessingNode({
+              ...editNode,
+              data: nodeConfig
+            });
+          }} style={{marginLeft: 10}}
+        >
+          Update
+        </MDButton>
       </MDBox>
     </DialogContent>
   )

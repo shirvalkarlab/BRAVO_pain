@@ -299,7 +299,7 @@ class QueryChronicNeuralActivity(RestViews.APIView):
                 userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
             else:
                 userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
-
+            
             result = Database.getCachedResult("/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
                 return Response(status=200, data=result)
@@ -367,18 +367,23 @@ class QueryCustomizedAnalysis(RestViews.APIView):
             
             analysis.metadata["Results"] = False
             analysis.metadata["Nodes"] = request.data["Nodes"]
-
-            # Reset Results
-            for i in analysis.metadata["Nodes"]:
-                if "Result" in i["data"].keys():
-                    del i["data"]["Result"]
-
-            analysis.metadata["Edges"] = request.data["Edges"]
+            
+            Participant = models.Participant.find(uid=analysis.metadata["ParticipantId"])
+            source = models.SourceFile.find(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
+            models.Recording.find_all(source=source).delete()
 
             try:
                 if request.data["StartProcessing"]:
                     DataAnalysis.processCustomizedPipeline(analysis)
-                    analysis.metadata["Results"] = True
+                    analysis.metadata["results"] = True
+                else:
+                    # Reset Results
+                    for i in range(len(analysis.metadata["Nodes"])):
+                        for j in range(len(analysis.metadata["Nodes"][i])):
+                            if "result" in analysis.metadata["Nodes"][i][j].keys():
+                                del analysis.metadata["Nodes"][i][j]["result"]
+                    analysis.metadata["results"] = False
+
             except Exception as e:
                 print(traceback.format_exc())
                 return Response(status=400, data={"message": str(e)})
@@ -394,7 +399,10 @@ class QueryCustomizedAnalysis(RestViews.APIView):
             analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
             if not analysis:
                 return Response(status=403)
-
+            
+            source = models.SourceFile.find(name=analysis.uid, type="CustomizedPipelineSource", owner__uid=request.data["ParticipantId"])
+            if source:
+                source.delete()
             analysis.delete()
             return Response(status=200)
 
@@ -408,5 +416,23 @@ class QueryCustomizedAnalysis(RestViews.APIView):
             
             Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
             return Response(status=200, data=Overview)
+        
+        elif request.data["RequestType"] == "AnalysisOutput":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "AnalysisId", "RequestType", "ResultId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            analysis = models.Analysis.find(uid=request.data["AnalysisId"], type="CustomizedAnalysis", metadata__ParticipantId=request.data["ParticipantId"])
+            if not analysis:
+                return Response(status=403)
+            
+            result = None
+            for group in analysis.metadata["Nodes"]:
+                for node in group:
+                    if "result" in node.keys():
+                        if node["result"] == request.data["ResultId"]:
+                            result = DataAnalysis.extractAnalysisOutput(node)
+                            result = DataAnalysis.selectRecordingChannel(result, request.data["ActiveChannels"] if "ActiveChannels" in request.data.keys() else [])
+            #Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
+            return Response(status=200, data=result)
         
         return Response(status=400, data={"message": "Malformed Input"})

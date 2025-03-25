@@ -8,6 +8,7 @@
 from spectrum import pyule
 import numpy as np
 import scipy.signal as signal
+import pywt
 import scipy.stats as stats
 import copy
 
@@ -317,9 +318,8 @@ def autoregressiveSpectrogram(data, window=2.0, overlap=1.0, frequency_resolutio
     
     return dict({"Time": time, "Frequency": frequency, "Power": spectrum, "logPower": 10*np.log10(spectrum), "Config": configuration})
 
-def MedtronicPSD(data, fs=250):
+def MedtronicPSD(data, packets=[24,38,25,38], fs=250):
     window = 256
-    packets = [24,38,25,38]
 
     maxIndex = 250
     count = 8
@@ -327,20 +327,22 @@ def MedtronicPSD(data, fs=250):
     while maxIndex < len(data):
         if maxIndex >= 250:
             nfft += 1
-        maxIndex += packets[count % 4]
+        maxIndex += packets[count % len(packets)]
         count += 1
 
     freq = np.arange(window)/window*fs
     power = np.zeros((len(freq), nfft))
+    time = np.zeros((nfft))
 
     maxIndex = 250
     for i in range(nfft):
+        time[i] = maxIndex / fs
         windowed_data = np.zeros(window)
         windowed_data[:250] = data[maxIndex-250:maxIndex] * (np.hanning(250)/54)
         power[:,i] = np.abs(np.fft.fft(windowed_data))
-        maxIndex += packets[i % 4]
+        maxIndex += packets[i % len(packets)]
 
-    return {"Frequency": freq[:100], "Power": power[:100,:], "logPower": 10*np.log10(power[:100,:]), "Config": {"Window": 256, "Overlap": 0}}
+    return {"Time": time, "Frequency": freq[:100], "Power": power[:100,:], "logPower": 10*np.log10(power[:100,:]), "Config": {"Window": 256, "Overlap": 0}}
 
 def defaultSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, fs=100):
     configuration = {"Window": window, "Overlap": overlap}

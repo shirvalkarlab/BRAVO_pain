@@ -14,22 +14,65 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { DialogContent } from "@mui/material";
+import MDBox from "components/MDBox";
+import MDButton from "components/MDButton";
+import LoadingProgress from "components/LoadingProgress";
+
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
-import TimeDomainFigure from "./TimeDomainFigure";
 
-function ResultViewer({data}) {
+import TimeDomainFigure from "./TimeDomainFigure";
+import SpectrumFigure from "./SpectrumFigure";
+import DistributionFigure from "./DistributionFigure";
+
+function ResultViewer({participant_uid, analysisId, onClose, node}) {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
   const { patientID, language } = controller;
 
-  if (Object.keys(data).length == 0) return null;
+  const [alert, setAlert] = useState(null);
+  const [result, setResult] = useState({Type: "Unknown", Signal: [], Spectrum: []});
 
-  if (data.RecordingInfo.type == "TimeDomain") {
-    return <TimeDomainFigure dataToRender={data} height={700} figureTitle={"TimeDomainFigure"} />;
-  } else {
-    return null;
-  }
+  useEffect(() => {
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/queryCustomizedAnalysis", {
+      RequestType: "AnalysisOutput",
+      ParticipantId: participant_uid,
+      AnalysisId: analysisId,
+      ResultId: node.result
+    }).then((response) => {
+      console.log(response.data)
+      setResult(response.data);
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }, [node]);
+
+  return (
+    <DialogContent>
+      {alert}
+      <MDBox px={2} pt={2}>
+        {result.Type === "TimeSeries" ? (
+          <TimeDomainFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"TimeDomainFigure"} />
+        ) : null}
+        {result.Spectrum.length > 0 ? (
+          <SpectrumFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />
+        ) : null}
+        {result.Type === "Distribution" ? (
+          <DistributionFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"DistributionFigure"} />
+        ) : null}
+      </MDBox>
+      <MDBox p={2}>
+        <MDButton color={"secondary"} 
+          onClick={onClose}
+        >
+          Close
+        </MDButton>
+      </MDBox>
+    </DialogContent>
+  )
 }
 
 export default ResultViewer;

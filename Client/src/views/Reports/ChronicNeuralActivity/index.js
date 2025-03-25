@@ -54,6 +54,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
 
   const [showEventCountOnCircadian, setShowEventCountOnCircadian] = useState(false);
+  const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
   const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
  
   const [annotationState, setAnnotationState] = useState({});
@@ -272,7 +273,15 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                           </MDBox>
                         </Grid>
                         <Grid item xs={12} lg={12}>
-                          <ChronicTimeline data={data} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
+                          <MDBox px={2} lineHeight={1}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Switch value={showAdaptiveMode} onClick={() => setShowAdaptiveMode(!showAdaptiveMode)} />
+                            <MDTypography variant={"subtitle"} fontSize={15}>
+                              {"Show Adaptive Duty Cycle on Timeline"}
+                            </MDTypography>
+                          </Stack>
+                          </MDBox>
+                          <ChronicTimeline data={data} showAdaptiveMode={showAdaptiveMode} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
                         </Grid>
                       </>
                     ) : (
@@ -313,7 +322,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                       <Grid item xs={12}>
                         <MDBox px={2} lineHeight={1}>
                         <Stack direction="row" spacing={1} alignItems="center">
-                          <Switch value={showEventCountOnCircadian} onClick={() => setShowEventCountOnCircadian(!showEventCountOnCircadian)} inputProps={{ 'aria-label': 'ant design' }} />
+                          <Switch value={showEventCountOnCircadian} onClick={() => setShowEventCountOnCircadian(!showEventCountOnCircadian)} />
                           <MDTypography variant={"subtitle"} fontSize={15}>
                             {"Show Event Histogram on Circadian Rhythm"}
                           </MDTypography>

@@ -230,7 +230,7 @@ class DataDownloadHandler(RestViews.APIView):
         ParticipantId = self.request.query_params.get('ParticipantId')
         CacheType = self.request.query_params.get('CacheType')
 
-        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+        Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
                                 study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
         if not Permissions:
             return Response(status=403)

@@ -22,6 +22,7 @@ import os, sys, pathlib
 import pickle, blosc
 import hashlib, hmac
 import shutil
+import json
 import copy
 import pandas as pd
 from filelock import Timeout, FileLock
@@ -35,11 +36,10 @@ import modules.utility.SignalProcessingUtility as SPU
 from modules.utility.PythonUtility import rangeSelection, uniqueList
 from modules import Database, Therapy, Event
 from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainSenseEvent, Percept
+from modules.Resources.ProcessingTemplates import ProcessingNodes
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
-
-ProcessingNodes = []
 
 def queryProcessingNodes(type=None):
     if not type:
@@ -350,6 +350,43 @@ def processCustomizedPipeline(analysis):
         source = models.SourceFile(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
         source.save()
     
+    print(analysis.metadata)
+    for i in range(len(analysis.metadata["Nodes"])):
+        Input = analysis.metadata["Nodes"][i][0]
+        recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata={ "RecordingList": [input["Id"] for input in Input["data"]], }, source=source)
+        if not recording:
+            ProcessedData = []
+            recordings = models.Recording.find_all(uid__in=[input["Id"] for input in Input["data"]])
+            for recording in recordings:
+                Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+                for input in Input["data"]:
+                    if input["Id"] == recording.uid:
+                        Data["StartTime"] += input["Alignment"]
+                ProcessedData.append(Data)
+            
+            recording = models.Recording(name=Input["name"], type="CustomAnalysis_"+Input["type"], metadata={
+                "RecordingList": [input["Id"] for input in Input["data"]],
+            }, source=source)
+            filename = DATABASE_PATH + "recordings" + os.path.sep + source.owner.uid + os.path.sep + recording.uid + ".bdat"
+            hashed = Database.saveSourceFile({
+                "DataType": "Original",
+                "Data": ProcessedData,
+            }, filename)
+
+            # TODO: Error handling
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.save()
+
+        PreviousOutput = recording.uid
+        for j in range(1, len(analysis.metadata["Nodes"][i])):
+            analysis.metadata["Nodes"][i][j] = handleProcessingNode(analysis.metadata["Nodes"][i][j], analysis.metadata["ParticipantId"], PreviousOutput)
+            PreviousOutput = analysis.metadata["Nodes"][i][j]["result"]
+
+    analysis.save()
+
+
+    """
     for edge in analysis.metadata["Edges"]:
         edge["Input"] = [node for node in analysis.metadata["Nodes"] if node["id"] == edge["source"]][0]
         edge["Output"] = [node for node in analysis.metadata["Nodes"] if node["id"] == edge["target"]][0]
@@ -411,9 +448,10 @@ def processCustomizedPipeline(analysis):
                     if len(InputNodes) == 0:
                         raise Exception("No Input provided for processing node.")
                     node = handleProcessingNode(node, InputNodes[0])
+    """
 
-def handleProcessingNode(node, input):
-    recording = models.Recording.find(uid=input["data"]["Result"])
+def handleProcessingNode(node, participant_uid, input_uid):
+    recording = models.Recording.find(uid=input_uid)
     if not recording:
         raise Exception("Input not found")
 
@@ -423,8 +461,10 @@ def handleProcessingNode(node, input):
             node["data"]["Configurations"][i]["Value"] = node["data"]["Configurations"][i]["Default"]
     
     metadata = {
-        "Input": input["data"]["Result"],
-        "Configurations": node["data"]
+        "Input": input_uid,
+        "ParticipantId": participant_uid,
+        "Configurations": node["data"],
+        "ProcessMode": "CustomizedAnalysis",
     }
     
     processed = models.Recording.find(metadata=metadata, original=recording)
@@ -437,12 +477,82 @@ def handleProcessingNode(node, input):
         elif node["data"]["Type"] == "Wiener Filter":
             Data = handleWienerFilter(Data, node["data"])
             Data["DataType"] = "TimeDomain"
-            
-        processed = saveAnalysisProcessedData(Data, node["data"]["Type"], metadata, recording)
         
-    node["data"]["Result"] = processed.uid
+        elif node["data"]["Type"] == "Welch's Periodogram":
+            Data = handleWelchPeriodogram(Data, node["data"])
+            Data["DataType"] = "PSD"
+            
+        elif node["data"]["Type"] == "Epoch by Annotations":
+            Data = handleAnnotationSegmentation(Data, metadata)
+            Data["DataType"] = ""
+            
+        elif node["data"]["Type"] == "Compute Distribution":
+            Data = handleDistributionComputation(Data, metadata)
+            Data["DataType"] = "Distribution"
+            
+        elif node["data"]["Type"] == "Time Frequency Analysis":
+            Data = handleCustomTimeFrequencyAnalysis(Data, metadata)
+            Data["DataType"] = ""
+            
+        processed = saveAnalysisProcessedData(Data, "CustomAnalysis_"+node["data"]["Type"], metadata, recording)
+        
+    node["result"] = processed.uid
     return node
 
+def extractAnalysisOutput(node):
+    result =  models.Recording.find(uid=node["result"])
+    Data = Database.loadSourceFile(result.pointer, result.hashed)
+
+    def CleanupSignalSeries(a):
+        a["Data"] = a["Data"].T
+        a["MissingIndex"] = []
+        for j in range(a["Missing"].shape[1]):
+            a["MissingIndex"].append(np.where(a["Missing"][:,j])[0])
+        del a["Missing"]
+        return a
+
+    AnalysisStruct = {"Signal": [], "Spectrum": [], "Annotations": []}
+    if Data["DataType"] == "TimeDomain":
+        for i in range(len(Data["Data"])):
+            Data["Data"][i] = CleanupSignalSeries(Data["Data"][i])
+
+            AnalysisStruct["Signal"].append({
+                "Type": "Signal",
+                "RecordingId": result.uid,
+                "SignalSeries": Data["Data"][i],
+                "Alignment": 0
+            })
+        AnalysisStruct["Type"] = "TimeSeries"
+
+    elif Data["DataType"] == "PSD":
+        for i in range(len(Data["Data"])):
+            AnalysisStruct["Spectrum"].append({
+                "Type": "Spectrum",
+                "RecordingId": result.uid,
+                "PSDSeries": Data["Data"][i]
+            })
+        AnalysisStruct["Type"] = "Spectrum"
+
+    elif Data["DataType"] == "Distribution":
+
+        for i in range(len(Data["Data"])):
+            if "Epochs" in Data["Data"][i].keys():
+                for j in range(len(Data["Data"][i]["Epochs"])):
+                    Data["Data"][i]["Epochs"][j] = CleanupSignalSeries(Data["Data"][i]["Epochs"][j])
+            else:
+                Data["Data"][i] = CleanupSignalSeries(Data["Data"][i])
+            
+            AnalysisStruct["Signal"].append({
+                "Type": "Signal",
+                "RecordingId": result.uid,
+                "SignalSeries": Data["Data"][i],
+                "Alignment": 0
+            })
+        AnalysisStruct["Type"] = "Distribution"
+
+    return AnalysisStruct
+
+# %% Processing Node Configuration: Butterworth Filter
 ProcessingNodes.append({
     "Group": "Digital Filters",
     "Type": "Butterworth Digital Filter",
@@ -498,6 +608,7 @@ def handleButterworthFilter(Data, config):
         data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
     return Data
 
+# %% Processing Node Configuration: Wiener Filter
 ProcessingNodes.append({
     "Group": "Digital Filters",
     "Type": "Wiener Filter",
@@ -522,6 +633,209 @@ def handleWienerFilter(Data, config):
             data["Data"][:,i] = Errors
     return Data
 
+# %% Processing Node Configuration: Epoch by Annotations
+ProcessingNodes.append({
+    "Group": "Segmentation",
+    "Type": "Epoch by Annotations",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "EpochMethod",
+            "Condition": True,
+            "Label": "Window Size (in seconds)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "1",
+        }
+    ]
+})
+def handleAnnotationSegmentation(Data, config):
+    for data in Data["Data"]:
+        Annotations = Event.queryAnnotations(config["ParticipantId"], "RecordingCustomEvent", start_time=data["StartTime"], duration=data["Duration"])
+        data["Time"] = np.arange(data["Data"].shape[0]) / data["SamplingRate"] + data["StartTime"]
+        data["Epochs"] = []
+        for annotation in Annotations:
+            TimeSelection = rangeSelection(data["Time"], [annotation["Date"], annotation["Date"]+annotation["Duration"]], "inclusive")
+            if np.any(TimeSelection):
+                data["Epochs"].append({
+                    "Data": data["Data"][TimeSelection,:],
+                    "TimeRange": [annotation["Date"], annotation["Date"]+annotation["Duration"]],
+                    "Missing": data["Missing"][TimeSelection,:],
+                    "Label": annotation["Name"]
+                })
+        del data["Data"]
+        del data["Missing"]
+    return Data
+
+# %% Processing Node Configuration: Compute Value Distribution
+ProcessingNodes.append({
+    "Group": "Statistics",
+    "Type": "Compute Distribution",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "FrequencyIndex",
+            "Condition": True,
+            "Label": "(If Spectral Feature) Center Frequency (in Hertz)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "22.0",
+        },
+        {
+            "Id": "FrequencyWindow",
+            "Condition": True,
+            "Label": "(If Spectral Feature) Bandwidth (in Hz)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "2.5",
+        }
+    ]
+})
+def handleDistributionComputation(Data, config):
+    for data in Data["Data"]:
+        if "Epochs" in data.keys():
+            for i in range(len(data["Epochs"])):
+                if "Spectrum" in data["Epochs"][i].keys():
+                    pass 
+    
+    return Data
+
+# %% Processing Node Configuration: Time Frequency Analysis
+ProcessingNodes.append({
+    "Group": "Power Spectral Estimation",
+    "Type": "Time Frequency Analysis",
+    "Description": "Time Frequency Analysis",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "FilterType",
+            "Condition": True,
+            "Label": "Filter Type",
+            "Type": "SelectSingle",
+            "Options": ["Welch's Periodogram", "Autoregressive Model"],
+            "Default": "Welch's Periodogram",
+        },
+        {
+            "Id": "PSDWindowSize",
+            "Condition": True,
+            "Label": "Window Size (in seconds)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "1",
+        },
+        {
+            "Id": "PSDOverlapSize",
+            "Condition": True,
+            "Label": "Overlap Size (in seconds)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "0.5",
+        }
+    ]
+})
+def handleCustomTimeFrequencyAnalysis(Data, config):
+    windowSec = float(config["Configurations"][1]["Value"])
+    overlapSec = float(config["Configurations"][2]["Value"])
+
+    for data in Data["Data"]:
+        data["Spectrum"] = []
+        for Channel in range(len(data["ChannelNames"])):
+            if "Data" in data.keys():
+                if config["Configurations"][0]["Value"] == "Welch's Periodogram":
+                    Spectrum = SPU.welchSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                    Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                elif config["Configurations"][0]["Value"] == "Autoregressive Model":
+                    Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
+                    Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                data["Spectrum"].append({**Spectrum, **{"Method": config["Configurations"][0]["Value"], "Channel": data["ChannelNames"][Channel], "Label": ""}})
+                
+            elif "Epochs" in data.keys():
+                for i in range(len(data["Epochs"])):
+                    if config["Configurations"][0]["Value"] == "Welch's Periodogram":
+                        Spectrum = SPU.welchSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                        Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                    elif config["Configurations"][0]["Value"] == "Autoregressive Model":
+                        Spectrum = SPU.autoregressiveSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
+                        Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                    data["Spectrum"].append({**Spectrum,  **{"Method": config["Configurations"][0]["Value"], "Channel": data["ChannelNames"][Channel], "Label": data["Epochs"][i]["Label"]}})
+
+        if "Data" in data.keys():
+            del data["Data"]
+            del data["Missing"]
+        elif "Epochs" in data.keys():
+            del data["Epochs"]
+
+    return Data
+
+# %% Processing Node Configuration: Welch's Periodogram
+ProcessingNodes.append({
+    "Group": "Power Spectral Estimation",
+    "Type": "Welch's Periodogram",
+    "Description": "Welch's Periodogram",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "PSDWindowSize",
+            "Condition": True,
+            "Label": "Window Size (in seconds)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "1",
+        },
+        {
+            "Id": "PSDOverlapSize",
+            "Condition": True,
+            "Label": "Overlap Size (in seconds)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "0.5",
+        }
+    ]
+})
+def handleWelchPeriodogram(Data, config):
+    windowSec = float(config["Configurations"][0]["Value"])
+    overlapSec = float(config["Configurations"][1]["Value"])
+    if windowSec > 2:
+        nfftSize = windowSec
+    else:
+        nfftSize = 2
+
+    for data in Data["Data"]:
+        data["Spectrum"] = []
+        for Channel in range(len(data["ChannelNames"])):
+            if "Data" in data.keys():
+                Fxx, Pxx = signal.welch(data["Data"][data["Missing"][:,Channel] == 0,Channel], fs=data["SamplingRate"], nperseg=data["SamplingRate"]*windowSec, noverlap=data["SamplingRate"]*overlapSec, nfft=data["SamplingRate"]*nfftSize)
+                data["Spectrum"].append({
+                    "Frequency": Fxx, 
+                    "Power": Pxx,
+                    "Time": [0],
+                    "Method": "Welch",
+                    "Channel": data["ChannelNames"][Channel],
+                    "Label": ""
+                })
+            elif "Epochs" in data.keys():
+                for i in range(len(data["Epochs"])):
+                    print(data["Epochs"][i]["Label"])
+                    Fxx, Pxx = signal.welch(data["Epochs"][i]["Data"][data["Epochs"][i]["Missing"][:,Channel] == 0,Channel], fs=data["SamplingRate"], nperseg=data["SamplingRate"]*windowSec, noverlap=data["SamplingRate"]*overlapSec, nfft=data["SamplingRate"]*nfftSize)
+                    data["Spectrum"].append({
+                        "Frequency": Fxx, 
+                        "Power": Pxx,
+                        "Time": [0],
+                        "Method": "Welch",
+                        "Channel": data["ChannelNames"][Channel],
+                        "Label": data["Epochs"][i]["Label"]
+                    })
+
+        if "Data" in data.keys():
+            del data["Data"]
+            del data["Missing"]
+        elif "Epochs" in data.keys():
+            del data["Epochs"]
+
+    return Data
+
 def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     recording = models.Recording.find(uid=recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
@@ -533,6 +847,9 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
+        Data["MissingIndex"] = []
+        for i in range(Data["Missing"].shape[1]):
+            Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
         del Data["Missing"]
         
         DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
@@ -556,6 +873,9 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
             Data = downsampleTimeDomainStreaming(Data)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
+        Data["MissingIndex"] = []
+        for i in range(Data["Missing"].shape[1]):
+            Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
         del Data["Missing"]
         
         TimeShift = recording.adjusted_alignment
@@ -575,6 +895,9 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
             Data = downsampleTimeDomainStreaming(Data)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
+        Data["MissingIndex"] = []
+        for i in range(Data["Missing"].shape[1]):
+            Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
         del Data["Missing"]
         
         TimeShift = recording.adjusted_alignment
@@ -661,8 +984,11 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
             Data = processTimeDomainStreaming(recording, Data, config)
             Data["Data"] = Data["Data"].T
+            Data["MissingIndex"] = []
+            for i in range(Data["Missing"].shape[1]):
+                Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
             del Data["Missing"]
-            
+
             DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
             for i in range(len(Data["ChannelNames"])):
                 Data["ChannelNames"][i] = DBSDevice["GenericName"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
@@ -682,14 +1008,27 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
             rel = models.RecordingRel.find(analysis=Analysis, recording=recording)
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
             DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
-            TherapeuticLabel, TherapyGraphs = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
-            AnalysisStruct["Therapy"].append({
-                "Type": "Therapy",
-                "RecordingId": recording.uid,
-                "TherapySeries": TherapeuticLabel,
-                "TherapyGraphs": TherapyGraphs,
-                "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
-            })
+            if config["APIAccess"]:
+                TherapeuticLabel, TherapyGraphs = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
+                AnalysisStruct["Therapy"].append({
+                    "Type": "Therapy",
+                    "Data": Data,
+                    "DBSDevice": DBSDevice,
+                    "RecordingId": recording.uid,
+                    "TherapySeries": TherapeuticLabel,
+                    "TherapyGraphs": TherapyGraphs,
+                    "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
+                })
+            else:
+                TherapeuticLabel, TherapyGraphs = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
+                AnalysisStruct["Therapy"].append({
+                    "Type": "Therapy",
+                    "RecordingId": recording.uid,
+                    "TherapySeries": TherapeuticLabel,
+                    "TherapyGraphs": TherapyGraphs,
+                    "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
+                })
+
 
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
 
@@ -899,6 +1238,9 @@ def handleTimeFrequencyAnalysis(recording, data, config):
     for i in range(len(data["ChannelNames"])):
         if config["SpectrogramMethod"] == "Welch's Periodogram":
             Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
+        
+        elif config["SpectrogramMethod"] == "Medtronic Percept PSD":
+            Spectrum = SPU.MedtronicPSD(data["Data"][:,i], packets=[5], fs=data["SamplingRate"])
 
         elif config["SpectrogramMethod"] == "Short-time Fourier Transform":
             Spectrum = SPU.defaultSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
@@ -978,33 +1320,54 @@ def selectRecordingChannel(analysis, channel_names=[]):
     AllChannels = []
     ActiveChannels = []
 
-    FilteredAnalysis = {"Signal": [], "Annotations": analysis["Annotations"]}
+    FilteredAnalysis = {"Signal": [], "Spectrum": [],  "Annotations": analysis["Annotations"]}
     for key in analysis.keys():
         if not key in FilteredAnalysis.keys():
             FilteredAnalysis[key] = analysis[key]
             
-    for trial in range(len(analysis["Signal"])):
-        if len(ActiveChannels) == 0:
-            if len(channel_names) == 0:
-                if len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"]) > 3:
-                    ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][0])
-                    ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][1])
-                    ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][2])
+    if "Signal" in analysis.keys():
+        
+        def SelectChannelSeries(a):
+            if "Data" in a.keys():
+                a["Data"] = a["Data"][i,:]
+            if "Spectrum" in a.keys():
+                a["Spectrum"] = a["Spectrum"][i]
+            return a
+                    
+        for trial in range(len(analysis["Signal"])):
+            if len(ActiveChannels) == 0:
+                if len(channel_names) == 0:
+                    if len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"]) > 3:
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][0])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][1])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][2])
+                    else:
+                        ActiveChannels.extend(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"])
                 else:
-                    ActiveChannels.extend(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"])
-            else:
-                ActiveChannels = channel_names
+                    ActiveChannels = channel_names
 
-        for i in range(len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"])):
-            if not analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i] in AllChannels:
-                AllChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i])
+            for i in range(len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"])):
+                if not analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i] in AllChannels:
+                    AllChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i])
 
-            if analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i] in ActiveChannels:
-                SelectedRecording = copy.deepcopy(analysis["Signal"][trial])
-                SelectedRecording["SignalSeries"]["ChannelNames"] = SelectedRecording["SignalSeries"]["ChannelNames"][i]
-                SelectedRecording["SignalSeries"]["Data"] = SelectedRecording["SignalSeries"]["Data"][i,:]
-                SelectedRecording["SignalSeries"]["Spectrum"] = SelectedRecording["SignalSeries"]["Spectrum"][i]
-                FilteredAnalysis["Signal"].append(SelectedRecording)
+                if analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][i] in ActiveChannels:
+                    SelectedRecording = copy.deepcopy(analysis["Signal"][trial])
+                    SelectedRecording["SignalSeries"]["ChannelNames"] = SelectedRecording["SignalSeries"]["ChannelNames"][i]
+                    SelectedRecording["SignalSeries"] = SelectChannelSeries(SelectedRecording["SignalSeries"])
+                    if "Epochs" in SelectedRecording["SignalSeries"].keys():
+                        for j in range(len(SelectedRecording["SignalSeries"]["Epochs"])):
+                            SelectedRecording["SignalSeries"]["Epochs"][j] = SelectChannelSeries(SelectedRecording["SignalSeries"]["Epochs"][j])
+                    FilteredAnalysis["Signal"].append(SelectedRecording)
+
+    if "Spectrum" in analysis.keys():
+        for trial in range(len(analysis["Spectrum"])):
+            if "PSDSeries" in analysis["Spectrum"][trial].keys():
+                for i in range(len(analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"])):
+                    if not analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i] in AllChannels:
+                        AllChannels.append(analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i])
+                        ActiveChannels.append(analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i])
+
+            FilteredAnalysis["Spectrum"].append(analysis["Spectrum"][trial])
 
     FilteredAnalysis["AllChannels"] = AllChannels
     FilteredAnalysis["ActiveChannel"] = ActiveChannels
@@ -1148,4 +1511,5 @@ def queryChronicNeuralActivity(participant_uid, config):
                                     break
                 
                 del ChronicNeuralActivity["Annotations"][i]["Recording"]
+
     return ChronicNeuralActivity

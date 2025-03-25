@@ -46,23 +46,12 @@ import { IoMdCheckmarkCircle } from "react-icons/io";
 import { SessionController } from "database/session-control";
 import { select } from "react-cookies";
 
-function RecordingSelect({recordings, existingGroups, name, currentSelect, onClose, onSelectRecording}) {
-  const { participant_uid } = useParams();
+function RecordingSelect({recordings, onClose, onSelectRecording}) {
 
-  const [groupName, setGroupName] = useState(name);
-  const [selectedRecording, setSelectedRecording] = useState(currentSelect);
+  const [selectedRecording, setSelectedRecording] = useState([]);
   const [recordingType, setRecordingType] = useState({active: "", options: []});
   const [recordingDate, setRecordingDate] = useState({active: "", options: []});
   const [availableRecordings, setAvailableRecordings] = useState([]);
-
-  useEffect(() => {
-    SessionController.query("/api/queryParticipantSurveyRecords", {
-      RequestType: "RequestAll",
-      ParticipantId: participant_uid
-    }).then((response) => {
-      console.log(response);
-    });
-  }, []);
 
   useEffect(() => {
     setRecordingType(() => {
@@ -71,9 +60,6 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
         if (!recordingTypes.includes(recordings[i].Type)) {
           recordingTypes.push(recordings[i].Type);
         }
-      }
-      if (existingGroups.length > 0) {
-        recordingTypes.push("Processed Output")
       }
       if (recordingTypes.length > 0) return {active: recordingTypes[0], options: recordingTypes};
       return {active: "", options: []};
@@ -98,14 +84,6 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
           }
         }
       }
-
-      if (recordingType.active == "Processed Output") {
-        recordingDates.push("All");
-        for (let i in existingGroups) {
-          console.log(existingGroups[i])
-        }
-      }
-
       if (recordingDates.length > 0) return {active: recordingDates[0], options: recordingDates};
       return {active: "", options: []};
     });
@@ -128,19 +106,9 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
           }
         }
       }
-      
-      if (recordingType.active == "Processed Output") {
-        for (let i in existingGroups) {
-          availableRecordings.push({
-            Name: existingGroups[i].name,
-            Id: existingGroups[i].id,
-          });
-        }
-      }
-
       return availableRecordings;
     });
-  }, [recordingType.active, recordingDate.active]);
+  }, [recordingType.active, recordingDate.active])
 
   return (
     <DialogContent>
@@ -148,12 +116,6 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
         <MDTypography variant="h5">
           {"Add Recordings to Analysis"}
         </MDTypography>
-        
-        <TextField variant="standard" label={"Recording Group Name"} fullWidth
-          placeholder={"New Recording Group"}
-          value={groupName}
-          onChange={(event) => setGroupName(event.target.value)}
-        />
       </MDBox>
       
       <MDBox px={2} pt={2}>
@@ -207,20 +169,18 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
                   <MDTypography variant={"h5"} fontWeight={"bold"}>
                     {a.Name.length > 0 ? a.Name : a.Id}
                   </MDTypography>
-                  {a.Date ? (
-                    <MDTypography variant={"p"} fontSize={15}>
-                      {new Date(a.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(a.Timezone),
-                        hour: "numeric",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })} {"-"} 
-                      {new Date(a.Date*1000 + a.Metadata.Duration*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(a.Timezone),
-                        hour: "numeric",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
-                    </MDTypography>
-                  ) : null}
+                  <MDTypography variant={"p"} fontSize={15}>
+                    {new Date(a.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(a.Timezone),
+                      hour: "numeric",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })} {"-"} 
+                    {new Date(a.Date*1000 + a.Metadata.Duration*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(a.Timezone),
+                      hour: "numeric",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </MDTypography>
                 </MDBox>
               </Card>
             </Grid>
@@ -236,7 +196,7 @@ function RecordingSelect({recordings, existingGroups, name, currentSelect, onClo
         </MDButton>
         <MDButton color={"info"} 
           onClick={() => {
-            onSelectRecording(selectedRecording, groupName);
+            onSelectRecording(selectedRecording);
           }} style={{marginLeft: 10}}
         >
           Update

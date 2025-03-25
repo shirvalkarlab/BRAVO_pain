@@ -1,0 +1,116 @@
+/**
+=========================================================
+* Material Dashboard 2 React - v2.2.0
+=========================================================
+
+* Product Page: https://www.creative-tim.com/product/material-dashboard-react
+* Copyright 2023 Creative Tim (https://www.creative-tim.com)
+
+Coded by www.creative-tim.com
+
+ =========================================================
+
+* The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+*/
+
+// prop-types is a library for typechecking of props
+import PropTypes from "prop-types";
+
+// @mui material components
+import Icon from "@mui/material/Icon";
+
+import { FaCirclePlay } from "react-icons/fa6";
+
+// Material Dashboard 2 React components
+import MDBox from "components/MDBox";
+import MDButton from "components/MDButton";
+import MDTypography from "components/MDTypography";
+
+function timelineItem(theme, ownerState) {
+  const { borders } = theme;
+  const { lastItem, isDark } = ownerState;
+  const { borderWidth, borderColor } = borders;
+  return {
+    "&:after": {
+      content: !lastItem && "''",
+      position: "absolute",
+      top: "2rem",
+      left: "17px",
+      height: "100%",
+      opacity: isDark ? 0.1 : 1,
+      borderRight: `${borderWidth[2]} solid ${borderColor}`,
+    },
+  };
+}
+
+function TimelineItem({ color, icon, title, dateTime, result, onClick, onViewResult, description, lastItem }) {
+  const isDark = false;
+
+  return (
+    <MDBox position="relative" mb={3} sx={(theme) => timelineItem(theme, { lastItem, isDark })}>
+      <MDBox
+        display="flex"
+        justifyContent="center"
+        alignItems="center"
+        bgColor={color}
+        color="white"
+        width="2rem"
+        height="2rem"
+        borderRadius="50%"
+        position="absolute"
+        top="8%"
+        left="2px"
+        zIndex={2}
+        onClick={onClick}
+        sx={{ fontSize: ({ typography: { size } }) => size.sm, cursor: "pointer" }}
+      >
+        <Icon fontSize="inherit">{icon}</Icon>
+      </MDBox>
+      <MDBox ml={5.75} pt={description ? 0.7 : 0.5} lineHeight={0} maxWidth="30rem">
+        <MDTypography variant="button" fontWeight="medium" color={isDark ? "white" : "dark"}>
+          {title}
+        </MDTypography>
+        <MDBox mt={2} mb={1.5}>
+          {description ? (
+            <MDTypography variant="button" color={isDark ? "white" : "dark"}>
+              {description}
+            </MDTypography>
+          ) : null}
+        </MDBox>
+        <MDBox mt={2} mb={1.5}>
+          {result ? (
+            <MDButton color={"primary"} onClick={() => onViewResult()} style={{marginLeft: 10}}>
+              <FaCirclePlay size={15} style={{marginRight: 5}}/> {"View Result"}
+            </MDButton>
+          ) : null}
+        </MDBox>
+      </MDBox>
+    </MDBox>
+  );
+}
+
+// Setting default values for the props of TimelineItem
+TimelineItem.defaultProps = {
+  color: "info",
+  lastItem: false,
+  description: "",
+};
+
+// Typechecking props for the TimelineItem
+TimelineItem.propTypes = {
+  color: PropTypes.oneOf([
+    "primary",
+    "secondary",
+    "info",
+    "success",
+    "warning",
+    "error",
+    "dark",
+    "light",
+  ]),
+  title: PropTypes.string.isRequired,
+  description: PropTypes.string,
+  lastItem: PropTypes.bool,
+};
+
+export default TimelineItem;
