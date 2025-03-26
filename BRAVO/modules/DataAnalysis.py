@@ -1378,7 +1378,7 @@ def queryNeuralActivitySnapshot(participant_uid, config):
 
     Participant = models.Participant.find(uid=participant_uid)
     SourceFiles = models.SourceFile.find_all(owner=Participant)
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicElectrodeIdentifier"])
 
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     DBSDeviceDictionary = {}

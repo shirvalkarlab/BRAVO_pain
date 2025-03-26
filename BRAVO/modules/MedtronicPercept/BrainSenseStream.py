@@ -344,14 +344,24 @@ def processTherapyInformation(data, devceInfo):
     return StimulationSeriesFormatted, TherapyGraph
 
 def reformatChannelName(name, electrodes):
-    Channel, Hemisphere = Percept.reformatChannelName(name)
     Target = ""
-    for lead in electrodes:
-        if lead["Target"].startswith(Hemisphere):
-            if type(Channel[0]) == int:
-                Target = lead["CustomName"] + " " + f"E{Channel[0]:02}-E{Channel[1]:02}"
-            else:
-                Target = lead["CustomName"] + " " + f"E0{Channel[0]:.1f}-E0{Channel[1]:.1f}"
+
+    if "_REFERENCE_" in name:
+        Channel, Hemisphere = Percept.reformatChannelName(name)[0]
+        for lead in electrodes:
+            if lead["Target"].startswith(Hemisphere):
+                if type(Channel[0]) == int:
+                    Target = lead["CustomName"] + " " + f"E{Channel[0]:02}"
+                else:
+                    Target = lead["CustomName"] + " " + f"E0{Channel[0]:.1f}"
+    else:
+        Channel, Hemisphere = Percept.reformatChannelName(name)
+        for lead in electrodes:
+            if lead["Target"].startswith(Hemisphere):
+                if type(Channel[0]) == int:
+                    Target = lead["CustomName"] + " " + f"E{Channel[0]:02}-E{Channel[1]:02}"
+                else:
+                    Target = lead["CustomName"] + " " + f"E0{Channel[0]:.1f}-E0{Channel[1]:.1f}"
                 
     return Target if len(Target) > 0 else name
 

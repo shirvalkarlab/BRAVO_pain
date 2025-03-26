@@ -44,7 +44,11 @@ def saveTherapyEvents(therapyList):
     for therapy in therapyList:
         if "TherapyStatus" in therapy.keys():
             event = { "name": "", "type": "TherapyStatus", "date": therapy["DateTime"].timestamp(), "previous_state": "OFF" if therapy["TherapyStatus"] else "ON", "new_state": "ON" if therapy["TherapyStatus"] else "OFF", }
-        else:
+        elif "AdbsStatus" in therapy.keys():
+            event = { "name": "", "type": "AdaptiveTherapyStatus", "date": therapy["DateTime"].timestamp(), "previous_state": "OFF" if therapy["AdbsStatus"] else "ON", "new_state": "ON" if therapy["AdbsStatus"] else "OFF", }
+        elif "RechargeStatus" in therapy.keys():
+            event = { "name": "", "type": "RechargeStatus", "date": therapy["DateTime"].timestamp(), "previous_state": "OFF" if therapy["RechargeStatus"] else "ON", "new_state": "ON" if therapy["RechargeStatus"] else "OFF", }
+        elif "OldGroupId" in therapy.keys():
             event = { "name": "", "type": "TherapyChangeGroup", "date": therapy["DateTime"].timestamp(), "previous_state": therapy["OldGroupId"], "new_state": therapy["NewGroupId"], }
         NewTherapies.append(event)
     return NewTherapies

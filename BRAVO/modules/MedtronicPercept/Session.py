@@ -172,6 +172,18 @@ def decodeMedtronicJSON(JSON):
     
     # Process BrainSense Survey
     SurveyRecordings = []
+    if "ElectrodeIdentifierTD" in Data.keys():
+        SurveyRecordings += [{
+            "name": "",
+            "type": "MedtronicElectrodeIdentifier",
+            "date": Recording["StartTime"],
+            "recording": Recording,
+            "metadata": {
+                "ChannelNames": Recording["ChannelNames"],
+                "Duration": Recording["Duration"],
+            }
+        } for Recording in BrainSenseSurvey.saveBrainSenseSurvey(Data["ElectrodeIdentifierTD"])]
+
     if "MontagesTD" in Data.keys():
         SurveyRecordings += [{
             "name": "",

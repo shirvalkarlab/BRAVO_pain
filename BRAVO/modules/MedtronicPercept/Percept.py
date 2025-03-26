@@ -419,6 +419,11 @@ def reformatChannelName(string):
         return (reformatChannelName(string[:string.find(",")]),
                 reformatChannelName(string[string.find(",")+1:]))
     
+    if string.find("_REFERENCE_") >= 0:
+        contacts = string.split("_REFERENCE_")
+        return (reformatChannelName(contacts[0]),
+                reformatChannelName(contacts[1]))
+
     channel = list()
     if string.find("SEGMENT") >= 0:
         if string.find("ONE_A") >= 0:
@@ -1294,6 +1299,21 @@ def extractTherapySettings(JSON, sourceData=dict()):
                     switchTime = datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
                     Data["TherapyChangeHistory"].append({"DateTime": switchTime, "TherapyStatus": event["TherapyStatus"] == "TherapyChangeStatusDef.ON"})
                     
+                elif "ParameterTrendId" in event.keys() and "AdbsStatus" in event.keys():
+                    switchTime = datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
+                    Data["TherapyChangeHistory"].append({"DateTime": switchTime, "AdbsStatus": event["AdbsStatus"] == "TherapyChangeStatusDef.ON"})
+                    
+                elif "RechargeSessionType" in event.keys():
+                    switchTime = datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
+                    Data["TherapyChangeHistory"].append({"DateTime": switchTime, "RechargeStatus": event["RechargeSessionType"] == "RechargeSessionStateDef.SessionStart"})
+
+    if "RechargeCount" in Data.keys():
+        for i in range(len(Data["RechargeCount"])):
+            switchTime = datetime.fromisoformat(Data["RechargeCount"][i]["SessionStartDate"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
+            Data["TherapyChangeHistory"].append({"DateTime": switchTime, "RechargeDurationHours": Data["RechargeCount"][i]["DurationInHours"], 
+                                                 "InitialBattery": Data["RechargeCount"][i]["StartingPercentage"], 
+                                                 "FinalBattery": Data["RechargeCount"][i]["EndingPercentage"]})
+
     for key in Data.keys():
         sourceData[key] = Data[key]
     return Data
@@ -1720,6 +1740,46 @@ def processTimeDomainStreamFormatting(Stream):
             
     return Stream
 
+def processTimeDomainElectrodeIdentifierFormatting(Stream):
+    Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
+    Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
+    Stream["Data"] = np.array(Stream["TimeDomainDatainMicroVolts"])
+    Stream["SamplingRate"] = text2num(Stream["SampleRateInHz"])
+    Stream["FirstPacketDateTime"] = getTimestamp(Stream["FirstPacketDateTime"])
+    del(Stream["GlobalSequences"])
+    del(Stream["GlobalPacketSizes"])
+    del(Stream["TicksInMs"])
+    del(Stream["TimeDomainDatainMicroVolts"])
+    del(Stream["SampleRateInHz"])
+
+    if "ReferenceElectrode" in Stream.keys():
+        Stream["Channel"] = Stream["Channel"] + "_" + Stream["Hemisphere"].upper() + "_REFERENCE_" + Stream["ReferenceElectrode"] + "_" + Stream["ReferenceHemisphere"].upper()
+
+    TDSequences = unwrap(Stream["Sequences"], cap=65536 if np.any(Stream["Sequences"] >= 256) else 256)
+    missingSequence = list()
+    for n in range(1,len(TDSequences)):
+        jumppedSequence = TDSequences[n]-TDSequences[n-1]
+        if jumppedSequence > 1:
+            missingIndexes = np.array(range(1, jumppedSequence)) + TDSequences[n-1]
+            missingSequence.extend(missingIndexes)
+    
+    Stream["Missing"] = np.zeros(Stream["Data"].shape)
+    
+    # Packet Size = [57,57,57,57,22]... Who even design like this
+    # This insertion is probably not right... but I am not going to go too crazy for the Surveys
+    PacketSize = int(np.mean(Stream["PacketSizes"]))
+
+    if len(missingSequence) > 0:
+        for nMissing in missingSequence:
+            insertionIndex = np.where(TDSequences < nMissing)[0][-1] + 1
+            startIndex = int(np.sum(Stream["PacketSizes"][:insertionIndex]))
+            TDSequences = np.concatenate((TDSequences[:insertionIndex], [nMissing], TDSequences[insertionIndex:]))
+            Stream["PacketSizes"] = np.concatenate((Stream["PacketSizes"][:insertionIndex], [PacketSize], Stream["PacketSizes"][insertionIndex:]))
+            Stream["Data"] = np.concatenate((Stream["Data"][:startIndex],np.zeros((PacketSize)),Stream["Data"][startIndex:]))
+            Stream["Missing"] = np.concatenate((Stream["Missing"][:startIndex],np.ones((PacketSize)),Stream["Missing"][startIndex:]))
+            
+    return Stream
+
 def extractIndefiniteStreaming(JSON, sourceData=dict()):
     """ Extract Indefinite Streaming during BrainSense Survey.
 
@@ -1782,8 +1842,17 @@ def extractBrainSenseSurvey(JSON, sourceData=dict()):
                                 print("MontageTD Duplicate")
                             Data["MontagesTD"][j]["PSD"] = Data["MontagesPSD"][i]
 
+    if "BrainSenseSurveysTimeDomain" in JSON.keys():
+        key = "BrainSenseSurveysTimeDomain"
+        Data["ElectrodeIdentifierTD"] = []
+        for i in range(len(JSON[key])):
+            if "ElectrodeIdentifier" in JSON[key][i].keys():
+                for Stream in JSON[key][i]["ElectrodeIdentifier"]:
+                    Data["ElectrodeIdentifierTD"].append(processTimeDomainElectrodeIdentifierFormatting(Stream))
+
     for key in Data.keys():
         sourceData[key] = Data[key]
+
     return Data
     
 def extractSignalCalibration(JSON, sourceData=dict()):
