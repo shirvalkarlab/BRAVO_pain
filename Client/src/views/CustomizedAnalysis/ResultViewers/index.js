@@ -25,6 +25,7 @@ import { usePlatformContext, setContextState } from "context.js";
 import TimeDomainFigure from "./TimeDomainFigure";
 import SpectrumFigure from "./SpectrumFigure";
 import DistributionFigure from "./DistributionFigure";
+import CircadianRhythmFigure from "./CircadianRhythmFigure";
 
 function ResultViewer({participant_uid, analysisId, onClose, node}) {
   const navigate = useNavigate();
@@ -61,6 +62,9 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
         ) : null}
         {result.Type === "Distribution" ? (
           <DistributionFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"DistributionFigure"} />
+        ) : null}
+        {result.Type === "Circadian Rhythm" ? (
+          <CircadianRhythmFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"CircadianRhythmFigure"} />
         ) : null}
       </MDBox>
       <MDBox p={2}>

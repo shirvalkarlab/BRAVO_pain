@@ -181,13 +181,34 @@ def queryAvailableAnalyses(participant_uid, request_type):
             elif recording.type == "MedtronicBrainSensePowerDomain":
                 for device in DBSDevices:
                     if device["Id"] == recording.source.metadata["Device"]:
-                        Description["Therapy"] = [{
-                            "Hemisphere": side,
-                            "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
-                            "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
-                            "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
-                            "SegmentMode": recording.metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in recording.metadata["Therapy"][side].keys() else "Ring"
-                        } for side in ["Left", "Right"] if side in recording.metadata["Therapy"].keys()]
+                        Description["Therapy"] = []
+                        for side in ["Left", "Right"]: 
+                            if side in recording.metadata["Therapy"].keys():
+                                TherapyDescription = {
+                                    "Hemisphere": side,
+                                    "Frequency": recording.metadata["Therapy"][side]["RateInHertz"],
+                                    "Pulsewidth": recording.metadata["Therapy"][side]["PulseWidthInMicroSecond"],
+                                    "Contact": BrainSenseStream.reformatStimulationChannel(recording.metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                                    "SegmentMode": recording.metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in recording.metadata["Therapy"][side].keys() else "Ring"
+                                }
+
+                                if "ElectrodeState" in recording.metadata["Therapy"][side].keys():
+                                    TherapyDescription["Contact"] = ""
+                                    TherapyDescription["SegmentMode"] = ""
+                                    
+                                    for lead in device["Electrodes"]:
+                                        if lead["Target"].startswith(side):
+                                            TherapyDescription["Contact"] = lead["CustomName"] + " "
+                                    for contact in recording.metadata["Therapy"][side]["ElectrodeState"]:
+                                        if contact["ElectrodeStateResult"] != "ElectrodeStateDef.None":
+                                            electrodeName, _ = Percept.reformatElectrodeDef(contact["Electrode"])
+                                            if not electrodeName == "CAN":
+                                                TherapyDescription["Contact"] += electrodeName + "-"
+                                    
+                                    TherapyDescription["Contact"] = TherapyDescription["Contact"][:-1]
+                                
+                                Description["Therapy"].append(TherapyDescription)
+
                         Description["Device"] = device
                         for i in range(len(Description["Metadata"]["ChannelNames"])):
                             if Description["Metadata"]["ChannelNames"][i].endswith("Stimulation"):
@@ -212,7 +233,9 @@ def queryAvailableAnalyses(participant_uid, request_type):
     
         AnalysisList = models.Analysis.find_all(type=request_type, metadata__ParticipantId=participant_uid)
         for analysis in AnalysisList:
-            Overview["Analyses"].append(analysis.get_info())
+            AnalysisOverview = analysis.get_info()
+            if AnalysisOverview:
+                Overview["Analyses"].append(AnalysisOverview)
         
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
@@ -298,7 +321,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicNeuralActivity", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
     
     Overview["Recordings"] = []
     for recording in Recordings:
@@ -329,6 +352,9 @@ def queryCustomizedAnalysis(participant_uid, analysis):
 
             Description["Type"] = "DBS Therapy Labels"
 
+        elif recording.type == "MedtronicChronicNeuralActivity":
+            Description["Type"] = "Medtronic Chronic Timeline"
+
         elif recording.type == "DelsysMDAT":
             pass
 
@@ -350,7 +376,6 @@ def processCustomizedPipeline(analysis):
         source = models.SourceFile(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
         source.save()
     
-    print(analysis.metadata)
     for i in range(len(analysis.metadata["Nodes"])):
         Input = analysis.metadata["Nodes"][i][0]
         recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata={ "RecordingList": [input["Id"] for input in Input["data"]], }, source=source)
@@ -359,10 +384,18 @@ def processCustomizedPipeline(analysis):
             recordings = models.Recording.find_all(uid__in=[input["Id"] for input in Input["data"]])
             for recording in recordings:
                 Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-                for input in Input["data"]:
-                    if input["Id"] == recording.uid:
-                        Data["StartTime"] += input["Alignment"]
-                ProcessedData.append(Data)
+                if recording.type == "MedtronicChronicNeuralActivity":
+                    for j in range(len(Data)):
+                        StructuredData = ChronicBrainSense.revertChronicActivityFormat(Data[j])
+                        for input in Input["data"]:
+                            if input["Id"] == recording.uid:
+                                StructuredData["StartTime"] += input["Alignment"]
+                        ProcessedData.append(StructuredData)
+                else:
+                    for input in Input["data"]:
+                        if input["Id"] == recording.uid:
+                            Data["StartTime"] += input["Alignment"]
+                    ProcessedData.append(Data)
             
             recording = models.Recording(name=Input["name"], type="CustomAnalysis_"+Input["type"], metadata={
                 "RecordingList": [input["Id"] for input in Input["data"]],
@@ -486,9 +519,17 @@ def handleProcessingNode(node, participant_uid, input_uid):
             Data = handleAnnotationSegmentation(Data, metadata)
             Data["DataType"] = ""
             
+        elif node["data"]["Type"] == "Epoch by Timestamps":
+            Data = handleTimestampSegmentation(Data, node["data"])
+            Data["DataType"] = ""
+            
         elif node["data"]["Type"] == "Compute Distribution":
             Data = handleDistributionComputation(Data, metadata)
             Data["DataType"] = "Distribution"
+            
+        elif node["data"]["Type"] == "Compute Circadian Rhythm from Timeline":
+            Data = handleCircadianRhythmComputation(Data, metadata)
+            Data["DataType"] = "Circadian Rhythm"
             
         elif node["data"]["Type"] == "Time Frequency Analysis":
             Data = handleCustomTimeFrequencyAnalysis(Data, metadata)
@@ -549,6 +590,22 @@ def extractAnalysisOutput(node):
                 "Alignment": 0
             })
         AnalysisStruct["Type"] = "Distribution"
+
+    elif Data["DataType"] == "Circadian Rhythm":
+        for i in range(len(Data["Data"])):
+            if "Epochs" in Data["Data"][i].keys():
+                for j in range(len(Data["Data"][i]["Epochs"])):
+                    Data["Data"][i]["Epochs"][j] = CleanupSignalSeries(Data["Data"][i]["Epochs"][j])
+            else:
+                Data["Data"][i] = CleanupSignalSeries(Data["Data"][i])
+            
+            AnalysisStruct["Signal"].append({
+                "Type": "Signal",
+                "RecordingId": result.uid,
+                "SignalSeries": Data["Data"][i],
+                "Alignment": 0
+            })
+        AnalysisStruct["Type"] = "Circadian Rhythm"
 
     return AnalysisStruct
 
@@ -668,6 +725,57 @@ def handleAnnotationSegmentation(Data, config):
         del data["Missing"]
     return Data
 
+# %% Processing Node Configuration: Epoch by Timestamps
+ProcessingNodes.append({
+    "Group": "Segmentation",
+    "Type": "Epoch by Timestamps",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "StartTime",
+            "Condition": True,
+            "Label": "Beginning Timestamp",
+            "Type": "Date",
+            "Verify": "Timestamp",
+            "Default": "0",
+        },{
+            "Id": "EndTime",
+            "Condition": True,
+            "Label": "Ending Timestamp",
+            "Type": "Date",
+            "Verify": "Timestamp",
+            "Default": "0",
+        }
+    ]
+})
+def handleTimestampSegmentation(Data, config):
+    StartTime = int(config["Configurations"][0]["Value"])/1000
+    EndTime = int(config["Configurations"][1]["Value"])/1000
+    for data in Data["Data"]:
+        if not "Time" in data.keys():
+            data["Time"] = np.arange(data["Data"].shape[0]) / data["SamplingRate"] + data["StartTime"]
+        
+        if not "Missing" in data.keys():
+            data["Missing"] = np.zeros(data["Data"].shape)
+
+        data["Epochs"] = []
+        TimeSelection = rangeSelection(data["Time"], [StartTime, EndTime], "inclusive")
+        if np.any(TimeSelection):
+            Epoch = {
+                "Data": data["Data"][TimeSelection,:],
+                "TimeRange": [StartTime, EndTime],
+                "Missing": data["Missing"][TimeSelection,:],
+                "Label": "Segmentation"
+            }
+            if data["SamplingRate"] < 0:
+                Epoch["Time"] = data["Time"][TimeSelection]
+
+            data["Epochs"].append(Epoch)
+    
+    Data["Data"] = [data for data in Data["Data"] if len(data["Epochs"]) > 0]
+    return Data
+
 # %% Processing Node Configuration: Compute Value Distribution
 ProcessingNodes.append({
     "Group": "Statistics",
@@ -699,6 +807,22 @@ def handleDistributionComputation(Data, config):
             for i in range(len(data["Epochs"])):
                 if "Spectrum" in data["Epochs"][i].keys():
                     pass 
+    
+    return Data
+
+# %% Processing Node Configuration: Compute Value Distribution
+ProcessingNodes.append({
+    "Group": "Statistics",
+    "Type": "Compute Circadian Rhythm from Timeline",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": []
+})
+def handleCircadianRhythmComputation(Data, config):
+    for data in Data["Data"]:
+        if "Epochs" in data.keys():
+            for i in range(len(data["Epochs"])):
+                pass
     
     return Data
 
@@ -817,7 +941,6 @@ def handleWelchPeriodogram(Data, config):
                 })
             elif "Epochs" in data.keys():
                 for i in range(len(data["Epochs"])):
-                    print(data["Epochs"][i]["Label"])
                     Fxx, Pxx = signal.welch(data["Epochs"][i]["Data"][data["Epochs"][i]["Missing"][:,Channel] == 0,Channel], fs=data["SamplingRate"], nperseg=data["SamplingRate"]*windowSec, noverlap=data["SamplingRate"]*overlapSec, nfft=data["SamplingRate"]*nfftSize)
                     data["Spectrum"].append({
                         "Frequency": Fxx, 
@@ -1017,6 +1140,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                     "RecordingId": recording.uid,
                     "TherapySeries": TherapeuticLabel,
                     "TherapyGraphs": TherapyGraphs,
+                    "FullTherapy": Data["Descriptor"]["Therapy"],
                     "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
                 })
             else:
@@ -1026,6 +1150,7 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                     "RecordingId": recording.uid,
                     "TherapySeries": TherapeuticLabel,
                     "TherapyGraphs": TherapyGraphs,
+                    "FullTherapy": Data["Descriptor"]["Therapy"],
                     "Alignment": (rel.time_shift if rel else 0) + recording.adjusted_alignment
                 })
 
@@ -1326,7 +1451,6 @@ def selectRecordingChannel(analysis, channel_names=[]):
             FilteredAnalysis[key] = analysis[key]
             
     if "Signal" in analysis.keys():
-        
         def SelectChannelSeries(a):
             if "Data" in a.keys():
                 a["Data"] = a["Data"][i,:]

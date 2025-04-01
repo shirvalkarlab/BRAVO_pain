@@ -107,7 +107,15 @@ export default function SourceFiles() {
       }
     }
 
-    if (options.length > 0) setViewDate({active: options[0], options: options});
+    if (options.length > 0) {
+      setViewDate((viewDate) => {
+        if (!options.includes(viewDate.active)) {
+          viewDate.active = options[0];
+        }
+        viewDate.options = options;
+        return {...viewDate} 
+      });
+    }
     else setViewDate({active: "", options: []});
   }, [availableSourceFiles, sourceFileType.active])
 

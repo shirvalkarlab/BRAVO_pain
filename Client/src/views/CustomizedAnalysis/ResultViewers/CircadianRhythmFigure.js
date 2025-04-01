@@ -12,6 +12,7 @@
 */
 
 import { useCallback, useState, useEffect, useMemo } from "react";
+import { useParams } from "react-router-dom";
 import { useResizeDetector } from 'react-resize-detector';
 
 import LoadingProgress from "components/LoadingProgress";
@@ -23,24 +24,56 @@ import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import * as math from "mathjs"
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
+import { SessionController } from "database/session-control";
 
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
 const filter = createFilterOptions();
 
-function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, activeChannel, figureTitle}) {
+function CircadianRhythmFigure({dataToRender, analysisId, resultId, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
+  const { participant_uid } = useParams();
 
+  const [alert, setAlert] = useState(null);
+  
   const [fig, setFig] = useState(null);
+  const [data, setData] = useState(null);
   const [renderData, setRenderData] = useState(null);
-  const [cacheData, setCacheData] = useState({});
+  const [cachedData, setCachedData] = useState([]);
+  const [availableChannels, setAvailableChannels] = useState({active: "", options: []});
 
   useEffect(() => {
     const fig = new PlotlyRenderManager(figureTitle, language);
     setFig(fig);
   }, [figureTitle]);
+
+  useEffect(() => {
+    setData({...dataToRender});
+    setCachedData(dataToRender.ActiveChannel);
+    setAvailableChannels({active: "", options: dataToRender.AllChannels});
+  }, [dataToRender]);
+
+  useEffect(() => {
+    if (!cachedData.includes(availableChannels.active)) {
+      SessionController.query("/api/queryCustomizedAnalysis", {
+        RequestType: "AnalysisOutput",
+        ParticipantId: participant_uid,
+        AnalysisId: analysisId,
+        ResultId: resultId,
+        ActiveChannels: [availableChannels.active]
+      }).then((response) => {
+        setCachedData((cachedData) => [...cachedData, availableChannels.active]);
+        setData((data) => {
+          data.Signal.push(...response.data.Signal);
+          return {...data};
+        });
+      }).catch((error) => {
+        SessionController.displayError(error, setAlert);
+      });
+    }
+  }, [availableChannels.active])
 
   useEffect(() => {
     if (!fig) return;
@@ -51,25 +84,10 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
 
     const ax = fig.subplots(1, 1, {sharex: true, sharey: true});
     fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Local", language)})`, {fontSize: 15}, ax[0]);
-    fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)})`, {fontSize: 15}, ax[0]);
+    fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)}`, {fontSize: 15}, ax[0]);
     fig.setLayoutProps({
       hovermode: "xy"
     });
-
-    fig.addDualYAxis(ax[0]);
-    fig.setYlabel("Event Count", {fontSize: 15}, ax[1]);
-    fig.setAxisProps({
-      title: {
-        font: {
-          color: "#FF0000"
-        }
-      },
-      tickcolor:  "#FF0000",
-      tickfont: {
-        color: "#FF0000"
-      },
-      showgrid: false
-    }, "y", ax[1]);
 
     fig.setAxisProps({
       tickformat: "%H:%M"
@@ -96,33 +114,22 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
         alpha: 0.3,
         showlegend: false
       }, 
-    }, {
-      type: "bar", x: [], y: [], options: {
-        width: 600000,
-        opacity: 0.3,
-        facecolor: "#FF0000",
-        showlegend: false,
-      }
     }];
 
-    let xData = [], yData = [], events = [];
-    for (let i in dataToRender) {
-      for (let j in dataToRender[i].ChannelNames) {
-        if (dataToRender[i].ChannelNames[j].endsWith(circadianState.amplitude ? " Amplitude" : " LFP")) {
-          const channelName = dataToRender[i].Device.Heritage + ": " + dataToRender[i].ChannelNames[j].replace(" LFP", "").replace(" Amplitude", "");
-          const therapyName = channelName + " (" + dataToRender[i].TherapyString + " Sense: " + dataToRender[i].RecordingString + ")";
-          if (activeChannel == therapyName) {
-            xData.push(...dataToRender[i].Time);
-            yData.push(...dataToRender[i].Data[j]);
-            events.push(...annotations.filter((a) => a.Date > dataToRender[i].Time[0] && a.Date < dataToRender[i].Time[dataToRender[i].Time.length-1]).map((a) => a.Date))
-          }
+    let xData = [], yData = [];
+    for (let i in data.Signal) {
+      if (availableChannels.active == data.Signal[i].SignalSeries.ChannelNames) {
+        console.log(data.Signal[i].SignalSeries.ChannelNames)
+        for (let j in data.Signal[i].SignalSeries.Epochs) {
+          xData.push(...data.Signal[i].SignalSeries.Epochs[j].Time.map((a) => (a % 86400)*1000));
+          yData.push(...data.Signal[i].SignalSeries.Epochs[j].Data);
         }
       }
     }
 
     const timezoneOffset = new Date().getTimezoneOffset();
-    xData = xData.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
-    events = events.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
+    const window = 1200000;
+    const defaultTimeArray = new Array(145).fill(0).map((a,i) => i*600000);
     const inRange = (time, ref, window) => {
       if (math.abs(time - ref) < window) return true; 
       if (math.abs(time+86400 - ref) < window) return true; 
@@ -130,8 +137,6 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
       return false
     }
 
-    const window = 1200000;
-    const defaultTimeArray = new Array(145).fill(0).map((a,i) => i*600000);
     for (let i = 0; i < defaultTimeArray.length; i++) {
       graphSeries[0].x.push(new Date(defaultTimeArray[i]+timezoneOffset*60000));
       if (i == 0 || i == 144) {
@@ -153,22 +158,15 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
           graphSeries[0].error_y.push(0);
         }
       }
-
-      graphSeries[1].x.push(new Date(defaultTimeArray[i]+timezoneOffset*60000));
-      graphSeries[1].y.push(events.filter((a) => a == defaultTimeArray[i]).length);
     }
     setRenderData(graphSeries);
-
-  }, [fig, activeChannel, annotations, dataToRender, circadianState.amplitude]);
+  }, [fig, availableChannels.active, data]);
 
   const refreshRender = () => {
     const ax = fig.getAxes();
     for (let i in renderData) {
       if (renderData[i].type === "line") {
         fig.shadedErrorBar(renderData[i].x, renderData[i].y, renderData[i].error_y, renderData[i].line_options, renderData[i].shade_options, ax[0]);
-      } else if (renderData[i].type === "bar" && circadianState.eventCount) {
-        fig.bar(renderData[i].x, renderData[i].y, renderData[i].options, ax[1]);
-        fig.setYlim([0, math.max(renderData[i].y) || 1], ax[1])
       }
     }
     fig.render();
@@ -179,7 +177,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
     
     fig.traces = [];
     refreshRender();
-  }, [fig, renderData, circadianState]);
+  }, [fig, renderData]);
 
   const onResize = useCallback(() => {
     if (!fig) return;
@@ -194,9 +192,25 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
     skipOnMount: false
   });
 
-  return useMemo(() => (
-    <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
-  ), [renderData]);
+  return <MDBox>
+    <MDBox>
+        <Autocomplete selectOnFocus clearOnBlur
+          renderInput={(params) => (
+            <TextField {...params} variant="standard" label={"Channel Selection"}/>
+          )}
+          isOptionEqualToValue={(option, value) => {
+            return option === value;
+          }}
+          renderOption={(props, option) => <li {...props}>{option}</li>}
+          value={availableChannels.active}
+          options={availableChannels.options}
+          onChange={(event, newValue) => {
+            setAvailableChannels({...availableChannels, active: newValue});
+          }}
+        />
+      </MDBox>
+      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
+  </MDBox>;
 }
 
-export default MedtronicCircadianRhythm;
+export default CircadianRhythmFigure;

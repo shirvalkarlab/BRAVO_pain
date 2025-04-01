@@ -114,6 +114,10 @@ class Analysis(models.Model):
 
     def get_info(self):
         rels = [rel.get_info() for rel in RecordingRel.objects.prefetch_related("analysis", "recording").filter(analysis=self).all()]
+        if len(rels) == 0 and not self.type == "CustomizedAnalysis":
+            self.delete()
+            return None
+        
         return {
             "Id": self.uid,
             "Name": self.name,

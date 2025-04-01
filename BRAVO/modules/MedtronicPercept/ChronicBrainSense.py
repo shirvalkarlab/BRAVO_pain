@@ -119,7 +119,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             GroupId = TherapyHistory["TherapyModification"][i]["History"][j]["Previous"]
                             ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
                             TherapyNote = Therapy.findClosestAdaptiveTherapy(Data["Time"][WindowSelected][0], ClosestTherapy)
-                            
+                        
                         Activity = {
                             "Device": DBSDevice["Id"],
                             "TherapyWindow": [float(Timestamps[j-1]), float(Timestamps[j])],
@@ -128,9 +128,18 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             "RecordingString": extractSensingString(TherapyNote),
                             "Time": Data["Time"][WindowSelected],
                             "ChannelNames": copy.deepcopy(Data["ChannelNames"]),
+                            "ChannelNamesFix": copy.deepcopy(Data["ChannelNames"]),
                             "ChannelUnits": ["", "mA"],
                             "Data": Data["Data"][WindowSelected,:].T
                         }
+
+                        for lead in DBSDevice["Electrodes"]:
+                            print(lead)
+                            for k in range(len(Activity["ChannelNames"])):
+                                if Activity["ChannelNames"][k].startswith("LeftHemisphere") and lead["Target"].startswith("Left"):
+                                    Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("LeftHemisphere", lead["CustomName"])
+                                elif Activity["ChannelNames"][k].startswith("RightHemisphere") and lead["Target"].startswith("Right"):
+                                    Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("RightHemisphere", lead["CustomName"])
 
                         duplicates = checkExistingSegments(ChronicNeuralActivity, Activity)
                         if duplicates > -1:
@@ -141,3 +150,13 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             ChronicNeuralActivity.append(Activity)
 
     return ChronicNeuralActivity
+
+def revertChronicActivityFormat(data):
+    Recording = dict()
+    Recording["SamplingRate"] = -1 # Variable Frequency
+    Recording["Time"] = data["Time"]
+    Recording["Data"] = data["Data"].T
+    Recording["ChannelNames"] = data["ChannelNamesFix"]
+    Recording["StartTime"] = Recording["Time"][0]
+    Recording["Duration"] = Recording["Time"][-1] - Recording["Time"][0]
+    return Recording

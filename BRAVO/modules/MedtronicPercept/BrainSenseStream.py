@@ -105,7 +105,36 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
         Recording = dict()
         Recording["SamplingRate"] = StreamingPower[n]["SamplingRate"]
         Channel = StreamingPower[n]["Channel"].split(",")
-        if len(Channel) == 1:
+
+        if len(Channel) == 1 and "Left" in StreamingPower[n]["TherapySnapshot"].keys() and "Right" in StreamingPower[n]["TherapySnapshot"].keys():
+            Recording["ChannelNames"] = ["LEFT Power","RIGHT Power","LEFT Stimulation","RIGHT Stimulation"]
+
+            if Channel[0].endswith("LEFT"):
+                SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"].replace("SensingChannelDef.",""))
+                if Hemisphere == "Left":
+                    SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Right"]["ElectrodeState"])
+                    SecondaryChannel = SensingChannelName + "_RIGHT"
+                else:
+                    SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"]
+                Recording["ChannelNames"] = [Channel[0] + " Power", SecondaryChannel + " Power", Channel[0] + " Stimulation", SecondaryChannel + " Stimulation"]
+                    
+            elif Channel[0].endswith("RIGHT"):
+                SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"].replace("SensingChannelDef.",""))
+                if Hemisphere == "Right":
+                    SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Left"]["ElectrodeState"])
+                    SecondaryChannel = SensingChannelName + "_LEFT"
+                else:
+                    SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"]
+                Recording["ChannelNames"] = [SecondaryChannel + " Power", Channel[0] + " Power", SecondaryChannel + " Stimulation", Channel[0] + " Stimulation"]
+
+            Recording["Data"] = np.zeros((len(StreamingPower[n]["Power"]), 4))
+            Recording["Missing"] = np.zeros((len(StreamingPower[n]["Missing"]), 4))
+            Recording["Data"][:,:2] = StreamingPower[n]["Power"]
+            Recording["Data"][:,2:] = StreamingPower[n]["Stimulation"]
+            Recording["Missing"][:,:2] = StreamingPower[n]["Missing"]
+            Recording["Missing"][:,2:] = StreamingPower[n]["Missing"]
+
+        elif len(Channel) == 1:
             Recording["ChannelNames"] = [Channel[0] + " Power", Channel[0] + " Stimulation"]
             ChannelIndex = 0 if np.all(np.array(StreamingPower[n]["Power"][:,1]) == 0) else 1
             Recording["Data"] = np.zeros((len(StreamingPower[n]["Power"]), 2))

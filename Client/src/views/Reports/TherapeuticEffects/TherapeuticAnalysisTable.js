@@ -49,6 +49,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDBadge from "components/MDBadge";
+import MultipleRecordingSelect from "./MultipleRecordingSelect";
 
 function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRecordingData, addNewAnalysis, deleteAnalysis, children}) {
   const [controller, dispatch] = usePlatformContext();
@@ -259,8 +260,9 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
                     analysis.RecordingChannels.push(...recording.Metadata.ChannelNames);
                   }
                 }
+                
                 analysis.RecordingChannels = [...new Set(analysis.RecordingChannels)];
-                analysis.Therapy = [...new Set(analysis.Therapy)];
+                analysis.Therapy = Array.from(new Set(analysis.Therapy.map((a) => JSON.stringify(a))), JSON.parse)
                 return <TableRow key={analysis.Id}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={18} fontWeight={"bold"}>
@@ -416,102 +418,20 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
         </MDButton>
       </MDBox>
 
-      <Dialog open={newGroupView.show} onClose={() => setNewGroupView({...newGroupView, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+      <Dialog open={newGroupView.show} onClose={() => setNewGroupView({...newGroupView, show: false})} PaperProps={{sx: {minWidth: 900}}}>
         <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
           <MDTypography variant="h5">
             {"New Therapeutic Analysis"}
           </MDTypography>
         </MDBox>
-        <DialogContent>
-          <Grid container spacing={2}>
-            <Grid item xs={12}>
-              <Autocomplete
-                fullWidth multiple value={newGroupView.timeseries}
-                options={recordings.filter((recording) => {
-                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
-                    year: "numeric",
-                    month: "2-digit",
-                    day: "2-digit",
-                    timeZoneName: "longGeneric"
-                  });
-                  return dateString == selectedDate.label && !recording.Therapy;
-                }).sort((a,b) => a.Date - b.Date).map((recording) => {
-                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                    timeZoneName: "longGeneric"
-                  })
-                  return {
-                    Id: recording.Id,
-                    Label: "["+dateString+"] " + (recording.Name ? recording.Name : recording.Id)
-                  }
-                })}
-                getOptionLabel={(option) => {
-                  return option.Label || "";
-                }}
-                onChange={(event, value) => setNewGroupView({...newGroupView, timeseries: value})}
-                renderInput={(params) => (
-                  <FormField
-                    {...params}
-                    label={"Recordings as Time-Series of Interest"}
-                    InputLabelProps={{ shrink: true }}
-                  />
-                )}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <Autocomplete
-                fullWidth multiple value={newGroupView.therapies}
-                options={recordings.filter((recording) => {
-                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
-                    year: "numeric",
-                    month: "2-digit",
-                    day: "2-digit",
-                    timeZoneName: "longGeneric"
-                  });
-                  return dateString == selectedDate.label && recording.Therapy;
-                }).sort((a,b) => a.Date - b.Date).map((recording) => {
-                  const dateString = new Date(recording.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(recording.Timezone),
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                    timeZoneName: "longGeneric"
-                  })
-
-                  return {
-                    Id: recording.Id,
-                    Label: "["+dateString+"] " + (recording.Name ? recording.Name : recording.Id)
-                  }
-                })}
-                getOptionLabel={(option) => {
-                  return option.Label || "";
-                }}
-                onChange={(event, value) => setNewGroupView({...newGroupView, therapies: value})}
-                renderInput={(params) => (
-                  <FormField
-                    {...params}
-                    label={"Recordings as Therapy Labels"}
-                    InputLabelProps={{ shrink: true }}
-                  />
-                )}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
-            <MDButton color={"secondary"} onClick={() => setNewGroupView({...newGroupView, show: false})}>
-              {"Cancel"}
-            </MDButton>
-            <MDButton color={"info"} onClick={() => {
-              addNewAnalysis(newGroupView);
-              setNewGroupView({...newGroupView, show: false});
-            }} style={{marginLeft: 10}}>
-              {"Update"}
-            </MDButton>
-          </MDBox>
-        </DialogActions>
+        <MultipleRecordingSelect recordings={recordings.filter((a) => a.Metadata.Duration > 2)} existingGroups={[]} name={""} currentSelect={[]} onSelectRecording={(selected, name) => {
+          const selectedRecording = recordings.filter((a) => selected.includes(a.Id));
+          addNewAnalysis({
+            show: false, timeseries: selectedRecording.filter((a) => ["MedtronicBrainSenseTimeDomain"].includes(a.Type)), 
+            therapies: selectedRecording.filter((a) => ["MedtronicBrainSensePowerDomain"].includes(a.Type))
+          });
+          setNewGroupView({...newGroupView, show: false});
+        }} onClose={() => setNewGroupView({...newGroupView, show: false})} />
       </Dialog>
     </>
   ), [data, showTable, displayData, newGroupView, editRecordingName]);

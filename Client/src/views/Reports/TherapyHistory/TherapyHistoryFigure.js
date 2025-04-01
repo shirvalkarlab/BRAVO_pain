@@ -184,6 +184,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
     fig.setTickValue(uniqueGroups.map((value, index) => index), "y");
     fig.setTickLabel(uniqueGroups.map((value, index) => value), "y");
     
+    fig.traces = [];
     for (let i in data) {
       if (showDevice.includes(data[i].device.Id)) {
         for (let j in data[i].therapyStatus) {
@@ -207,7 +208,8 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
     }
 
     let therapyBlocks = [];
-    let xLim = [0,0]
+    let xLim = [0,0];
+    let counter = 0;
     for (let i in data) {
       if (showDevice.includes(data[i].device.Id)) {
         for (let j in data[i].therapyBlocks) {
@@ -220,7 +222,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
               y0: uniqueGroups.indexOf(data[i].therapyBlocks[j].label) - 0.3,
               y1: uniqueGroups.indexOf(data[i].therapyBlocks[j].label) + 0.3,
               line: { color: "#000000", width: 2 },
-              fillcolor: colors[i*step],
+              fillcolor: colors[counter*step],
               opacity: 0.6
             });
           }
@@ -228,6 +230,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
           if (xLim[1] == 0 || xLim[1] < data[i].therapyBlocks[j].end) xLim[1] = data[i].therapyBlocks[j].end;
         }
       }
+      if (data[i].therapyBlocks) counter += 1;
     }
 
     fig.setLayoutProps({

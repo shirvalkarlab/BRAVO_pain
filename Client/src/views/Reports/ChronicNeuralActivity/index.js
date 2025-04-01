@@ -53,7 +53,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
   const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
 
-  const [showEventCountOnCircadian, setShowEventCountOnCircadian] = useState(false);
+  const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false});
   const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
   const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
  
@@ -322,15 +322,23 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                       <Grid item xs={12}>
                         <MDBox px={2} lineHeight={1}>
                         <Stack direction="row" spacing={1} alignItems="center">
-                          <Switch value={showEventCountOnCircadian} onClick={() => setShowEventCountOnCircadian(!showEventCountOnCircadian)} />
+                          <Switch value={circadianState.eventCount} onClick={() => setCircadianState({...circadianState, eventCount: !circadianState.eventCount})} />
                           <MDTypography variant={"subtitle"} fontSize={15}>
                             {"Show Event Histogram on Circadian Rhythm"}
                           </MDTypography>
                         </Stack>
                         </MDBox>
+                        <MDBox px={2} lineHeight={1}>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Switch value={circadianState.amplitude} onClick={() => setCircadianState({...circadianState, amplitude: !circadianState.amplitude})} />
+                          <MDTypography variant={"subtitle"} fontSize={15}>
+                            {"Show Stimulation Amplitude in Circadian"}
+                          </MDTypography>
+                        </Stack>
+                        </MDBox>
                       </Grid>
                       <Grid item xs={12}>
-                        <CircadianRhythm data={data} activeChannel={availableTherapy.active} annotations={annotations} showEventCount={showEventCountOnCircadian} figureTitle={"CircadianRhythm"}/>
+                        <CircadianRhythm data={data} activeChannel={availableTherapy.active} annotations={annotations} circadianState={circadianState} figureTitle={"CircadianRhythm"}/>
                       </Grid>
                     </Grid>
                   </Card>

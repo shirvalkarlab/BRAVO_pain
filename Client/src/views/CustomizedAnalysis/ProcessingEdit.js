@@ -41,6 +41,12 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 import MuiAlertDialog from "components/MuiAlertDialog";
 
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
+
 import { v4 as uuidv4 } from 'uuid';
 
 import { SessionController } from "database/session-control";
@@ -48,6 +54,7 @@ import { SessionController } from "database/session-control";
 function ProcessingEdit({editNode, onClose, onSetProcessingNode}) {
 
   const [nodeConfig, setNodeConfig] = useState({Configurations: []});
+  const [timerange, setTimerange] = useState({start: null, end: null});
 
   useEffect(() => {
     if (!editNode) return;
@@ -96,6 +103,39 @@ function ProcessingEdit({editNode, onClose, onSetProcessingNode}) {
               />
             </MDBox>
           );
+        } else if (a.Type == "Date") {
+          return (
+            <MDBox key={a.Id} px={2} pt={2}>
+              <MDBox p={2} display={"flex"} flexDirection={"row"}>
+                <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+                  <DatePicker
+                    label={a.Label + " Date"}
+                    value={a.Value === undefined ? "" : a.Value}
+                    onChange={(newDate) => {
+                      setNodeConfig((nodeConfig) => {
+                        nodeConfig.Configurations[index].Value = newDate;
+                        return {...nodeConfig}
+                      })
+                    }}
+                    renderInput={(params) => <TextField {...params} />}
+                  />
+                </LocalizationProvider>
+                <LocalizationProvider dateAdapter={AdapterMoment}>
+                  <TimePicker
+                    label={a.Label + " Time"}
+                    value={a.ValueTime === undefined ? "" : a.ValueTime}
+                    onChange={(newDate) => {
+                      setNodeConfig((nodeConfig) => {
+                        nodeConfig.Configurations[index].ValueTime = newDate;
+                        return {...nodeConfig}
+                      })
+                    }}
+                    renderInput={(params) => <TextField {...params} />}
+                  />
+                </LocalizationProvider>
+              </MDBox>
+            </MDBox>
+          );
         }
       })}
       
@@ -108,6 +148,25 @@ function ProcessingEdit({editNode, onClose, onSetProcessingNode}) {
           </MDButton>
           <MDButton color={"info"} 
             onClick={() => {
+              nodeConfig.Configurations = nodeConfig.Configurations.map((a) => {
+                if (a.Type == "Date") {
+                  let date = 0;
+                  if (a.Value && a.ValueTime) {
+                    if (!a.Value.toISOString) {
+                      a.Value = moment(a.Value);
+                    } 
+                    if (!a.ValueTime.toISOString) {
+                      a.ValueTime = moment(a.ValueTime);
+                    }
+                    date = new Date(a.Value.toISOString().split("T")[0] + "T" + a.ValueTime.toISOString().split("T")[1]).getTime();
+                    date -= (a.Value.utcOffset() - a.ValueTime.utcOffset()) * 60000;
+                    a.Value = date; 
+                    a.ValueTime = date;
+                  }
+                }
+                return a;
+              });
+
               onSetProcessingNode({
                 ...editNode,
                 data: nodeConfig

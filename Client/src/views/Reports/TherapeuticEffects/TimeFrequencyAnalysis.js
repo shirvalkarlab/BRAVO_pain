@@ -136,6 +136,15 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         }
       }
     }
+    
+    const uniqueStimChannels = [];
+    for (let trial in dataToRender.Therapy) {
+      for (let chan in dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview) {
+        if (!uniqueStimChannels.includes(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName)) {
+          uniqueStimChannels.push(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName);
+        }
+      }
+    }
 
     let stimulationLineColor = ["#253EF7", "#FCA503", "#8bc34a", "#9c27b0"]
     for (let trial in dataToRender.Therapy) {
@@ -150,9 +159,9 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             id: dataToRender.Therapy[trial].RecordingId,
             current_alignment: dataToRender.Therapy[trial].Alignment*1000,
             name: "Stimulation Waveform",
-            linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[chan],
+            linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[uniqueStimChannels.indexOf(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName)],
             hovertemplate: ` ${dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)}<br>  %{x} <extra></extra>`,
-            name: chan, showlegend: false
+            name: dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName, showlegend: false
           }, 
           axName: "Stimulation"
         });

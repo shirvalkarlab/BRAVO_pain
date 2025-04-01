@@ -331,6 +331,33 @@ def text2num(textList):
     else:
         return float(textList)
 
+def getSensingChannelNameFromStimulationElectrode(channel):
+    """ 
+    
+    """
+
+    StimContacts = []
+    for contact in channel:
+        if contact["ElectrodeStateResult"] != "ElectrodeStateDef.None":
+            _, electrodeId = reformatElectrodeDef(contact["Electrode"])
+            
+            if contact["Electrode"].find("ElectrodeDef.FourElectrodes_") >= 0:
+                StimContacts.append(electrodeId)
+            elif contact["Electrode"].find("ElectrodeDef.Sen") >= 0:
+                if electrodeId in [1,2,3]:
+                    StimContacts.append(1)
+                elif electrodeId in [4,5,6]:
+                    StimContacts.append(2)
+                    
+    if 1 in StimContacts and 2 in StimContacts:
+        return "ZERO_THREE"
+    elif 1 in StimContacts:
+        return "ZERO_TWO"
+    elif 2 in StimContacts:
+        return "ONE_THREE"
+    
+    return "Unknown"
+
 def reformatStimulationChannel(channel):
     """ Reformat Stimulation electrode definitions to common expressions.
 
@@ -1478,17 +1505,18 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 Stream["Sequences"][PackageID] = Stream["LfpData"][PackageID]["Seq"]
                 Stream["Time"][PackageID] = Stream["LfpData"][PackageID]["TicksInMs"] / 1000.0
                 Stream["Ticks"][PackageID] = Stream["LfpData"][PackageID]["TicksInMs"]
-                
-            while True:
-                if np.all(Stream["Sequences"][:2] == Stream["Sequences"][2:4]):
-                    Stream["Power"] = Stream["Power"][2:,:]
-                    Stream["Stimulation"] = Stream["Stimulation"][2:,:]
-                    Stream["Sequences"] = Stream["Sequences"][2:]
-                    Stream["Time"] = Stream["Time"][2:]
-                    Stream["Ticks"] = Stream["Ticks"][2:]
-                    print(f"Stream {Stream['FirstPacketDateTime']} Repeated Sequences")
-                else:
-                    break
+            
+            if len(Stream["Sequences"]) > 4:
+                while True:
+                    if np.all(Stream["Sequences"][:2] == Stream["Sequences"][2:4]):
+                        Stream["Power"] = Stream["Power"][2:,:]
+                        Stream["Stimulation"] = Stream["Stimulation"][2:,:]
+                        Stream["Sequences"] = Stream["Sequences"][2:]
+                        Stream["Time"] = Stream["Time"][2:]
+                        Stream["Ticks"] = Stream["Ticks"][2:]
+                        print(f"Stream {Stream['FirstPacketDateTime']} Repeated Sequences")
+                    else:
+                        break
                 
             Stream["InitialTickInMs"] = Stream["LfpData"][0]["TicksInMs"] % 1000.0
             Stream["Time"] -= Stream["Time"][0]
