@@ -134,7 +134,6 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                         }
 
                         for lead in DBSDevice["Electrodes"]:
-                            print(lead)
                             for k in range(len(Activity["ChannelNames"])):
                                 if Activity["ChannelNames"][k].startswith("LeftHemisphere") and lead["Target"].startswith("Left"):
                                     Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("LeftHemisphere", lead["CustomName"])

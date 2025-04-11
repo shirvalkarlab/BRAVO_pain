@@ -35,7 +35,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
-from modules.HelperFunctions import sanitize_input, get_or_none
+from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -278,7 +278,43 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
-    
+        
+class QueryChronicTimeline(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RequestAll":
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            
+            #result = Database.getCachedResult("/queryChronicTimeline", request.data["ParticipantId"], {**userConfig, **request.data})
+            #if result:
+            #    return Response(status=200, data=result)
+            
+            Analysis = {}
+            Analysis["Timelines"] = DataAnalysis.queryChronicTimeline(request.data["ParticipantId"], userConfig)
+            Analysis["ProcessingConfiguration"] = userConfig
+            Analysis = json_compliant_handler(Analysis)
+            Database.saveCachedResult(Analysis, "/queryChronicTimeline", request.data["ParticipantId"], {**userConfig, **request.data})
+            return Response(status=200, data=Analysis)
+
+        elif request.data["RequestType"] == "DeleteCache":
+            Database.deleteCachedResult(request.data["ParticipantId"], url="/queryChronicTimeline")
+            return Response(status=200)
+
 class QueryChronicNeuralActivity(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]

@@ -57,7 +57,7 @@ class DBSDevice(models.Model):
     def get_name(self):
         if len(self.name) > 0:
             return self.name
-        return self.device_bloodline
+        return self.device_bloodline if len(self.device_bloodline) > 0 else self.serial_number
 
     def include(*args, **kwargs):
         return DBSDevice.objects.select_related("owner").filter(**kwargs).exists()
@@ -68,6 +68,10 @@ class DBSDevice(models.Model):
     def find_all(*args, **kwargs):
         return DBSDevice.objects.select_related("owner").filter(**kwargs).all()
 
+    def create(serial_number, type):
+        device = DBSDevice(serial_number=serial_number, type=type)
+        return device
+    
     def find_or_create(serial_number, leads, type, institute):
         devices = DBSDevice.objects.select_related("owner").filter(serial_number=serial_number, type=type, owner__institute__pk=institute).all()
         if len(devices) > 0:

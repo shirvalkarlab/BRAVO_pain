@@ -93,7 +93,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
     }
 
     if (uniqueDates.length > 0) {
-      setAvailableDates(uniqueDates.sort((a,b) => a.value - b.value));
+      setAvailableDates(uniqueDates.sort((a,b) => b.value - a.value));
       setViewDate(uniqueDates[0]);
       setFilterOptions({TypeOptions: typeOptions, Type: "All", Keyword: ""})
     }

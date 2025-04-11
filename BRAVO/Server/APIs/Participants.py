@@ -155,6 +155,35 @@ class DeleteParticipantInformation(RestViews.APIView):
         Participant.delete()
         return Response(status=200)
 
+class ManageParticipantDevice(RestViews.APIView):
+    
+    permission_classes = [IsAuthenticated,]
+    parser_classes = [RestParsers.JSONParser]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
+            return Response(status=403)
+        
+        Participant = models.Participant.find(uid=request.data["ParticipantId"])
+
+        if not "DeviceId" in request.data.keys():
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "DeviceType", "ManufacturerDeviceType", "SerialNumber"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            if request.data["DeviceType"] == "DBSDevice":
+                device = models.DBSDevice.find(serial_number=request.data["SerialNumber"], type=request.data["ManufacturerDeviceType"], owner=Participant)
+                if not device:
+                    device = models.DBSDevice.create(request.data["SerialNumber"], request.data["ManufacturerDeviceType"])
+                    device.owner = Participant
+                    device.save()
+                return Response(status=200, data=device.get_info())
+            
+        return Response(status=400, data={"message": "Malformed Input"})
+        
 class UpdateDeviceInformation(RestViews.APIView):
     
     permission_classes = [IsAuthenticated,]

@@ -48,6 +48,7 @@ import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
 
 import { experimentalRoutes } from "views/Experimental/plugins";
+import ChronicTimeline from "views/Reports/ChronicTimeline";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
@@ -181,6 +182,13 @@ const routes = {
         icon: <TimelineIcon />,
         route: "/reports/chronic-neural-activity/:participant_uid",
         component: <ChronicNeuralActivity />,
+      },
+      {
+        key: "chronic-timeline",
+        name: "Generic Timeline Report",
+        icon: <TimelineIcon />,
+        route: "/reports/chronic-timeline/:participant_uid",
+        component: <ChronicTimeline />,
       },
       {
         key: "events",

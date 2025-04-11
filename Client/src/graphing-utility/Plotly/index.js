@@ -713,6 +713,29 @@ class PlotlyRenderManager {
     return colorAxisID;
   };
 
+  getColorAxis() {
+    return this.coloraxis;
+  };
+
+  setColorAxis(options, colorAxisID) {
+    if (!options) {
+      delete this.layout[colorAxisID];
+      this.coloraxis = this.coloraxis.filter((a) => a != colorAxisID);
+      return;
+    }
+
+    for (var key of Object.keys(options)) {
+      if (key == "clim") {
+        this.layout[colorAxisID].cmin = options[key][0];
+        this.layout[colorAxisID].cmax = options[key][1];
+      } else {
+        this.layout[colorAxisID][key] = options[key];
+      }
+    }
+
+    return this.coloraxis;
+  };
+
   setClim(limit, colorAxisID) {
     this.layout[colorAxisID].cmin = limit[0];
     this.layout[colorAxisID].cmax = limit[1];

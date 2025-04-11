@@ -20,6 +20,7 @@ import uuid
 from cryptography.fernet import Fernet
 import secrets
 import hashlib, base64
+import numpy as np
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
 secureEncoder = Fernet(key)
@@ -74,6 +75,21 @@ def sanitize_input(data, required_keys=[], accepted_keys=[]):
         raise Exception("Insufficient Form Data Input. Malformed Request.")
     
     return True
+
+def json_compliant_handler(data):
+    if type(data) == list:
+        for i in range(len(data)):
+            data[i] = json_compliant_handler(data[i])
+    elif type(data) == dict:
+        for item in data.keys():
+            data[item] = json_compliant_handler(data[item])
+    elif type(data) == np.ndarray:
+        data = data.tolist()
+        data = json_compliant_handler(data)
+    elif type(data) == float:
+        if np.isnan(data):
+            return None
+    return data
 
 def PKCE_code_verifier():
     return secrets.token_urlsafe(64)

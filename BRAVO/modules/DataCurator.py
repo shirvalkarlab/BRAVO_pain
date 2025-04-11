@@ -33,6 +33,7 @@ from io import BytesIO
 from filelock import Timeout, FileLock
 
 from Server import models
+from modules.NeuroPace.PersystDecoder import parsePersystRecording
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
 from modules.ExternalDevices.MATLAB import decodeMATLABFile
@@ -59,6 +60,66 @@ def saveCacheFile(filename, metadata, raw_bytes):
     source_file.hashed = hashed
     source_file.save()
     return source_file
+
+def NeuroPacePersystDatDecoder(source_file, person=None):
+    rawBytes = loadCacheFile(source_file)
+
+    # Process Patient/Device/Electrode Information for Storage and Query
+    PatientInformation = source_file.metadata["layout"]["PatientInformation"]
+
+    lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
+    with lock.acquire(timeout=180):
+        if not person:
+            person, person_created = models.Participant.find_or_create(PatientInformation["Initials"], PatientInformation["Identifier"], source_file.metadata["Institute"])
+            if person_created:
+                person.date_of_birth = PatientInformation["Timestamp"] if "Timestamp" in PatientInformation.keys() else 0
+                person.sex = PatientInformation["Gender"] if "Gender" in PatientInformation.keys() else "Unknown"
+                person.diagnosis = PatientInformation["Diagnosis"] if "Diagnosis" in PatientInformation.keys() else "Unknown"
+                person.institute_id = source_file.metadata["Institute"]
+                person.save()
+        
+        
+        device = models.DBSDevice.find(owner=person, type="NeuroPace " + PatientInformation["DeviceType"], serial_number=PatientInformation["DeviceIdentifier"] if "DeviceIdentifier" in PatientInformation.keys() else "")
+        if not device:
+            device = models.DBSDevice(serial_number=PatientInformation["DeviceIdentifier"] if "DeviceIdentifier" in PatientInformation.keys() else "", type="NeuroPace " + PatientInformation["DeviceType"])
+            device.owner = person
+            device.name = ""
+            device.device_bloodline = ""
+            device.save()
+        
+        # Electrode Information not available for RNS.
+        
+    Recordings = parsePersystRecording(rawBytes, source_file.metadata["layout"])
+    for stream in Recordings:
+        recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+            recording.delete()
+            continue
+        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+        hashed = Database.saveSourceFile(stream["recording"], filename)
+        # TODO: Error handling
+        if not hashed:
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue 
+        if models.Recording.include(hashed=hashed, source__owner=person):
+            recording.delete()
+        else:
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.save()
+
+    os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
+    shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat")
+    source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = device.uid
+    source_file.owner = person
+    source_file.save()
+
+    person.last_update = models.current_time()
+    person.save()
+    return True
 
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     rawBytes = loadCacheFile(source_file)
@@ -124,6 +185,9 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             if DatabaseEntries["SessionOverview"]["SessionTimestamp"] < electrode.implanted_date:
                 electrode.implanted_date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
                 electrode.save()
+        
+        source_file.owner = person
+        source_file.save()
     
     # Therapy History Storage
     for therapy in DatabaseEntries["Therapies"]:
@@ -194,6 +258,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
+        
         if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
@@ -283,7 +348,7 @@ def EventCSVDecoder(source_file, person):
 
 def MATFileDecoder(source_file, person, startTime=None):
     rawBytes = loadCacheFile(source_file)
-    MATFile = decodeMATLABFile(rawBytes)
+    DataType, MATFile = decodeMATLABFile(rawBytes)
 
     def CommonName(nameList):
         commonNames = []
@@ -296,41 +361,97 @@ def MATFileDecoder(source_file, person, startTime=None):
             if Found:
                 commonNames.append(allSubString[i])
         return commonNames
+    
+    if DataType == "ExternalSensorStreaming":
+        for ProcessedData in MATFile:
+            if startTime and ProcessedData["StartTime"] == 0:
+                ProcessedData["StartTime"] = startTime
 
-    for ProcessedData in MATFile:
-        if startTime and ProcessedData["StartTime"] == 0:
-            ProcessedData["StartTime"] = startTime
+            recording = models.Recording(**{
+                "name": "", "type": "MATFile", "date": ProcessedData["StartTime"], "metadata": {
+                    "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
+                    "Duration": ProcessedData["Duration"],
+                    "ChannelNames": ProcessedData["ChannelNames"]
+                }
+            }, source=source_file)
+            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                recording.delete()
+                continue
 
-        recording = models.Recording(**{
-            "name": "", "type": "MATFile", "date": ProcessedData["StartTime"], "metadata": {
-                "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
-                "Duration": ProcessedData["Duration"],
-                "ChannelNames": ProcessedData["ChannelNames"]
-            }
-        }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
-            recording.delete()
-            continue
+            filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+            hashed = Database.saveSourceFile(ProcessedData, filename)
+            # TODO: Error handling
+            if not hashed:
+                print("Hashing Failed for Data Storage")
+                print(recording.__dict__)
+                continue 
+            if models.Recording.include(hashed=hashed, source__owner=person):
+                recording.delete()
+            else:
+                recording.pointer = filename
+                recording.hashed = hashed
+                recording.save()
 
-        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
-        hashed = Database.saveSourceFile(ProcessedData, filename)
-        # TODO: Error handling
-        if not hashed:
-            print("Hashing Failed for Data Storage")
-            print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+    elif DataType == "CustomizedTimelineData":
+        for ProcessedData in MATFile:
+            recording = models.Recording(**{
+                "name": "", "type": "CustomizedTimelineData", "date": ProcessedData["StartTime"], "metadata": {
+                    "ChannelNames": ProcessedData["ChannelNames"]
+                }
+            }, source=source_file)
+            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                recording.delete()
+                continue
+
+            filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+            hashed = Database.saveSourceFile(ProcessedData, filename)
+            # TODO: Error handling
+            if not hashed:
+                print("Hashing Failed for Data Storage")
+                print(recording.__dict__)
+                continue 
+            if models.Recording.include(hashed=hashed, source__owner=person):
+                recording.delete()
+            else:
+                recording.pointer = filename
+                recording.hashed = hashed
+                recording.save()
+
+    elif DataType == "CustomizedStreamingData":
+        for ProcessedData in MATFile:
+            recording = models.Recording(**{
+                "name": "", "type": "CustomizedStreamingData", "date": ProcessedData["StartTime"], "metadata": {**{
+                    "ChannelNames": ProcessedData["ChannelNames"],
+                    "Duration": ProcessedData["Duration"]
+                }, **ProcessedData["Descriptor"]}
+            }, source=source_file)
+            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                recording.delete()
+                continue
+
+            filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+            hashed = Database.saveSourceFile(ProcessedData, filename)
+            # TODO: Error handling
+            if not hashed:
+                print("Hashing Failed for Data Storage")
+                print(recording.__dict__)
+                continue 
+            if models.Recording.include(hashed=hashed, source__owner=person):
+                recording.delete()
+            else:
+                recording.pointer = filename
+                recording.hashed = hashed
+                recording.save()
+            
+    else:
+        raise Exception("MAT File DataType Incorrect")
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
-    source_file.metadata["Device"] = ""
+    if not "Device" in source_file.metadata.keys():
+        source_file.metadata["Device"] = ""
     source_file.owner = person
     source_file.save()
 
@@ -378,7 +499,7 @@ def HPFCSVDecoder(source_file, person, startTime=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename
@@ -434,7 +555,7 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename
@@ -478,7 +599,7 @@ def UFMDATDecoder(source_file, person):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue 
-        if models.Recording.include(hashed=hashed):
+        if models.Recording.include(hashed=hashed, source__owner=person):
             recording.delete()
         else:
             recording.pointer = filename

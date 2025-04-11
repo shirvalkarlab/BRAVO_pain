@@ -63,6 +63,7 @@ import colors from "assets/theme/base/colors";
 import AlphaOmegaMPXUploader from "./AlphaOmegaMPXUploader";
 import EventCSVUploader from "./EventCSVUploader";
 import MATFileUploader from "./MATFileUploader";
+import NeuroPacePersystDatUploader from "./NeuroPacePersystDatUploader";
 
 const filter = createFilterOptions();
 
@@ -151,7 +152,7 @@ function UploadBatchDataView() {
                   }}
                   renderOption={(props, option) => <li {...props}>{option}</li>}
                   value={uploadDataType}
-                  options={["Medtronic JSON Files", "BRAVO Export (v1)"]}
+                  options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "BRAVO Export (v1)"]}
                   onChange={(event, newValue) => setUploadDataType(newValue)}
                 />
                 {uploadDataType === "Medtronic JSON Files" ? (
@@ -159,6 +160,9 @@ function UploadBatchDataView() {
                 ) : null}
                 {uploadDataType === "BRAVO Export (v1)" ? (
                   <BRAVOExportUploader institute={user.Institute} version={"v1"}/>
+                ) : null}
+                {uploadDataType === "NeuroPace Persyst Data Format" ? (
+                  <NeuroPacePersystDatUploader institute={user.Institute} participant={"batch-upload"}/>
                 ) : null}
               </Grid>
             </Grid>
@@ -367,11 +371,14 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", "MATLAB Data File", "3D Images"]}
+                    options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
                     <MedtronicJSONUploader institute={user.Institute} participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "NeuroPace Persyst Data Format" ? (
+                    <NeuroPacePersystDatUploader institute={user.Institute} participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "AlphaOmega MPX Files" ? (
                     <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
@@ -385,7 +392,7 @@ function UploadDeidentifiedDataView() {
                   {uploadDataType === "UF MDAT Files" ? (
                     <UFMDATUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
-                  {uploadDataType === "MATLAB Data File" ? (
+                  {uploadDataType === ".MAT Data File" ? (
                     <MATFileUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "3D Images" ? (

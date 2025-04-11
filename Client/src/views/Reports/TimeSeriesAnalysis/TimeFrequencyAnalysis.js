@@ -75,14 +75,6 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
   useEffect(() => {
     if (!fig) return;
 
-    const caxis = fig.createColorAxis({
-      colorscale: "Jet",
-      colorbar: {y: 0.5, len: 1},
-      clim: [-20, 20],
-    });
-
-    let clim = [-20, 20];
-
     let graphSeries = [];
     for (let i in activeChannels) {
       for (let trial in dataToRender.Signal) {
@@ -104,27 +96,20 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           });
           
           var timeArray = Array(dataToRender.Signal[trial].SignalSeries.Spectrum.Time.length).fill(0).map((value, index) => new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000 + dataToRender.Signal[trial].SignalSeries.Spectrum.Time[index]*1000 + dataToRender.Signal[trial].Alignment*1000));
+
+          const meanPower = Math.quantileSeq(dataToRender.Signal[trial].SignalSeries.Spectrum.Power, [0.5, 0.5]).map((a) => 10*Math.log10(a));
+          //const meanPower = [0,40];
           graphSeries.push({
             type: "surf",
             x: timeArray, y: dataToRender.Signal[trial].SignalSeries.Spectrum.Frequency, z: dataToRender.Signal[trial].SignalSeries.Spectrum.Power.map((a) => {
               return a.map((b) => 10*Math.log10(b));
             }),
             options: {
-              zlim: [-20 , 20],
+              zlim: [meanPower[0]-20, meanPower[0]+20],
               hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)}<br>  %{x} <br>  %{z:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)} <extra></extra>`,
-              coloraxis: caxis,
             }, 
             axName: activeChannels[i] + " " + "TimeFrequencyAnalysis"
           });
-          
-          const meanPower = 10*Math.log10(Math.mean(dataToRender.Signal[trial].SignalSeries.Spectrum.Power));
-          if (clim[0] > meanPower-20) {
-            clim[0] = meanPower-20;
-            clim[1] = meanPower+20;
-          } else if (clim[1] < meanPower+20) {
-            clim[0] = meanPower-20;
-            clim[1] = meanPower+20;
-          }
           
           if (dataToRender.Signal[trial].Alignment != 0) {
             graphSeries.push({
@@ -146,7 +131,6 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         }
       }
     }
-    fig.setClim(clim, caxis);
     
     for (let j in activeChannels) {
       for (let i in annotations) {
@@ -172,13 +156,28 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
   }, [fig, dataToRender, annotations]);
 
   const refreshRender = () => {
+    let caxis = fig.getColorAxis();
+    for (let i in caxis) {
+      fig.setColorAxis(null, caxis[i]);
+    }
+
     for (let i in renderData) {
       const subAx = fig.getAxes(renderData[i].axName);
+
       if (subAx) {
         if (renderData[i].type === "line") {
           fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
         } else if (renderData[i].type === "surf") {
-          fig.surf(renderData[i].x, renderData[i].y, renderData[i].z, renderData[i].options, subAx)
+          const caxis = fig.createColorAxis({
+            colorscale: "Jet",
+            colorbar: {y: (subAx.ydomain[0]+subAx.ydomain[1])/2, len: subAx.ydomain[1]-subAx.ydomain[0]},
+            clim: renderData[i].options.zlim,
+          });
+
+          fig.surf(renderData[i].x, renderData[i].y, renderData[i].z, {...renderData[i].options,
+            coloraxis: caxis
+          }, subAx);
+
         } else if (renderData[i].type === "shading") {
           fig.addShadedArea(renderData[i].x, renderData[i].y, {...renderData[i].options, hovertemplate: "<extra></extra>"}, subAx);
           fig.scatter(renderData[i].xDot, renderData[i].yDot, renderData[i].options, subAx);

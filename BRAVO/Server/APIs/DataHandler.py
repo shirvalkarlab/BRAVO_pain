@@ -93,9 +93,39 @@ class DataUploadHandler(RestViews.APIView):
                     if not person:
                         return Response(status=400, data={"message": "Participant not found."})
                     
+                    if not person.institute.uid == institute.uid:
+                        return Response(status=403)
+                    source_file.owner = person
+                    source_file.save()
+                    
                     DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
                 else:
                     DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+            
+        elif request.data["DataType"] == "NeuroPacePersystDAT":
+            try:
+                if not request.data["ParticipantId"] == "batch-upload":
+                    if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Upload"):
+                        return Response(status=403)
+
+                    person = models.Participant.find(uid=request.data["ParticipantId"])
+                    if not person:
+                        return Response(status=400, data={"message": "Participant not found."})
+                    
+                    if not person.institute.uid == institute.uid:
+                        return Response(status=403)
+                    source_file.owner = person
+                    source_file.save()
+                    
+                    DataCurator.NeuroPacePersystDatDecoder(source_file, person=person)
+                else:
+                    DataCurator.NeuroPacePersystDatDecoder(source_file)
                     
             except Exception as e:
                 print(request.data["File"].name)
@@ -120,7 +150,9 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
-
+            source_file.owner = person
+            source_file.save()
+            
             try:
                 DataCurator.AlphaOmegaMPXDecoder(source_file, person, name=request.data["File"].name)
             except Exception as e:
@@ -136,7 +168,9 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
-
+            source_file.owner = person
+            source_file.save()
+            
             try:
                 DataCurator.UFMDATDecoder(source_file, person)
             except Exception as e:
@@ -152,6 +186,8 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
+            source_file.owner = person
+            source_file.save()
 
             try:
                 if "StartTime" in metadata.keys():
@@ -171,6 +207,8 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
+            source_file.owner = person
+            source_file.save()
 
             try:
                 if "StartTime" in metadata.keys():
@@ -190,6 +228,8 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
+            source_file.owner = person
+            source_file.save()
 
             try:
                 DataCurator.EventCSVDecoder(source_file, person)
@@ -208,6 +248,8 @@ class DataUploadHandler(RestViews.APIView):
             
             if not person.institute.uid == institute.uid:
                 return Response(status=403)
+            source_file.owner = person
+            source_file.save()
 
             try:
                 DataCurator.NeuroImageStorage(source_file, person)

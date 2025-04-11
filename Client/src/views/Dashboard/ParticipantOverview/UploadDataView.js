@@ -83,7 +83,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
               }}
               renderOption={(props, option) => <li {...props}>{option}</li>}
               value={uploadDataType}
-              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", "MATLAB Data File", "3D Images"]}
+              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
               onChange={(event, newValue) => setUploadDataType(newValue)}
             />
           </Grid>
@@ -103,7 +103,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
             {uploadDataType === "UF MDAT Files" ? (
               <UFMDATUploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
-            {uploadDataType === "MATLAB Data File" ? (
+            {uploadDataType === ".MAT Data File" ? (
               <MATFileUploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
             {uploadDataType === "3D Images" ? (

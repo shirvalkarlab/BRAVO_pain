@@ -63,11 +63,14 @@ urlpatterns = [
     path('deleteDeviceInformation', Participants.DeleteDeviceInformation.as_view()),
     path('checkAccessPermission', Participants.CheckAccessPermission.as_view()),
     path('manageStudyInformation', Participants.StudyHandler.as_view()),
+    
+    path('manageParticipantDevice', Participants.ManageParticipantDevice.as_view()),
 
     path('queryAnalysisConfigurations', DataAnalysis.QueryAnalysisConfigurations.as_view()),
     path('queryTherapeuticEffectAnalysis', DataAnalysis.QueryTherapeuticEffectAnalysis.as_view()),
     path('queryNeuralActivitySnapshot', DataAnalysis.QueryNeuralActivitySnapshot.as_view()),
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),
+    path('queryChronicTimeline', DataAnalysis.QueryChronicTimeline.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
 
     path('queryCustomizedAnalysis', DataAnalysis.QueryCustomizedAnalysis.as_view()),
