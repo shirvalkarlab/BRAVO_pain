@@ -110,21 +110,27 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
             Recording["ChannelNames"] = ["LEFT Power","RIGHT Power","LEFT Stimulation","RIGHT Stimulation"]
 
             if Channel[0].endswith("LEFT"):
-                SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"].replace("SensingChannelDef.",""))
-                if Hemisphere == "Left":
-                    SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Right"]["ElectrodeState"])
-                    SecondaryChannel = SensingChannelName + "_RIGHT"
+                if not "ElectrodeState" in StreamingPower[n]["TherapySnapshot"]["Right"].keys():
+                    SecondaryChannel = "ZERO_ZERO_RIGHT"
                 else:
-                    SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"]
+                    SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"].replace("SensingChannelDef.",""))
+                    if Hemisphere == "Left":
+                        SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Right"]["ElectrodeState"])
+                        SecondaryChannel = SensingChannelName + "_RIGHT"
+                    else:
+                        SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Right"]["SensingChannel"]
                 Recording["ChannelNames"] = [Channel[0] + " Power", SecondaryChannel + " Power", Channel[0] + " Stimulation", SecondaryChannel + " Stimulation"]
                     
             elif Channel[0].endswith("RIGHT"):
-                SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"].replace("SensingChannelDef.",""))
-                if Hemisphere == "Right":
-                    SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Left"]["ElectrodeState"])
-                    SecondaryChannel = SensingChannelName + "_LEFT"
+                if not "ElectrodeState" in StreamingPower[n]["TherapySnapshot"]["Left"].keys():
+                    SecondaryChannel = "ZERO_ZERO_LEFT"
                 else:
-                    SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"]
+                    SensingContact, Hemisphere = Percept.reformatChannelName(StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"].replace("SensingChannelDef.",""))
+                    if Hemisphere == "Right":
+                        SensingChannelName = Percept.getSensingChannelNameFromStimulationElectrode(StreamingPower[n]["TherapySnapshot"]["Left"]["ElectrodeState"])
+                        SecondaryChannel = SensingChannelName + "_LEFT"
+                    else:
+                        SecondaryChannel = StreamingPower[n]["TherapySnapshot"]["Left"]["SensingChannel"]
                 Recording["ChannelNames"] = [SecondaryChannel + " Power", Channel[0] + " Power", SecondaryChannel + " Stimulation", Channel[0] + " Stimulation"]
 
             Recording["Data"] = np.zeros((len(StreamingPower[n]["Power"]), 4))

@@ -478,6 +478,17 @@ def reformatChannelName(string):
             channel.append(2)
         if string.find("THREE") >= 0:
             channel.append(3)
+
+        if len(channel) == 1:
+            if string.find("ZERO") >= 0:
+                channel.append(0)
+            if string.find("ONE") >= 0:
+                channel.append(1)
+            if string.find("TWO") >= 0:
+                channel.append(2)
+            if string.find("THREE") >= 0:
+                channel.append(3)
+
         if string.find("LEFT") >= 0:
             return (channel, "Left")
         if string.find("RIGHT") >= 0:

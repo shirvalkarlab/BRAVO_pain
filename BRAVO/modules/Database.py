@@ -19,7 +19,7 @@ Database Interaction
 """
 
 import os, sys, pathlib
-import pickle, blosc
+import pickle, blosc2
 import hashlib, hmac
 import shutil
 from filelock import Timeout, FileLock
@@ -382,7 +382,7 @@ def saveSourceFile(datastruct, pointer, bytes=False):
     try:
         with lock.acquire(timeout=30):
             with open(pointer + ".tmp", "wb+") as file:
-                rawBytes = blosc.compress(pData)
+                rawBytes = blosc2.compress2(pData, typesize=1)
                 hashed = hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
                 file.write(rawBytes)
             shutil.move(pointer + ".tmp", pointer)
@@ -401,7 +401,7 @@ def loadSourceFile(pointer, verifiedHash, bytes=False):
     if not hashed == verifiedHash:
         raise Exception(f"DANGER: Unauthorized Modification of Data {pointer}, risk of Pickle Arbitrary Code Execution.")
 
-    decompressed = blosc.decompress(rawBytes)
+    decompressed = blosc2.decompress2(rawBytes)
 
     # If Request Raw Byte Data
     if bytes:

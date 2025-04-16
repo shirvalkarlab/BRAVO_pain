@@ -19,7 +19,6 @@ Event and Annotations
 """
 
 import os, sys, pathlib
-import pickle, blosc
 import hashlib, hmac
 import shutil
 from filelock import Timeout, FileLock

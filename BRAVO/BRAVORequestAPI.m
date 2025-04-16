@@ -25,6 +25,47 @@ classdef BRAVORequestAPI
             response = webwrite([requester.ServerAddress '/api/queryProfile'], options);
         end
         
+        function response = DeleteParticipant(requester, participant_uid)
+            arguments
+                requester
+                participant_uid
+            end
+
+            data.ParticipantId = participant_uid;
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 500);
+            response = webwrite([requester.ServerAddress '/api/deleteParticipantInformation'], data, options);
+        end
+        
+        function response = AddNewParticipant(requester, participant_name)
+            arguments
+                requester
+                participant_name
+            end
+
+            data.Name = participant_name;
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 5);
+            response = webwrite([requester.ServerAddress '/api/createParticipantInformation'], data, options);
+        end
+        
+        function response = AddNewDBSDevice(requester, participant_uid, device_type, device_serial)
+            arguments
+                requester
+                participant_uid
+                device_type
+                device_serial
+            end
+
+            data.ParticipantId = participant_uid;
+            data.DeviceType = "DBSDevice";
+            data.ManufacturerDeviceType = device_type;
+            data.SerialNumber = device_serial;
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 5);
+            response = webwrite([requester.ServerAddress '/api/manageParticipantDevice'], data, options);
+        end
+        
         function response = QueryParticipants(requester)
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 5);
             response = webwrite([requester.ServerAddress '/api/queryParticipants'], options);
@@ -210,7 +251,6 @@ classdef BRAVORequestAPI
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
             response = webwrite([requester.ServerAddress '/api/queryTherapyHistory'], data, options);
         end
-        
     end
 end
 

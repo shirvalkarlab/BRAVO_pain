@@ -55,6 +55,8 @@ def get_or_none(func):
     def wrapped_func(*args, **kwargs):
         try:
             return func(*args, **kwargs)
+        except FileNotFoundError:
+            return None
         except Exception:
             print(traceback.format_exc())
             return None
