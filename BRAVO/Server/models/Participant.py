@@ -54,6 +54,9 @@ class Participant(models.Model):
     def find(*args, **kwargs):
         return Participant.objects.filter(**kwargs).first()
 
+    def find_all(*args, **kwargs):
+        return Participant.objects.filter(**kwargs).all()
+
     def create(*args, **kwargs):
         return Participant(**kwargs)
 

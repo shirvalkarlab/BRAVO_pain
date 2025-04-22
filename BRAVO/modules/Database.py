@@ -168,6 +168,22 @@ def extractParticipantInformation(participant_uid, deidentified=False):
 def extractParticipantDevices(participant):
     return [i.get_info() for i in models.DBSDevice.find_all(owner=participant)]
 
+# Database.assignSourceFile("","")
+def assignSourceFile(old_device_uid, new_device_uid):
+    old_device = models.DBSDevice.find(uid=old_device_uid)
+    new_device = models.DBSDevice.find(uid=new_device_uid)
+
+    for electrode in old_device.electrodes.all():
+        if not new_device.electrodes.filter(uid=electrode.uid).exists():
+            new_device.electrodes.add(electrode)
+
+    source_files = models.SourceFile.objects.filter(metadata__Device=old_device.uid).all()
+    for file in source_files:
+        file.metadata["Device"] = new_device.uid
+        file.save()
+
+    old_device.delete()
+
 def mergeParticipants(source, target):
     for entry in models.DBSDevice.find_all(owner=source):
         entry.owner = target
@@ -193,8 +209,16 @@ def mergeParticipants(source, target):
         entry.owner = target
         entry.save()
 
+    for entry in models.ParticipantLinkRel.find_all(participant=source):
+        entry.participant = target
+        entry.save()
+
     for entry in models.ScaleRecord.find_all(participant=source):
-        entry.owner = target
+        entry.participant = target
+        entry.save()
+
+    for entry in models.Participant.find_all(original=source):
+        entry.original = target
         entry.save()
 
     for entry in models.SourceFile.find_all(owner=source):
