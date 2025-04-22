@@ -286,13 +286,13 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDButton variant={"contained"} color="info" onClick={() => {
-                      getRecordingData(analysis);
+                      getRecordingData([analysis]);
                       setShowTable(false);
                     }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
                       {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
                     </MDButton>
                     <MDButton variant={"contained"} color="warning" onClick={() => {
-                      //addRecordingData(analysis);
+                      addRecordingData(analysis);
                       //setShowTable(false);
                     }} style={{width: 100, padding: 0, marginTop: 3}} fullWidth>
                       {"Add To View"}

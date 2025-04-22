@@ -71,7 +71,7 @@ function TimeSeriesAnalysis() {
 
   const [annotations, setAnnotations] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState({open: false, config: {}});
-  const [channel, setChannel] = useState({active: "", options: []});
+  const [channel, setChannel] = useState({active: [], options: []});
 
   const [channelInfos, setChannelInfos] = useState([]);
 
@@ -113,7 +113,7 @@ function TimeSeriesAnalysis() {
     
   }, [participant_uid]);
 
-  const getRecordingData = async (analysis, channel) => {
+  const getRecordingData = async (analysisList, channel) => {
     let newQueryChannel = [];
     for (let i in channel) {
       if (!data.CachedChannel.includes(channel[i])) {
@@ -121,31 +121,39 @@ function TimeSeriesAnalysis() {
       }
     }
 
-    setAlert(<LoadingProgress />)
+    setAlert(<LoadingProgress />);
     if (!channel || newQueryChannel.length > 0) {
       try {
-        const response = await SessionController.query("/api/queryTimeseriesAnalysis", {
-          RequestType: "RequestData",
-          ParticipantId: participant_uid,
-          AnalysisId: analysis.Id,
-          ActiveChannels: newQueryChannel
-        })
+        let allResponses = [];
+        for (let l in analysisList) {
+          const subResponse = await SessionController.query("/api/queryTimeseriesAnalysis", {
+            RequestType: "RequestData",
+            ParticipantId: participant_uid,
+            AnalysisId: analysisList[l].Id,
+            ActiveChannels: newQueryChannel
+          });
+          allResponses.push(subResponse.data);
+        }
 
         if (!channel) {
-          setAnnotations(response.data.Annotations);
-          setData({...response.data, CachedChannel: response.data.ActiveChannel, Analysis: analysis});
-          setChannel({active: response.data.ActiveChannel, options: response.data.AllChannels})
+          setAnnotations(allResponses[0].Annotations);
+          setData({...allResponses[0], CachedChannel: allResponses[0].ActiveChannel, Analysis: analysisList});
+          setChannel({active: allResponses[0].ActiveChannel, options: allResponses[0].AllChannels});
         } else {
           setData((data) => {
             data.CachedChannel.push(...newQueryChannel);
             data.ActiveChannel = channel;
-            data.Signal.push(...response.data.Signal);
+            for (let l in allResponses) {
+              data.Signal.push(...allResponses[l].Signal);
+            }
             setChannel((oldChannel) => {
               oldChannel.active = channel;
               return {...oldChannel}
             });
             setAnnotations((annotations) => {
-              annotations.push(...response.data.Annotations);
+              for (let l in allResponses) {
+                annotations.push(...allResponses[l].Annotations);
+              }
               return [...new Set(annotations)];
             });
             return {...data};
@@ -165,6 +173,51 @@ function TimeSeriesAnalysis() {
   };
   
   const addRecordingData = async (analysis, channel) => {
+    const response = await SessionController.query("/api/queryTimeseriesAnalysis", {
+      RequestType: "RequestData",
+      ParticipantId: participant_uid,
+      AnalysisId: analysis.Id,
+      ActiveChannels: data.ActiveChannel ? data.ActiveChannel : []
+    });
+
+    setAlert(<LoadingProgress />);
+    
+    setData((data) => {
+      if (data) {
+        for (let i in response.data.ActiveChannel) {
+          if (!data.CachedChannel.includes(response.data.ActiveChannel[i])) {
+            data.CachedChannel.push(response.data.ActiveChannel[i]);
+          }
+        }
+        for (let i in response.data.ActiveChannel) {
+          if (!data.ActiveChannel.includes(response.data.ActiveChannel[i])) {
+            data.ActiveChannel.push(response.data.ActiveChannel[i]);
+          }
+        }
+        data.Signal.push(...response.data.Signal);
+        
+        if (!data.Analysis.includes(analysis)) {
+          data.Analysis.push(analysis);
+        }
+      } else {
+        data = {...response.data, CachedChannel: response.data.ActiveChannel, Analysis: [analysis]};
+      }
+
+      setChannel((channel) => {
+        for (let i in response.data.AllChannels) {
+          if (!channel.options.includes(response.data.AllChannels[i])) {
+            channel.options.push(response.data.AllChannels[i]);
+          }
+        }
+        return {...channel, active: data.ActiveChannel};
+      });
+      setAnnotations((annotations) => {
+        annotations.push(...response.data.Annotations);
+        return [...new Set(annotations)];
+      });
+      return {...data};
+    });  
+    setAlert(null);
     
   };
   
