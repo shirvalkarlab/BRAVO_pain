@@ -312,6 +312,9 @@ class QueryChronicTimeline(RestViews.APIView):
             return Response(status=200, data=Analysis)
 
         elif request.data["RequestType"] == "DeleteCache":
+            Recording = models.Recording.find(type="ProcessedCustomizedStreamingData", source__owner__uid=request.data["ParticipantId"])
+            if Recording:
+                Recording.delete()
             Database.deleteCachedResult(request.data["ParticipantId"], url="/queryChronicTimeline")
             return Response(status=200)
 

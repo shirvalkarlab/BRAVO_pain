@@ -1679,7 +1679,7 @@ def queryChronicTimeline(participant_uid, config):
                 SelectedData = Activity["Time"][k] != 0
                 Activity["Data"][k] = 10*np.log10(Activity["Data"][k][SelectedData,:].T)
                 Activity["Time"][k] = Activity["Time"][k][SelectedData]
-                Activity["CLim"].append([np.percentile(Activity["Data"][k], 25), np.percentile(Activity["Data"][k], 85)])
+                Activity["CLim"].append([np.percentile(Activity["Data"][k], 15), np.percentile(Activity["Data"][k], 95)*1.1])
             
             Activity["ChannelNames"] = [name + " Chronic Spectrum" for name in Activity["ChannelNames"]]
             source = models.SourceFile.find(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
