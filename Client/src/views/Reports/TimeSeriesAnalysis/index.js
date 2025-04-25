@@ -222,14 +222,16 @@ function TimeSeriesAnalysis() {
   };
   
   const exportCurrentStream = () => {
-    let downloader = document.createElement('a');
-    downloader.href = SessionController.getDownloadLink("/api/downloadData", {
-      ParticipantId: participant_uid,
-      CacheType: "queryTimeseriesAnalysis",
-      RecordingId: data.Analysis.Id
-    });
-    downloader.target = '_blank';
-    downloader.click();
+    for (let i in data.Analysis) {
+      let downloader = document.createElement('a');
+      downloader.href = SessionController.getDownloadLink("/api/downloadData", {
+        ParticipantId: participant_uid,
+        CacheType: "queryTimeseriesAnalysis",
+        RecordingId: data.Analysis[i].Id
+      });
+      downloader.target = '_blank';
+      downloader.click();
+    }
   };
 
   const handleAddEvent = async (eventInfo) => {
@@ -365,13 +367,15 @@ function TimeSeriesAnalysis() {
                             {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
                           </MDButton>
                           <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
-                            SessionController.query("/api/queryTimeseriesAnalysis", {
-                              RequestType: "DeleteCache",
-                              ParticipantId: participant_uid,
-                              AnalysisId: data.Analysis.Id,
-                            }).then((response) => {
-                              getRecordingData(data.Analysis)
-                            });
+                            for (let i in data.Analysis) {
+                              SessionController.query("/api/queryTimeseriesAnalysis", {
+                                RequestType: "DeleteCache",
+                                ParticipantId: participant_uid,
+                                AnalysisId: data.Analysis[i].Id,
+                              }).then((response) => {
+                                getRecordingData([data.Analysis[i]])
+                              });
+                            }
                           }}>
                             {"Clear Cache"}
                           </MDButton>

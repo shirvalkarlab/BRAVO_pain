@@ -472,3 +472,28 @@ class QueryCustomizedAnalysis(RestViews.APIView):
             return Response(status=200, data=result)
         
         return Response(status=400, data={"message": "Malformed Input"})
+    
+class QueryAIModels(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RequestAll":
+            models = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"])
+            return Response(status=200, data=models)
+
+        else:
+            result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
+            return Response(status=200, data=result)
+
+        return Response(status=400, data={"message": "Malformed Input"})

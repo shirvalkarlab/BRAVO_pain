@@ -74,6 +74,9 @@ urlpatterns = [
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
 
     path('queryCustomizedAnalysis', DataAnalysis.QueryCustomizedAnalysis.as_view()),
+
+    
+    path('queryAIModels', DataAnalysis.QueryAIModels.as_view()),
     
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
     

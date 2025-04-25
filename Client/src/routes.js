@@ -63,6 +63,7 @@ const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
+const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
@@ -248,6 +249,13 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,
+      },
+      {
+        key: "AIHealthcare",
+        name: "AI Healthcare",
+        icon: <MdBuildCircle />,
+        route: "/ai-healthcare/:participant_uid",
+        component: <AIHealthcare />,
       }
     ]
   },
