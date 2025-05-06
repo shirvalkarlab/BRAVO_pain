@@ -50,9 +50,9 @@ def queryProcessingNodes(type=None):
 
 def deleteProcessedData(recording, type=None):
     if not type:
-        models.Recording.find_all(original=recording).delete()
+        models.Recording.find_all(original__in=recording).delete()
     else:
-        models.Recording.find_all(original=recording, type=type).delete()
+        models.Recording.find_all(original__in=recording, type=type).delete()
 
 def saveAnalysisProcessedData(Data, type, metadata, recording):
     ProcessedData = models.Recording.create(recording, type)

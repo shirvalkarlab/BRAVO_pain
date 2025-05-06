@@ -27,6 +27,7 @@ import {
   TableBody,
   TableRow,
   TableCell,
+  TextField,
   InputLabel,
   IconButton,
   Select,
@@ -48,7 +49,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, children}) {
+function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, addRecordingData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -58,6 +59,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
   
   const [filterOptions, setFilterOptions] = React.useState({Type: "", Keyword: "", TypeOptions: []});
   const [displayData, setDisplayData] = React.useState([]);
+  const [editRecordingName, setEditRecordingName] = React.useState({show: false, name: "", tags: [], analysisId: ""});
 
   const tableHeader = [{
     title: "Recording Time",
@@ -262,6 +264,11 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
                     <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
                       {analysis.Type}
                     </MDTypography>
+                    <MDButton variant={"contained"} color="secondary" onClick={() => {
+                      setEditRecordingName({show: true, analysisId: analysis.Id, tags: analysis.Metadata.Tags, name: analysis.Name})
+                    }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
+                      {"Edit Recording"}
+                    </MDButton>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
@@ -303,6 +310,58 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
               })}
             </TableBody>
           </Table>
+          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+            <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
+              <MDTypography variant="h5">
+                {"Edit Recording Information"}
+              </MDTypography>
+            </MDBox>
+            <DialogContent>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <TextField
+                    id="recording-name"
+                    name="recording-name"
+                    variant="standard"
+                    margin="dense"
+                    label="Recording Name"
+                    placeholder="Recording Name"
+                    value={editRecordingName.name}
+                    onChange={(event) => setEditRecordingName({...editRecordingName, name: event.target.value})}
+                    fullWidth
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <Autocomplete
+                    multiple freeSolo
+                    value={editRecordingName.tags}
+                    options={[]}
+                    onChange={(event, newValue) => setEditRecordingName({...editRecordingName, tags: newValue})}
+                    renderInput={(params) => {
+                      return <TextField
+                        {...params}
+                        variant="standard" id="recording_tags"
+                        placeholder={dictionary.ParticipantOverview.TagNames[language]}
+                      />
+                    }}
+                  />
+                </Grid>
+              </Grid>
+            </DialogContent>
+            <DialogActions>
+              <MDBox style={{marginLeft: "auto", paddingRight: 5}}>
+                <MDButton color={"secondary"} onClick={() => setEditRecordingName({...editRecordingName, show: false})}>
+                  {"Cancel"}
+                </MDButton>
+                <MDButton color={"info"} onClick={() => updateRecordingData(editRecordingName).then(() => {
+                  setFilterOptions({...filterOptions})
+                  setEditRecordingName({...editRecordingName, show: false});
+                })} style={{marginLeft: 10}}>
+                  {"Update"}
+                </MDButton>
+              </MDBox>
+            </DialogActions>
+          </Dialog>
         </MDBox>
       </Collapse>
       <MDBox p={2}>
@@ -311,7 +370,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, addRecordingData, chil
         </MDButton>
       </MDBox>
     </>
-  ), [data, showTable, displayData]);
+  ), [data, showTable, editRecordingName, displayData]);
 }
 
 export default TimeSeriesAnalysisTable;

@@ -36,6 +36,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
   const [contextMenu, setContextMenu] = useState(null);
   const [eventInfo, setEventInfo] = useState({ name: "", time: 0, duration: 0, show: false });
   const [dataAlignment, setDataAlignment] = useState({ show: false, alignment: 0 });
+  const [coloraxis, setColorAxis] = useState({ show: false, limit: [-20,20], limit_temp: [-20,20] });
 
   const [fig, setFig] = useState(null);
   const [renderData, setRenderData] = useState(null);
@@ -105,7 +106,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
               return a.map((b) => 10*Math.log10(b));
             }),
             options: {
-              zlim: [meanPower[0]-20, meanPower[0]+20],
+              zlim: coloraxis.limit,
               hovertemplate: `  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)}<br>  %{x} <br>  %{z:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "dB", language)} <extra></extra>`,
             }, 
             axName: activeChannels[i] + " " + "TimeFrequencyAnalysis"
@@ -152,8 +153,9 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       }
     }
     
+    console.log(coloraxis.limit)
     setRenderData(graphSeries);
-  }, [fig, dataToRender, annotations]);
+  }, [fig, dataToRender, coloraxis.limit, annotations]);
 
   const refreshRender = () => {
     let caxis = fig.getColorAxis();
@@ -260,6 +262,10 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             setDataAlignment({...dataAlignment, alignment: eventInfo.current_alignment, show: true})
           };
           }}>{"Adjust Alignment"}</MenuItem>
+        <MenuItem onClick={() => {
+          setContextMenu(null);
+          setColorAxis({...coloraxis, limit_temp: coloraxis.limit, show: true});
+          }}>{"Adjust Colormap"}</MenuItem>
       </Menu>
       <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
         <MDBox px={2} pt={2} sx={{minWidth: 500}}>
@@ -311,6 +317,51 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         </DialogActions>
       </Dialog>
       
+      <Dialog open={coloraxis.show} onClose={() => setColorAxis({...coloraxis, show: false})}>
+        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+          <MDTypography variant="h5">
+            {"Set Colorbar Axis Range (View Only)"} 
+          </MDTypography>
+        </MDBox>
+        <DialogContent>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6} style={{display: "flex", flexDirection: "column"}}>
+              <TextField
+                variant="standard"
+                margin="dense"
+                id={"caxis-lowerlimit"}
+                type={"number"}
+                label="Lower Limit"
+                placeholder={"Lower Limit"}
+                value={coloraxis.limit_temp[0]}
+                onChange={(event) => {
+                  console.log(event.target.value)
+                  setColorAxis({...coloraxis, limit_temp: [event.target.value, coloraxis.limit_temp[1]]})
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} style={{display: "flex", flexDirection: "column"}}>
+              <TextField
+                variant="standard"
+                margin="dense"
+                id={"caxis-upperlimit"}
+                type={"number"}
+                label="Upper Limit"
+                placeholder={"Upper Limit"}
+                value={coloraxis.limit_temp[1]}
+                onChange={(event) => setColorAxis({...coloraxis, limit_temp: [coloraxis.limit_temp[0], event.target.value]})}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <MDButton color="secondary" onClick={() => setEventInfo({...eventInfo, show: false})}>Cancel</MDButton>
+          <MDButton color="info" onClick={() => {
+            setColorAxis({...coloraxis, limit: coloraxis.limit_temp, show: false});
+          }}>Set</MDButton>
+        </DialogActions>
+      </Dialog>
+      
       <Dialog open={dataAlignment.show} onClose={() => setDataAlignment({show: false, alignment: 0})}>
         <MDBox px={2} pt={2}>
           <MDTypography variant="h5">
@@ -338,7 +389,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         </DialogActions>
       </Dialog>
     </MDBox>
-  ), [renderData, activeChannels, eventInfo, dataAlignment, contextMenu]);
+  ), [renderData, activeChannels, coloraxis, eventInfo, dataAlignment, contextMenu]);
 }
 
 export default TimeFrequencyAnalysis;

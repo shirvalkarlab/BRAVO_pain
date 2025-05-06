@@ -115,10 +115,11 @@ class ElectricalStimulation(models.Model):
 
     def get_info(self):
         Electrode = self.electrode.get_info()
-        return {
+
+        Info = {
             "Electrode": Electrode,
-            "Contact": [Electrode["ChannelNames"][i] for i in self.contact],
-            "ReturnContact": [Electrode["ChannelNames"][i] if i >= 0 else "CAN" for i in self.return_contact],
+            "Contact": self.contact,
+            "ReturnContact": self.return_contact,
             "Amplitude": self.amplitude,
             "FractionalAmplitudes": self.amplitude_fraction,
             "AmplitudeUnit": self.amplitude_unit,
@@ -128,6 +129,24 @@ class ElectricalStimulation(models.Model):
             "Cycling": self.cycling,
             "CyclingPeriod": self.cycling_period
         }
+
+        ValidContactName = True
+        for i in self.contact:
+            if i >= len(Electrode["ChannelNames"]):
+                ValidContactName = False
+
+        if ValidContactName:
+            Info["Contact"] = [Electrode["ChannelNames"][i] for i in self.contact]
+            
+        ValidContactName = True
+        for i in self.return_contact:
+            if i >= len(Electrode["ChannelNames"]):
+                ValidContactName = False
+
+        if ValidContactName:
+            Info["ReturnContact"] = [Electrode["ChannelNames"][i] if i >= 0 else "CAN" for i in self.return_contact]
+            
+        return Info
     
 class AdaptiveTherapy(models.Model):
     group = models.ForeignKey("ElectricalTherapy", models.CASCADE)

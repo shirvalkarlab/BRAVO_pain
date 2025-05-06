@@ -134,6 +134,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
 
+            Analysis = json_compliant_handler(Analysis)
             Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryTherapeuticEffectAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
@@ -216,10 +217,24 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
+            Analysis = json_compliant_handler(Analysis)
 
             Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
+
+        elif request.data["RequestType"] == "UpdateData":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingName", "RecordingTags"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            recording = models.Recording.find(uid=request.data["AnalysisId"])
+            if not recording.source.owner.uid == request.data["ParticipantId"]:
+                return Response(status=400, data={"message": "Permission Denied"})
+
+            recording.name = request.data["RecordingName"]
+            recording.metadata["Tags"] = request.data["RecordingTags"]
+            recording.save()
+            return Response(status=200)
 
         elif request.data["RequestType"] == "DeleteCache":
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId"]):
@@ -261,6 +276,7 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryNeuralActivitySnapshot(request.data["ParticipantId"], userConfig)
+            Analysis = json_compliant_handler(Analysis)
 
             Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryNeuralActivitySnapshot", request.data["ParticipantId"], {**userConfig, **request.data})

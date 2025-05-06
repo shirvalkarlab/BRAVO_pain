@@ -50,7 +50,6 @@ import ConfigurationDialog from "components/ConfigurationDialog";
 
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
-import StimulationPSD from "./StimulationPSD";
 import EventPSDs from "../TherapeuticEffects/EventPSDs";
 
 import { SessionController } from "database/session-control";
@@ -327,6 +326,34 @@ function TimeSeriesAnalysis() {
       SessionController.displayError(error, setAlert);
     }
   }
+  
+  const updateRecordingData = async (analysisUpdate) => {
+    setAlert(<LoadingProgress />)
+    try {
+      const response = await SessionController.query("/api/queryTimeseriesAnalysis", {
+        RequestType: "UpdateData",
+        ParticipantId: participant_uid,
+        AnalysisId: analysisUpdate.analysisId,
+        RecordingName: analysisUpdate.name,
+        RecordingTags: analysisUpdate.tags ? analysisUpdate.tags : []
+      });
+      
+      setAvailableAnalysis((availableAnalysis) => {
+        for (let i in availableAnalysis.Recordings) { 
+          if (availableAnalysis.Recordings[i].Id == analysisUpdate.analysisId) {
+            availableAnalysis.Recordings[i].Name = analysisUpdate.name;
+            availableAnalysis.Recordings[i].Metadata.Tags = analysisUpdate.tags ? analysisUpdate.tags : [];
+            break;
+          }
+        }
+        return {...availableAnalysis};
+      });
+      setAlert(null);
+    } catch (error) {
+      SessionController.displayError(error, setAlert);
+    }
+  };
+
 
   return (
     <DatabaseLayout>
@@ -340,7 +367,7 @@ function TimeSeriesAnalysis() {
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
                       {availableAnalysis.Recordings.length > 0 ? (
-                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData} addRecordingData={addRecordingData}/>
+                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData} updateRecordingData={updateRecordingData} addRecordingData={addRecordingData}/>
                       ) : (
                         <MDTypography variant="h6" fontSize={24}>
                           {dictionary.WarningMessage.NoData[language]}
@@ -410,6 +437,26 @@ function TimeSeriesAnalysis() {
                 </Card>
               </Grid>
             ) : null}
+            <Grid item xs={12}>
+              <Card>
+                <MDBox display={"flex"} justifyContent={"space-between"} p={3}>
+                  <Grid container>
+                    <Grid item xs={12}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
+                          {"Burst Analysis"}
+                        </MDTypography>
+                      </MDBox>
+                    </Grid>
+                    <Grid item xs={12} lg={6}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        
+                      </MDBox>
+                    </Grid>
+                  </Grid>
+                </MDBox>
+              </Card>
+            </Grid>
             {annotations.length > 0 ? (
               <Grid item xs={12} lg={6}>
                 <Card>

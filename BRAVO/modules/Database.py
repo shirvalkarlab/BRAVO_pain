@@ -103,7 +103,10 @@ def retrieveProcessingSettings(config=dict()):
         if type(config["ProcessingConfiguration"][key]) == dict:
             for subkey in config["ProcessingConfiguration"][key].keys():
                 if type(config["ProcessingConfiguration"][key][subkey]) == dict and subkey in options[key].keys():
-                    if config["ProcessingConfiguration"][key][subkey]["name"] == options[key][subkey]["name"] and config["ProcessingConfiguration"][key][subkey]["description"] == options[key][subkey]["description"] and config["ProcessingConfiguration"][key][subkey]["options"] == options[key][subkey]["options"]:
+                    if not "name" in config["ProcessingConfiguration"][key][subkey].keys():
+                        options[key][subkey]["value"] = config["ProcessingConfiguration"][key][subkey]["value"]
+
+                    elif config["ProcessingConfiguration"][key][subkey]["name"] == options[key][subkey]["name"] and config["ProcessingConfiguration"][key][subkey]["description"] == options[key][subkey]["description"] and config["ProcessingConfiguration"][key][subkey]["options"] == options[key][subkey]["options"]:
                         options[key][subkey]["value"] = config["ProcessingConfiguration"][key][subkey]["value"]
     
     return options, not (options==config["ProcessingConfiguration"])
