@@ -20,8 +20,19 @@ import {
   Grid,
   Stack,
   Switch,
+  SpeedDial,
+  SpeedDialAction,
+  SpeedDialIcon,
 } from "@mui/material"
 import { styled } from '@mui/material/styles';
+
+import { 
+  ChevronRight as ChevronRightIcon,
+  Settings as SettingsIcon,
+  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
+  Dashboard as DashboardIcon,
+  Cached as CachedIcon
+} from "@mui/icons-material";
 
 import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
@@ -405,6 +416,46 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                 </Grid>
               ) : null}
             </Grid>
+          </MDBox>
+          <MDBox style={{
+            position: 'sticky',
+            bottom: 32,
+            right: 32,
+            pointerEvents: "none"
+          }}>
+            <SpeedDial
+              ariaLabel={"SurveySpeedDial"}
+              color={"info"}
+              icon={<SpeedDialIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+              FabProps={{
+                color: "info",
+                sx: {display: "flex", marginLeft: "auto"}
+              }}
+              sx={{alignItems: "end"}}
+              hidden={false}
+            >
+              <SpeedDialAction
+                key={"GoToTop"}
+                icon={<KeyboardDoubleArrowUpIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Go to Top"}
+                onClick={() => {
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              />
+              <SpeedDialAction
+                key={"ClearCache"}
+                icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Clear Cache (Reprocessing)"}
+                onClick={() => {
+                  SessionController.query("/api/queryChronicNeuralActivity", {
+                    ParticipantId: participant_uid, 
+                    RequestType: "DeleteCache"
+                  }).then((response) => {
+                    window.location.reload()
+                  });
+                }}
+              />
+            </SpeedDial>
           </MDBox>
         </MDBox>
       </DatabaseLayout>

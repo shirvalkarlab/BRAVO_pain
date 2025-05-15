@@ -175,7 +175,7 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
                     return Response(status=400, data={"message": "Permission Denied"})
                 
                 Database.deleteCachedResult(request.data["ParticipantId"], url="/queryTherapeuticEffectAnalysis")
-                DataAnalysis.deleteProcessedData(recording=recording)
+                DataAnalysis.deleteProcessedData(recording=[recording])
 
             return Response(status=200)
 
@@ -244,7 +244,7 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             if not recording.source.owner.uid == request.data["ParticipantId"]:
                 return Response(status=400, data={"message": "Permission Denied"})
             
-            DataAnalysis.deleteProcessedData(recording=recording)
+            DataAnalysis.deleteProcessedData(recording=[recording])
             Database.deleteCachedResult(request.data["ParticipantId"], url="/queryTimeseriesAnalysis")
             return Response(status=200)
 

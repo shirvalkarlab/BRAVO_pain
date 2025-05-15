@@ -33,7 +33,8 @@ import {
   ChevronRight as ChevronRightIcon,
   Settings as SettingsIcon,
   KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon
+  Dashboard as DashboardIcon,
+  Cached as CachedIcon
 } from "@mui/icons-material";
 
 // core components
@@ -337,6 +338,19 @@ function NeuralActivitySnapshot() {
                 icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Edit Processing Configurations"}
                 onClick={() => setDrawerOpen({...drawerOpen, open: true})}
+              />
+              <SpeedDialAction
+                key={"ClearCache"}
+                icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Clear Cache (Reprocessing)"}
+                onClick={() => {
+                  SessionController.query("/api/queryNeuralActivitySnapshot", {
+                    RequestType: "DeleteCache",
+                    ParticipantId: participant_uid,
+                  }).then((response) => {
+                    window.location.reload();
+                  });
+                }}
               />
             </SpeedDial>
           </MDBox>

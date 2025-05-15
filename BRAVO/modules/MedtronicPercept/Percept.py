@@ -452,7 +452,7 @@ def reformatChannelName(string):
                 reformatChannelName(contacts[1]))
 
     channel = list()
-    if string.find("SEGMENT") >= 0:
+    if string.find("SEGMENT") >= 0 or (string.find("ELECTRODE") >= 0 and string.find("RING") < 0):
         if string.find("ONE_A") >= 0:
             channel.append(1.1)
         if string.find("ONE_B") >= 0:
@@ -469,6 +469,7 @@ def reformatChannelName(string):
             return (channel, "Left")
         if string.find("RIGHT") >= 0:
             return (channel, "Right")
+        
     else:
         if string.find("ZERO") >= 0:
             channel.append(0)

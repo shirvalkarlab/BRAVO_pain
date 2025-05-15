@@ -229,14 +229,32 @@ classdef BRAVORequestAPI
             response = webwrite([requester.ServerAddress '/api/queryChronicNeuralActivity'], data, options);
         end
         
-        function response = QueryNeuralActivitySnapshot(requester, participant_uid)
+        function response = QueryNeuralActivitySnapshot(requester, participant_uid, params)
             arguments
                 requester
                 participant_uid
+                params.refresh = false
+                params.config = false
             end
 
             data.ParticipantId = participant_uid;
             data.RequestType = 'RequestAll';
+            
+            if class(params.config) == "struct"
+                data.ProcessingConfiguration = params.config;
+            end
+
+            if params.refresh
+                data.RequestType = "DeleteCache";
+                options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+                webwrite([requester.ServerAddress '/api/queryNeuralActivitySnapshot'], data, options);
+
+                params.refresh = false;
+                params = namedargs2cell(params);
+                response = QueryNeuralActivitySnapshot(requester, participant_uid, params{:});
+                return;
+            end
+
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
             response = webwrite([requester.ServerAddress '/api/queryNeuralActivitySnapshot'], data, options);
         end

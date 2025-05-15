@@ -33,7 +33,8 @@ import {
   ChevronRight as ChevronRightIcon,
   Settings as SettingsIcon,
   KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon
+  Dashboard as DashboardIcon,
+  Cached as CachedIcon
 } from "@mui/icons-material";
 
 // core components
@@ -502,6 +503,22 @@ function TimeSeriesAnalysis() {
                 icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Edit Processing Configurations"}
                 onClick={() => setDrawerOpen({...drawerOpen, open: true})}
+              />
+              <SpeedDialAction
+                key={"ClearCache"}
+                icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Clear Cache (Reprocessing)"}
+                onClick={() => {
+                  for (let i in data.Analysis) {
+                    SessionController.query("/api/queryTimeseriesAnalysis", {
+                      RequestType: "DeleteCache",
+                      ParticipantId: participant_uid,
+                      AnalysisId: data.Analysis[i].Id,
+                    }).then((response) => {
+                      getRecordingData([data.Analysis[i]])
+                    });
+                  }
+                }}
               />
             </SpeedDial>
           </MDBox>
