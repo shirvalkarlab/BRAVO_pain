@@ -498,7 +498,7 @@ def handleProcessingNode(node, participant_uid, input_uid):
     metadata = {
         "Input": input_uid,
         "ParticipantId": participant_uid,
-        "Configurations": node["data"],
+        "Configurations": node["data"]["Configurations"],
         "ProcessMode": "CustomizedAnalysis",
     }
     
@@ -535,7 +535,15 @@ def handleProcessingNode(node, participant_uid, input_uid):
             
         elif node["data"]["Type"] == "Time Frequency Analysis":
             Data = handleCustomTimeFrequencyAnalysis(Data, metadata)
-            Data["DataType"] = ""
+            Data["DataType"] = "Time Frequency Analysis"
+
+        elif node["data"]["Type"] == "Aperiodic Component Extraction":
+            Data = handleAperiodicComponentExtraction(Data, metadata)
+            Data["DataType"] = "Aperiodic Component"
+
+        elif node["data"]["Type"] == "Narrow-band Power Extraction":
+            Data = handleNarrowBandPowerExtraction(Data, metadata)
+            Data["DataType"] = "Narrow-band Power Extraction"
             
         processed = saveAnalysisProcessedData(Data, "CustomAnalysis_"+node["data"]["Type"], metadata, recording)
         
@@ -554,7 +562,7 @@ def extractAnalysisOutput(node):
         del a["Missing"]
         return a
 
-    AnalysisStruct = {"Signal": [], "Spectrum": [], "Annotations": []}
+    AnalysisStruct = {"Signal": [], "Spectrum": [], "TimeFrequencyAnalysis": [], "Annotations": []}
     if Data["DataType"] == "TimeDomain":
         for i in range(len(Data["Data"])):
             Data["Data"][i] = CleanupSignalSeries(Data["Data"][i])
@@ -575,6 +583,15 @@ def extractAnalysisOutput(node):
                 "PSDSeries": Data["Data"][i]
             })
         AnalysisStruct["Type"] = "Spectrum"
+
+    elif Data["DataType"] == "Aperiodic Component":
+        for i in range(len(Data["Data"])):
+            AnalysisStruct["Spectrum"].append({
+                "Type": "Spectrum",
+                "RecordingId": result.uid,
+                "PSDSeries": Data["Data"][i]
+            })
+        AnalysisStruct["Type"] = "Aperiodic Component"
 
     elif Data["DataType"] == "Distribution":
 
@@ -608,6 +625,30 @@ def extractAnalysisOutput(node):
                 "Alignment": 0
             })
         AnalysisStruct["Type"] = "Circadian Rhythm"
+
+    elif Data["DataType"] == "Time Frequency Analysis":
+        for i in range(len(Data["Data"])):
+            for j in range(len(Data["Data"][i]["Spectrum"])):
+                AnalysisStruct["Spectrum"].append({
+                    "Type": "Time Frequency Analysis",
+                    "RecordingId": result.uid,
+                    "Spectrum": Data["Data"][i]["Spectrum"][j],
+                    "Alignment": 0
+                })
+
+        AnalysisStruct["Type"] = "Time Frequency Analysis"
+
+    elif Data["DataType"] == "Narrow-band Power Extraction":
+        for i in range(len(Data["Data"])):
+            Data["Data"][i] = CleanupSignalSeries(Data["Data"][i])
+            AnalysisStruct["Signal"].append({
+                "Type": "Signal",
+                "RecordingId": result.uid,
+                "SignalSeries": Data["Data"][i],
+                "Alignment": 0
+            })
+
+        AnalysisStruct["Type"] = "TimeSeries"
 
     return AnalysisStruct
 
@@ -770,12 +811,17 @@ def handleTimestampSegmentation(Data, config):
                 "Missing": data["Missing"][TimeSelection,:],
                 "Label": "Segmentation"
             }
+            
             if data["SamplingRate"] < 0:
                 Epoch["Time"] = data["Time"][TimeSelection]
-
+            else:
+                Epoch["Time"] = data["Time"][TimeSelection]
             data["Epochs"].append(Epoch)
     
     Data["Data"] = [data for data in Data["Data"] if len(data["Epochs"]) > 0]
+    for data in Data["Data"]:
+        del data["Data"]
+    
     return Data
 
 # %% Processing Node Configuration: Compute Value Distribution
@@ -858,34 +904,50 @@ ProcessingNodes.append({
             "Type": "Input",
             "Verify": "Float",
             "Default": "0.5",
+        },
+        {
+            "Id": "FrequencyResolution",
+            "Condition": True,
+            "Label": "Frequency Resolution (Hz)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "0.5",
         }
     ]
 })
 def handleCustomTimeFrequencyAnalysis(Data, config):
     windowSec = float(config["Configurations"][1]["Value"])
     overlapSec = float(config["Configurations"][2]["Value"])
+    frequencyResolution = float(config["Configurations"][3]["Value"])
 
     for data in Data["Data"]:
         data["Spectrum"] = []
         for Channel in range(len(data["ChannelNames"])):
             if "Data" in data.keys():
                 if config["Configurations"][0]["Value"] == "Welch's Periodogram":
-                    Spectrum = SPU.welchSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                    Spectrum = SPU.welchSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"], frequency_resolution=frequencyResolution)
                     Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                 elif config["Configurations"][0]["Value"] == "Autoregressive Model":
-                    Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
+                    Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=frequencyResolution, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
                     Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
-                data["Spectrum"].append({**Spectrum, **{"Method": config["Configurations"][0]["Value"], "Channel": data["ChannelNames"][Channel], "Label": ""}})
-                
+                data["Spectrum"].append({**Spectrum, **{"Method": config["Configurations"][0]["Value"], 
+                                                        "Channel": data["ChannelNames"][Channel], 
+                                                        "StartTime": data["StartTime"],
+                                                        "Label": ""}})
+
             elif "Epochs" in data.keys():
                 for i in range(len(data["Epochs"])):
                     if config["Configurations"][0]["Value"] == "Welch's Periodogram":
                         Spectrum = SPU.welchSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                         Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
+                        
                     elif config["Configurations"][0]["Value"] == "Autoregressive Model":
                         Spectrum = SPU.autoregressiveSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
                         Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
-                    data["Spectrum"].append({**Spectrum,  **{"Method": config["Configurations"][0]["Value"], "Channel": data["ChannelNames"][Channel], "Label": data["Epochs"][i]["Label"]}})
+                    data["Spectrum"].append({**Spectrum,  **{"Method": config["Configurations"][0]["Value"], 
+                                                             "Channel": data["ChannelNames"][Channel], 
+                                                             "StartTime": data["Epochs"][i]["TimeRange"][0],
+                                                             "Label": data["Epochs"][i]["Label"]}})
 
         if "Data" in data.keys():
             del data["Data"]
@@ -893,6 +955,102 @@ def handleCustomTimeFrequencyAnalysis(Data, config):
         elif "Epochs" in data.keys():
             del data["Epochs"]
 
+    return Data
+
+# %% Processing Node Configuration: Time Frequency Analysis
+ProcessingNodes.append({
+    "Group": "Power Spectral Estimation",
+    "Type": "Aperiodic Component Extraction",
+    "Description": "Extract Aperiodic Component from PSDs",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "EstimationType",
+            "Condition": True,
+            "Label": "Estimation Type",
+            "Type": "SelectSingle",
+            "Options": ["Log-Log Linear Fit", "Spectral Parameterization"],
+            "Default": "Log-Log Linear Fit",
+        },
+        {
+            "Id": "FrequencyRange",
+            "Condition": True,
+            "Label": "Frequency Range in a Comma-Separated List (i.e.: 4-12,40,60-90)",
+            "Type": "Input",
+            "Verify": "String",
+            "Default": "4-12,40,60-90",
+        }
+    ]
+})
+def handleAperiodicComponentExtraction(Data, config):
+    frequencyRanges = config["Configurations"][1]["Value"].split(",")
+    
+    for data in Data["Data"]:
+        for i in range(len(data["Spectrum"])):
+            frequencySelection = np.zeros(data["Spectrum"][i]["Frequency"].shape, dtype=bool)
+            for j in range(len(frequencyRanges)):
+                if "-" in frequencyRanges[j]:
+                    frequencySelection = np.bitwise_or(frequencySelection, rangeSelection(data["Spectrum"][i]["Frequency"], [float(k) for k in frequencyRanges[j].split("-")], "inclusive"))
+                else:
+                    frequencySelection = np.bitwise_or(frequencySelection, data["Spectrum"][i]["Frequency"] == float(frequencyRanges[j]))
+
+            YData = np.log10(data["Spectrum"][i]["Power"][frequencySelection])
+            XData = np.log10(data["Spectrum"][i]["Frequency"][frequencySelection])
+            coe = np.polyfit(XData, YData, 2)
+            data["Spectrum"][i]["AperiodicBaseline"] = np.polyval(coe, np.log10(data["Spectrum"][i]["Frequency"]))
+            for j in range(len(data["Spectrum"][i]["AperiodicBaseline"])):
+                if np.isnan(data["Spectrum"][i]["AperiodicBaseline"][-j-1]):
+                    data["Spectrum"][i]["AperiodicBaseline"][-j-1] = data["Spectrum"][i]["AperiodicBaseline"][-j]
+            data["Spectrum"][i]["AperiodicBaseline"] = np.power(10,data["Spectrum"][i]["AperiodicBaseline"])
+            
+    return Data
+
+# %% Processing Node Configuration: Narrow-Band Power Extraction
+ProcessingNodes.append({
+    "Group": "Feature Extraction",
+    "Type": "Narrow-band Power Extraction",
+    "Description": "Extract narrow band spectral feature from Spectrogram and visualize across time",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "CenterFrequency",
+            "Condition": True,
+            "Label": "Spectral Feature Center Frequency (Hz)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "20",
+        },
+        {
+            "Id": "FrequencyWindow",
+            "Condition": True,
+            "Label": "Spectral Feature Bandwidth [Fc-Fw, Fc+Fw] (Hz)",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "2.5",
+        },
+    ]
+})
+def handleNarrowBandPowerExtraction(Data, config):
+    centerFreq = float(config["Configurations"][0]["Value"])
+    freqWidth = float(config["Configurations"][1]["Value"])
+
+    Features = []
+    for data in Data["Data"]:
+        for i in range(len(data["Spectrum"])):
+            if "Spectrum" in data.keys():
+                print(data["Spectrum"][i]["Channel"])
+                FrequencySelection = rangeSelection(data["Spectrum"][i]["Frequency"], [centerFreq-freqWidth, centerFreq+freqWidth], "inclusive")
+                NarrowbandPower = np.mean(data["Spectrum"][i]["Power"][FrequencySelection, :], axis=0)
+                Features.append({
+                    "Unit": "uV/Hz",
+                    "Data": NarrowbandPower.reshape(1,-1).T,
+                    "Missing": data["Spectrum"][i]["Missing"].reshape(1,-1).T,
+                    "Time": data["Spectrum"][i]["Time"],
+                    "StartTime": data["Spectrum"][i]["StartTime"],
+                    "ChannelNames": [data["Spectrum"][i]["Channel"]]
+                })
+
+    Data["Data"] = Features
     return Data
 
 # %% Processing Node Configuration: Welch's Periodogram
@@ -1514,6 +1672,11 @@ def selectRecordingChannel(analysis, channel_names=[]):
                     if not analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i] in AllChannels:
                         AllChannels.append(analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i])
                         ActiveChannels.append(analysis["Spectrum"][trial]["PSDSeries"]["ChannelNames"][i])
+
+            elif "Spectrum" in analysis["Spectrum"][trial].keys():
+                if not analysis["Spectrum"][trial]["Spectrum"]["Channel"] in AllChannels:
+                    AllChannels.append(analysis["Spectrum"][trial]["Spectrum"]["Channel"])
+                    ActiveChannels.append(analysis["Spectrum"][trial]["Spectrum"]["Channel"])
 
             FilteredAnalysis["Spectrum"].append(analysis["Spectrum"][trial])
 

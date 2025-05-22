@@ -15,9 +15,10 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { useResizeDetector } from 'react-resize-detector';
 
-import { Menu, MenuItem, DialogContent, Autocomplete, TextField } from "@mui/material";
+import { Menu, MenuItem, Dialog, DialogContent, Autocomplete, TextField, Grid, DialogActions } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
 
 import * as Math from "mathjs"
 import colormap from "colormap";
@@ -40,6 +41,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
   const [availableChannels, setAvailableChannels] = useState({active: [], options: []});
   const [data, setData] = useState({});
   const [renderData, setRenderData] = useState([]);
+  const [smoothingFactor, setSmoothingFactor] = useState({ show: false, smooth: 1, smooth_temp: 1 });
   
   const [contextMenu, setContextMenu] = useState(null);
   const [eventInfo, setEventInfo] = useState({
@@ -116,24 +118,51 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
           } else {
             timeArray = data.Signal[i].SignalSeries.Data.map((value, index) => new Date(data.Signal[i].SignalSeries.StartTime*1000 + index*1000 / data.Signal[i].SignalSeries.SamplingRate));
           }
-          graphSeries.push({
-            type: "line",
-            x: timeArray, y: data.Signal[i].SignalSeries.Data,
-            xlim: [timeArray[0],timeArray[timeArray.length-1]], 
-            options: {
-              id: availableChannels.active[j],
-              name: availableChannels.active[j],
-              linewidth: 0.5,
-              hovertemplate: `  %{y:.2f} ${data.Signal[i].SignalSeries.Unit}<extra></extra>`,
-            }, 
-            axName: availableChannels.active[j]
-          });
+
+          if (smoothingFactor.smooth > 1) {
+            const halfWindow = Math.round(smoothingFactor.smooth/2);
+            const smoothSignal = data.Signal[i].SignalSeries.Data.map((a,k) => {
+              if (k < halfWindow) {
+                return Math.mean(data.Signal[i].SignalSeries.Data.slice(0,k+halfWindow+1));
+              } else if (k+halfWindow >= data.Signal[i].SignalSeries.Data.length) {
+                return Math.mean(data.Signal[i].SignalSeries.Data.slice(k-halfWindow));
+              } else {
+                return Math.mean(data.Signal[i].SignalSeries.Data.slice(k-halfWindow,k+halfWindow+1));
+              }
+            });
+            graphSeries.push({
+              type: "line",
+              x: timeArray, y: smoothSignal,
+              xlim: [timeArray[0],timeArray[timeArray.length-1]], 
+              options: {
+                id: availableChannels.active[j],
+                name: availableChannels.active[j],
+                linewidth: 0.5,
+                hovertemplate: `  %{y:.2f} ${data.Signal[i].SignalSeries.Unit}<extra></extra>`,
+              }, 
+              axName: availableChannels.active[j]
+            });
+          } else {
+            graphSeries.push({
+              type: "line",
+              x: timeArray, y: data.Signal[i].SignalSeries.Data,
+              xlim: [timeArray[0],timeArray[timeArray.length-1]], 
+              options: {
+                id: availableChannels.active[j],
+                name: availableChannels.active[j],
+                linewidth: 0.5,
+                hovertemplate: `  %{y:.2f} ${data.Signal[i].SignalSeries.Unit}<extra></extra>`,
+              }, 
+              axName: availableChannels.active[j]
+            });
+          }
+
         }
       }
     }
     
     setRenderData(graphSeries);
-  }, [availableChannels.active, data]);
+  }, [availableChannels.active, smoothingFactor.smooth, data]);
 
   const refreshRender = () => {
     for (let i in renderData) {
@@ -150,7 +179,9 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
   useEffect(() => {
     if (!fig || !renderData) return;
     
+    fig.traces = [];
     refreshRender();
+
     const ref = document.getElementById(figureTitle);
     if (ref) {
       ref.on("plotly_click", plotly_onClick);
@@ -210,6 +241,56 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 400*availableChannels.active.length, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}
         onContextMenu={onContextMenu}
       />
+      
+      <Menu
+        open={contextMenu !== null}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenu !== null
+            ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+            : undefined
+        }
+        disableScrollLock={true}
+      >
+        <MenuItem onClick={() => {
+          setContextMenu(null);
+          setSmoothingFactor({...smoothingFactor, smooth_temp: smoothingFactor.smooth, show: true});
+          }}>{"Set Moving-Average Smoothing"}</MenuItem>
+      </Menu>
+      
+      <Dialog open={smoothingFactor.show} onClose={() => setSmoothingFactor({...smoothingFactor, show: false})}>
+        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+          <MDTypography variant="h5">
+            {"Set Smoothing Factor (View Only)"} 
+          </MDTypography>
+        </MDBox>
+        <DialogContent>
+          <Grid container spacing={2}>
+            <Grid item xs={12} style={{display: "flex", flexDirection: "column"}}>
+              <TextField
+                variant="standard"
+                margin="dense"
+                id={"smoothing-factor"}
+                type={"number"}
+                label="Smoothing Factor (# of Samples)"
+                placeholder={"1"}
+                value={smoothingFactor.smooth_temp}
+                onChange={(event) => {
+                  setSmoothingFactor({...smoothingFactor, smooth_temp: event.target.value});
+                }}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <MDButton color="secondary" onClick={() => setSmoothingFactor({...smoothingFactor, show: false})}>Cancel</MDButton>
+          <MDButton color="info" onClick={() => {
+            setSmoothingFactor({...smoothingFactor, smooth: smoothingFactor.smooth_temp, show: false});
+          }}>Set</MDButton>
+        </DialogActions>
+      </Dialog>
+      
     </MDBox>
   );
 }

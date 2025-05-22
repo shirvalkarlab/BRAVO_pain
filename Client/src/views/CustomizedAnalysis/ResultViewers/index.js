@@ -26,6 +26,8 @@ import TimeDomainFigure from "./TimeDomainFigure";
 import SpectrumFigure from "./SpectrumFigure";
 import DistributionFigure from "./DistributionFigure";
 import CircadianRhythmFigure from "./CircadianRhythmFigure";
+import TimeFrequencyFigure from "./TimeFrequencyFigure";
+import AperiodicComponentFigure from "./AperiodicComponentFigure";
 
 function ResultViewer({participant_uid, analysisId, onClose, node}) {
   const navigate = useNavigate();
@@ -43,6 +45,7 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
       AnalysisId: analysisId,
       ResultId: node.result
     }).then((response) => {
+      console.log(response.data)
       setResult(response.data);
       setAlert(null);
     }).catch((error) => {
@@ -59,6 +62,12 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
         ) : null}
         {result.Type === "Spectrum" ? (
           <SpectrumFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />
+        ) : null}
+        {result.Type === "Aperiodic Component" ? (
+          <AperiodicComponentFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />
+        ) : null}
+        {result.Type === "Time Frequency Analysis" ? (
+          <TimeFrequencyFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"Time Frequency Analysis"} />
         ) : null}
         {result.Type === "Distribution" ? (
           <DistributionFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"DistributionFigure"} />

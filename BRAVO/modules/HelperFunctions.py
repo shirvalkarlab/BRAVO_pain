@@ -89,7 +89,7 @@ def json_compliant_handler(data):
         data = data.tolist()
         data = json_compliant_handler(data)
     elif type(data) == float:
-        if np.isnan(data):
+        if np.isnan(data) or np.isinf(data):
             return None
     return data
 

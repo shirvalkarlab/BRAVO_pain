@@ -113,6 +113,53 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
+    def QueryParticipantInformation(self, participant_uid):
+        form = {"ParticipantId": participant_uid}
+        response = self.query("/api/queryParticipants", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def CreateNewStudy(self, study_name):
+        form = {"RequestType": "CreateStudy", "StudyName": study_name}
+        response = self.query("/api/manageStudyInformation", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def AddToStudy(self, study_id, participant_uid):
+        form = {"RequestType": "AddParticipant", "StudyId": study_id, "ParticipantId": participant_uid}
+        response = self.query("/api/manageStudyInformation", data=form)
+        if response.status_code == 200:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QueryTherapyHistory(self, participant_uid):
+        form = {"ParticipantId": participant_uid}
+        response = self.query("/api/queryTherapyHistory", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+
     def QueryTherapeuticEffectAnalysis(self, participant_uid, analysis_uid=None, config=None):
         form = {"ParticipantId": participant_uid, "RequestType": "Overview"}
         if analysis_uid:
@@ -144,6 +191,30 @@ class BRAVOPlatformRequest:
             form["ProcessingConfiguration"] = config
             
         response = self.query("/api/queryTimeseriesAnalysis", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QueryChronicNeuralActivity(self, participant_uid):
+        form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        response = self.query("/api/queryChronicNeuralActivity", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QueryChronicTimeline(self, participant_uid):
+        form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        response = self.query("/api/queryChronicTimeline", data=form)
         if response.status_code == 200:
             payload = response.json()
             return payload

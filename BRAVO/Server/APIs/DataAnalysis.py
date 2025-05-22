@@ -488,6 +488,7 @@ class QueryCustomizedAnalysis(RestViews.APIView):
                             result = DataAnalysis.extractAnalysisOutput(node)
                             result = DataAnalysis.selectRecordingChannel(result, request.data["ActiveChannels"] if "ActiveChannels" in request.data.keys() else [])
             #Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
+            result = json_compliant_handler(result)
             return Response(status=200, data=result)
         
         return Response(status=400, data={"message": "Malformed Input"})

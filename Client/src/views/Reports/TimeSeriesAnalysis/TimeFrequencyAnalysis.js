@@ -153,7 +153,6 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       }
     }
     
-    console.log(coloraxis.limit)
     setRenderData(graphSeries);
   }, [fig, dataToRender, coloraxis.limit, annotations]);
 
