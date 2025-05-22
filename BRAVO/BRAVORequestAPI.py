@@ -125,6 +125,18 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
+    def ListAllStudies(self):
+        form = {"RequestType": "GetStudies"}
+        response = self.query("/api/manageStudyInformation", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
     def CreateNewStudy(self, study_name):
         form = {"RequestType": "CreateStudy", "StudyName": study_name}
         response = self.query("/api/manageStudyInformation", data=form)
@@ -137,8 +149,19 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
-    def AddToStudy(self, study_id, participant_uid):
+    def AddParticipantToStudy(self, study_id, participant_uid):
         form = {"RequestType": "AddParticipant", "StudyId": study_id, "ParticipantId": participant_uid}
+        response = self.query("/api/manageStudyInformation", data=form)
+        if response.status_code == 200:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def RemoveParticipantFromStudy(self, study_id, participant_uid):
+        form = {"RequestType": "RemoveParticipant", "StudyId": study_id, "ParticipantId": participant_uid}
         response = self.query("/api/manageStudyInformation", data=form)
         if response.status_code == 200:
             return True
