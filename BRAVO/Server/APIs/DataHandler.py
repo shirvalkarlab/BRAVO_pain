@@ -179,6 +179,24 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
+        elif request.data["DataType"] == "UFMDATv2":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+            source_file.owner = person
+            source_file.save()
+            
+            try:
+                DataCurator.UFMDATv2Decoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         elif request.data["DataType"] == "MATFile":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
@@ -375,7 +393,7 @@ class RecordingTimeShiftHandler(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingId", "Alignment"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
@@ -383,23 +401,42 @@ class RecordingTimeShiftHandler(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
         
-        Analysis = models.Analysis.find(uid=request.data["AnalysisId"])
-        if not Analysis:
-            return Response(status=403)
-        
-        Recording = Analysis.recordings.filter(uid=request.data["RecordingId"]).first()
-        if not Recording.source.owner.uid == request.data["ParticipantId"]:
-            return Response(status=403)
-        
-        rel = models.RecordingRel.find(analysis=Analysis, recording=Recording)
-        if not rel:
-            return Response(status=403)
-        
-        try:
-            Recording.adjusted_alignment = float(request.data["Alignment"])
-            Recording.save()
-        except:
-            return Response(status=400, data={"message": "Time Alignment is not valid"})
+        if request.data["RequestType"] == "Analysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingId", "Alignment"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            Analysis = models.Analysis.find(uid=request.data["AnalysisId"])
+            if not Analysis:
+                return Response(status=403)
+            
+            Recording = Analysis.recordings.filter(uid=request.data["RecordingId"]).first()
+            if not Recording.source.owner.uid == request.data["ParticipantId"]:
+                return Response(status=403)
+            
+            rel = models.RecordingRel.find(analysis=Analysis, recording=Recording)
+            if not rel:
+                return Response(status=403)
+            
+            try:
+                Recording.adjusted_alignment = float(request.data["Alignment"])
+                Recording.save()
+            except:
+                return Response(status=400, data={"message": "Time Alignment is not valid"})
+
+        elif request.data["RequestType"] == "Recording":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId", "Alignment"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            Recording = models.Recording.objects.filter(uid=request.data["RecordingId"]).first()
+            if not Recording.source.owner.uid == request.data["ParticipantId"]:
+                return Response(status=403)
+            
+            try:
+                Recording.adjusted_alignment = float(request.data["Alignment"])
+                Recording.save()
+            except:
+                return Response(status=400, data={"message": "Time Alignment is not valid"})
+
 
         return Response(status=200)
 

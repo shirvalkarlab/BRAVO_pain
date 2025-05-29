@@ -38,6 +38,7 @@ import MedtronicJSONUploader from "../UploadDataView/MedtronicJSONUploader";
 import AlphaOmegaMPXUploader from "../UploadDataView/AlphaOmegaMPXUploader";
 import HPFCSVUploader from "../UploadDataView/HPFCSVUploader";
 import UFMDATUploader from "../UploadDataView/UFMDATUploader";
+import UFMDATv2Uploader from "../UploadDataView/UFMDATv2Uploader";
 import NeuroimageUploader from "../UploadDataView/NeuroimageUploader";
 import EventCSVUploader from "../UploadDataView/EventCSVUploader";
 import MATFileUploader from "../UploadDataView/MATFileUploader";
@@ -83,7 +84,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
               }}
               renderOption={(props, option) => <li {...props}>{option}</li>}
               value={uploadDataType}
-              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
+              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "BRAVO Offline Synchronized Recordings", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
               onChange={(event, newValue) => setUploadDataType(newValue)}
             />
           </Grid>
@@ -93,6 +94,9 @@ function UploadDataView({show, participant_uid, onCancel}) {
             ) : null}
             {uploadDataType === "AlphaOmega MPX Files" ? (
               <AlphaOmegaMPXUploader institute={user.Institute}  participant={participant_uid}/>
+            ) : null}
+            {uploadDataType === "BRAVO Offline Synchronized Recordings" ? (
+              <UFMDATv2Uploader institute={user.Institute}  participant={participant_uid}/>
             ) : null}
             {uploadDataType === "HDF CSV Format" ? (
               <HPFCSVUploader institute={user.Institute}  participant={participant_uid}/>

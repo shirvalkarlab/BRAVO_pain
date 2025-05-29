@@ -455,6 +455,65 @@ class PlotlyRenderManager {
   }
 
   /**
+   * Add shaded error plot to figure
+   *
+   * @param {number[]} x - x-data array
+   * @param {number[]} y - top y-data array
+   * @param {number[]} threshold - the bottom y-data
+   * @param {Object} [options] - Shaded Area Configuration Options 
+   * @param {string} [options.color] - #RRGGBB syntax
+   * @param {number} [options.alpha] - fractional alpha value from 0 to 1.
+   * @param {string} [ax] - Subplot to add line to. Default to last access axes.
+   * 
+   */
+  addShading(x, y, threshold, options={}, ax=null) {
+    if (!ax) {
+      ax = this.gca;
+    } else {
+      if (this.ax.includes(ax)) {
+        this.gca = ax;
+      } else {
+        console.log("WARNING: Ax Not Found");
+        ax = this.gca;
+      }
+    }
+
+    var topY = new Array(x.length);
+    for (var t = 0; t < x.length; t++) {
+      topY[t] = y[t] > threshold ? y[t] : threshold;
+    }
+    var bottomY = new Array(x.length);
+    for (var t = 0; t < x.length; t++) {
+      bottomY[t] = threshold;
+    }
+
+    var trace = JSON.parse(JSON.stringify(defaultShadedAreaOptions));
+    trace.xaxis = this.gca.xaxis;
+    trace.yaxis = this.gca.yaxis;
+    trace.x = x;
+    trace.y = bottomY;
+    trace.fill = "none";
+    this.traces.push(trace);
+
+    var trace = JSON.parse(JSON.stringify(defaultShadedAreaOptions));
+    trace.xaxis = this.gca.xaxis;
+    trace.yaxis = this.gca.yaxis;
+    trace.x = x;
+    trace.y = topY;
+    for (var key of Object.keys(options)) {
+      if (key == "color") {
+        trace.fillcolor = options[key] + trace.fillcolor.slice(-2);
+      } else if (key == "alpha") {
+        trace.fillcolor = trace.fillcolor.slice(0,-2) + (Math.round(options[key]*255)).toString(16);
+      } else {
+        trace[key] = options[key];
+      }
+    }
+    trace.fill = "tonexty";
+    this.traces.push(trace);
+  }
+
+  /**
    * Add heatmap (image) plot to figure
    *
    * @param {number[]} x - x-data array

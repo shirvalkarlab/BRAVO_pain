@@ -368,6 +368,26 @@ def listSourceFiles(participant_uid, file_type=None):
 
             SourceFiles.append(SourceFile)
 
+        elif source.type == "UFMDATv2":
+            SourceFile = {
+                "Id": source.uid,
+                "Name": source.name,
+                "Type": "Synchronized External Device Data",
+                "DateOfUpload": source.date,
+                "DateOfRecording": source.date,
+                "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else ""
+            }
+
+            AllRecordings = models.Recording.find_all(source=source)
+            
+            SourceFile["SensorType"] = []
+            SourceFile["RecordingCount"] = []
+            for i in range(len(AllRecordings)):
+                if "ChannelNames" in AllRecordings[i].metadata.keys():
+                    SourceFile["RecordingCount"].append(len(AllRecordings[i].metadata["ChannelNames"]))
+                    SourceFile["SensorType"].append(AllRecordings[i].metadata["SensorType"])
+            SourceFiles.append(SourceFile)
+
         else:
             SourceFile = {
                 "Id": source.uid,

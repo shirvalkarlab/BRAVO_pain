@@ -28,6 +28,7 @@ from filelock import Timeout, FileLock
 
 import numpy as np
 from scipy import signal, stats, optimize
+import pywt
 from specparam import SpectralModel
 
 from Server import models
@@ -68,7 +69,7 @@ def queryAllRecordings(participant_uid, request_type=None):
     if request_type == "Timeseries":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile", "SynchronizedMDAT"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -108,6 +109,9 @@ def queryAllRecordings(participant_uid, request_type=None):
 
             elif recording.type == "DelsysMDAT":
                 Description["Type"] = "Delsys MDT"
+
+            elif recording.type == "SynchronizedMDAT":
+                Description["Type"] = "Synchronized External Data"
 
             elif recording.type == "HPFCSV":
                 Description["Name"] = recording.metadata["SensorType"]
@@ -239,7 +243,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "SynchronizedMDAT", "HPFCSV", "AOMPX", "MATFile"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -264,6 +268,9 @@ def queryAvailableAnalyses(participant_uid, request_type):
 
             elif recording.type == "DelsysMDAT":
                 Description["Type"] = "Delsys MDT"
+
+            elif recording.type == "SynchronizedMDAT":
+                Description["Type"] = "Synchronized External Data"
 
             elif recording.type == "HPFCSV":
                 Description["Name"] = recording.metadata["SensorType"]
@@ -1038,7 +1045,6 @@ def handleNarrowBandPowerExtraction(Data, config):
     for data in Data["Data"]:
         for i in range(len(data["Spectrum"])):
             if "Spectrum" in data.keys():
-                print(data["Spectrum"][i]["Channel"])
                 FrequencySelection = rangeSelection(data["Spectrum"][i]["Frequency"], [centerFreq-freqWidth, centerFreq+freqWidth], "inclusive")
                 NarrowbandPower = np.mean(data["Spectrum"][i]["Power"][FrequencySelection, :], axis=0)
                 Features.append({
@@ -1129,6 +1135,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
+
         Data["Data"] = Data["Data"].T
         Data["MissingIndex"] = []
         for i in range(Data["Missing"].shape[1]):
@@ -1150,7 +1157,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
 
-    if recording.type in ["CustomizedStreamingData"]:
+    elif recording.type in ["CustomizedStreamingData"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
@@ -1194,7 +1201,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
 
-    elif recording.type in ["HPFCSV", "MATFile"]:
+    elif recording.type in ["HPFCSV", "MATFile", "SynchronizedMDAT"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         if not config["APIAccess"]:
             Data = downsampleTimeDomainStreaming(Data)
@@ -1215,6 +1222,9 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
+
+    else:
+        print(recording.type)
 
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
     return AnalysisStruct
@@ -1532,6 +1542,7 @@ def handleCardiacFilter(recording, data, config):
     ProcessedData.save()
     return data
 
+
 def handleTimeFrequencyAnalysis(recording, data, config):
     ProcessedData = models.Recording.find(original=recording, type="TimeFrequencyAnalysis", metadata=config)
     if ProcessedData:
@@ -1608,6 +1619,104 @@ def handleTimeFrequencyAnalysis(recording, data, config):
     ProcessedData.save()
     return data
 
+def processBurstAnalysis(participant_uid, recording_uid, config, centerFreq=22):
+    recording = models.Recording.find(uid=recording_uid)
+    AnalysisStruct = {"Signal": [], "Annotations": []}
+
+    if not recording.source.owner.pk == participant_uid:
+        raise Exception("Permission Denied. Accessing Denied Recordings")
+    
+    if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data = handleBurstActivityPreprocessing(recording, Data, config)
+        
+        for i in range(len(Data["BurstEnvelop"])):
+            WaveletIndex = np.argmin(np.abs(Data["BurstEnvelop"][i]["Frequency"] - centerFreq))
+            Data["BurstEnvelop"][i]["Wavelet"] = Data["BurstEnvelop"][i]["Wavelet"][WaveletIndex,:]
+        
+        Data["MissingIndex"] = []
+        for i in range(Data["Missing"].shape[1]):
+            Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
+        del Data["Missing"]
+        del Data["Data"]
+        del Data["Spectrum"]
+        
+        DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+        for i in range(len(Data["ChannelNames"])):
+            Data["ChannelNames"][i] = DBSDevice["GenericName"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+
+        TimeShift = recording.adjusted_alignment
+        AnalysisStruct["Signal"].append({
+            "Type": "Signal",
+            "RecordingId": recording.uid,
+            "SignalSeries": Data,
+            "Alignment": TimeShift
+        })
+    
+    return AnalysisStruct
+
+def handleBurstActivityPreprocessing(recording, data, config, centerFreq=22):
+    ProcessedData = models.Recording.find(original=recording, type="BurstActivityPreprocessing", metadata=config)
+    if ProcessedData:
+        return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
+    
+    data["BurstEnvelop"] = []
+    if len(data["ChannelNames"]) == 1:
+        data["Data"] = data["Data"].reshape(-1,1)
+        data["Missing"] = data["Missing"].reshape(-1,1)
+
+    for i in range(len(data["ChannelNames"])):
+        coefs, freqs = pywt.cwt(data["Data"][:,i], np.geomspace(1, data["SamplingRate"], num=100), "morl", sampling_period=1/data["SamplingRate"])
+
+        averaging = int(data["SamplingRate"] * 0.2)
+        for j in range(coefs.shape[0]):
+            coefs[j,:] = np.abs(signal.hilbert(coefs[j,:]))
+            coefs[j,:] = SPU.smooth(coefs[j,:], averaging)
+
+        BurstEnvelop = {
+            "Wavelet": coefs,
+            "Frequency": freqs, 
+            "Method": "Morlet",
+        }
+
+        dropMissing = False
+        if dropMissing:
+            TimeSelection = data["Missing"][:,i] == 0
+            BurstEnvelop["Wavelet"] = BurstEnvelop["Wavelet"][:, TimeSelection]
+        
+        BurstEnvelop["Config"] = config
+        data["BurstEnvelop"].append(BurstEnvelop)
+    
+    ProcessedData = models.Recording.create(recording, "BurstActivityPreprocessing")
+    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
+    ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
+    ProcessedData.metadata = config
+    ProcessedData.save()
+    return data
+
+def calculateBurstParameters(envelop, fs):
+    threshold = np.percentile(envelop, 75)
+    above_threshold = np.int16(envelop > threshold)
+    onset = np.where(np.diff(above_threshold) == 1)[0]  # Find where the signal goes above the threshold
+    offset = np.where(np.diff(above_threshold) == -1)[0]
+    if onset[0] > offset[0]:
+        onset = np.insert(onset, 0, 0)
+    if len(offset) > 0 and offset[-1] < onset[-1]:  
+        offset = np.append(offset, len(envelop) - 1)
+    
+    burst_durations = np.array(offset - onset) / fs
+    burst_amplitudes = np.array([np.max(envelop[onset[i]:offset[i]]) for i in range(len(onset))])
+    burst_amplitudes = burst_amplitudes[burst_durations > 0.1]
+    burst_durations = burst_durations[burst_durations > 0.1]
+
+    return {
+        "Threshold": threshold,
+        "Duration": burst_durations,
+        "Amplitude": burst_amplitudes,
+    }
+
+
 def handlePowerSpectralEstimation(recording, data, config):
     Spectrum = handleTimeFrequencyAnalysis(recording, data, config)
 
@@ -1638,6 +1747,8 @@ def selectRecordingChannel(analysis, channel_names=[]):
                 a["Data"] = a["Data"][i,:]
             if "Spectrum" in a.keys():
                 a["Spectrum"] = a["Spectrum"][i]
+            if "BurstEnvelop" in a.keys():
+                a["BurstEnvelop"] = a["BurstEnvelop"][i]
             return a
                     
         for trial in range(len(analysis["Signal"])):

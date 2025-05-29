@@ -295,6 +295,58 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
 
         return Response(status=400, data={"message": "Malformed Input"})
         
+class QueryBurstAnalysis(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RequestData":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingIds", "Channel", "CenterFrequency"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
+
+            AnalysisResults = []
+            BurstWaveform = []
+            for recordingId in request.data["RecordingIds"]:
+                Analysis = DataAnalysis.processBurstAnalysis(request.data["ParticipantId"], recordingId, userConfig, centerFreq=request.data["CenterFrequency"])
+                
+                if not request.data["Channel"] == "RequestAllChannel":
+                    Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["Channel"])
+                Analysis = json_compliant_handler(Analysis)
+                Analysis["ProcessingConfiguration"] = userConfig
+                AnalysisResults.append(Analysis)
+
+                for i in range(len(Analysis["Signal"])):
+                    if Analysis["Signal"][i]["SignalSeries"]["ChannelNames"] == request.data["Channel"]:
+                        fs = Analysis["Signal"][i]["SignalSeries"]["SamplingRate"]
+                        BurstWaveform.extend(Analysis["Signal"][i]["SignalSeries"]["BurstEnvelop"]["Wavelet"])
+
+            Parameters = DataAnalysis.calculateBurstParameters(BurstWaveform, fs)
+            for j in range(len(AnalysisResults)):
+                for i in range(len(AnalysisResults[j]["Signal"])):
+                    if AnalysisResults[j]["Signal"][i]["SignalSeries"]["ChannelNames"] == request.data["Channel"]:
+                        AnalysisResults[j]["Signal"][i]["SignalSeries"]["BurstEnvelop"]["Parameters"] = Parameters
+
+            return Response(status=200, data=AnalysisResults)
+
+        return Response(status=400, data={"message": "Malformed Input"})
+    
 class QueryChronicTimeline(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]

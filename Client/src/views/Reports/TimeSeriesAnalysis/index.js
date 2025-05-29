@@ -52,6 +52,7 @@ import ConfigurationDialog from "components/ConfigurationDialog";
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
 import EventPSDs from "../TherapeuticEffects/EventPSDs";
+import BurstDynamics from "./BurstDynamics";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
@@ -300,8 +301,7 @@ function TimeSeriesAnalysis() {
     try {
       const response = await SessionController.query("/api/setRecordingTimeShift", {
         ParticipantId: participant_uid,
-        RequestType: "Analysis",
-        AnalysisId: data.Analysis.Id,
+        RequestType: "Recording",
         RecordingId: eventInfo.channel,
         Alignment: Alignment
       })
@@ -438,6 +438,7 @@ function TimeSeriesAnalysis() {
                 </Card>
               </Grid>
             ) : null}
+            {data ? (
             <Grid item xs={12}>
               <Card>
                 <MDBox display={"flex"} justifyContent={"space-between"} p={3}>
@@ -449,15 +450,15 @@ function TimeSeriesAnalysis() {
                         </MDTypography>
                       </MDBox>
                     </Grid>
-                    <Grid item xs={12} lg={6}>
-                      <MDBox display={"flex"} flexDirection={"column"}>
-                        
-                      </MDBox>
+                    <Grid item xs={12}>
+                      <BurstDynamics dataToRender={data} annotations={annotations} 
+                        participant_uid={participant_uid} figureTitle={"Burst Analysis"} />
                     </Grid>
                   </Grid>
                 </MDBox>
               </Card>
             </Grid>
+            ) : null}
             {annotations.length > 0 ? (
               <Grid item xs={12} lg={6}>
                 <Card>

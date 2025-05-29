@@ -64,6 +64,7 @@ import AlphaOmegaMPXUploader from "./AlphaOmegaMPXUploader";
 import EventCSVUploader from "./EventCSVUploader";
 import MATFileUploader from "./MATFileUploader";
 import NeuroPacePersystDatUploader from "./NeuroPacePersystDatUploader";
+import UFMDATv2Uploader from "./UFMDATv2Uploader";
 
 const filter = createFilterOptions();
 
@@ -371,7 +372,7 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "AlphaOmega MPX Files", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
+                    options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "AlphaOmega MPX Files", "BRAVO Offline Synchronized Recordings", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
@@ -382,6 +383,9 @@ function UploadDeidentifiedDataView() {
                   ) : null}
                   {uploadDataType === "AlphaOmega MPX Files" ? (
                     <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "BRAVO Offline Synchronized Recordings" ? (
+                    <UFMDATv2Uploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "HDF CSV Format" ? (
                     <HPFCSVUploader institute={user.Institute}  participant={activeParticipant.value}/>

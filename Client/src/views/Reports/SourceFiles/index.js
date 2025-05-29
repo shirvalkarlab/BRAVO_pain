@@ -40,11 +40,12 @@ import MedtronicSourceFileTable from "./MedtronicSourceFileTable";
 import NeuroImageFileTable from "./NeuroImageFileTable";
 import HPFCSVFileTable from "./HPFCSVFileTable";
 import AOMPXFileTable from "./AOMPXFileTable";
+import DefaultFileTable from "./DefaultFileTable";
+import ExternalDevicesFileTable from "./ExternalDevicesFileTable";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
-import DefaultFileTable from "./DefaultFileTable";
 
 export default function SourceFiles() {
   const navigate = useNavigate();
@@ -84,6 +85,7 @@ export default function SourceFiles() {
       else setSourceFileType({active: "", options: []});
 
       setAvailableSourceFiles(response.data)
+      console.log(response.data)
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -218,8 +220,11 @@ export default function SourceFiles() {
             {sourceFileType.active == "HDF CSV Format" ? (
               <HPFCSVFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
-            {["ChronicNeuralActivitySource","FitbitWebAPISource","MATFile"].includes(sourceFileType.active) ? (
+            {["ChronicNeuralActivitySource","FitbitWebAPISource"].includes(sourceFileType.active) ? (
               <DefaultFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
+            ) : null}
+            {["MATFile","Synchronized External Device Data"].includes(sourceFileType.active) ? (
+              <ExternalDevicesFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
           </MDBox>
         </Card>
