@@ -12,6 +12,7 @@
 */
 
 import { useEffect, useState, memo } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -49,6 +50,7 @@ import MDButton from "components/MDButton";
 
 import { FaCircleInfo, FaXmark } from "react-icons/fa6";
 
+import routes from "routes.js";
 import RecordingSelect from "./RecordingSelect";
 import AddStudy from "./AddStudy";
 import DatabaseLayout from "layouts/DatabaseLayout";
@@ -60,6 +62,7 @@ import LoadingProgress from "components/LoadingProgress";
 const filter = createFilterOptions();
 
 export default function StudyManagement() {
+  const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
   const { user, language } = controller;
 
@@ -428,6 +431,47 @@ export default function StudyManagement() {
             </Grid>
           </MDBox>
         </Card>
+        {routes["StudyGroupAnalysis"] ? (
+          <MDBox mb={3} mt={3}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} display={"flex"} alignItems={"stretch"}>
+                <MDTypography variant={"span"} fontSize={15} fontWeight={"bold"}>
+                  {"Study Group Analysis"}
+                </MDTypography>
+              </Grid>
+              {routes["StudyGroupAnalysis"].children.map((subreport) => {
+                if (subreport.hide) return;
+                return <Grid key={subreport.route} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                  <Card sx={{width: "100%"}}>
+                    <MDBox p={2} mx={3} display="flex" justifyContent="center">
+                      <MDBox
+                        display="grid" justifyContent="center" alignItems="center"
+                        width="4rem" height="4rem"
+                        shadow="md" borderRadius="lg" variant="gradient"
+                      >
+                        <Icon fontSize="large">
+                          {subreport.icon}
+                        </Icon>
+                      </MDBox>
+                    </MDBox>
+                    <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
+                      <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" mb={2}>
+                        {subreport.name}
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
+                      <MDButton variant={"contained"} color={"info"} fullWidth onClick={() => {
+                        navigate(subreport.route.replace(":study_uid", activeStudy.value), {replace: false})
+                      }}>
+                        {"View Analysis"}
+                      </MDButton>
+                    </MDBox>
+                  </Card>
+                </Grid>
+              })}
+            </Grid>
+          </MDBox>
+        ) : null}
       </MDBox>
       
       <Dialog open={participantInformation.show} onClose={() => setParticipantInformation({...participantInformation, show: false})} 

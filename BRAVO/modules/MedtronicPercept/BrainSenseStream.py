@@ -257,6 +257,27 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
     
     return TimeDomainRecordings, PowerDomainRecordings
 
+def calculateOverlap(TimeDomainRecording, PowerDomainRecording):
+    """ Calculate Overlap between TimeDomain and PowerDomain Recordings
+
+    Args:
+      TimeDomainRecording: TimeDomain Recording structure.
+      PowerDomainRecording: PowerDomain Recording structure.
+
+    Returns:
+      Overlap value between 0 and 1.
+    """
+    
+    LatestStartTime = np.max((PowerDomainRecording.date, TimeDomainRecording.date))
+    EarliestEndTime = np.min((PowerDomainRecording.date + PowerDomainRecording.metadata["Duration"], TimeDomainRecording.date + TimeDomainRecording.metadata["Duration"]))
+    ShortestDuration = np.min((PowerDomainRecording.metadata["Duration"], TimeDomainRecording.metadata["Duration"]))
+    
+    if LatestStartTime <= EarliestEndTime:
+        Overlap = (EarliestEndTime - LatestStartTime) / ShortestDuration
+        return Overlap
+    else:
+        return 0
+
 def createDefaultAnalysis(TimeDomainRecordings, PowerDomainRecordings):
     AllAnalyses = []
     for i in range(len(TimeDomainRecordings)):

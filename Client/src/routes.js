@@ -46,9 +46,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
-
 import { experimentalRoutes } from "views/Experimental/plugins";
-import ChronicTimeline from "views/Reports/ChronicTimeline";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
@@ -71,6 +69,7 @@ const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
 const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
+const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 const routes = {
@@ -145,9 +144,22 @@ const routes = {
       },
     ]
   },
+  "StudyGroupAnalysis": {
+    icon: <AssessmentIcon />,
+    name: "Group Analysis",
+    children: [
+      {
+        key: "ElectrodeIdentifier",
+        name: "Monopolar vs Bipolar Survey",
+        icon: <PiWavesBold />,
+        route: "/group-analysis/monopolar-bipolar-survey/:study_uid",
+        component: <TherapyHistory />,
+      },
+    ]
+  },
   "GeneralReports": {
     icon: <AssessmentIcon />,
-    name: "General Reports",
+    name: "Brain Data",
     children: [
       {
         key: "therapyHistory",
@@ -162,13 +174,6 @@ const routes = {
         icon: <PiWavesBold />,
         route: "/reports/nerual-activity-snapshot/:participant_uid",
         component: <NeuralActivitySnapshot />,
-      },
-      {
-        key: "therapeutic-effect",
-        name: "Therapeutic Effect Analysis",
-        icon: <FaFileWaveform />,
-        route: "/reports/therapeutic-effect/:participant_uid",
-        component: <TherapeuticEffects />,
       },
       {
         key: "time-series-analysis",

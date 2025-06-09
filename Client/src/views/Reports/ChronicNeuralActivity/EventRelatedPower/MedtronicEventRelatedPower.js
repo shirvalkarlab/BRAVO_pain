@@ -109,9 +109,9 @@ function MedtronicEventRelatedPower({dataToRender, annotations, activeChannel, a
       if (EventRelatedPowers[key].length == 0) continue;
       const matrix = math.matrix(EventRelatedPowers[key]);
       graphSeries.push({
-        type: "line", x: TimeWindow.map((a) => a/60), y: math.mean(matrix,0)._data, error_y: math.std(matrix,0)._data.map((a) => a/math.sqrt(matrix._size[1])),
+        type: "line", x: TimeWindow.map((a) => a/60), y: math.mean(matrix,0)._data, error_y: math.std(matrix,0)._data.map((a) => a/math.sqrt(matrix._size[0])),
         line_options: {
-          name: key,
+          name: key + " (n=" + matrix._size[0].toFixed(0) + ")",
           legendgroup: key,
           linewidth: 2,
           color: annotationState[key] ? annotationState[key].color : "#000000",

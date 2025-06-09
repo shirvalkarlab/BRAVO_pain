@@ -44,11 +44,11 @@ os.makedirs(DATASERVER_PATH + "visualization", exist_ok=True)
 DEBUG = not (os.environ.get('DJANGO_MODE') == "PRODUCTION")
 
 CSRF_TRUSTED_ORIGINS = ["http://localhost:27286", os.environ.get('SERVER_ADDRESS')]
-#SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 #SESSION_COOKIE_HTTPONLY = True
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIIE_HTTPONLY = True
-SESSION_COOKIE_AGE = 3600*24*365
+SESSION_COOKIE_AGE = 3600*1  # 1 hour
 
 ALLOWED_HOSTS = ["localhost", os.environ.get('SERVER_HOST')]
 

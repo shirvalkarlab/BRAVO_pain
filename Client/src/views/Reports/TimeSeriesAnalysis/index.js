@@ -51,6 +51,7 @@ import ConfigurationDialog from "components/ConfigurationDialog";
 
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
+import StimulationPSD from "../TherapeuticEffects/StimulationPSD";
 import EventPSDs from "../TherapeuticEffects/EventPSDs";
 import BurstDynamics from "./BurstDynamics";
 
@@ -106,7 +107,11 @@ function TimeSeriesAnalysis() {
       RequestType: "Overview",
       ParticipantId: participant_uid
     }).then((response) => {
-      setAvailableAnalysis(response.data);
+      let availableAnalysis = response.data;
+      availableAnalysis.Recordings = availableAnalysis.Recordings.filter((recording) => {
+        return recording.Type != "DBS Snapshots";
+      });
+      setAvailableAnalysis(availableAnalysis);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -131,7 +136,8 @@ function TimeSeriesAnalysis() {
             RequestType: "RequestData",
             ParticipantId: participant_uid,
             AnalysisId: analysisList[l].Id,
-            ActiveChannels: newQueryChannel
+            ActiveChannels: newQueryChannel,
+            TherapyId: analysisList[l].Therapy ? analysisList[l].Therapy[0].Id : null
           });
           allResponses.push(subResponse.data);
         }
@@ -331,17 +337,19 @@ function TimeSeriesAnalysis() {
   const updateRecordingData = async (analysisUpdate) => {
     setAlert(<LoadingProgress />)
     try {
-      const response = await SessionController.query("/api/queryTimeseriesAnalysis", {
-        RequestType: "UpdateData",
-        ParticipantId: participant_uid,
-        AnalysisId: analysisUpdate.analysisId,
-        RecordingName: analysisUpdate.name,
-        RecordingTags: analysisUpdate.tags ? analysisUpdate.tags : []
-      });
+      for (let i in analysisUpdate.analysisId) {
+        const response = await SessionController.query("/api/queryTimeseriesAnalysis", {
+          RequestType: "UpdateData",
+          ParticipantId: participant_uid,
+          AnalysisId: analysisUpdate.analysisId[i],
+          RecordingName: analysisUpdate.name,
+          RecordingTags: analysisUpdate.tags ? analysisUpdate.tags : []
+        });
+      }
       
       setAvailableAnalysis((availableAnalysis) => {
         for (let i in availableAnalysis.Recordings) { 
-          if (availableAnalysis.Recordings[i].Id == analysisUpdate.analysisId) {
+          if (availableAnalysis.Recordings[i].Id == analysisUpdate.analysisId[0]) {
             availableAnalysis.Recordings[i].Name = analysisUpdate.name;
             availableAnalysis.Recordings[i].Metadata.Tags = analysisUpdate.tags ? analysisUpdate.tags : [];
             break;
@@ -433,6 +441,19 @@ function TimeSeriesAnalysis() {
                       <TimeFrequencyAnalysis dataToRender={data} activeChannels={channel.active} annotations={annotations}
                         handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} 
                         figureTitle={"TimeFrequencyAnalysis"} height={700}/>
+                    </Grid>
+                  </Grid>
+                </Card>
+              </Grid>
+            ) : null}
+            {data.Therapy ? (
+              <Grid item xs={12}>
+                <Card>
+                  <Grid container>
+                    <Grid item xs={12}>
+                      <MDBox display={"flex"} flexDirection={"column"}>
+                        <StimulationPSD dataToRender={data} activeChannels={channel.active} figureTitle={"StimulationPSDs"} />
+                      </MDBox>
                     </Grid>
                   </Grid>
                 </Card>

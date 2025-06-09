@@ -243,7 +243,13 @@ def queryAvailableAnalyses(participant_uid, request_type):
     elif request_type == "TimeSeriesAnalysis":
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
-        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "SynchronizedMDAT", "HPFCSV", "AOMPX", "MATFile"])
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", 
+                                                                                 "MedtronicBrainSenseSurvey", 
+                                                                                 "MedtronicBaselineMontages", 
+                                                                                 "MedtronicBrainSenseTimeDomain", 
+                                                                                 "MedtronicBrainSensePowerDomain", 
+                                                                                 "MedtronicIndefiniteStream", 
+                                                                                 "DelsysMDAT", "SynchronizedMDAT", "HPFCSV", "AOMPX", "MATFile"])
         
         Overview["Recordings"] = []
         for recording in Recordings:
@@ -255,7 +261,34 @@ def queryAvailableAnalyses(participant_uid, request_type):
                         for i in range(len(Description["Metadata"]["ChannelNames"])):
                             Description["Metadata"]["ChannelNames"][i] = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], Description["Device"]["Electrodes"])
 
+                for i in range(len(Recordings)):
+                    if Recordings[i].type == "MedtronicBrainSensePowerDomain" and Recordings[i].source.metadata["Device"] == recording.source.metadata["Device"]:
+                        Overlap = BrainSenseStream.calculateOverlap(recording, Recordings[i]) 
+                        if Overlap > 0.7 and Overlap < 1.3:
+                            Therapy = Database.loadSourceFile(Recordings[i].pointer, Recordings[i].hashed)
+                            
+                            Description["Therapy"] = [{
+                                "Id": Recordings[i].uid,
+                                "Hemisphere": side,
+                                "Amplitudes": [0,0],
+                                "Frequency": Recordings[i].metadata["Therapy"][side]["RateInHertz"],
+                                "Pulsewidth": Recordings[i].metadata["Therapy"][side]["PulseWidthInMicroSecond"],
+                                "Contact": BrainSenseStream.reformatStimulationChannel(Recordings[i].metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                                "SegmentMode": Recordings[i].metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in Recordings[i].metadata["Therapy"][side].keys() else "Ring"
+                            } for side in ["Left", "Right"] if side in Recordings[i].metadata["Therapy"].keys()]
+
+                            for j in range(len(Therapy["ChannelNames"])):
+                                for k in range(len(Description["Therapy"])):
+                                    if Therapy["ChannelNames"][j].endswith("Stimulation"):
+                                        if Therapy["ChannelNames"][j].replace(" Stimulation", "").endswith(Description["Therapy"][k]["Hemisphere"].upper()):
+                                            Description["Therapy"][k]["Amplitudes"] = [np.min(Therapy["Data"][:,j]), np.max(Therapy["Data"][:,j])]
+
+                            break
+
                 Description["Type"] = "DBS TimeDomain Recordings"
+
+            elif recording.type == "MedtronicBrainSensePowerDomain":
+                continue
 
             elif recording.type == "MedtronicBaselineMontages" or recording.type == "MedtronicBrainSenseSurvey":
                 for device in DBSDevices:
@@ -1156,6 +1189,33 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 
         Annotations = Event.queryAnnotations(participant_uid, "RecordingCustomEvent", start_time=Data["StartTime"]+TimeShift, duration=Data["Duration"])
         AnalysisStruct["Annotations"].extend(Annotations)
+
+    elif recording.type in ["MedtronicBrainSensePowerDomain"]:
+        AnalysisStruct["Therapy"] = []
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+        if config["APIAccess"]:
+            TherapeuticLabel, TherapyGraphs = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
+            AnalysisStruct["Therapy"].append({
+                "Type": "Therapy",
+                "Data": Data,
+                "DBSDevice": DBSDevice,
+                "RecordingId": recording.uid,
+                "TherapySeries": TherapeuticLabel,
+                "TherapyGraphs": TherapyGraphs,
+                "FullTherapy": Data["Descriptor"]["Therapy"],
+                "Alignment": recording.adjusted_alignment
+            })
+        else:
+            TherapeuticLabel, TherapyGraphs = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
+            AnalysisStruct["Therapy"].append({
+                "Type": "Therapy",
+                "RecordingId": recording.uid,
+                "TherapySeries": TherapeuticLabel,
+                "TherapyGraphs": TherapyGraphs,
+                "FullTherapy": Data["Descriptor"]["Therapy"],
+                "Alignment": recording.adjusted_alignment
+            })
 
     elif recording.type in ["CustomizedStreamingData"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)

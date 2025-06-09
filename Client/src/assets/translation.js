@@ -889,6 +889,10 @@ export const dictionary = {
       en: "Dashboard",
       zh: "主平台"
     },
+    StudyManagement: {
+      en: "Study Management",
+      zh: "研究管理"
+    },
     ShareResearchAccess: {
       en: "Access Permission List",
       zh: "Access Permission List"

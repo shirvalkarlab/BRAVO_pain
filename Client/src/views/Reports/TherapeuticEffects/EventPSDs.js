@@ -158,6 +158,10 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
     setRenderData(graphSeries);    
   }, [fig, cacheData, options.value]);
 
+  useEffect(() => {
+    console.log(centerFreq)
+  }, [centerFreq]);
+
   const refreshRender = (fig) => {
     for (let i in renderData) {
       if (renderData[i].type === "line") {

@@ -55,20 +55,39 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       fig.fresh = true;
     }
 
-    const ax = fig.subplots(activeChannels.length * 2, 1, {sharey: false, sharex: true});
     let subplotIds = [];
-    for (let i in activeChannels) {
-      subplotIds.push(`${activeChannels[i]}`);
-      subplotIds.push(`${activeChannels[i]} TimeFrequencyAnalysis`);
+    if (dataToRender.Therapy) {
+      const ax = fig.subplots(activeChannels.length * 2 + 1, 1, {sharey: false, sharex: true});
+      for (let i in activeChannels) {
+        subplotIds.push(`${activeChannels[i]}`);
+        subplotIds.push(`${activeChannels[i]} TimeFrequencyAnalysis`);
 
-      fig.setYlim([0, 100], ax[1+i*2]);
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
-      
-      fig.setSubtitle(`${activeChannels[i]}`,ax[i*2]);
-      fig.setSubtitle(`${activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+        fig.setYlim([0, 100], ax[1+i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
+        
+        fig.setSubtitle(`${activeChannels[i]}`,ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+      }
+      fig.setSubtitle(`${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "Stimulation", language)}`,ax[ax.length-1]);
+      fig.setYlim([0, 5], ax[ax.length-1]);
+      subplotIds.push(`Stimulation`);
+
+    } else {
+      const ax = fig.subplots(activeChannels.length * 2, 1, {sharey: false, sharex: true});
+      for (let i in activeChannels) {
+        subplotIds.push(`${activeChannels[i]}`);
+        subplotIds.push(`${activeChannels[i]} TimeFrequencyAnalysis`);
+
+        fig.setYlim([0, 100], ax[1+i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
+        
+        fig.setSubtitle(`${activeChannels[i]}`,ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+      }
     }
-    
+
     fig.setSubplotId(subplotIds);
     setRefresh((a) => a+1);
   }, [fig, activeChannels]);
@@ -132,15 +151,65 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         }
       }
     }
+
+    if (dataToRender.Therapy) {
+      
+      const uniqueStimChannels = [];
+      for (let trial in dataToRender.Therapy) {
+        for (let chan in dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview) {
+          if (!uniqueStimChannels.includes(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName)) {
+            uniqueStimChannels.push(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName);
+          }
+        }
+      }
+  
+      let stimulationLineColor = ["#253EF7", "#FCA503", "#8bc34a", "#9c27b0"]
+      for (let trial in dataToRender.Therapy) {
+        for (let chan in dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview) {
+          const timeArray = dataToRender.Therapy[trial].TherapySeries.map((a) =>  (a.Time + dataToRender.Therapy[trial].Alignment)*1000);
+          graphSeries.push({
+            type: "line",
+            x: timeArray, y: dataToRender.Therapy[trial].TherapySeries.map((a) => {
+              return a.TherapyOverview[chan].Amplitude
+            }),
+            options: {
+              id: dataToRender.Therapy[trial].RecordingId,
+              current_alignment: dataToRender.Therapy[trial].Alignment*1000,
+              name: "Stimulation Waveform",
+              linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[uniqueStimChannels.indexOf(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName)],
+              hovertemplate: ` ${dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)}<br>  %{x} <extra></extra>`,
+              name: dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName, showlegend: false
+            }, 
+            axName: "Stimulation"
+          });
+          
+          if (dataToRender.Therapy[trial].Alignment != 0) {
+            graphSeries.push({
+              type: "shading",
+              x: [new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000 + dataToRender.Therapy[trial].Alignment*1000), new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000)],
+              xDot: [new Date(dataToRender.Therapy[trial].TherapySeries[0].Time*1000)],
+              y: [-100,100],
+              yDot: [0],
+              options: {
+                size: 10,
+                color: "#00ff00", 
+                alpha: 0.3, 
+                hovertemplate: ` Shifted Alignment ${dataToRender.Therapy[trial].Alignment*1000}ms <extra></extra>`,
+                name: "Shifted Alignment"
+              }, 
+            axName: "Stimulation"
+            })
+          }
+        }
+      }
+    }
     
     for (let j in activeChannels) {
       for (let i in annotations) {
         graphSeries.push({
           type: "shading",
-          x: [new Date(annotations[i].Date*1000), new Date((annotations[i].Date+annotations[i].Duration)*1000)],
-          xDot: [new Date(annotations[i].Date*1000)],
-          y: [-100,100],
-          yDot: [0],
+          x: [new Date(annotations[i].Date*1000), new Date((annotations[i].Date+annotations[i].Duration)*1000)], xDot: [new Date(annotations[i].Date*1000)],
+          y: [-100,100], yDot: [0],
           options: {
             size: 10,
             color: "#ff0000", 

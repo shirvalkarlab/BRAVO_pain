@@ -128,13 +128,13 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
       duration += dataToRender.Signal[i].SignalSeries.Data.length
     };
 
-    if (duration > 300*250) {
+    if (duration > 3000*250) {
       setCacheData({...dataToRender.TherapeuticEffects, type: "ServerSideRender"});
       return;
     }
 
     let cacheData = {};
-    
+
     // Extract PSDs
     for (let i in dataToRender.Signal) {
       const therapySeries = getTherapyChanges(therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] ? therapyLabel[dataToRender.Signal[i].SignalSeries.ChannelNames] : dataToRender.Signal[i].SignalSeries.ChannelNames);

@@ -68,11 +68,15 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
   },{
     title: "Recording Channels", 
     minWidth: 200,
-    width: "35%"
+    width: "25%"
+  },{
+    title: "Associated Therapy", 
+    minWidth: 200,
+    width: "25%"
   },{
     title: "Recording Duration", 
     minWidth: 200,
-    width: "20%"
+    width: "10%"
   }]
 
   React.useEffect(() => {
@@ -245,9 +249,6 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
             </TableHead>
             <TableBody>
               {displayData.sort((a,b) => a.Date - b.Date).map((analysis) => {
-                for (let i in analysis.DataId) {
-                  
-                }
                 return <TableRow key={analysis.Id}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDTypography variant="h5" style={{marginBottom: 0}} fontSize={18} fontWeight={"bold"}>
@@ -265,23 +266,48 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                       {analysis.Type}
                     </MDTypography>
                     <MDButton variant={"contained"} color="secondary" onClick={() => {
-                      setEditRecordingName({show: true, analysisId: analysis.Id, tags: analysis.Metadata.Tags, name: analysis.Name})
+                      if (analysis.Therapy) {
+                        setEditRecordingName({show: true, analysisId: [analysis.Id, analysis.Therapy[0].Id], tags: analysis.Metadata.Tags, name: analysis.Name})
+                      } else {
+                        setEditRecordingName({show: true, analysisId: [analysis.Id], tags: analysis.Metadata.Tags, name: analysis.Name})
+                      }
                     }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
                       {"Edit Recording"}
                     </MDButton>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
-                      {analysis.Metadata.ChannelNames.filter((a,i) => i < 3).map((a) => (
+                      {analysis.Metadata.ChannelNames.filter((a,i) => i < 6).map((a) => (
                         <MDTypography key={a} variant="h6" fontSize={12} style={{marginBottom: 0}}>
                           {a}
                         </MDTypography>
                       ))} 
-                      {analysis.Metadata.ChannelNames.length > 3 ? (
+                      {analysis.Metadata.ChannelNames.length > 6 ? (
                         <MDTypography variant="h6" fontSize={12} style={{marginBottom: 0}}>
                           {"... Total "}{analysis.Metadata.ChannelNames.length.toFixed(0)}{" Channels"}
                         </MDTypography>
                       ) : null}
+                    </MDBox>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column"}}>
+                    {analysis.Therapy ? analysis.Therapy.map((a, i) => (
+                      <MDBox key={i} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
+                      <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
+                        {a.Contact}{" "}{a.SegmentMode}{": "}
+                      </MDTypography>
+                      <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
+                        {a.Frequency.toFixed(1)}{" Hz "}{a.Pulsewidth.toFixed(1)}{" μSec"}
+                      </MDTypography>
+                      <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
+                        {a.Amplitudes[0].toFixed(1)}{" - "}{a.Amplitudes[1].toFixed(1)}{" mA"}
+                      </MDTypography>
+                      </MDBox>
+                    )) : (
+                      <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
+                        {"No Therapy Data"}
+                      </MDTypography>
+                    )} 
                     </MDBox>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>

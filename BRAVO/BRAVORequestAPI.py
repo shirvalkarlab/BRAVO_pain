@@ -203,6 +203,17 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
+    def SetRecordingTimeShift(self, participant_uid, analysis_uid, recording_uid, shift=0):
+        form = {"RequestType": "RemoveParticipant", "ParticipantId": participant_uid, "AnalysisId": analysis_uid, "RecordingId": recording_uid, "Alignment": shift}
+        response = self.query("/api/setRecordingTimeShift", data=form)
+        if response.status_code == 200:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
     def QueryTimeSeriesAnalysis(self, participant_uid, recording_uid=None, config=None ):
         form = {"ParticipantId": participant_uid, "RequestType": "Overview"}
         if recording_uid:
@@ -254,6 +265,93 @@ class BRAVOPlatformRequest:
             form["RecordingId"] = recording_uid
             
         response = self.query("/api/queryRawTimeseries", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QuerySurveyForms(self, form_link=None, version=None):
+        form = {"RequestType": "RequestAll"}
+        if form_link:
+            form["RequestType"] = "RequestForm"
+            form["FormLink"] = form_link
+            if version:
+                form["VersionRel"] = version
+            
+        response = self.query("/api/querySurveyForms", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def CreateSurveyForm(self, institute, form_name):
+        form = {"RequestType": "Create", "Institute": institute, "FormName": form_name, "FormType": "API-Generated Form", "FormContent": []}
+        response = self.query("/api/setSurveyForms", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def DeleteSurveyForm(self, form_uid):
+        form = {"FormId": form_uid}
+        
+        response = self.query("/api/deleteSurveyForms", data=form)
+        if response.status_code == 200:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def UpdateSurveyForm(self, form_link, content):
+        form = {"RequestType": "Create", "FormLink": form_link, "FormContent": content}
+        response = self.query("/api/setSurveyForms", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def SubmitSurveyResponse(self, form_uid, version, responder_code, result={}, date=None):
+        form = {"RequestType": "SubmitForm", "FormId": form_uid, "Version": version, "Passcode": responder_code, "FormResults": result}
+        if not date:
+            form["Date"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        else:
+            form["Date"] = date
+            
+        response = self.query("/api/querySurveyForms", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QuerySurveyResponse(self, participant_uid, form_uid=None):
+        form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        if form_uid:
+            form["RequestType"] = "RequestRecords"
+            form["FormId"] = form_uid
+        response = self.query("/api/queryParticipantSurveyRecords", data=form)
+
         if response.status_code == 200:
             payload = response.json()
             return payload
