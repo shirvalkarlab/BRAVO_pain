@@ -51,6 +51,49 @@ def processInput(argv):
 
             return True
         
+        elif argv[1] == "CleanUpDevices":
+            from BRAVO import wsgi
+            from Server import models
+            from modules import Database
+            participants = models.Participant.find_all()
+
+            def matchElectrodes(old, new):
+                if not len(old) == len(new):
+                    return False
+                
+                for lead in new:
+                    lead_exist = False
+                    for electrode in old:
+                        if electrode["Type"] == lead["Type"]:
+                            if electrode["Target"] == lead["Target"]:
+                                lead_exist = True
+                    
+                    if not lead_exist:
+                        return False
+
+                return True
+
+            for participant in participants:
+                while True:
+                    Merged = False
+                    devices = models.DBSDevice.find_all(owner=participant)
+                    for i in range(len(devices)):
+                        Electrodes = [electrode.get_info() for electrode in devices[i].electrodes.all()]
+                        for j in range(i+1, len(devices)):
+                            if devices[i].serial_number == devices[j].serial_number:
+                                Electrodes_Compare = [electrode.get_info() for electrode in devices[j].electrodes.all()]
+                                if matchElectrodes(Electrodes, Electrodes_Compare):
+                                    Merged = True
+                                    Database.assignSourceFile(devices[j].uid, devices[i].uid)
+
+                        if Merged:
+                            break
+
+                    if not Merged:
+                        break
+            
+            return True
+
         elif argv[1] == "SetupBRAVO":
             import socket
             import json

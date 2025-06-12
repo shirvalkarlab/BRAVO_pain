@@ -52,25 +52,40 @@ def queryTherapyHistory(Participant):
     TherapyDevices = []
 
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
-    for device in DBSDevices:
-        DeviceInfo = device.get_info()
+    DBSDeviceDict = {}
+    for i in range(len(DBSDevices)):
+        if not DBSDevices[i].serial_number in DBSDeviceDict.keys():
+            DBSDeviceDict[DBSDevices[i].serial_number] = []
+        DBSDeviceDict[DBSDevices[i].serial_number].append(DBSDevices[i])
+
+    for key in DBSDeviceDict.keys():
+        LeadCount = 0
+        for i in range(len(DBSDeviceDict[key])):
+            DeviceInfoTemp = DBSDeviceDict[key][0].get_info()
+            if len(DeviceInfoTemp["Electrodes"]) > LeadCount:
+                LeadCount = len(DeviceInfoTemp["Electrodes"])
+                DeviceInfo = DeviceInfoTemp
         TherapyDevices.append(DeviceInfo)
 
-        SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
         TherapyHistory = {
             "Device": DeviceInfo,
-            "History": [i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)]
+            "History": []
+        }
+        DeviceTherapyModification = {
+            "Device": DeviceInfo,
+            "History": []
         }
 
+        for i in range(len(DBSDeviceDict[key])):
+            device = DBSDeviceDict[key][i]
+            SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
+            TherapyHistory["History"].extend([i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)])
+            DeviceTherapyModification["History"].extend([i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)])
+
+        DeviceTherapyModification["History"].sort(key=lambda x: x["Date"])
         TherapyHistory["History"] = [i for i in TherapyHistory["History"] if (i["Type"] in ["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"])]
         TherapyHistory["History"].sort(key=lambda x: x["Date"])
         TherapyHistories.append(TherapyHistory)
-    
-        DeviceTherapyModification = {
-            "Device": DeviceInfo,
-            "History": [i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)]
-        }
-        DeviceTherapyModification["History"].sort(key=lambda x: x["Date"])
         
         LastTherapyChange = None
         VisitTimestamps = np.unique([i["Date"] for i in TherapyHistory["History"]])

@@ -44,7 +44,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function ExternalDevicesFileTable({data, deleteData}) {
+function ExternalDevicesFileTable({data, downloadData, deleteData}) {
   const tableHeader = [{
     title: "Recording Time",
     minWidth: 100,
@@ -110,7 +110,10 @@ function ExternalDevicesFileTable({data, deleteData}) {
                     )
                   })}
               </TableCell>
-              <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+              <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)", display: "flex", flexDirection: "column", justifyContent: "center"}}>
+                <MDButton variant="contained" color="success" size="small" onClick={() => downloadData(source.Id)}>
+                  {"Download"}
+                </MDButton>
                 <MDButton variant="contained" color="error" size="small" onClick={() => deleteData(source.Id)}>
                   {"Delete"}
                 </MDButton>

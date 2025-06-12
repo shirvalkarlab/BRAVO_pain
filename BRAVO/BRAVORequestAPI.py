@@ -125,6 +125,20 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
+    def UpdateParticipantInformation(self, participant_uid, info):
+        form = {"ParticipantId": participant_uid}
+        form = {**form, **info}
+
+        response = self.query("/api/updateParticipantInformation", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
     def ListAllStudies(self):
         form = {"RequestType": "GetStudies"}
         response = self.query("/api/manageStudyInformation", data=form)

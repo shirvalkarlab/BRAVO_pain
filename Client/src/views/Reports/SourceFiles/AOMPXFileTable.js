@@ -44,7 +44,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 
-function AOMPXFileTable({data, deleteData, children}) {
+function AOMPXFileTable({data, deleteData, downloadData, children}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -106,7 +106,10 @@ function AOMPXFileTable({data, deleteData, children}) {
                   {(source.DataSize/1000/1000).toFixed(2)}{" MB"}
                 </MDTypography>
               </TableCell>
-              <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+              <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)", display: "flex", flexDirection: "column", justifyContent: "center"}}>
+                <MDButton variant="contained" color="success" size="small" onClick={() => downloadData(source.Id)}>
+                  {"Download"}
+                </MDButton>
                 <MDButton variant="contained" color="error" size="small" onClick={() => deleteData(source.Id)}>
                   {"Delete"}
                 </MDButton>

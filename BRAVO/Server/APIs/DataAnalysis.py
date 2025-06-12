@@ -421,6 +421,8 @@ class QueryChronicNeuralActivity(RestViews.APIView):
             return Response(status=200, data=Analysis)
 
         elif request.data["RequestType"] == "DeleteCache":
+            Participant = models.Participant.find(uid=request.data["ParticipantId"])
+            models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant).delete()
             Database.deleteCachedResult(request.data["ParticipantId"], url="/queryChronicNeuralActivity")
             return Response(status=200)
 

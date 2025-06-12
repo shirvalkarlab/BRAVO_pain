@@ -160,12 +160,12 @@ class Electrode(models.Model):
     def find_all(*args, **kwargs):
         return Electrode.objects.select_related("owner").filter(**kwargs).all()
 
-    def find_or_create(owner, target):
-        electrode = Electrode.objects.filter(owner=owner, target=target).first()
+    def find_or_create(owner, type, target):
+        electrode = Electrode.objects.filter(owner=owner, type=type, target=target).first()
         if electrode:
             return electrode, False
         
-        electrode = Electrode(owner=owner, target=target)
+        electrode = Electrode(owner=owner, type=type, target=target)
         return electrode, True
     
     def get_info(self):

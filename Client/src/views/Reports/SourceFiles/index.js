@@ -166,6 +166,17 @@ export default function SourceFiles() {
     />)
   }
 
+  const handleDownloadSourceFile = (id) => {
+    let downloader = document.createElement('a');
+    downloader.href = SessionController.getDownloadLink("/api/querySourceFiles", {
+      RequestType: "Download",
+      ParticipantId: participant_uid,
+      SourceId: id
+    });
+    downloader.target = '_blank';
+    downloader.click();
+  }
+
   const deleteSession = (id) => {
   };
   
@@ -209,7 +220,7 @@ export default function SourceFiles() {
           </MDBox>
           <MDBox p={2}>
             {sourceFileType.active == "Medtronic JSON Sessions" ? (
-              <MedtronicSourceFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
+              <MedtronicSourceFileTable data={viewSourceFiles} downloadData={handleDownloadSourceFile} deleteData={handleDeleteSourceFile} />
             ) : null}
             {sourceFileType.active == "NeuroImaging Data" ? (
               <NeuroImageFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />

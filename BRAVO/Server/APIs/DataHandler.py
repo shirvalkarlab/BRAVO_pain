@@ -513,7 +513,32 @@ class DataSourceFileHandler(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
+    
+    def get(self, request):
+        ParticipantId = self.request.query_params.get('ParticipantId')
+        RequestType = self.request.query_params.get('RequestType')
+        SourceId = self.request.query_params.get('SourceId')
+
+        Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
         
+        Participant = models.Participant.find(uid=ParticipantId)
+        source = models.SourceFile.find(uid=SourceId, owner=Participant)
+        if not source:
+            return Response(status=400, data={"message": "Source File not found."})
+        
+        if not source.metadata["Uploader"] == request.user.pk:
+            return Response(status=403)
+        
+        file_data = DataCurator.loadCacheFile(source)
+        with BytesIO() as fp:
+            filename = source.name
+            response = HttpResponse( file_data, content_type="text/json" )
+            response["Content-Disposition"] = "attachment; filename=" + filename
+            return response
+
 class NeuroImageFileHandler(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]

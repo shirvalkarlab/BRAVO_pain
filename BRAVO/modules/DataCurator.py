@@ -142,7 +142,9 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
     with lock.acquire(timeout=180):
         if not device:
-            device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
+            device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], 
+                                                                     DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], 
+                                                                     DatabaseEntries["SessionOverview"]["Device"]["Type"], source_file.metadata["Institute"])
             if not device_created and device.owner.institute_id == source_file.metadata["Institute"]:
                 if not person:
                     person = device.owner
@@ -172,7 +174,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
         # This method is designed in a way that Electroe remain the same even with new DBS device. 
         for lead in DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"]:
-            electrode, electrode_created = models.Electrode.find_or_create(person, lead["name"])
+            electrode, electrode_created = models.Electrode.find_or_create(person, lead["type"], lead["name"])
             if electrode_created:
                 electrode.type = lead["type"]
                 electrode.custom_name = lead["custom_name"]

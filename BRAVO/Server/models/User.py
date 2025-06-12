@@ -243,4 +243,13 @@ class Study(models.Model):
             })
         
         return info
-            
+
+class BlacklistRecords(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
+    name = models.CharField(max_length=512, default="")
+    ip_address = models.CharField(max_length=32, default="")
+    date = models.FloatField(default=current_time)
+    reason = models.CharField(max_length=512, default="")
+    
+    def exists(*args, **kwargs):
+        return BlacklistRecords.objects.filter(**kwargs).exists()
