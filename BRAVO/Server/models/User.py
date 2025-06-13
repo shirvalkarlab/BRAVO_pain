@@ -151,6 +151,10 @@ class Institute(models.Model):
             return self.members.filter(uid=user.uid).exists()
         else:
             rel = InstituteRel.find(institute=self, member=user)
+            # Added to handle migration error where old database has no position defined
+            if not "Position" in rel.permission.keys():
+                rel.permission["Position"] = "Member"
+                rel.save()
             return get_permission(rel.permission, type)
 
 class StudyRel(models.Model):

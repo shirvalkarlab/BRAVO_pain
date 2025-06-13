@@ -57,7 +57,8 @@ def newInstitute(user, name):
     if Institute.include(name):
         raise Exception("Institute Already Exists")
 
-    institute = Institute.create(name, user.uid)
+    institute = Institute.create(name)
+    institute.join(user, "Admin")
     return institute
 
 def addToInstitute(user, name, permitted_by):
@@ -67,7 +68,7 @@ def addToInstitute(user, name, permitted_by):
     if not Institute.has_permission(name, permitted_by.uid):
         raise Exception("Permission Denied")
 
-    institute = Institute.join(name, user.uid)
+    institute = Institute.join(user, "Member")
     return institute
 
 def removeFromInstitute(user, name, permitted_by):
