@@ -102,9 +102,11 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
     for recording in recordings:
         RecordingInfo = recording.get_info()
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-        DBSDevice = devices.filter(uid=RecordingInfo["Device"]).first().get_info() # NOTE: SQL-Specific QuerySet
+        DBSDeviceRaw = devices.filter(uid=RecordingInfo["Device"]).first() # NOTE: SQL-Specific QuerySet
+        DBSDevice = DBSDeviceRaw.get_info()
+
         for i in range(len(TherapyHistory["TherapyModification"])):
-            if TherapyHistory["TherapyModification"][i]["Device"]["Id"] == DBSDevice["Id"]:
+            if devices.filter(uid=TherapyHistory["TherapyModification"][i]["Device"]["Id"], serial_number=DBSDeviceRaw.serial_number).exists():
                 TherapyHistory["TherapyModification"][i]["History"] = [j for j in TherapyHistory["TherapyModification"][i]["History"] if j["Type"] == "TherapyChangeGroup"]
                 TherapyHistory["TherapyModification"][i]["History"].sort(key=lambda x: x["Date"])
                 Timestamps = [event["Date"] for event in TherapyHistory["TherapyModification"][i]["History"]]
