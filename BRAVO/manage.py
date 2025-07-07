@@ -29,7 +29,7 @@ def processInput(argv):
                         text = line
                         text = text.replace('</head><body>', '</head>{% csrf_token %}<body>')
                         text = text.replace('<!doctype html>', '{% load static %}<!doctype html>')
-                        fileout.write()
+                        fileout.write(text)
 
             return True
         

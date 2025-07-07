@@ -108,11 +108,28 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
     downloader.click();
   };
 
+  const refreshData = () => {
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/queryGroupAnalysis", {
+      AnalysisName: "ExtractSpectralFeaturesDuringSurvey", 
+      RequestType: "RequestRefresh"
+    }).then((response) => {
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }
+
   return (
     <>
       {alert}
       <DatabaseLayout>
         <MDBox pt={3}>
+          <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="start" style={{marginBottom: 10}}>
+            <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => refreshData()}>
+              {dictionaryLookup(dictionary.FigureStandardText, "Refresh", language)}
+            </MDButton>
+          </MDBox>
           <MDBox>
             <Grid container spacing={2}>
               <Grid item xs={12}>
@@ -134,7 +151,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               participant_uid: participant_uid,
                               recordings: data.filter((a) => a.Participant.Id == participant_uid)
                             });
-                          }} />
+                          }}/>
                           
                           <Dialog open={resultDialog.show} onClose={() => setResultDialog({...resultDialog, show: false})} 
                             PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}

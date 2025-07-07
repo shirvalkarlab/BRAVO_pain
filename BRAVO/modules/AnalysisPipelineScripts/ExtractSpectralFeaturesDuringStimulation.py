@@ -1,10 +1,12 @@
 from Server import models
 
 import os, sys
+from pathlib import Path
 import datetime, pytz
 import numpy as np
 from scipy import stats
 import pickle
+import subprocess
 
 from modules import DataAnalysis, Database, DataCurator
 from modules.HelperFunctions import utc_offset_to_timezone
@@ -12,6 +14,7 @@ from modules.HelperFunctions import utc_offset_to_timezone
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 AnalysisScriptType = "ExtractSpectralFeaturesDuringStimulation"
+AnalysisMethodVersion = "1.0.0"
 
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
@@ -28,7 +31,14 @@ def HandleRefreshAnalysis():
         source_file.hashed = hashed
         source_file.save()
 
-    RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
+    if not "Version" in source_file.metadata:
+        source_file.metadata["Version"] = "1.0.0"
+        source_file.save()
+
+    if source_file.metadata["Version"] != AnalysisMethodVersion:
+        RecordingCollections = []
+    else:
+        RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
 
     def checkHistory(items, newItem):
         for item in items:
@@ -204,15 +214,17 @@ def HandleRefreshAnalysis():
                     collection["FTGStats"]["LastAppearance"] = collection["PSDs"][i]["Amplitudes"]
 
     hashed = Database.saveSourceFile(RecordingCollections, source_file.pointer)
+    source_file.metadata["Version"] = AnalysisMethodVersion
     source_file.hashed = hashed
     source_file.save()
 
 def QueryAnalysisResultTable(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
-        "User": "Admin"
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
     })
     if not source_file:
-        return []
+        return {"Participants": Participants, "RecordingCollection": []}
 
     RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
     ParticipantIds = [participant["Id"] for participant in Participants]
@@ -261,3 +273,8 @@ def QueryAnalysisResultRaw(Participants):
     RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] in ParticipantIds]
     
     return pickle.dumps(RecordingCollections)
+
+def CommandLineAsyncUpdate():
+    script_path = str(Path(__file__).resolve().parent) + "/AnalysisPipeline.py"
+    subprocess.Popen([sys.executable, script_path, "ExtractSpectralFeaturesDuringStimulation"], cwd=Path(__file__).resolve().parent, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True

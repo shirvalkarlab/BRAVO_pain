@@ -61,6 +61,10 @@ class QueryGroupAnalysis(RestViews.APIView):
                 result = ExtractSpectralFeaturesDuringStimulation.QueryAnalysisResultTable(Participants)
                 return Response(status=200, data=result)
             
+            elif request.data["RequestType"] == "RequestRefresh":
+                result = ExtractSpectralFeaturesDuringStimulation.CommandLineAsyncUpdate()
+                return Response(status=200)
+            
             elif request.data["RequestType"] == "RequestPSD":
                 if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Contact"]):
                     return Response(status=400, data={"message": "Malformed Input"})
@@ -78,6 +82,10 @@ class QueryGroupAnalysis(RestViews.APIView):
                 Participants = queryParticipantFunc(request.user)
                 result = ExtractSpectralFeaturesDuringSurvey.QueryAnalysisResultTable(Participants)
                 return Response(status=200, data=result)
+            
+            elif request.data["RequestType"] == "RequestRefresh":
+                result = ExtractSpectralFeaturesDuringSurvey.CommandLineAsyncUpdate()
+                return Response(status=200)
             
             elif request.data["RequestType"] == "RequestPSD":
                 if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Contact"]):
@@ -105,7 +113,7 @@ class QueryGroupAnalysis(RestViews.APIView):
             })
         
         elif AnalysisName == "ExtractSpectralFeaturesDuringSurvey":
-            result = ExtractSpectralFeaturesDuringSurvey.QueryAnalysisResultPSD(request.data["ParticipantId"], request.data["Contact"])
+            result = ExtractSpectralFeaturesDuringSurvey.QueryAnalysisResultRaw(Participants)
             return HttpResponse(bytes(result), status=200, headers={
                 "Content-Type": "application/octet-stream"
             })

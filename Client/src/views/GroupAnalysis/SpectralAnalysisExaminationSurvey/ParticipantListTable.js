@@ -196,13 +196,13 @@ function ParticipantListTable({data, getRecordingData}) {
   };
 
   const exportTable = () => {
-      var csvData = "Id,Diagnosis,Date,Target,Gamma Detected,First Amplitude with Gamma,Max Gamma Power (95%CI)\n";
+      var csvData = "Id,Diagnosis,Date,Target,Gamma Detected,Gamma Frequency,Max Gamma Power (95%CI)\n";
       for (let i in displayData) {
         for (let j in displayData[i].Recordings) {
           csvData += displayData[i].Id + "," + displayData[i].Diagnosis + "," + displayData[i].Recordings[j].Date + "," + displayData[i].Recordings[j].Contact + ",";
-          csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? "TRUE," : "FALSE,");
-          csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? displayData[i].Recordings[j].FTGStats.FirstAppearance.toFixed(1) : "") + ",";
-          csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? (displayData[i].Recordings[j].FTGStats.MaxGamma[0].toFixed(2) + " - " + displayData[i].Recordings[j].FTGStats.MaxGamma[1].toFixed(2)) : "") + ",";
+          csvData += (displayData[i].Recordings[j].FTGStats.Significant ? "TRUE," : "FALSE,");
+          csvData += (displayData[i].Recordings[j].FTGStats.Significant ? displayData[i].Recordings[j].FTGStats.GammaFrequency.toFixed(1) : "") + ",";
+          csvData += (displayData[i].Recordings[j].FTGStats.Significant ? (displayData[i].Recordings[j].FTGStats.MaxGamma[0].toFixed(2) + " - " + displayData[i].Recordings[j].FTGStats.MaxGamma[1].toFixed(2)) : "") + ",";
           csvData += "\n";
         }
       }
@@ -210,16 +210,31 @@ function ParticipantListTable({data, getRecordingData}) {
       var downloader = document.createElement('a');
       downloader.href = 'data:text/csv;charset=utf-8,' + encodeURI(csvData);
       downloader.target = '_blank';
-      downloader.download = 'SpectralAnalysisExamination.csv';
+      downloader.download = 'SpectralAnalysisExaminationSurvey.csv';
+      downloader.click();
+  }
+
+  const exportTableRaw = () => {
+      let downloader = document.createElement('a');
+      downloader.href = SessionController.getDownloadLink("/api/queryGroupAnalysis", {
+        AnalysisName: "ExtractSpectralFeaturesDuringSurvey"
+      });
+      downloader.download = 'SpectralAnalysisExaminationSurvey.pkl';
+      downloader.target = '_blank';
       downloader.click();
   }
 
   return useMemo(() => (
     <>
       <MDBox px={2} style={{overflowX: "auto", maxHeight: "100vh"}}>
-        <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportTable()}>
-          {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
-        </MDButton>
+        <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="start" style={{marginBottom: 10}}>
+          <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportTable()}>
+            {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
+          </MDButton>
+          <MDButton size="large" variant="contained" color="secondary" style={{marginBottom: 3}} onClick={() => exportTableRaw()}>
+            {"Export Raw Data"}
+          </MDButton>
+        </MDBox>
         <Table size="large" style={{marginTop: 20, display: "block", height: "fit-content"}}>
           <TableHead sx={{display: "table-header-group", position: "sticky", top: 0, zIndex: 1}}>
             <TableRow sx={{background: "white"}}>
