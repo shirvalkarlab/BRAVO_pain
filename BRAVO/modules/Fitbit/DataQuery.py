@@ -31,6 +31,9 @@ FitbitDataTypes = {
 def fitbitDate(timestamp):
     return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
 
+def fitbitTime(timestamp):
+    return datetime.datetime.fromtimestamp(timestamp).strftime("%H:%m")
+
 def retrieveToken(code, verifier):
     try:
         response = requests.post("https://api.fitbit.com/oauth2/token", headers={
@@ -123,7 +126,43 @@ def getGeneralTimeseries(device, type="br", start_date=0, end_date=0):
         data = response.json()
         if "details" in data.keys():
             raise Exception(data["details"])
-        
+    
+    raise Exception("Unknown Fitbit API Error: " + str(response.status_code))
+
+def getIntradayActivityTimeseries(device, type="activities/steps", start_date=0):
+    token = device.auth
+
+    if type == "hrv" or type == "spo2" or type == "br":
+        url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(start_date) + "/all" + ".json" 
+    else:
+        url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + "1d" + "/1min" + ".json"
+    print(url)
+    response = requests.get(url, headers={
+        "Authorization": "Bearer " + token["access_token"], 
+        "Content-Type": "application/json",
+    })
+
+    if response.status_code == 200:
+        data = response.json()
+        return data
+    
+    elif response.status_code == 401:
+        print("Refresh Auth Token")
+        newToken = refreshToken(device.auth)
+        if not newToken:
+            raise Exception("Authorization Expired. Refreshing Failed. Please reauthorize.")
+        device.auth = newToken
+        device.save()
+        return getIntradayActivityTimeseries(device, type, start_date)
+
+    elif response.status_code == 429:
+        raise Exception("Request Rate Limit reached for Fitbit APIs.")
+    
+    else:
+        data = response.json()
+        if "details" in data.keys():
+            raise Exception(data["details"])
+    
     raise Exception("Unknown Fitbit API Error: " + str(response.status_code))
 
 def queryFitbitData(device, type, start_date, end_date):
@@ -142,7 +181,7 @@ def queryFitbitData(device, type, start_date, end_date):
                 Data.extend(data[FitbitDataTypes[type][1]])
         
         return Data
-
+    
     data = getGeneralTimeseries(device, FitbitDataTypes[type][0], start_date, end_date)
     if FitbitDataTypes[type][1] == "":
         Data = data

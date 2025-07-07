@@ -15,7 +15,7 @@
 import os
 import traceback
 import random, string
-import datetime
+import datetime, pytz
 import uuid
 from cryptography.fernet import Fernet
 import secrets
@@ -39,6 +39,15 @@ PermissionDefinitions = {
         "Delete": False,
     }
 }
+
+def utc_offset_to_timezone(offset_str):
+    # Parse the offset string
+    sign = -1 if '-' in offset_str else 1
+    hours, minutes = map(int, offset_str.replace('UTC', '').replace('+', '').replace('-', '').split(':'))
+    total_minutes = sign * (hours * 60 + minutes)
+
+    # Create a FixedOffset timezone
+    return pytz.FixedOffset(total_minutes)
 
 def get_permission(permission_dict, permit):
     position = permission_dict["Position"]
