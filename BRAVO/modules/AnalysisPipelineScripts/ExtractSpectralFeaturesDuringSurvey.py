@@ -190,7 +190,8 @@ def QueryAnalysisResultTable(Participants):
 
 def QueryAnalysisResultPSD(ParticipantId, Contact):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
-        "User": "Admin"
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
     })
     if not source_file:
         return []
@@ -207,7 +208,8 @@ def QueryAnalysisResultPSD(ParticipantId, Contact):
 
 def QueryAnalysisResultRaw(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
-        "User": "Admin"
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
     })
     if not source_file:
         return []
