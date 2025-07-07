@@ -101,7 +101,7 @@ function PatientEventCount({dataToRender, events, height, stack, grouping, figur
         }
       }
 
-      fig.bar(xdata, ydata, {
+      fig.bar(xdata, ydata, [], {
         facecolor: events[key].color,
         name: key,
         meta: key,

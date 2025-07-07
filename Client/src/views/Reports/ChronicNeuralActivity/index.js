@@ -64,7 +64,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
   const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
 
-  const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false});
+  const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false, histogram: false});
   const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
   const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
  
@@ -308,6 +308,17 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                 </Card>
               </Grid>
               {data ? (
+                <Grid item xs={12}>
+                  <Card sx={{width: "100%"}}>
+                    <Grid container>
+                      <Grid item xs={12}>
+                        
+                      </Grid>
+                    </Grid>
+                  </Card>
+                </Grid>
+              ) : null}
+              {data ? (
                 <Grid item xs={12} lg={6}>
                   <Card sx={{width: "100%"}}>
                     <Grid container>
@@ -315,7 +326,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={availableTherapy.active}
-                            options={availableTherapy.options}
+                            options={["Time-based Assessment", ...availableTherapy.options]}
                             onChange={(event, value) => {
                               setAvailableTherapy({...availableTherapy, active: value})
                             }}
@@ -347,9 +358,17 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                           </MDTypography>
                         </Stack>
                         </MDBox>
+                        <MDBox px={2} lineHeight={1}>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Switch value={circadianState.histogram} onClick={() => setCircadianState({...circadianState, histogram: !circadianState.histogram})} />
+                          <MDTypography variant={"subtitle"} fontSize={15}>
+                            {"Show Power Distribution"}
+                          </MDTypography>
+                        </Stack>
+                        </MDBox>
                       </Grid>
                       <Grid item xs={12}>
-                        <CircadianRhythm data={data} activeChannel={availableTherapy.active} annotations={annotations} circadianState={circadianState} figureTitle={"CircadianRhythm"}/>
+                        <CircadianRhythm data={data} channelSelector={availableChannels.options} activeChannel={availableTherapy.active} annotations={annotations} circadianState={circadianState} figureTitle={"CircadianRhythm"}/>
                       </Grid>
                     </Grid>
                   </Card>

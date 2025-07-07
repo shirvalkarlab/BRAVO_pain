@@ -151,6 +151,9 @@ class Institute(models.Model):
             return self.members.filter(uid=user.uid).exists()
         else:
             rel = InstituteRel.find(institute=self, member=user)
+            if not rel:
+                return False 
+            
             # Added to handle migration error where old database has no position defined
             if not "Position" in rel.permission.keys():
                 rel.permission["Position"] = "Member"

@@ -422,7 +422,9 @@ class QueryChronicNeuralActivity(RestViews.APIView):
 
         elif request.data["RequestType"] == "DeleteCache":
             Participant = models.Participant.find(uid=request.data["ParticipantId"])
-            models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant).delete()
+            if models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant):
+                models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant).delete()
+
             Database.deleteCachedResult(request.data["ParticipantId"], url="/queryChronicNeuralActivity")
             return Response(status=200)
 
@@ -571,6 +573,34 @@ class QueryAIModels(RestViews.APIView):
 
         else:
             result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
+            return Response(status=200, data=result)
+
+        return Response(status=400, data={"message": "Malformed Input"})
+    
+class QueryMedicationCycleAnalysis(RestViews.APIView):
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        if request.data["RequestType"] == "RequestAll":
+            recordings = DataAnalysis.extractMedtronicPowerBands(request.data["ParticipantId"], "MedicationCycle")
+            return Response(status=200, data=recordings)
+
+        elif request.data["RequestType"] == "RequestAnalysis":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingIds"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            result = DataAnalysis.extractMedtronicPowerBands(request.data["ParticipantId"], "MedicationCycle", request.data["RecordingIds"])
             return Response(status=200, data=result)
 
         return Response(status=400, data={"message": "Malformed Input"})

@@ -717,6 +717,7 @@ def checkMissingPackage(Data):
                 
             # Compensate for shifting less than 500ms, which will be indicated by the TickInMs
             TimeShift = Data["StreamingPower"][nStream]["InitialTickInMs"] - Data["StreamingTD"][nStream]["Ticks"][0] / 1000
+            print(TimeShift)
             if TimeShift < -1000:
                 TimeShift = np.round(TimeShift+3276.8,2)
             elif TimeShift > 1000:
@@ -1588,7 +1589,11 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                     Data["StreamingPower"][nStream]["Ticks"] += 3276800
                     
             for nStream in range(1, len(Data["StreamingPower"])):
-                Data["StreamingPower"][nStream]["FirstPacketDateTime"] = Data["StreamingPower"][0]["FirstPacketDateTime"] + (Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][0]["Ticks"][0]) / 1000
+                UpdatedTimestamp = Data["StreamingPower"][0]["FirstPacketDateTime"] + (Data["StreamingPower"][nStream]["Ticks"][0] - Data["StreamingPower"][0]["Ticks"][0]) / 1000
+                if np.abs(UpdatedTimestamp - Data["StreamingPower"][nStream]["FirstPacketDateTime"]) > 10:
+                    print(f"Warning: Stream {nStream} FirstPacketDateTime is not aligned with Stream 0, off by {Data["StreamingPower"][nStream]["FirstPacketDateTime"] - UpdatedTimestamp}")
+                else:
+                    Data["StreamingPower"][nStream]["FirstPacketDateTime"] = UpdatedTimestamp
 
     for key in Data.keys():
         sourceData[key] = Data[key]

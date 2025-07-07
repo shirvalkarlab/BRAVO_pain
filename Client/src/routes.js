@@ -62,6 +62,7 @@ const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRec
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
+const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMedicationCycle'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
@@ -71,6 +72,12 @@ const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis')
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
+
+// Group Analysis
+const ElectrodeIdentifierExamination = lazy(() => import('views/GroupAnalysis/ElectrodeIdentifierExamination'));
+const SpectralAnalysisExaminationStreaming = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationStreaming'));
+const SpectralAnalysisExaminationSurvey = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationSurvey'));
+
 
 const routes = {
   "Main": {
@@ -102,7 +109,6 @@ const routes = {
         icon: <IosShare/>,
         noCollapse: true,
       },
-      { type: "divider", key: "divider-1" },
       {
         type: "collapse",
         name: "Survey and Questionnaire",
@@ -132,16 +138,39 @@ const routes = {
         noCollapse: true,
         hide: true,
       },
-      { type: "divider", key: "divider-2" },
+    ]
+  },
+  "SurveyTabs": {
+    children: [
       {
         type: "collapse",
-        name: "ParticipantOverview",
-        key: "participant-overview",
-        component: <ParticipantOverview />,
-        route: "/participant-overview/:participant_uid",
-        icon: <PersonIcon/>,
+        name: "Survey and Questionnaire",
+        key: "SurveyList",
+        component: <FormList />,
+        route: "/form-manager",
+        icon: <FaClipboardList />,
         noCollapse: true,
       },
+      {
+        type: "collapse",
+        name: "Forms Editor",
+        key: "SurveyEditor",
+        component: <FormEditor />,
+        route: "/form-manager/:form_link",
+        icon: <FaClipboardList />,
+        noCollapse: true,
+        hide: true,
+      },
+      {
+        type: "collapse",
+        name: "Forms Viewer",
+        key: "SurveyViewer",
+        component: <FormViewer />,
+        route: "/survey/:form_link",
+        icon: <FaClipboardList />,
+        noCollapse: true,
+        hide: true,
+      }
     ]
   },
   "StudyGroupAnalysis": {
@@ -151,9 +180,23 @@ const routes = {
       {
         key: "ElectrodeIdentifier",
         name: "Monopolar vs Bipolar Survey",
-        icon: <PiWavesBold />,
-        route: "/group-analysis/monopolar-bipolar-survey/:study_uid",
-        component: <TherapyHistory />,
+        icon: <BiotechIcon />,
+        route: "/group-analysis/monopolar-bipolar-survey",
+        component: <ElectrodeIdentifierExamination />,
+      },
+      {
+        key: "SpectralAnalysisExaminationStreaming",
+        name: "Stimulation-induced FTG",
+        icon: <BiotechIcon />,
+        route: "/group-analysis/stimulation-induced-FTG",
+        component: <SpectralAnalysisExaminationStreaming />,
+      },
+      {
+        key: "SpectralAnalysisExaminationStreaming",
+        name: "Baseline FTG",
+        icon: <BiotechIcon />,
+        route: "/group-analysis/baseline-FTG",
+        component: <SpectralAnalysisExaminationSurvey />,
       },
     ]
   },
@@ -161,6 +204,16 @@ const routes = {
     icon: <AssessmentIcon />,
     name: "Brain Data",
     children: [
+      {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: false,
+        hide: true
+      },
       {
         key: "therapyHistory",
         name: "Therapy History",
@@ -210,6 +263,16 @@ const routes = {
     name: "Surveys and Questionnaires",
     children: [
       {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: true,
+        hide: true
+      },
+      {
         key: "FormRecords",
         name: "Form Records",
         icon: <FaClipboardList />,
@@ -222,6 +285,16 @@ const routes = {
     icon: <IoWatch />,
     name: "External Sensors",
     children: [
+      {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: true,
+        hide: true
+      },
       {
         key: "FitbitDashboard",
         name: "Fitbit Dashboard",
@@ -236,6 +309,16 @@ const routes = {
     name: "Imaging Reports",
     children: [
       {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: true,
+        hide: true
+      },
+      {
         key: "3dImageViewer",
         name: "3D Image Viewer",
         icon: <FaBrain />,
@@ -249,6 +332,16 @@ const routes = {
     name: "Customized Analysis",
     children: [
       {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: true,
+        hide: true
+      },
+      {
         key: "AnalysisBuilder",
         name: "Analysis Builder",
         icon: <MdBuildCircle />,
@@ -261,6 +354,13 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/ai-healthcare/:participant_uid",
         component: <AIHealthcare />,
+      },
+      {
+        key: "InClinicMedicationCycle",
+        name: "In-clinic Medication Cycle",
+        icon: <MdBuildCircle />,
+        route: "/medication-cycle/:participant_uid",
+        component: <InClinicMedicationCycle />,
       }
     ]
   },
@@ -268,6 +368,16 @@ const routes = {
     icon: <MdStorage />,
     name: "Data Manager",
     children: [
+      {
+        type: "collapse",
+        name: "ParticipantOverview",
+        key: "participant-overview",
+        component: <ParticipantOverview />,
+        route: "/participant-overview/:participant_uid",
+        icon: <PersonIcon/>,
+        noCollapse: true,
+        hide: true
+      },
       {
         key: "ExistingSourceFiles",
         name: "Existing Source Files",

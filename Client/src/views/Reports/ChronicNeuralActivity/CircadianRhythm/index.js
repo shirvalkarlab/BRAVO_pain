@@ -23,10 +23,10 @@ import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import MedtronicCircadianRhythm from "./MedtronicCircadianRhythm";
 
-export default function CircadianRhythm({data, activeChannel, annotations, circadianState, ...rest}) {
+export default function CircadianRhythm({data, channelSelector, activeChannel, annotations, circadianState, ...rest}) {
   return useMemo(() => {
     if (data.AnalysisType === "MedtronicChronicBrainSense") {
-      return <MedtronicCircadianRhythm dataToRender={data.ChronicNeuralActivity} activeChannel={activeChannel} annotations={annotations} circadianState={circadianState} {...rest} />
+      return <MedtronicCircadianRhythm dataToRender={data.ChronicNeuralActivity} channelSelector={channelSelector} activeChannel={activeChannel} annotations={annotations} circadianState={circadianState} {...rest} />
     }
   }, [data, annotations, activeChannel, circadianState]);
 };

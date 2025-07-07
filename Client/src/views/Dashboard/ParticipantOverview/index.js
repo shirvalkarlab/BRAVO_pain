@@ -368,6 +368,7 @@ export default function ParticipantOverview() {
             {Object.keys(routes).map((key) => {
               if (key === "Main") return;
               if (key === "StudyGroupAnalysis") return;
+              if (key === "SurveyTabs") return;
               return <Grid key={key} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
                 <Card sx={{width: "100%"}}>
                   <MDBox p={2} mx={3} display="flex" justifyContent="center">

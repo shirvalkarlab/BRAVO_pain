@@ -109,7 +109,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   };
 
   // Render all the routes from the routes.js (All the visible items on the Sidenav)
-  const renderRoutes = routes.Main.children.map(({ type, name, icon, title, collapse, noCollapse, key, hide, href, route, report_type }) => {
+  const renderRoute = ({ type, name, icon, title, collapse, noCollapse, key, hide, href, route, report_type }) => {
     let returnValue;
 
     if (hide) return;
@@ -182,7 +182,14 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
     }
 
     return returnValue;
-  });
+  };
+
+  const allRoutes = routes.Main.children.map(renderRoute);
+
+  let reportName = report;
+  if (pathname == "/dashboard" || pathname.startsWith("/group-analysis")) {
+    reportName = "StudyGroupAnalysis";
+  }
 
   return (
     <SidenavRoot
@@ -222,21 +229,23 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           (darkMode && !transparentSidenav && whiteSidenav)
         }
       />
-      <List>{renderRoutes}</List>
+      <List>{allRoutes}</List>
       <Divider
         light={
           (!darkMode && !whiteSidenav && !transparentSidenav) ||
           (darkMode && !transparentSidenav && whiteSidenav)
         }
       />
-      {routes[report] ? (
-        <List>{routes[report].children.map(({ key, name, icon, route }) => {
+      {routes[reportName] ? (
+        <List>{routes[reportName].children.map(({ key, name, icon, route }) => {
           var nameString = "";
           if (Object.keys(dictionary.Routes).includes(name)) {
             nameString = dictionary.Routes[name][language];
           } else {
             nameString = name;
           }
+
+          if (!route) return;
           
           return <NavLink to={route.replace(":participant_uid",participant_uid)} key={key}>
             <SidenavCollapse

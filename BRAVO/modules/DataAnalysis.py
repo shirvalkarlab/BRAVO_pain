@@ -263,17 +263,17 @@ def queryAvailableAnalyses(participant_uid, request_type):
 
                 for i in range(len(Recordings)):
                     if Recordings[i].type == "MedtronicBrainSensePowerDomain" and Recordings[i].source.metadata["Device"] == recording.source.metadata["Device"]:
+                        
                         Overlap = BrainSenseStream.calculateOverlap(recording, Recordings[i]) 
-                        if Overlap > 0.7 and Overlap < 1.3:
+                        if (Overlap > 0.7 and Overlap < 1.3):
                             Therapy = Database.loadSourceFile(Recordings[i].pointer, Recordings[i].hashed)
-                            
                             Description["Therapy"] = [{
                                 "Id": Recordings[i].uid,
                                 "Hemisphere": side,
                                 "Amplitudes": [0,0],
                                 "Frequency": Recordings[i].metadata["Therapy"][side]["RateInHertz"],
                                 "Pulsewidth": Recordings[i].metadata["Therapy"][side]["PulseWidthInMicroSecond"],
-                                "Contact": BrainSenseStream.reformatStimulationChannel(Recordings[i].metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), device["Electrodes"]),
+                                "Contact": BrainSenseStream.reformatStimulationChannel(Recordings[i].metadata["Therapy"][side]["SensingChannel"].replace("SensingChannelDef.",""), Description["Device"]["Electrodes"]),
                                 "SegmentMode": Recordings[i].metadata["Therapy"][side]["SegmentMode"] if "SegmentMode" in Recordings[i].metadata["Therapy"][side].keys() else "Ring"
                             } for side in ["Left", "Right"] if side in Recordings[i].metadata["Therapy"].keys()]
 
@@ -282,9 +282,14 @@ def queryAvailableAnalyses(participant_uid, request_type):
                                     if Therapy["ChannelNames"][j].endswith("Stimulation"):
                                         if Therapy["ChannelNames"][j].replace(" Stimulation", "").endswith(Description["Therapy"][k]["Hemisphere"].upper()):
                                             Description["Therapy"][k]["Amplitudes"] = [np.min(Therapy["Data"][:,j]), np.max(Therapy["Data"][:,j])]
+                                            Description["Therapy"][k]["UniqueAmplitudes"] = []
+
+                                            for z in np.unique(Therapy["Data"][:,j]):
+                                                if np.sum(Therapy["Data"][:,j] == z) > 20:
+                                                    Description["Therapy"][k]["UniqueAmplitudes"].append(z)
 
                             break
-
+                        
                 Description["Type"] = "DBS TimeDomain Recordings"
 
             elif recording.type == "MedtronicBrainSensePowerDomain":
@@ -2151,3 +2156,65 @@ def extractMachineLearningModels(participant_uid, model_key=None, config={}):
         return models[model_key](participant_uid, config=config)
 
     return models.keys()
+
+def extractMedtronicPowerBands(participant_uid, recording_type, recording_uids=None):
+    Participant = models.Participant.find(uid=participant_uid)
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+
+    if recording_type == "MedicationCycle":
+        Recordings = []
+        PowerBands_Threshold = {}
+        
+        if not recording_uids:
+            AllRecordings = models.Recording.find_all(type="MedtronicBrainSensePowerDomain", source__owner=Participant, 
+                                                name__in=["MEDOFF_DBSOFF_UPDRS", "MEDOFF_THRESHOLD", "MEDOFF_DBSON_UPDRS",
+                                                        "MEDON_DBSOFF_UPDRS", "MEDON_THRESHOLD", "MEDON_DBSON_UPDRS"])
+            for recording in AllRecordings:
+                RecordingInfo = recording.get_info()
+                DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+                Recordings.append(RecordingInfo)
+
+        else:
+            AllRecordings = models.Recording.find_all(uid__in=recording_uids, type="MedtronicBrainSensePowerDomain", source__owner=Participant, 
+                                                name__in=["MEDOFF_DBSOFF_UPDRS", "MEDOFF_THRESHOLD", "MEDOFF_DBSON_UPDRS",
+                                                        "MEDON_DBSOFF_UPDRS", "MEDON_THRESHOLD", "MEDON_DBSON_UPDRS"])
+
+            for recording in AllRecordings:
+                RecordingInfo = recording.get_info()
+                DBSDevice = models.DBSDevice.find(uid=recording.source.metadata["Device"]).get_info()
+                Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+                TherapySeries, TherapyGraph = BrainSenseStream.processTherapyInformation(Data, DBSDevice)
+                TherapySeries = BrainSenseStream.extractPowerBands(Data, TherapySeries)
+                for i in range(len(TherapySeries)):
+                    TherapyString = BrainSenseStream.extractTherapyString(TherapySeries[i]["TherapyOverview"])
+                    if not TherapyString in PowerBands_Threshold.keys():
+                        PowerBands_Threshold[TherapyString] = {"MEDOFF": {}, "MEDON": {}}
+
+                    if recording.name.startswith("MEDOFF"):
+                        for key in TherapySeries[i].keys():
+                            if key == "TherapyOverview" or key == "Time":
+                                continue
+                            
+                            if len(TherapySeries[i][key]) == 0:
+                                continue
+
+                            if not key in PowerBands_Threshold[TherapyString]["MEDOFF"].keys():
+                                PowerBands_Threshold[TherapyString]["MEDOFF"][key] = []
+                            PowerBands_Threshold[TherapyString]["MEDOFF"][key].extend(TherapySeries[i][key])
+
+                    elif recording.name.startswith("MEDON"):
+                        for key in TherapySeries[i].keys():
+                            if key == "TherapyOverview" or key == "Time":
+                                continue
+                            
+                            if len(TherapySeries[i][key]) == 0:
+                                continue
+
+                            if not key in PowerBands_Threshold[TherapyString]["MEDON"].keys():
+                                PowerBands_Threshold[TherapyString]["MEDON"][key] = []
+                            PowerBands_Threshold[TherapyString]["MEDON"][key].extend(TherapySeries[i][key])
+
+                Recordings.append(RecordingInfo)
+        
+        return {"Recordings": Recordings, "PowerBands": PowerBands_Threshold}

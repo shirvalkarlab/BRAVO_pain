@@ -331,7 +331,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
           fig.setXlabel(renderData[i].parameter, {fontSize: 15});
           fig.setYlim([0, math.max(renderData[i].y)*1.1]);
         } else if (renderData[i].type === "bar") {
-          fig.bar(renderData[i].x, renderData[i].y, renderData[i].options);
+          fig.bar(renderData[i].x, renderData[i].y, [], renderData[i].options);
           fig.setSubtitle("Spectral Features @ " + centerFreq.toFixed(1) + " Hz");
           fig.setXlabel(renderData[i].parameter, {fontSize: 15});
           if (math.max(renderData[i].y)*1.1 > maxYlim) {

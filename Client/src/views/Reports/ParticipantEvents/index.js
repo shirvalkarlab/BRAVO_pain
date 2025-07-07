@@ -46,7 +46,6 @@ import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary } from "assets/translation.js";
 
-
 function ParticipantEvents() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();

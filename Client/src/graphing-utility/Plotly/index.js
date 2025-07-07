@@ -45,6 +45,13 @@ const defaultShadedAreaOptions = {
   showlegend: false
 }
 
+const defaultHistogramOptions = {
+  type: "histogram",
+  marker: {},
+  showlegend: true,
+  hovertemplate: "<extra></extra>",
+}
+
 const defaultBarOptions = {
   type: "bar",
   marker: {},
@@ -104,6 +111,7 @@ const defaultLayoutOptions = {
     title: {text: "", font: {size: 15}},
   },
   hovermode: "x",
+  boxmode: "group",
   autosize: true,
   annotations: [],
 }
@@ -567,10 +575,54 @@ class PlotlyRenderManager {
    * 
    * @return {Object} The shaded error plot object created.
    */
-  bar(x, y, options={}, ax=null) {
+  bar(x, y, base=[], options={}, ax=null) {
     var trace = JSON.parse(JSON.stringify(defaultBarOptions));
     trace.x = x;
     trace.y = y;
+    if (base.length > 0) {
+      trace.base = base;
+    }
+
+    for (var key of Object.keys(options)) {
+      if (key == "facecolor") {
+        trace.marker.color = options[key];
+      } else if (key == "color") {
+        trace.facecolor = options[key];
+      } else {
+        trace[key] = options[key];
+      }
+    }
+
+    if (!ax) {
+      ax = this.gca;
+    } else {
+      if (this.ax.includes(ax)) {
+        this.gca = ax;
+      } else {
+        console.log("WARNING: Ax Not Found");
+        ax = this.gca;
+      }
+    }
+
+    trace.xaxis = this.gca.xaxis;
+    trace.yaxis = this.gca.yaxis;
+
+    this.traces.push(trace);
+    return trace;
+  }
+
+  /**
+   * Add histogram to figure
+   *
+   * @param {number[]} x - data array
+   * @param {Object} [options] - Bar Graph Configuration Options (https://plotly.com/javascript/reference/bar)
+   * @param {string} [ax] - Subplot to add bar to. Default to last access axes.
+   * 
+   * @return {Object} The shaded error plot object created.
+   */
+  hist(x, options={}, ax=null) {
+    var trace = JSON.parse(JSON.stringify(defaultHistogramOptions));
+    trace.x = x;
 
     for (var key of Object.keys(options)) {
       if (key == "facecolor") {

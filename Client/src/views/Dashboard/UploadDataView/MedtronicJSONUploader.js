@@ -37,12 +37,12 @@ import MDButton from "components/MDButton";
 import { SessionController } from "database/session-control";
 
 function MedtronicJSONUploader({institute, participant}) {
-  const [metadata, setMetadata] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true});
+  const [metadata, setMetadata] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: false});
   const [files, setFiles] = useState([]);
 
   useEffect(() => {
     setFiles([]);
-    setMetadata({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true});
+    setMetadata({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: false});
   }, [participant]);
 
   const handleFileUpload = (fieldName, file, file_metadata, load, error, progress, abort, transfer, options) => {

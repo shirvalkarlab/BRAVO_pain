@@ -128,7 +128,7 @@ function ParticipantEventCount({dataToRender, figureTitle}) {
   const refreshRender = () => {
     for (let i in renderData) {
       if (renderData[i].type === "bar") {
-        fig.bar(renderData[i].x, renderData[i].y, renderData[i].options);
+        fig.bar(renderData[i].x, renderData[i].y, [], renderData[i].options);
       }
     }
     fig.render();

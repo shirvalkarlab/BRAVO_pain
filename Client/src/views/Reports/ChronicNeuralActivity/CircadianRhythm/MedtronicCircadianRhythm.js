@@ -17,9 +17,15 @@ import { useResizeDetector } from 'react-resize-detector';
 import LoadingProgress from "components/LoadingProgress";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import FormField from "components/MDInput/FormField";
 import MDButton from "components/MDButton";
 import { Autocomplete, Dialog, DialogContent, TextField, DialogActions, Grid, Menu, MenuItem } from "@mui/material";
 import { createFilterOptions } from "@mui/material/Autocomplete";
+
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from '@mui/x-date-pickers/TimePicker';
 
 import * as math from "mathjs"
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
@@ -29,13 +35,15 @@ import { dictionary, dictionaryLookup } from "assets/translation";
 
 const filter = createFilterOptions();
 
-function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, activeChannel, figureTitle}) {
+function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, channelSelector, activeChannel, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
   const [fig, setFig] = useState(null);
   const [renderData, setRenderData] = useState(null);
   const [cacheData, setCacheData] = useState({});
+  const [activeDevice, setActiveDevice] = useState("");
+  const [timerange, setTimerange] = useState({device: "", start: null, end: null});
 
   useEffect(() => {
     const fig = new PlotlyRenderManager(figureTitle, language);
@@ -53,6 +61,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
     fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Local", language)})`, {fontSize: 15}, ax[0]);
     fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)})`, {fontSize: 15}, ax[0]);
     fig.setLayoutProps({
+      bargap: 0.01,
       hovermode: "xy"
     });
 
@@ -103,7 +112,25 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
         facecolor: "#FF0000",
         showlegend: false,
       }
+    }, {
+      type: "histogram", x: [], options: {
+        opacity: 1,
+        xbins: {
+          size: 5,
+        },
+        facecolor: "#000000",
+        hovertemplate: `  %{x} ${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)}<extra></extra>`,
+        showlegend: false,
+      }
     }];
+
+    let timePeriods = [0,0];
+    if (timerange.start) {
+      timePeriods[0] = timerange.start.toDate().getTime() / 1000;
+    }
+    if (timerange.end) {
+      timePeriods[1] = timerange.end.toDate().getTime() / 1000;
+    }
 
     let xData = [], yData = [], events = [];
     for (let i in dataToRender) {
@@ -115,6 +142,9 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
             xData.push(...dataToRender[i].Time);
             yData.push(...dataToRender[i].Data[j]);
             events.push(...annotations.filter((a) => a.Date > dataToRender[i].Time[0] && a.Date < dataToRender[i].Time[dataToRender[i].Time.length-1]).map((a) => a.Date))
+          } else if (activeChannel === "Time-based Assessment" && channelName === timerange.device) {
+            xData.push(...dataToRender[i].Time.filter((a) => a > timePeriods[0] && a < timePeriods[1]));
+            yData.push(...dataToRender[i].Data[j].filter((a,k) => dataToRender[i].Time[k] > timePeriods[0] && dataToRender[i].Time[k] < timePeriods[1]));
           }
         }
       }
@@ -157,18 +187,37 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
       graphSeries[1].x.push(new Date(defaultTimeArray[i]+timezoneOffset*60000));
       graphSeries[1].y.push(events.filter((a) => a == defaultTimeArray[i]).length);
     }
-    setRenderData(graphSeries);
 
-  }, [fig, activeChannel, annotations, dataToRender, circadianState.amplitude]);
+    graphSeries[2].x = yData;
+    if (graphSeries[2].x.length > 0) {
+      console.log((math.quantileSeq(yData,0.95) - math.quantileSeq(yData,0.05)))
+      graphSeries[2].options.xbins.size = (math.quantileSeq(yData,0.95) - math.quantileSeq(yData,0.05)) > 2000 ? 20 : 5
+    }
+    setRenderData(graphSeries);
+  }, [fig, activeChannel, timerange, annotations, dataToRender, circadianState.amplitude]);
 
   const refreshRender = () => {
     const ax = fig.getAxes();
     for (let i in renderData) {
-      if (renderData[i].type === "line") {
+      if (renderData[i].type === "line" && !circadianState.histogram) {
         fig.shadedErrorBar(renderData[i].x, renderData[i].y, renderData[i].error_y, renderData[i].line_options, renderData[i].shade_options, ax[0]);
+        fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Time", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Local", language)})`, {fontSize: 15}, ax[0]);
+        fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)})`, {fontSize: 15}, ax[0]);
+        fig.setAxisProps({
+          type: "date",
+          tickformat: "%H:%M",
+        }, "x", ax[0]);
       } else if (renderData[i].type === "bar" && circadianState.eventCount) {
-        fig.bar(renderData[i].x, renderData[i].y, renderData[i].options, ax[1]);
+        fig.bar(renderData[i].x, renderData[i].y, [], renderData[i].options, ax[1]);
         fig.setYlim([0, math.max(renderData[i].y) || 1], ax[1])
+      } else if (renderData[i].type === "histogram" && circadianState.histogram) {
+        fig.hist(renderData[i].x, renderData[i].options, ax[0]);
+        fig.setXlabel(`Power`, {fontSize: 15}, ax[0]);
+        fig.setYlabel(`Count`, {fontSize: 15}, ax[0]);
+        fig.setAxisProps({
+          type: "linear",
+          tickformat: "",
+        }, "x", ax[0]);
       }
     }
     fig.render();
@@ -195,8 +244,57 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ac
   });
 
   return useMemo(() => (
-    <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
-  ), [renderData]);
+    <MDBox display={"flex"} flexDirection={"column"}>
+      {activeChannel === "Time-based Assessment" ? (
+        <MDBox p={2}>
+          <Autocomplete
+            disableClearable
+            value={timerange.device}
+            options={channelSelector}
+            onChange={(event, value) => setTimerange({...timerange, device: value})}
+            renderInput={(params) => (
+              <FormField
+                {...params}
+                label={"Channel Selector"}
+                InputLabelProps={{ shrink: true }}
+              />
+            )}
+          />
+        </MDBox>
+      ) : null}
+      {activeChannel === "Time-based Assessment" ? (
+      <MDBox p={2} display={"flex"} flexDirection={"row"}>
+        <MDTypography variant={"p"} fontSize={20} pr={2}>
+          {"From"}
+        </MDTypography>
+        <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+          <DatePicker
+            label="Start Date"
+            value={timerange.start}
+            onChange={(newDate) => {
+              setTimerange({...timerange, start: newDate});
+            }}
+            renderInput={(params) => <TextField {...params} />}
+          />
+        </LocalizationProvider>
+        <MDTypography variant={"p"} fontSize={20} px={2}>
+          {"To"}
+        </MDTypography>
+        <LocalizationProvider dateAdapter={AdapterMoment}>
+          <DatePicker
+            label="End Date"
+            value={timerange.end}
+            onChange={(newDate) => {
+              setTimerange({...timerange, end: newDate});
+            }}
+            renderInput={(params) => <TextField {...params} />}
+          />
+        </LocalizationProvider>
+      </MDBox>
+      ) : null}
+      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
+    </MDBox>
+  ), [renderData, timerange]);
 }
 
 export default MedtronicCircadianRhythm;

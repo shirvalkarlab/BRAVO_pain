@@ -48,6 +48,7 @@ import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
+import MDBadge from "components/MDBadge";
 
 function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, addRecordingData, children}) {
   const [controller, dispatch] = usePlatformContext();
@@ -64,7 +65,11 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
   const tableHeader = [{
     title: "Recording Time",
     minWidth: 100,
-    width: "40%"
+    width: "30%"
+  },{
+    title: "Recording Tags", 
+    minWidth: 200,
+    width: "15%"
   },{
     title: "Recording Channels", 
     minWidth: 200,
@@ -274,6 +279,13 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                     }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
                       {"Edit Recording"}
                     </MDButton>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column", justifyContent: "center"}}>
+                    {analysis.Metadata.Tags ? analysis.Metadata.Tags.map((a) => (
+                      <MDBadge badgeContent={a} color={"success"} size={"sm"} container />
+                    )) : null} 
+                    </MDBox>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     <MDBox style={{display: "flex", flexDirection: "column"}}>

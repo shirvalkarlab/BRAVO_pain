@@ -27,6 +27,7 @@ import pandas as pd
 from modules.HelperFunctions import uuid4_hex
 from modules.MedtronicPercept import Percept
 
+
 key = os.environ.get('DATASERVER_ENCRYPTION')
 
 def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
@@ -398,6 +399,24 @@ def processTherapyInformation(data, devceInfo):
             TherapyGraph.append(TherapyGraphTrend)
 
     return StimulationSeriesFormatted, TherapyGraph
+
+def extractPowerBands(Data, TherapySeries):
+    for i in range(len(Data["ChannelNames"])):
+        if Data["ChannelNames"][i].endswith(" Power"):
+            TimeArray = np.arange(Data["Data"].shape[0]) / Data["SamplingRate"] + Data["StartTime"]
+            for j in range(len(TherapySeries)-1):
+                DataSelection = (TimeArray > TherapySeries[j]["Time"]+3) & (TimeArray < TherapySeries[j+1]["Time"]-3)
+                TherapySeries[j][Data["ChannelNames"][i]] = Data["Data"][DataSelection,i]
+
+    return TherapySeries
+
+def extractTherapyString(TherapyOverview):
+    TherapyString = ""
+    for key in TherapyOverview.keys():
+        TherapyString += TherapyOverview[key]["Hemisphere"] + " " + str(TherapyOverview[key]["Amplitude"]) + " mA"
+        TherapyString += " | "
+    TherapyString = TherapyString.strip(" | ") 
+    return TherapyString
 
 def reformatChannelName(name, electrodes):
     Target = ""

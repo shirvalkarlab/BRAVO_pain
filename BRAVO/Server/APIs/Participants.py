@@ -33,6 +33,43 @@ from modules.HelperFunctions import sanitize_input, get_or_none, get_token
 from modules import Database, DataAnalysis
 from Server import models
 
+def queryParticipantFunc(user):
+    AllParticipants = []
+    AllParticipantInfos = []
+    
+    if "ActiveStudy" in user.configuration.keys():
+        study = models.Study.find(uid=user.configuration["ActiveStudy"])
+        if not study:
+            user.configuration["ActiveStudy"] = ""
+        else:
+            rel = models.StudyRel.find(member=user, study=study)
+            if rel:
+                deidentified = True
+                if rel.permission["Position"] == "Admin" or "PHIAllowed" in rel.permission.keys():
+                    deidentified = False
+
+                AllParticipants = study.participants.all()
+                for i in range(len(AllParticipants)):
+                    ParticipantInfo = AllParticipants[i].get_info()
+                    ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
+                    if deidentified:
+                        ParticipantInfo["Name"] = ParticipantInfo["Id"]
+                        ParticipantInfo["MRN"] = ""
+                        ParticipantInfo["DOB"] = 0
+                            
+                    AllParticipantInfos.append(ParticipantInfo)
+
+    else:
+        institute = user.institute
+        if institute:
+            AllParticipants = models.Participant.from_institute(institute)
+            for i in range(len(AllParticipants)):
+                ParticipantInfo = AllParticipants[i].get_info()
+                ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
+                AllParticipantInfos.append(ParticipantInfo)
+
+    return AllParticipantInfos
+
 class QueryParticipants(RestViews.APIView):
     
     permission_classes = [IsAuthenticated,]
@@ -104,11 +141,21 @@ class UpdateParticipantInformation(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId", "MergeWith", "Name", "DOB", "Sex", "Diagnosis", "DiagnosisStartTime", "Tags"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
-            return Response(status=403)
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                            study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
         
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
-
+        if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
+            if "Tags" in request.data.keys():
+                Participant.tags.clear()
+                for tag_name in request.data["Tags"]:
+                    tag, _ = models.Tag.find_or_create(name=tag_name, owner=request.user)
+                    Participant.tags.add(tag)
+                Participant.save()
+                ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"], deidentified=Permissions["Deidentified"])
+                return Response(status=200, data=ParticipantInfo)
+            return Response(status=403)
+        
         if "MergeWith" in request.data.keys():
             if not Database.checkManagePermission(request.user, request.data["MergeWith"], "Delete"):
                 return Response(status=403)
