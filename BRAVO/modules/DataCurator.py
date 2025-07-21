@@ -639,9 +639,14 @@ def UFMDATv2Decoder(source_file, person):
                 commonNames.append(allSubString[i])
         return commonNames
     
+    try:
+        SourceFilename = source_file.name.replace(source_file.name[source_file.name.index("["):source_file.name.index("]")+1], "").replace(".mdat","")
+    except Exception as e:
+        SourceFilename = ""
+
     for ProcessedData in TrignoData:
         recording = models.Recording(**{
-            "name": "", "type": "SynchronizedMDAT", "date": ProcessedData["StartTime"], "metadata": {
+            "name": SourceFilename, "type": "SynchronizedMDAT", "date": ProcessedData["StartTime"], "metadata": {
                 "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
                 "Duration": ProcessedData["Duration"],
                 "ChannelNames": ProcessedData["ChannelNames"]

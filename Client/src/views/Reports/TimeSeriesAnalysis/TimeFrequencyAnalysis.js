@@ -29,7 +29,7 @@ import { dictionary, dictionaryLookup } from "assets/translation";
 
 const filter = createFilterOptions();
 
-function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, handleDeleteEvent, handleAdjustAlignment, annotations, height, figureTitle}) {
+function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, handleDeleteEvent, handleAdjustAlignment, annotations, setTimeseriesPlayback, height, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -237,6 +237,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       if (subAx) {
         if (renderData[i].type === "line") {
           fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
+          fig.setYlim([-renderData[i].ylim*1.1, renderData[i].ylim*1.1], subAx);
         } else if (renderData[i].type === "surf") {
           const caxis = fig.createColorAxis({
             colorscale: "Jet",
@@ -324,6 +325,17 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           setContextMenu(null);
           handleDeleteEvent(eventInfo);
           }}>{"Delete Event"}</MenuItem>
+        <MenuItem onClick={() => {
+          setContextMenu(null);
+          setTimeseriesPlayback(() => {
+            for (let i in renderData) {
+              if (renderData[i].options.id === eventInfo.channel) {
+                return {data: renderData[i], playing: true};
+              }
+            }
+            return {data: null, playing: false};
+          });
+          }}>{"Playback Signal"}</MenuItem>
         <MenuItem onClick={() => {
           setContextMenu(null);
           if (eventInfo.channel) {

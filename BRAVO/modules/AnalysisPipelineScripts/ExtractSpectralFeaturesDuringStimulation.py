@@ -14,16 +14,18 @@ from modules.HelperFunctions import utc_offset_to_timezone
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 AnalysisScriptType = "ExtractSpectralFeaturesDuringStimulation"
-AnalysisMethodVersion = "1.0.0"
+AnalysisMethodVersion = "1.0.1"
 
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
-        "User": "Admin"
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
     })
     if not source_file:
         source_file = models.SourceFile.create(type=AnalysisScriptType, metadata={
-            "User": "Admin"
+            "User": "Admin",
+            "Version": AnalysisMethodVersion
         })
         source_file.name = AnalysisScriptType
         source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.name + ".bpkl"
@@ -189,20 +191,90 @@ def HandleRefreshAnalysis():
                     }
                     PSDInfo["AperiodicComponent"] = ExtractAperiodicComponents(PSDFrequency, MovingAverageFilter(PSDInfo["PowerSpectrum"],5))
                     
+                    # Calculate the Gamma Power and Fluctuation
                     GammaPower = np.nanmedian(UniqueTherapyAmplitudes[amp][GammaSelection, :],axis=0)
                     GammaPower = GammaPower[~np.isnan(GammaPower)]
                     GammaFluctuation = np.mean(UniqueTherapyAmplitudes[amp][((PSDFrequency < 90) & (PSDFrequency > 60)) & (~GammaSelection), :],axis=1)
                     if stats.sem(GammaPower) > 1e5 or stats.sem(GammaFluctuation) > 1e5:
                         continue
-                    
                     ConfidenceInterval = stats.t.interval(0.95, len(GammaPower)-1, loc=np.median(GammaPower) / np.median(GammaFluctuation), scale=np.std(GammaFluctuation/ np.median(GammaFluctuation)))
-                    
                     PSDInfo["FTG"] = {
                         "CenterFrequency": GammaFrequency,
                         "Power": ConfidenceInterval,
                     }
+
                     collection["PSDs"].append(PSDInfo)
-        
+
+        # Calculate the Stimulation-induced Power Increase
+        collection["StimulationCorrelation"] = {"MeanSlope": 0, "PercentSignificant": 0, "MeanCorrelation": 0}
+        if len(collection["PSDs"]) > 1:
+            Amplitude = [psd["Amplitudes"] for psd in collection["PSDs"]]
+            PowerSpectrum = np.array([psd["PowerSpectrum"] for psd in collection["PSDs"]])
+
+            Correlations = []
+            for i in range(len(PSDFrequency)):
+                if PSDFrequency[i] < 55 or PSDFrequency[i] > 90:
+                    continue
+
+                # Calculate the correlation between amplitude and power spectrum
+                corr = stats.pearsonr(Amplitude, PowerSpectrum[:,i])
+                Correlations.append({
+                    "Frequency": PSDFrequency[i],
+                    "Correlation": corr[0],
+                    "Slope": corr[0] * np.std(Amplitude) / np.std(PowerSpectrum[:,i]),
+                    "PValue": corr[1]
+                })
+            
+            collection["StimulationCorrelation"]["MeanSlope"] = np.mean([corr["Slope"] for corr in Correlations])
+            collection["StimulationCorrelation"]["MeanCorrelation"] = np.mean([corr["Correlation"] for corr in Correlations])
+            collection["StimulationCorrelation"]["PercentSignificant"] = np.sum([corr["PValue"] < 0.05 for corr in Correlations]) / len(Correlations) * 100
+
+        # Calculate the Stimulation-induced Beta Changes
+        collection["BetaStats"] = {"FirstReduction": 0, "BetaFrequency": 0, "BetaPeak": -99, "MaxCorrelation": 0, "MinBeta": [99,99], "MaxReduction": 0, "LastReduction": 0}
+        if len(collection["PSDs"]) > 1:
+            Amplitude = [psd["Amplitudes"] for psd in collection["PSDs"]]
+            PowerSpectrum = np.array([psd["PowerSpectrum"] for psd in collection["PSDs"]])
+            BaselinePSD = MovingAverageFilter(np.mean(PowerSpectrum[np.array(Amplitude) < 1,:], axis=0), 5) 
+            BaselinePSD = BaselinePSD / ExtractAperiodicComponents(PSDFrequency, BaselinePSD)
+
+            Correlations = []
+            for i in range(len(PSDFrequency)):
+                if PSDFrequency[i] < 12 or PSDFrequency[i] > 30:
+                    continue
+
+                # Calculate the correlation between amplitude and power spectrum
+                corr = stats.pearsonr(Amplitude, PowerSpectrum[:,i])
+                Correlations.append({
+                    "Frequency": PSDFrequency[i],
+                    "Correlation": corr[0],
+                    "MaxPeak": BaselinePSD[i],
+                    "Slope": corr[0] * np.std(Amplitude) / np.std(PowerSpectrum[:,i]),
+                    "PValue": corr[1]
+                })
+            
+            # Identify Beta Frequency by Max Correlation/PValue within Beta Band
+            for i in range(len(Correlations)):
+                if Correlations[i]["PValue"] < 0.05 and Correlations[i]["MaxPeak"] > collection["BetaStats"]["BetaPeak"]:
+                    collection["BetaStats"]["MaxCorrelation"] = Correlations[i]["Correlation"]
+                    collection["BetaStats"]["BetaPeak"] = Correlations[i]["MaxPeak"]
+                    collection["BetaStats"]["BetaFrequency"] = Correlations[i]["Frequency"]
+            
+            if collection["BetaStats"]["MaxCorrelation"] < 0:
+                betaIndex = PSDFrequency.tolist().index(collection["BetaStats"]["BetaFrequency"])
+                BaselineBetaConfidenceInterval = stats.t.interval(0.95, 20, loc=PowerSpectrum[0,betaIndex], scale=collection["PSDs"][0]["StdPower"][betaIndex])
+                for i in range(1, len(collection["PSDs"])):
+                    ConfidenceInterval = stats.t.interval(0.95, 20, loc=PowerSpectrum[i,betaIndex], scale=collection["PSDs"][i]["StdPower"][betaIndex])
+                    if collection["BetaStats"]["MinBeta"][0] > ConfidenceInterval[0]:
+                        collection["BetaStats"]["MinBeta"] = ConfidenceInterval
+                        if i > 1 and collection["BetaStats"]["FirstReduction"] == 0:
+                            collection["BetaStats"]["FirstReduction"] = collection["PSDs"][i]["Amplitudes"]
+                        
+                        collection["BetaStats"]["MaxReduction"] = np.mean(ConfidenceInterval) / np.mean(BaselineBetaConfidenceInterval)
+
+            collection["BetaStats"]["MeanSlope"] = np.mean([corr["Slope"] for corr in Correlations])
+            collection["BetaStats"]["MeanCorrelation"] = np.mean([corr["Correlation"] for corr in Correlations])
+            collection["BetaStats"]["PercentSignificant"] = np.sum([corr["PValue"] < 0.05 for corr in Correlations]) / len(Correlations) * 100
+
         collection["FTGStats"] = {"FirstAppearance": 0, "MaxGamma": [-99,-99], "LastAppearance": 0}
         if len(collection["PSDs"]) > 1:
             for i in range(1, len(collection["PSDs"])):
@@ -231,6 +303,7 @@ def QueryAnalysisResultTable(Participants):
 
     RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] in ParticipantIds]
     
+    Participants = sorted(Participants, key=lambda x: x["Name"])
     ResultTable = {"Participants": Participants, "RecordingCollection": []}
     for collection in RecordingCollections:
         ResultTable["RecordingCollection"].append({
@@ -239,7 +312,9 @@ def QueryAnalysisResultTable(Participants):
             "Contact": collection["Contact"],
             "TherapyParameters": collection["TherapyParameters"],
             "UniqueAmplitudes": collection["UniqueAmplitudes"],
-            "FTGStats": collection["FTGStats"]
+            "FTGStats": collection["FTGStats"],
+            "BetaStats": collection["BetaStats"],
+            "StimulationCorrelation": collection["StimulationCorrelation"],
         })
         
     return ResultTable
@@ -254,13 +329,37 @@ def QueryAnalysisResultPSD(ParticipantId, Contact):
 
     RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
     RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] == ParticipantId]
-    
+
     Result = []
     for collection in RecordingCollections:
         if collection["Date"] + " " + collection["Contact"] + " " + collection["TherapyParameters"] == Contact:
+            for i in range(len(collection["PSDs"])):
+                if not "ExpertLabel" in collection.keys():
+                    collection["PSDs"][i]["CenterFrequency"] = []
+                else:
+                    collection["PSDs"][i]["CenterFrequency"] = collection["ExpertLabel"]
             Result = collection["PSDs"]
-        
+            break
     return Result
+
+def SetExpertLabel(ParticipantId, Contact, Label):
+    source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
+    })
+    if not source_file:
+        return False
+
+    RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
+    for collection in RecordingCollections:
+        if collection["ParticipantId"] == ParticipantId and collection["Date"] + " " + collection["Contact"] + " " + collection["TherapyParameters"] == Contact:
+            collection["ExpertLabel"] = Label
+            break
+
+    hashed = Database.saveSourceFile(RecordingCollections, source_file.pointer)
+    source_file.hashed = hashed
+    source_file.save()
+    return True
 
 def QueryAnalysisResultRaw(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={

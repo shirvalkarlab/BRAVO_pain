@@ -17,6 +17,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Autocomplete,
   Drawer,
+  Dialog,
   Divider,
   ToggleButton,
   ToggleButtonGroup,
@@ -58,6 +59,7 @@ import BurstDynamics from "./BurstDynamics";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary, dictionaryLookup } from "assets/translation.js";
+import TimeseriesPlayback from "./TimeseriesPlayback";
 
 function TimeSeriesAnalysis() {
   const navigate = useNavigate();
@@ -75,24 +77,7 @@ function TimeSeriesAnalysis() {
   const [drawerOpen, setDrawerOpen] = useState({open: false, config: {}});
   const [channel, setChannel] = useState({active: [], options: []});
 
-  const [channelInfos, setChannelInfos] = useState([]);
-
-  const [therapyLabel, setTherapyLabel] = useState({active: "Default", options: ["Default"]});
-  
-  const [eventPSDs, setEventPSDs] = useState(false);
-  const [eventPSDSelector, setEventPSDSelector] = useState({
-    type: "Channels",
-    options: [],
-    value: ""
-  });
-  const [eventSpectrograms, setEventSpectrograms] = useState(false);
-  const [eventSpectrogramSelector, setEventSpectrogramSelector] = useState({
-    options: [],
-    value: ""
-  });
-
-  const [referenceType, setReferenceType] = useState([]);
-  
+  const [timeseriesPlayback, setTimeseriesPlayback] = useState({data: [], playing: false});
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -184,11 +169,11 @@ function TimeSeriesAnalysis() {
       RequestType: "RequestData",
       ParticipantId: participant_uid,
       AnalysisId: analysis.Id,
+      TherapyId: null,
       ActiveChannels: data.ActiveChannel ? data.ActiveChannel : []
     });
 
     setAlert(<LoadingProgress />);
-    
     setData((data) => {
       if (data) {
         for (let i in response.data.ActiveChannel) {
@@ -363,7 +348,6 @@ function TimeSeriesAnalysis() {
     }
   };
 
-
   return (
     <DatabaseLayout>
       {alert}
@@ -376,7 +360,9 @@ function TimeSeriesAnalysis() {
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
                       {availableAnalysis.Recordings.length > 0 ? (
-                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData} updateRecordingData={updateRecordingData} addRecordingData={addRecordingData}/>
+                        <TimeSeriesAnalysisTable data={availableAnalysis.Recordings} getRecordingData={getRecordingData} 
+                          updateRecordingData={updateRecordingData} addRecordingData={addRecordingData}
+                        />
                       ) : (
                         <MDTypography variant="h6" fontSize={24}>
                           {dictionary.WarningMessage.NoData[language]}
@@ -440,6 +426,7 @@ function TimeSeriesAnalysis() {
                     <Grid item xs={12}>
                       <TimeFrequencyAnalysis dataToRender={data} activeChannels={channel.active} annotations={annotations}
                         handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} 
+                        setTimeseriesPlayback={setTimeseriesPlayback}
                         figureTitle={"TimeFrequencyAnalysis"} height={700}/>
                     </Grid>
                   </Grid>
@@ -494,6 +481,12 @@ function TimeSeriesAnalysis() {
               </Grid>
             ) : null}
           </Grid>
+          
+          <Dialog open={timeseriesPlayback.playing} onClose={() => setTimeseriesPlayback({...timeseriesPlayback, playing: false})} 
+            PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
+          >
+            <TimeseriesPlayback dataToRender={timeseriesPlayback.data} />
+          </Dialog>
           <ConfigurationDialog show={drawerOpen.open} setShow={(state) => setDrawerOpen({open: false})} setAlert={setAlert} />
           <MDBox style={{
             position: 'sticky',

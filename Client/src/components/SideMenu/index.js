@@ -237,7 +237,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
         }
       />
       {routes[reportName] ? (
-        <List>{routes[reportName].children.map(({ key, name, icon, route }) => {
+        <List key={reportName}>{routes[reportName].children.map(({ key, name, icon, route }) => {
           var nameString = "";
           if (Object.keys(dictionary.Routes).includes(name)) {
             nameString = dictionary.Routes[name][language];
@@ -245,9 +245,9 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
             nameString = name;
           }
 
-          if (!route) return;
-          
-          return <NavLink to={route.replace(":participant_uid",participant_uid)} key={key}>
+          if (!route) return null;
+
+          return <NavLink to={route.replace(":participant_uid",participant_uid)} key={`${reportName}-${key}`}>
             <SidenavCollapse
               name={nameString}
               icon={icon}

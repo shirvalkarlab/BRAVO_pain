@@ -19,11 +19,13 @@ AnalysisMethodVersion = "1.0.0"
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
-        "User": "Admin"
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
     })
     if not source_file:
         source_file = models.SourceFile.create(type=AnalysisScriptType, metadata={
-            "User": "Admin"
+            "User": "Admin",
+            "Version": AnalysisMethodVersion
         })
         source_file.name = AnalysisScriptType
         source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.name + ".bpkl"
@@ -177,6 +179,7 @@ def QueryAnalysisResultTable(Participants):
 
     RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] in ParticipantIds]
     
+    Participants = sorted(Participants, key=lambda x: x["Name"])
     ResultTable = {"Participants": Participants, "RecordingCollection": []}
     for collection in RecordingCollections:
         ResultTable["RecordingCollection"].append({
@@ -184,6 +187,34 @@ def QueryAnalysisResultTable(Participants):
             "Date": collection["Date"],
             "Contact": collection["Contact"],
             "FTGStats": collection["FTGStats"]
+        })
+        
+    return ResultTable
+
+def QueryAnalysisResultFullTable(Participants):
+    source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
+    })
+    if not source_file:
+        return {"Participants": Participants, "RecordingCollection": []}
+
+    RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
+    ParticipantIds = [participant["Id"] for participant in Participants]
+    RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] in ParticipantIds]
+    
+    Participants = sorted(Participants, key=lambda x: x["Name"])
+    ResultTable = {"Participants": Participants, "RecordingCollection": []}
+    for collection in RecordingCollections:
+        ResultTable["RecordingCollection"].append({
+            "ParticipantId": collection["ParticipantId"],
+            "Date": collection["Date"],
+            "Contact": collection["Contact"],
+            "CenterFrequency": collection["CenterFrequency"] if "CenterFrequency" in collection.keys() else [],
+            "PredictedCenterFrequency": collection["PredictedCenterFrequency"] if "PredictedCenterFrequency" in collection.keys() else [],
+            "PSD": collection["PowerSpectrum"],
+            "StdPower": collection["StdPower"],
+            "Frequency": collection["Frequency"],
         })
         
     return ResultTable
@@ -206,6 +237,25 @@ def QueryAnalysisResultPSD(ParticipantId, Contact):
         
     return Result
 
+def SetExpertLabel(ParticipantId, Date, Contact, Label):
+    source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
+    })
+    if not source_file:
+        return False
+
+    RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
+    for collection in RecordingCollections:
+        if collection["ParticipantId"] == ParticipantId and collection["Date"] == Date and collection["Contact"] == Contact:
+            collection["CenterFrequency"] = Label
+            break
+
+    hashed = Database.saveSourceFile(RecordingCollections, source_file.pointer)
+    source_file.hashed = hashed
+    source_file.save()
+    return True
+
 def QueryAnalysisResultRaw(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
         "User": "Admin",
@@ -224,3 +274,20 @@ def CommandLineAsyncUpdate():
     script_path = str(Path(__file__).resolve().parent) + "/AnalysisPipeline.py"
     subprocess.Popen([sys.executable, script_path, "ExtractSpectralFeaturesDuringSurvey"], cwd=Path(__file__).resolve().parent, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
+
+def UpdateSavedData():
+    source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
+        "User": "Admin",
+        "Version": AnalysisMethodVersion
+    })
+
+    with open("C:\\Backup\\UFL Dropbox\\Jackson Cagle\\SpectralAnalysisExaminationSurvey_Updated2.pkl", "rb") as f:
+        RecordingCollections = pickle.load(f)
+
+    for i in range(len(RecordingCollections)):
+        RecordingCollections[i]["CenterFrequency"] = []
+
+    hashed = Database.saveSourceFile(RecordingCollections, source_file.pointer)
+    source_file.metadata["Version"] = AnalysisMethodVersion
+    source_file.hashed = hashed
+    source_file.save()

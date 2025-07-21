@@ -1893,8 +1893,9 @@ def extractBrainSenseSurvey(JSON, sourceData=dict()):
         for i in range(len(JSON[key])):
             if "ElectrodeIdentifier" in JSON[key][i].keys():
                 for Stream in JSON[key][i]["ElectrodeIdentifier"]:
-                    Data["ElectrodeIdentifierTD"].append(processTimeDomainElectrodeIdentifierFormatting(Stream))
-
+                    if not Stream["FirstPacketDateTime"] == "":
+                        Data["ElectrodeIdentifierTD"].append(processTimeDomainElectrodeIdentifierFormatting(Stream))
+                        
     for key in Data.keys():
         sourceData[key] = Data[key]
 

@@ -25,12 +25,14 @@ from copy import deepcopy
 from pathlib import Path
 import hmac, hashlib, base64
 from urllib.parse import urlencode, parse_qs
+import pickle
 
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
+from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
@@ -104,11 +106,12 @@ class FitbitAuthHandler(RestViews.APIView):
                 return Response(status=400, data={"message": "Verification Failed"})
 
             device.auth = data
+            device.auth["timezoneOffset"] = DataQuery.getUserTimezone(device)
             device.save()
             return Response(status=200)
             
         elif request.data["RequestType"] == "DeleteAuthentication":
-            DataManager.deleteFitbitData(Participant)
+            #DataManager.deleteFitbitData(Participant)
             device.delete()
             return Response(status=200)
             
@@ -161,10 +164,35 @@ class QueryFitbitData(RestViews.APIView):
 
         if request.data["RequestType"] == "RequestOverview":
             Data = DataManager.loadFitbitData(Participant)
+            for key in Data.keys():
+                for i in range(len(Data[key])):
+                    Data[key][i]["Data"] = Data[key][i]["Data"].T
+
             return Response(status=200, data=Data)
         elif request.data["RequestType"] == "RefreshFitbitData":
-            Data = DataManager.refreshFitbitData(device)
-            DataManager.saveFitbitData(Participant, Data)
-            return Response(status=200, data=Data)
+            DataManager.refreshFitbitData(device)
+            return Response(status=200)
 
         return Response(status=200)
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def get(self, request):
+        ParticipantId = self.request.query_params.get('ParticipantId')
+        Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        Participant = models.Participant.find(uid=ParticipantId)
+        device = models.FitbitDevice.find(owner=Participant)
+        if not device:
+            device = models.FitbitDevice.create(owner=Participant)
+        
+        if len(device.auth.keys()) == 0:
+            return Response(status=400, data={"message": "Verification Failed"})
+
+        Data = DataManager.loadFitbitData(Participant)
+        result = pickle.dumps(Data)
+        return HttpResponse(bytes(result), status=200, headers={
+            "Content-Type": "application/octet-stream"
+        })

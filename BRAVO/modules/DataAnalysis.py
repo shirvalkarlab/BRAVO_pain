@@ -37,6 +37,8 @@ from modules.utility.PythonUtility import rangeSelection, uniqueList
 from modules import Database, Therapy, Event
 from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainSenseEvent, Percept
 from modules.Resources.ProcessingTemplates import ProcessingNodes
+from modules.Fitbit import DataManager as FitbitDataManager
+from modules.OURA import DataManager as OuraDataManager
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -1163,6 +1165,26 @@ def handleWelchPeriodogram(Data, config):
 
     return Data
 
+def processTimeseriesAnalysisRaw(data, config):
+    AnalysisStruct = {"Signal": [], "Annotations": []}
+    Data = processTimeDomainStreaming(None, data, config)
+
+    Data["Data"] = Data["Data"].T
+    Data["MissingIndex"] = []
+    for i in range(Data["Missing"].shape[1]):
+        Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
+    del Data["Missing"]
+
+    AnalysisStruct["Signal"].append({
+        "Type": "Signal",
+        "RecordingId": "",
+        "SignalSeries": Data,
+        "Alignment": 0
+    })
+
+    AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
+    return AnalysisStruct
+
 def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     recording = models.Recording.find(uid=recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
@@ -1270,6 +1292,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         if not config["APIAccess"]:
             Data = downsampleTimeDomainStreaming(Data)
+        
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
         Data["MissingIndex"] = []
@@ -1510,8 +1533,12 @@ def processTimeDomainStreaming(recording, data, config):
         data["Data"] = data["Data"].reshape(-1,1)
 
     if config["TimeSeriesRecording"]["StandardFilter"]["value"] == "Butterworth 1-100Hz":
-        sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
-        data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
+        if data["SamplingRate"] > 200:
+            sos = signal.butter(5, np.array([1,100])*2/data["SamplingRate"], 'bp', output='sos')
+            data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
+        else:
+            sos = signal.butter(5, 1*2/data["SamplingRate"], 'highpass', output='sos')
+            data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
 
     if config["TimeSeriesRecording"]["NotchFilter"]["value"] == "Notch 55-65Hz":
         sos = signal.butter(5, np.array([55,65])*2/data["SamplingRate"], 'bandstop', output='sos')
@@ -1525,14 +1552,14 @@ def processTimeDomainStreaming(recording, data, config):
             data["Data"][:,i] -= signal.wiener(data["Data"][:,i], mysize=int(data["SamplingRate"] / 2))
 
     if config["TimeSeriesRecording"]["CardiacFilter"]["value"] == "Use Adaptive Template Matching":
-        data = handleCardiacFilter(recording, data, {
+        data = handleCardiacFilter(data, {
             "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
             "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],
             "WienerFilter": config["TimeSeriesRecording"]["WienerFilter"]["value"],
             "CardiacFilter": config["TimeSeriesRecording"]["CardiacFilter"]["value"]
-        })
+        }, recording=recording)
     
-    data = handleTimeFrequencyAnalysis(recording, data, {
+    data = handleTimeFrequencyAnalysis(data, {
         "StandardFilter": config["TimeSeriesRecording"]["StandardFilter"]["value"],
         "NotchFilter": config["TimeSeriesRecording"]["NotchFilter"]["value"],
         "WienerFilter": config["TimeSeriesRecording"]["WienerFilter"]["value"],
@@ -1540,14 +1567,15 @@ def processTimeDomainStreaming(recording, data, config):
         "SpectrogramMethod": config["TimeSeriesRecording"]["SpectrogramMethod"]["value"],
         "BaselineCorrection": config["TimeSeriesRecording"]["BaselineCorrection"]["value"],
         "Normalization": config["TimeSeriesRecording"]["Normalization"]["value"]
-    })
+    }, recording=recording)
 
     return data
 
-def handleCardiacFilter(recording, data, config):
-    ProcessedData = models.Recording.find(original=recording, type="CardiacFlitered", metadata=config)
-    if ProcessedData:
-        return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
+def handleCardiacFilter(data, config, recording=None):
+    if recording:
+        ProcessedData = models.Recording.find(original=recording, type="CardiacFiltered", metadata=config)
+        if ProcessedData:
+            return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
 
     Window = int(data["SamplingRate"] / 2)
     for i in range(len(data["ChannelNames"])):
@@ -1600,18 +1628,20 @@ def handleCardiacFilter(recording, data, config):
             CardiacFiltered[sliceSelection] = Original - EKGTemplateFunc(sliceSelection, *params)
         data["Data"][:,i] = CardiacFiltered
     
-    ProcessedData = models.Recording.create(recording, "CardiacFlitered")
-    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
-    ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
-    ProcessedData.metadata = config
-    ProcessedData.save()
+    if recording:
+        ProcessedData = models.Recording.create(recording, "CardiacFlitered")
+        ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
+        ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
+        ProcessedData.metadata = config
+        ProcessedData.save()
     return data
 
 
-def handleTimeFrequencyAnalysis(recording, data, config):
-    ProcessedData = models.Recording.find(original=recording, type="TimeFrequencyAnalysis", metadata=config)
-    if ProcessedData:
-        return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
+def handleTimeFrequencyAnalysis(data, config, recording=None):
+    if recording:
+        ProcessedData = models.Recording.find(original=recording, type="TimeFrequencyAnalysis", metadata=config)
+        if ProcessedData:
+            return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
     data["Spectrum"] = []
     if len(data["ChannelNames"]) == 1:
@@ -1677,11 +1707,13 @@ def handleTimeFrequencyAnalysis(recording, data, config):
         Spectrum["Config"] = {**Spectrum["Config"], **config}
         data["Spectrum"].append(Spectrum)
     
-    ProcessedData = models.Recording.create(recording, "TimeFrequencyAnalysis")
-    ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
-    ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
-    ProcessedData.metadata = config
-    ProcessedData.save()
+    if recording:
+        ProcessedData = models.Recording.create(recording, "TimeFrequencyAnalysis")
+        ProcessedData.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + ProcessedData.uid + ".bdat"
+        ProcessedData.hashed = Database.saveSourceFile(data, ProcessedData.pointer)
+        ProcessedData.metadata = config
+        ProcessedData.save()
+
     return data
 
 def processBurstAnalysis(participant_uid, recording_uid, config, centerFreq=22):
@@ -1783,7 +1815,7 @@ def calculateBurstParameters(envelop, fs):
 
 
 def handlePowerSpectralEstimation(recording, data, config):
-    Spectrum = handleTimeFrequencyAnalysis(recording, data, config)
+    Spectrum = handleTimeFrequencyAnalysis(data, config, recording=recording)
 
     data["PSD"] = []
     for i in range(len(Spectrum["Spectrum"])):
@@ -1982,7 +2014,173 @@ def queryChronicTimeline(participant_uid, config):
                 "Data": Data["Data"],
             }
             ChronicTimeline.append(Activity)
-    
+
+    if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
+        Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
+        if Recording:
+            ChronicNeuralActivity = Database.loadSourceFile(Recording.pointer, Recording.hashed)
+
+            # Rename Channels
+            for i in range(len(ChronicNeuralActivity)):
+                ChronicNeuralActivity[i]["AnalysisType"] = "MedtronicChronicBrainSense"
+                ChronicNeuralActivity[i]["Device"] = DBSDevices.filter(uid=ChronicNeuralActivity[i]["Device"]).first().get_info()
+                for j in range(len(ChronicNeuralActivity[i]["ChannelNames"])):
+                    for k in range(len(ChronicNeuralActivity[i]["Device"]["Electrodes"])):
+                        if ChronicNeuralActivity[i]["ChannelNames"][j].startswith(ChronicNeuralActivity[i]["Device"]["Electrodes"][k]["Target"].split(" ")[0]):
+                            ChronicNeuralActivity[i]["ChannelNames"][j] = ChronicNeuralActivity[i]["Device"]["Electrodes"][k]["CustomName"] + " " + ChronicNeuralActivity[i]["ChannelNames"][j].split(" ")[-1]
+                            break
+            
+                Activity = {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": ChronicNeuralActivity[i]["Time"],
+                    "Duration": np.diff(ChronicNeuralActivity[i]["Time"]),
+                    "ChannelNames": ChronicNeuralActivity[i]["ChannelNames"],
+                    "ChannelUnits": ["" for name in ChronicNeuralActivity[i]["ChannelNames"]],
+                    "Data": ChronicNeuralActivity[i]["Data"],
+                }
+
+                ChronicTimeline.append(Activity)
+
+    if models.SourceFile.include(owner=Participant, type="FitbitWebAPISource"):
+        Data = FitbitDataManager.loadFitbitData(Participant)
+        for key in Data.keys():
+            SingleTimePoint = False
+            for i in range(len(Data[key])):
+                if len(Data[key][i]["Data"]) > 0:
+                    if Data[key][i]["Data"].shape[0] == 1:
+                        SingleTimePoint = True
+                    else:
+                        SingleTimePoint = False
+                        break
+
+            if SingleTimePoint:
+                Activity = {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": [],
+                    "Duration": [],
+                    "ChannelNames": [],
+                    "ChannelUnits": [],
+                    "Data": [],
+                }
+                
+                for i in range(len(Data[key])):
+                    if len(Data[key][i]["Data"]) > 0:
+                        Activity["ChannelNames"] = [key + " " + name for name in Data[key][i]["ChannelNames"]]
+                        Activity["ChannelUnits"] = ["" for name in Data[key][i]["ChannelNames"]]
+                        break
+
+                for i in range(len(Data[key])):
+                    if len(Data[key][i]["Data"]) > 0:
+                        Activity["Time"].append(Data[key][i]["StartTime"])
+                        Activity["Duration"].append(3600*24)
+
+                Activity["Data"] = np.zeros((len(Activity["ChannelNames"]), len(Activity["Time"])))
+                Count = 0
+                for i in range(len(Data[key])):
+                    if len(Data[key][i]["Data"]) > 0:
+                        Activity["Data"][:, Count] = Data[key][i]["Data"]
+                        Count += 1
+
+                ChronicTimeline.append(Activity)
+
+            else:
+                for i in range(len(Data[key])):
+                    if len(Data[key][i]["Data"]) > 0:
+                        Activity = {
+                            "AnalysisType": "CustomizedTimelineData",
+                            "Time": Data[key][i]["Time"],
+                            "Duration": np.diff(Data[key][i]["Time"]),
+                            "ChannelNames": [key + " " + name for name in Data[key][i]["ChannelNames"]],
+                            "ChannelUnits": ["" for name in Data[key][i]["ChannelNames"]],
+                            "Data": np.array(Data[key][i]["Data"]).T.tolist(),
+                        }
+
+                        if not type(Data[key][i]["Duration"]) == int:
+                            Activity["Duration"] = Data[key][i]["Duration"]
+
+                        for j in range(len(Activity["ChannelNames"])):
+                            if Activity["ChannelNames"][j] in ["sleep SleepStage"]:
+                                Activity["ChannelUnits"][j] = "Category"
+                                Activity["Data"][j] = []
+                                for k in range(len(Data[key][i]["Data"])):
+                                    for subkey in Data[key][i]["Metadata"]["SleepStages"].keys():
+                                        if Data[key][i]["Metadata"]["SleepStages"][subkey] == Data[key][i]["Data"][k,j]:
+                                            Activity["Data"][j].append(subkey)
+
+                        ChronicTimeline.append(Activity)
+
+    if models.SourceFile.include(owner=Participant, type="OuraRingAPISource"):
+        Data = OuraDataManager.loadOuraRingData(Participant)
+        for key in Data.keys():
+            SingleTimePoint = False
+            for i in range(len(Data[key])):
+                if len(Data[key][i]["Data"]) == 0:
+                    SingleTimePoint = True
+                    break
+
+            if SingleTimePoint:
+                Activity = {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": [],
+                    "Duration": [],
+                    "ChannelNames": [],
+                    "ChannelUnits": [],
+                    "Data": [],
+                }
+
+                for i in range(len(Data[key])):
+                    for descriptor in Data[key][i]["Descriptor"].keys():
+                        if type(Data[key][i]["Descriptor"][descriptor]) == float or type(Data[key][i]["Descriptor"][descriptor]) == int:
+                            if descriptor not in Activity["ChannelNames"]:
+                                Activity["ChannelNames"].append(descriptor)
+                                Activity["ChannelUnits"].append("")
+                
+                for i in range(len(Data[key])):
+                    Activity["Time"].append(Data[key][i]["StartTime"])
+                    Activity["Duration"].append(3600*24)
+
+                    ChanData = []
+                    for chan in Activity["ChannelNames"]:
+                        ChanData.append(Data[key][i]["Descriptor"][chan])
+                    Activity["Data"].append(ChanData)
+                
+                for i in range(len(Activity["ChannelNames"])):
+                    Activity["ChannelNames"][i] = key + " " + Activity["ChannelNames"][i]
+                    
+                ChronicTimeline.append(Activity)
+
+            else:
+                for i in range(len(Data[key])):
+                    if len(Data[key][i]["Data"]) > 0:
+                        if not "Time" in Data[key][i].keys():
+                            Data[key][i]["Time"] = [Data[key][i]["StartTime"] + j/Data[key][i]["SamplingRate"] for j in range(len(Data[key][i]["Data"]))]
+
+                        Activity = {
+                            "AnalysisType": "CustomizedTimelineData",
+                            "Time": Data[key][i]["Time"],
+                            "Duration": np.diff(Data[key][i]["Time"]),
+                            "ChannelNames": [key + " " + name for name in Data[key][i]["ChannelNames"]],
+                            "ChannelUnits": ["" for name in Data[key][i]["ChannelNames"]],
+                            "Data": np.array(Data[key][i]["Data"]).T.tolist(),
+                        }
+
+                        for j in range(len(Activity["ChannelNames"])):
+                            if Activity["ChannelNames"][j] in ["Sleep Sleep Phase"]:
+                                SleepStages = {
+                                    "deep": 1,
+                                    "light": 2,
+                                    "rem": 3, 
+                                    "awake": 4
+                                }
+                                Activity["ChannelUnits"][j] = "Category"
+                                Activity["Data"][j] = []
+                                for k in range(len(Data[key][i]["Data"])):
+                                    for subkey in SleepStages.keys():
+                                        if SleepStages[subkey] == int(Data[key][i]["Data"][k,j]):
+                                            Activity["Data"][j].append(subkey)
+                                
+                        ChronicTimeline.append(Activity)
+
     if models.Recording.include(source__in=SourceFiles, type__in=["CustomizedStreamingData"], metadata__DataType="Scheduled Streams"):
         Recording = models.Recording.find(type="ProcessedCustomizedStreamingData", source__owner=Participant)
         if not Recording:

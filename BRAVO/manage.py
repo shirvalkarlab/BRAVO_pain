@@ -51,6 +51,25 @@ def processInput(argv):
 
             return True
         
+        elif argv[1] == "RefreshPerceptSessions":
+            from BRAVO import wsgi
+            from Server import models
+            from modules import Database
+            from modules import DataCurator
+
+            participants = models.Participant.find_all()
+            for i in range(len(participants)):
+                participant = participants[i]
+                print(f"Start Processing Participant {i}/{len(participants)}")
+                session_files = models.SourceFile.find_all(owner=participant, metadata__UploadType="MedtronicJSON")
+                for session in session_files:
+                    StartFiles = models.Recording.objects.filter(source=session).count()
+                    device = models.DBSDevice.find(uid=session.metadata["Device"])
+                    DataCurator.MedtronicPerceptJSONDecoder(session, device=device, person=participant)
+                    EndFiles = models.Recording.objects.filter(source=session).count()
+                    if EndFiles > StartFiles:
+                        print(f"Participant {participant.uid} - {participant.name} - {StartFiles} -> {EndFiles}")
+                    
         elif argv[1] == "CleanUpDevices":
             from BRAVO import wsgi
             from Server import models

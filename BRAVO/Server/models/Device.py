@@ -136,6 +136,31 @@ class FitbitDevice(models.Model):
         device.save()
         return device
 
+class OuraRingDevice(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
+    name = models.CharField(max_length=128, default="")
+    type = models.CharField(max_length=128, default="")
+    owner = models.ForeignKey('Participant', models.CASCADE)
+
+    pkce = models.CharField(max_length=128, default=PKCE_code_verifier)
+    auth = models.JSONField(default=dict)
+
+    date_periods = models.JSONField(default=list)
+
+    def include(*args, **kwargs):
+        return OuraRingDevice.objects.select_related("owner").filter(**kwargs).exists()
+
+    def find(*args, **kwargs):
+        return OuraRingDevice.objects.select_related("owner").filter(**kwargs).first()
+
+    def find_all(*args, **kwargs):
+        return OuraRingDevice.objects.select_related("owner").filter(**kwargs).all()
+
+    def create(owner):
+        device = OuraRingDevice(owner=owner)
+        device.save()
+        return device
+
 class Electrode(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
     type = models.CharField(max_length=128, default="")

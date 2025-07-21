@@ -38,7 +38,7 @@ import { dictionary, dictionaryLookup } from "assets/translation";
 
 const filter = createFilterOptions();
 
-function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClose}) {
+function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClick, onClose}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -48,7 +48,7 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
   const [activeDevice, setActiveDevice] = useState("");
   const [recording, setRecording] = useState("");
   const [viewType, setViewType] = useState("Power Spectral Density");
-  const [timerange, setTimerange] = useState({device: "", start: null, end: null});
+  const [centerFreq, setCenterFreq] = useState([]);
 
   const [alert, setAlert] = useState(null);
 
@@ -68,6 +68,7 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
       Contact: recording
     }).then((response) => {
       setCacheData(response.data)
+      setCenterFreq(response.data[0].CenterFrequency);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -133,6 +134,7 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
     const colorMapper = (level) => colors[Math.floor(level/maxColor*100)];
 
     let graphSeries = [];
+
     if (viewType == "FTG Distribution") {
       const gammaData = {
         type: "bar", x: cacheData.map((a) => a.Amplitudes), y: cacheData.map((a) => a.FTG.Power[1]-a.FTG.Power[0]), base: cacheData.map((a) => a.FTG.Power[0]),
@@ -149,7 +151,21 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
       fig.setXlim([math.min(gammaData.x)-1, math.max(gammaData.x)+1]);
       fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)})`, {fontSize: 15});
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)})`, {fontSize: 15});
-
+    } else {
+      
+      for (let i in centerFreq) {
+        graphSeries.push({
+          type: "centerFreq", x: [centerFreq[i], centerFreq[i]], y: [0,10],
+          options: {
+            linewidth: 2,
+            name: "Center Frequency: " + centerFreq[i].toFixed(1) + " Hz",
+            color: "#000000",
+            hovertemplate: `  %{x:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "Hz", language)}<extra></extra>`,
+            showlegend: false
+          }, 
+          figName: figureTitle
+        });
+      }
     }
 
     for (let i in cacheData) {
@@ -196,12 +212,14 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
     }
     
     setRenderData(graphSeries);
-  }, [fig, viewType, cacheData]);
+  }, [fig, viewType, centerFreq, cacheData]);
 
   const refreshRender = () => {
     for (let i in renderData) {
       if (renderData[i].type === "line") {
         fig.shadedErrorBar(renderData[i].x, renderData[i].y, renderData[i].error_y, renderData[i].line_options, renderData[i].shade_options);
+      } else if (renderData[i].type === "centerFreq") {
+        fig.plot(renderData[i].x, renderData[i].y, renderData[i].options);
       } else if (renderData[i].type === "bar") {
         fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options);
       }
@@ -214,6 +232,17 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
     
     fig.traces = [];
     refreshRender();
+    
+    const ref = document.getElementById(figureTitle);
+    if (ref && ref.on) {
+      ref.on("plotly_click", plotly_onClick);
+    };
+    return () => {
+      const ref = document.getElementById(figureTitle);
+      if (ref && ref.removeListener) {
+        ref.removeListener("plotly_click", plotly_onClick);
+      };
+    }
   }, [fig, renderData]);
 
   const onResize = useCallback(() => {
@@ -228,6 +257,42 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
     refreshRate: 50,
     skipOnMount: false
   });
+
+  var updateTimeout = null;
+  var plotly_singleclicked = false;
+  const plotly_onClick = (data) => {
+    if (plotly_singleclicked) {
+      plotly_singleclicked = false;
+      clearTimeout(updateTimeout);
+    } else {
+      plotly_singleclicked = true;
+      updateTimeout = setTimeout(function() {
+        setCenterFreq((centerFreq) => {
+          if (centerFreq.includes(data["points"][0]["x"])) {
+            centerFreq = centerFreq.filter(freq => freq !== data["points"][0]["x"]);
+          } else {
+            centerFreq = [...centerFreq, data["points"][0]["x"]];
+          }
+
+          setAlert(<LoadingProgress/>);
+          SessionController.query("/api/queryGroupAnalysis", {
+            AnalysisName: "ExtractSpectralFeaturesDuringStimulation", 
+            RequestType: "UpdateExpertLabel",
+            ParticipantId: participant_uid,
+            Contact: recording,
+            Label: centerFreq
+          }).then((response) => {
+            setAlert(null);
+          }).catch((error) => {
+            SessionController.displayError(error, setAlert);
+          });
+
+          return centerFreq;
+        });
+        plotly_singleclicked = false
+      }, 300);
+    }
+  };
 
   return useMemo(() => (
     <MDBox display={"flex"} flexDirection={"column"}>

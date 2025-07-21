@@ -21,7 +21,7 @@ All API URLs
 from django.urls import path
 from django.conf import settings
 
-from . import Auth, WebSession, Participants, FitbitDashboard, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis
+from . import Auth, WebSession, Participants, FitbitDashboard, OuraRingDashboard, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis, AIModels
 
 urlpatterns = [
     path('register', Auth.UserRegister.as_view()),
@@ -31,6 +31,8 @@ urlpatterns = [
     
     path('requestFitbitAuth', FitbitDashboard.FitbitAuthHandler.as_view()),
     path('queryFitbitData', FitbitDashboard.QueryFitbitData.as_view()),
+    path('requestOuraRingAuth', OuraRingDashboard.OuraRingAuthHandler.as_view()),
+    path('queryOuraRingData', OuraRingDashboard.QueryOuraRingData.as_view()),
 
     path('downloadData', DataHandler.DataDownloadHandler.as_view()),
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
@@ -78,6 +80,8 @@ urlpatterns = [
     path('queryMedicationCycleAnalysis', DataAnalysis.QueryMedicationCycleAnalysis.as_view()),
     
     path('queryAIModels', DataAnalysis.QueryAIModels.as_view()),
+    
+    path('requestAIPrediction', AIModels.RequestPrediction.as_view()),
     
     path('queryGroupAnalysis', GroupAnalysis.QueryGroupAnalysis.as_view()),
     

@@ -135,6 +135,10 @@ function ParticipantListTable({data, getRecordingData}) {
       }
     }
 
+    collectiveData.sort((a,b) => {
+      return a.Name.localeCompare(b.Name);
+    });
+
     setFilterOptions({...filterOptions})
     setParticipantData(collectiveData);
   }, [data]);
@@ -218,10 +222,11 @@ function ParticipantListTable({data, getRecordingData}) {
   };
 
   const exportTable = () => {
-      var csvData = "Id,Diagnosis,Date,Target,Therapy,Gamma Detected,First Amplitude with Gamma,Max Gamma Power (95%CI)\n";
+      var csvData = "Id,Diagnosis,Date,Target,Therapy,StimulationArtifacts,Gamma Detected,First Amplitude with Gamma,Max Gamma Power (95%CI)\n";
       for (let i in displayData) {
         for (let j in displayData[i].Recordings) {
           csvData += displayData[i].Id + "," + displayData[i].Diagnosis + "," + displayData[i].Recordings[j].Date + "," + displayData[i].Recordings[j].Contact + "," + displayData[i].Recordings[j].TherapyParameters + ",";
+          csvData += (displayData[i].Recordings[j].StimulationCorrelation.PercentSignificant > 70 ? "TRUE," : "FALSE,");
           csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? "TRUE," : "FALSE,");
           csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? displayData[i].Recordings[j].FTGStats.FirstAppearance.toFixed(1) : "") + ",";
           csvData += (displayData[i].Recordings[j].FTGStats.FirstAppearance > 0 ? (displayData[i].Recordings[j].FTGStats.MaxGamma[0].toFixed(2) + " - " + displayData[i].Recordings[j].FTGStats.MaxGamma[1].toFixed(2)) : "") + ",";
@@ -278,6 +283,11 @@ function ParticipantListTable({data, getRecordingData}) {
               <TableCell variant="head" style={{width: "10%", minWidth: 100, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
                 <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>{}}>
                   {"Targets"}
+                </MDTypography>
+              </TableCell>
+              <TableCell variant="head" style={{width: "25%", minWidth: 300, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
+                <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}} onClick={()=>{}}>
+                  {"This is what we called, Rainbow"}
                 </MDTypography>
               </TableCell>
               <TableCell variant="head" style={{width: "25%", minWidth: 300, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
@@ -362,6 +372,18 @@ function ParticipantListTable({data, getRecordingData}) {
                   })
                 } 
               }
+              
+              let RainbowInfo = [];
+              for (let i in participant.Recordings) {
+                if (participant.Recordings[i].StimulationCorrelation.PercentSignificant > 70) {
+                  RainbowInfo.push({
+                    Therapy: participant.Recordings[i].TherapyParameters,
+                    Contact: participant.Recordings[i].Contact,
+                    Rainbow: participant.Recordings[i].StimulationCorrelation.MeanSlope.toFixed(2) + " (" + participant.Recordings[i].StimulationCorrelation.PercentSignificant.toFixed(2) + "%)"
+                  });
+                }
+              }
+
               return (
                 <TableRow key={participant.Id} onClick={() => getRecordingData(participant.Id)}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}} >
@@ -389,6 +411,18 @@ function ParticipantListTable({data, getRecordingData}) {
                         {participant.Targets.join(" - ")}
                       </MDTypography>
                     </MDBox>
+                  </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    {RainbowInfo.map((a) => {
+                      return <MDBox style={{display: "flex", flexDirection: "column"}}>
+                      <MDTypography variant="p" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
+                        {a.Contact + " " + a.Therapy}
+                      </MDTypography>
+                      <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
+                        {a.Rainbow}
+                      </MDTypography>
+                    </MDBox>
+                    })}
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                     {GammaInfo.map((a) => {

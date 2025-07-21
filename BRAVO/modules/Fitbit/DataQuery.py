@@ -32,7 +32,7 @@ def fitbitDate(timestamp):
     return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
 
 def fitbitTime(timestamp):
-    return datetime.datetime.fromtimestamp(timestamp).strftime("%H:%m")
+    return datetime.datetime.fromtimestamp(timestamp).strftime("%H:%M")
 
 def retrieveToken(code, verifier):
     try:
@@ -67,10 +67,43 @@ def refreshToken(token):
         })
         data = response.json()
         if "access_token" in data.keys() and "refresh_token" in data.keys():
+            data["timezoneOffset"] = token["timezoneOffset"]
             return data 
 
     except Exception as e:
         print(traceback.format_exc())
+
+def getUserTimezone(device):
+    token = device.auth
+    url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/profile.json"
+    response = requests.get(url, headers={
+        "Authorization": "Bearer " + token["access_token"], 
+        "Content-Type": "application/json",
+    })
+
+    if response.status_code == 200:
+        data = response.json()
+        return data["user"]["offsetFromUTCMillis"]
+    
+    elif response.status_code == 401:
+        print("Refresh Auth Token")
+        newToken = refreshToken(device.auth)
+        if not newToken:
+            raise Exception("Authorization Expired. Refreshing Failed. Please reauthorize.")
+        device.auth = newToken
+        device.save()
+        return getUserTimezone(device)
+
+    elif response.status_code == 429:
+        raise Exception("Request Rate Limit reached for Fitbit APIs.")
+    
+    else:
+        data = response.json()
+        if "details" in data.keys():
+            raise Exception(data["details"])
+    
+    raise Exception("Unknown Fitbit API Error: " + str(response.status_code))
+
 
 TimeseriesMaxQueryTime = {
     "activities/active-zone-minutes": 94608000, 
@@ -100,7 +133,11 @@ def getGeneralTimeseries(device, type="br", start_date=0, end_date=0):
         start_date = end_date - TimeseriesMaxQueryTime[type]
 
     token = device.auth
-    url = "https://api.fitbit.com/1/user/-/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(end_date) + ".json"
+    if type == "sleep":
+        url = "https://api.fitbit.com/1.2/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(end_date) + ".json"
+    else:
+        url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(end_date) + ".json"
+        
     response = requests.get(url, headers={
         "Authorization": "Bearer " + token["access_token"], 
         "Content-Type": "application/json",
@@ -190,8 +227,5 @@ def queryFitbitData(device, type, start_date, end_date):
     
     return Data
 
-def queryAllData(device, start_date, end_date):
-    Data = {}
-    for key in FitbitDataTypes.keys():
-        Data[key] = queryFitbitData(device, key, start_date, end_date)
-    return Data
+def queryAllData(device):
+    pass

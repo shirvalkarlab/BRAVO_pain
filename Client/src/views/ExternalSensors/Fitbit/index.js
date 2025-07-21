@@ -87,6 +87,7 @@ export default function FitbitDashboard() {
       RequestType: "RequestOverview",
       ParticipantId: participant_uid
     }).then((response) => {
+      console.log(response.data);
       setData(response.data)
       setAlert(null)
     }).catch((error) => {
@@ -228,6 +229,17 @@ export default function FitbitDashboard() {
                     });
                   }}>
                     {"Refresh Fitbit Data"} 
+                  </MDButton>
+                  <MDButton variant="contained" color="primary" style={{marginTop: 5, marginLeft: 15}} onClick={() => {
+                    let downloader = document.createElement('a');
+                    downloader.href = SessionController.getDownloadLink("/api/queryFitbitData", {
+                      ParticipantId: participant_uid
+                    });
+                    downloader.download = 'FitbitData.pkl';
+                    downloader.target = '_blank';
+                    downloader.click();
+                  }}>
+                    {"Download Fitbit Data"} 
                   </MDButton>
                 </Grid>
               </Grid>

@@ -85,10 +85,11 @@ class UserLogin(RestViews.APIView):
         user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
         if user is not None:
             if "Persistent" in request.data:
-                login(request, user)
-            else:
-                request.session.set_expiry(3600)
-                login(request, user)
+                if request.data["Persistent"]:
+                    request.session.set_expiry(3600 * 24 * 30)  # 30 days
+                else:
+                    request.session.set_expiry(3600)
+            login(request, user)
             return Response(status=200, data=user.get_info())
         return Response(status=400, data={"message": "Incorrect Email or Password"})
 

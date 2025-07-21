@@ -65,6 +65,18 @@ class QueryGroupAnalysis(RestViews.APIView):
                 result = ExtractSpectralFeaturesDuringStimulation.CommandLineAsyncUpdate()
                 return Response(status=200)
             
+            elif request.data["RequestType"] == "UpdateExpertLabel":
+                if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Contact", "Label"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+                
+                Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+                if not Permissions:
+                    return Response(status=403)
+
+                ExtractSpectralFeaturesDuringStimulation.SetExpertLabel(request.data["ParticipantId"], request.data["Contact"], request.data["Label"])
+                return Response(status=200)
+            
             elif request.data["RequestType"] == "RequestPSD":
                 if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Contact"]):
                     return Response(status=400, data={"message": "Malformed Input"})
@@ -77,12 +89,30 @@ class QueryGroupAnalysis(RestViews.APIView):
                 result = ExtractSpectralFeaturesDuringStimulation.QueryAnalysisResultPSD(request.data["ParticipantId"], request.data["Contact"])
                 return Response(status=200, data=result)
             
+        elif request.data["AnalysisName"] == "AnnotationTrainer":
+            if request.data["RequestType"] == "UpdateExpertLabel":
+                if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Date", "Contact", "Label"]):
+                    return Response(status=400, data={"message": "Malformed Input"})
+                
+                Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+                if not Permissions:
+                    return Response(status=403)
+
+                ExtractSpectralFeaturesDuringSurvey.SetExpertLabel(request.data["ParticipantId"], request.data["Date"], request.data["Contact"], request.data["Label"])
+                return Response(status=200)
+            
         elif request.data["AnalysisName"] == "ExtractSpectralFeaturesDuringSurvey":
             if request.data["RequestType"] == "RequestTable":
                 Participants = queryParticipantFunc(request.user)
                 result = ExtractSpectralFeaturesDuringSurvey.QueryAnalysisResultTable(Participants)
                 return Response(status=200, data=result)
             
+            elif request.data["RequestType"] == "RequestFullTable":
+                Participants = queryParticipantFunc(request.user)
+                result = ExtractSpectralFeaturesDuringSurvey.QueryAnalysisResultFullTable(Participants)
+                return Response(status=200, data=result)
+
             elif request.data["RequestType"] == "RequestRefresh":
                 result = ExtractSpectralFeaturesDuringSurvey.CommandLineAsyncUpdate()
                 return Response(status=200)

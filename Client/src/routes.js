@@ -30,7 +30,7 @@ import Icon from "@mui/material/Icon";
 
 import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle, MdStorage, MdSdStorage } from "react-icons/md";
 import { IoWatch } from "react-icons/io5";
-import { FaBrain, FaFileWaveform, FaClipboardList } from "react-icons/fa6";
+import { FaBrain, FaFileWaveform, FaClipboardList, FaRing } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
 
@@ -60,6 +60,7 @@ const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
+const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
 const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMedicationCycle'));
@@ -74,6 +75,7 @@ const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
+const SurveyPeakIdentifier = lazy(() => import('views/GroupAnalysis/AnnotationTrainer/SurveyPeakIdentifier'));
 const ElectrodeIdentifierExamination = lazy(() => import('views/GroupAnalysis/ElectrodeIdentifierExamination'));
 const SpectralAnalysisExaminationStreaming = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationStreaming'));
 const SpectralAnalysisExaminationSurvey = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationSurvey'));
@@ -198,6 +200,13 @@ const routes = {
         route: "/group-analysis/baseline-FTG",
         component: <SpectralAnalysisExaminationSurvey />,
       },
+      {
+        key: "SurveyPeakIdentifier",
+        name: "Annotating Peaks from PSD",
+        icon: <BiotechIcon />,
+        route: "/group-analysis/annotating-peaks-from-PSD",
+        component: <SurveyPeakIdentifier />,
+      },
     ]
   },
   "GeneralReports": {
@@ -301,6 +310,13 @@ const routes = {
         icon: <MdFitbit />,
         route: "/fitbit/dashboard/:participant_uid",
         component: <FitbitDashboard />,
+      },
+      {
+        key: "OuraRingDashboard",
+        name: "Oura Ring Dashboard",
+        icon: <FaRing />,
+        route: "/oura-ring/dashboard/:participant_uid",
+        component: <OuraRingDashboard />,
       }
     ]
   },

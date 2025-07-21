@@ -67,63 +67,72 @@ function FitbitScoreTimeline({dataToRender, type, figureTitle}) {
   useEffect(() => {
     if (!dataToRender) return;
 
-    const allKeys = Object.keys(dataToRender);
-    if (allKeys.length > 0) {
-      setAvailableScores(allKeys);
-      setActiveScores([allKeys[0]])
+    let allKeys = [];
+    for (let key in dataToRender) {
+      for (let j in dataToRender[key]) {
+        for (let i in dataToRender[key][j].ChannelNames) {
+          if (!allKeys.includes(key + " | " + dataToRender[key][j].ChannelNames[i])) {
+            allKeys.push(key + " | " + dataToRender[key][j].ChannelNames[i]);
+          }
+        }
+      }
     }
+    
+    setAvailableScores(allKeys);
+    setActiveScores([])
   }, [dataToRender]);
 
   useEffect(() => {
     if (!fig) return;
 
     let allSubscores = [];
-    for (let i in activeScores) {
-      for (let j in dataToRender[activeScores[i]].Data) {
-        for (let key in dataToRender[activeScores[i]].Data[j]) {
-          if (!allSubscores.includes(key)) {
-            allSubscores.push(key);
-          }
-        }
-      }
-    }
-
     const colors = colormap({
       colormap: 'rainbow',
-      nshades: allSubscores.length < 10 ? 10 : allSubscores.length,
+      nshades: activeScores.length < 10 ? 10 : activeScores.length,
       format: 'hex',
       alpha: 1,
     });
 
+    let legendGroup = [];
+
     let graphSeries = [];
-    for (let key in allSubscores) {
-      let xData = [], yData = [];
-      for (let i in activeScores) {
-        for (let j in dataToRender[activeScores[i]].Data) {
-          if (dataToRender[activeScores[i]].Data[j][allSubscores[key]]) {
-            xData.push(new Date(dataToRender[activeScores[i]].Time[j]*1000))
+    for (let score of activeScores) {
+      let key = score.split(" | ")[0];
+      let channel = score.split(" | ")[1];
+      
+      if (!dataToRender[key]) continue;
+      
+      for (let day in dataToRender[key]) {
+        
+        let xData = dataToRender[key][day].Time.map((a) => new Date(a*1000)), yData = [];
+        for (let j in dataToRender[key][day].Time) {
+          xData.push(new Date(dataToRender[key][day].Time[j]*1000));
+        }
 
-            if (typeof dataToRender[activeScores[i]].Data[j][allSubscores[key]] === "object") {
-              yData.push(dataToRender[activeScores[i]].Data[j][allSubscores[key]][1])
-            } else {
-              yData.push(dataToRender[activeScores[i]].Data[j][allSubscores[key]])
-            }
-
+        for (let i in dataToRender[key][day].ChannelNames) {
+          if (dataToRender[key][day].ChannelNames[i] === channel) {
+            yData = dataToRender[key][day].Data[i];
           }
         }
-      }
 
-      graphSeries.push({
-        type: "line", x: xData, y: yData, 
-        options: {
-          mode: "lines+markers",
-          linewidth: 2,
-          name: allSubscores[key],
-          color: null,
-          hovertemplate: `  ${allSubscores[key]}:  %{y:.2f}<extra></extra>`,
-          showlegend: true
+        graphSeries.push({
+          type: "line", x: xData, y: yData, 
+          options: {
+            mode: "lines",
+            line: {shape: "hv"},
+            linewidth: 2,
+            name: score,
+            legendgroup: score,
+            color: legendGroup.includes(score) ? colors[legendGroup.length-1] : colors[legendGroup.length],
+            hovertemplate: `  ${score}:  %{y:.2f}<extra></extra>`,
+            showlegend: legendGroup.includes(score) ? false : true,
+          }
+        })
+
+        if (!legendGroup.includes(score)) {
+          legendGroup.push(score);
         }
-      })
+      }
     }
     
     setRenderData(graphSeries);

@@ -65,7 +65,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
     fig.setSubplotId(subplotIds);
     
     fig.setLegend({ tracegroupgap: 5, xanchor: "left", y: 0.5, });
-    fig.setLayoutProps({ hovermode: "x", hoverdistance: 1 });
+    fig.setLayoutProps({ barmode: "group", hovermode: "x", hoverdistance: 1 });
 
     if (!fig.fresh) {
       let caxis = fig.getColorAxis();
@@ -97,8 +97,11 @@ export default function GenericTimeline({data, availableChannels, annotations, h
             }, subAx);
             fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, subAx);
       
-          } else {
+          } else if (renderData[i].type === "lineseries") {
             fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
+          }  else if (renderData[i].type == "bar") {
+            fig.setScaleType("category", "y", subAx);
+            fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, subAx);
           }
         }
       }
@@ -111,6 +114,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
     if (!fig) return;
 
     let lineSeries = [];
+    let barSeries = [];
     for (let i in data) {
       if (data[i].AnalysisType === "CustomizedTimelineData") {
         let xData = [];
@@ -120,23 +124,46 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         }
         
         for (let j in data[i].ChannelNames) {
-          const yData = [];
-          for (let t in data[i].Time) {
-            yData.push(data[i]["Data"][j][t]);
-            yData.push(data[i]["Data"][j][t]);
+          if (data[i].ChannelUnits[j] === "Category") {
+            const yData = [];
+            for (let t in data[i].Time) {
+              yData.push(data[i]["Data"][j][t]);
+            }
+            barSeries.push({
+              type: "bar",
+              x: data[i]["Duration"].map((a,t) => new Date(a)*1000), y: data[i]["Data"][j], base: data[i].Time.map((a) => new Date(a*1000)),
+              options: {
+                id: data[i].ChannelNames[j],
+                linewidth: 2,
+                line: {shape: "hvh"},
+                color: "#000000",
+                orientation: "h",
+                hovertemplate: "%{y}<extra></extra>"
+              }, 
+              axName: data[i].ChannelNames[j]
+            });
+
+          } else {
+            const yData = [];
+            for (let t in data[i].Time) {
+              yData.push(data[i]["Data"][j][t]);
+              yData.push(data[i]["Data"][j][t]);
+            }
+            if ( yData.filter((a,i) => yData[i]).length === 0 ) continue;
+
+            lineSeries.push({
+              type: "lineseries",
+              x: xData.filter((a,i) => yData[i]), y: yData.filter((a,i) => yData[i]),
+              options: {
+                id: data[i].ChannelNames[j],
+                linewidth: 2,
+                line: {shape: "hvh"},
+                color: "#000000",
+                hovertemplate: "%{y}<extra></extra>"
+              }, 
+              axName: data[i].ChannelNames[j]
+            });
           }
-  
-          lineSeries.push({
-            type: "lineseries",
-            x: xData, y: yData,
-            options: {
-              id: data[i].ChannelNames[j],
-              linewidth: 2,
-              color: "#000000",
-              hovertemplate: "%{y}<extra></extra>"
-            }, 
-            axName: data[i].ChannelNames[j]
-          });
         }
       } else if (data[i].AnalysisType === "ChronicSpectrum") {
         for (let j in data[i].ChannelNames) {
@@ -151,6 +178,24 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           });
         }
       }
+    }
+
+    if (barSeries.length > 0) {
+      let xaxis = [];
+      let yaxis = [];
+      let base = [];
+      for (let i in barSeries) {
+        xaxis.push(...barSeries[i].x);
+        yaxis.push(...barSeries[i].y);
+        base.push(...barSeries[i].base);
+      }
+
+      lineSeries.push({
+        type: "bar",
+        x: xaxis, y: yaxis, base: base,
+        options: barSeries[0].options, 
+        axName: barSeries[0].axName
+      });
     }
 
     setRenderData(lineSeries);
@@ -217,19 +262,35 @@ export default function GenericTimeline({data, availableChannels, annotations, h
 
       if (renderData[i].type == "lineseries") {
         if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
-        const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
-        if (currentMax > yLim[renderData[i].axName][1]) {
-          yLim[renderData[i].axName][1] = currentMax*1.1;
-          fig.setYlim(yLim[renderData[i].axName], ax);
-        };
-        if (!renderData[i].options.hidden && ax) fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
+        if (!renderData[i].options.hidden && ax) {
+          const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
+          if (currentMax > yLim[renderData[i].axName][1]) {
+            yLim[renderData[i].axName][1] = currentMax*1.1;
+            fig.setYlim(yLim[renderData[i].axName], ax);
+          };
+          fig.setScaleType("linear", "y", ax);
+          fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
+        }
       } else if (renderData[i].type === "surf") {
         if (!renderData[i].options.hidden && ax) {
+          fig.setScaleType("linear", "y", ax);
           if (renderData[i].options.zlim[0] < clim[renderData[i].axName].limits[0] || clim[renderData[i].axName].limits[0] == 0) clim[renderData[i].axName].limits[0] = renderData[i].options.zlim[0];
           if (renderData[i].options.zlim[1] > clim[renderData[i].axName].limits[1] || clim[renderData[i].axName].limits[1] == 0) clim[renderData[i].axName].limits[1] = renderData[i].options.zlim[1];
           fig.surf(renderData[i].x, renderData[i].y, renderData[i].z, {...renderData[i].options,
             coloraxis: clim[renderData[i].axName].caxis
           }, ax);
+        }
+      } else if (renderData[i].type == "bar") {
+        //if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
+        //const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
+        //if (currentMax > yLim[renderData[i].axName][1]) {
+        //  yLim[renderData[i].axName][1] = currentMax*1.1;
+        //  fig.setYlim(yLim[renderData[i].axName], ax);
+        //};
+        console.log(renderData[i])
+        if (!renderData[i].options.hidden && ax) {
+          fig.setScaleType("category", "y", ax);
+          fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, ax);
         }
       }
     }

@@ -99,7 +99,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const exportCurrentStream = () => {
     let downloader = document.createElement('a');
     downloader.href = SessionController.getDownloadLink("/api/downloadData", {
-      
       CacheType: "queryChronicTimeline"
     });
     downloader.target = '_blank';
