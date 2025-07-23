@@ -179,6 +179,24 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
+        elif request.data["DataType"] == "BRAVORecordingStructure":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+            source_file.owner = person
+            source_file.save()
+            
+            try:
+                DataCurator.BRAVORecordingBinaryDecoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         elif request.data["DataType"] == "UFMDATv2":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:

@@ -173,7 +173,7 @@ def getIntradayActivityTimeseries(device, type="activities/steps", start_date=0)
         url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + fitbitDate(start_date) + "/all" + ".json" 
     else:
         url = "https://api.fitbit.com/1/user/" + token["user_id"] + "/" + type + "/date/" + fitbitDate(start_date) + "/" + "1d" + "/1min" + ".json"
-    print(url)
+    
     response = requests.get(url, headers={
         "Authorization": "Bearer " + token["access_token"], 
         "Content-Type": "application/json",

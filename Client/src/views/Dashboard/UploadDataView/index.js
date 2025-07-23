@@ -372,7 +372,8 @@ function UploadDeidentifiedDataView() {
                     }}
                     renderOption={(props, option) => <li {...props}>{option}</li>}
                     value={uploadDataType}
-                    options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "AlphaOmega MPX Files", "BRAVO Offline Synchronized Recordings", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
+                    options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "AlphaOmega MPX Files", "BRAVO Recording Structure (Binary)", 
+                      "BRAVO Offline Synchronized Recordings", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
                     onChange={(event, newValue) => setUploadDataType(newValue)}
                   />
                   {uploadDataType === "Medtronic JSON Files" ? (
@@ -383,6 +384,9 @@ function UploadDeidentifiedDataView() {
                   ) : null}
                   {uploadDataType === "AlphaOmega MPX Files" ? (
                     <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
+                  ) : null}
+                  {uploadDataType === "BRAVO Recording Structure (Binary)" ? (
+                    <BRAVORecordingBinaryStructureUploader institute={user.Institute}  participant={activeParticipant.value} version={""}/>
                   ) : null}
                   {uploadDataType === "BRAVO Offline Synchronized Recordings" ? (
                     <UFMDATv2Uploader institute={user.Institute}  participant={activeParticipant.value}/>
