@@ -40,7 +40,7 @@ from django.conf import settings
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, PKCE_code_challenger
 from modules import Database, DataCurator
-from modules.OURA import DataManager
+from modules.OURA import DataManager as OuraDataManager
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -146,10 +146,10 @@ class QueryOuraRingData(RestViews.APIView):
             return Response(status=400, data={"message": "Verification Failed"})
 
         if request.data["RequestType"] == "RequestOverview":
-            Data = DataManager.loadOuraRingData(Participant)
+            Data = OuraDataManager.loadOuraRingData(Participant)
             return Response(status=200, data=Data)
         elif request.data["RequestType"] == "RefreshOuraRingData":
-            DataManager.refreshOuraRingData(device)
+            OuraDataManager.refreshOuraRingData(device)
             return Response(status=200)
 
         return Response(status=200)
@@ -170,7 +170,7 @@ class QueryOuraRingData(RestViews.APIView):
         if len(device.auth.keys()) == 0:
             return Response(status=400, data={"message": "Verification Failed"})
 
-        Data = DataManager.loadOuraRingData(Participant)
+        Data = OuraDataManager.loadOuraRingData(Participant)
         result = pickle.dumps(Data)
         return HttpResponse(bytes(result), status=200, headers={
             "Content-Type": "application/octet-stream"

@@ -2146,11 +2146,27 @@ def queryChronicTimeline(participant_uid, config):
                 
                 for i in range(len(Activity["ChannelNames"])):
                     Activity["ChannelNames"][i] = key + " " + Activity["ChannelNames"][i]
-                    
+                
+                Activity["Data"] = np.array(Activity["Data"]).T.tolist()
                 ChronicTimeline.append(Activity)
 
             else:
+                DescriptorActivity = {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": [],
+                    "Duration": [],
+                    "ChannelNames": [],
+                    "ChannelUnits": [],
+                    "Data": [],
+                }
+
                 for i in range(len(Data[key])):
+                    for descriptor in Data[key][i]["Descriptor"].keys():
+                        if type(Data[key][i]["Descriptor"][descriptor]) == float or type(Data[key][i]["Descriptor"][descriptor]) == int:
+                            if descriptor not in DescriptorActivity["ChannelNames"]:
+                                DescriptorActivity["ChannelNames"].append(descriptor)
+                                DescriptorActivity["ChannelUnits"].append("")
+
                     if len(Data[key][i]["Data"]) > 0:
                         if not "Time" in Data[key][i].keys():
                             Data[key][i]["Time"] = [Data[key][i]["StartTime"] + j/Data[key][i]["SamplingRate"] for j in range(len(Data[key][i]["Data"]))]
@@ -2180,6 +2196,21 @@ def queryChronicTimeline(participant_uid, config):
                                             Activity["Data"][j].append(subkey)
                                 
                         ChronicTimeline.append(Activity)
+
+                for i in range(len(Data[key])):
+                    DescriptorActivity["Time"].append(Data[key][i]["StartTime"])
+                    DescriptorActivity["Duration"].append(3600*24)
+
+                    ChanData = []
+                    for chan in DescriptorActivity["ChannelNames"]:
+                        ChanData.append(Data[key][i]["Descriptor"][chan])
+                    DescriptorActivity["Data"].append(ChanData)
+
+                for i in range(len(DescriptorActivity["ChannelNames"])):
+                    DescriptorActivity["ChannelNames"][i] = key + " " + DescriptorActivity["ChannelNames"][i]
+
+                DescriptorActivity["Data"] = np.array(DescriptorActivity["Data"]).T.tolist()
+                ChronicTimeline.append(DescriptorActivity)
 
     if models.Recording.include(source__in=SourceFiles, type__in=["CustomizedStreamingData"], metadata__DataType="Scheduled Streams"):
         Recording = models.Recording.find(type="ProcessedCustomizedStreamingData", source__owner=Participant)
