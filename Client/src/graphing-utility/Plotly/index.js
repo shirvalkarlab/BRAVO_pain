@@ -23,7 +23,7 @@ const defaultLineOptions = {
 }
 
 const defaultScatterOptions = {
-  type: "scatter",
+  type: "scattergl",
   mode: "markers",
   marker: {color: "rgb(0,0,0)", size: 5},
   showlegend: false,
@@ -41,7 +41,7 @@ const defaultShadedAreaOptions = {
   fillcolor: "#33333344",
   line: {color: "transparent"},
   hoverinfo: "skip",
-  type: "scatter",
+  type: "scattergl",
   showlegend: false
 }
 
@@ -131,6 +131,66 @@ const setDictionaryProps = (dict, key, value) => {
   return dict;
 
 }
+
+function downsampleLTTB(x, y, threshold) {
+    const dataLength = x.length;
+    if (threshold >= dataLength || threshold === 0) {
+        return { x, y };
+    }
+    const sampledX = [];
+    const sampledY = [];
+
+    const every = (dataLength - 2) / (threshold - 2);
+    let a = 0;
+
+    sampledX.push(x[a]);
+    sampledY.push(y[a]);
+
+    for (let i = 0; i < threshold - 2; i++) {
+        const avgRangeStart = Math.floor((i + 1) * every) + 1;
+        const avgRangeEnd = Math.floor((i + 2) * every) + 1;
+        const avgRangeLength = avgRangeEnd - avgRangeStart;
+
+        let avgX = 0, avgY = 0;
+        for (let j = avgRangeStart; j < avgRangeEnd; j++) {
+            avgX += x[j];
+            avgY += y[j];
+        }
+        avgX /= avgRangeLength;
+        avgY /= avgRangeLength;
+
+        const rangeOffs = Math.floor(i * every) + 1;
+        const rangeTo = Math.floor((i + 1) * every) + 1;
+
+        let maxArea = -1;
+        let nextA = rangeOffs;
+
+        const ax = x[a];
+        const ay = y[a];
+
+        for (let j = rangeOffs; j < rangeTo; j++) {
+            const area = Math.abs(
+                (ax - avgX) * (y[j] - ay) -
+                (ax - x[j]) * (avgY - ay)
+            );
+
+            if (area > maxArea) {
+                maxArea = area;
+                nextA = j;
+            }
+        }
+
+        sampledX.push(x[nextA]);
+        sampledY.push(y[nextA]);
+        a = nextA;
+    }
+
+    sampledX.push(x[dataLength - 1]);
+    sampledY.push(y[dataLength - 1]);
+
+    return { x: sampledX, y: sampledY };
+}
+
 
 class PlotlyRenderManager {
 
@@ -1336,4 +1396,5 @@ class PlotlyRenderManager {
 
 export {
   PlotlyRenderManager,
+  downsampleLTTB
 };

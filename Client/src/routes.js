@@ -59,6 +59,7 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
@@ -317,6 +318,13 @@ const routes = {
         icon: <FaRing />,
         route: "/oura-ring/dashboard/:participant_uid",
         component: <OuraRingDashboard />,
+      },
+      {
+        key: "EmpaticaDataExplorer",
+        name: "Empatica Data Explorer",
+        icon: <img src={"https://www.empatica.com/website/assets/images/embraceplus/embraceplus_closed_side_hero-sm-xhdpi.png"} width={"30pt"} alt="Empatica" />,
+        route: "/empatica/data-explorer/:participant_uid",
+        component: <EmpaticaDataExplorer />,
       }
     ]
   },

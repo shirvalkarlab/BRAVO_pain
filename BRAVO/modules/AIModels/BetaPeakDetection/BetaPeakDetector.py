@@ -47,9 +47,12 @@ def ExtractFTGPeak(Frequency, Power):
     return GammaParameters
 
 def BetaPeakDetector(data):
-    # data require dict({"Data": np.ndarray, "SamplingRate": float})
+    # data require dict({"Data": list, "SamplingRate": float})
+    if type(data["Data"]) is not list:
+        raise ValueError("Data must be a list of time series data.")
     data["Data"] = np.array(data["Data"])
-    data["Missing"] = np.array(data["Missing"])
+    data["Missing"] = np.zeros(data["Data"].shape)
+    data["ChannelNames"] = []
 
     userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
         "TimeSeriesRecording": {
@@ -67,13 +70,13 @@ def BetaPeakDetector(data):
     userConfig["APIAccess"] = True
 
     Data = DataAnalysis.processTimeDomainStreaming(None, data, userConfig)
-    MeanPSD = np.nanmedian(Data["Spectrum"][j]["Power"],axis=1)
-    StdPSD = np.nanstd(Data["Spectrum"][j]["Power"],axis=1)
+    MeanPSD = np.nanmedian(Data["Spectrum"][0]["Power"],axis=1)
+    StdPSD = np.nanstd(Data["Spectrum"][0]["Power"],axis=1)
     if np.any(StdPSD == 0):
         return None
 
-    PSD = MeanPSD[Data["Spectrum"][j]["Frequency"] < 100]
-    PSDFrequency = Data["Spectrum"][j]["Frequency"][Data["Spectrum"][j]["Frequency"] < 100]
+    PSD = MeanPSD[Data["Spectrum"][0]["Frequency"] < 100]
+    PSDFrequency = Data["Spectrum"][0]["Frequency"][Data["Spectrum"][0]["Frequency"] < 100]
     BetaBand = (PSDFrequency >= 11) & (PSDFrequency <= 30)
     NormBeta = np.log10(PSD[BetaBand]) / np.sum(np.log10(PSD[BetaBand]))
     MeanPSDPower = np.mean(np.log10(PSD))

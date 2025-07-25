@@ -28,8 +28,6 @@ import {
 
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
-import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
-
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MuiAlertDialog from "components/MuiAlertDialog";

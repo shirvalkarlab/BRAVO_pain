@@ -696,10 +696,27 @@ def BRAVORecordingBinaryDecoder(source_file, person):
     except Exception as e:
         SourceFilename = ""
 
-    for ProcessedData in Recordings:
+    RecordingTypes = []
+    for i in range(len(Recordings)):
+        if "RecordingType" in Recordings[i]["Metadata"].keys():
+            if not Recordings[i]["Metadata"]["RecordingType"] in RecordingTypes:
+                RecordingTypes.append(Recordings[i]["Metadata"]["RecordingType"])
+    
+    for i in range(len(RecordingTypes)):
+        ProcessedData = [Recording for Recording in Recordings if Recording["Metadata"]["RecordingType"] == RecordingTypes[i]]
+        StartTime = ProcessedData[0]["StartTime"]
+        ChannelNames = []
+        for j in range(len(ProcessedData)):
+            if ProcessedData[j]["StartTime"] < StartTime:
+                StartTime = ProcessedData[j]["StartTime"]
+
+            for k in range(len(ProcessedData[j]["ChannelNames"])):
+                if not ProcessedData[j]["ChannelNames"][k] in ChannelNames:
+                    ChannelNames.append(ProcessedData[j]["ChannelNames"][k])
+
         recording = models.Recording(**{
-            "name": SourceFilename, "type": ProcessedData["Metadata"]["RecordingType"], "date": ProcessedData["StartTime"], "metadata": {
-                "ChannelNames": ProcessedData["ChannelNames"]
+            "name": SourceFilename, "type": RecordingTypes[i], "date": StartTime, "metadata": {
+                "ChannelNames": ChannelNames
             }
         }, source=source_file)
         if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):

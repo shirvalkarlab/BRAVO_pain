@@ -37,7 +37,7 @@ import MDButton from "components/MDButton";
 import DropzoneUploader from "components/DropzoneUploader";
 import { SessionController } from "database/session-control";
 
-function BRAVORecordingBinaryStructureUploader({institute, version}) {
+function BRAVORecordingBinaryStructureUploader({institute, participant, version}) {
   const [metadataField, setMetadataField] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true, Password: ""})
   const [files, setFiles] = useState([]);
 
@@ -49,8 +49,8 @@ function BRAVORecordingBinaryStructureUploader({institute, version}) {
   const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
     const formData = new FormData();
     formData.append(fieldName, file, file.name);
-    formData.append("ParticipantId", "");
-    formData.append("DataType", "BRAVORecordingBinaryStructure"+version);
+    formData.append("ParticipantId", participant);
+    formData.append("DataType", "BRAVORecordingBinaryStructure");
     formData.append("Institute", institute);
     formData.append("Metadata", JSON.stringify(metadataField));
 
@@ -107,44 +107,12 @@ function BRAVORecordingBinaryStructureUploader({institute, version}) {
   return (
     <MDBox pt={2}>
       <Divider variant="insert" />
-      <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "center"}}>
-
-        <MDTypography variant="h6" style={{width: 300}}>
-          {"Export Encryption Password"}
-        </MDTypography>
-        <TextField
-          variant="standard" margin="dense" id="export-file-decryption-key"
-          value={metadataField.Password}
-          onChange={(event) => setMetadataField({...metadataField, Password: event.target.value})}
-          label={"Decryption Password (Required)"} type="text"
-          fullWidth
-        />
-        
-      </MDBox>
-      
-      <MDBox pt={2} px={3}>
-        <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
-          <Checkbox checked={metadataField.automatic_deidentification} onClick={() => setMetadataField({...metadataField, automatic_deidentification: !metadataField.automatic_deidentification})} />
-          <MDTypography variant="h6">
-            {"Automatic Deidentification"}
-          </MDTypography>
-        </MDBox>
-        <MDBox pt={2} style={{display: "flex", flexDirection: "row", alignItems: "center"}}>
-          <Checkbox checked={metadataField.automatic_concatenation} onClick={() => setMetadataField({...metadataField, automatic_concatenation: !metadataField.automatic_concatenation})} />
-          <MDTypography variant="h6">
-            {"Automatic Concatenating Multiple Streams"}
-          </MDTypography>
-        </MDBox>
-      </MDBox>
-      <Divider variant="insert" />
       <MDBox pt={2} style={{display: "flex", flexDirection: "row", justifyContent: "space-between"}}>
-        
         <MDTypography variant="h6">
           {"Data Uploader"}
         </MDTypography>
         <MDButton color="info" onClick={() => setFiles([])} style={{marginLeft: "auto"}}>{"Clear Upload Queue"}</MDButton>
       </MDBox>
-      
       
       <MDBox pt={2}>
         <FilePond

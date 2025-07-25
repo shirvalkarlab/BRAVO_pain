@@ -46,6 +46,7 @@ import ExternalDevicesFileTable from "./ExternalDevicesFileTable";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
+import BRAVORecordingTable from "./BRAVORecordingTable";
 
 export default function SourceFiles() {
   const navigate = useNavigate();
@@ -84,8 +85,7 @@ export default function SourceFiles() {
       if (options.length > 0) setSourceFileType({active: options[0], options: options});
       else setSourceFileType({active: "", options: []});
 
-      setAvailableSourceFiles(response.data)
-      console.log(response.data)
+      setAvailableSourceFiles(response.data);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
@@ -236,6 +236,9 @@ export default function SourceFiles() {
             ) : null}
             {["MATFile","Synchronized External Device Data"].includes(sourceFileType.active) ? (
               <ExternalDevicesFileTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
+            ) : null}
+            {["BRAVORecordingBinaryStructure"].includes(sourceFileType.active) ? (
+              <BRAVORecordingTable data={viewSourceFiles} deleteData={handleDeleteSourceFile} />
             ) : null}
           </MDBox>
         </Card>

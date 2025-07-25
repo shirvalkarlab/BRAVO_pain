@@ -50,6 +50,7 @@ import { HiIdentification } from "react-icons/hi2"
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 import MedtronicJSONUploader from "./MedtronicJSONUploader";
+import BRAVORecordingBinaryStructureUploader from "./BRAVORecordingBinaryStructureUploader";
 import BRAVOExportUploader from "./BRAVOExportUploader";
 import NeuroimageUploader from "./NeuroimageUploader";
 import ExternalCSVUploader from "./ExternalCSVUploader";

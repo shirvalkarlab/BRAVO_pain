@@ -87,6 +87,65 @@ def sanitize_input(data, required_keys=[], accepted_keys=[]):
     
     return True
 
+def lttb_optimized(x, y, threshold=200000):
+    """
+    Optimized LTTB algorithm for downsampling time-series data.
+
+    Parameters:
+        x (np.ndarray): 1D array of time or x-values.
+        y (np.ndarray): 1D array of corresponding y-values.
+        threshold (int): Number of points to retain.
+
+    Returns:
+        (np.ndarray, np.ndarray): Downsampled x and y arrays.
+    """
+    if threshold >= len(x) or threshold == 0:
+        return x, y
+
+    data = np.column_stack((x, y))
+    sampled = np.zeros((threshold, 2))
+    sampled[0] = data[0]
+    sampled[-1] = data[-1]
+
+    bucket_size = (len(data) - 2) / (threshold - 2)
+    a = 0
+
+    for i in range(1, threshold - 1):
+        start = int((i - 1) * bucket_size) + 1
+        end = int(i * bucket_size) + 1
+        next_end = int((i + 1) * bucket_size) + 1
+
+        bucket = data[start:end]
+        next_bucket = data[end:next_end]
+
+        if len(next_bucket) == 0:
+            avg_x, avg_y = data[-1]
+        else:
+            avg_x = np.mean(next_bucket[:, 0])
+            avg_y = np.mean(next_bucket[:, 1])
+
+        ax, ay = data[a]
+        dx = ax - bucket[:, 0]
+        dy = bucket[:, 1] - ay
+        area = np.abs((ax - avg_x) * dy - dx * (avg_y - ay))
+        max_idx = np.argmax(area)
+        sampled[i] = bucket[max_idx]
+        a = start + max_idx
+    return sampled[:, 0], sampled[:, 1]
+
+def minimum_change_eliminator(x, y, threshold=0.1):
+    threshold_level = threshold * np.std(y)
+    last_value = y[0]
+    selected_indices = [0]
+    for i in range(1, len(y)):
+        if np.abs(y[i] - last_value) > threshold_level:
+            last_value = y[i]
+            selected_indices.append(i)
+
+    x_filtered = x[selected_indices]
+    y_filtered = y[selected_indices]
+    return x_filtered, y_filtered
+
 def json_compliant_handler(data):
     if type(data) == list:
         for i in range(len(data)):
