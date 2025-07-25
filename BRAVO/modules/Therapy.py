@@ -116,15 +116,22 @@ def queryTherapyHistory(Participant):
         for j in range(len(DeviceTherapyModification["History"])):
             if DeviceTherapyModification["History"][j]["Type"] == "TherapyChangeGroup":
                 GroupId = DeviceTherapyModification["History"][j]["New"]
-                print(GroupId)
                 for k in range(len(TherapyHistory["History"])):
                     if TherapyHistory["History"][k]["GroupId"] == GroupId and TherapyHistory["History"][k]["Date"] > DeviceTherapyModification["History"][j]["Date"]:
                         if not "TherapyGroup" in DeviceTherapyModification["History"][j].keys():
                             DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
+                        elif TherapyHistory["History"][k]["Date"] < DeviceTherapyModification["History"][j]["TherapyGroup"]["Date"]+24*3600 and DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == "Past Therapy":
+                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
                         
-                        else:
-                            if TherapyHistory["History"][k]["Date"] < DeviceTherapyModification["History"][j]["TherapyGroup"]["Date"]+24*3600 and DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == "Past Therapy":
-                                DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
+                    elif TherapyHistory["History"][k]["GroupId"] == GroupId and TherapyHistory["History"][k]["Date"] == DeviceTherapyModification["History"][j]["Date"]: 
+                        if not "TherapyGroup" in DeviceTherapyModification["History"][j].keys():
+                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
+
+                        if DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == TherapyHistory["History"][k]["Type"]:
+                            ExistingSides = [DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"][t]["Electrode"]["Target"] for t in range(len(DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"]))]
+                            if TherapyHistory["History"][k]["StimulationSettings"][0]["Electrode"]["Target"] not in ExistingSides:
+                                DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"].extend(TherapyHistory["History"][k]["StimulationSettings"])
+                                DeviceTherapyModification["History"][j]["TherapyGroup"]["AdaptiveSettings"].extend(TherapyHistory["History"][k]["AdaptiveSettings"])
 
         TherapyModifications.append(DeviceTherapyModification)
 
