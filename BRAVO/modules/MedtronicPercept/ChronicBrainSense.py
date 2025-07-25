@@ -116,7 +116,9 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                     if np.any(WindowSelected):
                         GroupId = TherapyHistory["TherapyModification"][i]["History"][j-1]["New"]
                         ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
+                        ClosestTherapy["Post"] = Therapy.findSameSourceTherapy(RecordingInfo["SourceId"], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])
                         TherapyNote = Therapy.findClosestAdaptiveTherapy(Data["Time"][WindowSelected][0], ClosestTherapy)
+                        
                         if extractSensingString(TherapyNote) == "Unknown":
                             GroupId = TherapyHistory["TherapyModification"][i]["History"][j]["Previous"]
                             ClosestTherapy = Therapy.findClosestTherapy(Data["Time"][WindowSelected][0], "Left" if Data["ChannelNames"][0].startswith("Left") else "Right", GroupId, TherapyHistory["TherapyConfiguration"][i]["History"])

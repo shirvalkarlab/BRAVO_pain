@@ -84,6 +84,7 @@ class ElectricalTherapy(models.Model):
     def get_info(self):
         return {
             "Id": self.therapy.uid,
+            "SourceId": self.therapy.source.uid,
             "Name": self.therapy.name,
             "Type": self.therapy.type,
             "Date": self.therapy.date,

@@ -179,7 +179,7 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
-        elif request.data["DataType"] == "BRAVORecordingStructure":
+        elif request.data["DataType"] == "BRAVORecordingBinaryStructure":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
                 return Response(status=400, data={"message": "Participant not found."})

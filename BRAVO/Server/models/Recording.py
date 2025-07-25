@@ -59,6 +59,7 @@ class Recording(models.Model):
     def get_info(self):
         return {
             "Id": self.uid,
+            "SourceId": self.source.uid,
             "Name": self.name,
             "Type": self.type,
             "Date": self.date,

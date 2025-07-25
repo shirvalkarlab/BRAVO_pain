@@ -26,8 +26,6 @@ import pandas as pd
 import uuid
 from cryptography.fernet import Fernet
 
-import timeit
-
 from Server import models
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -115,6 +113,19 @@ def queryTherapyHistory(Participant):
                 "New": LastTherapyChange,
             })
 
+        for j in range(len(DeviceTherapyModification["History"])):
+            if DeviceTherapyModification["History"][j]["Type"] == "TherapyChangeGroup":
+                GroupId = DeviceTherapyModification["History"][j]["New"]
+                print(GroupId)
+                for k in range(len(TherapyHistory["History"])):
+                    if TherapyHistory["History"][k]["GroupId"] == GroupId and TherapyHistory["History"][k]["Date"] > DeviceTherapyModification["History"][j]["Date"]:
+                        if not "TherapyGroup" in DeviceTherapyModification["History"][j].keys():
+                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
+                        
+                        else:
+                            if TherapyHistory["History"][k]["Date"] < DeviceTherapyModification["History"][j]["TherapyGroup"]["Date"]+24*3600 and DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == "Past Therapy":
+                                DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
+
         TherapyModifications.append(DeviceTherapyModification)
 
         i = 1
@@ -164,8 +175,22 @@ def queryTherapyHistory(Participant):
 
             lastVisit = i  
             i += 1
-                    
+    
     return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories}
+
+def findSameSourceTherapy(source_uid, hemisphere, group, TherapyHistories):
+    for history in TherapyHistories:
+        for j in range(len(history["StimulationSettings"])):
+            if history["SourceId"] == source_uid and history["GroupId"].startswith(group) and history["StimulationSettings"][j]["Electrode"]["Target"].startswith(hemisphere) and history["Type"] == "Pre-visit Therapy":
+                return {
+                    "Type": "Pre-visit Therapy",
+                    "TherapyId": history["Id"],
+                    "Date": history["Date"],
+                    "Stimulation": history["StimulationSettings"][j],
+                    "Adaptive": history["AdaptiveSettings"][j]
+                }
+    
+    return None
 
 def findClosestTherapy(timestamp, hemisphere, group, TherapyHistories):
     TherapyHistories.sort(key=lambda x: x["Date"])
@@ -227,6 +252,10 @@ def queryElectrodeImpedances(participant):
     return ElectrodeImpedances
     
 def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):
+    # This is a new function based on SourceFile JSON ID
+    if ClosestTherapy["Post"]:
+        return ClosestTherapy["Post"]
+
     if not ClosestTherapy["Post"] and not ClosestTherapy["Pre"]:
         return None
     elif not ClosestTherapy["Post"]:
