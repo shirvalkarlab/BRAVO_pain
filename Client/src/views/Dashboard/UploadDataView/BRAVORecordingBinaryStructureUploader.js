@@ -38,12 +38,12 @@ import DropzoneUploader from "components/DropzoneUploader";
 import { SessionController } from "database/session-control";
 
 function BRAVORecordingBinaryStructureUploader({institute, participant, version}) {
-  const [metadataField, setMetadataField] = useState({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true, Password: ""})
+  const [metadataField, setMetadataField] = useState({});
   const [files, setFiles] = useState([]);
 
   useEffect(() => {
     setFiles([]);
-    setMetadataField({device_location: "", automatic_deidentification: false, infer_from_device: true, automatic_concatenation: true, Password: ""});
+    setMetadataField({});
   }, [institute]);
 
   const handleFileUpload = (fieldName, file, metadata, load, error, progress, abort, transfer, options) => {
@@ -113,7 +113,6 @@ function BRAVORecordingBinaryStructureUploader({institute, participant, version}
         </MDTypography>
         <MDButton color="info" onClick={() => setFiles([])} style={{marginLeft: "auto"}}>{"Clear Upload Queue"}</MDButton>
       </MDBox>
-      
       <MDBox pt={2}>
         <FilePond
           name="File" 

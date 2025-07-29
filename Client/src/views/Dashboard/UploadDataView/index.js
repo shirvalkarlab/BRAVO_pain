@@ -56,6 +56,7 @@ import NeuroimageUploader from "./NeuroimageUploader";
 import ExternalCSVUploader from "./ExternalCSVUploader";
 import UFMDATUploader from "./UFMDATUploader";
 import HPFCSVUploader from "./HPFCSVUploader";
+import BRAVORecordingBinaryStructureUploader from "./BRAVORecordingBinaryStructureUploader";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
@@ -387,7 +388,7 @@ function UploadDeidentifiedDataView() {
                     <AlphaOmegaMPXUploader institute={user.Institute}  participant={activeParticipant.value}/>
                   ) : null}
                   {uploadDataType === "BRAVO Recording Structure (Binary)" ? (
-                    <BRAVORecordingBinaryStructureUploader institute={user.Institute}  participant={activeParticipant.value} version={""}/>
+                    <BRAVORecordingBinaryStructureUploader institute={user.Institute} participant={activeParticipant.value} version={""}/>
                   ) : null}
                   {uploadDataType === "BRAVO Offline Synchronized Recordings" ? (
                     <UFMDATv2Uploader institute={user.Institute}  participant={activeParticipant.value}/>
