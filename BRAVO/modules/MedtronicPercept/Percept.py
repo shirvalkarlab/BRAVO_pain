@@ -1478,8 +1478,12 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
                     Data["StreamingTD"][nStream]["Ticks"] += 3276800
 
             for nStream in range(1, len(Data["StreamingTD"])):
-                Data["StreamingTD"][nStream]["FirstPacketDateTime"] = Data["StreamingTD"][0]["FirstPacketDateTime"] + (Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][0]["Ticks"][0]) / 1000
-
+                UpdatedTimestamp = Data["StreamingTD"][0]["FirstPacketDateTime"] + (Data["StreamingTD"][nStream]["Ticks"][0] - Data["StreamingTD"][0]["Ticks"][0]) / 1000
+                if np.abs(UpdatedTimestamp - Data["StreamingTD"][nStream]["FirstPacketDateTime"]) > 10:
+                    print(f"Warning: Stream {nStream} FirstPacketDateTime is not aligned with Stream 0, off by {Data["StreamingTD"][nStream]["FirstPacketDateTime"] - UpdatedTimestamp}")
+                else:
+                    Data["StreamingTD"][nStream]["FirstPacketDateTime"] = UpdatedTimestamp
+                
     for key in Data.keys():
         sourceData[key] = Data[key]
         

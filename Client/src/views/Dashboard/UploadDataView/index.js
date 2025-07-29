@@ -56,7 +56,6 @@ import NeuroimageUploader from "./NeuroimageUploader";
 import ExternalCSVUploader from "./ExternalCSVUploader";
 import UFMDATUploader from "./UFMDATUploader";
 import HPFCSVUploader from "./HPFCSVUploader";
-import BRAVORecordingBinaryStructureUploader from "./BRAVORecordingBinaryStructureUploader";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
