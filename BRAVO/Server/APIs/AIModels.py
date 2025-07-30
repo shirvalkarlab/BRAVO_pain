@@ -101,6 +101,7 @@ class RequestPrediction(RestViews.APIView):
                 result = ModelManager.Overview[request.data["AnalysisName"]]["Method"](request.data["Data"])
                 return Response(status=200, data=result)
             except Exception as e:
+                print(e)
                 return Response(status=400, data={"message": "Error executing model: " + str(e)})
             
         return Response(status=400, data={"message": "Model not found"})

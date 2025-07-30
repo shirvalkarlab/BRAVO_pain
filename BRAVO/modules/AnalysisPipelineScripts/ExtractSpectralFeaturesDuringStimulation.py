@@ -100,6 +100,7 @@ def HandleRefreshAnalysis():
                         }
                         if not checkHistory(RecordingCollections, collection):
                             RecordingCollections.append(collection)
+                            
 
     userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
         "TimeSeriesRecording": {
@@ -160,8 +161,13 @@ def HandleRefreshAnalysis():
         
         UniqueTherapyAmplitudes = {}
         for recording in collection["Recordings"]:
-            Analysis = DataAnalysis.processTimeseriesAnalysis(collection["ParticipantId"], recording["TimeSeries"], userConfig)
-            Analysis["Therapy"] = DataAnalysis.processTimeseriesAnalysis(collection["ParticipantId"], recording["Therapy"], userConfig)["Therapy"]
+            try:
+                Analysis = DataAnalysis.processTimeseriesAnalysis(collection["ParticipantId"], recording["TimeSeries"], userConfig)
+                Analysis["Therapy"] = DataAnalysis.processTimeseriesAnalysis(collection["ParticipantId"], recording["Therapy"], userConfig)["Therapy"]
+            except Exception as e:
+                print(f"Error processing recording {recording['TimeSeries']}: {e}")
+                continue
+
             TherapyPSDs = ExtractTherapyLevelPSDs(Analysis)
             
             for amp in collection["UniqueAmplitudes"]:

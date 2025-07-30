@@ -5,7 +5,7 @@ from modules import Database, DataAnalysis
 import pickle
 
 with open(Path(__file__).parent / "BetaPeakDetector.pkl", "rb") as f:
-    BetaPeakDetector = pickle.load(f)
+    BetaPeakDetectorModel = pickle.load(f)
 
 with open(Path(__file__).parent / "BetaPeakIdentifier_Classification.pkl", "rb") as f:
     BetaPeakIdentifier_Classifier = pickle.load(f)
@@ -52,7 +52,7 @@ def BetaPeakDetector(data):
         raise ValueError("Data must be a list of time series data.")
     data["Data"] = np.array(data["Data"])
     data["Missing"] = np.zeros(data["Data"].shape)
-    data["ChannelNames"] = []
+    data["ChannelNames"] = ["Input Data"]
 
     userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
         "TimeSeriesRecording": {
@@ -68,13 +68,12 @@ def BetaPeakDetector(data):
         }
     }})
     userConfig["APIAccess"] = True
-
     Data = DataAnalysis.processTimeDomainStreaming(None, data, userConfig)
     MeanPSD = np.nanmedian(Data["Spectrum"][0]["Power"],axis=1)
     StdPSD = np.nanstd(Data["Spectrum"][0]["Power"],axis=1)
     if np.any(StdPSD == 0):
         return None
-
+    
     PSD = MeanPSD[Data["Spectrum"][0]["Frequency"] < 100]
     PSDFrequency = Data["Spectrum"][0]["Frequency"][Data["Spectrum"][0]["Frequency"] < 100]
     BetaBand = (PSDFrequency >= 11) & (PSDFrequency <= 30)
@@ -82,7 +81,7 @@ def BetaPeakDetector(data):
     MeanPSDPower = np.mean(np.log10(PSD))
     Feature = np.concatenate((NormBeta, [MeanPSDPower]))
     
-    HasBetaPeak = BetaPeakDetector.predict_proba([Feature])[0][1]
+    HasBetaPeak = BetaPeakDetectorModel.predict_proba([Feature])[0][1]
     Result = {"PredictedCenterFrequency": []}
     Result["BetaPresence"] = HasBetaPeak
     

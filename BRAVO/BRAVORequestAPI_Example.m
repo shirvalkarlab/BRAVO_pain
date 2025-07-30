@@ -1,5 +1,5 @@
-requester = BRAVORequestAPI('Q7LMHCTKMPCH9443TGYKZ099PDXIYCJSCWYPOQZCFJPQI9SP76D9AGEXWI8E5M8Q', ...
-    'http://localhost');
+requester = BRAVORequestAPI('A66UW638LG0XARPYMZMI77EGHCUZ6ETF5WZVY1D9FNYGMWBA1T8LMACYWYW1DHUS', ...
+    'http://localhost:27286');
 
 NewParticipant = requester.AddNewParticipant("NeuroPace01");
 Device = requester.AddNewDBSDevice(NewParticipant.Id, "NeuroPace RNS-320", "LGS-000000");
@@ -60,3 +60,8 @@ Input = struct();
 Input.Data = Data.Signal.SignalSeries(1).Data(1,:);
 Input.SamplingRate = Data.Signal.SignalSeries(1).SamplingRate;
 Result = requester.RequestAIPrediction('BetaPeakDetection', Input);
+
+figure(1); clf; hold on;
+plot(Data.Signal.SignalSeries(1).Spectrum(1).Frequency, mean(Data.Signal.SignalSeries(1).Spectrum(1).Power,2))
+plot([Result.PredictedCenterFrequency.Frequency], [Result.PredictedCenterFrequency.Probability])
+
