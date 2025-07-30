@@ -20,9 +20,31 @@ classdef BRAVORequestAPI
             requester.Profile = GetUserInfo(requester);
         end
         
+        %{  
+        Example Usage:
+            Profile = requester.GetUserInfo();
+        %}
         function response = GetUserInfo(requester)
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 5);
             response = webwrite([requester.ServerAddress '/api/queryProfile'], options);
+        end
+        
+        %{  
+        Example Usage:
+            Config = requester.QueryAnalysisConfiguration();
+        %}
+        function response = QueryAnalysisConfiguration(requester, params)
+            arguments
+                requester
+                params.config = false
+            end
+
+            if isa(params.config, 'struct')
+                data.Configurations = params.config;
+            end
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 5);
+            response = webwrite([requester.ServerAddress '/api/queryProfile'], data, options);
         end
         
         function response = DeleteParticipant(requester, participant_uid)
@@ -165,22 +187,25 @@ classdef BRAVORequestAPI
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
             response = webwrite([requester.ServerAddress '/api/queryTherapeuticEffectAnalysis'], data, options);
         end
-        
+
         function response = QueryTimeseriesAnalysis(requester, participant_uid, params)
             arguments
                 requester
                 participant_uid
                 params.analysis_uid = false
+                params.therapy_uid = false
                 params.config = false
                 params.refresh = false
             end
 
             data.ParticipantId = participant_uid;
             data.RequestType = 'Overview';
+            data.TherapyId = params.therapy_uid;
 
             if params.refresh
                 data.RequestType = "DeleteCache";
                 data.AnalysisId = params.analysis_uid;
+                data.TherapyId = params.therapy_uid;
                 options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
                 webwrite([requester.ServerAddress '/api/queryTimeseriesAnalysis'], data, options);
 
@@ -229,6 +254,31 @@ classdef BRAVORequestAPI
             response = webwrite([requester.ServerAddress '/api/queryChronicNeuralActivity'], data, options);
         end
         
+        function response = QueryChronicTimeline(requester, participant_uid, params)
+            arguments
+                requester
+                participant_uid
+                params.refresh = false
+            end
+
+            data.ParticipantId = participant_uid;
+            data.RequestType = 'RequestAll';
+
+            if params.refresh
+                data.RequestType = "DeleteCache";
+                options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+                webwrite([requester.ServerAddress '/api/queryChronicTimeline'], data, options);
+
+                params.refresh = false;
+                params = namedargs2cell(params);
+                response = QueryChronicTimeline(requester, participant_uid, params{:});
+                return;
+            end
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+            response = webwrite([requester.ServerAddress '/api/queryChronicTimeline'], data, options);
+        end
+        
         function response = QueryNeuralActivitySnapshot(requester, participant_uid, params)
             arguments
                 requester
@@ -259,6 +309,32 @@ classdef BRAVORequestAPI
             response = webwrite([requester.ServerAddress '/api/queryNeuralActivitySnapshot'], data, options);
         end
         
+        function response = QueryBurstAnalysis(requester, participant_uid, recording_ids, channel, fc, params)
+            arguments
+                requester
+                participant_uid
+                recording_ids
+                channel
+                fc
+                params.config = false
+            end
+
+            data.ParticipantId = participant_uid;
+            data.RequestType = 'RequestData';
+            data.RecordingIds = recording_ids;
+            data.Channel = channel;
+            data.CenterFrequency = fc;
+
+            disp(data);
+
+            if isa(params.config, 'struct')
+                data.ProcessingConfiguration = params.config;
+            end
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+            response = webwrite([requester.ServerAddress '/api/queryBurstAnalysis'], data, options);
+        end
+        
         function response = QueryTherapyHistory(requester, participant_uid)
             arguments
                 requester
@@ -268,6 +344,40 @@ classdef BRAVORequestAPI
             data.ParticipantId = participant_uid;
             options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
             response = webwrite([requester.ServerAddress '/api/queryTherapyHistory'], data, options);
+        end
+
+        function response = QueryMedicationCycleAnalysis(requester, participant_uid, params)
+            arguments
+                requester
+                participant_uid
+                params.recording_ids = false
+            end
+
+            data.ParticipantId = participant_uid;
+            data.RequestType = 'RequestAll';
+
+            if isa(params.recording_ids, 'cell')
+                data.RequestType = 'RequestAnalysis';
+                data.RecordingIds = params.recording_ids;
+            end
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+            response = webwrite([requester.ServerAddress '/api/queryMedicationCycleAnalysis'], data, options);
+        end
+
+        function response = RequestAIPrediction(requester, analysis_name, input)
+            arguments
+                requester
+                analysis_name,
+                input
+            end
+            
+            data.RequestType = 'RequestAnalysis';
+            data.AnalysisName = analysis_name;
+            data.Data = input;
+
+            options = weboptions('HeaderFields', {'X-Secure-API-Key' requester.APIKey;}, 'Timeout', 60);
+            response = webwrite([requester.ServerAddress '/api/requestAIPrediction'], data, options);
         end
     end
 end

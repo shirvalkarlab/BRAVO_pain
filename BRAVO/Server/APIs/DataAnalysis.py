@@ -42,6 +42,97 @@ DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 
 class QueryAnalysisConfigurations(RestViews.APIView):
+    """
+    API View for managing analysis processing configurations.
+    
+    This view handles user-specific processing configurations that control how 
+    data analysis operations are performed across the platform.
+    
+    **URL:** ``/queryAnalysisConfigurations``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users only
+    
+    **Request Types:**
+    
+    * ``QueryConfigurations`` - Retrieve current user processing settings
+    * ``UpdateConfigurations`` - Update user processing configuration
+    
+    **Request Parameters:**
+    
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param Configurations: Processing configuration data (for UpdateConfigurations only)
+    :type Configurations: dict, optional
+    
+    **Default Processing Configuration:**
+    
+    .. code-block:: json
+    
+        {
+            "TimeSeriesRecording": {
+                "StandardFilter": {
+                    "options": ["No Filter","Butterworth 1-100Hz"],
+                    "value": "Butterworth 1-100Hz"
+                },
+                "NotchFilter": {
+                    "options": ["No Filter","Notch 55-65Hz","Notch 45-55Hz"],
+                    "value": "No Filter"
+                },
+                "WienerFilter": {
+                    "options": ["No Filter","Use Wiener Filter"],
+                    "value": "No Filter"
+                },
+                "CardiacFilter": {
+                    "options": ["No Filter","Use Adaptive Template Matching"],
+                    "value": "No Filter"
+                },
+                "SpectrogramMethod": {
+                    "options": ["Welch's Periodogram","Short-time Fourier Transform","Medtronic Percept PSD","Wavelet","Autoregressive Model (Yule-Walker)"],
+                    "value": "Welch's Periodogram"
+                },
+                "BaselineCorrection": {
+                    "options": ["No Correction"],
+                    "value": "No Correction"
+                },
+                "Normalization": {
+                    "options": ["No Normalization", "1/f PSD Trend Removal"],
+                    "value": "No Normalization"
+                },
+            },
+            "PowerSpectralDensity": {
+                "PSDMethod": {
+                    "options": ["Estimated Medtronic PSD","Welch's Periodogram","Autoregressive Model (Yule-Walker)","Short-time Fourier Transform"],
+                    "value": "Welch's Periodogram"
+                },
+                "MonopolarEstimation": {
+                    "options": ["No Estimation", "DETEC Algorithm (Strelow et. al., 2022)"],
+                    "value": "No Estimation"
+                },
+            }
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input data
+    * ``401`` - Unauthorized access
+    * ``500`` - Internal server error (Check Server logs for details)
+
+    **MATLAB API Example Usage:**
+    
+    .. code-block:: matlab
+
+        % Query current analysis configurations
+        Config = requester.QueryAnalysisConfiguration();
+
+        % Update analysis configurations
+        Config.TimeSeriesRecording.StandardFilter.value = "No Filter";
+        Config.TimeSeriesRecording.CardiacFilter.value = "Use Adaptive Template Matching";
+        requester.QueryAnalysisConfiguration(Config);
+
+    """
     
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -65,6 +156,9 @@ class QueryAnalysisConfigurations(RestViews.APIView):
             return Response(status=200, data=userConfig)
 
 class QueryTherapeuticEffectAnalysis(RestViews.APIView):
+    """
+    DEPRECATED: Use `QueryTimeseriesAnalysis` instead.
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -182,6 +276,121 @@ class QueryTherapeuticEffectAnalysis(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
 class QueryTimeseriesAnalysis(RestViews.APIView):
+    """
+    API View for time series analysis of neural recordings.
+    
+    This API is the central endpoint for requesting data from BRAVO Platform.
+
+    **URL:** ``/queryTimeseriesAnalysis``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``Overview`` - Get available time series analyses for a participant
+    * ``RequestData`` - Get processed time series analysis data
+    * ``UpdateData`` - Update recording metadata and tags
+    * ``DeleteCache`` - Clear cached analysis results
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+
+    **-RequestData-**
+    
+    :param AnalysisId: Unique identifier for the time series recording
+    :type AnalysisId: str
+    :param TherapyId: Optional therapy recording Id, if a corresponding therapy is available. Put "" if not available.
+    :type TherapyId: str
+    :param ActiveChannels: Channel selection for data retrieval. Use "RequestAllChannel" to retrieve all channels.
+    :type ActiveChannels: str or list
+    :param ProcessingConfiguration: Custom processing settings
+    :type ProcessingConfiguration: dict, optional
+    
+    **-UpdateData-**
+
+    :param AnalysisId: Unique identifier for the analysis/recording
+    :type AnalysisId: str
+    :param RecordingName: New name for the recording (for UpdateData)
+    :type RecordingName: str, optional
+    :param RecordingTags: Metadata tags for the recording (for UpdateData)
+    :type RecordingTags: list, optional
+    
+    **Response Format:**
+    
+    For Overview request:
+    
+    .. code-block:: json
+    
+        [
+            {
+                "Id": "<AnalysisId>",
+                "SourceId": "<SourceId>",
+                "Name": "MEDOFF_THRESHOLD",
+                "Type": "MedtronicBrainSenseTimeDomain",
+                "Date": 1753732685,
+                "Alignment": 0,
+                "Metadata": {
+                    "Key1": "Value1",
+                    "Key2": "Value2"
+                },
+                "Device": "DeviceName",
+                "Timezone": "UTC-04:00",
+            }
+        ]
+    
+    For RequestData:
+    
+    .. code-block:: json
+    
+        {
+            "Signal": [
+                {
+                    "Type": "Signal",
+                    "RecordingId": "",
+                    "SignalSeries": [
+                        {
+                            "Time": [...],
+                            "Data": [...],
+                            "StartTime": 0,
+                            "SamplingRate": 250
+                        }
+                    ],
+                    "Alignment": 0
+                }
+            ],
+            "Therapy": [
+                ...
+            ],
+            "ProcessingConfiguration": {...}
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input or operation failed
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **MATLAB API Example Usage:**
+    
+    .. code-block:: matlab
+
+        % Get time series list
+        Recordings = requester.QueryTimeseriesAnalysis(Participant.Id).Recordings;
+
+        % Request specific time series data (with Therapy data)
+        response = requester.QueryTimeseriesAnalysis(Participant.Id, 'analysis_uid', Recordings(1).Id, 'therapy_uid', Recordings(1).Therapy(1).Id);
+
+        % Request specific time series data (without Therapy data)
+        response = requester.QueryTimeseriesAnalysis(Participant.Id, 'analysis_uid', Recordings(1).Id);
+        
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -254,6 +463,85 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
 class QueryNeuralActivitySnapshot(RestViews.APIView):
+    """
+    API View for neural activity snapshots (PSD from short recordings) analysis.
+    
+    This view provides functionality for analyzing brief snapshots of neural
+    activity data, typically used for baseline measurements and short-term
+    neural state assessments.
+    
+    **URL:** ``/queryNeuralActivitySnapshot``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``RequestAll`` - Get all neural activity snapshot data for a participant
+    * ``DeleteCache`` - Clear cached snapshot analysis results
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param ProcessingConfiguration: Custom processing settings
+    :type ProcessingConfiguration: dict, optional
+    
+    **Response Format:**
+    
+    For RequestAll:
+    
+    .. code-block:: json
+    
+        {
+            "Recordings": [
+                {
+                    "Id": "<RecordingId>",
+                    "SourceId": "<SourceId>",
+                    "Name": "",
+                    "Type": "NeuralActivitySnapshot",
+                    "Date": 1753732685,
+                    "Alignment": 0,
+                    "Metadata": {...},
+                    "Device": "<DeviceId>",
+                    "Timezone": "UTC-04:00",
+                    "RecordingId": "<RecordingId>",
+                    "Channels": ["Channel1", "Channel2"],
+                    "PSDs": [
+                        {
+                            "Frequency": [...],
+                            "Power": [...],
+                            "StdPower": [...],
+                            "nObservation": 51,
+                            "Config": {...}
+                        }
+                    ],
+                }
+            ],
+            "AnalysisType": "NeuralActivitySnapshot",
+            "ProcessingConfiguration": {
+                ...
+            }
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **MATLAB API Example Usage:**
+    
+    .. code-block:: matlab
+    
+        % Get all neural activity snapshots
+        Surveys = requester.QueryParticipantSurveyRecords(Participant.Id);
+
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -299,6 +587,77 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
         
 class QueryBurstAnalysis(RestViews.APIView):
+    """
+    API View for neural burst analysis. 
+    
+    **URL:** ``/queryBurstAnalysis``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``RequestData`` - Process and retrieve burst analysis data
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param RecordingIds: List of recording identifiers to analyze
+    :type RecordingIds: list
+    :param Channel: Channel name for burst analysis
+    :type Channel: str
+    :param CenterFrequency: Center frequency for burst detection (Hz)
+    :type CenterFrequency: float
+    :param ProcessingConfiguration: Custom processing settings
+    :type ProcessingConfiguration: dict, optional
+    
+    **Response Format:**
+    
+    .. code-block:: json
+    
+        {
+            "Signal": [
+                {
+                    "Type": "Signal",
+                    "RecordingId": "",
+                    "SignalSeries": {
+                        "Time": [...],
+                        "Data": [...],
+                        "StartTime": 0,
+                        "SamplingRate": 250
+                        "BurstEnvelop": [
+                            {
+                                "Wavelet": [...],
+                                "Frequency": [...],
+                                "Method": "Morlet",
+                            }
+                        ]
+                    },
+                    "Alignment": 0
+                }
+            ],
+            "ProcessingConfiguration": {...}
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **Example Usage:**
+    
+    .. code-block:: matlab
+    
+        # Analyze burst patterns
+        Recording = requester.QueryTimeseriesAnalysis(Participant.Id, "analysis_uid", Recordings{20}.Id);
+        BetaBurst = requester.QueryBurstAnalysis(Participant.Id, {Recording.Signal(1).RecordingId}, Recording.Signal(1).SignalSeries.ChannelNames{1}, 22);
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -351,6 +710,76 @@ class QueryBurstAnalysis(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
 class QueryChronicTimeline(RestViews.APIView):
+    """
+    API View for chronic timeline analysis.
+    
+    This view provides functionality for analyzing long-term temporal patterns
+    in neural recordings, tracking changes in neural activity over extended
+    periods (days to months). This is the generic timeline data query, which applys to all wearable data as well. 
+    
+    **URL:** ``/queryChronicTimeline``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``RequestAll`` - Get complete chronic timeline data for a participant
+    * ``DeleteCache`` - Clear cached timeline analysis results
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param ProcessingConfiguration: Custom processing settings
+    :type ProcessingConfiguration: dict, optional
+    
+    **Response Format:**
+    
+    For RequestAll:
+    
+    .. code-block:: json
+    
+        {
+            "Timelines": [
+                {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": [...],
+                    "Duration": [...],
+                    "ChannelNames": [...],
+                    "ChannelUnits": ["", ...],
+                    "Data": [...], # Shape with (Channels, Time)
+                }
+            ],
+            "ProcessingConfiguration": {...}
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **Example Usage:**
+    
+    .. code-block:: matlab
+    
+        # Get chronic timeline data
+        response = requests.post('/queryChronicTimeline', {
+            "ParticipantId": "<ParticipantId>",
+            "RequestType": "RequestAll"
+        })
+        
+        # Clear timeline cache
+        response = requests.post('/queryChronicTimeline', {
+            "ParticipantId": "<ParticipantId>",
+            "RequestType": "DeleteCache"
+        })
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -390,6 +819,90 @@ class QueryChronicTimeline(RestViews.APIView):
             return Response(status=200)
 
 class QueryChronicNeuralActivity(RestViews.APIView):
+    """
+    API View for chronic neural activity analysis.
+    
+    This view provides functionality for analyzing chronic neural activity patterns,
+    focusing on long-term neural signal characteristics and trends over extended
+    monitoring periods. This is different from the Chronic Timeline because the data here is more specific 
+    to Medtronic Percept data type. 
+    
+    **URL:** ``/queryChronicNeuralActivity``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``RequestAll`` - Get all chronic neural activity data for a participant
+    * ``DeleteCache`` - Clear cached chronic neural activity results
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param ProcessingConfiguration: Custom processing settings
+    :type ProcessingConfiguration: dict, optional
+    
+    **Response Format:**
+    
+    For RequestAll:
+    
+    .. code-block:: json
+    
+        {
+            "AnalysisType": "MedtronicChronicBrainSense",
+            "ChronicNeuralActivity": [
+                {
+                    "Device": {
+                        "Id": "<DeviceId>",
+                        ...
+                    },
+                    "TherapyWindow": [StartDate, EndDate],
+                    "TherapyNote": {...},
+                    "TherapyString": "125Hz 120uS [E01-A|E01-B|E01-C]",
+                    "RecordingString": "33.2Hz",
+                    "Time": [...],
+                    "ChannelNames": ["Left GPi LFP", "Left GPi Amplitude"],
+                    "ChannelNamesFix": [...] # Fixed channel names for Medtronic Percept Formatting
+                    "ChannelUnits": ["", ""],
+                    "Data": [
+                        [...], # Shape with (Channels, Time)
+                        [...]
+                    ],
+                    "AnalysisType": ["MedtronicChronicBrainSense", ...]
+                }
+            ],
+            "Annotations": [...],
+            "ProcessingConfiguration": {...}
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **Example Usage:**
+    
+    .. code-block:: python
+    
+        # Get chronic neural activity
+        response = requests.post('/queryChronicNeuralActivity', {
+            "ParticipantId": "<ParticipantId>",
+            "RequestType": "RequestAll"
+        })
+        
+        # Clear cache
+        response = requests.post('/queryChronicNeuralActivity', {
+            "ParticipantId": "<ParticipantId>",
+            "RequestType": "DeleteCache"
+        })
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -429,6 +942,12 @@ class QueryChronicNeuralActivity(RestViews.APIView):
             return Response(status=200)
 
 class QueryCustomizedAnalysis(RestViews.APIView):
+    """
+    NOT RECOMMENDED FOR API USE. 
+
+    This API is designed for simplified data analysis using the Web interface. If you are writing code in API already, 
+    the data analysis should be handled by you for maximum controls.
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -553,6 +1072,9 @@ class QueryCustomizedAnalysis(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
 class QueryAIModels(RestViews.APIView):
+    """
+    DEPRECATED. Use AIModels.RequestPrediction API Instead.
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
@@ -578,6 +1100,99 @@ class QueryAIModels(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
 class QueryMedicationCycleAnalysis(RestViews.APIView):
+    """
+    API View for medication cycle analysis.
+    
+    This API view provides simplified way to aggregate multiple recordings' BrainSense Power Domain data 
+    during medication cycles across different stimulation parameters. 
+
+    **URL:** ``/queryMedicationCycleAnalysis``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Types:**
+    
+    * ``RequestAll`` - Get all medication cycle recordings for a participant
+    * ``RequestAnalysis`` - Analyze specific medication cycle recordings
+    
+    **Request Parameters:**
+    
+    :param ParticipantId: Unique identifier for the participant
+    :type ParticipantId: str
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param RecordingIds: List of recording identifiers to analyze (for RequestAnalysis)
+    :type RecordingIds: list, optional
+    
+    **Response Format:**
+    
+    For RequestAll:
+    
+    .. code-block:: json
+    
+        {
+            "MedicationCycles": [
+                {
+                    "RecordingId": "med_cycle_123",
+                    "StartDate": "2025-01-01T08:00:00Z",
+                    "EndDate": "2025-01-01T20:00:00Z",
+                    "MedicationInfo": {
+                        "Name": "Levodopa",
+                        "Dosage": "100mg",
+                        "AdministrationTime": "2025-01-01T08:00:00Z"
+                    },
+                    "RecordingType": "MedtronicBrainSensePowerDomain"
+                }
+            ]
+        }
+    
+    For RequestAnalysis:
+    
+    .. code-block:: json
+    
+        {
+            "Recordings": [
+                {
+                    "Id": "<RecordingId>",
+                    "SourceId": "<SourceId>",
+                    "Name": "",
+                    "Type": "MedtronicBrainSensePowerDomain",
+                    "Date": 1753732685,
+                    "Alignment": 0,
+                    "Metadata": {...},
+                    "Device": "<DeviceId>",
+                    "Timezone": "UTC-04:00",
+                },
+                ...
+            ],
+            "PowerBands": {
+                "Left1_5MA_Right1_2MA": {
+                    "MEDON": {
+                        "ZERO_THREE_LEFTPower": [...],
+                        "ZERO_THREE_RIGHTPower: [...]
+                    }
+                }
+            }
+        }
+    
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **Example Usage:**
+    
+    .. code-block:: matlab
+    
+        # Get all medication cycle recordings
+        Overview = requester.QueryMedicationCycleAnalysis(Participant.Id);
+        Data = requester.QueryMedicationCycleAnalysis(Participant.Id, 'recording_ids', {Overview.Recordings.Id});
+
+    """
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]

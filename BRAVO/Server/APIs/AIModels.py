@@ -46,7 +46,48 @@ DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 
 class RequestPrediction(RestViews.APIView):
+    """
+    API View for AI/Machine Learning model predictions
     
+    This view provides functionality for accessing and utilizing machine learning
+    models for neural data analysis, including pre-trained models.
+    
+    **URL:** ``/requestAIPrediction``
+    
+    **Methods:** POST
+    
+    **Permissions:** Authenticated users with participant access permissions
+    
+    **Request Parameters:**
+    
+    :param RequestType: Type of operation to perform
+    :type RequestType: str
+    :param AnalysisName: Name of the analysis or model to execute
+    :type AnalysisName: str
+    :param Data: Input data for the model, typically in JSON format
+    :type Data: dict
+    
+    **Response Format:**
+    
+    Model dependent.
+
+    **HTTP Status Codes:**
+    
+    * ``200`` - Success
+    * ``400`` - Malformed input
+    * ``401`` - Unauthorized access
+    * ``403`` - Insufficient permissions
+    
+    **Example Usage:**
+    
+    .. code-block:: matlab
+    
+        # Get available AI models
+        Input = struct();
+        Input.Data = Data.Signal.SignalSeries(1).Data(1,:);
+        Input.SamplingRate = Data.Signal.SignalSeries(1).SamplingRate;
+        Result = requester.RequestAIPrediction('BetaPeakDetection', Input);
+    """
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
 

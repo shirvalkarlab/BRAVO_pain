@@ -86,7 +86,6 @@ function InClinicMedicationCycle() {
       RequestType: "RequestAll",
       ParticipantId: participant_uid
     }).then((response) => {
-      console.log(response.data)
       setAvailableDates(() => {
         let uniqueDates = [];
         for (let i in response.data.Recordings) {
