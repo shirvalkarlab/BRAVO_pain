@@ -115,6 +115,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
 
     let lineSeries = [];
     let barSeries = [];
+    
     for (let i in data) {
       if (data[i].AnalysisType === "CustomizedTimelineData") {
         let xData = [];
@@ -287,7 +288,6 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         //  yLim[renderData[i].axName][1] = currentMax*1.1;
         //  fig.setYlim(yLim[renderData[i].axName], ax);
         //};
-        console.log(renderData[i])
         if (!renderData[i].options.hidden && ax) {
           fig.setScaleType("category", "y", ax);
           fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, ax);

@@ -2041,6 +2041,25 @@ def queryChronicTimeline(participant_uid, config):
 
                 ChronicTimeline.append(Activity)
 
+    if models.Recording.include(source__in=SourceFiles, type__in=["AppleWatchData"]):
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["AppleWatchData"])
+        for recording in Recordings:
+            RecordingInfo = recording.get_info()
+            Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+            for i in range(len(Data)):
+                if Data[i]["ChannelNames"][0].startswith("accel"):
+                    continue
+
+                Activity = {
+                    "AnalysisType": "CustomizedTimelineData",
+                    "Time": Data[i]["Time"] + Data[i]["StartTime"],
+                    "Duration": Data[i]["Duration"],
+                    "ChannelNames": Data[i]["ChannelNames"],
+                    "ChannelUnits": ["" for name in Data[i]["ChannelNames"]],
+                    "Data": Data[i]["Data"].T,
+                }
+                ChronicTimeline.append(Activity)
+
     if models.SourceFile.include(owner=Participant, type="FitbitWebAPISource"):
         Data = FitbitDataManager.loadFitbitData(Participant)
         for key in Data.keys():

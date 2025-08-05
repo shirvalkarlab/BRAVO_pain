@@ -20,6 +20,9 @@ import {
   Grid,
   Stack,
   Switch,
+  SpeedDial,
+  SpeedDialAction,
+  SpeedDialIcon
 } from "@mui/material"
 import { styled } from '@mui/material/styles';
 
@@ -29,6 +32,9 @@ import MDTypography from "components/MDTypography";
 import FormField from "components/MDInput/FormField";
 import LoadingProgress from "components/LoadingProgress";
 import MuiAlertDialog from "components/MuiAlertDialog";
+
+import KeyboardDoubleArrowUpIcon from '@mui/icons-material/KeyboardDoubleArrowUp';
+import CachedIcon from '@mui/icons-material/Cached';
 
 // core components
 import GenericTimeline from "./GenericTimeline";
@@ -248,6 +254,46 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                 </Card>
               </Grid>
             </Grid>
+          </MDBox>
+          <MDBox style={{
+            position: 'sticky',
+            bottom: 32,
+            right: 32,
+            pointerEvents: "none"
+          }}>
+            <SpeedDial
+              ariaLabel={"SurveySpeedDial"}
+              color={"info"}
+              icon={<SpeedDialIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+              FabProps={{
+                color: "info",
+                sx: {display: "flex", marginLeft: "auto"}
+              }}
+              sx={{alignItems: "end"}}
+              hidden={false}
+            >
+              <SpeedDialAction
+                key={"GoToTop"}
+                icon={<KeyboardDoubleArrowUpIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Go to Top"}
+                onClick={() => {
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              />
+              <SpeedDialAction
+                key={"ClearCache"}
+                icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
+                tooltipTitle={"Clear Cache (Reprocessing)"}
+                onClick={() => {
+                  SessionController.query("/api/queryChronicTimeline", {
+                    ParticipantId: participant_uid, 
+                    RequestType: "DeleteCache"
+                  }).then((response) => {
+                    window.location.reload()
+                  });
+                }}
+              />
+            </SpeedDial>
           </MDBox>
         </MDBox>
       </DatabaseLayout>

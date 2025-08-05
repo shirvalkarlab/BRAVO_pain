@@ -692,7 +692,7 @@ def BRAVORecordingBinaryDecoder(source_file, person):
     Recordings = decodebdata(rawBytes)
 
     try:
-        SourceFilename = source_file.name.replace(source_file.name[source_file.name.index("["):source_file.name.index("]")+1], "").replace(".mdat","")
+        SourceFilename = source_file.name.replace(source_file.name[source_file.name.index("["):source_file.name.index("]")+1], "").replace(".bdata","")
     except Exception as e:
         SourceFilename = ""
 
@@ -719,7 +719,7 @@ def BRAVORecordingBinaryDecoder(source_file, person):
                 "ChannelNames": ChannelNames
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
             recording.delete()
             continue
 
