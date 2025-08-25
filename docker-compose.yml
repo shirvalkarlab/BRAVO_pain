@@ -16,7 +16,7 @@ services:
       - backend
   
   bravo-server:
-    image: jcagle95/bravo-server:3.0.0-alpha
+    image: jcagle95/bravo-server:3.0.1
     restart: always
     environment:
       BRAVO_DATABASE: "BRAVOServer"

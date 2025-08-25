@@ -1,7 +1,6 @@
 FROM ubuntu/nginx:1.24-24.04_beta
 
 ENV DATASERVER_PATH=/usr/src/BRAVO/BRAVOStorage/
-ENV PYTHONPATH=/usr/src/BRAVO/modules/python-scripts
 
 WORKDIR /usr/src/BRAVO
 COPY ./Client/build /usr/share/nginx/html
