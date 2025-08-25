@@ -1185,6 +1185,69 @@ def processTimeseriesAnalysisRaw(data, config):
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
     return AnalysisStruct
 
+def computeTherapeuticEffects(AnalysisStruct):
+    AllTherapyLabels = []
+    for i in range(len(AnalysisStruct["Therapy"])):
+        for j in range(len(AnalysisStruct["Therapy"][i]["TherapySeries"])):
+            for key in AnalysisStruct["Therapy"][i]["TherapySeries"][j]["TherapyOverview"].keys():
+                if not key in AllTherapyLabels:
+                    AllTherapyLabels.append(key)
+    
+    parameters = ["Amplitude", "Frequency", "Pulsewidth"]
+    
+    StimulationPSDs = {}
+    for label in AllTherapyLabels:
+        StimulationPSDs[label] = {}
+        TherapyChanges = getTherapyChanges(AnalysisStruct, label)
+        for i in range(len(AnalysisStruct["Signal"])):
+            for j in range(len(AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"])):
+                if not AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j] in StimulationPSDs[label].keys():
+                    StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]] = {}
+                Time = AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Time"] + AnalysisStruct["Signal"][i]["SignalSeries"]["StartTime"] + AnalysisStruct["Signal"][i]["Alignment"]
+
+                for parameter in parameters:
+                    UniqueStates = []
+                    for stage in range(len(TherapyChanges[parameter])):
+                        if not TherapyChanges[parameter][stage]["State"] in UniqueStates:
+                            UniqueStates.append(TherapyChanges[parameter][stage]["State"])
+                    UniqueStates = sorted(UniqueStates)
+                    if not parameter in StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]].keys():
+                        StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter] = []
+
+                    if len(UniqueStates) > 1:
+                        for state in UniqueStates:
+                            TimeSelection = np.zeros(Time.shape, dtype=bool)
+                            for stage in range(len(TherapyChanges[parameter])-1):
+                                if TherapyChanges[parameter][stage]["State"] == state:
+                                    TimeSelection |= (
+                                        (Time > TherapyChanges[parameter][stage]["Time"]+2) & 
+                                        (Time < TherapyChanges[parameter][stage+1]["Time"]-2)
+                                    )
+                                
+                            if TherapyChanges[parameter][-1]["State"] == state:
+                                TimeSelection |= (
+                                    (Time > TherapyChanges[parameter][-1]["Time"]+2)
+                                )
+
+                            if np.sum(TimeSelection) > 0:
+                                StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter].append({
+                                    "Frequency": AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Frequency"],
+                                    "MeanPower": np.mean(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1),
+                                    "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"][:, TimeSelection],axis=1)/np.sqrt(np.sum(TimeSelection)),
+                                    "State": state
+                                })
+                                
+                    elif len(UniqueStates) == 1:
+                        StimulationPSDs[label][AnalysisStruct["Signal"][i]["SignalSeries"]["ChannelNames"][j]][parameter].append({
+                            "Frequency": AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Frequency"],
+                            "MeanPower": np.mean(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"],axis=1),
+                            "StdErrPower": np.std(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"],axis=1)/np.sqrt(AnalysisStruct["Signal"][i]["SignalSeries"]["Spectrum"][j]["Power"].shape[1]),
+                            "State": UniqueStates[0]
+                        })
+                        
+    AnalysisStruct["TherapeuticEffects"] = StimulationPSDs
+    return AnalysisStruct
+
 def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     recording = models.Recording.find(uid=recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
@@ -1437,6 +1500,9 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
 
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
 
+    if config["APIAccess"]:
+        return AnalysisStruct
+
     AllTherapyLabels = []
     for i in range(len(AnalysisStruct["Therapy"])):
         for j in range(len(AnalysisStruct["Therapy"][i]["TherapySeries"])):
@@ -1444,9 +1510,6 @@ def processTherapeuticAnalysis(participant_uid, analysis_uid, config):
                 if not key in AllTherapyLabels:
                     AllTherapyLabels.append(key)
     
-    if config["APIAccess"]:
-        return AnalysisStruct
-
     parameters = ["Amplitude", "Frequency", "Pulsewidth"]
     
     StimulationPSDs = {}

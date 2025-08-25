@@ -426,7 +426,8 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
             if request.data["TherapyId"]:
                 Analysis["Therapy"] = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["TherapyId"], userConfig)["Therapy"]
-
+                Analysis = DataAnalysis.computeTherapeuticEffects(Analysis)
+                
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
             Analysis = json_compliant_handler(Analysis)
