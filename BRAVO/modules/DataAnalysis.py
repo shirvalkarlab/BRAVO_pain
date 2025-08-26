@@ -2395,6 +2395,12 @@ def queryChronicNeuralActivity(participant_uid, config):
                 if len(ChronicNeuralActivity["Annotations"][i]["Recording"]) > 0:
                     for j in range(len(ChronicNeuralActivity["Annotations"][i]["Recording"])):
                         EventPSDs = BrainSenseEvent.extractBrainSenseEventRecording(ChronicNeuralActivity["Annotations"][i]["Recording"][j], DBSDevices)
+                        for k in range(len(EventPSDs)):
+                            if len(EventPSDs[k]["Frequency"]) != 100:
+                                NewFrequency = np.arange(100)*250/256
+                                EventPSDs[k]["Power"] = np.interp(NewFrequency, EventPSDs[k]["Frequency"], EventPSDs[k]["Power"])
+                                EventPSDs[k]["Frequency"] = NewFrequency
+                                
                         ChronicNeuralActivity["Annotations"][i]["EventPSDs"].extend(EventPSDs)
             
                 for j in range(len(ChronicNeuralActivity["Annotations"][i]["EventPSDs"])):

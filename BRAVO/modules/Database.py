@@ -459,6 +459,8 @@ def saveSourceFile(datastruct, pointer, bytes=False):
         return False
 
 def loadSourceFile(pointer, verifiedHash, bytes=False):
+    pointer = pointer.replace("\\", os.path.sep).replace("/", os.path.sep)
+
     if not pointer.startswith(DATABASE_PATH) or ".." in pointer:
         raise Exception("Malicious Attempt at Accessing Other Data in the Computer.")
     
