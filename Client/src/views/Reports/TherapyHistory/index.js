@@ -607,6 +607,30 @@ function TherapyHistory() {
     setDataToRender(dataToRender);
   } 
 
+  const exportTherapyHistory = (raw) => {
+    if (raw) {
+      let downloader = document.createElement('a');
+      downloader.href = SessionController.getDownloadLink("/api/downloadData", {
+        ParticipantId: participant_uid,
+        CacheType: "queryTherapyHistory",
+        RequestType: "Raw"
+      });
+      downloader.target = '_blank';
+      downloader.click();
+    } else {
+      for (let type of ["TherapyHistory", "TherapyModification"]) {
+        let downloader = document.createElement('a');
+        downloader.href = SessionController.getDownloadLink("/api/downloadData", {
+          ParticipantId: participant_uid,
+          CacheType: "queryTherapyHistory",
+          RequestType: type
+        });
+        downloader.target = '_blank';
+        downloader.click();
+      }
+    }
+  }
+
   return (
     <DatabaseLayout>
       {alert}
@@ -634,6 +658,17 @@ function TherapyHistory() {
             </Card>
           </Grid>
           ) : null}
+          
+          <Grid item xs={12}>
+            <MDBox display={"flex"} justifyContent={"space-between"}>
+              <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => exportTherapyHistory(false)}>
+                {"Export CSV"}
+              </MDButton>
+              <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => exportTherapyHistory(true)}>
+                {"Export Raw"}
+              </MDButton>
+            </MDBox>
+          </Grid>
 
           <Grid item xs={6} sm={4}>
             <Tabs

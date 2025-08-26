@@ -25,6 +25,7 @@ from copy import deepcopy
 from pathlib import Path
 import hmac, hashlib
 from io import BytesIO
+import datetime
 import pandas as pd
 import numpy as np
 from filelock import Timeout, FileLock
@@ -41,7 +42,7 @@ from django.conf import settings
 
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, current_time
-from modules import Database, DataCurator, DataAnalysis, ImageDatabase
+from modules import Database, DataCurator, DataAnalysis, ImageDatabase, Therapy
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -349,6 +350,101 @@ class DataDownloadHandler(RestViews.APIView):
             return HttpResponse(bytes(file_data), status=200, headers={
                 "Content-Type": "application/octet-stream"
             })
+        
+        elif CacheType == "queryTherapyHistory":
+            Participant = models.Participant.find(uid=ParticipantId)
+            TherapyHistory = Therapy.queryTherapyHistory(Participant)
+            TherapyHistory["DeviceImpedance"] = Therapy.queryElectrodeImpedances(Participant)
+
+            if self.request.query_params.get('RequestType') == "Raw":
+                file_data = json.dumps(TherapyHistory, indent=4)
+                return HttpResponse(file_data, status=200, headers={
+                    "Content-Type": "application/json"
+                })
+            
+            elif self.request.query_params.get('RequestType') == "TherapyModification":
+                TherapyExport = []
+                for i in range(len(TherapyHistory["TherapyModification"])):
+                    for j in range(len(TherapyHistory["TherapyModification"][i]["History"])):
+                        Record = {
+                            "Date": datetime.datetime.fromtimestamp(TherapyHistory["TherapyModification"][i]["History"][j]["Date"]).isoformat(),
+                            "Type": TherapyHistory["TherapyModification"][i]["History"][j]["Type"],
+                            "Device": TherapyHistory["TherapyModification"][i]["Device"]["Name"],
+                            "Location": TherapyHistory["TherapyModification"][i]["Device"]["Location"],
+                        }
+                        Record["Previous State"] = TherapyHistory["TherapyModification"][i]["History"][j]["Previous"]
+                        Record["New State"] = TherapyHistory["TherapyModification"][i]["History"][j]["New"]
+                        TherapyExport.append(Record)
+
+                with BytesIO() as fp:
+                    pd.DataFrame(TherapyExport).to_csv(fp, index=False)
+                    filename = "TherapyModification_" + ParticipantId + ".csv"
+                    response = HttpResponse( fp.getvalue(), content_type="text/csv" )
+                    response["Content-Disposition"] = "attachment; filename=" + filename
+                    return response
+                
+            elif self.request.query_params.get('RequestType') == "TherapyHistory":
+                TherapyExport = []
+                for i in range(len(TherapyHistory["TherapyConfiguration"])):
+                    for j in range(len(TherapyHistory["TherapyConfiguration"][i]["History"])):
+                        Record = {
+                            "Date": datetime.datetime.fromtimestamp(TherapyHistory["TherapyConfiguration"][i]["History"][j]["Date"]).isoformat(),
+                            "Timezone": TherapyHistory["TherapyConfiguration"][i]["History"][j]["Timezone"],
+                            "Type": TherapyHistory["TherapyConfiguration"][i]["History"][j]["Type"],
+                            "Group": TherapyHistory["TherapyConfiguration"][i]["History"][j]["GroupId"],
+                            "StimulationType": TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationType"]
+                        }
+
+                        for hemisphere in ["Left", "Right"]:
+                            for k in range(len(TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"])):
+                                if TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Electrode"]["Target"].startswith(hemisphere):
+                                    if hemisphere + " Program 1" in Record.keys():
+                                        ProgramName = hemisphere + " Program 2"
+                                    else:
+                                        ProgramName = hemisphere + " Program 1"
+
+                                    Record[ProgramName + " Target"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Electrode"]["CustomName"]
+                                    Record[ProgramName + " Electrode"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Electrode"]["Type"]
+                                    Record[ProgramName + " Stimulation Contact"] = "+".join(TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Contact"])
+                                    Record[ProgramName + " Return Contact"] = "+".join(TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["ReturnContact"])
+                                    Record[ProgramName + " Frequency"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Frequency"]
+                                    Record[ProgramName + " Pulsewidth"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Pulsewidth"]
+                                    Record[ProgramName + " Amplitude"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Amplitude"]
+
+                                    if not TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["RecordingConfiguration"]["Type"] == "Unknown":
+                                        Record[ProgramName + " Sense Frequency"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]
+                                        Record[ProgramName + " Sense Average Duration"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["RecordingConfiguration"]["Config"]["SensingSetup"]["AveragingDurationInMilliSeconds"]
+                                        Record[ProgramName + " Sense Thresholds"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["RecordingConfiguration"]["Config"]["Thresholds"]["LFPThresholds"]
+
+                                    if not TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Type"] == "Unknown":
+                                        if "Mode" in TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"].keys():
+                                            Record[ProgramName + " Adaptive Mode"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"]["Mode"]
+                                        else:
+                                            Record[ProgramName + " Adaptive Mode"] = "NOT_CONFIGURED"
+
+                                        Record[ProgramName + " Adaptive Onset"] = [
+                                            TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"]["UpperThresholdOnsetInMilliSeconds"],
+                                            TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"]["LowerThresholdOnsetInMilliSeconds"]
+                                        ]
+                                        Record[ProgramName + " Adaptive Blanking"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"]["DetectionBlankingDurationInMilliSeconds"]
+
+                                        if "Bypass" in TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"].keys():
+                                            Record[ProgramName + " Adaptive Feedback"] = TherapyHistory["TherapyConfiguration"][i]["History"][j]["AdaptiveSettings"][k]["StimulationConfiguration"]["Config"]["Bypass"]
+                                        else:
+                                            Record[ProgramName + " Adaptive Feedback"] = "Self"
+
+                        TherapyExport.append(Record)
+
+                with BytesIO() as fp:
+                    pd.DataFrame(TherapyExport).to_csv(fp, index=False)
+                    filename = "TherapyHistory_" + ParticipantId + ".csv"
+                    response = HttpResponse( fp.getvalue(), content_type="text/csv" )
+                    response["Content-Disposition"] = "attachment; filename=" + filename
+                    return response
+                
+            else:
+                return Response(status=403)
+
         
         elif CacheType == "queryChronicNeuralActivity":
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
