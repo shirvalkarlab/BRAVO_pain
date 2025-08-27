@@ -28,6 +28,7 @@ import DistributionFigure from "./DistributionFigure";
 import CircadianRhythmFigure from "./CircadianRhythmFigure";
 import TimeFrequencyFigure from "./TimeFrequencyFigure";
 import AperiodicComponentFigure from "./AperiodicComponentFigure";
+import PSDStatisticsFigure from "./PSDStatisticsFigure";
 
 function ResultViewer({participant_uid, analysisId, onClose, node}) {
   const navigate = useNavigate();
@@ -62,6 +63,9 @@ function ResultViewer({participant_uid, analysisId, onClose, node}) {
         ) : null}
         {result.Type === "Spectrum" ? (
           <SpectrumFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />
+        ) : null}
+        {result.Type === "PSDStatistics" ? (
+          <PSDStatisticsFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"PSDStatisticsFigure"} />
         ) : null}
         {result.Type === "Aperiodic Component" ? (
           <AperiodicComponentFigure dataToRender={result} analysisId={analysisId} resultId={node.result} figureTitle={"SpectrumFigure"} />

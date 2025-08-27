@@ -28,7 +28,7 @@ import { usePlatformContext } from "context";
 import { SessionController } from "database/session-control";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
+function PSDStatisticsFigure({dataToRender, analysisId, resultId, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   const { participant_uid } = useParams();
@@ -38,6 +38,7 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
   const [fig, setFig] = useState(null);
   const [cachedData, setCachedData] = useState([]);
   const [availableChannels, setAvailableChannels] = useState({active: "", options: []});
+  const [availableTestType, setAvailableTestType] = useState({active: "", options: ["Welch's T-Statistics", "Spearman's R"]});
   const [data, setData] = useState({});
   const [renderData, setRenderData] = useState([]);
   
@@ -56,7 +57,14 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
 
   useEffect(() => {
     setData({...dataToRender});
-    setAvailableChannels({active: "", options: dataToRender.AllChannels})
+    let availableTests = [];
+    for (let i in dataToRender.Spectrum) {
+      if (!availableTests.includes(dataToRender.Spectrum[i].TestType)) {
+        availableTests.push(dataToRender.Spectrum[i].TestType);
+      }
+    }
+    setAvailableChannels({active: "", options: dataToRender.AllChannels});
+    setAvailableTestType({active: "", options: availableTests});
   }, [dataToRender]);
 
   useEffect(() => {
@@ -67,12 +75,9 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
     }
 
     const ax = fig.subplots(1, 1, {sharex: true, sharey: true});
-    fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)}`, {fontSize: 15}, ax);
+    fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Statistics", language)}`, {fontSize: 15}, ax);
     fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)}`, {fontSize: 15}, ax);
     
-    fig.setScaleType("log", "y");
-    fig.setTickValue([0.001, 0.01, 0.1, 1, 10, 100, 1000], "y");
-    fig.setYlim([-3, 2]);
     fig.setLayoutProps({ hovermode: "x", hoverdistance: 1 });
     fig.setLegend({ tracegroupgap: 5, xanchor: "right", y: 1 });
 
@@ -83,50 +88,45 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
   }, [availableChannels])
 
   useEffect(() => {
+    if (!data) return;
     if (!fig) return;
-
-    let uniqueLabels = [];
-    for (let i in data.Spectrum) {
-      for (let j in data.Spectrum[i].PSDSeries.Spectrum) {
-        if (availableChannels.active == data.Spectrum[i].PSDSeries.Spectrum[j].Channel) {
-          if (!uniqueLabels.includes(data.Spectrum[i].PSDSeries.Spectrum[j].Label)) {
-            uniqueLabels.push(data.Spectrum[i].PSDSeries.Spectrum[j].Label);
-          }
-        }
-      }
-    }
-
-    const colors = colormap({
-      colormap: 'rainbow',
-      nshades: uniqueLabels.length > 9 ? uniqueLabels.length : 9,
-      format: 'hex',
-      alpha: 1,
-    });
 
     let graphSeries = [];
     for (let i in data.Spectrum) {
-      for (let j in data.Spectrum[i].PSDSeries.Spectrum) {
-        if (availableChannels.active == data.Spectrum[i].PSDSeries.Spectrum[j].Channel) {
-          const nShades = uniqueLabels.indexOf(data.Spectrum[i].PSDSeries.Spectrum[j].Label);
+      if (availableChannels.active == data.Spectrum[i].Channel) {
+        if (availableTestType.active == data.Spectrum[i].TestType) {
+          fig.setYlim(data.Spectrum[i].Range);
           graphSeries.push({
             type: "line",
-            x: data.Spectrum[i].PSDSeries.Spectrum[j].Frequency, y: data.Spectrum[i].PSDSeries.Spectrum[j].Power,
-            xlim: [data.Spectrum[i].PSDSeries.Spectrum[j].Frequency[0],data.Spectrum[i].PSDSeries.Spectrum[j].Frequency[data.Spectrum[i].PSDSeries.Spectrum[j].Frequency.length-1]], 
+            x: data.Spectrum[i].Frequency, y: data.Spectrum[i].Results[0],
+            xlim: [data.Spectrum[i].Frequency[0],data.Spectrum[i].Frequency[data.Spectrum[i].Frequency.length-1]], 
             options: {
-              id: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
-              name: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
-              legendgroup: data.Spectrum[i].PSDSeries.Spectrum[j].Label,
+              id: data.Spectrum[i].TestType,
+              name: data.Spectrum[i].TestType,
               linewidth: 2,
-              color: colors[nShades],
-              showlegend: Boolean(data.Spectrum[i].PSDSeries.Spectrum[j].Label),
-              hovertemplate: `  %{y:.2f} ${""}<extra></extra>`,
+              color: "#e03131ff",
+              showlegend: true,
+              hovertemplate: `  stats = %{y:.2f} ${""}<extra></extra>`,
+            },
+          });
+          graphSeries.push({
+            type: "line",
+            x: data.Spectrum[i].Frequency, y: data.Spectrum[i].Results[1],
+            xlim: [data.Spectrum[i].Frequency[0],data.Spectrum[i].Frequency[data.Spectrum[i].Frequency.length-1]], 
+            options: {
+              id: data.Spectrum[i].TestType + " p-value",
+              name: data.Spectrum[i].TestType + " p-value",
+              linewidth: 1,
+              color: "#000000ff",
+              showlegend: true,
+              hovertemplate: `  p = %{y:.2f} ${""}<extra></extra>`,
             },
           });
         }
       }
     }
     setRenderData(graphSeries);
-  }, [availableChannels.active, data]);
+  }, [availableChannels.active, availableTestType.active, data]);
 
   const refreshRender = () => {
     fig.traces = [];
@@ -184,7 +184,7 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
 
   return (
     <MDBox>
-      <MDBox>
+      <MDBox mb={1}>
         <Autocomplete selectOnFocus clearOnBlur
           renderInput={(params) => (
             <TextField {...params} variant="standard" label={"Channel Selection"}/>
@@ -200,6 +200,22 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
           }}
         />
       </MDBox>
+      <MDBox>
+        <Autocomplete selectOnFocus clearOnBlur
+          renderInput={(params) => (
+            <TextField {...params} variant="standard" label={"Statistic Test Selection"}/>
+          )}
+          isOptionEqualToValue={(option, value) => {
+            return option === value;
+          }}
+          renderOption={(props, option) => <li {...props}>{option}</li>}
+          value={availableTestType.active}
+          options={availableTestType.options}
+          onChange={(event, newValue) => {
+            setAvailableTestType({...availableTestType, active: newValue});
+          }}
+        />
+      </MDBox>
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 400, width: "100%", display: ""}}
         onContextMenu={onContextMenu}
       />
@@ -207,4 +223,4 @@ function SpectrumFigure({dataToRender, analysisId, resultId, figureTitle}) {
   );
 }
 
-export default SpectrumFigure;
+export default PSDStatisticsFigure;

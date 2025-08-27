@@ -575,7 +575,11 @@ def handleProcessingNode(node, participant_uid, input_uid):
         elif node["data"]["Type"] == "Compute Distribution":
             Data = handleDistributionComputation(Data, metadata)
             Data["DataType"] = "Distribution"
-            
+
+        elif node["data"]["Type"] == "Compute Power Spectral Separation":
+            Data = handlePowerSpectralSeparationTest(Data, metadata)
+            Data["DataType"] = "Power Spectral Separation"
+
         elif node["data"]["Type"] == "Compute Circadian Rhythm from Timeline":
             Data = handleCircadianRhythmComputation(Data, metadata)
             Data["DataType"] = "Circadian Rhythm"
@@ -630,6 +634,29 @@ def extractAnalysisOutput(node):
                 "PSDSeries": Data["Data"][i]
             })
         AnalysisStruct["Type"] = "Spectrum"
+
+    elif Data["DataType"] == "Power Spectral Separation":
+        for channel in Data["Condition"].keys():
+            if "TStatistics" in Data["Condition"][channel].keys():
+                AnalysisStruct["Spectrum"].append({
+                    "Type": "Statistics",
+                    "TestType": "Welch's T-Statistics",
+                    "Channel": channel,
+                    "Frequency": Data["Condition"][channel]["Frequency"],
+                    "Range": None,
+                    "Results": [Data["Condition"][channel]["TStatistics"],
+                                Data["Condition"][channel]["TStatisticsPValues"]*len(Data["Condition"][channel]["TStatisticsPValues"])]
+                })
+                AnalysisStruct["Spectrum"].append({
+                    "Type": "Statistics",
+                    "TestType": "Spearman's R",
+                    "Channel": channel,
+                    "Frequency": Data["Condition"][channel]["Frequency"],
+                    "Range": [-1,1],
+                    "Results": [Data["Condition"][channel]["RStatistics"],
+                                Data["Condition"][channel]["RStatisticsPValues"]*len(Data["Condition"][channel]["RStatisticsPValues"])]
+                })
+        AnalysisStruct["Type"] = "PSDStatistics"
 
     elif Data["DataType"] == "Aperiodic Component":
         for i in range(len(Data["Data"])):
@@ -871,6 +898,93 @@ def handleTimestampSegmentation(Data, config):
     
     return Data
 
+# %% Processing Node Configuration: Compute Statistical Comparison of PSDs
+ProcessingNodes.append({
+    "Group": "Statistics",
+    "Type": "Compute Power Spectral Separation",
+    "Description": "",
+    "NodeType": "SingleInputProcessingNode",
+    "Configurations": [
+        {
+            "Id": "Label1Name",
+            "Condition": True,
+            "Label": "Baseline Label (Annotation for Reference)",
+            "Type": "Input",
+            "Verify": "String",
+            "Default": "",
+        },
+        {
+            "Id": "Label2Name",
+            "Condition": True,
+            "Label": "Condition Label (Annotation for Testing)",
+            "Type": "Input",
+            "Verify": "String",
+            "Default": "",
+        },
+        {
+            "Id": "Bandwidth",
+            "Condition": True,
+            "Label": "Feature Bandwidth",
+            "Type": "Input",
+            "Verify": "Float",
+            "Default": "2.5",
+        }
+    ]
+})
+def handlePowerSpectralSeparationTest(Data, config):
+    Label1Name = config["Configurations"][0]["Value"]
+    Label2Name = config["Configurations"][1]["Value"]
+    Bandwidth = float(config["Configurations"][2]["Value"])
+
+    PSDs = {"Baseline": {}, "Condition": {}}
+    AllChannels = []
+    for data in Data["Data"]:
+        for spectrum in data["Spectrum"]:
+            if not spectrum["Channel"] in AllChannels:
+                AllChannels.append(spectrum["Channel"])
+
+            if spectrum["Label"] == Label1Name:
+                if spectrum["Channel"] not in PSDs["Baseline"].keys():
+                    PSDs["Baseline"][spectrum["Channel"]] = {"Frequency": spectrum["Frequency"], "Power": np.zeros((spectrum["Frequency"].shape[0], 0))}
+                PSDs["Baseline"][spectrum["Channel"]]["Power"] = np.concatenate((PSDs["Baseline"][spectrum["Channel"]]["Power"], spectrum["Power"]), axis=1)
+            elif spectrum["Label"] == Label2Name:
+                if spectrum["Channel"] not in PSDs["Condition"].keys():
+                    PSDs["Condition"][spectrum["Channel"]] = {"Frequency": spectrum["Frequency"], "Power": np.zeros((spectrum["Frequency"].shape[0], 0))}
+                PSDs["Condition"][spectrum["Channel"]]["Power"] = np.concatenate((PSDs["Condition"][spectrum["Channel"]]["Power"], spectrum["Power"]), axis=1)
+
+    for channel in PSDs["Baseline"].keys():
+        PSDs["Baseline"][channel]["Power"] = np.array(PSDs["Baseline"][channel]["Power"])
+    for channel in PSDs["Condition"].keys():
+        PSDs["Condition"][channel]["Power"] = np.array(PSDs["Condition"][channel]["Power"])
+
+    for channel in AllChannels:
+        if channel in PSDs["Baseline"].keys() and channel in PSDs["Condition"].keys():
+            # Compute the power spectral separation
+            BaselinePower = PSDs["Baseline"][channel]["Power"]
+            ConditionPower = PSDs["Condition"][channel]["Power"]
+            # Perform statistical comparison (e.g., t-test)
+            if len(PSDs["Baseline"][channel]["Frequency"]) == len(PSDs["Condition"][channel]["Frequency"]):
+                PSDs["Condition"][channel]["TStatistics"] = []
+                PSDs["Condition"][channel]["TStatisticsPValues"] = []
+                PSDs["Condition"][channel]["RStatistics"] = []
+                PSDs["Condition"][channel]["RStatisticsPValues"] = []
+                for f in range(len(PSDs["Baseline"][channel]["Frequency"])):
+                    # Compute the t-test
+                    Selection = (PSDs["Baseline"][channel]["Frequency"] >= (PSDs["Baseline"][channel]["Frequency"][f] - Bandwidth)) & (PSDs["Baseline"][channel]["Frequency"] <= (PSDs["Baseline"][channel]["Frequency"][f] + Bandwidth))
+                    BaseFeature = np.mean(BaselinePower[Selection,:],axis=0)
+                    CondFeature = np.mean(ConditionPower[Selection,:],axis=0)
+                    t_stat, p_value = stats.ttest_ind(BaseFeature, CondFeature, equal_var=False)
+                    PSDs["Condition"][channel]["TStatistics"].append(t_stat)
+                    PSDs["Condition"][channel]["TStatisticsPValues"].append(p_value)
+
+                    # Compute the Spearman correlation coefficient
+                    label = np.concatenate((np.zeros(BaselinePower.shape[1]), np.ones(ConditionPower.shape[1])))
+                    r_stat, p_value = stats.spearmanr(np.concatenate((BaseFeature, CondFeature)), label)
+                    PSDs["Condition"][channel]["RStatistics"].append(r_stat)
+                    PSDs["Condition"][channel]["RStatisticsPValues"].append(p_value)
+
+    return PSDs
+
 # %% Processing Node Configuration: Compute Value Distribution
 ProcessingNodes.append({
     "Group": "Statistics",
@@ -905,7 +1019,7 @@ def handleDistributionComputation(Data, config):
     
     return Data
 
-# %% Processing Node Configuration: Compute Value Distribution
+# %% Processing Node Configuration: Compute Circadian Rhythm from Timeline
 ProcessingNodes.append({
     "Group": "Statistics",
     "Type": "Compute Circadian Rhythm from Timeline",
@@ -1948,6 +2062,11 @@ def selectRecordingChannel(analysis, channel_names=[]):
                 if not analysis["Spectrum"][trial]["Spectrum"]["Channel"] in AllChannels:
                     AllChannels.append(analysis["Spectrum"][trial]["Spectrum"]["Channel"])
                     ActiveChannels.append(analysis["Spectrum"][trial]["Spectrum"]["Channel"])
+
+            elif "Channel" in analysis["Spectrum"][trial].keys():
+                if not analysis["Spectrum"][trial]["Channel"] in AllChannels:
+                    AllChannels.append(analysis["Spectrum"][trial]["Channel"])
+                    ActiveChannels.append(analysis["Spectrum"][trial]["Channel"])
 
             FilteredAnalysis["Spectrum"].append(analysis["Spectrum"][trial])
 
