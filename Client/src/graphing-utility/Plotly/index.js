@@ -41,7 +41,7 @@ const defaultShadedAreaOptions = {
   fillcolor: "#33333344",
   line: {color: "transparent"},
   hoverinfo: "skip",
-  type: "scattergl",
+  type: "scatter",
   showlegend: false
 }
 
