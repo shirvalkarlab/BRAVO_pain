@@ -113,7 +113,7 @@ class OuraRingAuthHandler(RestViews.APIView):
             for i in range(len(request.data["DatePeriods"])):
                 if not type(request.data["DatePeriods"][i]) == list:
                     return Response(status=400, data={"message": "Malformed Input"})
-                for j in range(len(request.data["DatePeriods"])):
+                for j in range(len(request.data["DatePeriods"][i])):
                     request.data["DatePeriods"][i][j] = float(request.data["DatePeriods"][i][j])
 
             device.date_periods = request.data["DatePeriods"]

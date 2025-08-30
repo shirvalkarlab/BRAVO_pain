@@ -374,7 +374,7 @@ class OuraRingAPI:
             for i in range(len(item["heart_rate"]["items"])):
                 Recording["Data"][i, 0] = item["heart_rate"]["items"][i] if item["heart_rate"]["items"][i] else -1
                 Recording["Data"][i, 1] = item["hrv"]["items"][i] if item["hrv"]["items"][i] else -1
-                Recording["Data"][i, 2] = int(item["sleep_phase_5_min"][i])
+                Recording["Data"][i, 2] = int(item["sleep_phase_5_min"][i]) if i < len(item["sleep_phase_5_min"])-1 else -1
                 Recording["Data"][i, 3] = np.mean(item["movement_30_sec"][i*10:i*10+10]) if i*10+10 < len(item["movement_30_sec"]) else np.mean(item["movement_30_sec"][i*10:])
 
             Recording["Missing"] = np.zeros(Recording["Data"].shape)

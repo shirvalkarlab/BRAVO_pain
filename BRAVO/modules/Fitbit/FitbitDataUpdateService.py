@@ -1,3 +1,6 @@
+import os, sys
+sys.path.append(os.getcwd())
+
 from BRAVO import wsgi
 from Server import models
 from modules.Fitbit import DataManager, DataQuery
