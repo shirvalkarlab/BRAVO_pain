@@ -113,9 +113,6 @@ while True:
                     if participant_data == ".DS_Store":
                         continue
                     
-                    if os.path.exists(SourceDir + "/Processed/" + participant_data + "-" + date + "-raw_data.bdata"):
-                        continue
-                    
                     print("Processing Participant Data: ", participant_data)
 
                     Recordings = []
@@ -124,6 +121,10 @@ while True:
                     participant_raw_data_dir = SourceDir + "/" + study_id + "/" + site_id + "/participant_data/" + date + "/" + participant_data + "/raw_data/v6"
                     if os.path.exists(participant_raw_data_dir):
                         all_raw_datas = os.listdir(participant_raw_data_dir)
+                        file_count = len(all_raw_datas)
+                        if os.path.exists(SourceDir + "/Processed/" + participant_data + "-" + date + "-raw_data" + f"-{file_count}" + ".bdata"):
+                            continue
+                        
                         for file in all_raw_datas:
                             if file == ".DS_Store" or file.endswith(".bpkl"):
                                 continue
@@ -384,9 +385,13 @@ while True:
                                 
                                 Recordings.append(Recording)
 
+                    for file in os.listdir(SourceDir + "/Processed"):
+                        if file.startswith(participant_data + "-" + date + "-raw_data"):
+                            os.remove(os.path.join(SourceDir + "/Processed", file))
+    
                     # Save Recordings to a file
-                    with open(SourceDir + "/Processed/" + participant_data + "-" + date + "-raw_data.bdata", "wb+") as f:
+                    with open(SourceDir + "/Processed/" + participant_data + "-" + date + "-raw_data" + f"-{file_count}" + ".bdata", "wb+") as f:
                         pData = BRAVORecordingBinaryFormat(Recordings)
                         f.write(blosc2.compress2(pData, typesize=1))
-    
+
     time.sleep(3600)
