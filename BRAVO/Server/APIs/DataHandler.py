@@ -398,7 +398,7 @@ class DataDownloadHandler(RestViews.APIView):
                         for hemisphere in ["Left", "Right"]:
                             for k in range(len(TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"])):
                                 if TherapyHistory["TherapyConfiguration"][i]["History"][j]["StimulationSettings"][k]["Electrode"]["Target"].startswith(hemisphere):
-                                    if hemisphere + " Program 1" in Record.keys():
+                                    if (hemisphere + " Program 1 Target") in Record.keys():
                                         ProgramName = hemisphere + " Program 2"
                                     else:
                                         ProgramName = hemisphere + " Program 1"

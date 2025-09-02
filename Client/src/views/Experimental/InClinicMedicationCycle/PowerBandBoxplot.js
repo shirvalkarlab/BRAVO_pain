@@ -104,8 +104,8 @@ function PowerBandBoxplot({dataToRender, figureTitle}) {
         options: {
           showlegend: true,
           name: type,
-          fillcolor: type == "MEDON" ? "#000000" : "#AA0000",
-          marker: {color: type == "MEDON" ? "#000000" : "#AA0000"},
+          fillcolor: type == "MEDON" ? "#ef8a62" : "#67a9cf",
+          marker: {color: type == "MEDON" ? "#ef8a62" : "#67a9cf"},
           hovertemplate: `<extra></extra>`,
         },
       });
