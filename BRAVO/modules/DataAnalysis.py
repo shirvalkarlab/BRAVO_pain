@@ -2279,7 +2279,9 @@ def queryChronicTimeline(participant_uid, config):
                 Count = 0
                 for i in range(len(Data[key])):
                     if len(Data[key][i]["Data"]) > 0:
-                        Activity["Data"][:, Count] = Data[key][i]["Data"]
+                        for j in range(len(Data[key][i]["ChannelNames"])):
+                            chanIndex = Activity["ChannelNames"].index(key + " " + Data[key][i]["ChannelNames"][j])
+                            Activity["Data"][chanIndex, Count] = Data[key][i]["Data"][0][j]
                         Count += 1
 
                 ChronicTimeline.append(Activity)
@@ -2296,7 +2298,7 @@ def queryChronicTimeline(participant_uid, config):
                             "Data": np.array(Data[key][i]["Data"]).T.tolist(),
                         }
 
-                        if not type(Data[key][i]["Duration"]) == int:
+                        if not type(Data[key][i]["Duration"]) == int and not type(Data[key][i]["Duration"]) == float and not type(Data[key][i]["Duration"]) == np.float64:
                             Activity["Duration"] = Data[key][i]["Duration"]
 
                         for j in range(len(Activity["ChannelNames"])):

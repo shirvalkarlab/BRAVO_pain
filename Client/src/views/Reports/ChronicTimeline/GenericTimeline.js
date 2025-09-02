@@ -101,6 +101,10 @@ export default function GenericTimeline({data, availableChannels, annotations, h
             fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
           }  else if (renderData[i].type == "bar") {
             fig.setScaleType("category", "y", subAx);
+            fig.setAxisProps({
+              categoryorder: "array",
+              categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"] 
+            }, "y", ax);
             fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, subAx);
           }
         }
@@ -121,7 +125,11 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         let xData = [];
         for (let t in data[i].Time) {
           xData.push(new Date(data[i].Time[t]*1000));
-          xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration[t]*1000));
+          if (typeof data[i].Duration === "number") {
+            xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration*1000));
+          } else {
+            xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration[t]*1000));
+          }
         }
         
         for (let j in data[i].ChannelNames) {
@@ -138,6 +146,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
                 linewidth: 2,
                 line: {shape: "hvh"},
                 color: "#000000",
+                showlegend: false,
                 orientation: "h",
                 hovertemplate: "%{y}<extra></extra>"
               }, 
@@ -245,7 +254,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
     fig.traces = [];
     let yLim = {};
     let clim = {};
-    
+
     for (let i in renderData) {
       const ax = fig.getAxes(renderData[i].axName);
       if (renderData[i].type === "surf" && ax) {
@@ -290,6 +299,10 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         //};
         if (!renderData[i].options.hidden && ax) {
           fig.setScaleType("category", "y", ax);
+          fig.setAxisProps({
+            categoryorder: "array",
+            categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"] 
+          }, "y", ax);
           fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, ax);
         }
       }
