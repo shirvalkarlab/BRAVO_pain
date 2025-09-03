@@ -73,11 +73,10 @@ class QueryEmpaticaData(RestViews.APIView):
             Data = DataManager.loadEmpaticaData(Participant, channel_name=request.data["ChannelName"])
             if not APIAccess:
                 for i in range(len(Data)):
-                    if len(Data[i]["Data"]) > 10000:
+                    if len(Data[i]["Data"]) > int(Data[i]["Time"][-1] - Data[i]["Time"][0])*10:
                         Data[i]["Time"], Data[i]["Data"] = lttb_optimized(Data[i]["Time"], Data[i]["Data"], threshold=int((Data[i]["Time"][-1] - Data[i]["Time"][0]) * 10))
                         #Data[i]["Time"], Data[i]["Data"] = minimum_change_eliminator(Data[i]["Time"], Data[i]["Data"], threshold=0.5)
-                        print(len(Data[i]["Data"]))
-
+                        
             Data = json_compliant_handler(Data)
             return Response(status=200, data=Data)
             

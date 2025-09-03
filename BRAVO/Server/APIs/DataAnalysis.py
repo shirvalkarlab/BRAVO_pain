@@ -812,6 +812,15 @@ class QueryChronicTimeline(RestViews.APIView):
             Database.saveCachedResult(Analysis, "/queryChronicTimeline", request.data["ParticipantId"], {**userConfig, **request.data})
             return Response(status=200, data=Analysis)
 
+        elif request.data["RequestType"] == "RequestData":
+            if "ProcessingConfiguration" in request.data.keys():
+                userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": request.data["ProcessingConfiguration"]})
+            else:
+                userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            
+            Data = DataAnalysis.queryChronicTimelineData(request.data["ParticipantId"], request.data["DataIds"], request.data["Channel"], userConfig)
+            return Response(status=200, data=Data)
+
         elif request.data["RequestType"] == "DeleteCache":
             Recording = models.Recording.find(type="ProcessedCustomizedStreamingData", source__owner__uid=request.data["ParticipantId"])
             if Recording:

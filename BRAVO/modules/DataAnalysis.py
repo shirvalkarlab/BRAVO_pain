@@ -39,6 +39,7 @@ from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainS
 from modules.Resources.ProcessingTemplates import ProcessingNodes
 from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
+from modules.Empatica import DataManager as EmpaticaDataManager
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -2312,6 +2313,23 @@ def queryChronicTimeline(participant_uid, config):
 
                         ChronicTimeline.append(Activity)
 
+    if models.Recording.include(source__owner=Participant, type="EmpaticaData"):
+        Data = EmpaticaDataManager.loadEmpaticaDataOverview(Participant)
+        AllChannels = []
+        for i in range(len(Data)):
+            for name in Data[i]["ChannelNames"]:
+                if not name in AllChannels:
+                    AllChannels.append(name)
+        
+        for i in range(len(AllChannels)):
+            Activity = {
+                "AnalysisType": "CustomizedTimelineData",
+                "DataId": [Data[j]["Id"] for j in range(len(Data)) if AllChannels[i] in Data[j]["ChannelNames"]],
+                "ChannelNames": [AllChannels[i]],
+                "ChannelUnits": [""]
+            }
+            ChronicTimeline.append(Activity)
+
     if models.SourceFile.include(owner=Participant, type="OuraRingAPISource"):
         Data = OuraDataManager.loadOuraRingData(Participant)
         for key in Data.keys():
@@ -2468,6 +2486,27 @@ def queryChronicTimeline(participant_uid, config):
         ChronicTimeline.append(Activity)
 
     return ChronicTimeline
+
+def queryChronicTimelineData(participant_uid, data_ids, channel, config):
+    Participant = models.Participant.find(uid=participant_uid)
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+
+    Result = []
+    if models.Recording.include(uid__in=data_ids, source__owner=Participant, type="EmpaticaData"):
+        Recordings = models.Recording.find_all(uid__in=data_ids, source__owner=Participant, type="EmpaticaData")
+        for recording in Recordings:
+            Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+            for i in range(len(Data)):
+                if channel in Data[i]["ChannelNames"]:
+                    chanIndex = Data[i]["ChannelNames"].index(channel)
+                    Data[i]["Data"][np.isnan(Data[i]["Data"])] = -1
+                    Result.append({
+                        "Time": Data[i]["Time"] + Data[i]["StartTime"],
+                        "Duration": np.diff(Data[i]["Time"]),
+                        "Data": [np.array(Data[i]["Data"]).T[chanIndex].tolist()],
+                    })
+                    
+    return Result
 
 def queryChronicNeuralActivity(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)

@@ -99,7 +99,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
         }
       }
 
-      setAvailableChannels({active: availableChannels.length < 4 ? availableChannels : availableChannels.slice(0,4), options: availableChannels});
+      setAvailableChannels({active: [], options: availableChannels});
       setData(response.data.Timelines);
       setAnnotations(response.data.Annotations);
       setAlert(null);
@@ -114,8 +114,39 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   };
   
   useEffect(() => {
-    
-  }, [data]);
+    for (let i in availableChannels.active) {
+      for (let j in data) {
+        if (data[j].ChannelNames.includes(availableChannels.active[i])) {
+          if (data[j].DataId && !data[j].Data) {
+            setAlert(<LoadingProgress/>);
+            SessionController.query("/api/queryChronicTimeline", {
+              ParticipantId: participant_uid, 
+              RequestType: "RequestData",
+              DataIds: data[j].DataId,
+              Channel: availableChannels.active[i]
+            }).then((response) => {
+              setData((oldData) => {
+                oldData = oldData.filter((d) => d.DataId != data[j].DataId);
+                for (let k in response.data) {
+                  oldData.push({
+                    ...data[j],
+                    DataId: null,
+                    ...response.data[k],
+                  });
+                }
+                return [...oldData];
+              });
+              
+              setAlert(null);
+            }).catch((error) => {
+              SessionController.displayError(error, setAlert);
+            });
+
+          } 
+        }
+      }
+    }
+  }, [availableChannels.active]);
 
   const handleAddEvent = async (eventInfo) => {
     setAlert(<LoadingProgress />);

@@ -99,12 +99,13 @@ export default function GenericTimeline({data, availableChannels, annotations, h
       
           } else if (renderData[i].type === "lineseries") {
             fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
-          }  else if (renderData[i].type == "bar") {
+          } else if (renderData[i].type == "bar") {
             fig.setScaleType("category", "y", subAx);
+            fig.setScaleType("date", "x", subAx);
             fig.setAxisProps({
               categoryorder: "array",
               categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"] 
-            }, "y", ax);
+            }, "y", subAx);
             fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, subAx);
           }
         }
@@ -152,7 +153,6 @@ export default function GenericTimeline({data, availableChannels, annotations, h
               }, 
               axName: data[i].ChannelNames[j]
             });
-
           } else {
             const yData = [];
             for (let t in data[i].Time) {
@@ -191,21 +191,30 @@ export default function GenericTimeline({data, availableChannels, annotations, h
     }
 
     if (barSeries.length > 0) {
-      let xaxis = [];
-      let yaxis = [];
-      let base = [];
-      for (let i in barSeries) {
-        xaxis.push(...barSeries[i].x);
-        yaxis.push(...barSeries[i].y);
-        base.push(...barSeries[i].base);
-      }
+      let allAx = barSeries.map((a) => a.axName);
+      allAx = [...new Set(allAx)];
 
-      lineSeries.push({
-        type: "bar",
-        x: xaxis, y: yaxis, base: base,
-        options: barSeries[0].options, 
-        axName: barSeries[0].axName
-      });
+      for (let n in allAx) {
+        let xaxis = [];
+        let yaxis = [];
+        let base = [];
+        let options = {};
+        for (let i in barSeries) {
+          if (barSeries[i].axName !== allAx[n]) continue;
+          
+          options = barSeries[i].options;
+          xaxis.push(...barSeries[i].x);
+          yaxis.push(...barSeries[i].y);
+          base.push(...barSeries[i].base);
+        }
+
+        lineSeries.push({
+          type: "bar",
+          x: xaxis, y: yaxis, base: base,
+          options: options, 
+          axName: allAx[n]
+        });
+      }
     }
 
     setRenderData(lineSeries);
@@ -299,6 +308,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         //};
         if (!renderData[i].options.hidden && ax) {
           fig.setScaleType("category", "y", ax);
+          fig.setScaleType("date", "x", ax);
           fig.setAxisProps({
             categoryorder: "array",
             categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"] 
