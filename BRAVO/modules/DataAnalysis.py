@@ -1695,11 +1695,11 @@ def downloadTherapeuticAnalysis(participant_uid, analysis_uid, config):
     return df
 
 def downsampleTimeDomainStreaming(data):
-    if data["SamplingRate"] > 1000:
-        sos = signal.butter(5, np.array([1,500])*2/data["SamplingRate"], 'bp', output='sos')
+    if data["SamplingRate"] > 300:
+        sos = signal.butter(5, np.array([1,150])*2/data["SamplingRate"], 'bp', output='sos')
         data["Data"] = signal.sosfiltfilt(sos, data["Data"], axis=0)
         
-        skipIndexes = int(np.floor(data["SamplingRate"] / 1000))
+        skipIndexes = int(np.floor(data["SamplingRate"] / 300))
         data["Data"] = data["Data"][::skipIndexes, :]
         data["Time"] = data["Time"][::skipIndexes]
         data["Missing"] = data["Missing"][::skipIndexes, :]
@@ -2267,7 +2267,7 @@ def queryChronicTimeline(participant_uid, config):
                 
                 for i in range(len(Data[key])):
                     if len(Data[key][i]["Data"]) > 0:
-                        Activity["ChannelNames"] = [key + " " + name for name in Data[key][i]["ChannelNames"]]
+                        Activity["ChannelNames"] = ["[Fitbit] " + key + " " + name for name in Data[key][i]["ChannelNames"]]
                         Activity["ChannelUnits"] = ["" for name in Data[key][i]["ChannelNames"]]
                         break
 
@@ -2281,7 +2281,7 @@ def queryChronicTimeline(participant_uid, config):
                 for i in range(len(Data[key])):
                     if len(Data[key][i]["Data"]) > 0:
                         for j in range(len(Data[key][i]["ChannelNames"])):
-                            chanIndex = Activity["ChannelNames"].index(key + " " + Data[key][i]["ChannelNames"][j])
+                            chanIndex = Activity["ChannelNames"].index("[Fitbit] " + key + " " + Data[key][i]["ChannelNames"][j])
                             Activity["Data"][chanIndex, Count] = Data[key][i]["Data"][0][j]
                         Count += 1
 
@@ -2294,7 +2294,7 @@ def queryChronicTimeline(participant_uid, config):
                             "AnalysisType": "CustomizedTimelineData",
                             "Time": Data[key][i]["Time"],
                             "Duration": np.diff(Data[key][i]["Time"]),
-                            "ChannelNames": [key + " " + name for name in Data[key][i]["ChannelNames"]],
+                            "ChannelNames": ["[Fitbit] " + key + " " + name for name in Data[key][i]["ChannelNames"]],
                             "ChannelUnits": ["" for name in Data[key][i]["ChannelNames"]],
                             "Data": np.array(Data[key][i]["Data"]).T.tolist(),
                         }
@@ -2303,7 +2303,7 @@ def queryChronicTimeline(participant_uid, config):
                             Activity["Duration"] = Data[key][i]["Duration"]
 
                         for j in range(len(Activity["ChannelNames"])):
-                            if Activity["ChannelNames"][j] in ["sleep SleepStage"]:
+                            if Activity["ChannelNames"][j] in ["[Fitbit] sleep SleepStage"]:
                                 Activity["ChannelUnits"][j] = "Category"
                                 Activity["Data"][j] = []
                                 for k in range(len(Data[key][i]["Data"])):
@@ -2325,7 +2325,7 @@ def queryChronicTimeline(participant_uid, config):
             Activity = {
                 "AnalysisType": "CustomizedTimelineData",
                 "DataId": [Data[j]["Id"] for j in range(len(Data)) if AllChannels[i] in Data[j]["ChannelNames"]],
-                "ChannelNames": [AllChannels[i]],
+                "ChannelNames": ["[Empatica] " + AllChannels[i]],
                 "ChannelUnits": [""]
             }
             ChronicTimeline.append(Activity)
@@ -2366,7 +2366,7 @@ def queryChronicTimeline(participant_uid, config):
                     Activity["Data"].append(ChanData)
                 
                 for i in range(len(Activity["ChannelNames"])):
-                    Activity["ChannelNames"][i] = key + " " + Activity["ChannelNames"][i]
+                    Activity["ChannelNames"][i] = "[OURA] " + key + " " + Activity["ChannelNames"][i]
                 
                 Activity["Data"] = np.array(Activity["Data"]).T.tolist()
                 ChronicTimeline.append(Activity)
@@ -2396,13 +2396,13 @@ def queryChronicTimeline(participant_uid, config):
                             "AnalysisType": "CustomizedTimelineData",
                             "Time": Data[key][i]["Time"],
                             "Duration": np.diff(Data[key][i]["Time"]),
-                            "ChannelNames": [key + " " + name for name in Data[key][i]["ChannelNames"]],
+                            "ChannelNames": ["[OURA] " + key + " " + name for name in Data[key][i]["ChannelNames"]],
                             "ChannelUnits": ["" for name in Data[key][i]["ChannelNames"]],
                             "Data": np.array(Data[key][i]["Data"]).T.tolist(),
                         }
 
                         for j in range(len(Activity["ChannelNames"])):
-                            if Activity["ChannelNames"][j] in ["Sleep Sleep Phase"]:
+                            if Activity["ChannelNames"][j] in ["[OURA] Sleep Sleep Phase"]:
                                 SleepStages = {
                                     "deep": 1,
                                     "light": 2,
@@ -2428,7 +2428,7 @@ def queryChronicTimeline(participant_uid, config):
                     DescriptorActivity["Data"].append(ChanData)
 
                 for i in range(len(DescriptorActivity["ChannelNames"])):
-                    DescriptorActivity["ChannelNames"][i] = key + " " + DescriptorActivity["ChannelNames"][i]
+                    DescriptorActivity["ChannelNames"][i] = "[OURA] " + key + " " + DescriptorActivity["ChannelNames"][i]
 
                 DescriptorActivity["Data"] = np.array(DescriptorActivity["Data"]).T.tolist()
                 ChronicTimeline.append(DescriptorActivity)
@@ -2497,8 +2497,8 @@ def queryChronicTimelineData(participant_uid, data_ids, channel, config):
         for recording in Recordings:
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
             for i in range(len(Data)):
-                if channel in Data[i]["ChannelNames"]:
-                    chanIndex = Data[i]["ChannelNames"].index(channel)
+                if channel.replace("[Empatica] ","") in Data[i]["ChannelNames"]:
+                    chanIndex = Data[i]["ChannelNames"].index(channel.replace("[Empatica] ",""))
                     Data[i]["Data"][np.isnan(Data[i]["Data"])] = -1
                     Result.append({
                         "Time": Data[i]["Time"] + Data[i]["StartTime"],

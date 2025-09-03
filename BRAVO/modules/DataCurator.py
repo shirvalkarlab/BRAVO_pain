@@ -95,7 +95,7 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     Recordings = parsePersystRecording(rawBytes, source_file.metadata["layout"])
     for stream in Recordings:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person, source__metadata__Uploader=source_file.metadata["Uploader"]):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -549,7 +549,7 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
             recording.delete()
             continue
 
@@ -593,7 +593,7 @@ def UFMDATDecoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
             recording.delete()
             continue
 
@@ -654,7 +654,7 @@ def UFMDATv2Decoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata):
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
             recording.delete()
             continue
 
