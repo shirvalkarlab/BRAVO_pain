@@ -19,10 +19,16 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
+import moment from "moment";
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { TimePicker } from "@mui/x-date-pickers";
+
 import colormap from "colormap";
 import { TwitterPicker, BlockPicker } from "react-color";
 
-import { Card, Menu, MenuItem, Dialog, DialogContent, Grid, IconButton, Popover, TextField, DialogActions } from "@mui/material";
+import { Card, Menu, MenuItem, Dialog, DialogContent, Grid, IconButton, Popover, TextField, DialogActions, Switch } from "@mui/material";
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import { dictionary, dictionaryLookup } from "assets/translation";
@@ -36,7 +42,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
   const { language } = controller;
 
   const [contextMenu, setContextMenu] = useState(null);
-  const [eventInfo, setEventInfo] = useState({ name: "", time: 0, duration: 0, show: false });
+  const [eventInfo, setEventInfo] = useState({ name: "", time: 0, enddate: null, endtime: null, hasEndDate: true, show: false });
   const [popup, setPopupState] = useState({item: ""});
 
   const [fig, setFig] = useState(null);
@@ -179,18 +185,37 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
 
     for (let i in annotations) {
       for (let j in availableChannels.active) {
-        lineSeries.push({
-          type: "annotations",
-          x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000)], y: [0, 50000],
-          options: {
-            id: annotations[i].Id,
-            name: annotations[i].Name,
-            linewidth: 2,
-            color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
-            hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
-          }, 
-          axName: availableChannels.active[j]
-        });
+        if (!annotations[i].Duration) {
+          lineSeries.push({
+            type: "annotations",
+            x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000)], y: [0, 50000],
+            options: {
+              id: annotations[i].Id,
+              name: annotations[i].Name,
+              linewidth: 2,
+              color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
+              hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
+            }, 
+            axName: availableChannels.active[j]
+          });
+        } else {
+          lineSeries.push({
+            type: "shading",
+            x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000 + annotations[i].Duration*1000)], y: [0, 50000],
+            xDot: [new Date(annotations[i].Date*1000)],
+            y: [0,50000],
+            yDot: [0],
+            options: {
+              id: annotations[i].Id,
+              name: annotations[i].Name,
+              size: 10,
+              color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
+              alpha: 0.3, 
+              hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
+            }, 
+            axName: availableChannels.active[j]
+          })
+        }
       }
     }
 
@@ -220,7 +245,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
 
     setRenderData((renderData) => {
       for (let i in renderData) {
-        if (renderData[i].type === "annotations") {
+        if (renderData[i].type === "annotations" || renderData[i].type === "shading") {
           renderData[i].options.color = annotationState[renderData[i].options.name] ? annotationState[renderData[i].options.name].color : "#00FF00";
           renderData[i].options.hidden = annotationState[renderData[i].options.name] ? !annotationState[renderData[i].options.name].show : false;
         }
@@ -246,6 +271,10 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
           yLim[renderData[i].axName][1] = Math.max(renderData[i].y)*1.1;
           fig.setYlim(yLim[renderData[i].axName], ax);
         };
+      } else if (renderData[i].type === "shading") {
+        fig.addShadedArea(renderData[i].x, renderData[i].y, {...renderData[i].options, hovertemplate: "<extra></extra>"}, ax);
+        fig.scatter(renderData[i].xDot, renderData[i].yDot, renderData[i].options, ax);
+        continue;
       }
 
       if (!renderData[i].options.hidden) fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
@@ -300,6 +329,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
       <Grid item xs={12} sx={{marginLeft: 5, marginRight: 5}}>
         <Grid container spacing={2}>
           {Object.keys(annotationState).map((name) => {
+            if (!name) return null
             return <Grid item key={name} xs={6} sm={4} md={3} lg={2}>
               <Card sx={{background: annotationState[name].show ? "" : "darkgrey"}}>
               <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
@@ -355,7 +385,10 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
           >
             <MenuItem onClick={() => {
               setContextMenu(null);
-              setEventInfo({...eventInfo, name: "", show: true});
+              setEventInfo({...eventInfo, name: "", hasEndDate: false, 
+                enddate: moment(new Date(eventInfo.time)), 
+                endtime: moment(new Date(eventInfo.time)),
+                show: true});
             }}>{"Add New Event"}</MenuItem>
             <MenuItem onClick={() => {
               setContextMenu(null);
@@ -366,7 +399,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
           <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
             <MDBox px={2} pt={2} sx={{minWidth: 500}}>
               <MDTypography variant="h5">
-                {"New Custom Event"} 
+                {"New Chronic Event Marking"} 
               </MDTypography>
               <MDTypography variant="h6">
                 {"Time: "}{new Date(eventInfo.time).toLocaleString("en-US", {
@@ -395,15 +428,34 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
                   />
                 </Grid>
                 <Grid item xs={12} style={{display: "flex", flexDirection: "column"}}>
-                  <TextField
-                    variant="standard"
-                    margin="dense"
-                    type={"number"}
-                    label="Event Duration"
-                    placeholder={"0 for Instant Event"}
-                    value={eventInfo.duration}
-                    onChange={(event) => setEventInfo({...eventInfo, duration: event.target.value})}
-                  />
+                  <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
+                    <Switch checked={eventInfo.hasEndDate} onChange={(event, checked) => setEventInfo({...eventInfo, hasEndDate: checked})} />
+                    <MDTypography fontSize={15} fontWeight={"bold"}>{"Has End Date (Local Time)"}</MDTypography>
+                  </MDBox>
+                  {!eventInfo.hasEndDate ? null : (
+                    <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"space-between"}>
+                      <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+                        <DatePicker
+                          label="Date"
+                          value={eventInfo.enddate}
+                          onChange={(newDate) => {
+                            setEventInfo({...eventInfo, enddate: newDate});
+                          }}
+                          renderInput={(params) => <TextField {...params} />}
+                        />
+                      </LocalizationProvider>
+                      <LocalizationProvider dateAdapter={AdapterMoment}>
+                        <TimePicker
+                          label="Time"
+                          value={eventInfo.endtime}
+                          onChange={(newDate) => {
+                            setEventInfo({...eventInfo, endtime: newDate});
+                          }}
+                          renderInput={(params) => <TextField {...params} />}
+                        />
+                      </LocalizationProvider>
+                    </MDBox>
+                  )}
                 </Grid>
               </Grid>
             </DialogContent>

@@ -164,13 +164,22 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   }, [data]);
 
   const handleAddEvent = async (eventInfo) => {
+    if (!eventInfo.name) return;
+
     setAlert(<LoadingProgress />);
     try {
+      let duration = 0
+      if (eventInfo.hasEndDate) {
+        duration = new Date(eventInfo.enddate.toISOString().split("T")[0] + "T" + eventInfo.endtime.toISOString().split("T")[1]).getTime() / 1000;
+        duration -= (eventInfo.enddate.utcOffset() - eventInfo.endtime.utcOffset()) * 60;
+        duration -= eventInfo.time / 1000;
+      }
+
       const response = await SessionController.query("/api/addParticipantAnnotation", {
         ParticipantId: participant_uid,
         EventName: eventInfo.name,
         EventTime: eventInfo.time / 1000,
-        EventDuration: parseFloat(eventInfo.duration),
+        EventDuration: duration,
         EventType: "ChronicCustomEvent"
       });
       setAlert(null);
