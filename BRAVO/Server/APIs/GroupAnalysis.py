@@ -40,7 +40,7 @@ from .Participants import queryParticipantFunc
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation, ExtractSpectralFeaturesDuringSurvey
-
+from modules.AsyncJobScheduler import ProcessingScheduler
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -62,7 +62,10 @@ class QueryGroupAnalysis(RestViews.APIView):
                 return Response(status=200, data=result)
             
             elif request.data["RequestType"] == "RequestRefresh":
-                result = ExtractSpectralFeaturesDuringStimulation.CommandLineAsyncUpdate()
+                ProcessingScheduler.ScheduleSlurmJob(requester=request.user, 
+                                                     recording_uid="GroupAnalysis", 
+                                                     script_name="ExtractSpectralFeaturesDuringStimulation", 
+                                                     config=[""])
                 return Response(status=200)
             
             elif request.data["RequestType"] == "UpdateExpertLabel":
