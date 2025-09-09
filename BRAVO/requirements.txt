@@ -14,6 +14,7 @@ spectrum==0.8.1
 specparam==2.0.0rc2
 requests==2.32.3
 pymysql==1.1.1
+psutil==7.0.0
 mysqlclient==2.1
 whitenoise==6.7.0
 waitress==3.0.2

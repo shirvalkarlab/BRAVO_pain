@@ -893,6 +893,10 @@ export const dictionary = {
       en: "Study Management",
       zh: "研究管理"
     },
+    AsyncJobScheduleTable: {
+      en: "Async Job Schedules",
+      zh: "异步作业调度"
+    },
     ShareResearchAccess: {
       en: "Access Permission List",
       zh: "Access Permission List"

@@ -73,5 +73,7 @@ class AsyncJob(models.Model):
             "Name": self.name,
             "Type": self.type,
             "Date": self.date,
-            "Metadata": self.metadata
+            "Metadata": self.metadata,
+            "State": self.state,
+            "Result": self.result_message
         }

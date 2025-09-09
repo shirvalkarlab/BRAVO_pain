@@ -21,7 +21,10 @@ All API URLs
 from django.urls import path
 from django.conf import settings
 
-from . import Auth, WebSession, Participants, FitbitDashboard, OuraRingDashboard, EmpaticaDashboard, DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis, AIModels
+from . import Auth, WebSession, Participants
+from . import FitbitDashboard, OuraRingDashboard, EmpaticaDashboard 
+from . import DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis, AIModels
+from . import AsyncJobScheduling
 
 urlpatterns = [
     path('register', Auth.UserRegister.as_view()),
@@ -85,6 +88,7 @@ urlpatterns = [
     path('requestAIPrediction', AIModels.RequestPrediction.as_view()),
     
     path('queryGroupAnalysis', GroupAnalysis.QueryGroupAnalysis.as_view()),
+    path('queryAsyncJobQueue', AsyncJobScheduling.QueryAsyncJobQueue.as_view()),
     
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
     

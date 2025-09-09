@@ -1,9 +1,13 @@
 import os, sys
-BRAVO_Path = ""
+BRAVO_Path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(BRAVO_Path)
 
 from BRAVO import wsgi
 from Server import models
+import subprocess
+import psutil
+
+USE_SLURM = os.environ.get('USE_SLURM', 'FALSE') == 'TRUE'
 
 AsyncJobScripts = {
     "BurstAnalysis": "",
@@ -17,7 +21,7 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config):
     
     job = models.AsyncJob.create(
         name="BRAVO_Processing_Schedule",
-        type="SLURM",
+        type="SLURM" if USE_SLURM else "LOCAL",
         recording_uid=recording_uid,
         result_message="",
         requester=requester,
@@ -36,12 +40,29 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config):
     with open(os.path.join(SLURM_JOB_PATH, job.uid + ".sh"), 'w+') as f:
         f.write(sbatch_script)
 
-def CheckJobStatus(job_id):
-    job = models.AsyncJob.find(uid=job_id)
-    if not job:
-        return {"status": "error", "message": "Job not found"}
+    if USE_SLURM:
+        pid = subprocess.call(["sbatch", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")])
+    else:
+        process = subprocess.Popen(["bash", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")])
+        job.metadata["pid"] = process.pid
+        job.save()
 
-    return {"status": "success", "data": job.get_info()}
+def CheckJobStatus(job):
+    if job.type == "LOCAL":
+        try:
+            ps_proc = psutil.Process(job.metadata["pid"])
+            if not job.state == "Running":
+                job.state = "Running"
+                job.save() 
+
+        except:
+            if not job.state == "Completed":
+                job.state = "Completed"
+                job.save() 
+
+            print("UID Not Found")
+
+    return job.get_info()
 
 if __name__ == "__main__":
     pass

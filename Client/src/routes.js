@@ -29,8 +29,9 @@ import MDAvatar from "components/MDAvatar";
 import Icon from "@mui/material/Icon";
 
 import { MdOutlineEventAvailable, MdFitbit, MdBuildCircle, MdStorage, MdSdStorage } from "react-icons/md";
+import { BsCollectionFill } from "react-icons/bs"
 import { IoWatch } from "react-icons/io5";
-import { FaBrain, FaFileWaveform, FaClipboardList, FaRing } from "react-icons/fa6";
+import { FaBrain, FaFileWaveform, FaClipboardList, FaRing, FaMicrophone, FaTimeline } from "react-icons/fa6";
 import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
 
@@ -50,6 +51,7 @@ import { experimentalRoutes } from "views/Experimental/plugins";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
+const AsyncJobSchedule = lazy(() => import('views/AsyncJobSchedule'));
 const StudyManagement = lazy(() => import('views/Dashboard/StudyManagement'));
 const UploadDataView = lazy(() => import('views/Dashboard/UploadDataView'));
 const ResearchAccessView = lazy(() => import('views/Dashboard/ShareResearchAccess'));
@@ -62,6 +64,7 @@ const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRec
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
+const SpeechAnalysisAndRecorder = lazy(() => import('views/ExternalSensors/SpeechAnalysis'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
 const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMedicationCycle'));
@@ -81,7 +84,6 @@ const ElectrodeIdentifierExamination = lazy(() => import('views/GroupAnalysis/El
 const SpectralAnalysisExaminationStreaming = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationStreaming'));
 const SpectralAnalysisExaminationSurvey = lazy(() => import('views/GroupAnalysis/SpectralAnalysisExaminationSurvey'));
 
-
 const routes = {
   "Main": {
     children: [
@@ -96,20 +98,20 @@ const routes = {
       },
       {
         type: "collapse",
-        name: "StudyManagement",
-        key: "study-management",
-        component: <StudyManagement />,
-        route: "/study-management",
-        icon: <IosShare/>,
-        noCollapse: true,
-      },
-      {
-        type: "collapse",
         name: "UploadRawData",
         key: "upload-data",
         component: <UploadDataView />,
         route: "/upload-data",
         icon: <IosShare/>,
+        noCollapse: true,
+      },
+      {
+        type: "collapse",
+        name: "StudyManagement",
+        key: "study-management",
+        component: <StudyManagement />,
+        route: "/study-management",
+        icon: <BsCollectionFill/>,
         noCollapse: true,
       },
       {
@@ -140,6 +142,15 @@ const routes = {
         icon: <FaClipboardList />,
         noCollapse: true,
         hide: true,
+      },
+      {
+        type: "collapse",
+        name: "AsyncJobScheduleTable",
+        key: "async-job-management",
+        component: <AsyncJobSchedule />,
+        route: "/async-job-management",
+        icon: <FaTimeline/>,
+        noCollapse: true,
       },
     ]
   },
@@ -325,6 +336,13 @@ const routes = {
         icon: <img src={"https://www.empatica.com/website/assets/images/embraceplus/embraceplus_closed_side_hero-sm-xhdpi.png"} width={"30pt"} alt="Empatica" />,
         route: "/empatica/data-explorer/:participant_uid",
         component: <EmpaticaDataExplorer />,
+      },
+      {
+        key: "SpeechAnalysisAndRecorder",
+        name: "Speech Analysis and Recorder",
+        icon: <FaMicrophone />,
+        route: "/speech-analysis-and-recorder/:participant_uid",
+        component: <SpeechAnalysisAndRecorder />,
       }
     ]
   },
