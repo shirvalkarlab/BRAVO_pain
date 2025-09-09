@@ -64,7 +64,6 @@ const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRec
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
-const SpeechAnalysisAndRecorder = lazy(() => import('views/ExternalSensors/SpeechAnalysis'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
 const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMedicationCycle'));
@@ -336,13 +335,6 @@ const routes = {
         icon: <img src={"https://www.empatica.com/website/assets/images/embraceplus/embraceplus_closed_side_hero-sm-xhdpi.png"} width={"30pt"} alt="Empatica" />,
         route: "/empatica/data-explorer/:participant_uid",
         component: <EmpaticaDataExplorer />,
-      },
-      {
-        key: "SpeechAnalysisAndRecorder",
-        name: "Speech Analysis and Recorder",
-        icon: <FaMicrophone />,
-        route: "/speech-analysis-and-recorder/:participant_uid",
-        component: <SpeechAnalysisAndRecorder />,
       }
     ]
   },
