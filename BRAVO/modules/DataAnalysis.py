@@ -1900,7 +1900,7 @@ def processBurstAnalysis(participant_uid, recording_uid, config, centerFreq=22):
 
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
-    
+
     if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
@@ -1928,7 +1928,31 @@ def processBurstAnalysis(participant_uid, recording_uid, config, centerFreq=22):
             "SignalSeries": Data,
             "Alignment": TimeShift
         })
-    
+        
+    elif recording.type in ["CustomizedStreamingData"]:
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data = handleBurstActivityPreprocessing(recording, Data, config)
+        
+        for i in range(len(Data["BurstEnvelop"])):
+            WaveletIndex = np.argmin(np.abs(Data["BurstEnvelop"][i]["Frequency"] - centerFreq))
+            Data["BurstEnvelop"][i]["Wavelet"] = Data["BurstEnvelop"][i]["Wavelet"][WaveletIndex,:]
+        
+        Data["MissingIndex"] = []
+        for i in range(Data["Missing"].shape[1]):
+            Data["MissingIndex"].append(np.where(Data["Missing"][:,i])[0])
+        del Data["Missing"]
+        del Data["Data"]
+        del Data["Spectrum"]
+        
+        TimeShift = recording.adjusted_alignment
+        AnalysisStruct["Signal"].append({
+            "Type": "Signal",
+            "RecordingId": recording.uid,
+            "SignalSeries": Data,
+            "Alignment": TimeShift
+        })
+
     return AnalysisStruct
 
 def handleBurstActivityPreprocessing(recording, data, config, centerFreq=22):

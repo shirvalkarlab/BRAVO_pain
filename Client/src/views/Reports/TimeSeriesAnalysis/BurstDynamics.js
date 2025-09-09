@@ -66,9 +66,13 @@ function BurstDynamics({dataToRender, participant_uid, annotations, figureTitle}
       Channel: options.value,
       CenterFrequency: centerFreq,
     }).then((response) => {
+      if (response.data.length == 0) {
+        SessionController.displayError("Async Processing Has Started. Check Schedules for Update.", setAlert);
+        return;
+      }
+
       setRenderData((graphingSeries) => {
         graphingSeries = graphingSeries.filter((a) => a.axName != "Burst");
-        console.log(response.data);
         for (let n in response.data) {
           for (let i in response.data[n].Signal) {
             const timeArray = response.data[n].Signal[i].SignalSeries.BurstEnvelop.Wavelet.map((a,t) => new Date((response.data[n].Signal[i].SignalSeries.StartTime + t / response.data[n].Signal[i].SignalSeries.SamplingRate)*1000));

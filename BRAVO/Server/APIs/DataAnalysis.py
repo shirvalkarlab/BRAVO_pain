@@ -37,6 +37,7 @@ from django.conf import settings
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
+from modules.AsyncJobScheduler import ProcessingScheduler
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -683,23 +684,34 @@ class QueryBurstAnalysis(RestViews.APIView):
                 userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
 
             userConfig["APIAccess"] = hasattr(request.user, "api_access")
-
+            
             AnalysisResults = []
             BurstWaveform = []
             for recordingId in request.data["RecordingIds"]:
-                Analysis = DataAnalysis.processBurstAnalysis(request.data["ParticipantId"], recordingId, userConfig, centerFreq=request.data["CenterFrequency"])
-                
-                if not request.data["Channel"] == "RequestAllChannel":
-                    Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["Channel"])
-                Analysis = json_compliant_handler(Analysis)
-                Analysis["ProcessingConfiguration"] = userConfig
-                AnalysisResults.append(Analysis)
+                recording = models.Recording.find(uid=recordingId)
+                ProcessedData = models.Recording.find(original=recording, type="BurstActivityPreprocessing", metadata=userConfig)
+                if not ProcessedData:
+                    job = ProcessingScheduler.ScheduleSlurmJob(request.user, recordingId, "BurstAnalysis", {
+                        **userConfig,
+                        "ParticipantId": request.data["ParticipantId"],
+                    })
 
-                for i in range(len(Analysis["Signal"])):
-                    if Analysis["Signal"][i]["SignalSeries"]["ChannelNames"] == request.data["Channel"]:
-                        fs = Analysis["Signal"][i]["SignalSeries"]["SamplingRate"]
-                        BurstWaveform.extend(Analysis["Signal"][i]["SignalSeries"]["BurstEnvelop"]["Wavelet"])
+                else:
+                    Analysis = DataAnalysis.processBurstAnalysis(request.data["ParticipantId"], recordingId, userConfig, centerFreq=request.data["CenterFrequency"])
+                    if not request.data["Channel"] == "RequestAllChannel":
+                        Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["Channel"])
+                    Analysis = json_compliant_handler(Analysis)
+                    Analysis["ProcessingConfiguration"] = userConfig
+                    AnalysisResults.append(Analysis)
 
+                    for i in range(len(Analysis["Signal"])):
+                        if Analysis["Signal"][i]["SignalSeries"]["ChannelNames"] == request.data["Channel"]:
+                            fs = Analysis["Signal"][i]["SignalSeries"]["SamplingRate"]
+                            BurstWaveform.extend(Analysis["Signal"][i]["SignalSeries"]["BurstEnvelop"]["Wavelet"])
+
+            if len(AnalysisResults) < len(request.data["RecordingIds"]):
+                return Response(status=200, data=[])
+            
             Parameters = DataAnalysis.calculateBurstParameters(BurstWaveform, fs)
             for j in range(len(AnalysisResults)):
                 for i in range(len(AnalysisResults[j]["Signal"])):

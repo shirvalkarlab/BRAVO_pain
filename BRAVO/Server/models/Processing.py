@@ -30,6 +30,8 @@ from modules.Database import deleteSourceFile
 from modules.HelperFunctions import current_time, get_token, get_or_none, uuid4_hex
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
+BRAVO_Path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SLURM_JOB_PATH = os.path.join(BRAVO_Path, "modules", "AsyncJobScheduler")
 
 class AsyncJob(models.Model):
     uid = models.CharField(max_length=32, default=uuid4_hex, unique=True, primary_key=True)
@@ -64,9 +66,6 @@ class AsyncJob(models.Model):
     def purge(*args, **kwargs):
         return AsyncJob.objects.filter(**kwargs).delete()
     
-    def purge_cache():
-        return AsyncJob.objects.filter(type="CachedResult").delete()
-    
     def get_info(self):
         return {
             "Id": self.uid,
@@ -77,3 +76,8 @@ class AsyncJob(models.Model):
             "State": self.state,
             "Result": self.result_message
         }
+    
+@receiver(pre_delete, sender=AsyncJob)
+def on_asyncjob_delete(sender, instance, **kwargs):
+    print(SLURM_JOB_PATH)
+    get_or_none(os.remove)(os.path.join(SLURM_JOB_PATH, instance.uid + ".sh"))
