@@ -110,6 +110,10 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           }
         }
       }
+
+      if (availableChannels.active.length == 1) {
+        fig.fresh = true;
+      }
       fig.render();
     }
 
@@ -416,7 +420,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         </Grid>
       </Grid>
       <Grid item xs={12}>
-        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 400*availableChannels.active.length+100, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}>
+        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 400*availableChannels.active.length+100, width: "100%", visibility: availableChannels.active.length == 0 ? "hidden" : ""}}>
           <Menu
             open={contextMenu !== null}
             onClose={() => setContextMenu(null)}
