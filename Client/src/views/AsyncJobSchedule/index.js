@@ -45,22 +45,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const { language } = controller;
   const { study_uid } = useParams();
 
-  const [data, setData] = useState(false);
-  const [resultDialog, setResultDialog] = useState({show: false, participant_uid: "", recordings: []})
-
-  const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
-
-  const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false});
-  const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
-  const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
- 
-  const [annotationState, setAnnotationState] = useState({});
-  const [circadianData, setCircadianData] = useState({});
-  const [eventPSDData, setEventPSDData] = useState(false);
-  const [eventRelatedPower, setEventRelatedPower] = useState(false)
-  const [eventLockedPowerData, setEventLockedPowerData] = useState(false);
-  const [normalizeCircadianRhythm, setNormalizeCircadianRhythm] = useState(false);
-
+  const [data, setData] = useState([]);
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -68,7 +53,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
     
     setAlert(<LoadingProgress/>);
     SessionController.query("/api/queryAsyncJobQueue", {
-      RequestType: "GetStatus"
+      RequestType: "GetAllStatus"
     }).then((response) => {
       setData(response.data);
       setAlert(null);
@@ -77,9 +62,24 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
     });
   }, [study_uid]);
   
-  useEffect(() => {
-    
-  }, [data]);
+  const updateJobStatus = (job_id) => {
+    SessionController.query("/api/queryAsyncJobQueue", {
+      RequestType: "GetJobStatus",
+      JobId: job_id
+    }).then((response) => {
+      setData((prevData) => {
+        const newData = [...prevData];
+        for (let i in newData) {
+          if (newData[i].Id === job_id) {
+            newData[i] = response.data;
+          }
+        }
+        return newData;
+      });
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }
 
   return (
     <>
@@ -91,7 +91,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
               <Grid item xs={12}>
                 <Card sx={{width: "100%"}}>
                   <Grid container>
-                    {data ? (
+                    {data.length > 0 ? (
                       <>
                         <Grid item xs={12}>
                           <MDBox p={2} display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
@@ -99,9 +99,24 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               {"Asynchronous Job Scheduling List"}
                             </MDTypography>
                           </MDBox>
+                          <MDBox px={2} pb={2} display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
+                            <MDButton variant="gradient" color="info" onClick={() => {
+                              setAlert(<LoadingProgress/>);
+                              SessionController.query("/api/queryAsyncJobQueue", {
+                                RequestType: "ClearCompletedJobs"
+                              }).then((response) => {
+                                setData(response.data);
+                                setAlert(null);
+                              }).catch((error) => {
+                                SessionController.displayError(error, setAlert);
+                              });
+                            }}>
+                              {"Clear All Finished Jobs"}
+                            </MDButton>
+                          </MDBox>
                         </Grid>
                         <Grid item xs={12} lg={12}>
-                          <JobTable data={data}/>
+                          <JobTable data={data} updateJobStatus={updateJobStatus}/>
                         </Grid>
                       </>
                     ) : (

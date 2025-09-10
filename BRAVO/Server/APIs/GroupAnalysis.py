@@ -65,7 +65,7 @@ class QueryGroupAnalysis(RestViews.APIView):
                 ProcessingScheduler.ScheduleSlurmJob(requester=request.user, 
                                                      recording_uid="GroupAnalysis", 
                                                      script_name="ExtractSpectralFeaturesDuringStimulation", 
-                                                     config=[""])
+                                                     config=[""], refresh=True)
                 return Response(status=200)
             
             elif request.data["RequestType"] == "UpdateExpertLabel":
@@ -117,7 +117,10 @@ class QueryGroupAnalysis(RestViews.APIView):
                 return Response(status=200, data=result)
 
             elif request.data["RequestType"] == "RequestRefresh":
-                result = ExtractSpectralFeaturesDuringSurvey.CommandLineAsyncUpdate()
+                ProcessingScheduler.ScheduleSlurmJob(requester=request.user, 
+                                                     recording_uid="GroupAnalysis", 
+                                                     script_name="ExtractSpectralFeaturesDuringSurvey", 
+                                                     config=[""], refresh=True)
                 return Response(status=200)
             
             elif request.data["RequestType"] == "RequestPSD":

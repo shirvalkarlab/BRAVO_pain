@@ -6,20 +6,27 @@ from BRAVO import wsgi
 from Server import models
 import subprocess
 import psutil
+import time
 
 USE_SLURM = os.environ.get('USE_SLURM', 'FALSE') == 'TRUE'
 SLURM_JOB_PATH = os.path.join(BRAVO_Path, "modules", "AsyncJobScheduler")
 
 AsyncJobScripts = {
-    "BurstAnalysis": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py BurstAnalysis",
-    "ExtractSpectralFeaturesDuringStimulation": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py ExtractSpectralFeaturesDuringStimulation"
+    "BurstAnalysis": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py BurstAnalysis ${JOB_ARGS}",
+    "ExtractSpectralFeaturesDuringStimulation": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py ExtractSpectralFeaturesDuringStimulation",
+    "ExtractSpectralFeaturesDuringSurvey": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py ExtractSpectralFeaturesDuringSurvey"
 }
 
-def ScheduleSlurmJob(requester, recording_uid, script_name, config):
+def ScheduleSlurmJob(requester, recording_uid, script_name, config, refresh=False):
     existing_job = models.AsyncJob.find(recording_uid=recording_uid, requester=requester, metadata__script_name=script_name, metadata__config=config)
     if existing_job:
-        return existing_job
-    
+        if refresh:
+            state = CheckJobStatus(existing_job)
+            if not state["State"] == "Completed":
+                return existing_job
+        else:
+            return existing_job
+
     job = models.AsyncJob.create(
         name="BRAVO_Processing_Schedule",
         type="SLURM" if USE_SLURM else "LOCAL",
@@ -32,7 +39,6 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config):
         }
     )
 
-    
     with open(os.path.join(SLURM_JOB_PATH, "sjob.sh"), 'r') as f:
         sbatch_script = f.read()
     
@@ -46,26 +52,46 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config):
         f.write(sbatch_script)
 
     if USE_SLURM:
-        pid = subprocess.call(["sbatch", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")])
+        result = subprocess.run(["sbatch", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")], capture_output=True, text=True)
+        job.metadata["slurm_job_id"] = result.stdout.strip().split(" ")[-1]
+        job.save()
     else:
         process = subprocess.Popen(["bash", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")])
         job.metadata["pid"] = process.pid
-        job.save()
-    
+        while True:
+            try:
+                ps_proc = psutil.Process(job.metadata["pid"])
+                job.state = "Running"
+                job.save() 
+                break
+            except:
+                job.state = "Pending"
+                job.save()
+            time.sleep(1)
+            
     return job
 
 def CheckJobStatus(job):
     if job.type == "LOCAL":
         try:
             ps_proc = psutil.Process(job.metadata["pid"])
-            if not job.state == "Running":
-                job.state = "Running"
-                job.save() 
+            job.state = "Running"
+            job.save() 
 
         except:
-            if not job.state == "Completed":
                 job.state = "Completed"
-                job.save() 
+                job.save()
+
+    elif job.type == "SLURM":
+        format_str = "%.18i|%.9P|%.20j|%.8u|%.2t|%.10M|%.6D|%.30R"
+        result = subprocess.run(["squeue", "-j", job.metadata["slurm_job_id"], "--noheader", "--format", format_str], capture_output=True, text=True)
+        if len(result.stdout.strip()) == 0:
+            job.state = "Completed"
+            job.save()
+        else:
+            result = result.stdout.strip().split("|")
+            job.state = result[4].strip()
+            job.save()
 
     return job.get_info()
 

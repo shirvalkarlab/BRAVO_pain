@@ -11,4 +11,4 @@
 source ${PYTHON_ENV}
 
 # Run your Python script
-python ${SLURM_JOB_SCRIPT} ${JOB_ARGS}
+exec python ${SLURM_JOB_SCRIPT}

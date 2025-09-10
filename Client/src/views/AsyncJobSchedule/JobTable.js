@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import React, { useMemo, Fragment } from "react"
+import React, { useMemo, useState, useEffect } from "react"
 import { useHistory } from "react-router-dom";
 
 import {
@@ -39,18 +39,13 @@ import {
 } from "@mui/material"
 
 import { SessionController } from "database/session-control.js";
-import { formatSegmentString, matchArray } from "database/helper-function";
 import { usePlatformContext, setContextState } from "context.js";
-import { dictionary, dictionaryLookup } from "assets/translation.js";
 
-import FormField from "components/MDInput/FormField.js";
 import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDInput from "components/MDInput";
-import MDBadge from "components/MDBadge";
 
-function JobTable({data}) {
+function JobTable({data, updateJobStatus}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -80,11 +75,13 @@ function JobTable({data}) {
                   {"Status"}
                 </MDTypography>
               </TableCell>
+              <TableCell variant="head" style={{width: "10%", minWidth: 100, verticalAlign: "bottom", paddingBottom: 0, paddingTop: 0}}>
+                
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {data.sort((a,b) => b.Date-a.Date).map((job) => {
-              
               return (
                 <TableRow key={job.Id}>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}} >
@@ -113,6 +110,15 @@ function JobTable({data}) {
                       </MDTypography>
                     </MDBox>
                   </TableCell>
+                  <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                    <MDBox style={{display: "flex", flexDirection: "column"}}>
+                      <MDButton variant="outlined" color="primary" size="small" onClick={() => {
+                        updateJobStatus(job.Id);
+                      }}>
+                        {"Refresh State"}
+                      </MDButton>
+                    </MDBox>
+                  </TableCell>
                 </TableRow>
                 )
             })}
@@ -120,7 +126,7 @@ function JobTable({data}) {
         </Table>
       </MDBox>
     </>
-  ), [data, data]);
+  ), [data]);
 }
 
 export default JobTable;

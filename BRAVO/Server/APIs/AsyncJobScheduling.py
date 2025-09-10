@@ -53,13 +53,29 @@ class QueryAsyncJobQueue(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        if request.data["RequestType"] == "GetStatus":
+        if request.data["RequestType"] == "GetAllStatus":
             AllJobs = models.AsyncJob.find_all(requester=request.user)
-
             Results = []
             for job in AllJobs:
                 ret = ProcessingScheduler.CheckJobStatus(job)
                 Results.append(ret)
             return Response(status=200, data=Results)
+
+        if request.data["RequestType"] == "ClearCompletedJobs":
+            models.AsyncJob.objects.filter(state="Completed", requester=request.user).delete()
+            AllJobs = models.AsyncJob.find_all(requester=request.user)
+            Results = []
+            for job in AllJobs:
+                ret = ProcessingScheduler.CheckJobStatus(job)
+                Results.append(ret)
+            return Response(status=200, data=Results)
+
+        elif request.data["RequestType"] == "GetJobStatus":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["JobId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+            
+            job = models.AsyncJob.find(uid=request.data["JobId"], requester=request.user)
+            ret = ProcessingScheduler.CheckJobStatus(job)
+            return Response(status=200, data=ret)
 
         return Response(status=400, data={"message": "Malformed Input"})
