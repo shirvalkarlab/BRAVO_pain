@@ -52,7 +52,7 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config, refresh=Fals
         f.write(sbatch_script)
 
     if USE_SLURM:
-        result = subprocess.run(["sbatch", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")], capture_output=True, text=True)
+        result = subprocess.run(["sbatch", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")], capture_output=True, text=True, shell=True)
         job.metadata["slurm_job_id"] = result.stdout.strip().split(" ")[-1]
         job.save()
     else:
@@ -84,7 +84,7 @@ def CheckJobStatus(job):
 
     elif job.type == "SLURM":
         format_str = "%.18i|%.9P|%.20j|%.8u|%.2t|%.10M|%.6D|%.30R"
-        result = subprocess.run(["squeue", "-j", job.metadata["slurm_job_id"], "--noheader", "--format", format_str], capture_output=True, text=True)
+        result = subprocess.run(["squeue", "-j", job.metadata["slurm_job_id"], "--noheader", "--format", format_str], capture_output=True, text=True, shell=True)
         if len(result.stdout.strip()) == 0:
             job.state = "Completed"
             job.save()
