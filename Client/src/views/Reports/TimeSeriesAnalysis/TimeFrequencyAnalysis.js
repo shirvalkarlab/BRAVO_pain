@@ -100,6 +100,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       for (let trial in dataToRender.Signal) {
         if (dataToRender.Signal[trial].SignalSeries.ChannelNames == activeChannels[i]) {
           var timeArray = Array(dataToRender.Signal[trial].SignalSeries.Data.length).fill(0).map((value, index) => new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000 + dataToRender.Signal[trial].Alignment*1000 + (1000/dataToRender.Signal[trial].SignalSeries.SamplingRate)*index));
+          dataToRender.Signal[trial].SignalSeries.Data = dataToRender.Signal[trial].SignalSeries.Data.map((a) => a === null ? 0 : a);
           graphSeries.push({
             type: "line",
             x: timeArray, y: dataToRender.Signal[trial].SignalSeries.Data,
@@ -117,8 +118,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           
           var timeArray = Array(dataToRender.Signal[trial].SignalSeries.Spectrum.Time.length).fill(0).map((value, index) => new Date(dataToRender.Signal[trial].SignalSeries.StartTime*1000 + dataToRender.Signal[trial].SignalSeries.Spectrum.Time[index]*1000 + dataToRender.Signal[trial].Alignment*1000));
 
-          const meanPower = Math.quantileSeq(dataToRender.Signal[trial].SignalSeries.Spectrum.Power, [0.5, 0.5]).map((a) => 10*Math.log10(a));
-          //const meanPower = [0,40];
+          //const meanPower = Math.quantileSeq(dataToRender.Signal[trial].SignalSeries.Spectrum.Power, [0.5, 0.5]).map((a) => a === 0 ? -99 : 10*Math.log10(a));
           graphSeries.push({
             type: "surf",
             x: timeArray, y: dataToRender.Signal[trial].SignalSeries.Spectrum.Frequency, z: dataToRender.Signal[trial].SignalSeries.Spectrum.Power.map((a) => {
@@ -153,7 +153,6 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
     }
 
     if (dataToRender.Therapy) {
-      
       const uniqueStimChannels = [];
       for (let trial in dataToRender.Therapy) {
         for (let chan in dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview) {

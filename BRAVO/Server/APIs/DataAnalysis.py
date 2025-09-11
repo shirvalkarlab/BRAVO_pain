@@ -818,7 +818,7 @@ class QueryChronicTimeline(RestViews.APIView):
             #    return Response(status=200, data=result)
             
             Analysis = {}
-            Analysis["Timelines"] = DataAnalysis.queryChronicTimeline(request.data["ParticipantId"], userConfig)
+            Analysis["Timelines"], Analysis["Annotations"] = DataAnalysis.queryChronicTimeline(request.data["ParticipantId"], userConfig)
             Analysis["ProcessingConfiguration"] = userConfig
             Analysis = json_compliant_handler(Analysis)
             Database.saveCachedResult(Analysis, "/queryChronicTimeline", request.data["ParticipantId"], {**userConfig, **request.data})

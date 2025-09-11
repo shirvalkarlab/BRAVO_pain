@@ -74,7 +74,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
       } else {
         fig.subplots(1, 1, {sharey: false, sharex: false});
         fig.setScaleType("log", "y");
-        fig.setTickValue([0.001, 0.01, 0.1, 1, 10, 100, 1000], "y");
+        fig.setTickValue([0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000], "y");
         fig.setYlim([-3, 2]);
         fig.setXlim([0, 100]);
         fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15});
@@ -426,8 +426,8 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
         let visibility = activeChannels.includes(a) && (figGroup[a] && figGroup[a].traces.length > 0);
         let otherIndex = thatIndex === 0 ? 1 : 0;
         return [
-          <Grid key={figureTitle + "_SwitchControl"} item xs={12}>
-            <MDBox px={3}>
+          <Grid key={figureTitle + "_SwitchControl"} item xs={12} >
+            <MDBox px={3} style={{display: visibility ? "" : "none"}}>
               <FormControlLabel control={<Switch value={therapyLabel[a] != a} onChange={(event, value) => {
                 if (dataToRender.AllChannels.length == 2) {
                   setTherapyLabel({...therapyLabel, [a]: therapyLabel[a] === dataToRender.AllChannels[otherIndex] ? dataToRender.AllChannels[thatIndex] : dataToRender.AllChannels[otherIndex]})

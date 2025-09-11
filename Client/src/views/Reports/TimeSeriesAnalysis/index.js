@@ -127,6 +127,12 @@ function TimeSeriesAnalysis() {
           allResponses.push(subResponse.data);
         }
 
+        for (let l in allResponses) {
+          for (let trial in allResponses[l].Signal) {
+            allResponses[l].Signal[trial].SignalSeries.Spectrum.Power = allResponses[l].Signal[trial].SignalSeries.Spectrum.Power.map((a) => a.map((b) => b === null ? -100 : b));
+          }
+        }
+
         if (!channel) {
           setAnnotations(allResponses[0].Annotations);
           setData({...allResponses[0], CachedChannel: allResponses[0].ActiveChannel, Analysis: analysisList});
@@ -137,6 +143,9 @@ function TimeSeriesAnalysis() {
             data.ActiveChannel = channel;
             for (let l in allResponses) {
               data.Signal.push(...allResponses[l].Signal);
+              if (allResponses[l].Therapy) {
+                data.Therapy.push(...allResponses[l].Therapy);
+              }
             }
             setChannel((oldChannel) => {
               oldChannel.active = channel;
@@ -169,9 +178,13 @@ function TimeSeriesAnalysis() {
       RequestType: "RequestData",
       ParticipantId: participant_uid,
       AnalysisId: analysis.Id,
-      TherapyId: null,
+      TherapyId: analysis.Therapy ? analysis.Therapy[0].Id : null,
       ActiveChannels: data.ActiveChannel ? data.ActiveChannel : []
     });
+
+    for (let trial in response.data.Signal) {
+      response.data.Signal[trial].SignalSeries.Spectrum.Power = response.data.Signal[trial].SignalSeries.Spectrum.Power.map((a) => a.map((b) => b === null ? -100 : b));
+    }
 
     setAlert(<LoadingProgress />);
     setData((data) => {
@@ -187,7 +200,9 @@ function TimeSeriesAnalysis() {
           }
         }
         data.Signal.push(...response.data.Signal);
-        
+        if (response.data.Therapy) {
+          data.Therapy.push(...response.data.Therapy);
+        }
         if (!data.Analysis.includes(analysis)) {
           data.Analysis.push(analysis);
         }
