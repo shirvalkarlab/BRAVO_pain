@@ -67,7 +67,6 @@ function SpectralFeatureViewer({figureTitle, participant_uid, recordings, onClos
       ParticipantId: participant_uid,
       Contact: recording
     }).then((response) => {
-      console.log(response.data)
       setCacheData([response.data]);
       setAlert(null);
     }).catch((error) => {

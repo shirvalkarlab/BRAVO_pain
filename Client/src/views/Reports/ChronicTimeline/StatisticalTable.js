@@ -67,8 +67,7 @@ export default function StatisticalTable({data, availableChannels, annotations})
   }
 
   useEffect(() => {
-    console.log(availableChannels);
-    console.log(annotations)
+    
   }, [annotations, availableChannels]);
 
   return (

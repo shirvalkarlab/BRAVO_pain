@@ -235,7 +235,6 @@ function TimeFrequencyFigure({dataToRender, analysisId, resultId, figureTitle}) 
                 placeholder={"Lower Limit"}
                 value={coloraxis.limit_temp[0]}
                 onChange={(event) => {
-                  console.log(event.target.value)
                   setColorAxis({...coloraxis, limit_temp: [event.target.value, coloraxis.limit_temp[1]]})
                 }}
               />

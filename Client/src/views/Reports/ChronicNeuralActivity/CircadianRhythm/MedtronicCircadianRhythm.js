@@ -190,7 +190,6 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
 
     graphSeries[2].x = yData;
     if (graphSeries[2].x.length > 0) {
-      console.log((math.quantileSeq(yData,0.95) - math.quantileSeq(yData,0.05)))
       graphSeries[2].options.xbins.size = (math.quantileSeq(yData,0.95) - math.quantileSeq(yData,0.05)) > 2000 ? 20 : 5
     }
     setRenderData(graphSeries);

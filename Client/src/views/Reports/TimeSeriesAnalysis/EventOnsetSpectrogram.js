@@ -26,7 +26,7 @@ import { formatSegmentString, matchArray } from "database/helper-function";
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 
-function EventPSDs({dataToRender, annotations, figureTitle}) {
+function EventOnsetSpectrogram({dataToRender, annotations, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   
@@ -247,4 +247,4 @@ function EventPSDs({dataToRender, annotations, figureTitle}) {
   ), [refresh]);
 }
 
-export default EventPSDs;
+export default EventOnsetSpectrogram;
