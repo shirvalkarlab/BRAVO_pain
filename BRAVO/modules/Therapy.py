@@ -59,10 +59,11 @@ def queryTherapyHistory(Participant):
     for key in DBSDeviceDict.keys():
         LeadCount = 0
         for i in range(len(DBSDeviceDict[key])):
-            DeviceInfoTemp = DBSDeviceDict[key][0].get_info()
+            DeviceInfoTemp = DBSDeviceDict[key][i].get_info()
             if len(DeviceInfoTemp["Electrodes"]) > LeadCount:
                 LeadCount = len(DeviceInfoTemp["Electrodes"])
-                DeviceInfo = DeviceInfoTemp
+                DeviceInfo = {**DeviceInfoTemp}
+        
         TherapyDevices.append(DeviceInfo)
 
         TherapyHistory = {
