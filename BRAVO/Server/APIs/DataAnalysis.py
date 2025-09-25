@@ -950,6 +950,7 @@ class QueryChronicNeuralActivity(RestViews.APIView):
                 return Response(status=200, data=result)
 
             Analysis = DataAnalysis.queryChronicNeuralActivity(request.data["ParticipantId"], userConfig)
+            Analysis = json_compliant_handler(Analysis)
 
             Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryChronicNeuralActivity", request.data["ParticipantId"], {**userConfig, **request.data})
