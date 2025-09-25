@@ -89,6 +89,16 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
 
   }, [fig, availableChannels]);
 
+  const getMax = (list) => {
+    let max = -Infinity;
+    for (let i in list) {
+      if (list[i] && list[i] > max) max = list[i];
+    }
+
+    if (max === -Infinity) return 0;
+    return max;
+  }
+
   const getAdaptiveParameters = (therapyNote, channelName) => {
     if (!therapyNote) return { "Mode": "Unknown" };
 
@@ -155,10 +165,11 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
               axName: channelName
             });
           } else {
+
             lineSeries.push({
               type: "lineseries",
               x: timeArray, y: data[i]["Data"][j],
-              ylim: [0,Math.max(data[i]["Data"][j])],
+              ylim: [0,getMax(data[i]["Data"][j])],
               options: {
                 id: channelName,
                 linewidth: 1,
@@ -272,8 +283,8 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
       const ax = fig.getAxes(renderData[i].axName);
       if (renderData[i].type == "lineseries") {
         if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
-        if (Math.max(renderData[i].y) > yLim[renderData[i].axName][1]) {
-          yLim[renderData[i].axName][1] = Math.max(renderData[i].y)*1.1;
+        if (getMax(renderData[i].y) > yLim[renderData[i].axName][1]) {
+          yLim[renderData[i].axName][1] = getMax(renderData[i].y)*1.1;
           fig.setYlim(yLim[renderData[i].axName], ax);
         };
       } else if (renderData[i].type === "shading") {
