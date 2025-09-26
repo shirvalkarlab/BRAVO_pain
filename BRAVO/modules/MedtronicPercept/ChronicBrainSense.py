@@ -211,7 +211,9 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                                         TherapyNote["StimulationSettings"][leadId]["Contact"] = "{" + "|".join([str(f["Value"]) for f in TherapyNote["StimulationSettings"][leadId]["Contact"]]) + "}"
                                     if TherapyNote["StimulationSettings"][leadId]["ReturnContact"] == ["CAN"]:
                                         TherapyString = str(TherapyNote["StimulationSettings"][leadId]["Frequency"]) + "Hz " + str(TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]) + TherapyNote["StimulationSettings"][leadId]["PulsewidthUnit"] + " [" + "|".join(TherapyNote["StimulationSettings"][leadId]["Contact"]) + "]"
-
+                                    else:
+                                        TherapyString = str(TherapyNote["StimulationSettings"][leadId]["Frequency"]) + "Hz " + str(TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]) + TherapyNote["StimulationSettings"][leadId]["PulsewidthUnit"] + " [" + "Unknown" + "]"
+                                    
                                     Description["Stimulation"] = TherapyString
                                     if "RecordingConfiguration" in TherapyNote["AdaptiveSettings"][leadId].keys():
                                         if "SensingSetup" in TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"].keys():
