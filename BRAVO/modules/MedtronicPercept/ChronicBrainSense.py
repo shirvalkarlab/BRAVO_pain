@@ -159,8 +159,31 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             continue
                         
                         for leadId in range(len(TherapyNote["StimulationSettings"])):
-                            TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Pre"] if len(TherapyNote["StimulationSettings"][leadId]["Pre"].keys()) > 0 else TherapyNote["StimulationSettings"][leadId]["Summary"]
-                            TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Pre"] if len(TherapyNote["AdaptiveSettings"][leadId]["Pre"].keys()) > 0 else TherapyNote["AdaptiveSettings"][leadId]["Summary"]
+                            if type(TherapyNote["StimulationSettings"][leadId]["Pre"]) == list:
+                                if len(TherapyNote["StimulationSettings"][leadId]["Pre"]) > 0:
+                                    TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Pre"][0]
+                            else:
+                                TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Pre"]
+                            
+                            if "Pre" in TherapyNote["StimulationSettings"][leadId].keys():
+                                if type(TherapyNote["StimulationSettings"][leadId]["Summary"]) == list:
+                                    if len(TherapyNote["StimulationSettings"][leadId]["Summary"]) > 0:
+                                        TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Summary"][0]
+                                else:
+                                    TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Summary"]
+
+                            if type(TherapyNote["AdaptiveSettings"][leadId]["Pre"]) == list:
+                                if len(TherapyNote["AdaptiveSettings"][leadId]["Pre"]) > 0:
+                                    TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Pre"][0]
+                            else:
+                                TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Pre"]
+
+                            if "Pre" in TherapyNote["AdaptiveSettings"][leadId].keys():
+                                if type(TherapyNote["AdaptiveSettings"][leadId]["Summary"]) == list:
+                                    if len(TherapyNote["AdaptiveSettings"][leadId]["Summary"]) > 0:
+                                        TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Summary"][0]
+                                else:
+                                    TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Summary"]
 
                         ChannelNames = list(TimelineDataframe.columns)
                         ChannelNames.remove("Time")

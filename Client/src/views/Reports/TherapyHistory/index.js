@@ -98,6 +98,8 @@ function TherapyHistory() {
     SessionController.query("/api/queryTherapyHistory", {
       ParticipantId: participant_uid
     }).then((response) => {
+      console.log(response.data)
+      
       let availableDevices = [];
       for (let i in response.data.TherapyDevices) {
         if (!availableDevices.includes(response.data.TherapyDevices[i].Name)) {
@@ -151,7 +153,6 @@ function TherapyHistory() {
     }
     UniqueDateStrings = UniqueDateStrings.sort((a,b) => b.value - a.value).map((a) => a.label)
     
-
     if (UniqueDateStrings.length > 0) {
       setTherapyConfigurations(TherapyConfigurations)
       setTherapyDate({
