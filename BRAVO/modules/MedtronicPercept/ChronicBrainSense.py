@@ -164,19 +164,37 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
                         ChannelNames = list(TimelineDataframe.columns)
                         ChannelNames.remove("Time")
+                        
+                        TherapyList = []
+                        for k in range(len(ChannelNames)):
+                            for leadId in range(len(TherapyNote["StimulationSettings"])):
+                                if ChannelNames[k].startswith("LeftHemisphere") and TherapyNote["StimulationSettings"][leadId]["Electrode"]["Target"].startswith("Left"):
+                                    TherapyList.append({
+                                        "Stimulation": TherapyNote["StimulationSettings"][leadId],
+                                        "Adaptive": TherapyNote["AdaptiveSettings"][leadId]
+                                    })
+                                elif ChannelNames[k].startswith("RightHemisphere") and TherapyNote["StimulationSettings"][leadId]["Electrode"]["Target"].startswith("Right"):
+                                    TherapyList.append({
+                                        "Stimulation": TherapyNote["StimulationSettings"][leadId],
+                                        "Adaptive": TherapyNote["AdaptiveSettings"][leadId]
+                                    })
+                            if len(TherapyList) != k+1:
+                                TherapyList.append({})
+                                
                         Activity = {
                             "Device": DBSDevice["Id"],
                             "TherapyWindow": [float(Timestamps[j-1]), float(Timestamps[j])],
                             "Description": [],
-                            "TherapyNote": TherapyNote,
-                            "TherapyString": [],
-                            "RecordingString": [],
+                            "TherapyNote": TherapyList,
+                            "TherapyString": [extractTherapyString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
+                            "RecordingString": [extractSensingString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
                             "Time": DataSelected["Time"].tolist(),
                             "ChannelNames": copy.deepcopy(ChannelNames),
                             "ChannelNamesFix": copy.deepcopy(ChannelNames),
                             "ChannelUnits": ["" if x.endswith("LFP") else "mA" for x in ChannelNames],
                             "Data": DataSelected[ChannelNames].to_numpy().T
                         }
+
                         for k in range(len(Activity["ChannelNames"])):
                             mean = np.nanmean(Activity["Data"][k,:])
                             std = np.nanstd(Activity["Data"][k,:])
@@ -205,32 +223,15 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
                         for k in range(len(Activity["ChannelNames"])):
                             Description = {}
-                            for leadId in range(len(TherapyNote["StimulationSettings"])):
-                                if "Electrode" in TherapyNote["StimulationSettings"][leadId].keys() and TherapyNote["StimulationSettings"][leadId]["Electrode"]["Target"].startswith(Activity["ChannelNames"][k].split("Hemisphere")[0]):
-                                    if type(TherapyNote["StimulationSettings"][leadId]["Frequency"]) == list:
-                                        TherapyNote["StimulationSettings"][leadId]["Frequency"] = "{" + "|".join([f["Value"] for f in TherapyNote["StimulationSettings"][leadId]["Frequency"]]) + "}"
-                                    if type(TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]) == list:
-                                        TherapyNote["StimulationSettings"][leadId]["Pulsewidth"] = "{" + "|".join([str(int(f["Value"])) for f in TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]]) + "}"
-                                    if type(TherapyNote["StimulationSettings"][leadId]["Contact"][0]) == dict:
-                                        TherapyNote["StimulationSettings"][leadId]["Contact"] = "{" + "|".join([str(f["Value"]) for f in TherapyNote["StimulationSettings"][leadId]["Contact"]]) + "}"
-                                    if TherapyNote["StimulationSettings"][leadId]["ReturnContact"] == ["CAN"]:
-                                        TherapyString = str(TherapyNote["StimulationSettings"][leadId]["Frequency"]) + "Hz " + str(TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]) + TherapyNote["StimulationSettings"][leadId]["PulsewidthUnit"] + " [" + "|".join(TherapyNote["StimulationSettings"][leadId]["Contact"]) + "]"
-                                    else:
-                                        TherapyString = str(TherapyNote["StimulationSettings"][leadId]["Frequency"]) + "Hz " + str(TherapyNote["StimulationSettings"][leadId]["Pulsewidth"]) + TherapyNote["StimulationSettings"][leadId]["PulsewidthUnit"] + " [" + "Unknown" + "]"
-                                    
-                                    Description["Stimulation"] = TherapyString
-                                    if "RecordingConfiguration" in TherapyNote["AdaptiveSettings"][leadId].keys():
-                                        if "SensingSetup" in TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"].keys():
-                                            if "FrequencyInHertz" in TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
-                                                if type(TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) == list:
-                                                    Description["Bypass"] = False
-                                                    Description["SensingFrequency"] = "{" + "|".join([str(f) + " Hz" for f in TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]]) + "}"
-                                                else:
-                                                    Description["Bypass"] = False
-                                                    Description["SensingFrequency"] = str(TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
-                                                    if "Bypass" in TherapyNote["AdaptiveSettings"][leadId]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
-                                                        Description["Bypass"] = True
-                                        
+                            Description["Stimulation"] = Activity["TherapyString"][k]
+                            if "RecordingConfiguration" in TherapyList[k]["Adaptive"].keys():
+                                if "SensingSetup" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"].keys():
+                                    if "FrequencyInHertz" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
+                                        Description["Bypass"] = False
+                                        Description["SensingFrequency"] = str(TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
+                                        if "Bypass" in TherapyList[k]["Adaptive"]["StimulationConfiguration"]["Config"].keys():
+                                            Description["Bypass"] = True
+                                
                             Activity["Description"].append(Description)
 
                         ChronicNeuralActivity.append(Activity)

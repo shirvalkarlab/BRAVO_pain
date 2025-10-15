@@ -321,13 +321,21 @@ def createTherapyTimeline(TherapyHistory):
                         continue
 
                     ElectrodeSetting["Pre"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Pre"] = ElectrodeSetting["Pre"][0] if len(ElectrodeSetting["Pre"]) > 0 else {}
+                    ElectrodeSetting["Pre"] = [ElectrodeSetting["Pre"][j] for j in range(len(ElectrodeSetting["Pre"])) if ElectrodeSetting["Pre"][j]["Date"] == ElectrodeSetting["Pre"][0]["Date"]]
+                    if len(ElectrodeSetting["Pre"]) == 1:
+                        ElectrodeSetting["Pre"] = ElectrodeSetting["Pre"][0]
+                    #ElectrodeSetting["Pre"] = ElectrodeSetting["Pre"][0] if len(ElectrodeSetting["Pre"]) > 0 else {}
                     ElectrodeSetting["Post"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Post-visit Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Post"] = ElectrodeSetting["Post"][-1] if len(ElectrodeSetting["Post"]) > 0 else {}
+                    ElectrodeSetting["Post"] = [ElectrodeSetting["Post"][j] for j in range(len(ElectrodeSetting["Post"])) if ElectrodeSetting["Post"][j]["Date"] == ElectrodeSetting["Post"][0]["Date"]]
+                    if len(ElectrodeSetting["Post"]) == 1:
+                        ElectrodeSetting["Post"] = ElectrodeSetting["Post"][0]
+                    #ElectrodeSetting["Post"] = ElectrodeSetting["Post"][-1] if len(ElectrodeSetting["Post"]) > 0 else {}
                     ElectrodeSetting["Summary"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Summary"] = ElectrodeSetting["Summary"][0] if len(ElectrodeSetting["Summary"]) > 0 else {}
+                    ElectrodeSetting["Summary"] = [ElectrodeSetting["Summary"][j] for j in range(len(ElectrodeSetting["Summary"])) if ElectrodeSetting["Summary"][j]["Date"] == ElectrodeSetting["Summary"][0]["Date"]]
+                    if len(ElectrodeSetting["Summary"]) == 1:
+                        ElectrodeSetting["Summary"] = ElectrodeSetting["Summary"][0]
+                    #ElectrodeSetting["Summary"] = ElectrodeSetting["Summary"][0] if len(ElectrodeSetting["Summary"]) > 0 else {}
                     #ElectrodeSetting["Summary"] = CompareAdaptiveDictionaries([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], 
-                    #                                                          [KnownSettings[i]["TherapyType"] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]])
                     DefinedTherapy["StimulationSettings"].append(ElectrodeSetting)
 
                     AdaptiveSetting = {}
@@ -342,11 +350,17 @@ def createTherapyTimeline(TherapyHistory):
                                 KnownSettings.append({**{"TherapyType": therapy["Type"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
 
                     AdaptiveSetting["Pre"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Pre"] = AdaptiveSetting["Pre"][0] if len(AdaptiveSetting["Pre"]) > 0 else {}
+                    AdaptiveSetting["Pre"] = [AdaptiveSetting["Pre"][j] for j in range(len(AdaptiveSetting["Pre"])) if AdaptiveSetting["Pre"][j]["Date"] == AdaptiveSetting["Pre"][0]["Date"]]
+                    if len(AdaptiveSetting["Pre"]) == 1:
+                        AdaptiveSetting["Pre"] = AdaptiveSetting["Pre"][0]
                     AdaptiveSetting["Post"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Post-visit Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Post"] = AdaptiveSetting["Post"][-1] if len(AdaptiveSetting["Post"]) > 0 else {}
+                    AdaptiveSetting["Post"] = [AdaptiveSetting["Post"][j] for j in range(len(AdaptiveSetting["Post"])) if AdaptiveSetting["Post"][j]["Date"] == AdaptiveSetting["Post"][0]["Date"]]
+                    if len(AdaptiveSetting["Post"]) == 1:
+                        AdaptiveSetting["Post"] = AdaptiveSetting["Post"][0]
                     AdaptiveSetting["Summary"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Summary"] = AdaptiveSetting["Summary"][0] if len(AdaptiveSetting["Summary"]) > 0 else {}
+                    AdaptiveSetting["Summary"] = [AdaptiveSetting["Summary"][j] for j in range(len(AdaptiveSetting["Summary"])) if AdaptiveSetting["Summary"][j]["Date"] == AdaptiveSetting["Summary"][0]["Date"]]
+                    if len(AdaptiveSetting["Summary"]) == 1:
+                        AdaptiveSetting["Summary"] = AdaptiveSetting["Summary"][0]
 
                     #AdaptiveSetting["Summary"] = CompareAdaptiveDictionaries([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], 
                     #                                                         [KnownSettings[i]["TherapyType"] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]])
