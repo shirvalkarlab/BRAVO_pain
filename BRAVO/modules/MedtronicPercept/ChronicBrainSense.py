@@ -247,14 +247,15 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                         for k in range(len(Activity["ChannelNames"])):
                             Description = {}
                             Description["Stimulation"] = Activity["TherapyString"][k]
-                            if "RecordingConfiguration" in TherapyList[k]["Adaptive"].keys():
-                                if "SensingSetup" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"].keys():
-                                    if "FrequencyInHertz" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
-                                        Description["Bypass"] = False
-                                        Description["SensingFrequency"] = str(TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
-                                        if "Bypass" in TherapyList[k]["Adaptive"]["StimulationConfiguration"]["Config"].keys():
-                                            Description["Bypass"] = True
-                                
+                            if "Adaptive" in TherapyList[k].keys():
+                                if "RecordingConfiguration" in TherapyList[k]["Adaptive"].keys():
+                                    if "SensingSetup" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"].keys():
+                                        if "FrequencyInHertz" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
+                                            Description["Bypass"] = False
+                                            Description["SensingFrequency"] = str(TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
+                                            if "Bypass" in TherapyList[k]["Adaptive"]["StimulationConfiguration"]["Config"].keys():
+                                                Description["Bypass"] = True
+
                             Activity["Description"].append(Description)
 
                         ChronicNeuralActivity.append(Activity)
