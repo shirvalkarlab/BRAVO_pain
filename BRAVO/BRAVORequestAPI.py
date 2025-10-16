@@ -228,11 +228,27 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
-    def QueryTimeSeriesAnalysis(self, participant_uid, recording_uid=None, config=None ):
+    def QueryNeuralActivitySnapshot(self, participant_uid, config=None ):
+        form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        if config:
+            form["ProcessingConfiguration"] = config
+            
+        response = self.query("/api/queryNeuralActivitySnapshot", data=form)
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QueryTimeSeriesAnalysis(self, participant_uid, recording_uid=None, therapy_uid=None, config=None ):
         form = {"ParticipantId": participant_uid, "RequestType": "Overview"}
         if recording_uid:
             form["RequestType"] = "RequestData"
             form["AnalysisId"] = recording_uid
+            form["TherapyId"] = therapy_uid
             form["ActiveChannels"] = "RequestAllChannel"
 
         if config:
