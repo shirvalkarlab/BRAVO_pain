@@ -98,15 +98,12 @@ function TherapyHistory() {
     SessionController.query("/api/queryTherapyHistory", {
       ParticipantId: participant_uid
     }).then((response) => {
-      console.log(response.data)
-      
       let availableDevices = [];
       for (let i in response.data.TherapyDevices) {
         if (!availableDevices.includes(response.data.TherapyDevices[i].Name)) {
           availableDevices.push(response.data.TherapyDevices[i].Name);
         }
       }
-
       setAvailableDevices({active: availableDevices[0], options: availableDevices});
       setTherapyHistory(response.data);
       setAlert(null);
