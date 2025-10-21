@@ -170,6 +170,10 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
       }
     }
 
+    xData = xData.filter((a,i) => yData[i]);
+    yStim = yStim.filter((a,i) => yData[i]);
+    yData = yData.filter((a,i) => yData[i]);
+
     const timezoneOffset = new Date().getTimezoneOffset();
     xData = xData.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
     events = events.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
