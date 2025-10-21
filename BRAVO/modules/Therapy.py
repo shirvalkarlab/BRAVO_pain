@@ -211,7 +211,7 @@ def createTherapyTimeline(TherapyHistory):
 
     if not SessionDates[-1] == AllSessionDates[-1]:
         SessionDates.append(AllSessionDates[-1])
-
+    
     TherapyTimeline = []
     for n in range(len(SessionDates)):
         TimelineEntry = {"Date": SessionDates[n], "Therapies": []}
@@ -367,9 +367,11 @@ def createTherapyTimeline(TherapyHistory):
                     #AdaptiveSetting["Summary"] = CompareAdaptiveDictionaries([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], 
                     #                                                         [KnownSettings[i]["TherapyType"] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]])
                     DefinedTherapy["AdaptiveSettings"].append(AdaptiveSetting)
-
                 TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
     
+    if TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
+        TherapyTimeline[-1] = copy.deepcopy(TherapyTimeline[-2])
+
     return TherapyTimeline
 
 def findSameSourceTherapy(source_uid, hemisphere, group, TherapyHistories):
