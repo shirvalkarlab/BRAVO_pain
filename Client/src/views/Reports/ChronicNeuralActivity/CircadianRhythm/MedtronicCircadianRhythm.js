@@ -163,6 +163,11 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
             yData.push(...dataToRender[i].Data[j]);
             events.push(...annotations.filter((a) => a.Date > dataToRender[i].Time[0] && a.Date < dataToRender[i].Time[dataToRender[i].Time.length-1]).map((a) => a.Date))
           } else if (activeChannel === "Time-based Assessment" && channelName === timerange.device) {
+            for (let k in dataToRender[i].ChannelNames) {
+              if (dataToRender[i].ChannelNames[k] == dataToRender[i].ChannelNames[j].replace(" LFP", " Amplitude")) {
+                yStim.push(...dataToRender[i].Data[k].filter((a,k) => dataToRender[i].Time[k] > timePeriods[0] && dataToRender[i].Time[k] < timePeriods[1]));
+              }
+            }
             xData.push(...dataToRender[i].Time.filter((a) => a > timePeriods[0] && a < timePeriods[1]));
             yData.push(...dataToRender[i].Data[j].filter((a,k) => dataToRender[i].Time[k] > timePeriods[0] && dataToRender[i].Time[k] < timePeriods[1]));
           }

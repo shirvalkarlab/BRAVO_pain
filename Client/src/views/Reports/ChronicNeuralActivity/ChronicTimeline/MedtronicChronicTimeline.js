@@ -101,6 +101,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
 
   const getAdaptiveParameters = (therapyNote, channelName) => {
     if (!therapyNote) return { "Mode": "Unknown" };
+    if (!therapyNote.Adaptive) return { "Mode": "Unknown" };
 
     let Parameters = {"Mode": "Adaptive"};
     if (therapyNote.Adaptive.RecordingConfiguration) {
