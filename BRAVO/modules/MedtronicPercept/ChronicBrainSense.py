@@ -106,6 +106,11 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
     TherapyHistory = Therapy.queryTherapyHistory(participant)
     TherapyTimeline = Therapy.createTherapyTimeline(TherapyHistory)
 
+    Sources = []
+    for i in range(len(recordings)):
+        if not recordings[i].source in Sources:
+            Sources.append(recordings[i].source)
+
     ChronicNeuralActivity = []
     for key in DBSDeviceDict.keys():
         LeadCount = 0
@@ -117,148 +122,170 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                 LeadCount = len(DeviceInfoTemp["Electrodes"])
                 DBSDevice = {**DeviceInfoTemp}
         
-        TimelineDataframe = pd.DataFrame({"Time": []})
-        for recording in recordings:
-            if not recording.source.metadata["Device"] in DBSDeviceIds:
-                continue
-            Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-            RecordingDF = {"Time": Data["Time"]}
-            for i in range(len(Data["ChannelNames"])):
-                if not Data["ChannelNames"][i] in TimelineDataframe.columns:
-                    TimelineDataframe[Data["ChannelNames"][i]] = np.nan
-                RecordingDF[Data["ChannelNames"][i]] = Data["Data"][:,i]
-            RecordingDF = pd.DataFrame(RecordingDF)
-            TimelineDataframe = pd.concat([TimelineDataframe, pd.DataFrame(RecordingDF)], ignore_index=True)
-
-        TimelineDataframe.drop_duplicates(inplace=True)
-        TimelineDataframe = TimelineDataframe.groupby("Time", as_index=False).first()
-        TimelineDataframe.sort_values(by="Time", inplace=True)
-        TimelineDataframe.reset_index(inplace=True, drop=True)
-
         for i in range(len(TherapyHistory["TherapyModification"])):
             if TherapyHistory["TherapyModification"][i]["Device"]["Id"] in DBSDeviceIds:
                 TherapyHistory["TherapyModification"][i]["History"] = [x for x in TherapyHistory["TherapyModification"][i]["History"] if x["Type"] == "TherapyChangeGroup"]
                 TherapyHistory["TherapyModification"][i]["History"].sort(key=lambda x: x["Date"])
                 Timestamps = [event["Date"] for event in TherapyHistory["TherapyModification"][i]["History"]]
+                GroupIds = [event["New"] for event in TherapyHistory["TherapyModification"][i]["History"]]
 
-                for j in range(1, len(Timestamps)):
-                    # TODO: Make it less specific to Percept
-                    GroupId = TherapyHistory["TherapyModification"][i]["History"][j-1]["New"]
-                    DataSelected = TimelineDataframe.loc[(TimelineDataframe["Time"] > Timestamps[j-1]) & (TimelineDataframe["Time"] < Timestamps[j])]
+        TimelineSegments = []
+        for recording in recordings:
+            if not recording.source.metadata["Device"] in DBSDeviceIds:
+                continue
+
+            Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+
+            TherapyTimelineConfig = []
+            for i in range(len(TherapyHistory["TherapyConfiguration"])):
+                if TherapyHistory["TherapyConfiguration"][i]["Device"]["Id"] == recording.source.metadata["Device"]:
+                    for j in range(len(TherapyHistory["TherapyConfiguration"][i]["History"])):
+                        if TherapyHistory["TherapyConfiguration"][i]["History"][j]["SourceId"] == recording.source.uid:
+                            if TherapyHistory["TherapyConfiguration"][i]["History"][j]["Type"] == "Pre-visit Therapy":
+                                TherapyTimelineConfig.append(TherapyHistory["TherapyConfiguration"][i]["History"][j])
+            
+            for i in range(len(Timestamps)):
+                DataSelected = (Data["Time"] > Timestamps[i])
+                if i < len(Timestamps) - 1:
+                    DataSelected = DataSelected & (Data["Time"] < Timestamps[i+1] + 3)
                     
-                    if len(DataSelected) > 0:
-                        TherapyNote = {}
-                        for k in range(len(TherapyTimeline)):
-                            if len(TherapyNote.keys()) == 0:
-                                if TherapyTimeline[k]["Date"] > Timestamps[j-1]:
-                                    for therapy in TherapyTimeline[k]["DefinedTherapies"]:
-                                        if therapy["GroupId"] == GroupId:
-                                            TherapyNote = copy.deepcopy(therapy)
+                if np.any(DataSelected):
+                    TherapyNote = None
+                    for k in range(len(TherapyTimelineConfig)):
+                        if TherapyTimelineConfig[k]["GroupId"] == GroupIds[i]:
+                            TherapyNote = TherapyTimelineConfig[k]
+                            break
 
-                        if len(TherapyNote.keys()) == 0:
-                            continue
+                    BrainSenseSegment = {
+                        "Device": recording.source.metadata["Device"],
+                        "ChannelNames": Data["ChannelNames"],
+                        "Data": Data["Data"][DataSelected,:],
+                        "Time": Data["Time"][DataSelected],
+                        "TherapyStartTime": Timestamps[i],
+                        "GroupId": GroupIds[i],
+                        "TherapyNote": TherapyNote
+                    }
+                    TimelineSegments.append(BrainSenseSegment)
+        
+        TimelineSegments = sorted(TimelineSegments, key=lambda x: x["TherapyStartTime"])
+        for i in range(len(Timestamps)):
+            if Timestamps[i] == 1758637520.0:
+                raise
+            
+            AvailableData = [TimelineSegments[j] for j in range(len(TimelineSegments)) if TimelineSegments[j]["TherapyStartTime"] == Timestamps[i]]
+            if len(AvailableData) > 0:
+                TimelineDataframe = pd.DataFrame({"Time": []})
+                for j in range(len(AvailableData)):
+                    RecordingDF = {"Time": AvailableData[j]["Time"]}
+                    for k in range(len(AvailableData[j]["ChannelNames"])):
+                        if not AvailableData[j]["ChannelNames"][k] in TimelineDataframe.columns:
+                            TimelineDataframe[AvailableData[j]["ChannelNames"][k]] = np.nan
+                        RecordingDF[AvailableData[j]["ChannelNames"][k]] = AvailableData[j]["Data"][:,k]
+                    RecordingDF = pd.DataFrame(RecordingDF)
+                    TimelineDataframe = pd.concat([TimelineDataframe, pd.DataFrame(RecordingDF)], ignore_index=True)
+                    
+                TimelineDataframe.drop_duplicates(inplace=True)
+                TimelineDataframe = TimelineDataframe.groupby("Time", as_index=False).first()
+                TimelineDataframe.sort_values(by="Time", inplace=True)
+                TimelineDataframe.reset_index(inplace=True, drop=True)
+                ChannelNames = list(TimelineDataframe.columns)
+                ChannelNames.remove("Time")
+
+                TherapyList = []
+                for j in range(len(ChannelNames)):
+                    #AllTherapies = [AvailableData[k]["TherapyNote"] for k in range(len(AvailableData)) if ChannelNames[j] in AvailableData[k]["ChannelNames"]]
+                    TherapyNote = None
+                    DataSize = 0
+                    TherapyDate = 99999999999999
+                    for k in range(len(AvailableData)):
+                        if ChannelNames[j] in AvailableData[k]["ChannelNames"]:
+                            if len(AvailableData[k]["Data"]) >= DataSize and AvailableData[k]["TherapyNote"] and AvailableData[k]["TherapyNote"]["Date"] < TherapyDate:
+                                for n in range(len(AvailableData[k]["TherapyNote"]["StimulationSettings"])):
+                                    if ChannelNames[j].startswith("LeftHemisphere") and AvailableData[k]["TherapyNote"]["StimulationSettings"][n]["Electrode"]["Target"].startswith("Left"):
+                                        TherapyNote = AvailableData[k]["TherapyNote"]
+                                        DataSize = len(AvailableData[k]["Data"])
+                                        TherapyDate = AvailableData[k]["TherapyNote"]["Date"]
+                                    elif ChannelNames[j].startswith("RightHemisphere") and AvailableData[k]["TherapyNote"]["StimulationSettings"][n]["Electrode"]["Target"].startswith("Right"):
+                                        TherapyNote = AvailableData[k]["TherapyNote"]
+                                        DataSize = len(AvailableData[k]["Data"])
+                                        TherapyDate = AvailableData[k]["TherapyNote"]["Date"]
+
+                    TherapyList.append(TherapyNote)
+                
+                for j in range(len(TherapyList)):
+                    if TherapyList[j] is None:
+                        TherapyList[j] = {"Stimulation": {}, "Adaptive": {}}
+                    else:
+                        leadId = -1
+                        for k in range(len(TherapyList[j]["StimulationSettings"])):
+                            if ChannelNames[j].startswith("LeftHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Left"):
+                                leadId = k
+                            elif ChannelNames[j].startswith("RightHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Right"):
+                                leadId = k
                         
-                        for leadId in range(len(TherapyNote["StimulationSettings"])):
-                            if type(TherapyNote["StimulationSettings"][leadId]["Pre"]) == list:
-                                if len(TherapyNote["StimulationSettings"][leadId]["Pre"]) > 0:
-                                    TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Pre"][0]
-                            else:
-                                TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Pre"]
-                            
-                            if "Pre" in TherapyNote["StimulationSettings"][leadId].keys():
-                                if type(TherapyNote["StimulationSettings"][leadId]["Summary"]) == list:
-                                    if len(TherapyNote["StimulationSettings"][leadId]["Summary"]) > 0:
-                                        TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Summary"][0]
-                                else:
-                                    TherapyNote["StimulationSettings"][leadId] = TherapyNote["StimulationSettings"][leadId]["Summary"]
+                        if leadId >= 0:
+                            TherapyList[j] = {
+                                "Stimulation": TherapyList[j]["StimulationSettings"][leadId],
+                                "Adaptive": TherapyList[j]["AdaptiveSettings"][leadId]
+                            }
+                        else:
+                            TherapyList[j] = {"Stimulation": {}, "Adaptive": {}}
 
-                            if type(TherapyNote["AdaptiveSettings"][leadId]["Pre"]) == list:
-                                if len(TherapyNote["AdaptiveSettings"][leadId]["Pre"]) > 0:
-                                    TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Pre"][0]
-                            else:
-                                TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Pre"]
+                Activity = {
+                    "Device": AvailableData[0]["Device"],
+                    "TherapyStartTime": Timestamps[i],
+                    "Description": [],
+                    "TherapyNote": TherapyList,
+                    "TherapyString": [extractTherapyString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
+                    "RecordingString": [extractSensingString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
+                    "Time": TimelineDataframe["Time"].tolist(),
+                    "ChannelNames": copy.deepcopy(ChannelNames),
+                    "ChannelNamesFix": copy.deepcopy(ChannelNames),
+                    "ChannelUnits": ["" if x.endswith("LFP") else "mA" for x in ChannelNames],
+                    "Data": TimelineDataframe[ChannelNames].to_numpy().T
+                }
 
-                            if "Pre" in TherapyNote["AdaptiveSettings"][leadId].keys():
-                                if type(TherapyNote["AdaptiveSettings"][leadId]["Summary"]) == list:
-                                    if len(TherapyNote["AdaptiveSettings"][leadId]["Summary"]) > 0:
-                                        TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Summary"][0]
-                                else:
-                                    TherapyNote["AdaptiveSettings"][leadId] = TherapyNote["AdaptiveSettings"][leadId]["Summary"]
-
-                        ChannelNames = list(TimelineDataframe.columns)
-                        ChannelNames.remove("Time")
+                for k in range(len(Activity["ChannelNames"])):
+                    mean = np.nanmean(Activity["Data"][k,:])
+                    std = np.nanstd(Activity["Data"][k,:])
+                    
+                    counter = 0
+                    while True:
+                        counter += 1
+                        outlier_idx = np.where(Activity["Data"][k,:] > mean + 6*std)[0]
+                        if len(outlier_idx) == 0 or counter > 10:
+                            break
                         
-                        TherapyList = []
-                        for k in range(len(ChannelNames)):
-                            for leadId in range(len(TherapyNote["StimulationSettings"])):
-                                if ChannelNames[k].startswith("LeftHemisphere") and TherapyNote["StimulationSettings"][leadId]["Electrode"]["Target"].startswith("Left"):
-                                    TherapyList.append({
-                                        "Stimulation": TherapyNote["StimulationSettings"][leadId],
-                                        "Adaptive": TherapyNote["AdaptiveSettings"][leadId]
-                                    })
-                                elif ChannelNames[k].startswith("RightHemisphere") and TherapyNote["StimulationSettings"][leadId]["Electrode"]["Target"].startswith("Right"):
-                                    TherapyList.append({
-                                        "Stimulation": TherapyNote["StimulationSettings"][leadId],
-                                        "Adaptive": TherapyNote["AdaptiveSettings"][leadId]
-                                    })
-                            if len(TherapyList) != k+1:
-                                TherapyList.append({})
-                                
-                        Activity = {
-                            "Device": DBSDevice["Id"],
-                            "TherapyWindow": [float(Timestamps[j-1]), float(Timestamps[j])],
-                            "Description": [],
-                            "TherapyNote": TherapyList,
-                            "TherapyString": [extractTherapyString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
-                            "RecordingString": [extractSensingString(therapy) if len(therapy.keys()) > 0 else "Unknown" for therapy in TherapyList ],
-                            "Time": DataSelected["Time"].tolist(),
-                            "ChannelNames": copy.deepcopy(ChannelNames),
-                            "ChannelNamesFix": copy.deepcopy(ChannelNames),
-                            "ChannelUnits": ["" if x.endswith("LFP") else "mA" for x in ChannelNames],
-                            "Data": DataSelected[ChannelNames].to_numpy().T
-                        }
+                        for idx in outlier_idx:
+                            if 0 < idx < len(Activity["Data"][k,:]) - 1:
+                                Activity["Data"][k,idx] = np.nanmean([Activity["Data"][k,idx-1], Activity["Data"][k,idx+1]])
+                            elif idx == 0:
+                                Activity["Data"][k,idx] = Activity["Data"][k,idx+1]
+                            else:
+                                Activity["Data"][k,idx] = Activity["Data"][k,idx-1]
 
-                        for k in range(len(Activity["ChannelNames"])):
-                            mean = np.nanmean(Activity["Data"][k,:])
-                            std = np.nanstd(Activity["Data"][k,:])
-                            
-                            counter = 0
-                            while True:
-                                counter += 1
-                                outlier_idx = np.where(Activity["Data"][k,:] > mean + 6*std)[0]
-                                if len(outlier_idx) == 0 or counter > 10:
-                                    break
-                                
-                                for idx in outlier_idx:
-                                    if 0 < idx < len(Activity["Data"][k,:]) - 1:
-                                        Activity["Data"][k,idx] = np.nanmean([Activity["Data"][k,idx-1], Activity["Data"][k,idx+1]])
-                                    elif idx == 0:
-                                        Activity["Data"][k,idx] = Activity["Data"][k,idx+1]
-                                    else:
-                                        Activity["Data"][k,idx] = Activity["Data"][k,idx-1]
+                for lead in DBSDevice["Electrodes"]:
+                    for k in range(len(Activity["ChannelNames"])):
+                        if Activity["ChannelNames"][k].startswith("LeftHemisphere") and lead["Target"].startswith("Left"):
+                            Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("LeftHemisphere", lead["CustomName"])
+                        elif Activity["ChannelNames"][k].startswith("RightHemisphere") and lead["Target"].startswith("Right"):
+                            Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("RightHemisphere", lead["CustomName"])
 
-                        for lead in DBSDevice["Electrodes"]:
-                            for k in range(len(Activity["ChannelNames"])):
-                                if Activity["ChannelNames"][k].startswith("LeftHemisphere") and lead["Target"].startswith("Left"):
-                                    Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("LeftHemisphere", lead["CustomName"])
-                                elif Activity["ChannelNames"][k].startswith("RightHemisphere") and lead["Target"].startswith("Right"):
-                                    Activity["ChannelNamesFix"][k] = Activity["ChannelNames"][k].replace("RightHemisphere", lead["CustomName"])
+                for k in range(len(Activity["ChannelNames"])):
+                    Description = {}
+                    Description["Stimulation"] = Activity["TherapyString"][k]
+                    if "Adaptive" in TherapyList[k].keys():
+                        if "RecordingConfiguration" in TherapyList[k]["Adaptive"].keys():
+                            if "SensingSetup" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"].keys():
+                                if "FrequencyInHertz" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
+                                    Description["Bypass"] = False
+                                    Description["SensingFrequency"] = str(TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
+                                    if "Bypass" in TherapyList[k]["Adaptive"]["StimulationConfiguration"]["Config"].keys():
+                                        Description["Bypass"] = True
 
-                        for k in range(len(Activity["ChannelNames"])):
-                            Description = {}
-                            Description["Stimulation"] = Activity["TherapyString"][k]
-                            if "Adaptive" in TherapyList[k].keys():
-                                if "RecordingConfiguration" in TherapyList[k]["Adaptive"].keys():
-                                    if "SensingSetup" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"].keys():
-                                        if "FrequencyInHertz" in TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"].keys():
-                                            Description["Bypass"] = False
-                                            Description["SensingFrequency"] = str(TherapyList[k]["Adaptive"]["RecordingConfiguration"]["Config"]["SensingSetup"]["FrequencyInHertz"]) + " Hz"
-                                            if "Bypass" in TherapyList[k]["Adaptive"]["StimulationConfiguration"]["Config"].keys():
-                                                Description["Bypass"] = True
+                    Activity["Description"].append(Description)
 
-                            Activity["Description"].append(Description)
-
-                        ChronicNeuralActivity.append(Activity)
+                ChronicNeuralActivity.append(Activity)
 
     return ChronicNeuralActivity
 

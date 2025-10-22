@@ -103,23 +103,21 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
     if (!therapyNote) return { "Mode": "Unknown" };
 
     let Parameters = {"Mode": "Adaptive"};
-    for (let i in therapyNote.StimulationSettings) {
-      if (therapyNote.StimulationSettings[i].Electrode && channelName.startsWith(therapyNote.StimulationSettings[i].Electrode.CustomName)) {
-        const Recordings = therapyNote.AdaptiveSettings[i].RecordingConfiguration.Config;
-        if (Recordings.Thresholds) {
-          if (typeof Recordings.Thresholds.LFPThresholds[0] === "object") {
-            Recordings.Thresholds.LFPThresholds = Recordings.Thresholds.LFPThresholds[0].Value;
-          }
-          if (Recordings.Thresholds.LFPThresholds[0] !== 20 && Recordings.Thresholds.LFPThresholds[1] !== 30) {
-            Parameters["LFPThresholds"] = Recordings.Thresholds.LFPThresholds;
-            if (Parameters["LFPThresholds"][0] == Parameters["LFPThresholds"][1]) {
-              Parameters["LFPThresholds"] = [Parameters["LFPThresholds"][0]];
-            }
+    if (therapyNote.Adaptive.RecordingConfiguration) {
+      const Recordings = therapyNote.Adaptive.RecordingConfiguration.Config;
+      if (Recordings.Thresholds) {
+        if (typeof Recordings.Thresholds.LFPThresholds[0] === "object") {
+          Recordings.Thresholds.LFPThresholds = Recordings.Thresholds.LFPThresholds[0].Value;
+        }
+        if (Recordings.Thresholds.LFPThresholds[0] !== 20 && Recordings.Thresholds.LFPThresholds[1] !== 30) {
+          Parameters["LFPThresholds"] = Recordings.Thresholds.LFPThresholds;
+          if (Parameters["LFPThresholds"][0] == Parameters["LFPThresholds"][1]) {
+            Parameters["LFPThresholds"] = [Parameters["LFPThresholds"][0]];
           }
         }
-        if (therapyNote.AdaptiveSettings[i].StimulationConfiguration.Type == "Medtronic Adaptive") {
-          Parameters["StimulationLimits"] = Recordings.Thresholds.AmplitudeThreshold;
-        }
+      }
+      if (therapyNote.Adaptive.StimulationConfiguration.Type == "Medtronic Adaptive") {
+        Parameters["StimulationLimits"] = Recordings.Thresholds.AmplitudeThreshold;
       }
     }
     return Parameters;
@@ -134,7 +132,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
       for (let j in data[i].ChannelNames) {
         const channelName = data[i].Device.Heritage + ": " + (data[i].ChannelNames[j].endsWith("Amplitude") ? data[i].ChannelNames[j].replace(" Amplitude", " Stimulation") : data[i].ChannelNames[j].replace(" LFP", ""));
         if (!data[i].Description[j].Bypass || channelName.endsWith("Stimulation")) {
-          const AdaptiveParameters = getAdaptiveParameters(data[i].TherapyNote, data[i]["ChannelNames"][j]);
+          const AdaptiveParameters = getAdaptiveParameters(data[i].TherapyNote[j], data[i]["ChannelNames"][j]);
           if (channelName.endsWith("Stimulation")) {
             if (AdaptiveParameters.StimulationLimits && showAdaptiveMode) {
               if (AdaptiveParameters.StimulationLimits[1] !== 0) {
