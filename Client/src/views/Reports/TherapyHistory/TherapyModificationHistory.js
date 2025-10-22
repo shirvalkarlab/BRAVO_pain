@@ -378,10 +378,16 @@ function TherapyModificationHistory({therapyHistory, device, viewConfigurationTa
       }
     }
 
-    if (adaptiveConfig[configKey].StimulationConfiguration) {
-      if (adaptiveConfig[configKey].StimulationConfiguration.Type === "Medtronic Adaptive") {
-        adaptive = true;
+    try {
+      if (adaptiveConfig[configKey].StimulationConfiguration) {
+        if (adaptiveConfig[configKey].StimulationConfiguration.Type === "Medtronic Adaptive") {
+          if (adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[0] != 20 && adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[1] != 30) {
+            adaptive = true;
+          }
+        }
       }
+    } catch (e) {
+      console.log(e)
     }
 
     return (
@@ -538,10 +544,16 @@ function TherapyModificationHistory({therapyHistory, device, viewConfigurationTa
                   {"Adaptive Mode: "}<b>{adaptiveConfig[configKey].StimulationConfiguration.Config.Status}</b><br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-                  {"Lower Onset Duration: "}<b>{adaptiveConfig[configKey].StimulationConfiguration.Config.LowerThresholdOnsetInMilliSeconds}</b>{" ms"}<br/>
+                  {"Onset Durations (L|H): "}<b>{adaptiveConfig[configKey].StimulationConfiguration.Config.LowerThresholdOnsetInMilliSeconds}</b>{" ms"} {" | "}
+                  <b>{adaptiveConfig[configKey].StimulationConfiguration.Config.UpperThresholdOnsetInMilliSeconds}</b>{" ms"}<br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-                  {"Upper Onset Duration: "}<b>{adaptiveConfig[configKey].StimulationConfiguration.Config.UpperThresholdOnsetInMilliSeconds}</b>{" ms"}<br/>
+                  {"Ramp Time (Up|Down): "}<b>{adaptiveConfig[configKey].StimulationConfiguration.Config.RampUpTime}</b>{" ms"} {" | "}
+                  <b>{adaptiveConfig[configKey].StimulationConfiguration.Config.RampDownTime}</b>{" ms"}<br/>
+                </MDTypography>
+                <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                  {"LFP Thresholds (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[0]}</b>{" a.u."} {" | "}
+                  <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[1]}</b>{" a.u."}<br/>
                 </MDTypography>
                 {adaptiveConfig[configKey].StimulationConfiguration.Config.Bypass ? (
                   <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
