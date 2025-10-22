@@ -169,9 +169,6 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
         
         TimelineSegments = sorted(TimelineSegments, key=lambda x: x["TherapyStartTime"])
         for i in range(len(Timestamps)):
-            if Timestamps[i] == 1758637520.0:
-                raise
-            
             AvailableData = [TimelineSegments[j] for j in range(len(TimelineSegments)) if TimelineSegments[j]["TherapyStartTime"] == Timestamps[i]]
             if len(AvailableData) > 0:
                 TimelineDataframe = pd.DataFrame({"Time": []})
