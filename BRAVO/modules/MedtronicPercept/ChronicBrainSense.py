@@ -138,7 +138,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
 
             TherapyTimelineConfig = []
             for i in range(len(TherapyHistory["TherapyConfiguration"])):
-                if TherapyHistory["TherapyConfiguration"][i]["Device"]["Id"] == recording.source.metadata["Device"]:
+                if TherapyHistory["TherapyConfiguration"][i]["Device"]["Id"] in DBSDeviceIds:
                     for j in range(len(TherapyHistory["TherapyConfiguration"][i]["History"])):
                         if TherapyHistory["TherapyConfiguration"][i]["History"][j]["SourceId"] == recording.source.uid:
                             if TherapyHistory["TherapyConfiguration"][i]["History"][j]["Type"] == "Pre-visit Therapy":
@@ -157,6 +157,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                             break
 
                     BrainSenseSegment = {
+                        "RecordingId": recording.uid,
                         "Device": recording.source.metadata["Device"],
                         "ChannelNames": Data["ChannelNames"],
                         "Data": Data["Data"][DataSelected,:],
@@ -173,6 +174,7 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
             if len(AvailableData) > 0:
                 TimelineDataframe = pd.DataFrame({"Time": []})
                 for j in range(len(AvailableData)):
+                    AvailableData[j]["StartTime"] = AvailableData[j]["Time"][0]
                     RecordingDF = {"Time": AvailableData[j]["Time"]}
                     for k in range(len(AvailableData[j]["ChannelNames"])):
                         if not AvailableData[j]["ChannelNames"][k] in TimelineDataframe.columns:
@@ -207,6 +209,29 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                                         DataSize = len(AvailableData[k]["Data"])
                                         TherapyDate = AvailableData[k]["TherapyNote"]["Date"]
 
+                    if not TherapyNote:
+                        for k in range(len(TherapyTimeline)):
+                            if TherapyTimeline[k]["Date"] > Timestamps[i]:
+                                for t in range(len(TherapyTimeline[k]["DefinedTherapies"])):
+                                    if TherapyTimeline[k]["DefinedTherapies"][t]["Device"]["Id"] in DBSDeviceIds:
+                                        for n in range(len(TherapyTimeline[k]["DefinedTherapies"][t]["StimulationSettings"])):
+                                            if type(TherapyTimeline[k]["DefinedTherapies"][t]["StimulationSettings"][n]["Pre"]) is dict:
+                                                if TherapyTimeline[k]["DefinedTherapies"][t]["AdaptiveSettings"][n]["Pre"]["RecordingConfiguration"]["Config"]: 
+                                                    if ChannelNames[j].startswith("LeftHemisphere") and TherapyTimeline[k]["DefinedTherapies"][t]["StimulationSettings"][n]["Pre"]["Electrode"]["Target"].startswith("Left"):
+                                                        TherapyNote = copy.deepcopy(TherapyTimeline[k]["DefinedTherapies"][t])
+                                                    elif ChannelNames[j].startswith("RightHemisphere") and TherapyTimeline[k]["DefinedTherapies"][t]["StimulationSettings"][n]["Pre"]["Electrode"]["Target"].startswith("Right"):
+                                                        TherapyNote = copy.deepcopy(TherapyTimeline[k]["DefinedTherapies"][t])
+
+                            if TherapyNote:
+                                break
+
+                        if TherapyNote:
+                            for n in range(len(TherapyNote["StimulationSettings"])):
+                                TherapyNote["StimulationSettings"][n] = TherapyNote["StimulationSettings"][n]["Pre"]
+
+                            for n in range(len(TherapyNote["AdaptiveSettings"])):
+                                TherapyNote["AdaptiveSettings"][n] = TherapyNote["AdaptiveSettings"][n]["Pre"]
+                                
                     TherapyList.append(TherapyNote)
                 
                 for j in range(len(TherapyList)):
