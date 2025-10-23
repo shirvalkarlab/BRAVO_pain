@@ -2131,6 +2131,7 @@ def queryNeuralActivitySnapshot(participant_uid, config):
 
         NeuralActivitySnapshot["Recordings"].append({**Description, **{
             "Type": recording.type,
+            "MedtronicPSDs": Data["Descriptor"]["MedtronicPSD"] if "MedtronicPSD" in Data["Descriptor"].keys() else None,
             "RecordingId": recording.uid,
             "Channels": Data["ChannelNames"],
             "PSDs": Data["PSD"],
