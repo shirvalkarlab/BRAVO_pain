@@ -240,10 +240,11 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                     else:
                         leadId = -1
                         for k in range(len(TherapyList[j]["StimulationSettings"])):
-                            if ChannelNames[j].startswith("LeftHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Left"):
-                                leadId = k
-                            elif ChannelNames[j].startswith("RightHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Right"):
-                                leadId = k
+                            if type(TherapyList[j]["StimulationSettings"][k]) is dict:
+                                if ChannelNames[j].startswith("LeftHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Left"):
+                                    leadId = k
+                                elif ChannelNames[j].startswith("RightHemisphere") and TherapyList[j]["StimulationSettings"][k]["Electrode"]["Target"].startswith("Right"):
+                                    leadId = k
                         
                         if leadId >= 0:
                             TherapyList[j] = {
