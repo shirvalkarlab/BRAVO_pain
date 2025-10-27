@@ -317,8 +317,16 @@ function TherapyModificationHistory({therapyHistory, device, viewConfigurationTa
                   <b>{adaptiveConfig[configKey].StimulationConfiguration.Config.RampDownTime}</b>{" ms"}<br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                  {"Amplitude Limits (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]}</b>{" a.u."} {" | "}
+                  <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}</b>{" a.u."}<br/>
+                </MDTypography>
+                <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
                   {"LFP Thresholds (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[0]}</b>{" a.u."} {" | "}
                   <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[1]}</b>{" a.u."}<br/>
+                </MDTypography>
+                <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                  {"Medtronic LFP Thresholds (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.MeasuredLFP[0]}</b>{" a.u."} {" | "}
+                  <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.MeasuredLFP[1]}</b>{" a.u."}<br/>
                 </MDTypography>
                 {adaptiveConfig[configKey].StimulationConfiguration.Config.Bypass ? (
                   <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
@@ -552,8 +560,16 @@ function TherapyModificationHistory({therapyHistory, device, viewConfigurationTa
                   <b>{adaptiveConfig[configKey].StimulationConfiguration.Config.RampDownTime}</b>{" ms"}<br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                  {"Amplitude Limits (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]}</b>{" a.u."} {" | "}
+                  <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}</b>{" a.u."}<br/>
+                </MDTypography>
+                <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
                   {"LFP Thresholds (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[0]}</b>{" a.u."} {" | "}
                   <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.LFPThresholds[1]}</b>{" a.u."}<br/>
+                </MDTypography>
+                <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+                  {"Medtronic LFP Thresholds (Up|Down): "}<b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.MeasuredLFP[0]}</b>{" a.u."} {" | "}
+                  <b>{adaptiveConfig[configKey].RecordingConfiguration.Config.Thresholds.MeasuredLFP[1]}</b>{" a.u."}<br/>
                 </MDTypography>
                 {adaptiveConfig[configKey].StimulationConfiguration.Config.Bypass ? (
                   <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
