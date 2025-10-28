@@ -68,6 +68,7 @@ class ElectricalTherapy(models.Model):
     group_name = models.CharField(max_length=128, default="")
     group_id = models.CharField(max_length=128, default="")
     stimulation_type = models.CharField(max_length=128, default="")
+    label = models.CharField(max_length=128, default="")
     
     stimulation_settings = models.ManyToManyField("ElectricalStimulation", related_name="has_setting")
     adaptive_settings = models.ManyToManyField("AdaptiveTherapy", related_name="has_adaptive")
@@ -88,6 +89,7 @@ class ElectricalTherapy(models.Model):
             "Name": self.therapy.name,
             "Type": self.therapy.type,
             "Date": self.therapy.date,
+            "Label": self.label,
             "Timezone": self.therapy.source.metadata["Timezone"],
             "GroupId": self.group_id,
             "GroupName": self.group_name,
