@@ -77,6 +77,59 @@ def decodeEncryptedJSON(inputFilename, key):
         return Data
 
 def estimateSessionDateTime(JSON):
+    SessionStartDate = 0
+    if "SessionDate" in JSON.keys():
+        try:
+            SessionStartDate = datetime.fromisoformat(JSON["SessionDate"].replace("Z","+00:00")).timestamp()
+        except:
+            pass
+    
+    SessionEndDate = 0
+    if "SessionEndDate" in JSON.keys() and not JSON["SessionEndDate"] == "":
+        try:
+            SessionEndDate = datetime.fromisoformat(JSON["SessionEndDate"].replace("Z","+00:00")).timestamp()
+        except:
+            pass
+        
+    # Default to Use Session Start Date
+    if not (SessionEndDate == 0) and not (SessionStartDate == 0):
+        if SessionEndDate - SessionStartDate < 8*60*60:
+            return SessionStartDate
+    
+    sessionDatePools = list()
+    if "EventSummary" in JSON.keys():
+        sessionDatePools.append(datetime.fromisoformat(JSON["EventSummary"]["SessionEndDate"].replace("Z","+00:00")).timestamp())
+    if "CalibrationTests" in JSON.keys():
+        for i in range(len(JSON["CalibrationTests"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["CalibrationTests"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "SenseChannelTests" in JSON.keys():
+        for i in range(len(JSON["SenseChannelTests"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["SenseChannelTests"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "BrainSenseTimeDomain" in JSON.keys():
+        for i in range(len(JSON["BrainSenseTimeDomain"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["BrainSenseTimeDomain"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "BrainSenseLfp" in JSON.keys():
+        for i in range(len(JSON["BrainSenseLfp"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["BrainSenseLfp"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    
+    sessionDatePools = np.array(sessionDatePools)
+    sessionDatePools = sessionDatePools[sessionDatePools > 1420088400]
+    if len(sessionDatePools) == 0:
+        if not (SessionEndDate == 0) and not (SessionStartDate == 0):
+            return SessionEndDate
+        elif not (SessionStartDate == 0):
+            return SessionStartDate
+        elif not (SessionEndDate == 0):
+            return SessionEndDate
+
+    FirstRecording = np.min(sessionDatePools)
+    if not (SessionStartDate == 0):
+        if FirstRecording - SessionStartDate < 8*60*60:
+            return SessionStartDate
+
+    return FirstRecording
+
+def estimateSessionDateTime_Old(JSON):
     """ Find all common occurance of Session DateTime String
 
     Percept JSON often display wrong DateTime for "SessionDate" field due to unknown errors. 
@@ -1292,7 +1345,7 @@ def extractTherapySettings(JSON, sourceData=dict()):
         Data["TherapyHistory"] = list()
         for historyID in range(len(JSON[key])):
             therapySettings = list()
-            CurrentDateSetting = datetime.fromisoformat(JSON["SessionDate"].replace("Z","+00:00")).date() == datetime.fromisoformat(JSON["GroupHistory"][historyID]["SessionDate"].replace("Z","+00:00")).date()
+            #CurrentDateSetting = datetime.fromisoformat(JSON["SessionDate"].replace("Z","+00:00")).date() == datetime.fromisoformat(JSON["GroupHistory"][historyID]["SessionDate"].replace("Z","+00:00")).date()
             for groupID in range(len(JSON[key][historyID]["Groups"])):
                 therapySettings.append(processTherapySettings(JSON[key][historyID]["Groups"][groupID]))
             Data["TherapyHistory"].append({"DateTime": JSON[key][historyID]["SessionDate"], "Therapy": therapySettings})

@@ -193,11 +193,25 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         
         source_file.owner = person
         source_file.save()
+
     
+    electrodes = device.electrodes.all()
+    for k in range(len(DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"])):
+        for elec in electrodes:
+            if DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["name"] == elec.target:
+                if elec.channel_count == DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["channel_count"]:
+                    if elec.type == DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["type"]:
+                        DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["model"] = elec 
+
     # Therapy History Storage
     for therapy in DatabaseEntries["Therapies"]:
         if Therapy.checkDuplicate(device, therapy):
             continue 
+        
+        electrode = None
+        for k in range(len(DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"])):
+            if DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["name"].startswith(therapy["hemisphere"]):
+                electrode = DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k].get("model", None)
 
         therapy_object = models.Therapy(**{key: therapy[key] for key in therapy.keys() if key in ["name", "type", "date"]}, source=source_file)
         therapy_object.save()
@@ -208,7 +222,9 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         for i in range(len(therapy["stimulation_settings"])):
             setting = therapy["stimulation_settings"][i]
 
-            electrode = device.electrodes.filter(target__startswith=therapy["hemisphere"]).first()
+            if not electrode:
+                electrode = device.electrodes.filter(target__startswith=therapy["hemisphere"]).first()
+                
             detail_setting = models.ElectricalStimulation(**{key: setting[key] for key in setting.keys() if key in ["contact", "return_contact", "amplitude", "amplitude_fraction", "amplitude_unit", "pulsewidth", "pulsewidth_unit", "frequency", "cycling", "cycling_period"]}, group=stimulation_therapy)
             detail_setting.electrode = electrode
             detail_setting.save()
