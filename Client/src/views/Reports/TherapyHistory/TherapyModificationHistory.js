@@ -48,7 +48,6 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   const { participant_uid } = useParams();
 
   React.useEffect(() => {
-    console.log(therapyHistoryRaw)
     if (therapyHistoryRaw) setTherapyHistory(therapyHistoryRaw);
   }, [therapyHistoryRaw]);
 
@@ -90,10 +89,10 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                 }
               }
             }
-            if (options.pre.length < j+1) {
+            if (options.pre.length < parseInt(j)+1) {
               options.pre.push(null);
             }
-            if (options.post.length < j+1) {
+            if (options.post.length < parseInt(j)+1) {
               options.post.push(null);
             }
           }
@@ -138,7 +137,6 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   }
 
   const getTherapySettings = (config, index) => {
-    console.log(config, index)
     if (config.Stimulation.length < index+1) return;
 
     let interleaving = false;
@@ -451,7 +449,6 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
             {therapyTable.DefinedTherapies.map((config, g) => {
               const PreTherapy = therapyTable.Therapies[g].Processed.filter((a) => listMatch(a.TherapyIds, config.Pre));
               const PostTherapy = therapyTable.Therapies[g].Processed.filter((a) => listMatch(a.TherapyIds, config.Post));
-              const selectOptions = therapyOptions.options.filter((a) => a.GroupId == config.GroupId && ["Pre-visit Therapy", "Past Therapy"].includes(a.Type));
               return <Grid item xs={12} key={config.Date+"_"+config.GroupId}>
                 <Card p={2}>
                   <MDBox px={2} pt={1}>
@@ -473,7 +470,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                           renderOption={(props, option) => <li {...props}>{getTimeString(option.Date) + " " + option.Type + " [" + option.TherapyIds + "]"}</li>}
                           getOptionLabel={(option) => option ? getTimeString(option.Date) + " " + option.Type : ""}
                           value={therapyOptions.pre[g]}
-                          options={selectOptions}
+                          options={therapyOptions.options.filter((a) => a.GroupId == config.GroupId && ["Pre-visit Therapy", "Past Therapy"].includes(a.Type))}
                           onChange={(event, newValue) => {
                             SessionController.query("/api/assignTherapyLabel", {
                               ParticipantId: participant_uid,
@@ -510,20 +507,31 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                             return listMatch(option.TherapyIds, value.TherapyIds);
                           }}
                           renderOption={(props, option) => <li {...props}>{getTimeString(option.Date) + " " + option.Type + " [" + option.TherapyIds + "]"}</li>}
-                          getOptionLabel={(option) => getTimeString(option.Date) + " " + option.Type + " [" + option.TherapyIds + "]"}
-                          value={therapyOptions.active}
-                          options={therapyOptions.options}
+                          getOptionLabel={(option) => getTimeString(option.Date) + " " + option.Type}
+                          value={therapyOptions.post[g]}
+                          options={therapyOptions.options.filter((a) => a.GroupId == config.GroupId && ["Post-visit Therapy"].includes(a.Type))}
                           onChange={(event, newValue) => {
-                            setTherapyTable((table) => {
-                              for (let g in table.DefinedTherapies) {
+                            SessionController.query("/api/assignTherapyLabel", {
+                              ParticipantId: participant_uid,
+                              TimelineDate: therapyTable.Date,
+                              GroupId: config.GroupId,
+                              TherapyLabel: "Post-visit Preferred",
+                              TherapyIds: newValue ? newValue.TherapyIds : [],
+                            }).then((response) => {
+                              setTherapyTable((table) => {
                                 table.DefinedTherapies[g] = {
                                   ...table.DefinedTherapies[g],
-                                  Pre: newValue ? newValue.TherapyIds : [],
+                                  Post: newValue ? newValue.TherapyIds : [],
                                 }
-                              }
-                              return {...table};
+                                return {...table};
+                              });
+                              setTherapyOptions((state) => {
+                                state.post[g] = newValue;
+                                return {...state};
+                              });
+                            }).catch((error) => {
+                              SessionController.displayError(error, setAlert);
                             });
-                            setTherapyOptions((state) => ({...state, active: newValue}));
                           }}
                         />
                       </MDBox>

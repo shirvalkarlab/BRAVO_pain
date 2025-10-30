@@ -255,8 +255,12 @@ def createTherapyTimeline(TherapyHistory):
                         DefinedTherapy["Pre"] = TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyIds"]
 
                 if len(DefinedTherapy["Pre"]) == 0:
-                    PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
-                    DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"] if len(PreTherapy) > 0 else []
+                    PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy"]]
+                    if len(PreTherapy) > 0:
+                        DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"]
+                    else:
+                        PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
+                        DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"] if len(PreTherapy) > 0 else []
                     
                 for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])):
                     if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyLabel"] == "Post-visit Preferred":

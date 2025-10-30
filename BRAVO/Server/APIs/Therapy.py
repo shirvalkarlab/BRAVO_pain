@@ -99,6 +99,8 @@ class AssignTherapyLabel(RestViews.APIView):
                         for k in range(len(TherapyHistory["TherapyTimeline"][i]["Therapies"][j]["Processed"])):
                             if request.data["TherapyLabel"] == "Pre-visit Preferred" and TherapyHistory["TherapyTimeline"][i]["Therapies"][j]["Processed"][k]["Type"] in ["Pre-visit Therapy", "Past Therapy"]:
                                 AllTherapies.extend(TherapyHistory["TherapyTimeline"][i]["Therapies"][j]["Processed"][k]["TherapyIds"])
+                            elif request.data["TherapyLabel"] == "Post-visit Preferred" and TherapyHistory["TherapyTimeline"][i]["Therapies"][j]["Processed"][k]["Type"] in ["Post-visit Therapy"]:
+                                AllTherapies.extend(TherapyHistory["TherapyTimeline"][i]["Therapies"][j]["Processed"][k]["TherapyIds"])
 
         for i in request.data["TherapyIds"]:
             if not i in AllTherapies:
