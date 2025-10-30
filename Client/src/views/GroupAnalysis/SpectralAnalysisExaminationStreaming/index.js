@@ -49,19 +49,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const [data, setData] = useState(false);
   const [resultDialog, setResultDialog] = useState({show: false, participant_uid: "", recordings: []})
 
-  const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
-
-  const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false});
-  const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
-  const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
- 
-  const [annotationState, setAnnotationState] = useState({});
-  const [circadianData, setCircadianData] = useState({});
-  const [eventPSDData, setEventPSDData] = useState(false);
-  const [eventRelatedPower, setEventRelatedPower] = useState(false)
-  const [eventLockedPowerData, setEventLockedPowerData] = useState(false);
-  const [normalizeCircadianRhythm, setNormalizeCircadianRhythm] = useState(false);
-
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {

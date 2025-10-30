@@ -358,7 +358,7 @@ function TherapyHistory() {
               />
             </MDBox>
             <MDBox fullWidth>
-              <TherapyModificationHistory therapyHistory={therapyHistory} device={availableDevices.active} viewConfigurationTable={() => {}} />
+              <TherapyModificationHistory therapyHistoryRaw={therapyHistory} device={availableDevices.active} viewConfigurationTable={() => {}} />
             </MDBox>
           </Grid>
         </Grid>

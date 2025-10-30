@@ -205,14 +205,14 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Therapy History Storage
     for therapy in DatabaseEntries["Therapies"]:
-        if Therapy.checkDuplicate(device, therapy):
-            continue 
-        
         electrode = None
         for k in range(len(DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"])):
             if DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k]["name"].startswith(therapy["hemisphere"]):
                 electrode = DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"][k].get("model", None)
 
+        if Therapy.checkDuplicate(device, electrode, therapy):
+            continue 
+        
         therapy_object = models.Therapy(**{key: therapy[key] for key in therapy.keys() if key in ["name", "type", "date"]}, source=source_file)
         therapy_object.save()
 

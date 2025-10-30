@@ -91,5 +91,5 @@ urlpatterns = [
     path('queryAsyncJobQueue', AsyncJobScheduling.QueryAsyncJobQueue.as_view()),
     
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
-    
+    path('assignTherapyLabel', Therapy.AssignTherapyLabel.as_view()),
 ]

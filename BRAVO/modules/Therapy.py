@@ -114,89 +114,41 @@ def queryTherapyHistory(Participant):
                 "Previous": LastTherapyChange,
                 "New": LastTherapyChange,
             })
-
-        for j in range(len(DeviceTherapyModification["History"])):
-            if DeviceTherapyModification["History"][j]["Type"] == "TherapyChangeGroup":
-                GroupId = DeviceTherapyModification["History"][j]["New"]
-                for k in range(len(TherapyHistory["History"])):
-                    if TherapyHistory["History"][k]["GroupId"] == GroupId and TherapyHistory["History"][k]["Date"] > DeviceTherapyModification["History"][j]["Date"]:
-                        if not "TherapyGroup" in DeviceTherapyModification["History"][j].keys():
-                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
-                        elif TherapyHistory["History"][k]["Date"] < DeviceTherapyModification["History"][j]["TherapyGroup"]["Date"]+24*3600 and DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == "Past Therapy":
-                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
-                        
-                    elif TherapyHistory["History"][k]["GroupId"] == GroupId and TherapyHistory["History"][k]["Date"] == DeviceTherapyModification["History"][j]["Date"]: 
-                        if not "TherapyGroup" in DeviceTherapyModification["History"][j].keys():
-                            DeviceTherapyModification["History"][j]["TherapyGroup"] = TherapyHistory["History"][k]
-
-                        if DeviceTherapyModification["History"][j]["TherapyGroup"]["Type"] == TherapyHistory["History"][k]["Type"]:
-                            ExistingSides = [DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"][t]["Electrode"]["Target"] for t in range(len(DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"]))]
-                            if TherapyHistory["History"][k]["StimulationSettings"][0]["Electrode"]["Target"] not in ExistingSides:
-                                DeviceTherapyModification["History"][j]["TherapyGroup"]["StimulationSettings"].extend(TherapyHistory["History"][k]["StimulationSettings"])
-                                DeviceTherapyModification["History"][j]["TherapyGroup"]["AdaptiveSettings"].extend(TherapyHistory["History"][k]["AdaptiveSettings"])
-
+        
         TherapyModifications.append(DeviceTherapyModification)
-
-        i = 1
-        lastVisit = 0
-        GroupDurationCounter = {}
-        while i < len(VisitTimestamps):
-            TotalDuration = VisitTimestamps[i] - VisitTimestamps[lastVisit]
-            if TotalDuration < 3600*24:
-                for history in TherapyHistory["History"]:
-                    if history["Date"] == VisitTimestamps[i] and history["Type"] in ["Pre-visit Therapy", "Past Therapy"]:
-                        if history["GroupId"] in GroupDurationCounter.keys():
-                            history["Percent"] = GroupDurationCounter[history["GroupId"]]
-                        else:
-                            history["Percent"] = 0
-                            
-                i += 1
-                continue
-
-            GroupDurationCounter = {}
-            LastGroupTime = 0
-            LastGroup = ""
-            for j in range(len(DeviceTherapyModification["History"])):
-                if DeviceTherapyModification["History"][j]["Type"] == "TherapyChangeGroup":
-                    if DeviceTherapyModification["History"][j]["Date"] >= VisitTimestamps[lastVisit] and DeviceTherapyModification["History"][j]["Date"] <= VisitTimestamps[i]:
-                        if not DeviceTherapyModification["History"][j]["Previous"] in GroupDurationCounter.keys():
-                            GroupDurationCounter[DeviceTherapyModification["History"][j]["Previous"]] = 0
-                        if LastGroupTime == 0:
-                            GroupDurationCounter[DeviceTherapyModification["History"][j]["Previous"]] += DeviceTherapyModification["History"][j]["Date"] - VisitTimestamps[lastVisit]
-                        else:
-                            GroupDurationCounter[DeviceTherapyModification["History"][j]["Previous"]] += DeviceTherapyModification["History"][j]["Date"] - LastGroupTime
-                        LastGroupTime = DeviceTherapyModification["History"][j]["Date"]
-                        LastGroup = DeviceTherapyModification["History"][j]["New"]
-
-            if not LastGroup in GroupDurationCounter.keys():
-                GroupDurationCounter[LastGroup] = 0
-            GroupDurationCounter[LastGroup] += VisitTimestamps[i] - LastGroupTime
-
-            for key in GroupDurationCounter.keys():
-                GroupDurationCounter[key] /= TotalDuration
-
-            for history in TherapyHistory["History"]:
-                if history["Date"] == VisitTimestamps[i] and history["Type"] in ["Pre-visit Therapy", "Past Therapy"]:
-                    if history["GroupId"] in GroupDurationCounter.keys():
-                        history["Percent"] = GroupDurationCounter[history["GroupId"]]
-                    else:
-                        history["Percent"] = 0
-
-            lastVisit = i  
-            i += 1
     
-    return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories}
+    TherapyTimeline = createTherapyTimeline({
+        "TherapyDevices": TherapyDevices,
+        "TherapyModification": TherapyModifications, 
+        "TherapyConfiguration": TherapyHistories
+    })
+
+    TherapyTimeline.sort(key=lambda x: x["Date"])
+    for n in range(len(TherapyModifications)):
+        TherapyModifications[n]["History"].sort(key=lambda x: x["Date"])
+        for j in range(len(TherapyModifications[n]["History"])):
+            if TherapyModifications[n]["History"][j]["Type"] == "TherapyChangeGroup":
+                TherapyModifications[n]["History"][j]["Therapy"] = None
+                for k in range(len(TherapyTimeline)):
+                    if TherapyTimeline[k]["Date"] > TherapyModifications[n]["History"][j]["Date"] and not TherapyModifications[n]["History"][j]["Therapy"]:
+                        for i in range(len(TherapyTimeline[k]["DefinedTherapies"])):
+                            if TherapyTimeline[k]["DefinedTherapies"][i]["Device"]["Id"] == TherapyModifications[n]["Device"]["Id"]:
+                                if TherapyTimeline[k]["DefinedTherapies"][i]["GroupId"] == TherapyModifications[n]["History"][j]["New"]:
+                                    for l in range(len(TherapyTimeline[k]["Therapies"][i]["Processed"])):
+                                        if TherapyTimeline[k]["Therapies"][i]["Processed"][l]["TherapyIds"] == TherapyTimeline[k]["DefinedTherapies"][i]["Pre"]:
+                                            TherapyModifications[n]["History"][j]["Therapy"] = TherapyTimeline[k]["Therapies"][i]["Processed"][l]
+                                            break
+
+    return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories, "TherapyTimeline": TherapyTimeline}
 
 def createTherapyTimeline(TherapyHistory):
-    #Participant = models.Participant.find(uid="dccdae2db1674b47b7881e87d2fb8b98")
-    #TherapyHistory = Therapy.queryTherapyHistory(Participant)
-
     AllSessionDates = []
     AllTherapyGroups = []
     for i in range(len(TherapyHistory["TherapyConfiguration"])):
         TherapyHistory["TherapyConfiguration"][i]["History"].sort(key=lambda x: x["Date"])
         AllSessionDates.extend([history["Date"] for history in TherapyHistory["TherapyConfiguration"][i]["History"]])
         AllTherapyGroups.extend([history["GroupId"] for history in TherapyHistory["TherapyConfiguration"][i]["History"]])
+
     AllSessionDates.extend([device["Date"] for device in TherapyHistory["TherapyDevices"]])
 
     AllSessionDates = np.unique(AllSessionDates)
@@ -226,149 +178,152 @@ def createTherapyTimeline(TherapyHistory):
             GroupEntries = [history for history in KnownTherapyEntries if history["GroupId"] == id]
             TimelineEntry["Therapies"].append({
                 "GroupId": id,
-                "GroupEntries": GroupEntries
+                "GroupEntries": GroupEntries,
+                "Processed": []
             })
-            
         TherapyTimeline.append(TimelineEntry)
+    
+    for n in range(len(TherapyTimeline)):
+        for device in TherapyHistory["TherapyDevices"]:
+            for g in range(len(TherapyTimeline[n]["Therapies"])):
+                GroupId = TherapyTimeline[n]["Therapies"][g]["GroupId"]
+                AllTherapies = [TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i] for i in range(len(TherapyTimeline[n]["Therapies"][g]["GroupEntries"])) if TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i]["Device"]["Id"] == device["Id"]]
 
+                for therapyType in ["Past Therapy", "Pre-visit Therapy", "Post-visit Therapy"]:
+                    AvailableTherapies = [AllTherapies[i] for i in range(len(AllTherapies)) if AllTherapies[i]["Type"] == therapyType]
+                    if len(AvailableTherapies) == 0:
+                        continue
+                    
+                    UniqueDates = np.unique([AvailableTherapies[i]["Date"] for i in range(len(AvailableTherapies))])
+                    for date in UniqueDates:
+                        UniqueSettings = [AvailableTherapies[i] for i in range(len(AvailableTherapies)) if AvailableTherapies[i]["Date"] == date]
+                        DefinedTherapy = {
+                            "Device": device,
+                            "Name": "",  "Type": therapyType,
+                            "Date": date, "Timezone": "",
+                            "GroupId": GroupId, "GroupName": "", "GroupType": "",
+                            "TherapyLabel": "",
+                            "Electrodes": [], "Stimulation": [], "Adaptive": [],
+                            "TherapyIds": []
+                        }
+
+                        for electrode in device["Electrodes"]:
+                            DefinedTherapy["Electrodes"].append(electrode)
+
+                            KnownSettings = []
+                            for therapy in UniqueSettings:
+                                for j in range(len(therapy["StimulationSettings"])):
+                                    if therapy["StimulationSettings"][j]["Electrode"]["Target"] == electrode["Target"]:
+                                        KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
+                            DefinedTherapy["Stimulation"].append(KnownSettings)
+                            DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
+                            for j in range(len(KnownSettings)):
+                                if KnownSettings[j]["Label"] != "":
+                                    DefinedTherapy["TherapyLabel"] = KnownSettings[j]["Label"]
+
+                            KnownSettings = []
+                            for therapy in UniqueSettings:
+                                for j in range(len(therapy["StimulationSettings"])):
+                                    if therapy["StimulationSettings"][j]["Electrode"]["Target"] == electrode["Target"]:
+                                        KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
+                            DefinedTherapy["Adaptive"].append(KnownSettings)
+                            DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
+                        
+                        DefinedTherapy["TherapyIds"] = list(np.unique(DefinedTherapy["TherapyIds"]))
+                        TherapyTimeline[n]["Therapies"][g]["Processed"].append(DefinedTherapy)
+                        
     for n in range(len(TherapyTimeline)):
         TherapyTimeline[n]["DefinedTherapies"] = []
         for device in TherapyHistory["TherapyDevices"]:
-            for g in range(len(AllTherapyGroups)):
-                GroupId = AllTherapyGroups[g]
-                ConfiguredTherapy = [TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i] for i in range(len(TherapyTimeline[n]["Therapies"][g]["GroupEntries"])) if TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i]["Device"]["Id"] == device["Id"] and TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i]["Type"] in ["Post-visit Therapy"]]
-                if n == len(TherapyTimeline)-1:
-                    RecordedTherapy = []
-                else:
-                    RecordedTherapy = [TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i] for i in range(len(TherapyTimeline[n]["Therapies"][g]["GroupEntries"])) if TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i]["Device"]["Id"] == device["Id"] and TherapyTimeline[n]["Therapies"][g]["GroupEntries"][i]["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
-
-                if len(RecordedTherapy) == 0 and len(ConfiguredTherapy) == 0:
-                    continue
+            for g in range(len(TherapyTimeline[n]["Therapies"])):
+                TherapyTimeline[n]["Therapies"][g]["Processed"].sort(key=lambda x: x["Date"])
 
                 DefinedTherapy = {
                     "Device": device,
                     "Name": "",  "Type": "Defined Therapy",
                     "Date": TherapyTimeline[n]["Date"], "Timezone": "",
-                    "GroupId": GroupId, "GroupName": "", "GroupType": "",
-                    "StimulationSettings": [], "AdaptiveSettings": []
+                    "GroupId": TherapyTimeline[n]["Therapies"][g]["GroupId"], "GroupName": "", "GroupType": "",
+                    "Pre": [], "Post": [],
                 }
+                
+                if len(TherapyTimeline[n]["Therapies"][g]["Processed"]) == 0:
+                    TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
+                    continue
 
-                def CompareAdaptiveDictionaries(KnownSettings, TherapyType):
-                    SettingDict = {}
+                for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])):
+                    if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyLabel"] == "Pre-visit Preferred":
+                        DefinedTherapy["Pre"] = TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyIds"]
 
-                    UniqueKeys = []
-                    for j in range(len(KnownSettings)):
-                        if KnownSettings[j]: 
-                            for key in KnownSettings[j].keys():
-                                if not key in UniqueKeys:
-                                    UniqueKeys.append(key)
+                if len(DefinedTherapy["Pre"]) == 0:
+                    PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
+                    DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"] if len(PreTherapy) > 0 else []
+                    
+                for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])):
+                    if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyLabel"] == "Post-visit Preferred":
+                        DefinedTherapy["Post"] = TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyIds"]
 
-                    for key in UniqueKeys:
-                        if key == "TherapyType":
-                            continue
-
-                        SettingDict[key] = None
-
-                        AllKnownValues = [KnownSettings[i][key] if (KnownSettings[i] and key in KnownSettings[i].keys()) else None for i in range(len(KnownSettings))]
-                        AllKnownValues = [x for x in AllKnownValues if x != None]
-                        if type(AllKnownValues[0]) == dict:
-                            SettingDict[key] = CompareAdaptiveDictionaries(AllKnownValues, TherapyType)
-                            continue
-                        
-                        CompareList = False
-                        if type(AllKnownValues[0]) == list:
-                            CompareList = True
-                            AllKnownValues = [json.dumps(AllKnownValues[i]) if AllKnownValues[i] != None else "[]" for i in range(len(AllKnownValues))]
-                        
-                        AllUniqueKnownValues = list(set(AllKnownValues))
-                        if len(AllUniqueKnownValues) == 1:
-                            SettingDict[key] = json.loads(AllUniqueKnownValues[0]) if CompareList else AllUniqueKnownValues[0]
-                            continue
-                        
-                        Counter = []
-                        for value in AllUniqueKnownValues:
-                            Counter.append({"Value": value, "Occurances": len([x for x in AllKnownValues if x == value]) / len(AllKnownValues)})
-                        
-                        # Max Occurance
-                        Counter.sort(key=lambda x: x["Occurances"], reverse=True)
-                        MaxOccurance = Counter[0]["Occurances"]
-                        MaxValues = [Counter[i]["Value"] for i in range(len(Counter)) if Counter[i]["Occurances"] == MaxOccurance]
-                        if len(MaxValues) == 1:
-                            SettingDict[key] = json.loads(MaxValues[0]) if CompareList else MaxValues[0]
-                            continue
-                        
-                        SettingDict[key] = []
-                        for i in range(len(AllKnownValues)):
-                            SettingDict[key].append({
-                                "TherapyType": TherapyType[i],
-                                "Value": json.loads(AllKnownValues[i]) if CompareList else AllKnownValues[i]
-                            })
-
-                    return SettingDict
-
-                for electrode in device["Electrodes"]:
-                    Target = electrode["Target"]
-                    ElectrodeSetting = {}
-                    KnownSettings = []
-                    for therapy in ConfiguredTherapy:
-                        for j in range(len(therapy["StimulationSettings"])):
-                            if therapy["StimulationSettings"][j]["Electrode"]["Target"] == Target:
-                                KnownSettings.append({**{"TherapyType": therapy["Type"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
-                    for therapy in RecordedTherapy:
-                        for j in range(len(therapy["StimulationSettings"])):
-                            if therapy["StimulationSettings"][j]["Electrode"]["Target"] == Target:
-                                KnownSettings.append({**{"TherapyType": therapy["Type"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
-
-                    if len(KnownSettings) == 0:
-                        continue
-
-                    ElectrodeSetting["Pre"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Pre"] = [ElectrodeSetting["Pre"][j] for j in range(len(ElectrodeSetting["Pre"])) if ElectrodeSetting["Pre"][j]["Date"] == ElectrodeSetting["Pre"][0]["Date"]]
-                    if len(ElectrodeSetting["Pre"]) == 1:
-                        ElectrodeSetting["Pre"] = ElectrodeSetting["Pre"][0]
-                    #ElectrodeSetting["Pre"] = ElectrodeSetting["Pre"][0] if len(ElectrodeSetting["Pre"]) > 0 else {}
-                    ElectrodeSetting["Post"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Post-visit Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Post"] = [ElectrodeSetting["Post"][j] for j in range(len(ElectrodeSetting["Post"])) if ElectrodeSetting["Post"][j]["Date"] == ElectrodeSetting["Post"][-1]["Date"]]
-                    if len(ElectrodeSetting["Post"]) == 1:
-                        ElectrodeSetting["Post"] = ElectrodeSetting["Post"][0]
-                    #ElectrodeSetting["Post"] = ElectrodeSetting["Post"][-1] if len(ElectrodeSetting["Post"]) > 0 else {}
-                    ElectrodeSetting["Summary"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], key=lambda x: x["Date"])
-                    ElectrodeSetting["Summary"] = [ElectrodeSetting["Summary"][j] for j in range(len(ElectrodeSetting["Summary"])) if ElectrodeSetting["Summary"][j]["Date"] == ElectrodeSetting["Summary"][0]["Date"]]
-                    if len(ElectrodeSetting["Summary"]) == 1:
-                        ElectrodeSetting["Summary"] = ElectrodeSetting["Summary"][0]
-                    #ElectrodeSetting["Summary"] = ElectrodeSetting["Summary"][0] if len(ElectrodeSetting["Summary"]) > 0 else {}
-                    #ElectrodeSetting["Summary"] = CompareAdaptiveDictionaries([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], 
-                    DefinedTherapy["StimulationSettings"].append(ElectrodeSetting)
-
-                    AdaptiveSetting = {}
-                    KnownSettings = []
-                    for therapy in ConfiguredTherapy:
-                        for j in range(len(therapy["StimulationSettings"])):
-                            if therapy["StimulationSettings"][j]["Electrode"]["Target"] == Target:
-                                KnownSettings.append({**{"TherapyType": therapy["Type"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
-                    for therapy in RecordedTherapy:
-                        for j in range(len(therapy["StimulationSettings"])):
-                            if therapy["StimulationSettings"][j]["Electrode"]["Target"] == Target:
-                                KnownSettings.append({**{"TherapyType": therapy["Type"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
-
-                    AdaptiveSetting["Pre"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Pre"] = [AdaptiveSetting["Pre"][j] for j in range(len(AdaptiveSetting["Pre"])) if AdaptiveSetting["Pre"][j]["Date"] == AdaptiveSetting["Pre"][0]["Date"]]
-                    if len(AdaptiveSetting["Pre"]) == 1:
-                        AdaptiveSetting["Pre"] = AdaptiveSetting["Pre"][0]
-                    AdaptiveSetting["Post"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Post-visit Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Post"] = [AdaptiveSetting["Post"][j] for j in range(len(AdaptiveSetting["Post"])) if AdaptiveSetting["Post"][j]["Date"] == AdaptiveSetting["Post"][-1]["Date"]]
-                    if len(AdaptiveSetting["Post"]) == 1:
-                        AdaptiveSetting["Post"] = AdaptiveSetting["Post"][0]
-                    AdaptiveSetting["Summary"] = sorted([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], key=lambda x: x["Date"])
-                    AdaptiveSetting["Summary"] = [AdaptiveSetting["Summary"][j] for j in range(len(AdaptiveSetting["Summary"])) if AdaptiveSetting["Summary"][j]["Date"] == AdaptiveSetting["Summary"][0]["Date"]]
-                    if len(AdaptiveSetting["Summary"]) == 1:
-                        AdaptiveSetting["Summary"] = AdaptiveSetting["Summary"][0]
-
-                    #AdaptiveSetting["Summary"] = CompareAdaptiveDictionaries([KnownSettings[i] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]], 
-                    #                                                         [KnownSettings[i]["TherapyType"] for i in range(len(KnownSettings)) if KnownSettings[i]["TherapyType"] in ["Pre-visit Therapy", "Past Therapy"]])
-                    DefinedTherapy["AdaptiveSettings"].append(AdaptiveSetting)
+                if len(DefinedTherapy["Post"]) == 0:
+                    PostTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Post-visit Therapy"]]
+                    DefinedTherapy["Post"] = PostTherapy[-1]["TherapyIds"] if len(PostTherapy) > 0 else []
+                    
                 TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
     
+    for device in TherapyHistory["TherapyDevices"]:
+        SessionTimestamps = []
+        for i in range(len(TherapyTimeline)):
+            for j in range(len(TherapyTimeline[i]["DefinedTherapies"])):
+                if TherapyTimeline[i]["DefinedTherapies"][j]["Device"]["Id"] == device["Id"]:
+                    SessionTimestamps.append(TherapyTimeline[i]["Date"])
+                    break
+        SessionTimestamps.sort()
+
+        for i in range(len(TherapyHistory["TherapyModification"])):
+            if TherapyHistory["TherapyModification"][i]["Device"]["Id"] == device["Id"]:
+                TherapyModification = [history for history in TherapyHistory["TherapyModification"][i]["History"] if history["Type"] == "TherapyChangeGroup"]
+                TherapyModification.sort(key=lambda x: x["Date"])
+
+                if len(TherapyModification) == 0:
+                    continue
+
+                for n in range(len(TherapyModification)-1):
+                    if not (TherapyModification[n]["New"] == TherapyModification[n+1]["Previous"]):
+                        TherapyModification[n]["EndDate"] = None
+                    else:
+                        TherapyModification[n]["EndDate"] = TherapyModification[n+1]["Date"]
+                TherapyModification[-1]["EndDate"] = None
+
+                for k in range(1, len(SessionTimestamps)):
+                    DutyCycleCalculation = {}
+                    for n in range(len(TherapyModification)-1):
+                        if not TherapyModification[n]["New"] in DutyCycleCalculation.keys():
+                            DutyCycleCalculation[TherapyModification[n]["New"]] = 0
+
+                        if TherapyModification[n+1]["Date"] > SessionTimestamps[k-1] and TherapyModification[n]["Date"] < SessionTimestamps[k]:
+                            if TherapyModification[n]["Date"] < SessionTimestamps[k-1]:
+                                DutyCycleCalculation[TherapyModification[n]["New"]] += TherapyModification[n+1]["Date"] - SessionTimestamps[k-1]
+                            else:
+                                DutyCycleCalculation[TherapyModification[n]["New"]] += TherapyModification[n+1]["Date"] - TherapyModification[n]["Date"]
+
+                            if TherapyModification[n+1]["Date"] > SessionTimestamps[k]:
+                                DutyCycleCalculation[TherapyModification[n]["New"]] -= TherapyModification[n+1]["Date"] - SessionTimestamps[k]
+
+                    TotalTime = np.sum([value for key, value in DutyCycleCalculation.items()])
+                    if TotalTime == 0:
+                        TotalTime = 1 # Prevent Division by Zero
+
+                    for key in DutyCycleCalculation.keys():
+                        if TotalTime > 0:
+                            DutyCycleCalculation[key] = DutyCycleCalculation[key] / TotalTime
+                        else:
+                            DutyCycleCalculation[key] = 0
+
+                        for j in range(len(TherapyTimeline)):
+                            if TherapyTimeline[j]["Date"] == SessionTimestamps[k]:
+                                for m in range(len(TherapyTimeline[j]["DefinedTherapies"])):
+                                    if TherapyTimeline[j]["DefinedTherapies"][m]["Device"]["Id"] == device["Id"]:
+                                        if TherapyTimeline[j]["DefinedTherapies"][m]["GroupId"] == key:
+                                            TherapyTimeline[j]["DefinedTherapies"][m]["PercentUsage"] = DutyCycleCalculation[key]
+                            
     if TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
         TherapyTimeline[-1] = copy.deepcopy(TherapyTimeline[-2])
 
@@ -472,7 +427,7 @@ def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):
                 return ClosestTherapy["Post"]
     return None
 
-def checkDuplicate(device, therapy):
+def checkDuplicate(device, electrode, therapy):
     AllTherapies = models.Therapy.find_all(source__metadata__Device=device.uid, type=therapy["type"], date=therapy["date"])
     if len(AllTherapies) == 0:
         return False
@@ -481,7 +436,6 @@ def checkDuplicate(device, therapy):
     if len(AllElectricalTherapy) == 0:
         return False
 
-    electrode = device.electrodes.filter(target__startswith=therapy["hemisphere"]).first()
     for electrical_therapy in AllElectricalTherapy:
         AllTrue = True
         for i in range(len(therapy["stimulation_settings"])):

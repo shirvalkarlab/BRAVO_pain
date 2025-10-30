@@ -147,7 +147,7 @@ function ParticipantListTable({data, getRecordingData}) {
     var collectiveData = [];
     for (var i = 0; i < participantData.length; i++) {
       if (filterOptions.Keyword.length > 0) {
-        if (!participantData[i].Name.includes(filterOptions.Keyword)) {
+        if (!participantData[i].Name.toLowerCase().includes(filterOptions.Keyword.toLowerCase()) && !participantData[i].Id.toLowerCase().includes(filterOptions.Keyword.toLowerCase())) {
           continue;
         }
       }
