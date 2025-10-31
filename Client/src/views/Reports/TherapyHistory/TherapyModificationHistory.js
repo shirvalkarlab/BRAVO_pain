@@ -56,7 +56,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
 
     let therapyDates = {active: 0, options: []};
     for (let i in therapyHistoryRaw.TherapyTimeline) {
-      if (therapyHistoryRaw.TherapyTimeline[i].DefinedTherapies.some((a) => a.Device.GenericName == device) == false) continue;
+      if (therapyHistoryRaw.TherapyTimeline[i].DefinedTherapies.some((a) => a.Device.Name == device) == false) continue;
       therapyDates.options.push(therapyHistoryRaw.TherapyTimeline[i].Date);
     }
 
@@ -77,15 +77,19 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
       if (therapyHistory.TherapyTimeline[i].Date == therapyDateSlider.active) {
         setTherapyOptions(() => {
           let options = {active: null, pre: [], post: [], options: []};
-          for (let j in therapyHistory.TherapyTimeline[i].Therapies) {
-            for (let k in therapyHistory.TherapyTimeline[i].Therapies[j].Processed) {
-              if (therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k].Device.GenericName == device) {
-                options.options.push(therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k]);
-                if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Pre)) {
-                  options.pre.push(therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k]);
-                }
-                if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Post)) {
-                  options.post.push(therapyHistory.TherapyTimeline[i].Therapies[j].Processed[k]);
+          for (let j in therapyHistory.TherapyTimeline[i].DefinedTherapies) {
+            for (let l in therapyHistory.TherapyTimeline[i].Therapies) {
+              for (let k in therapyHistory.TherapyTimeline[i].Therapies[l].Processed) {
+                if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Device.Id == therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Device.Id) {
+                  if (!options.options.map((a) => a.TherapyIds).includes(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds)) {
+                  options.options.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
+                  }
+                  if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Pre)) {
+                    options.pre.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
+                  }
+                  if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Post)) {
+                    options.post.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
+                  }
                 }
               }
             }
@@ -447,9 +451,20 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
             </Grid>
           
             {therapyTable.DefinedTherapies.map((config, g) => {
-              const PreTherapy = therapyTable.Therapies[g].Processed.filter((a) => listMatch(a.TherapyIds, config.Pre));
-              const PostTherapy = therapyTable.Therapies[g].Processed.filter((a) => listMatch(a.TherapyIds, config.Post));
-              return <Grid item xs={12} key={config.Date+"_"+config.GroupId}>
+              let PreTherapy = [], PostTherapy = [];
+              for (let h in therapyTable.Therapies) {
+                for (let k in therapyTable.Therapies[h].Processed) {
+                  if (therapyTable.Therapies[h].Processed[k].Device.Id != config.Device.Id) continue;
+                  if (listMatch(therapyTable.Therapies[h].Processed[k].TherapyIds, config.Pre)) {
+                    PreTherapy = [therapyTable.Therapies[h].Processed[k]];
+                  }
+                  if (listMatch(therapyTable.Therapies[h].Processed[k].TherapyIds, config.Post)) {
+                    PostTherapy = [therapyTable.Therapies[h].Processed[k]];
+                  }
+                }
+              }
+
+              return <Grid item xs={12} key={config.Date+"_"+config.GroupId+"_"+config.Device.Id}>
                 <Card p={2}>
                   <MDBox px={2} pt={1}>
                     <MDTypography variant={"h5"} >

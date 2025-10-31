@@ -134,10 +134,12 @@ def queryTherapyHistory(Participant):
                         for i in range(len(TherapyTimeline[k]["DefinedTherapies"])):
                             if TherapyTimeline[k]["DefinedTherapies"][i]["Device"]["Id"] == TherapyModifications[n]["Device"]["Id"]:
                                 if TherapyTimeline[k]["DefinedTherapies"][i]["GroupId"] == TherapyModifications[n]["History"][j]["New"]:
-                                    for l in range(len(TherapyTimeline[k]["Therapies"][i]["Processed"])):
-                                        if TherapyTimeline[k]["Therapies"][i]["Processed"][l]["TherapyIds"] == TherapyTimeline[k]["DefinedTherapies"][i]["Pre"]:
-                                            TherapyModifications[n]["History"][j]["Therapy"] = TherapyTimeline[k]["Therapies"][i]["Processed"][l]
-                                            break
+                                    for therapyList in TherapyTimeline[k]["Therapies"]:
+                                        if therapyList["GroupId"] == TherapyModifications[n]["History"][j]["New"]:
+                                            for l in range(len(therapyList["Processed"])):
+                                                if np.all(therapyList["Processed"][l]["TherapyIds"] == TherapyTimeline[k]["DefinedTherapies"][i]["Pre"]):
+                                                    TherapyModifications[n]["History"][j]["Therapy"] = therapyList["Processed"][l]
+                                                    break
 
     return {"TherapyModification": TherapyModifications, "TherapyDevices": TherapyDevices, "TherapyConfiguration": TherapyHistories, "TherapyTimeline": TherapyTimeline}
 
@@ -236,7 +238,8 @@ def createTherapyTimeline(TherapyHistory):
         TherapyTimeline[n]["DefinedTherapies"] = []
         for device in TherapyHistory["TherapyDevices"]:
             for g in range(len(TherapyTimeline[n]["Therapies"])):
-                TherapyTimeline[n]["Therapies"][g]["Processed"].sort(key=lambda x: x["Date"])
+                ProcessedTherapyList = [TherapyTimeline[n]["Therapies"][g]["Processed"][i] for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])) if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["Device"]["Id"] == device["Id"]]
+                ProcessedTherapyList.sort(key=lambda x: x["Date"])
 
                 DefinedTherapy = {
                     "Device": device,
@@ -246,28 +249,28 @@ def createTherapyTimeline(TherapyHistory):
                     "Pre": [], "Post": [],
                 }
                 
-                if len(TherapyTimeline[n]["Therapies"][g]["Processed"]) == 0:
-                    TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
+                if len(ProcessedTherapyList) == 0:
+                    #TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
                     continue
 
-                for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])):
-                    if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyLabel"] == "Pre-visit Preferred":
-                        DefinedTherapy["Pre"] = TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyIds"]
+                for i in range(len(ProcessedTherapyList)):
+                    if ProcessedTherapyList[i]["TherapyLabel"] == "Pre-visit Preferred":
+                        DefinedTherapy["Pre"] = ProcessedTherapyList[i]["TherapyIds"]
 
                 if len(DefinedTherapy["Pre"]) == 0:
-                    PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy"]]
+                    PreTherapy = [therapy for therapy in ProcessedTherapyList if therapy["Type"] in ["Pre-visit Therapy"]]
                     if len(PreTherapy) > 0:
                         DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"]
                     else:
-                        PreTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
+                        PreTherapy = [therapy for therapy in ProcessedTherapyList if therapy["Type"] in ["Pre-visit Therapy", "Past Therapy"]]
                         DefinedTherapy["Pre"] = PreTherapy[0]["TherapyIds"] if len(PreTherapy) > 0 else []
-                    
-                for i in range(len(TherapyTimeline[n]["Therapies"][g]["Processed"])):
-                    if TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyLabel"] == "Post-visit Preferred":
-                        DefinedTherapy["Post"] = TherapyTimeline[n]["Therapies"][g]["Processed"][i]["TherapyIds"]
+
+                for i in range(len(ProcessedTherapyList)):
+                    if ProcessedTherapyList[i]["TherapyLabel"] == "Post-visit Preferred":
+                        DefinedTherapy["Post"] = ProcessedTherapyList[i]["TherapyIds"]
 
                 if len(DefinedTherapy["Post"]) == 0:
-                    PostTherapy = [therapy for therapy in TherapyTimeline[n]["Therapies"][g]["Processed"] if therapy["Type"] in ["Post-visit Therapy"]]
+                    PostTherapy = [therapy for therapy in ProcessedTherapyList if therapy["Type"] in ["Post-visit Therapy"]]
                     DefinedTherapy["Post"] = PostTherapy[-1]["TherapyIds"] if len(PostTherapy) > 0 else []
                     
                 TherapyTimeline[n]["DefinedTherapies"].append(DefinedTherapy)
