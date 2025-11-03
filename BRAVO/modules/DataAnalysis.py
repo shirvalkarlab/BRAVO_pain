@@ -299,7 +299,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
             elif recording.type == "MedtronicBrainSensePowerDomain":
                 continue
 
-            elif recording.type == "MedtronicBaselineMontages" or recording.type == "MedtronicBrainSenseSurvey":
+            elif recording.type == "MedtronicBaselineMontages" or recording.type == "MedtronicBrainSenseSurvey" or recording.type == "MedtronicElectrodeIdentifier":
                 for device in DBSDevices:
                     if device["Id"] == recording.source.metadata["Device"]:
                         Description["Device"] = device
