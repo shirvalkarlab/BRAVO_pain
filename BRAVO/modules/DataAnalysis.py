@@ -247,6 +247,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
         SourceFiles = models.SourceFile.find_all(owner=Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", 
+                                                                                 "MedtronicElectrodeIdentifier", 
                                                                                  "MedtronicBrainSenseSurvey", 
                                                                                  "MedtronicBaselineMontages", 
                                                                                  "MedtronicBrainSenseTimeDomain", 
@@ -1369,8 +1370,8 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
-    
-    if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
+
+    if recording.type in ["MedtronicElectrodeIdentifier", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         Data = processTimeDomainStreaming(recording, Data, config)
 
