@@ -191,33 +191,19 @@ const routes = {
     name: "Group Analysis",
     children: [
       {
-        key: "ElectrodeIdentifier",
-        name: "Monopolar vs Bipolar Survey",
-        icon: <BiotechIcon />,
-        route: "/group-analysis/monopolar-bipolar-survey",
-        component: <ElectrodeIdentifierExamination />,
-      },
-      {
         key: "SpectralAnalysisExaminationStreaming",
-        name: "Stimulation-induced FTG",
+        name: "Effects of Changes in Stimulation",
         icon: <BiotechIcon />,
-        route: "/group-analysis/stimulation-induced-FTG",
+        route: "/group-analysis/stimulation-induced-changes",
         component: <SpectralAnalysisExaminationStreaming />,
       },
       {
-        key: "SpectralAnalysisExaminationStreaming",
-        name: "Baseline FTG",
+        key: "SpectralAnalysisExaminationSurvey",
+        name: "DBS Snapshot Analysis",
         icon: <BiotechIcon />,
-        route: "/group-analysis/baseline-FTG",
+        route: "/group-analysis/dbs-snapshot-analysis",
         component: <SpectralAnalysisExaminationSurvey />,
-      },
-      {
-        key: "SurveyPeakIdentifier",
-        name: "Annotating Peaks from PSD",
-        icon: <BiotechIcon />,
-        route: "/group-analysis/annotating-peaks-from-PSD",
-        component: <SurveyPeakIdentifier />,
-      },
+      }
     ]
   },
   "GeneralReports": {

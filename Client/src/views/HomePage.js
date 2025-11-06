@@ -28,7 +28,7 @@ export default function HomePage() {
   const [alert, setAlert] = useState(null);
 
   return (
-    <OnePageLayout wide image={"https://j9q7m2a3.rocketcdn.me/wp-content/uploads/2022/01/UF-Health.jpg"}>
+    <OnePageLayout wide image={"https://parrish-mccall.com/wp-content/uploads/2019/10/Parrish-McCall_NDC-UF_Health_Night-Ext-2-2-e1636574511902.jpg"}>
       {alert}
       <Card sx={{
         paddingTop: 5,

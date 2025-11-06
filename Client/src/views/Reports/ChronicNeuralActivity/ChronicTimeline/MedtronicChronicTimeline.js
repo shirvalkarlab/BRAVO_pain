@@ -233,7 +233,6 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
         }
       }
     }
-
     setRenderData(lineSeries);
   }, [fig, data, showAdaptiveMode, annotations]);
 
@@ -340,50 +339,50 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
   }
 
   return (
-    <Grid container spacing={2} sx={{marginTop: 1}}>
+    <Grid container spacing={2} sx={{marginTop: 0}}>
       <Grid item xs={12} sx={{marginLeft: 5, marginRight: 5}}>
         <Grid container spacing={2}>
           {Object.keys(annotationState).map((name) => {
             if (!name) return null
             return <Grid item key={name} xs={6} sm={4} md={3} lg={2}>
               <Card sx={{background: annotationState[name].show ? "" : "darkgrey"}}>
-              <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
-                <IconButton
-                  style={{padding: 0, marginRight: 3, borderStyle: "solid", borderColor: "#000000", borderWidth: 1, height: "100%"}} 
-                  onClick={(event) => setPopupState({item: name, anchorEl: event.currentTarget})}
-                >
-                  <img style={{background: annotationState[name].color, padding: 8, borderRadius: "50%"}}/>
-                </IconButton>
-                <Popover 
-                  open={popup.item == name}
-                  onClose={() => setPopupState({item: "", anchorEl: null})}
-                  anchorEl={popup.anchorEl}
-                  anchorOrigin={{
-                    vertical: 'bottom',
-                    horizontal: 'left',
-                  }}
-                  transformOrigin={{
-                    vertical: "top",
-                    horizontal: 'left',
-                  }}
-                  PaperProps={{sx: {boxShadow: "none"}}}
-                >
-                  <TwitterPicker color={annotationState[name].color} onChange={(color) => {
+                <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
+                  <IconButton
+                    style={{padding: 0, marginRight: 3, borderStyle: "solid", borderColor: "#000000", borderWidth: 1, height: "100%"}} 
+                    onClick={(event) => setPopupState({item: name, anchorEl: event.currentTarget})}
+                  >
+                    <img style={{background: annotationState[name].color, padding: 8, borderRadius: "50%"}}/>
+                  </IconButton>
+                  <Popover 
+                    open={popup.item == name}
+                    onClose={() => setPopupState({item: "", anchorEl: null})}
+                    anchorEl={popup.anchorEl}
+                    anchorOrigin={{
+                      vertical: 'bottom',
+                      horizontal: 'left',
+                    }}
+                    transformOrigin={{
+                      vertical: "top",
+                      horizontal: 'left',
+                    }}
+                    PaperProps={{sx: {boxShadow: "none"}}}
+                  >
+                    <TwitterPicker color={annotationState[name].color} onChange={(color) => {
+                      setAnnotationState((annotationState) => {
+                        annotationState[name].color = color.hex;
+                        return {...annotationState}
+                      });
+                    }}/>
+                  </Popover>
+                  <MDTypography variant="h6" fontSize={15} color={"dark"} style={{cursor: "pointer"}} onClick={() => {
                     setAnnotationState((annotationState) => {
-                      annotationState[name].color = color.hex;
+                      annotationState[name].show = !annotationState[name].show;
                       return {...annotationState}
                     });
-                  }}/>
-                </Popover>
-                <MDTypography variant="h6" fontSize={15} color={"dark"} style={{cursor: "pointer"}} onClick={() => {
-                  setAnnotationState((annotationState) => {
-                    annotationState[name].show = !annotationState[name].show;
-                    return {...annotationState}
-                  });
-                }}>
-                  {name}
-                </MDTypography>
-              </MDBox>
+                  }}>
+                    {name}
+                  </MDTypography>
+                </MDBox>
               </Card>
             </Grid>
           })}

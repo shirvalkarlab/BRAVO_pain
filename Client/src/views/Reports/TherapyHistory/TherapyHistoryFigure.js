@@ -28,7 +28,7 @@ import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 import { SessionController } from "database/session-control";
 
-function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) {
+function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -42,7 +42,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
     format: 'hex',
     alpha: 1,
   });
-  const step = Math.floor(11 / Object.keys(dataToRender.TherapyDevices).length);
+  const step = Math.floor(11 / dataToRender.TherapyDevices.length);
 
   useEffect(() => {
     setShowDevice(dataToRender.TherapyDevices.map((a) => a.Id));
@@ -80,6 +80,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
   useEffect(() => {
     if (!fig) return;
 
+    console.log(dataToRender)
     let graphingData = []
     for (let i in dataToRender.TherapyModification) {
       let TherapyBlocks = [];
@@ -233,10 +234,25 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
       if (data[i].therapyBlocks) counter += 1;
     }
 
-    fig.setLayoutProps({
-      shapes: therapyBlocks,
-      xaxis: {type: "date"}
-    });
+    if (rangeSlider) { 
+      fig.setLayoutProps({
+        shapes: therapyBlocks,
+        xaxis: {
+          type: "date",
+          rangeselector: {
+            buttons: [
+              { step: "month", count: 1, label: "1 Month" },
+              { step: "day", count: 7, label: "1 Week" },
+            ]
+          },
+        }
+      });
+    } else {
+      fig.setLayoutProps({
+        shapes: therapyBlocks,
+        xaxis: {type: "date"}
+      });
+    }
     fig.setXlim([new Date(xLim[0]*1000), new Date(xLim[1]*1000)]);
     fig.setYlim([-0.5, uniqueGroups.length-0.5]);
 
@@ -303,7 +319,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
   return useMemo(() => (
     <MDBox>
       <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: height, width: "100%", display: ""}}/>
-      {dataToRender ? (
+      {dataToRender && dataToRender.TherapyDevices.length > 1 ? (
         <Grid container spacing={2}>
           {dataToRender.TherapyDevices.map((device, index) => {
             return <Grid item xs={4} sm={3} key={device.Id}>
@@ -326,7 +342,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, figureTitle}) 
         </Grid>
       ) : null}
     </MDBox>
-  ), [showDevice, dataToRender]);
+  ), [ref, showDevice, dataToRender]);
 }
 
 export default TherapyHistoryFigure;

@@ -96,7 +96,7 @@ export default function SourceFiles() {
     let options = [];
     for (let i in availableSourceFiles) {
       if (availableSourceFiles[i].Type == sourceFileType.active) {
-        const dateString = new Date(availableSourceFiles[i].DateOfRecording*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(availableSourceFiles[i].Timezone),
+        const dateString = new Date(availableSourceFiles[i].DateOfUpload*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(availableSourceFiles[i].Timezone),
           year: "numeric",
           month: "2-digit",
           day: "2-digit",
@@ -125,7 +125,7 @@ export default function SourceFiles() {
     let collectiveData = [];
     for (var i = 0; i < availableSourceFiles.length; i++) {
       if (availableSourceFiles[i].Type == sourceFileType.active) {
-        const dateString = new Date(availableSourceFiles[i].DateOfRecording*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(availableSourceFiles[i].Timezone),
+        const dateString = new Date(availableSourceFiles[i].DateOfUpload*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(availableSourceFiles[i].Timezone),
           year: "numeric",
           month: "2-digit",
           day: "2-digit",

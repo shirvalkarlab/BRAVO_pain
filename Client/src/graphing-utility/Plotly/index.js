@@ -256,7 +256,7 @@ class PlotlyRenderManager {
    * 
    * @return {string[]} Array of subplots created, C-ordered. 
    */
-  subplots(row, col, options={sharex: false, sharey: false, colSpacing: 0.02, rowSpacing: 0.15}) {
+  subplots(row, col, options={sharex: false, sharey: false, colSpacing: 0.02, rowSpacing: 0.25}) {
     this.ax = [];
 
     if (options.sharex) {
@@ -266,7 +266,7 @@ class PlotlyRenderManager {
     }
     
     if (!options.colSpacing) options.colSpacing = 0.02;
-    if (!options.rowSpacing) options.rowSpacing = 0.15;
+    if (!options.rowSpacing) options.rowSpacing = 0.25;
     
     if (options.sharey) {
       var yAxesLabels = Array(row).fill(0).map((value, index) => (index+1 == 1) ? "y" : "y" + (index+1).toString());
@@ -277,21 +277,24 @@ class PlotlyRenderManager {
     this.layout.grid.subplots = Array(row).fill(0).map(() => Array(col));
     
     const colFraction = 1/col;
-    const rowFraction = 1/row;
+    const rowFraction = 1 / ((1 + options.rowSpacing) * (row - 1) + 1);
     const colSpacing = colFraction*options.colSpacing;
     const rowSpacing = rowFraction*options.rowSpacing;
+
     for (var i = 0; i < row; i++) {
       for (var k = 0; k < col; k++) {
         var xaxis = (options.sharex ? xAxesLabels[k] : xAxesLabels[i*col+k]);
         var yaxis = (options.sharey ? yAxesLabels[i] : yAxesLabels[i*col+k]);
         this.layout.grid.subplots[i][k] = xaxis + yaxis;
+        const ydomain = [1 - (rowFraction*i + rowSpacing*i) - rowFraction, 1 - (rowFraction*i + rowSpacing*i)];
+        
         this.ax.push({
           xaxis: xaxis,
           yaxis: yaxis,
           xlayout: xaxis.replace("x","xaxis"),
           ylayout: yaxis.replace("y","yaxis"),
           xdomain: col > 1 ? [colFraction*k+colSpacing, colFraction*(k+1)-colSpacing] : [0,1],
-          ydomain: row > 1 ? [1-(rowFraction*(i+1)-rowSpacing), 1-(rowFraction*i+rowSpacing)] : [0,1]
+          ydomain: row > 1 ? ydomain : [0,1]
         });
       }
     }
