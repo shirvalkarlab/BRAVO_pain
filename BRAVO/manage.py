@@ -51,6 +51,20 @@ def processInput(argv):
 
             return True
         
+        elif argv[1] == "DeleteChronicNeuralActivityCache":
+            from BRAVO import wsgi
+            from Server import models
+            from modules import Database
+            from modules import DataCurator
+
+            participants = models.Participant.find_all()
+            for i in range(len(participants)):
+                participant = participants[i]
+                print(f"Start Processing Participant {i}/{len(participants)}")
+                if models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=participant):
+                    models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=participant).delete()
+                Database.deleteCachedResult(participant.uid, url="/queryChronicNeuralActivity")
+                    
         elif argv[1] == "RefreshPerceptSessions":
             from BRAVO import wsgi
             from Server import models
