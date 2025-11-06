@@ -243,7 +243,7 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
-    def QueryTimeSeriesAnalysis(self, participant_uid, recording_uid=None, therapy_uid=None, config=None ):
+    def QueryTimeSeriesAnalysis(self, participant_uid, recording_uid=None, therapy_uid=None, config=None, refresh=False ):
         form = {"ParticipantId": participant_uid, "RequestType": "Overview"}
         if recording_uid:
             form["RequestType"] = "RequestData"
@@ -251,11 +251,17 @@ class BRAVOPlatformRequest:
             form["TherapyId"] = therapy_uid
             form["ActiveChannels"] = "RequestAllChannel"
 
+        if refresh:
+            form["RequestType"] = "DeleteCache"
+
         if config:
             form["ProcessingConfiguration"] = config
             
         response = self.query("/api/queryTimeseriesAnalysis", data=form)
         if response.status_code == 200:
+            if refresh:
+                return self.QueryTimeSeriesAnalysis(participant_uid, recording_uid, therapy_uid, config)
+            
             payload = response.json()
             return payload
         else:
@@ -264,10 +270,16 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
-    def QueryChronicNeuralActivity(self, participant_uid):
+    def QueryChronicNeuralActivity(self, participant_uid, refresh=False):
         form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        if refresh:
+            form["RequestType"] = "DeleteCache"
+
         response = self.query("/api/queryChronicNeuralActivity", data=form)
         if response.status_code == 200:
+            if refresh: 
+                return self.QueryChronicNeuralActivity(participant_uid)
+            
             payload = response.json()
             return payload
         else:
