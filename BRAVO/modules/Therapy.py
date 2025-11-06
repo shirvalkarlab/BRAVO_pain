@@ -91,6 +91,7 @@ def queryTherapyHistory(Participant):
         VisitTimestamps = np.unique([i["Date"] for i in TherapyHistory["History"]])
         for i in range(len(VisitTimestamps)):
             LastTherapyChange = None
+            Inserted = False
             for j in range(0, len(DeviceTherapyModification["History"])):
                 if DeviceTherapyModification["History"][j]["Type"] == "TherapyChangeGroup":
                     if DeviceTherapyModification["History"][j]["Date"] > VisitTimestamps[i] and LastTherapyChange:
@@ -102,9 +103,20 @@ def queryTherapyHistory(Participant):
                             "Previous": LastTherapyChange,
                             "New": LastTherapyChange,
                         })
+                        Inserted = True
                         break
                     LastTherapyChange = DeviceTherapyModification["History"][j]["New"]
-        
+            
+            if not Inserted and LastTherapyChange:
+                DeviceTherapyModification["History"].append({
+                    "Id": uuid.uuid4().hex,
+                    "Name": "",
+                    "Type": "TherapyChangeGroup",
+                    "Date": VisitTimestamps[i],
+                    "Previous": LastTherapyChange,
+                    "New": LastTherapyChange,
+                })
+
         if LastTherapyChange:
             DeviceTherapyModification["History"].append({
                 "Id": uuid.uuid4().hex,

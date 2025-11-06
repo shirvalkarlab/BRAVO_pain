@@ -13,6 +13,7 @@ SLURM_JOB_PATH = os.path.join(BRAVO_Path, "modules", "AsyncJobScheduler")
 
 AsyncJobScripts = {
     "BurstAnalysis": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py BurstAnalysis ${JOB_ARGS}",
+    "FitbitRefresh": "/modules/Fitbit/FitbitDataUpdateService.py ${JOB_ARGS}",
     "ExtractSpectralFeaturesDuringStimulation": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py ExtractSpectralFeaturesDuringStimulation",
     "ExtractSpectralFeaturesDuringSurvey": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py ExtractSpectralFeaturesDuringSurvey"
 }

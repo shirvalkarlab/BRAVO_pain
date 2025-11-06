@@ -93,7 +93,7 @@ def estimateSessionDateTime(JSON):
         
     # Default to Use Session Start Date
     if not (SessionEndDate == 0) and not (SessionStartDate == 0):
-        if SessionEndDate - SessionStartDate < 8*60*60:
+        if SessionEndDate - SessionStartDate < 8*60*60 and SessionEndDate > SessionStartDate:
             return SessionStartDate
     
     sessionDatePools = list()
@@ -124,7 +124,7 @@ def estimateSessionDateTime(JSON):
 
     FirstRecording = np.min(sessionDatePools)
     if not (SessionStartDate == 0):
-        if FirstRecording - SessionStartDate < 8*60*60:
+        if FirstRecording - SessionStartDate < 8*60*60 and FirstRecording > SessionStartDate:
             return SessionStartDate
 
     return FirstRecording

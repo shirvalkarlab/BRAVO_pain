@@ -4,7 +4,7 @@ import os, sys
 from pathlib import Path
 import datetime, pytz
 import numpy as np
-from scipy import stats
+from scipy import stats, signal
 import pickle
 import subprocess
 
@@ -14,7 +14,7 @@ from modules.HelperFunctions import utc_offset_to_timezone
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 AnalysisScriptType = "ExtractSpectralFeaturesDuringStimulation"
-AnalysisMethodVersion = "1.0.2"
+AnalysisMethodVersion = "1.0.3"
 
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
@@ -206,22 +206,38 @@ def HandleRefreshAnalysis():
                         "Frequency": PSDFrequency
                     }
                     PSDInfo["AperiodicComponent"] = ExtractAperiodicComponents(PSDFrequency, MovingAverageFilter(PSDInfo["PowerSpectrum"],5))
+                            
+                    GammaPower = PSDInfo["PowerSpectrum"][GammaSelection]
+                    GammaFluctuation = np.nanmedian(UniqueTherapyAmplitudes[amp][((PSDFrequency < 90) & (PSDFrequency > 60)) & (~GammaSelection), :],axis=1)
 
-                    # Calculate the Gamma Power and Fluctuation
-                    GammaPower = np.nanmedian(UniqueTherapyAmplitudes[amp][GammaSelection, :],axis=0)
-                    GammaPower = GammaPower[~np.isnan(GammaPower)]
-                    GammaFluctuation = np.mean(UniqueTherapyAmplitudes[amp][((PSDFrequency < 90) & (PSDFrequency > 60)) & (~GammaSelection), :],axis=1)
+                    if np.all(np.isnan(GammaFluctuation)) or np.all(np.isnan(GammaPower)) : 
+                        continue 
+
                     if stats.sem(GammaPower) > 1e5 or stats.sem(GammaFluctuation) > 1e5:
                         continue
 
-                    ConfidenceInterval = stats.t.interval(0.95, len(GammaPower)-1, loc=np.median(GammaPower) / np.median(GammaFluctuation), scale=np.std(GammaFluctuation/ np.median(GammaFluctuation)))
-                    PSDInfo["FTG"] = {
-                        "CenterFrequency": GammaFrequency,
-                        "Power": ConfidenceInterval,
-                    }
-
+                    GammaFluctuation = signal.detrend(GammaFluctuation[~np.isnan(GammaFluctuation)])
                     collection["PSDs"].append(PSDInfo)
 
+        if len(collection["PSDs"]) > 1:
+            PSDLists = np.array([collection["PSDs"][i]["PowerSpectrum"][GammaSelection]-collection["PSDs"][0]["PowerSpectrum"][GammaSelection] for i in range(0, len(collection["PSDs"]))])
+            PeakIndex = np.argmax(np.max(PSDLists, axis=0))
+
+            for i in range(len(collection["PSDs"])):
+                GammaPower = collection["PSDs"][i]["PowerSpectrum"][GammaSelection]
+                GammaPower = GammaPower[~np.isnan(GammaPower)]
+                GammaFluctuation = collection["PSDs"][i]["PowerSpectrum"][((PSDFrequency < 90) & (PSDFrequency > 60)) & (~GammaSelection)]
+
+                if stats.sem(GammaPower) > 1e5 or stats.sem(GammaFluctuation) > 1e5:
+                    continue
+
+                GammaFluctuation = signal.detrend(GammaFluctuation[~np.isnan(GammaFluctuation)])
+                ConfidenceInterval = GammaPower[PeakIndex] + np.array([-5,5]) * np.std(GammaFluctuation)
+                collection["PSDs"][i]["FTG"] = {
+                    "CenterFrequency": GammaFrequency,
+                    "Power": ConfidenceInterval,
+                }
+        
         # Calculate the Stimulation-induced Power Increase
         collection["StimulationCorrelation"] = {"MeanSlope": 0, "PercentSignificant": 0, "MeanCorrelation": 0}
         if len(collection["PSDs"]) > 1:
