@@ -97,8 +97,6 @@ def estimateSessionDateTime(JSON):
             return SessionStartDate
     
     sessionDatePools = list()
-    if "EventSummary" in JSON.keys():
-        sessionDatePools.append(datetime.fromisoformat(JSON["EventSummary"]["SessionEndDate"].replace("Z","+00:00")).timestamp())
     if "CalibrationTests" in JSON.keys():
         for i in range(len(JSON["CalibrationTests"])):
             sessionDatePools.append(datetime.fromisoformat(JSON["CalibrationTests"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
@@ -112,22 +110,29 @@ def estimateSessionDateTime(JSON):
         for i in range(len(JSON["BrainSenseLfp"])):
             sessionDatePools.append(datetime.fromisoformat(JSON["BrainSenseLfp"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
     
+    if len(sessionDatePools) == 0:
+        if "EventSummary" in JSON.keys():
+            sessionDatePools.append(datetime.fromisoformat(JSON["EventSummary"]["SessionEndDate"].replace("Z","+00:00")).timestamp())
+
     sessionDatePools = np.array(sessionDatePools)
     sessionDatePools = sessionDatePools[sessionDatePools > 1420088400]
     if len(sessionDatePools) == 0:
-        if not (SessionEndDate == 0) and not (SessionStartDate == 0):
+        if SessionEndDate > 0 and SessionStartDate > 0:
             return SessionEndDate
-        elif not (SessionStartDate == 0):
+        elif SessionStartDate > 0:
             return SessionStartDate
-        elif not (SessionEndDate == 0):
+        elif SessionEndDate > 0:
             return SessionEndDate
+    
+    else:
+        FirstRecording = np.min(sessionDatePools)
+        if not (SessionStartDate == 0):
+            if np.abs(FirstRecording - SessionStartDate) < 60*60:
+                return SessionStartDate
 
-    FirstRecording = np.min(sessionDatePools)
-    if not (SessionStartDate == 0):
-        if FirstRecording - SessionStartDate < 8*60*60 and FirstRecording > SessionStartDate:
-            return SessionStartDate
-
-    return FirstRecording
+        return FirstRecording
+    
+    return SessionStartDate
 
 def estimateSessionDateTime_Old(JSON):
     """ Find all common occurance of Session DateTime String

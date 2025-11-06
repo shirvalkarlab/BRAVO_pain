@@ -24,6 +24,7 @@ import hashlib, hmac
 import shutil
 from filelock import Timeout, FileLock
 import numpy as np
+import datetime
 
 from Server import models
 from modules.MedtronicPercept import BrainSenseStream
@@ -297,7 +298,7 @@ def listSourceFiles(participant_uid, file_type=None):
                     if device.uid == source.metadata["Device"]:
                         SourceFile["Device"] = device.get_info()
 
-            AllRecordings = models.Recording.find_all(source=source)
+            AllRecordings = models.Recording.find_all(source=source, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"])
             SourceFile["RecordingCount"] = len(AllRecordings)
             if SourceFile["RecordingCount"] > 0:
                 SourceFile["DateOfRecording"] = np.mean([i.date for i in AllRecordings])

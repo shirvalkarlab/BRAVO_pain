@@ -1,6 +1,7 @@
 import os
 import pickle, blosc2
 import hashlib, hmac
+from datetime import datetime
 
 from BRAVO import wsgi 
 from Server import models 
@@ -22,7 +23,7 @@ Participants = models.Participant.find_all(institute=User.institute)
 for k in range(0, len(Participants)):
     participant = Participants[k]
     print(f"Processing Participant:", participant.uid)
-    Sources = models.SourceFile.find_all(owner=participant)
+    Sources = models.SourceFile.find_all(owner=participant, type="MedtronicJSON")
     for n in range(len(Sources)):
         session = Sources[n]
         try:
