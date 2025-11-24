@@ -379,7 +379,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   return useMemo(() => (
     <MDBox>
       {alert}
-      <MDBox p={2} mt={2} pb={0}>
+      {therapyDateSlider.options.length > 1 && (<MDBox p={2} mt={2} pb={0}>
         <Slider aria-label="TherapyDates"
           value={therapyDateSlider.active} getAriaValueText={(value) => {
             return new Date(value*1000).toLocaleDateString("en-US", {
@@ -433,8 +433,8 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
             }
           }}
         />
-      </MDBox>
-
+      </MDBox>)}
+      
       {therapyTable.Date ? (
         <MDBox p={2} pt={0}>
           <Grid container spacing={2}>

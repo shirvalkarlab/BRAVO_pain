@@ -14,7 +14,7 @@ from modules.HelperFunctions import utc_offset_to_timezone
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
 AnalysisScriptType = "ExtractSpectralFeaturesDuringStimulation"
-AnalysisMethodVersion = "1.0.3"
+AnalysisMethodVersion = "1.0.4"
 
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
@@ -145,6 +145,13 @@ def HandleRefreshAnalysis():
         AperiodicBaseline = np.power(10,AperiodicBaseline)
         return AperiodicBaseline
 
+    def FindPeaks(signal):
+        peaks = []
+        for i in range(1, len(signal)-1):
+            if signal[i] > signal[i-1] and signal[i] > signal[i+1]:
+                peaks.append(i)
+        return peaks
+
     for collection in RecordingCollections:
         print(collection["ParticipantId"] + " " + collection["Contact"])
 
@@ -263,50 +270,64 @@ def HandleRefreshAnalysis():
             collection["StimulationCorrelation"]["PercentSignificant"] = np.sum([corr["PValue"] < 0.05 for corr in Correlations]) / len(Correlations) * 100
 
         # Calculate the Stimulation-induced Beta Changes
-        collection["BetaStats"] = {"FirstReduction": 0, "BetaFrequency": 0, "BetaPeak": -99, "MaxCorrelation": 0, "MinBeta": [99,99], "MaxReduction": 0, "LastReduction": 0}
+        collection["BetaStats"] = {"BetaFrequency": 0, "BaselineBetaPower": -99, 
+                                   "MaxCorrelation": 0, 
+                                   "BetaThreshold": {
+                                        "Amplitude": 0, "Power": 0, "Threshold": 0
+                                   },
+                                   "MinBeta": {
+                                       "Amplitude": -1, "Power": 99
+                                   }, 
+                                   "LastBeta": {
+                                        "Amplitude": -1, "Power": 99
+                                   }}
         if len(collection["PSDs"]) > 1:
             Amplitude = [psd["Amplitudes"] for psd in collection["PSDs"]]
             PowerSpectrum = np.array([psd["PowerSpectrum"] for psd in collection["PSDs"]])
-            BaselinePSD = MovingAverageFilter(np.mean(PowerSpectrum[np.array(Amplitude) < 1,:], axis=0), 5) 
-            BaselinePSD = BaselinePSD / ExtractAperiodicComponents(PSDFrequency, BaselinePSD)
+            SmoothedPSDs = np.array([MovingAverageFilter(psd["PowerSpectrum"],5) for psd in collection["PSDs"]])
+            StimulationInducedPSDs = np.log10(SmoothedPSDs / SmoothedPSDs[0,:])
 
+            PeakIndexes = FindPeaks(SmoothedPSDs[0,:])
+            BetaPeaks = [idx for idx in PeakIndexes if PSDFrequency[idx] >= 12 and PSDFrequency[idx] <=30]
+            
             Correlations = []
-            for i in range(len(PSDFrequency)):
-                if PSDFrequency[i] < 12 or PSDFrequency[i] > 30:
-                    continue
-
+            for i in range(len(BetaPeaks)):
                 # Calculate the correlation between amplitude and power spectrum
-                corr = stats.pearsonr(Amplitude, PowerSpectrum[:,i])
+                BetaBand = (PSDFrequency > PSDFrequency[BetaPeaks[i]] - 2.5) & (PSDFrequency < PSDFrequency[BetaPeaks[i]] + 2.5)
+                corr = stats.pearsonr(Amplitude, np.mean(StimulationInducedPSDs[:,BetaBand], axis=1))
                 Correlations.append({
-                    "Frequency": PSDFrequency[i],
+                    "Frequency": PSDFrequency[BetaPeaks[i]],
                     "Correlation": corr[0],
-                    "MaxPeak": BaselinePSD[i],
-                    "Slope": corr[0] * np.std(Amplitude) / np.std(PowerSpectrum[:,i]),
+                    "MaxPeak": np.mean(SmoothedPSDs[0,:][BetaBand]),
+                    "Slope": corr[0] * np.std(Amplitude) / np.std(StimulationInducedPSDs[:,BetaPeaks[i]]),
                     "PValue": corr[1]
                 })
             
             # Identify Beta Frequency by Max Correlation/PValue within Beta Band
             for i in range(len(Correlations)):
-                if Correlations[i]["PValue"] < 0.05 and Correlations[i]["MaxPeak"] > collection["BetaStats"]["BetaPeak"]:
+                if Correlations[i]["PValue"] < 0.05 and Correlations[i]["MaxPeak"] > collection["BetaStats"]["BaselineBetaPower"]:
                     collection["BetaStats"]["MaxCorrelation"] = Correlations[i]["Correlation"]
-                    collection["BetaStats"]["BetaPeak"] = Correlations[i]["MaxPeak"]
+                    collection["BetaStats"]["BaselineBetaPower"] = Correlations[i]["MaxPeak"]
                     collection["BetaStats"]["BetaFrequency"] = Correlations[i]["Frequency"]
             
             if collection["BetaStats"]["MaxCorrelation"] < 0:
-                betaIndex = PSDFrequency.tolist().index(collection["BetaStats"]["BetaFrequency"])
-                BaselineBetaConfidenceInterval = stats.t.interval(0.95, 20, loc=PowerSpectrum[0,betaIndex], scale=collection["PSDs"][0]["StdPower"][betaIndex])
-                for i in range(1, len(collection["PSDs"])):
-                    ConfidenceInterval = stats.t.interval(0.95, 20, loc=PowerSpectrum[i,betaIndex], scale=collection["PSDs"][i]["StdPower"][betaIndex])
-                    if collection["BetaStats"]["MinBeta"][0] > ConfidenceInterval[0]:
-                        collection["BetaStats"]["MinBeta"] = ConfidenceInterval
-                        if i > 1 and collection["BetaStats"]["FirstReduction"] == 0:
-                            collection["BetaStats"]["FirstReduction"] = collection["PSDs"][i]["Amplitudes"]
-                        
-                        collection["BetaStats"]["MaxReduction"] = np.mean(ConfidenceInterval) / np.mean(BaselineBetaConfidenceInterval)
+                BetaBand = (PSDFrequency > collection["BetaStats"]["BetaFrequency"] - 2.5) & (PSDFrequency < collection["BetaStats"]["BetaFrequency"] + 2.5)
+                BetaPowers = np.mean(SmoothedPSDs[:,BetaBand], axis=1)
 
-            collection["BetaStats"]["MeanSlope"] = np.mean([corr["Slope"] for corr in Correlations])
-            collection["BetaStats"]["MeanCorrelation"] = np.mean([corr["Correlation"] for corr in Correlations])
-            collection["BetaStats"]["PercentSignificant"] = np.sum([corr["PValue"] < 0.05 for corr in Correlations]) / len(Correlations) * 100
+                for i in range(len(BetaPowers)):
+                    if BetaPowers[i] < collection["BetaStats"]["MinBeta"]["Power"]:
+                        collection["BetaStats"]["MinBeta"] = {"Amplitude": collection["PSDs"][i]["Amplitudes"], "Power": BetaPowers[i]}
+                
+                BetaReduction = collection["BetaStats"]["MinBeta"]["Power"] - collection["BetaStats"]["BaselineBetaPower"]
+                collection["BetaStats"]["BetaThreshold"]["Threshold"] = BetaReduction * 0.5
+                
+                for i in range(len(BetaPowers)):
+                    if BetaPowers[i] < collection["BetaStats"]["BetaThreshold"]["Threshold"] + collection["BetaStats"]["BaselineBetaPower"]:
+                        collection["BetaStats"]["BetaThreshold"]["Amplitude"] = collection["PSDs"][i]["Amplitudes"]
+                        collection["BetaStats"]["BetaThreshold"]["Power"] = BetaPowers[i]
+                        break 
+                
+                collection["BetaStats"]["LastBeta"] = {"Amplitude": collection["PSDs"][-1]["Amplitudes"], "Power": BetaPowers[-1]}
 
         collection["FTGStats"] = {"FirstAppearance": 0, "MaxGamma": [-99,-99], "LastAppearance": 0, "GammaFrequency": GammaFrequency}
         if len(collection["PSDs"]) > 1:

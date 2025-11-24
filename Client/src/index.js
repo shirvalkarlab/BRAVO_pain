@@ -43,7 +43,7 @@ function Main() {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    if (pathname.startsWith("/survey/")) {
+    if (pathname.startsWith("/survey/") || pathname.startsWith("/offline-report")) {
       setSessionReady(true);
     } else {
       SessionController.syncSession().then((sessionStates) => {

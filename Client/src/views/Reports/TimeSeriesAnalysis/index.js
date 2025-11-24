@@ -95,7 +95,8 @@ function TimeSeriesAnalysis() {
       ParticipantId: participant_uid
     }).then((response) => {
       let availableAnalysis = response.data;
-      availableAnalysis.Recordings = availableAnalysis.Recordings;
+      //availableAnalysis.Recordings = availableAnalysis.Recordings;
+      availableAnalysis.Recordings = availableAnalysis.Recordings.filter((a) => a.Type != "DBS Snapshots");
       setAvailableAnalysis(availableAnalysis);
       setAlert(null);
     }).catch((error) => {

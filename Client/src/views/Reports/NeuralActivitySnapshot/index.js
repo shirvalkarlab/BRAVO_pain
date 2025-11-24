@@ -73,6 +73,18 @@ function NeuralActivitySnapshot() {
 
   const [alert, setAlert] = useState(null);
 
+  const getRecordingType = (type) => {
+    if (type === "MedtronicBaselineMontages") {
+      return "BrainSense Setup";
+    } else if (type === "MedtronicBrainSenseSurvey") {
+      return "BrainSense Survey";
+    } else if (type === "MedtronicElectrodeIdentifier") {
+      return "Electrode Identifier";
+    } else {
+      return type;
+    }
+  }
+
   useEffect(() => {
     if (!participant_uid) {
       navigate("/dashboard", {replace: false});
@@ -145,11 +157,12 @@ function NeuralActivitySnapshot() {
               analysis.Overview = findCommonItem(analysis.Overview, subString);
             }
           }
+          analysis.Type = recordings[0].Type;
           analysis.Overview = analysis.Overview.join(" ")
           analyses.push(analysis);
         }
 
-        if (analyses.length > 0) setViewSnapshot(analyses[0].Date + " | " + analyses[0].Overview);
+        if (analyses.length > 0) setViewSnapshot(analyses[0].Date + " | " + " (" + getRecordingType(analyses[0].Type) + ") " + analyses[0].Overview);
         return {Analyses: analyses, Recordings: response.data.Recordings};
       });
       setAlert(null);
@@ -162,7 +175,7 @@ function NeuralActivitySnapshot() {
   useEffect(() => {
     setSnapshot(() => {
       for (let i in availableSnapshots.Analyses) {
-        if (availableSnapshots.Analyses[i].Date + " | " + availableSnapshots.Analyses[i].Overview == viewSnapshot) {
+        if (availableSnapshots.Analyses[i].Date + " | " + " (" + getRecordingType(availableSnapshots.Analyses[i].Type) + ") " +  availableSnapshots.Analyses[i].Overview == viewSnapshot) {
           let dataToRender = [];
           const overview = availableSnapshots.Analyses[i].Overview.split(" ");
           for (let j in availableSnapshots.Recordings) {
@@ -208,31 +221,7 @@ function NeuralActivitySnapshot() {
       }
       return allRecordings.sort((a,b) => a.DateTimestamp-b.DateTimestamp);
     })
-  }, [availableSnapshots, viewChronicChannel])
-
-  const onCenterFrequencyChange = (side, freq) => {
-    
-  };
-
-  const toggleCardiacFilter = () => {
-    
-  };
-
-  const toggleWaveletTransform = () => {
-    
-  };
-
-  const handlePSDUpdate = (reference, side) => {
-    
-  }
-
-  const exportCurrentStream = () => {
-    
-  };
-
-  const adaptiveClosedLoopParameters = (therapy) => {
-    
-  }
+  }, [availableSnapshots, viewChronicChannel]);
 
   return (
     <DatabaseLayout>
@@ -246,18 +235,20 @@ function NeuralActivitySnapshot() {
                 <Grid container>
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
-                        <Autocomplete
-                          value={viewSnapshot}
-                          options={availableSnapshots.Analyses.map((a) => a.Date + " | " + a.Overview)}
-                          onChange={(event, value) => setViewSnapshot(value)}
-                          renderInput={(params) => (
-                            <FormField
-                              {...params}
-                              label={dictionary.TherapeuticAnalysis.Table.TableTitle[language]}
-                              InputLabelProps={{ shrink: true }}
-                            />
-                          )}
-                        />
+                      <Autocomplete
+                        value={viewSnapshot}
+                        options={availableSnapshots.Analyses.map((a) => a.Date + " | " + " (" + getRecordingType(a.Type) + ") " + a.Overview)}
+                        onChange={(event, value) => {
+                          setViewSnapshot(value)
+                        }}
+                        renderInput={(params) => (
+                          <FormField
+                            {...params}
+                            label={dictionary.TherapeuticAnalysis.Table.TableTitle[language]}
+                            InputLabelProps={{ shrink: true }}
+                          />
+                        )}
+                      />
                     </MDBox>
                   </Grid>
                   <Grid item xs={12}>

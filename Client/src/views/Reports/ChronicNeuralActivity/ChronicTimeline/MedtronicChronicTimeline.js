@@ -37,7 +37,7 @@ import { usePlatformContext } from "context";
 
 const filter = createFilterOptions();
 
-export default function MedtronicChronicTimeline({data, availableChannels, showAdaptiveMode, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
+export default function MedtronicChronicTimeline({data, availableChannels, onSelection, showAdaptiveMode, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -75,8 +75,28 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
     fig.setSubplotId(subplotIds);
     
     fig.setLegend({ tracegroupgap: 5, xanchor: "left", y: 0.5, });
-    fig.setLayoutProps({ hovermode: "x", hoverdistance: 1 });
-
+    fig.setLayoutProps({ hovermode: "x", hoverdistance: 1,
+      xaxis: {
+        type: "date",
+        rangeselector: {
+          buttons: [
+            { step: "month", count: 1, label: "1 Month" },
+            { step: "day", count: 7, label: "1 Week" },
+          ]
+        },
+        rangeslider: { visible: true,
+          thickness: 0.05,  // make it thinner
+          bgcolor: 'white',
+          bordercolor: '#444',
+          borderwidth: 1 
+        },
+        range: [
+          moment().subtract(1, 'months').valueOf(),  // 1 week ago
+          moment().valueOf()  // now
+        ]
+      }
+    });
+    
     if (!fig.fresh) {
       for (let i in renderData) {
         const subAx = fig.getAxes(renderData[i].axName);
@@ -317,7 +337,12 @@ export default function MedtronicChronicTimeline({data, availableChannels, showA
   }
 
   const plotly_onZoom = (evt) => {
-    
+    if (onSelection && evt.detail['xaxis.range[0]'] && evt.detail['xaxis.range[1]'] && evt.detail['divName'] === figureTitle) {
+      onSelection({start: new Date(evt.detail['xaxis.range[0]']).getTime()/1000, end: new Date(evt.detail['xaxis.range[1]']).getTime()/1000});
+    } else if (onSelection && evt.detail['xaxis.autorange'] && evt.detail['divName'] === figureTitle) {
+      const range = fig.getXlim();
+      onSelection({start: new Date(range[0]).getTime()/1000, end: new Date(range[1]).getTime()/1000});
+    }
   }
 
   const onResize = useCallback(() => {

@@ -35,7 +35,7 @@ import { dictionary, dictionaryLookup } from "assets/translation";
 
 const filter = createFilterOptions();
 
-function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, channelSelector, activeChannel, figureTitle}) {
+function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, circadianState, channelSelector, onSelection, activeChannel, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -51,6 +51,10 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
   }, [figureTitle]);
 
   useEffect(() => {
+    setTimerange({...timelineRange});
+  }, [timelineRange])
+
+  useEffect(() => {
     if (!fig) return;
     
     if (!fig.fresh) {
@@ -62,7 +66,8 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
     fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)})`, {fontSize: 15}, ax[0]);
     fig.setLayoutProps({
       bargap: 0.01,
-      hovermode: "xy"
+      hovermode: "xy",
+      dragmode: onSelection ? "select" : "zoom",
     });
 
     fig.addDualYAxis(ax[0]);
@@ -162,7 +167,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
             xData.push(...dataToRender[i].Time);
             yData.push(...dataToRender[i].Data[j]);
             events.push(...annotations.filter((a) => a.Date > dataToRender[i].Time[0] && a.Date < dataToRender[i].Time[dataToRender[i].Time.length-1]).map((a) => a.Date))
-          } else if (activeChannel === "Time-based Assessment" && channelName === timerange.device) {
+          } else if (activeChannel.startsWith("Time-based Assessment") && channelName === timerange.device) {
             for (let k in dataToRender[i].ChannelNames) {
               if (dataToRender[i].ChannelNames[k] == dataToRender[i].ChannelNames[j].replace(" LFP", " Amplitude")) {
                 yStim.push(...dataToRender[i].Data[k].filter((a,k) => dataToRender[i].Time[k] > timePeriods[0] && dataToRender[i].Time[k] < timePeriods[1]));
@@ -188,6 +193,8 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
       if (math.abs(time-86400 - ref) < window) return true; 
       return false
     }
+
+    setCacheData({xData: xData.map((a) => a+timezoneOffset*60000), yData: yData, yStim: yStim});
 
     const window = 1200000;
     const defaultTimeArray = new Array(145).fill(0).map((a,i) => i*600000);
@@ -256,11 +263,12 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
           type: "date",
           tickformat: "%H:%M",
         }, "x", ax[0]);
-        
+        fig.setYlim([math.min(renderData[i].y) - 0.1, math.max(renderData[i].y) + 0.1], ax[1]);
+
         fig.setYlabel("Stimulation Amplitude (mA)", {fontSize: 15}, ax[1]);
       } else if (renderData[i].type === "bar" && circadianState.eventCount) {
         fig.bar(renderData[i].x, renderData[i].y, [], renderData[i].options, ax[1]);
-        fig.setYlim([0, math.max(renderData[i].y) || 1], ax[1])
+        fig.setYlim([0, math.max(renderData[i].y) || 1], ax[1]);
         fig.setYlabel("Event Count (N)", {fontSize: 15}, ax[1]);
       } else if (renderData[i].type === "histogram" && circadianState.histogram) {
         fig.hist(renderData[i].x, renderData[i].options, ax[0]);
@@ -288,11 +296,32 @@ function MedtronicCircadianRhythm({dataToRender, annotations, circadianState, ch
     fig.render();
   }
 
+  const plotly_onSelect = (e) => {
+    if (onSelection && e) {
+      const dateRange = e.range.x.map((a) => new Date(a).getTime());
+      const allData = cacheData.xData.map((a, i) => ({
+        x: a,
+        y: cacheData.yData[i]
+      })).filter((a,i) => {
+        return (a.x >= dateRange[0] && a.x <= dateRange[1]);
+      }).map((a) => a.y);
+      onSelection(allData);
+    }
+  }
+
   useEffect(() => {
     if (!fig || !renderData) return;
     
     fig.traces = [];
     refreshRender();
+    
+    const ref = document.getElementById(figureTitle);
+    if (ref) {
+      ref.on("plotly_selected", plotly_onSelect);
+      return () => {
+        ref.removeListener("plotly_selected", plotly_onSelect);
+      }
+    };
   }, [fig, renderData, circadianState]);
 
   const onResize = useCallback(() => {

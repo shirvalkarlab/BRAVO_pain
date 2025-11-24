@@ -248,12 +248,26 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         }
       });
     } else {
-      fig.setLayoutProps({
+      fig.setLayoutProps({ hovermode: "x", hoverdistance: 1,
         shapes: therapyBlocks,
-        xaxis: {type: "date"}
+        xaxis: {
+          type: "date",
+          rangeselector: {
+            buttons: [
+              { step: "month", count: 1, label: "1 Month" },
+              { step: "day", count: 7, label: "1 Week" },
+            ]
+          },
+          rangeslider: { visible: true,
+            thickness: 0.15,  // make it thinner
+            bgcolor: 'white',
+            bordercolor: '#444',
+            borderwidth: 1 
+          }
+        }
       });
     }
-    fig.setXlim([new Date(xLim[0]*1000), new Date(xLim[1]*1000)]);
+    fig.setXlim([new Date((xLim[1] - 3600*24*60)*1000), new Date(xLim[1]*1000)]);
     fig.setYlim([-0.5, uniqueGroups.length-0.5]);
 
     fig.render();

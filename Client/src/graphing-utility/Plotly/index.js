@@ -1274,6 +1274,7 @@ class PlotlyRenderManager {
         scale: 1
       },
       modeBarButtonsToAdd: [
+        "select2d",
         {
           name: 'Download Vector File',
           icon: {
@@ -1348,7 +1349,10 @@ class PlotlyRenderManager {
       if (this.fresh) {
         Plotly.newPlot(this.divName, this.traces, this.layout, config).then(() => {
           ref.on("plotly_relayout", (evt) => {
-            const event = new CustomEvent("PlotlyRelayout", {detail: evt});
+            const event = new CustomEvent("PlotlyRelayout", {detail: { 
+              ...evt, 
+              divName: this.divName
+            }});
             document.dispatchEvent(event);
           })
         });

@@ -259,7 +259,7 @@ class QueryEventHandler(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
@@ -271,7 +271,7 @@ class QueryEventHandler(RestViews.APIView):
         try:
             Annotations = Event.queryAnnotations(request.data["ParticipantId"], type="ChronicCustomEvent")
             AllEvents.extend(Annotations)
-            DBSEvents = Event.queryDBSEvents(request.data["ParticipantId"], type="PatientControllerEvent", data=False)
+            DBSEvents = Event.queryDBSEvents(request.data["ParticipantId"], type="PatientControllerEvent", data=request.data["RequestType"] == "RequestData")
             AllEvents.extend(DBSEvents)
         except Exception as e:
             print(traceback.format_exc())
