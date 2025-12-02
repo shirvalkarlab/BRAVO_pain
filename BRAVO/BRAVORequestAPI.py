@@ -115,7 +115,7 @@ class BRAVOPlatformRequest:
     
     def QueryParticipantInformation(self, participant_uid):
         form = {"ParticipantId": participant_uid}
-        response = self.query("/api/queryParticipants", data=form)
+        response = self.query("/api/queryParticipantInformation", data=form)
         if response.status_code == 200:
             payload = response.json()
             return payload
@@ -393,6 +393,21 @@ class BRAVOPlatformRequest:
             form["RequestType"] = "RequestRecords"
             form["FormId"] = form_uid
         response = self.query("/api/queryParticipantSurveyRecords", data=form)
+
+        if response.status_code == 200:
+            payload = response.json()
+            return payload
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+    
+    def QueryEvents(self, participant_uid, data=False):
+        form = {"ParticipantId": participant_uid, "RequestType": "RequestAll"}
+        if data:
+            form["RequestType"] = "RequestData"
+        response = self.query("/api/queryParticipantEvents", data=form)
 
         if response.status_code == 200:
             payload = response.json()
