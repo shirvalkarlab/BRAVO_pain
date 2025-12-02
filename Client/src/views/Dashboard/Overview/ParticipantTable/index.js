@@ -44,7 +44,7 @@ const ParticipantTable = ({data}) => {
   const viewPerPage = 20;
   const [sortedData, setSortedData] = useState([]);
   const [sortType, setSortType] = useState({
-    key: "ParticipantTableName",
+    key: "ParticipantTableLastModified",
     direction: 1
   });
 
@@ -57,8 +57,8 @@ const ParticipantTable = ({data}) => {
   useEffect(() => {
     setSortedData(data);
     setSortType({
-      key: "ParticipantTableName",
-      direction: 1
+      key: "ParticipantTableLastModified",
+      direction: -1
     });
 
     if (paginationControl.totalPages != Math.ceil(data.length / viewPerPage) && paginationControl.totalPages != 0) {

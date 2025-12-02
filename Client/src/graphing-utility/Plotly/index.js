@@ -267,6 +267,7 @@ class PlotlyRenderManager {
     
     if (!options.colSpacing) options.colSpacing = 0.02;
     if (!options.rowSpacing) options.rowSpacing = 0.25;
+    if (!options.scales) options.scales = new Array(row).fill(1);
     
     if (options.sharey) {
       var yAxesLabels = Array(row).fill(0).map((value, index) => (index+1 == 1) ? "y" : "y" + (index+1).toString());
@@ -275,18 +276,47 @@ class PlotlyRenderManager {
     }
     
     this.layout.grid.subplots = Array(row).fill(0).map(() => Array(col));
-    
+
+    function calculateSegments(ratios, totalLength = 1, spacingPercent = 0.25) {
+      const n = ratios.length;
+      
+      // Step 1: Compute total units (segments + spacing units)
+      const sumRatios = ratios.reduce((a, b) => a + b, 0);
+      const spacingUnits = ratios.slice(0, n - 1).reduce((a, b) => a + b * spacingPercent, 0);
+      const totalUnits = sumRatios + spacingUnits;
+
+      // Step 2: Scale factor
+      const k = totalLength / totalUnits;
+
+      // Step 3: Compute positions
+      let positions = [];
+      let currentPos = 0;
+
+      for (let i = 0; i < n; i++) {
+        const segmentLength = ratios[i] * k;
+        const start = currentPos;
+        const end = start + segmentLength;
+        positions.push({ segment: i + 1, start, end });
+        currentPos = end;
+        if (i < n - 1) {
+          const spacingLength = ratios[i] * spacingPercent * k;
+          currentPos += spacingLength;
+        }
+      }
+      return positions;
+    }
+
+    const segments = calculateSegments(options.scales, 1, options.rowSpacing);
     const colFraction = 1/col;
-    const rowFraction = 1 / ((1 + options.rowSpacing) * (row - 1) + 1);
     const colSpacing = colFraction*options.colSpacing;
-    const rowSpacing = rowFraction*options.rowSpacing;
 
     for (var i = 0; i < row; i++) {
       for (var k = 0; k < col; k++) {
         var xaxis = (options.sharex ? xAxesLabels[k] : xAxesLabels[i*col+k]);
         var yaxis = (options.sharey ? yAxesLabels[i] : yAxesLabels[i*col+k]);
         this.layout.grid.subplots[i][k] = xaxis + yaxis;
-        const ydomain = [1 - (rowFraction*i + rowSpacing*i) - rowFraction, 1 - (rowFraction*i + rowSpacing*i)];
+        
+        const ydomain = [1 - segments[i].end, 1 - segments[i].start];
         
         this.ax.push({
           xaxis: xaxis,

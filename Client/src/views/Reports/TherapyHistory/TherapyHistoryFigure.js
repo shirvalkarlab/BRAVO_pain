@@ -267,7 +267,6 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         }
       });
     }
-    fig.setXlim([new Date((xLim[1] - 3600*24*60)*1000), new Date(xLim[1]*1000)]);
     fig.setYlim([-0.5, uniqueGroups.length-0.5]);
 
     fig.render();

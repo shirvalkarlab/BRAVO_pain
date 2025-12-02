@@ -217,7 +217,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
       </MDBox>
       <Collapse in={showTable} >
         <MDBox p={2} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, justifyContent: "space-between"}}>
-          <MDInput label={"Search for Analysis"} value={filterOptions.Keyword} onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
+          <MDInput label={"Search for Recording"} value={filterOptions.Keyword} onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
           <Autocomplete
             fullWidth
             value={filterOptions.Type}

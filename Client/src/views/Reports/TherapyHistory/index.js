@@ -89,7 +89,7 @@ function TherapyHistory() {
 
   React.useEffect(() => {
     if (!participant_uid) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
       return
     }
     setContextState(dispatch, "report", "GeneralReports");
@@ -345,7 +345,7 @@ function TherapyHistory() {
             <MDBox fullWidth>
               <Autocomplete
                 value={availableDevices.active}
-                options={availableDevices.options}
+                options={availableDevices.options}   
                 onChange={(event, value) => setAvailableDevices({...availableDevices, active: value})}
                 renderOption={(props, option) => <li {...props}>{option}</li>}
                 renderInput={(params) => (

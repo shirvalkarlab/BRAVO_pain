@@ -297,7 +297,7 @@ function ParticipantListTable({data, getRecordingData}) {
             </TableRow>
             <TableRow sx={{background: "white"}}>
               <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}} >
-                <MDInput label={"Search for Analysis"} value={filterOptions.Keyword} 
+                <MDInput label={"Search for Recording"} value={filterOptions.Keyword} 
                           onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth 
                           sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
               </TableCell>

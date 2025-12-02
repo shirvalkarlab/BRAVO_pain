@@ -59,7 +59,7 @@ function MultipleSegmentAnalysis() {
 
   React.useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       SessionController.query("/api/queryNeuralActivityStreaming", {
         id: patientID,

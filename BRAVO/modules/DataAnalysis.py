@@ -2054,10 +2054,14 @@ def selectRecordingChannel(analysis, channel_names=[]):
         for trial in range(len(analysis["Signal"])):
             if len(ActiveChannels) == 0:
                 if len(channel_names) == 0:
-                    if len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"]) > 3:
+                    if len(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"]) > 6:
                         ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][0])
                         ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][1])
                         ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][2])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][2])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][3])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][4])
+                        ActiveChannels.append(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"][5])
                     else:
                         ActiveChannels.extend(analysis["Signal"][trial]["SignalSeries"]["ChannelNames"])
                 else:

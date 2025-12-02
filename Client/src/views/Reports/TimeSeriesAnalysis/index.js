@@ -52,7 +52,7 @@ import ConfigurationDialog from "components/ConfigurationDialog";
 
 import TimeSeriesAnalysisTable from "./TimeSeriesAnalysisTable";
 import TimeFrequencyAnalysis from "./TimeFrequencyAnalysis";
-import StimulationPSD from "../TherapeuticEffects/StimulationPSD";
+import StimulationPSD from "./StimulationPSD";
 import EventPSDs from "../TherapeuticEffects/EventPSDs";
 import BurstDynamics from "./BurstDynamics";
 
@@ -84,7 +84,7 @@ function TimeSeriesAnalysis() {
 
   useEffect(() => {
     if (!participant_uid) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
       return;
     }
     setContextState(dispatch, "report", "GeneralReports");
@@ -95,7 +95,6 @@ function TimeSeriesAnalysis() {
       ParticipantId: participant_uid
     }).then((response) => {
       let availableAnalysis = response.data;
-      //availableAnalysis.Recordings = availableAnalysis.Recordings;
       availableAnalysis.Recordings = availableAnalysis.Recordings.filter((a) => a.Type != "DBS Snapshots");
       setAvailableAnalysis(availableAnalysis);
       setAlert(null);
@@ -447,6 +446,10 @@ function TimeSeriesAnalysis() {
                           onChange={(event, value) => {
                             getRecordingData(data.Analysis, value);
                           }}
+                          renderOption={(props, option) => <li {...props}>{option.split(": ")[1]}</li>}
+                          getOptionLabel={(option) => {
+                            return option.split(": ")[1];
+                          }}
                           renderInput={(params) => (
                             <FormField
                               {...params}
@@ -461,7 +464,7 @@ function TimeSeriesAnalysis() {
                       <TimeFrequencyAnalysis dataToRender={data} activeChannels={channel.active} annotations={annotations}
                         handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} handleAdjustAlignment={handleAdjustAlignment} 
                         setTimeseriesPlayback={setTimeseriesPlayback}
-                        figureTitle={"TimeFrequencyAnalysis"} height={700}/>
+                        figureTitle={"TimeFrequencyAnalysis"} height={300}/>
                     </Grid>
                   </Grid>
                 </Card>

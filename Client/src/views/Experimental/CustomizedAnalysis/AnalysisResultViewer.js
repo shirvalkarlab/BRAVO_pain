@@ -57,7 +57,7 @@ function AnalysisResultViewer({analysisId, analysisData}) {
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       setData(analysisData);
       setAvailableResults(analysisData.Configuration.Results.map((result) => {

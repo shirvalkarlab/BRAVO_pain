@@ -64,6 +64,7 @@ def processInput(argv):
                 if models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=participant):
                     models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=participant).delete()
                 Database.deleteCachedResult(participant.uid, url="/queryChronicNeuralActivity")
+            return True 
                     
         elif argv[1] == "RefreshPerceptSessions":
             from BRAVO import wsgi
@@ -83,7 +84,37 @@ def processInput(argv):
                     EndFiles = models.Recording.objects.filter(source=session).count()
                     if EndFiles > StartFiles:
                         print(f"Participant {participant.uid} - {participant.name} - {StartFiles} -> {EndFiles}")
+            return True 
                     
+        elif argv[1] == "ClearErrorCachedFiles":
+            from BRAVO import wsgi
+            from Server import models
+            models.SourceFile.objects.filter(owner=None).delete()
+            return True 
+
+        elif argv[1] == "MigrateDataStorage":
+            from BRAVO import wsgi
+            from Server import models
+
+            OldStoragePath = argv[2]
+            DATASERVER_PATH = os.environ.get('DATASERVER_PATH')
+            
+            source_files = models.SourceFile.find_all()
+            for i in range(len(source_files)):
+                source_file = source_files[i]
+                print(f"Processing source file {i}/{len(source_files)}")
+                source_file.pointer = source_file.pointer.replace(OldStoragePath, DATASERVER_PATH).replace("\\", os.path.sep).replace("/", os.path.sep)
+                source_file.save()
+
+            source_files = models.Recording.find_all()
+            for i in range(len(source_files)):
+                source_file = source_files[i]
+                print(f"Processing recording file {i}/{len(source_files)}")
+                source_file.pointer = source_file.pointer.replace(OldStoragePath, DATASERVER_PATH).replace("\\", os.path.sep).replace("/", os.path.sep)
+                source_file.save()
+        
+            return True
+        
         elif argv[1] == "CleanUpDevices":
             from BRAVO import wsgi
             from Server import models

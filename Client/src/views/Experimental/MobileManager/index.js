@@ -106,7 +106,7 @@ function MobileManager() {
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       SessionController.query("/mobile/wearable/queryMobileAccount", {
         queryMobileAccount: true,

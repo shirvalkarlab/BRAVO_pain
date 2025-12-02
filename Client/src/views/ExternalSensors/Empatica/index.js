@@ -77,7 +77,7 @@ function EmpaticaDataExplorer() {
 
   useEffect(() => {
     if (!participant_uid) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
       return;
     }
     setContextState(dispatch, "report", "ExternalSensorReports");

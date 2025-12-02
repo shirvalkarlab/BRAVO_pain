@@ -79,7 +79,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
         fig.setXlim([0, 100]);
         fig.setXlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15});
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)})`, {fontSize: 15});
-        fig.setSubtitle(key);
+        fig.setSubtitle(key.split(": ")[1]);
 
       }
       if (!fig.fresh) {

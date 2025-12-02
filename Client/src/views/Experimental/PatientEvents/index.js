@@ -62,7 +62,7 @@ function PatientEvents() {
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       setAlert(<LoadingProgress/>);
       SessionController.query("/api/queryPatientEvents", {

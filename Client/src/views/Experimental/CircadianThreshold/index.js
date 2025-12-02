@@ -55,7 +55,7 @@ function CircadianThreshold() {
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       setAlert(<LoadingProgress/>);
       SessionController.query("/api/queryChronicNeuralActivity", {

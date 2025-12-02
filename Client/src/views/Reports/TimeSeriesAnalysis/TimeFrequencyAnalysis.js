@@ -57,7 +57,11 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
 
     let subplotIds = [];
     if (dataToRender.Therapy) {
-      const ax = fig.subplots(activeChannels.length * 2 + 1, 1, {sharey: false, sharex: true});
+      const scales = new Array(activeChannels.length * 2 + 1).fill(1);
+      for (let i = 0; i < activeChannels.length; i++) {
+        scales[i*2 + 1] = 2;
+      }
+      const ax = fig.subplots(activeChannels.length * 2 + 1, 1, {sharey: false, sharex: true, scales: scales});
       for (let i in activeChannels) {
         subplotIds.push(`${activeChannels[i]}`);
         subplotIds.push(`${activeChannels[i]} TimeFrequencyAnalysis`);
@@ -66,15 +70,19 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
         
-        fig.setSubtitle(`${activeChannels[i]}`,ax[i*2]);
-        fig.setSubtitle(`${activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+        fig.setSubtitle(`${activeChannels[i].split(": ")[1]}`,ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i].split(": ")[1]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
       }
       fig.setSubtitle(`${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "Stimulation", language)}`,ax[ax.length-1]);
       fig.setYlim([0, 5], ax[ax.length-1]);
       subplotIds.push(`Stimulation`);
 
     } else {
-      const ax = fig.subplots(activeChannels.length * 2, 1, {sharey: false, sharex: true});
+      const scales = new Array(activeChannels.length * 2).fill(1);
+      for (let i = 0; i < activeChannels.length; i++) {
+        scales[i*2 + 1] = 1.5;
+      }
+      const ax = fig.subplots(activeChannels.length * 2, 1, {sharey: false, sharex: true, scales: scales});
       for (let i in activeChannels) {
         subplotIds.push(`${activeChannels[i]}`);
         subplotIds.push(`${activeChannels[i]} TimeFrequencyAnalysis`);
@@ -83,11 +91,12 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
         
-        fig.setSubtitle(`${activeChannels[i]}`,ax[i*2]);
-        fig.setSubtitle(`${activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+        fig.setSubtitle(`${activeChannels[i].split(": ")[1]}`,ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i].split(": ")[1]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
       }
     }
 
+    fig.setLegend({ xanchor: "left", y: 0, yanchor: "bottom" });
     fig.setSubplotId(subplotIds);
     setRefresh((a) => a+1);
   }, [fig, activeChannels]);
@@ -176,7 +185,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
               name: "Stimulation Waveform",
               linewidth: 3, line: {shape: "hv"}, color: stimulationLineColor[uniqueStimChannels.indexOf(dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName)],
               hovertemplate: ` ${dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "mA", language)}<br>  %{x} <extra></extra>`,
-              name: dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName, showlegend: false
+              name: dataToRender.Therapy[trial].TherapySeries[0].TherapyOverview[chan].ChannelName, showlegend: true
             }, 
             axName: "Stimulation"
           });
@@ -307,7 +316,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
 
   return useMemo(() => (
     <MDBox ref={ref} id={figureTitle} onContextMenu={onContextMenu} 
-      style={{marginTop: 5, marginBottom: 10, height: activeChannels.length*900, width: "100%", display: activeChannels.length > 0 ? "" : "none"}}
+      style={{marginTop: 5, marginBottom: 10, height: dataToRender.Therapy ? (activeChannels.length * 400 + 300) : (activeChannels.length * 500), width: "100%", display: activeChannels.length > 0 ? "" : "none"}}
     >
       <Menu
         open={contextMenu !== null}

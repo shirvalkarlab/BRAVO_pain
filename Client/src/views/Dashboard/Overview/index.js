@@ -12,18 +12,25 @@
 */
 
 import { useEffect, useState, memo } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   Card,
   Grid,
+  Divider,
   Dialog,
   Autocomplete,
+  TextField,
 } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
+
+import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 
 import FormField from "components/MDInput/FormField.js";
 import SessionPasswordView from "./SessionPasswordView";
@@ -34,6 +41,10 @@ import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 import LoadingProgress from "components/LoadingProgress";
+
+import BRAVOExportUploader from "../UploadDataView/BRAVOExportUploader";
+import NeuroPacePersystDatUploader from "../UploadDataView/NeuroPacePersystDatUploader";
+import MedtronicJSONUploader from "../UploadDataView/MedtronicJSONUploader";
 
 function DatabaseStatistic({title, description, value}) {
   return (
@@ -80,18 +91,36 @@ export default function DashboardOverview() {
   const { user, language } = controller;
   const [alert, setAlert] = useState(null);
 
-  const [databaseInfo, setDatabaseInfo] = useState({
-    participants: 0,
-    totalRecordings: 0,
-    totalStorage: "0 Bytes",
-  });
-
-  const [currentStudy, setCurrentStudy] = useState(false);
+  const navigate = useNavigate();
+  
+  const [newParticipantEditor, setNewParticipantEditor] = useState(false);
+  const [participantInformation, setParticipantInformation] = useState({});
   const [filteredParticipants, setFilteredParticipants] = useState([]);
   const [filterOptions, setFilterOptions] = useState({});
   const [availableParticipants, setAvailableParticipants] = useState(false);
-  const [uploadInterface, setUploadInterface] = useState(null);
+  const [uploadInterface, setUploadInterface] = useState({ show: false, uploadDataType: "Medtronic JSON Files" });
+
   const [showDecryptionPassword, setShowDecryptionPassword] = useState(false);
+
+  const handleCreateParticipant = () => {
+    if (!participantInformation.name) {
+      SessionController.displayError("Name is required.", setAlert);
+      return;
+    }
+
+    SessionController.query("/api/createParticipantInformation", {
+      Name: participantInformation.name,
+      Sex: participantInformation.sex,
+      DOB: participantInformation.dob ? (participantInformation.dob.toDate().getTime() / 1000) : 0,
+      Diagnosis: participantInformation.diagnosis,
+      DiseaseStartTime: participantInformation.disease_start_time ? (participantInformation.disease_start_time.toDate().getTime() / 1000) : 0
+    }).then((response) => {
+      setContextState(dispatch, "participant_uid", response.data.Id);
+      navigate("/participant-overview/" + response.data.Id, {replace: false});
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
 
   useEffect(() => {
     SessionController.query("/api/queryParticipants", {
@@ -143,37 +172,167 @@ export default function DashboardOverview() {
     return () => clearTimeout(filterTimer);
   }, [filterOptions, availableParticipants]);
 
-  const currentDate = new Date();
-
   return (
     <DatabaseLayout>
       {alert}
-      {availableParticipants ? (
       <MDBox mt={2}>
         <Card>
           <MDBox p={2}>
             <Grid container spacing={2}>
-              <Grid item sm={12}>
-                <MDTypography variant="h3">
-                  {dictionary.Dashboard.ParticipantTable[language]}
-                </MDTypography>
+              <Grid item xs={12} md={8}>
+                <MDBox display="flex" flexDirection="column">
+                  <MDTypography variant="h3">
+                    {dictionary.Dashboard.ParticipantTable[language]}
+                  </MDTypography>
+                  <MDInput label={dictionary.Dashboard.SearchParticipant[language]} value={filterOptions.text} onChange={(value) => handleParticipantFilter(value)} sx={{paddingRight: 2, marginTop: 2, width: "100%"}}/>
+                </MDBox>
               </Grid>
-              <Grid item sm={6} md={6} display="flex" sx={{
-                justifyContent: {
-                  sm: "space-between",
-                  md: "end"
-                }
-              }}>
-                <MDInput label={dictionary.Dashboard.SearchParticipant[language]} value={filterOptions.text} onChange={(value) => handleParticipantFilter(value)} sx={{paddingRight: 2, width: "100%"}}/>
+              <Grid item xs={12} md={4}>
+                <MDBox display="flex" flexDirection="column">
+                  <MDButton variant="gradient" color="info" style={{margin: 2}} onClick={() => setUploadInterface({show: true, uploadDataType: "Medtronic JSON Files"})}>
+                    <MDTypography variant="h5" color="white">
+                      {"Upload Data"}
+                    </MDTypography>
+                  </MDButton>
+                  <MDButton variant="gradient" color="success" style={{margin: 2}} onClick={() => setNewParticipantEditor(true)}>
+                    <MDTypography variant="h5" color="white">
+                      {"Add New Participant"}
+                    </MDTypography>
+                  </MDButton>
+                </MDBox>
               </Grid>
-              <Grid item xs={12} sx={{marginTop: 2}}>
-                <ParticipantTable data={filteredParticipants} />
-              </Grid>
+              {availableParticipants ? (
+                <Grid item xs={12} sx={{marginTop: 2}}>
+                  <ParticipantTable data={filteredParticipants} />
+                </Grid>
+              ) : ( <LoadingProgress /> )}
             </Grid>
           </MDBox>
         </Card>
+
+        <Dialog open={uploadInterface.show} onClose={() => setUploadInterface({show: false, uploadDataType: "Medtronic JSON Files"})} maxWidth="md" fullWidth>
+          <Grid container spacing={2} p={3}>
+            <Grid item xs={12}>
+              <MDTypography variant="h3">
+                {"Upload Data to Database"}
+              </MDTypography>
+            </Grid>
+            <Grid item sm={12} md={12}>
+              <Divider variant="insert" />
+              <MDTypography variant="h5">
+                {"Upload Data Type"}
+              </MDTypography>
+              <Autocomplete selectOnFocus clearOnBlur
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    variant="standard"
+                    placeholder={"Select Data Type (Required)"}
+                  />
+                )}
+                isOptionEqualToValue={(option, value) => {
+                  return option === value;
+                }}
+                renderOption={(props, option) => <li {...props}>{option}</li>}
+                value={uploadInterface.uploadDataType}
+                options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "BRAVO Export (v1)"]}
+                onChange={(event, newValue) => setUploadInterface(prev => ({...prev, uploadDataType: newValue}))}
+              />
+              {uploadInterface.uploadDataType === "Medtronic JSON Files" ? (
+                <MedtronicJSONUploader institute={user.Institute} participant={"batch-upload"}/>
+              ) : null}
+              {uploadInterface.uploadDataType === "BRAVO Export (v1)" ? (
+                <BRAVOExportUploader institute={user.Institute} version={"v1"}/>
+              ) : null}
+              {uploadInterface.uploadDataType === "NeuroPace Persyst Data Format" ? (
+                <NeuroPacePersystDatUploader institute={user.Institute} participant={"batch-upload"}/>
+              ) : null}
+            </Grid>
+          </Grid>
+        </Dialog>
+
+        <Dialog open={newParticipantEditor} onClose={() => setNewParticipantEditor(false)} maxWidth="md" fullWidth>
+          <MDBox p={3}>
+            <MDTypography variant="h5">
+              {"New Participant Information"}
+            </MDTypography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  variant="standard" margin="dense" id="study-participant-name"
+                  value={participantInformation.name}
+                  onChange={(event) => setParticipantInformation({...participantInformation, name: event.target.value})}
+                  label={"Study Participant Name (Required)"} type="text"
+                  fullWidth
+                />
+              </Grid>
+              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+                <Autocomplete selectOnFocus clearOnBlur
+                  renderInput={(params) => (
+                    <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} />
+                  )}
+                  isOptionEqualToValue={(option, value) => {
+                    return option === value;
+                  }}
+                  renderOption={(props, option) => <li {...props}>{option}</li>}
+                  value={participantInformation.sex}
+                  options={["Male", "Female", "Other"]}
+                  onChange={(event, newValue) => setParticipantInformation({...participantInformation, sex: newValue})}
+                />
+              </Grid>
+              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+                <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+                  <DatePicker
+                    id="study-participant-dob"
+                    label="Date of Birth (Optional)"
+                    value={participantInformation.dob}
+                    onChange={(newDate) => {
+                      setParticipantInformation({...participantInformation, dob: newDate});
+                    }}
+                    renderInput={(params) => <TextField {...params} fullWidth/>}
+                  />
+                </LocalizationProvider>
+              </Grid>
+              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+                <Autocomplete selectOnFocus freeSolo
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      variant="standard"
+                      placeholder={"Select Diagnosis (Optional)"}
+                    />
+                  )}
+                  isOptionEqualToValue={(option, value) => {
+                    return option === value;
+                  }}
+                  renderOption={(props, option) => <li {...props}>{option}</li>}
+                  value={participantInformation.diagnosis}
+                  options={["Parkinson's Disease", "Essential Tremor", "Other"]}
+                  onChange={(event, newValue) => setParticipantInformation({...participantInformation, diagnosis: newValue})}
+                />
+              </Grid>
+              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+                <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
+                  <DatePicker
+                    id="study-participant-dod"
+                    label="Date of Diagnosis (Optional)"
+                    value={participantInformation.disease_start_time}
+                    onChange={(newDate) => {
+                      setParticipantInformation({...participantInformation, disease_start_time: newDate});
+                    }}
+                    renderInput={(params) => <TextField {...params} fullWidth/>}
+                  />
+                </LocalizationProvider>
+              </Grid>
+              <Grid item xs={12} style={{marginTop: "auto"}}>
+                <MDButton variant={"contained"} color={"success"} style={{marginLeft: "auto"}} onClick={handleCreateParticipant}>
+                  {"Create Participant"}
+                </MDButton>
+              </Grid>
+            </Grid>
+          </MDBox>
+        </Dialog>
       </MDBox>
-      ) : ( <LoadingProgress /> )}
     </DatabaseLayout>
   );
 };

@@ -172,6 +172,14 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
       }
     }
 
+    if (config.Type == "Past Therapy") {
+      for (let i in config.Stimulation[index]) {
+        for (let j in config.Stimulation[index][i].FractionalAmplitudes) {
+          config.Stimulation[index][i].FractionalAmplitudes[j] = (config.Stimulation[index][0].FractionalAmplitudes[j] / config.Stimulation[index][i].Contact.length);
+        }
+      }
+    }
+
     return (
       <MDBox pt={1} pb={2}>
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
@@ -207,35 +215,55 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
           </MDTypography>
           )}
         </MDBox>
+        <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
+          {interleaving ? (
+          <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+            {"Amplitude: "}<b>{config.Stimulation[index][0].Amplitude}</b>{" " + config.Stimulation[index][0].AmplitudeUnit}{" | "}<b>{config.Stimulation[index][1].Amplitude}</b>{" " + config.Stimulation[index][1].AmplitudeUnit}<br/>
+          </MDTypography>
+          ) : (
+          <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
+            {"Amplitude: "}<b>{config.Stimulation[index][0].Amplitude}</b>{" " + config.Stimulation[index][0].AmplitudeUnit}<br/>
+          </MDTypography>
+          )}
+        </MDBox>
         
         {interleaving ? (
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"start"} pt={1}>
           <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-            {"Stimulation: "}
+            {"Active Contact: "}
           </MDTypography>
           {config.Stimulation[index][0].Contact.map((a, sindex) => {
-            return <Tooltip key={a} title={config.Stimulation[index][0].FractionalAmplitudes[sindex] / config.Stimulation[index][0].Contact.length + " " + config.Stimulation[index][0].AmplitudeUnit}>
+            return <MDBox key={a}>
               <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
-            </Tooltip>
+              <MDTypography variant={"h6"} fontSize={12} fontWeight={"regular"} lineHeight={1} ml={1}>
+                {(config.Stimulation[index][0].FractionalAmplitudes[sindex]).toFixed(1) + " " + config.Stimulation[index][0].AmplitudeUnit}
+              </MDTypography>
+            </MDBox>
           })}
           <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} ml={1}>
             {" | "}
           </MDTypography>
           {config.Stimulation[index][1].Contact.map((a, sindex) => {
-            return <Tooltip key={a} title={config.Stimulation[index][1].FractionalAmplitudes[sindex] / config.Stimulation[index][1].Contact.length + " " + config.Stimulation[index][1].AmplitudeUnit}>
+            return <MDBox key={a}>
               <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
-            </Tooltip>
+              <MDTypography variant={"h6"} fontSize={12} fontWeight={"regular"} lineHeight={1} ml={1}>
+                {(config.Stimulation[index][1].FractionalAmplitudes[sindex]).toFixed(1) + " " + config.Stimulation[index][1].AmplitudeUnit}
+              </MDTypography>
+            </MDBox>
           })}
         </MDBox>
         ) : (
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"start"} pt={1}>
           <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-            {"Stimulation: "}
+            {"Active Contact: "}
           </MDTypography>
           {config.Stimulation[index][0].Contact.map((a, sindex) => {
-            return <Tooltip key={a} title={config.Stimulation[index][0].FractionalAmplitudes[sindex] / config.Stimulation[index][0].Contact.length + " " + config.Stimulation[index][0].AmplitudeUnit}>
+            return <MDBox>
               <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
-            </Tooltip>
+              <MDTypography variant={"h6"} fontSize={12} fontWeight={"regular"} lineHeight={1} ml={1}>
+                {(config.Stimulation[index][0].FractionalAmplitudes[sindex]).toFixed(1) + " " + config.Stimulation[index][0].AmplitudeUnit}
+              </MDTypography>
+            </MDBox>
           })}
         </MDBox>
         )}
@@ -243,7 +271,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
         {interleaving ? (
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} justifyContent={"start"} pt={1}>
           <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-            {"Stimulation Return: "}
+            {"Return Contact: "}
           </MDTypography>
           {config.Stimulation[index][0].ReturnContact.map((a) => {
             return <MDBadge key={a} badgeContent={a} color={"info"} size={"xs"} container sx={{marginLeft: 1}} />
@@ -258,7 +286,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
         ) : (
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
           <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-            {"Stimulation Return: "}
+            {"Return Contact: "}
           </MDTypography>
           {config.Stimulation[index][0].ReturnContact.map((a) => {
             return <MDBadge key={a} badgeContent={a} color={"info"} size={"xs"} container sx={{marginLeft: 1}} />
@@ -266,53 +294,37 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
         </MDBox>
         )}
 
-        {interleaving ? ( 
-        <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
-          <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
-            {"Cycling: "}{" "}
-          </MDTypography>
-          {config.Stimulation[index][0].CyclingPeriod == 0 ? (
-            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-              {" Continuous Stimulation"}
+        {config.Stimulation[index][0].CyclingPeriod > 0 ? <>
+          {interleaving? ( 
+          <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
+              {"Cycling: "}{" "}
             </MDTypography>
-          ) : (
             <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
               {"Duty Cycle " + (config.Stimulation[index][0].Cycling*100).toFixed(1) + "%"}<br/>
               {"Duty Period " + (config.Stimulation[index][0].CyclingPeriod/60000).toFixed(1) + " minutes"}
             </MDTypography>
-          )}
-          <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} px={1}>
-            {" | "}
-          </MDTypography>
-          {config.Stimulation[index][1].CyclingPeriod == 0 ? (
-            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-              {" Continuous Stimulation"}
+            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} px={1}>
+              {" | "}
             </MDTypography>
-          ) : (
             <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
               {"Duty Cycle " + (config.Stimulation[index][1].Cycling*100).toFixed(1) + "%"}<br/>
               {"Duty Period " + (config.Stimulation[index][1].CyclingPeriod/60000).toFixed(1) + " minutes"}
             </MDTypography>
-          )}
-        </MDBox>
-        ) : (
-        <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
-          <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
-            {"Cycling: "}{" "}
-          </MDTypography>
-          {config.Stimulation[index][0].CyclingPeriod == 0 ? (
-            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-              {" Continuous Stimulation"}
-            </MDTypography>
+          </MDBox>
           ) : (
+          <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} pt={1}>
+            <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1} pr={1}>
+              {"Cycling: "}{" "}
+            </MDTypography>
             <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
               {"Duty Cycle " + (config.Stimulation[index][0].Cycling*100).toFixed(1) + "%"}<br/>
               {"Duty Period " + (config.Stimulation[index][0].CyclingPeriod/60000).toFixed(1) + " minutes"}
             </MDTypography>
+          </MDBox>
           )}
-        </MDBox>
-        )}
-
+        </> : null}
+        
         {interleaving || !sensing ? null : (
           <MDBox pt={2}>
             <MDBox display={"flex"} flexDirection={"column"} justifyContent={"start"} pt={1}>
@@ -334,8 +346,8 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                   <b>{config.Adaptive[index][0].StimulationConfiguration.Config.RampDownTime}</b>{" ms"}<br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
-                  {"Amplitude Limits (Up|Down): "}<b>{config.Adaptive[index][0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]}</b>{" a.u."} {" | "}
-                  <b>{config.Adaptive[index][0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}</b>{" a.u."}<br/>
+                  {"Amplitude Limits (Up|Down): "}<b>{config.Adaptive[index][0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]}</b>{" mA"} {" | "}
+                  <b>{config.Adaptive[index][0].RecordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}</b>{" mA"}<br/>
                 </MDTypography>
                 <MDTypography variant={"h6"} fontSize={15} fontWeight={"regular"} lineHeight={1}>
                   {"LFP Thresholds (Up|Down): "}<b>{config.Adaptive[index][0].RecordingConfiguration.Config.Thresholds.LFPThresholds[0]}</b>{" a.u."} {" | "}
@@ -468,7 +480,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                 <Card p={2}>
                   <MDBox px={2} pt={1}>
                     <MDTypography variant={"h5"} >
-                      {config.GroupName ? config.GroupName : config.GroupId}{config.PercentUsage ? (" ("+(config.PercentUsage*100).toFixed(1)+"%)") : ""}
+                      {config.GroupName ? config.GroupName : config.GroupId.replace("GroupIdDef.", "").replace("_", " ")}{config.PercentUsage ? (" ("+(config.PercentUsage*100).toFixed(1)+"%)") : ""}
                     </MDTypography>
                   </MDBox>
                   

@@ -152,6 +152,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           </SidenavCollapse>
         );
       }
+
     } else if (type === "title") {
       returnValue = (
         <MDTypography
@@ -187,7 +188,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   const allRoutes = routes.Main.children.map(renderRoute);
 
   let reportName = report;
-  if (pathname == "/dashboard" || pathname.startsWith("/group-analysis")) {
+  if (pathname == "/database" || pathname.startsWith("/group-analysis")) {
     reportName = "StudyGroupAnalysis";
   }
 
@@ -237,12 +238,31 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
         }
       />
       {routes[reportName] ? (
-        <List key={reportName}>{routes[reportName].children.map(({ key, name, icon, route }) => {
+        <List key={reportName}>{routes[reportName].children.map(({ key, name, title, icon, route }) => {
           var nameString = "";
           if (Object.keys(dictionary.Routes).includes(name)) {
             nameString = dictionary.Routes[name][language];
           } else {
             nameString = name;
+          }
+
+          if (title) {
+            return (
+              <MDTypography
+                key={key}
+                color={textColor}
+                display="block"
+                variant="caption"
+                fontWeight="bold"
+                textTransform="uppercase"
+                pl={3}
+                mt={2}
+                mb={1}
+                ml={1}
+              >
+                {nameString}
+              </MDTypography>
+            );
           }
 
           if (!route) return null;

@@ -92,8 +92,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
       const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
         year: "numeric",
         month: "2-digit",
-        day: "2-digit",
-        timeZoneName: "longGeneric"
+        day: "2-digit"
       })
 
       if (!uniqueDates.map((a) => a.label).includes(dateString)) uniqueDates.push({
@@ -117,8 +116,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
       const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
         year: "numeric",
         month: "2-digit",
-        day: "2-digit",
-        timeZoneName: "longGeneric"
+        day: "2-digit"
       })
 
       let filterState = dateString == selectedDate.label && (data[i].Type == filterOptions.Type || filterOptions.Type == "All");
@@ -151,8 +149,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
       const dateString = new Date(data[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(data[i].Timezone),
         year: "numeric",
         month: "2-digit",
-        day: "2-digit",
-        timeZoneName: "longGeneric"
+        day: "2-digit"
       })
 
       if (dateString == date.label) {
@@ -222,7 +219,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
       </MDBox>
       <Collapse in={showTable} >
         <MDBox p={2} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, justifyContent: "space-between"}}>
-          <MDInput label={"Search for Analysis"} value={filterOptions.Keyword} onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
+          <MDInput label={"Search for Recording"} value={filterOptions.Keyword} onChange={(value) => setFilterOptions({...filterOptions, Keyword: value.target.value})} fullWidth sx={{marginRight: {xs: 0, sm: 3}, marginBottom: {xs: 3, sm: 0}}}/>
           <Autocomplete
             fullWidth
             value={filterOptions.Type}
@@ -231,7 +228,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
             renderInput={(params) => (
               <FormField
                 {...params}
-                label={"Filter by Analysis Type"}
+                label={"Filter by Recording Type"}
                 InputLabelProps={{ shrink: true }}
               />
             )}
@@ -264,8 +261,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                       {new Date(analysis.Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(analysis.Timezone),
                         hour: "2-digit",
                         minute: "2-digit",
-                        second: "2-digit",
-                        timeZoneName: "longGeneric"
+                        second: "2-digit"
                       })}
                     </MDTypography>
                     <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
@@ -278,7 +274,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                         setEditRecordingName({show: true, analysisId: [analysis.Id], tags: analysis.Metadata.Tags, name: analysis.Name})
                       }
                     }} style={{width: 200, padding: 0, marginTop: 3}} fullWidth>
-                      {"Edit Recording"}
+                      {"Rename Recording"}
                     </MDButton>
                   </TableCell>
                   <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
@@ -407,7 +403,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
       </Collapse>
       <MDBox p={2}>
         <MDButton variant={"contained"} color="info" onClick={() => setShowTable(!showTable)} >
-          {showTable ? "Hide Table" : "Show Table"}
+          {showTable ? "Hide Available Recordings" : "Show Available Recordings"}
         </MDButton>
       </MDBox>
     </>

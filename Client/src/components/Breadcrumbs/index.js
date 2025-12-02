@@ -52,7 +52,7 @@ function Breadcrumbs({ icon, title, route, light }) {
             },
           }}
         >
-          <Link to="/dashboard">
+          <Link to="/database">
             <MDTypography
               component="span"
               variant="body2"
@@ -109,7 +109,7 @@ function Breadcrumbs({ icon, title, route, light }) {
             },
           }}
         >
-          <Link to="/dashboard">
+          <Link to="/database">
             <MDTypography
               component="span"
               variant="body2"

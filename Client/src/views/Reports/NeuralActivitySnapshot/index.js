@@ -62,7 +62,6 @@ function NeuralActivitySnapshot() {
 
   const [availableSnapshots, setAvailableSnapshots] = useState({Analyses: [], Recordings: []});
   const [viewSnapshot, setViewSnapshot] = useState("");
-
   const [viewChronicChannel, setViewChronicChannel] = useState({active: "", options: []});
 
   const [snapshot, setSnapshot] = useState([]);
@@ -87,7 +86,7 @@ function NeuralActivitySnapshot() {
 
   useEffect(() => {
     if (!participant_uid) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
       return;
     }
     setContextState(dispatch, "report", "GeneralReports");
@@ -98,7 +97,7 @@ function NeuralActivitySnapshot() {
       ParticipantId: participant_uid
     }).then((response) => {
       setViewChronicChannel(() => {
-        const allChannels = response.data.Recordings.reduce((accumulator, a) => {
+        let allChannels = response.data.Recordings.reduce((accumulator, a) => {
           for (let k in a.Channels) {
             if (!accumulator.includes(a.Channels[k])) {
               accumulator.push(a.Channels[k]);
@@ -106,6 +105,7 @@ function NeuralActivitySnapshot() {
           }
           return accumulator
         }, []).sort((a,b) => a.localeCompare(b));
+        allChannels = allChannels.map((a) => a.split(": ")[1]);
 
         if (allChannels.length > 0) return {active: allChannels[0], options: allChannels}
         return {active: "", options: []}
@@ -120,8 +120,7 @@ function NeuralActivitySnapshot() {
             day: "2-digit",
             hour: "2-digit",
             minute: "2-digit",
-            second: "2-digit",
-            timeZoneName: "longGeneric"
+            second: "2-digit"
           })
           response.data.Recordings[i].DateString = dateString;
           if (!uniqueDates.map((a) => a.dateString).includes(dateString)) uniqueDates.push({value: response.data.Recordings[i].Date, dateString});
@@ -150,11 +149,7 @@ function NeuralActivitySnapshot() {
           
           for (let j in analysis.Channels) {
             for (let k in analysis.Channels[j]) {
-              const subString = analysis.Channels[j][k].split(" ");
-              if (analysis.Overview.length == 0) {
-                analysis.Overview = subString;
-              }
-              analysis.Overview = findCommonItem(analysis.Overview, subString);
+              analysis.Overview = analysis.Overview;
             }
           }
           analysis.Type = recordings[0].Type;
@@ -203,12 +198,11 @@ function NeuralActivitySnapshot() {
       let allRecordings = []
       for (let i in availableSnapshots.Recordings) {
         for (let k in availableSnapshots.Recordings[i].Channels) {
-          if (availableSnapshots.Recordings[i].Channels[k] == viewChronicChannel.active) {
+          if (availableSnapshots.Recordings[i].Channels[k].split(": ")[1] == viewChronicChannel.active) {
             const dateString = new Date(availableSnapshots.Recordings[i].Date*1000).toLocaleString("en-US", {...SessionController.getTimezoneName(availableSnapshots.Recordings[i].Timezone),
               year: "numeric",
               month: "2-digit",
-              day: "2-digit",
-              timeZoneName: "longGeneric"
+              day: "2-digit"
             })
             allRecordings.push({
               Date: dateString,

@@ -81,7 +81,7 @@ function AnalysisBuilder({analysisId, analysisData, updateAnalysisData}) {
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       setData(analysisData);
       setAvailableRecordings(analysisData.AvailableRecordings.sort((a,b) => {

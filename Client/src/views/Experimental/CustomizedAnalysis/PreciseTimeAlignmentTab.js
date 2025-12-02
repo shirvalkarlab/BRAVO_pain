@@ -110,7 +110,7 @@ function PreciseTimeAlignmentTab({analysisId, analysisData, updateAnalysisData})
 
   useEffect(() => {
     if (!patientID) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
     } else {
       setData(analysisData);
       setAvailableRecordings(analysisData.Recordings.sort((a,b) => {

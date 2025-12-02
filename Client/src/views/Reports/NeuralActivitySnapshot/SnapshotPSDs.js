@@ -92,14 +92,14 @@ function SnapshotPSDs({dataToRender, figureTitle}) {
         ylim: ylim,
         line_options: {
           linewidth: 2,
-          name: dataToRender[i].ChannelName,
-          legendgroup: dataToRender[i].ChannelName,
+          name: dataToRender[i].ChannelName.split(": ")[1],
+          legendgroup: dataToRender[i].ChannelName.split(": ")[1],
           color: colors[i],
-          hovertemplate: `  ${dataToRender[i].ChannelName}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
+          hovertemplate: `  ${dataToRender[i].ChannelName.split(": ")[1]}<br>  %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "uV2Hz", language)}<extra></extra>`,
           showlegend: true
         }, 
         shade_options: {
-          legendgroup: dataToRender[i].ChannelName,
+          legendgroup: dataToRender[i].ChannelName.split(": ")[1],
           color: colors[i],
           alpha: 0.3,
           showlegend: false
@@ -109,7 +109,7 @@ function SnapshotPSDs({dataToRender, figureTitle}) {
 
       const index = getFrequencyIndex(dataToRender[i].Frequency);
       graphSeries.push({
-        type: "bar", x: [dataToRender[i].ChannelName], y: [dataToRender[i].Power[index]], 
+        type: "bar", x: [dataToRender[i].ChannelName.split(": ")[1]], y: [dataToRender[i].Power[index]], 
         options: {
           error_y: {
             type: "data",

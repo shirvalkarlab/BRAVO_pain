@@ -35,17 +35,6 @@ import {
 
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
-import BoltIcon from '@mui/icons-material/Bolt';
-import AssessmentIcon from '@mui/icons-material/Assessment';
-import PollIcon from '@mui/icons-material/Poll';
-import SensorsIcon from '@mui/icons-material/Sensors';
-import TimelineIcon from '@mui/icons-material/Timeline';
-import BatchPredictionIcon from '@mui/icons-material/BatchPrediction';
-import FlashAutoIcon from "@mui/icons-material/FlashAuto";
-import PhotoIcon from "@mui/icons-material/Photo";
-import WatchIcon from "@mui/icons-material/Watch";
-import ArticleIcon from '@mui/icons-material/Article';
-
 import { FaBrain, FaXmark, FaPen } from "react-icons/fa6";
 
 import MDBox from "components/MDBox";
@@ -82,10 +71,6 @@ export default function ParticipantOverview() {
   const [editParticipantInfo, setEditParticipantInfo] = useState(false);
   const [editDeviceInfo, setEditDeviceInfo] = useState({show: false});
   const [uploadView, setUploadView] = useState({show: false});
-  const [activeExperiment, setActiveExperiment] = useState({show: false, options: [], active: experiment});
-  const [uploadNewJson, setUploadNewJson] = useState({show: false});
-  const [mergeRecords, setMergeRecords] = useState({show: false});
-  const [addNewDevice, setAddNewDevice] = useState({show: false});
   const [availableTags, setAvailableTags] = useState([]);
 
   const [alert, setAlert] = useState(null);
@@ -95,7 +80,7 @@ export default function ParticipantOverview() {
     try {
       let response = await SessionController.query("/api/queryParticipantInformation", {
         ParticipantId: participant_uid
-      })
+      });
       
       setContextState(dispatch, "participant_uid", participant_uid);
       setEditParticipantInfo(false);
@@ -106,17 +91,17 @@ export default function ParticipantOverview() {
 
     } catch (error) {
       SessionController.displayError(error, setAlert, () => {
-        navigate("/dashboard", {replace: true});
+        navigate("/database", {replace: true});
       });
     }
   }
 
   useEffect(() => {
     if (!participant_uid) {
-      navigate("/dashboard", {replace: false});
+      navigate("/database", {replace: false});
       return
     }
-
+    setContextState(dispatch, "participant_uid", participant_uid);
     initialSetup();
   }, [participant_uid]);
 
@@ -160,7 +145,7 @@ export default function ParticipantOverview() {
           ParticipantId: participant_uid
         }).then(() => {
           setContextState(dispatch, "participant_uid", null);
-          navigate("/dashboard", {replace: true});
+          navigate("/database", {replace: true});
         }).catch((error) => {
           SessionController.displayError(error, setAlert);
         });

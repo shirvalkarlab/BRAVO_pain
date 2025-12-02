@@ -88,20 +88,11 @@ const routes = {
     children: [
       {
         type: "collapse",
-        name: "Dashboard",
+        name: "Database",
         key: "dashboard",
         component: <DashboardOverview />,
-        route: "/dashboard",
+        route: "/database",
         icon: <DashboardIcon/>,
-        noCollapse: true,
-      },
-      {
-        type: "collapse",
-        name: "UploadRawData",
-        key: "upload-data",
-        component: <UploadDataView />,
-        route: "/upload-data",
-        icon: <IosShare/>,
         noCollapse: true,
       },
       {
@@ -141,15 +132,6 @@ const routes = {
         icon: <FaClipboardList />,
         noCollapse: true,
         hide: true,
-      },
-      {
-        type: "collapse",
-        name: "AsyncJobScheduleTable",
-        key: "async-job-management",
-        component: <AsyncJobSchedule />,
-        route: "/async-job-management",
-        icon: <FaTimeline/>,
-        noCollapse: true,
       },
     ]
   },
@@ -191,6 +173,12 @@ const routes = {
     name: "Group Analysis",
     children: [
       {
+        key: "GroupAnalysis",
+        name: "Group Analysis",
+        title: true,
+        hide: true
+      },
+      {
         key: "SpectralAnalysisExaminationStreaming",
         name: "Effects of Changes in Stimulation",
         icon: <BiotechIcon />,
@@ -210,6 +198,12 @@ const routes = {
     icon: <AssessmentIcon />,
     name: "Brain Data",
     children: [
+      {
+        key: "GeneralReports",
+        name: "General Reports",
+        title: true,
+        hide: true
+      },
       {
         type: "collapse",
         name: "ParticipantOverview",
@@ -269,6 +263,12 @@ const routes = {
     name: "Surveys and Questionnaires",
     children: [
       {
+        key: "SurveysandQuestionnaires",
+        name: "Surveys and Questionnaires",
+        title: true,
+        hide: true
+      },
+      {
         type: "collapse",
         name: "ParticipantOverview",
         key: "participant-overview",
@@ -291,6 +291,12 @@ const routes = {
     icon: <IoWatch />,
     name: "External Sensors",
     children: [
+      {
+        key: "ExternalSensor",
+        name: "External Sensors",
+        title: true,
+        hide: true
+      },
       {
         type: "collapse",
         name: "ParticipantOverview",
@@ -329,6 +335,12 @@ const routes = {
     name: "Imaging Reports",
     children: [
       {
+        key: "ImagingReports",
+        name: "Imaging Reports",
+        title: true,
+        hide: true
+      },
+      {
         type: "collapse",
         name: "ParticipantOverview",
         key: "participant-overview",
@@ -351,6 +363,12 @@ const routes = {
     icon: <MdBuildCircle />,
     name: "Customized Analysis",
     children: [
+      {
+        key: "CustomizedAnalysis",
+        name: "Customized Analysis",
+        title: true,
+        hide: true
+      },
       {
         type: "collapse",
         name: "ParticipantOverview",
@@ -388,6 +406,12 @@ const routes = {
     icon: <MdStorage />,
     name: "Data Manager",
     children: [
+      {
+        key: "DataManager",
+        name: "Data Manager",
+        title: true,
+        hide: true
+      },
       {
         type: "collapse",
         name: "ParticipantOverview",
