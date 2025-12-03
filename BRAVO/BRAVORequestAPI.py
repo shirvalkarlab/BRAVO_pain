@@ -418,6 +418,33 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
     
+    def DeleteData(self, recording_uid, participant=None):
+        participantObj = participant if participant else self.__ActiveParticipant
+        data = {"participant": participantObj["uid"], "study": participantObj["study"], "recording_uid": recording_uid}
+        response = self.query("/api/deleteData", data)
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 301:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+
+    def RequestAIPrediction(self, request_type, data):
+        data = {"RequestType": request_type, "AnalysisName": request_type, "Data": data}
+        response = self.query("/api/requestAIPrediction", data)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 301:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+
     def UploadMedtronicJSON(self, participant, file, metadata={"device_location": "", "infer_from_device": True}):
         form = {
             "File": file,
