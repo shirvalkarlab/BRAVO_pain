@@ -39,6 +39,7 @@ classdef BRAVORequestAPI
                 params.config = false
             end
 
+            data.Configurations = struct();
             if isa(params.config, 'struct')
                 data.Configurations = params.config;
             end
