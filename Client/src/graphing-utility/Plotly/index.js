@@ -96,6 +96,7 @@ const defaultLayoutOptions = {
     showticklabels: true,
 
     ticks: "outside",
+    fixedrange: false,
 
     title: {text: "", font: {size: 15}},
   },
@@ -107,6 +108,7 @@ const defaultLayoutOptions = {
     showticklabels: true,
 
     ticks: "outside",
+    fixedrange: false,
 
     title: {text: "", font: {size: 15}},
   },
