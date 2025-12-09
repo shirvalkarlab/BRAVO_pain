@@ -89,11 +89,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
           bgcolor: 'white',
           bordercolor: '#444',
           borderwidth: 1 
-        },
-        range: [
-          moment().subtract(1, 'months').valueOf(),  // 1 week ago
-          moment().valueOf()  // now
-        ]
+        }
       }
     });
     
