@@ -2049,42 +2049,42 @@ def extractChronicLFP(JSON, sourceData=dict()):
                 
                     Data["LFPTrends"][hemisphere] = copy.deepcopy(RealtimeLFP[hemisphere])
                 
-        if subkey == "LfpFrequencySnapshotEvents":
-            Data["PatientEventLogs"] = copy.deepcopy(JSON[key][subkey])
-            for event in Data["PatientEventLogs"]:
-                event["DateTime"] = datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
+            elif subkey == "LfpFrequencySnapshotEvents":
+                Data["PatientEventLogs"] = copy.deepcopy(JSON[key][subkey])
+                for event in Data["PatientEventLogs"]:
+                    event["DateTime"] = datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal())
 
-            # Extract Events from Event Logs
-            Data["PSDEvents"] = dict()
-            Data["LFPEvents"] = dict()
-            PSDArrays = dict({"ZERO_TWO_LEFT": {"Power": list(), "Time": list()},
-                              "ONE_THREE_LEFT": {"Power": list(), "Time": list()},
-                              "ZERO_TWO_RIGHT": {"Power": list(), "Time": list()},
-                              "ONE_THREE_RIGHT": {"Power": list(), "Time": list()}})
-            
-            for event in JSON[key][subkey]:
-                if event["EventName"] not in Data["LFPEvents"].keys():
-                    Data["LFPEvents"][event["EventName"]] = list()
-                    Data["PSDEvents"][event["EventName"]] = copy.deepcopy(PSDArrays)
-                    
-                Data["LFPEvents"][event["EventName"]].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                # Extract Events from Event Logs
+                Data["PSDEvents"] = dict()
+                Data["LFPEvents"] = dict()
+                PSDArrays = dict({"ZERO_TWO_LEFT": {"Power": list(), "Time": list()},
+                                "ONE_THREE_LEFT": {"Power": list(), "Time": list()},
+                                "ZERO_TWO_RIGHT": {"Power": list(), "Time": list()},
+                                "ONE_THREE_RIGHT": {"Power": list(), "Time": list()}})
                 
-                if "LfpFrequencySnapshotEvents" in event.keys():
-                    for hemisphere in ["HemisphereLocationDef.Left","HemisphereLocationDef.Right"]:
-                        if hemisphere in event["LfpFrequencySnapshotEvents"].keys():
-                            channel = reformatChannelName(event["LfpFrequencySnapshotEvents"][hemisphere]["SenseID"])
-                            if channel == [0,2] and hemisphere == "HemisphereLocationDef.Left":
-                                Data["PSDEvents"][event["EventName"]]["ZERO_TWO_LEFT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
-                                Data["PSDEvents"][event["EventName"]]["ZERO_TWO_LEFT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
-                            elif channel == [1,3] and hemisphere == "HemisphereLocationDef.Left":
-                                Data["PSDEvents"][event["EventName"]]["ONE_THREE_LEFT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
-                                Data["PSDEvents"][event["EventName"]]["ONE_THREE_LEFT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
-                            elif channel == [0,2] and hemisphere == "HemisphereLocationDef.Right":
-                                Data["PSDEvents"][event["EventName"]]["ZERO_TWO_RIGHT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
-                                Data["PSDEvents"][event["EventName"]]["ZERO_TWO_RIGHT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
-                            elif channel == [1,3] and hemisphere == "HemisphereLocationDef.Right":
-                                Data["PSDEvents"][event["EventName"]]["ONE_THREE_RIGHT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
-                                Data["PSDEvents"][event["EventName"]]["ONE_THREE_RIGHT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                for event in JSON[key][subkey]:
+                    if event["EventName"] not in Data["LFPEvents"].keys():
+                        Data["LFPEvents"][event["EventName"]] = list()
+                        Data["PSDEvents"][event["EventName"]] = copy.deepcopy(PSDArrays)
+                        
+                    Data["LFPEvents"][event["EventName"]].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                    
+                    if "LfpFrequencySnapshotEvents" in event.keys():
+                        for hemisphere in ["HemisphereLocationDef.Left","HemisphereLocationDef.Right"]:
+                            if hemisphere in event["LfpFrequencySnapshotEvents"].keys():
+                                channel = reformatChannelName(event["LfpFrequencySnapshotEvents"][hemisphere]["SenseID"])
+                                if channel == [0,2] and hemisphere == "HemisphereLocationDef.Left":
+                                    Data["PSDEvents"][event["EventName"]]["ZERO_TWO_LEFT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
+                                    Data["PSDEvents"][event["EventName"]]["ZERO_TWO_LEFT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                                elif channel == [1,3] and hemisphere == "HemisphereLocationDef.Left":
+                                    Data["PSDEvents"][event["EventName"]]["ONE_THREE_LEFT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
+                                    Data["PSDEvents"][event["EventName"]]["ONE_THREE_LEFT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                                elif channel == [0,2] and hemisphere == "HemisphereLocationDef.Right":
+                                    Data["PSDEvents"][event["EventName"]]["ZERO_TWO_RIGHT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
+                                    Data["PSDEvents"][event["EventName"]]["ZERO_TWO_RIGHT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
+                                elif channel == [1,3] and hemisphere == "HemisphereLocationDef.Right":
+                                    Data["PSDEvents"][event["EventName"]]["ONE_THREE_RIGHT"]["Power"].append(event["LfpFrequencySnapshotEvents"][hemisphere]["FFTBinData"])
+                                    Data["PSDEvents"][event["EventName"]]["ONE_THREE_RIGHT"]["Time"].append(datetime.fromisoformat(event["DateTime"].replace("Z","+00:00")).astimezone(dateutil.tz.tzlocal()))
 
     for key in Data.keys():
         sourceData[key] = Data[key]

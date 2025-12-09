@@ -67,10 +67,10 @@ def extractPatientInformation(JSON):
 
     try:
         if "BatteryPercentage" in JSON["BatteryInformation"].keys():
-            JSON["BatteryInformation"]["BatteryPercentage"]
+            PatientOverview["Device"]["BatteryPercent"] = JSON["BatteryInformation"]["BatteryPercentage"]
 
         if "EstimatedBatteryLifeMonths" in JSON["BatteryInformation"].keys():
-            PatientOverview["Device"]["EOL"] = PatientOverview["SessionTimestamp"] + int(JSON["BatteryInformation"]["EstimatedBatteryLifeMonths"])*30*3600
+            PatientOverview["Device"]["EOL"] = PatientOverview["SessionTimestamp"] + int(JSON["BatteryInformation"]["EstimatedBatteryLifeMonths"])*30.44*24*3600
         elif "ERIDate" in JSON["BatteryInformation"].keys():
             PatientOverview["Device"]["EOL"] = Percept.getTimestamp(JSON["BatteryInformation"]["ERIDate"])
         
