@@ -22,6 +22,7 @@ import os
 import json
 import traceback
 from copy import deepcopy
+import pickle
 from pathlib import Path
 import hmac, hashlib
 from io import BytesIO
@@ -137,6 +138,18 @@ class DataUploadHandler(RestViews.APIView):
         elif request.data["DataType"] == "BRAVOExportv1":
             try:
                 DataCurator.ImportBRAVOExport(source_file)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+            source_file.delete()
+            
+        elif request.data["DataType"] == "BRAVOExportv2":
+            try:
+                participant = DataCurator.ImportBRAVOStructure(source_file)
+                participant.institute = request.user.institute
+                participant.save()
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())
@@ -306,9 +319,12 @@ class DataDownloadHandler(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def get(self, request):
-        ParticipantId = self.request.query_params.get('ParticipantId')
         CacheType = self.request.query_params.get('CacheType')
+        if CacheType == "ClearDataUpload":
+            models.SourceFile.objects.filter(metadata__Uploader=request.user.pk, owner=None).delete()
+            return Response(status=200)
 
+        ParticipantId = self.request.query_params.get('ParticipantId')
         Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
                                 study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
         if not Permissions:
@@ -326,6 +342,18 @@ class DataDownloadHandler(RestViews.APIView):
                 response = HttpResponse( fp.getvalue(), content_type="text/csv" )
                 response["Content-Disposition"] = "attachment; filename=" + filename
                 return response
+
+        elif CacheType == "queryNeuralActivitySnapshot":
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            userConfig["APIAccess"] = hasattr(request.user, "api_access")
+            Snapshots = DataAnalysis.downloadNeuralActivitySnapshot(ParticipantId, userConfig)
+            file_data = pickle.dumps(Snapshots)
+            
+            response = HttpResponse(bytes(file_data), status=200, headers={
+                "Content-Type": "application/octet-stream"
+            })
+            response["Content-Disposition"] = "attachment; filename=NeuralActivitySnapshots_" + ParticipantId + ".pkl"
+            return response
 
         elif CacheType == "queryTimeseriesAnalysis":
             RecordingId = self.request.query_params.get('RecordingId')

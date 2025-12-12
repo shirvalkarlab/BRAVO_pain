@@ -1496,6 +1496,46 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
     AnalysisStruct["Annotations"] = uniqueList(AnalysisStruct["Annotations"])
     return AnalysisStruct
 
+def downloadNeuralActivitySnapshot(participant_uid, config):
+    AllSnapshots = []
+    Participant = models.Participant.find(uid=participant_uid)
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
+    DBSDeviceDictionary = {}
+    for i in range(len(DBSDevices)):
+        DBSDeviceDictionary[DBSDevices[i]["Id"]] = DBSDevices[i]
+
+    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+    for recording in Recordings:
+        Description = recording.get_info()
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        Data = processNeuralActivitySnapshot(recording, Data, config)
+        
+        if recording.source.metadata["Device"] in DBSDeviceDictionary.keys():
+            DBSDevice = DBSDeviceDictionary[recording.source.metadata["Device"]]
+        else:
+            raise Exception("Neural Activity Snapshot Query found a recording whose DeviceId does not belongs to the Participant")
+
+        for i in range(len(Data["ChannelNames"])):
+            ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
+            if ElectrodeIdentifier.startswith("Left"):
+                Description["Date"] += 1
+
+            Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + ElectrodeIdentifier
+            Data["ChannelNames"][i] = Data["ChannelNames"][i].replace(".1","A").replace(".2","B").replace(".3","C")
+
+        AllSnapshots.append({**Description, **{
+            "Type": recording.type,
+            "MedtronicPSDs": Data["Descriptor"]["MedtronicPSD"] if "MedtronicPSD" in Data["Descriptor"].keys() else None,
+            "RecordingId": recording.uid,
+            "Channels": Data["ChannelNames"],
+            "PSDs": Data["PSD"],
+            "Data": Data["Data"]
+        }})
+    
+    return AllSnapshots
+        
+
 def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
     Analysis = processTimeseriesAnalysis(participant_uid, recording_uid, config)
     
