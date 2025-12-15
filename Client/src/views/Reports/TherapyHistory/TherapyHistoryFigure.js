@@ -80,7 +80,6 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
   useEffect(() => {
     if (!fig) return;
 
-    console.log(dataToRender)
     let graphingData = []
     for (let i in dataToRender.TherapyModification) {
       let TherapyBlocks = [];

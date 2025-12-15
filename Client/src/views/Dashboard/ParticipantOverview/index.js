@@ -36,6 +36,7 @@ import {
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import { FaBrain, FaXmark, FaPen } from "react-icons/fa6";
+import DownloadIcon from '@mui/icons-material/Download';
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -392,6 +393,33 @@ export default function ParticipantOverview() {
                   {dictionary.Routes[report] ? dictionary.Routes[report][language] : report}
                 </MDTypography>
               </Grid>
+              {report === "DataManager" ? (
+                <Grid item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                  <Card sx={{width: "100%"}}>
+                    <MDBox p={2} mx={3} display="flex" justifyContent="center">
+                      <MDBox
+                        display="grid" justifyContent="center" alignItems="center"
+                        width="4rem" height="4rem"
+                        shadow="md" borderRadius="lg" variant="gradient"
+                      >
+                        <Icon fontSize="large">
+                          <DownloadIcon />
+                        </Icon>
+                      </MDBox>
+                    </MDBox>
+                    <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
+                      <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" pb={2}>
+                        {"Export Participant Data"}
+                      </MDTypography>
+                    </MDBox>
+                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
+                      <MDButton variant={"contained"} color={"info"} href={`/api/downloadParticipantExport?ParticipantId=${participant_uid}`} fullWidth>
+                        {"Download"}
+                      </MDButton>
+                    </MDBox>
+                  </Card>
+                </Grid>
+              ) : null}
               {routes[report].children.map((subreport) => {
                 if (subreport.hide) return;
                 return <Grid key={subreport.route} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>

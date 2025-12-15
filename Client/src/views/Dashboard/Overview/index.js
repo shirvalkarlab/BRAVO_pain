@@ -45,6 +45,7 @@ import LoadingProgress from "components/LoadingProgress";
 import BRAVOExportUploader from "../UploadDataView/BRAVOExportUploader";
 import NeuroPacePersystDatUploader from "../UploadDataView/NeuroPacePersystDatUploader";
 import MedtronicJSONUploader from "../UploadDataView/MedtronicJSONUploader";
+import BRAVOExportV2Uploader from "../UploadDataView/BRAVOExportV2Uploader";
 
 function DatabaseStatistic({title, description, value}) {
   return (
@@ -235,7 +236,7 @@ export default function DashboardOverview() {
                 }}
                 renderOption={(props, option) => <li {...props}>{option}</li>}
                 value={uploadInterface.uploadDataType}
-                options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "BRAVO Export (v1)"]}
+                options={["Medtronic JSON Files", "NeuroPace Persyst Data Format", "BRAVO Export (v1)", "BRAVO Export (v2)"]}
                 onChange={(event, newValue) => setUploadInterface(prev => ({...prev, uploadDataType: newValue}))}
               />
               {uploadInterface.uploadDataType === "Medtronic JSON Files" ? (
@@ -243,6 +244,9 @@ export default function DashboardOverview() {
               ) : null}
               {uploadInterface.uploadDataType === "BRAVO Export (v1)" ? (
                 <BRAVOExportUploader institute={user.Institute} version={"v1"}/>
+              ) : null}
+              {uploadInterface.uploadDataType === "BRAVO Export (v2)" ? (
+                <BRAVOExportV2Uploader institute={user.Institute}  participant={"batch-upload"}/>
               ) : null}
               {uploadInterface.uploadDataType === "NeuroPace Persyst Data Format" ? (
                 <NeuroPacePersystDatUploader institute={user.Institute} participant={"batch-upload"}/>

@@ -168,6 +168,19 @@ export const SessionController = (function () {
     return href.slice(0,-1);
   };
 
+  const get = (url) => {
+    let csrftoken = ""
+    if (document.querySelector('[name=csrfmiddlewaretoken]')) {
+      csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+    
+    return axios.get(server + url, {
+      headers: {
+        "X-CSRFToken": csrftoken
+      }
+    });
+  };
+
   const query = (url, form, config, timeout, responseType) => {
     let csrftoken = ""
     if (document.querySelector('[name=csrfmiddlewaretoken]')) {
@@ -337,6 +350,7 @@ export const SessionController = (function () {
 
     getDownloadLink: getDownloadLink,
     query: query,
+    get: get,
     displayError: displayError,
     syncSession: syncSession,
     getSession: getSession,

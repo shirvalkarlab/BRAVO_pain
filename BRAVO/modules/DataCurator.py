@@ -862,4 +862,618 @@ def ImportBRAVOExport(source_file):
             
             currentIndex += 15+PacketSize+PacketContentSize
 
+def createExportContent(message, encoder=None):
+    if encoder:
+        encryptedMessage = encoder.encrypt(message.encode("utf-8"))
+        return encryptedMessage
+    return message.encode("utf-8")
 
+def ImportBRAVOStructure(source_file):
+    rawBytes = loadCacheFile(source_file)
+    raise Exception("Not Implemented Yet")
+    if not rawBytes[:12].decode("utf-8") == "BRAVO Export":
+        raise Exception("Incorrect File Format")
+
+    if source_file.metadata["Password"] == "":
+        hashed_key = hashlib.sha256(b"BRAVOExportv2").digest()
+    else:
+        hashed_key = hashlib.sha256(source_file.metadata["Password"].encode("utf-8")).digest()
+    export_key = base64.urlsafe_b64encode(hashed_key)
+    FernetEncoder = Fernet(export_key)
+
+    UIDMapper = {}
+
+    currentIndex = 12
+    while currentIndex < len(rawBytes):
+        HeaderBytes = rawBytes[currentIndex:currentIndex+8]
+        ContentSize = int.from_bytes(rawBytes[currentIndex+8:currentIndex+12], "little")
+
+        if HeaderBytes == b"XXXXPART":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            participant = models.Participant(
+                name=Content["name"], date_of_birth=Content["date_of_birth"], 
+                sex=Content["sex"], mrn=Content["mrn"],
+                diagnosis=Content["diagnosis"], disease_start_time=Content["disease_start_time"],
+            )
+            participant.save()
+            UIDMapper[Content["uid"]] = participant
+
+            for tag in Content["tags"]:
+                tagObj = models.Tag.find(name=tag)
+                if not tagObj:
+                    tagObj = models.Tag(name=tag)
+                    tagObj.save()
+                participant.tags.add(tagObj)
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXDBSD":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            device = models.DBSDevice(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                serial_number=Content["serial_number"],
+                implanted_location=Content["implanted_location"],
+                implanted_date=Content["implanted_date"],
+                estimated_eol=Content["estimated_eol"],
+                device_bloodline=Content["device_bloodline"],
+            )
+            device.save()
+            UIDMapper[Content["uid"]] = device
+            currentIndex += 12 + ContentSize
+
+        elif HeaderBytes == b"XXXXMERD":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            device = models.MERDevice(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+            )
+            device.save()
+            UIDMapper[Content["uid"]] = device
+            currentIndex += 12 + ContentSize
+
+        elif HeaderBytes == b"XXXXELEC":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            electrode = models.Electrode(
+                owner=participant,
+                type=Content["type"],
+                name=Content["name"],
+                hemisphere=Content["hemisphere"],
+                target=Content["target"],
+                custom_name=Content["custom_name"],
+                channel_count=Content["channel_count"],
+                channel_names=Content["channel_names"],
+                channel_mapping=Content["channel_mapping"],
+                channel_coordinates=Content["channel_coordinates"],
+                implanted_date=Content["implanted_date"],
+            )
+            electrode.save()
+            UIDMapper[Content["uid"]] = electrode
+
+            device = UIDMapper[Content["device"]]
+            device.electrodes.add(electrode)
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXFITB":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            device = models.FitbitDevice(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                pkce=Content["pkce"],
+                auth=Content["auth"],
+                date_periods=Content["date_periods"],
+            )
+            device.save()
+            UIDMapper[Content["uid"]] = device
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXOURA":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            device = models.OuraRingDevice(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                pkce=Content["pkce"],
+                auth=Content["auth"],
+                date_periods=Content["date_periods"],
+            )
+            device.save()
+            UIDMapper[Content["uid"]] = device
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXSOUR":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            source_file = models.SourceFile(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+                metadata=Content["metadata"],
+            )
+            source_file.save()
+            UIDMapper[Content["uid"]] = source_file
+
+            if Content["type"] == "MedtronicJSON":
+                hashed = Database.saveSourceFile({}, DATABASE_PATH + "raws" + os.path.sep + participant.uid + os.path.sep + source_file.uid + ".json")
+                source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + participant.uid + os.path.sep + source_file.uid + ".json"
+                source_file.hashed = hashed
+                source_file.save()
+
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXTMOD":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            event = models.TherapyModification(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+                previous_state=Content["previous_state"],
+                new_state=Content["new_state"],
+            )
+
+            if not Content["source"] == "":
+                event.source = UIDMapper[Content["source"]]
+            event.save()
+
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXANNO":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            event = models.Annotation(
+                owner=participant,
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+                duration=Content["duration"],
+            )
+
+            if not Content["source"] == "":
+                event.source = UIDMapper[Content["source"]]
+            event.save()
+
+            currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXDBSE":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            event = models.DBSEvent(
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+            )
+            
+            if not Content["source"] == "":
+                event.source = UIDMapper[Content["source"]]
+            event.save()
+
+            currentIndex += 12 + ContentSize
+            
+        elif HeaderBytes == b"XXXXRECD":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            recording = models.Recording(
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+                adjusted_alignment=Content["adjusted_alignment"],
+                hashed=Content["hashed"],
+                metadata=Content["metadata"],
+                source=UIDMapper[Content["source"]]
+            )
+            recording.save()
+            UIDMapper[Content["uid"]] = recording
+            currentIndex += 12 + ContentSize
+            
+            HeaderBytes = rawBytes[currentIndex:currentIndex+8]
+            ContentSize = int.from_bytes(rawBytes[currentIndex+8:currentIndex+12], "little")
+            if HeaderBytes == b"XXXXRAWD":
+                recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + participant.uid + os.path.sep + recording.uid + ".bdat"
+                Content = rawBytes[currentIndex+12:currentIndex+12+ContentSize]
+                Database.saveSourceBinary(recording.pointer, Content)
+                recording.save()
+                currentIndex += 12 + ContentSize
+        
+        elif HeaderBytes == b"XXXXTHER":
+            PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+            Content = json.loads(PacketContent)
+
+            therapy = models.Therapy(
+                name=Content["name"],
+                type=Content["type"],
+                date=Content["date"],
+                source=UIDMapper[Content["source"]]
+            )
+            therapy.save()
+            UIDMapper[Content["uid"]] = therapy
+            currentIndex += 12 + ContentSize
+
+            HeaderBytes = rawBytes[currentIndex:currentIndex+8]
+            ContentSize = int.from_bytes(rawBytes[currentIndex+8:currentIndex+12], "little")
+            if HeaderBytes == b"XXXXETHE":
+                PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+                Content = json.loads(PacketContent)
+
+                eTherapy = models.ElectricalTherapy(
+                    therapy=therapy,
+                    group_type=Content["group_type"],
+                    group_name=Content["group_name"],
+                    stimulation_type=Content["stimulation_type"],
+                    label=Content["label"],
+                )
+                eTherapy.save()
+                currentIndex += 12 + ContentSize
+
+                while True:
+                    HeaderBytes = rawBytes[currentIndex:currentIndex+8]
+                    ContentSize = int.from_bytes(rawBytes[currentIndex+8:currentIndex+12], "little")
+
+                    if HeaderBytes == b"XXXXESTM":
+                        PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+                        Content = json.loads(PacketContent)
+
+                        setting = models.ElectricalStimulation(
+                            group=eTherapy,
+                            electrode=UIDMapper[Content["electrode"]],
+                            contact=Content["contact"],
+                            return_contact=Content["return_contact"],
+                            amplitude=Content["amplitude"],
+                            amplitude_fraction=Content["amplitude_fraction"],
+                            amplitude_unit=Content["amplitude_unit"],
+                            pulsewidth=Content["pulsewidth"],
+                            pulsewidth_unit=Content["pulsewidth_unit"],
+                            frequency=Content["frequency"],
+                            cycling=Content["cycling"],
+                            cycling_period=Content["cycling_period"],
+                        )
+                        setting.save()
+                        currentIndex += 12 + ContentSize
+                        
+                    elif HeaderBytes == b"XXXXEADT":
+                        PacketContent = FernetEncoder.decrypt(rawBytes[currentIndex+12:currentIndex+12+ContentSize]).decode("utf-8")
+                        Content = json.loads(PacketContent)
+
+                        setting = models.AdaptiveTherapy(
+                            group=eTherapy,
+                            sensing_type=Content["sensing_type"],
+                            sensing=Content["sensing"],
+                            adaptive_type=Content["adaptive_type"],
+                            adaptive=Content["adaptive"],
+                        )
+                        setting.save()
+                        currentIndex += 12 + ContentSize
+                        
+                    else:
+                        break
+        
+        else:
+            raise Exception("Unknown Packet Type: " + str(HeaderBytes))
+    
+    return participant
+
+def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv2"):
+    rawBytes = b"BRAVO Export"
+    hashed_key = hashlib.sha256(password.encode("utf-8")).digest()
+    export_key = base64.urlsafe_b64encode(hashed_key)
+    FernetEncoder = Fernet(export_key)
+
+    os.makedirs(DATABASE_PATH + "exports", exist_ok=True)
+    filePath = DATABASE_PATH + "exports" + os.path.sep + participant.uid + (".Deidentified" if deidentified else "") + ".bravoexp"
+    fid = open(filePath, "wb")
+    fid.write(rawBytes)
+
+    ParticipantInfo = {
+        "uid": participant.uid,
+        "name": participant.name if not deidentified else participant.uid,
+        "date_of_birth": participant.date_of_birth if not deidentified else 0,
+        "sex": participant.sex,
+        "mrn": participant.mrn if not deidentified else "",
+        "diagnosis": participant.diagnosis,
+        "disease_start_time": participant.disease_start_time,
+        "tags": [tag.name for tag in participant.tags.all()],
+    }
+    headerContent = b"XXXXPART"
+    exportContent = createExportContent(json.dumps(ParticipantInfo), FernetEncoder)
+    headerContent += len(exportContent).to_bytes(4, "little")
+    fid.write(headerContent)
+    fid.write(exportContent)
+
+    devices = models.DBSDevice.find_all(owner=participant)
+    for device in devices:
+        DeviceInfo = {
+            "uid": device.uid,
+            "name": device.name,
+            "type": device.type,
+            "serial_number": device.serial_number,
+            "implanted_location": device.implanted_location,
+            "implanted_date": device.implanted_date,
+            "estimated_eol": device.estimated_eol,
+            "device_bloodline": device.device_bloodline,
+        }
+
+        headerContent = b"XXXXDBSD"
+        exportContent = createExportContent(json.dumps(DeviceInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+        for electrode in device.electrodes.all():
+            ElectrodeInfo = {
+                "uid": electrode.uid,
+                "type": electrode.type,
+                "name": electrode.name,
+                "hemisphere": electrode.hemisphere,
+                "target": electrode.target,
+                "custom_name": electrode.custom_name,
+                "device": device.uid,
+                "channel_count": electrode.channel_count,
+                "channel_names": electrode.channel_names,
+                "channel_mapping": electrode.channel_mapping,
+                "channel_coordinates": electrode.channel_coordinates,
+                "implanted_date": electrode.implanted_date,
+            }
+            
+            headerContent = b"XXXXELEC"
+            exportContent = createExportContent(json.dumps(ElectrodeInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+        
+    devices = models.MERDevice.find_all(owner=participant)
+    for device in devices:
+        DeviceInfo = {
+            "uid": device.uid,
+            "name": device.name,
+            "type": device.type,
+        }
+
+        headerContent = b"XXXXMERD"
+        exportContent = createExportContent(json.dumps(DeviceInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+        for electrode in device.electrodes.all():
+            ElectrodeInfo = {
+                "uid": electrode.uid,
+                "type": electrode.type,
+                "name": electrode.name,
+                "hemisphere": electrode.hemisphere,
+                "target": electrode.target,
+                "custom_name": electrode.custom_name,
+                "device": device.uid,
+                "channel_count": electrode.channel_count,
+                "channel_names": electrode.channel_names,
+                "channel_mapping": electrode.channel_mapping,
+                "channel_coordinates": electrode.channel_coordinates,
+                "implanted_date": electrode.implanted_date,
+            }
+            
+            headerContent = b"XXXXELEC"
+            exportContent = createExportContent(json.dumps(ElectrodeInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+        
+    devices = models.FitbitDevice.find_all(owner=participant)
+    for device in devices:
+        DeviceInfo = {
+            "uid": device.uid,
+            "name": device.name,
+            "type": device.type,
+            "pkce": device.pkce,
+            "auth": device.auth,
+            "date_periods": device.date_periods,
+        }
+
+        headerContent = b"XXXXFITB"
+        exportContent = createExportContent(json.dumps(DeviceInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+    devices = models.OuraRingDevice.find_all(owner=participant)
+    for device in devices:
+        DeviceInfo = {
+            "uid": device.uid,
+            "name": device.name,
+            "type": device.type,
+            "pkce": device.pkce,
+            "auth": device.auth,
+            "date_periods": device.date_periods,
+        }
+
+        headerContent = b"XXXXOURA"
+        exportContent = createExportContent(json.dumps(DeviceInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+    sources = models.SourceFile.find_all(owner=participant)
+    for source in sources:
+        SourceInfo = {
+            "uid": source.uid,
+            "name": source.name,
+            "type": source.type,
+            "date": source.date,
+            "metadata": source.metadata,
+        }
+
+        headerContent = b"XXXXSOUR"
+        exportContent = createExportContent(json.dumps(SourceInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+    events = models.TherapyModification.find_all(owner=participant)
+    for event in events:
+        EventInfo = {
+            "uid": event.uid,
+            "name": event.name,
+            "type": event.type,
+            "date": event.date,
+            "previous_state": event.previous_state,
+            "new_state": event.new_state,
+            "source": event.source.uid if event.source else "",
+        }
+
+        headerContent = b"XXXXTMOD"
+        exportContent = createExportContent(json.dumps(EventInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+    events = models.Annotation.find_all(owner=participant)
+    for event in events:
+        EventInfo = {
+            "uid": event.uid,
+            "name": event.name,
+            "type": event.type,
+            "date": event.date,
+            "duration": event.duration,
+            "source": event.source.uid if event.source else "",
+        }
+
+        headerContent = b"XXXXANNO"
+        exportContent = createExportContent(json.dumps(EventInfo), FernetEncoder)
+        headerContent += len(exportContent).to_bytes(4, "little")
+        fid.write(headerContent)
+        fid.write(exportContent)
+
+    for source in sources:
+        events = models.DBSEvent.find_all(source=source)
+        for event in events:
+            EventInfo = {
+                "uid": event.uid,
+                "name": event.name,
+                "type": event.type,
+                "date": event.date,
+                "source": event.source.uid if event.source else "",
+            }
+
+            headerContent = b"XXXXDBSE"
+            exportContent = createExportContent(json.dumps(EventInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+
+        recordings = models.Recording.find_all(source=source)
+        for recording in recordings:
+            RecordingInfo = {
+                "uid": recording.uid,
+                "name": recording.name,
+                "type": recording.type,
+                "date": recording.date,
+                "adjusted_alignment": recording.adjusted_alignment,
+                "hashed": recording.hashed,
+                "metadata": recording.metadata,
+                "source": source.uid,
+            }
+            
+            headerContent = b"XXXXRECD"
+            exportContent = createExportContent(json.dumps(RecordingInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+
+            if recording.pointer == "":
+                continue
+            data = Database.loadSourceBinary(recording.pointer)
+            headerContent = b"XXXXRAWD"
+            headerContent += len(data).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(data)
+
+        therapies = models.Therapy.find_all(source=source)
+        for therapy in therapies:
+            TherapyInfo = {
+                "uid": therapy.uid,
+                "name": therapy.name,
+                "type": therapy.type,
+                "date": therapy.date,
+                "source": source.uid,
+            }
+
+            headerContent = b"XXXXTHER"
+            exportContent = createExportContent(json.dumps(TherapyInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+
+            eTherapy = models.ElectricalTherapy.find(therapy=therapy)
+            ElecTherapyInfo = {
+                "therapy": therapy.uid,
+                "group_type": eTherapy.group_type,
+                "group_name": eTherapy.group_name,
+                "group_id": eTherapy.group_id,
+                "stimulation_type": eTherapy.stimulation_type,
+                "label": eTherapy.label
+            }
+
+            headerContent = b"XXXXETHE"
+            exportContent = createExportContent(json.dumps(ElecTherapyInfo), FernetEncoder)
+            headerContent += len(exportContent).to_bytes(4, "little")
+            fid.write(headerContent)
+            fid.write(exportContent)
+
+            for setting in eTherapy.stimulation_settings.all():
+                SettingInfo = {
+                    "therapy": therapy.uid,
+                    "electrode": setting.electrode.uid,
+                    "contact": setting.contact,
+                    "return_contact": setting.return_contact,
+                    "amplitude": setting.amplitude,
+                    "amplitude_fraction": setting.amplitude_fraction,
+                    "amplitude_unit": setting.amplitude_unit,
+                    "pulsewidth": setting.pulsewidth,
+                    "pulsewidth_unit": setting.pulsewidth_unit,
+                    "frequency": setting.frequency,
+                    "cycling": setting.cycling,
+                    "cycling_period": setting.cycling_period,
+                }
+
+                headerContent = b"XXXXESTM"
+                exportContent = createExportContent(json.dumps(SettingInfo), FernetEncoder)
+                headerContent += len(exportContent).to_bytes(4, "little")
+                fid.write(headerContent)
+                fid.write(exportContent)
+
+            for setting in eTherapy.adaptive_settings.all():
+                SettingInfo = {
+                    "therapy": therapy.uid,
+                    "sensing_type": setting.sensing_type,
+                    "sensing": setting.sensing,
+                    "adaptive_type": setting.adaptive_type,
+                    "adaptive": setting.adaptive
+                }
+
+                headerContent = b"XXXXEADT"
+                exportContent = createExportContent(json.dumps(SettingInfo), FernetEncoder)
+                headerContent += len(exportContent).to_bytes(4, "little")
+                fid.write(headerContent)
+                fid.write(exportContent)
+
+    fid.close()
+    return filePath

@@ -99,7 +99,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
       if (response.data.AnalysisType === "MedtronicChronicBrainSense") {
         for (let i in response.data.ChronicNeuralActivity) {
           for (let j in response.data.ChronicNeuralActivity[i].ChannelNames) {
-            const channelName = response.data.ChronicNeuralActivity[i].Device.Heritage + ": " + response.data.ChronicNeuralActivity[i].ChannelNames[j].replace(" LFP", "").replace(" Amplitude", "");
+            const channelName = response.data.ChronicNeuralActivity[i].ChannelNames[j].replace(" LFP", "").replace(" Amplitude", "");
             if (!availableChannels.includes(channelName)) {
               availableChannels.push(channelName);
             }
@@ -118,8 +118,8 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
         let options = [];
         for (let i in response.data.Annotations) {
           for (let j in response.data.Annotations[i].EventPSDs) {
-            const channelName = response.data.Annotations[i].EventPSDs[j].DeviceHeritage + ": " + response.data.Annotations[i].EventPSDs[j].ChannelName;
-            const therapyName = "(" + response.data.Annotations[i].EventPSDs[j].TherapyString + ")"
+            const channelName = response.data.Annotations[i].EventPSDs[j].ChannelName;
+            const therapyName = "(" + (response.data.Annotations[i].EventPSDs[j].TherapyString == "Unknown" ? "" : response.data.Annotations[i].EventPSDs[j].TherapyString[j]) + ")"
             response.data.Annotations[i].EventPSDs[j].TherapyLabel = channelName + " " + therapyName;
             if (!options.includes(response.data.Annotations[i].EventPSDs[j].TherapyLabel)) {
               options.push(response.data.Annotations[i].EventPSDs[j].TherapyLabel);
@@ -334,6 +334,13 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                     <Grid container>
                       <Grid item xs={12}>
                         <MDBox p={2} lineHeight={1}>
+                          <MDTypography variant="h6" fontSize={24}>
+                            {"Circadian Rhythm Analysis"}
+                          </MDTypography>
+                        </MDBox>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={availableTherapy.active}
                             options={["Time-based Assessment", ...availableTherapy.options]}
@@ -382,6 +389,13 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                     <Grid container>
                       <Grid item xs={12}>
                         <MDBox p={2} lineHeight={1}>
+                          <MDTypography variant="h6" fontSize={24}>
+                            {"Event-locked Power Changes"}
+                          </MDTypography>
+                        </MDBox>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={availableTherapy.active}
                             options={availableTherapy.options}
@@ -410,6 +424,13 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                 <Grid item xs={12} lg={6}>
                   <Card sx={{width: "100%"}}>
                     <Grid container>
+                      <Grid item xs={12}>
+                        <MDBox p={2} lineHeight={1}>
+                          <MDTypography variant="h6" fontSize={24}>
+                            {"Event-captured Power Spectrums"}
+                          </MDTypography>
+                        </MDBox>
+                      </Grid>
                       <Grid item xs={12}>
                         <MDBox p={2} lineHeight={1}>
                           <Autocomplete

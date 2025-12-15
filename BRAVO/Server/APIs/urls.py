@@ -51,6 +51,7 @@ urlpatterns = [
     path('setSurveyForms', EventAnnotationHandler.SetSurveyForms.as_view()),
     path('queryParticipantSurveyRecords', EventAnnotationHandler.QueryParticipantSurveyRecords.as_view()),
     
+    path('downloadParticipantExport', Participants.ExportParticipant.as_view()),
     path('queryParticipantEvents', EventAnnotationHandler.QueryEventHandler.as_view()),
     path('queryParticipantAnnotations', EventAnnotationHandler.QueryAnnotationHandler.as_view()),
     path('addParticipantAnnotation', EventAnnotationHandler.InsertAnnotationHandler.as_view()),

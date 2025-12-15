@@ -61,7 +61,11 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
       fig.clearData();
     }
 
-    const ax = fig.subplots(availableChannels.active.length*2, 1, {sharex: true, sharey: true});
+    const scales = new Array(availableChannels.active.length * 2).fill(1);
+    for (let i = 0; i < availableChannels.active.length; i++) {
+      scales[i*2] = 2;
+    }
+    const ax = fig.subplots(availableChannels.active.length*2, 1, {sharex: true, sharey: true, scales: scales});
     let subplotIds = [];
     for (let i in availableChannels.active) {
       subplotIds.push(`${availableChannels.active[i]}`);
@@ -147,7 +151,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
     for (let i in data) {
       let timeArray = data[i]["Time"].map((a) => new Date(a*1000));
       for (let j in data[i].ChannelNames) {
-        const channelName = data[i].Device.Heritage + ": " + (data[i].ChannelNames[j].endsWith("Amplitude") ? data[i].ChannelNames[j].replace(" Amplitude", " Stimulation") : data[i].ChannelNames[j].replace(" LFP", ""));
+        const channelName = (data[i].ChannelNames[j].endsWith("Amplitude") ? data[i].ChannelNames[j].replace(" Amplitude", " Stimulation") : data[i].ChannelNames[j].replace(" LFP", ""));
         if (!data[i].Description[j].Bypass || channelName.endsWith("Stimulation")) {
           const AdaptiveParameters = getAdaptiveParameters(data[i].TherapyNote[j], data[i]["ChannelNames"][j]);
           if (channelName.endsWith("Stimulation")) {

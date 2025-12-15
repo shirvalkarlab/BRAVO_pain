@@ -483,6 +483,27 @@ def loadSourceFile(pointer, verifiedHash, bytes=False):
     datastruct = pickle.loads(decompressed)
     return datastruct
 
+def loadSourceBinary(pointer):
+    pointer = pointer.replace("\\", os.path.sep).replace("/", os.path.sep)
+
+    if not pointer.startswith(DATABASE_PATH) or ".." in pointer:
+        raise Exception("Malicious Attempt at Accessing Other Data in the Computer.")
+    
+    with open(pointer, "rb") as file:
+        rawBytes = file.read()
+        
+    return rawBytes
+
+def saveSourceBinary(pointer, rawBytes):
+    pointer = pointer.replace("\\", os.path.sep).replace("/", os.path.sep)
+
+    if not pointer.startswith(DATABASE_PATH) or ".." in pointer:
+        raise Exception("Malicious Attempt at Accessing Other Data in the Computer.")
+    
+    os.makedirs(os.path.dirname(pointer), exist_ok=True)
+    with open(pointer, "wb") as file:
+        file.write(rawBytes)
+
 def getCachedResult(url, participant_uid, config):
     models.SourceFile.purge(type="CachedResult", date__lt=models.current_time() - 3600)
     metadata = {**config, **{"URL": url, "Participant": participant_uid}}

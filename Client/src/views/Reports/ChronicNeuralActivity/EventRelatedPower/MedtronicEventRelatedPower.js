@@ -89,8 +89,8 @@ function MedtronicEventRelatedPower({dataToRender, annotations, activeChannel, a
     for (let i in dataToRender) {
       for (let j in dataToRender[i].ChannelNames) {
         if (dataToRender[i].ChannelNames[j].endsWith(" LFP")) {
-          const channelName = dataToRender[i].Device.Heritage + ": " + dataToRender[i].ChannelNames[j].replace(" LFP", "");
-          const therapyName = channelName + " (" + dataToRender[i].TherapyString + " Sense: " + dataToRender[i].RecordingString + ")";
+          const channelName = dataToRender[i].ChannelNames[j].replace(" LFP", "");
+          const therapyName = channelName + " (" + dataToRender[i].TherapyString[j] + " Sense: " + dataToRender[i].RecordingString[j].replace("Hz", " Hz") + ")";
           if (activeChannel == therapyName) {
             annotations.filter((a) => a.Date > dataToRender[i].Time[0] && a.Date < dataToRender[i].Time[dataToRender[i].Time.length-1]).map((a) => {
               if (!EventRelatedPowers[a.Name]) {
@@ -126,7 +126,7 @@ function MedtronicEventRelatedPower({dataToRender, annotations, activeChannel, a
         }, 
       })
     }
-    
+
     setRenderData(graphSeries);
   }, [fig, activeChannel, annotations, annotationState, dataToRender]);
 

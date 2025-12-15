@@ -121,7 +121,7 @@ function NeuralActivitySnapshot() {
             hour: "2-digit",
             minute: "2-digit",
             second: "2-digit"
-          })
+          });
           response.data.Recordings[i].DateString = dateString;
           if (!uniqueDates.map((a) => a.dateString).includes(dateString)) uniqueDates.push({value: response.data.Recordings[i].Date, dateString});
         }
@@ -149,7 +149,8 @@ function NeuralActivitySnapshot() {
           
           for (let j in analysis.Channels) {
             for (let k in analysis.Channels[j]) {
-              analysis.Overview = analysis.Overview;
+              const target = analysis.Channels[j][k].split(" E")[0];
+              if (!analysis.Overview.includes(target.split(": ")[1])) analysis.Overview.push(target.split(": ")[1]);
             }
           }
           analysis.Type = recordings[0].Type;
@@ -177,7 +178,7 @@ function NeuralActivitySnapshot() {
             if (availableSnapshots.Analyses[i].RecordingIds.includes(availableSnapshots.Recordings[j].Id)) {
               for (let k in availableSnapshots.Recordings[j].Channels) {
                 dataToRender.push({
-                  ChannelName: availableSnapshots.Recordings[j].Channels[k].split(" ").filter((a) => !overview.includes(a)).join(" "),
+                  ChannelName: availableSnapshots.Recordings[j].Channels[k].split(" ").filter((a) => a).join(" "),
                   Frequency: availableSnapshots.Recordings[j].PSDs[k].Frequency,
                   Power: availableSnapshots.Recordings[j].PSDs[k].Power,
                   stdPower: availableSnapshots.Recordings[j].PSDs[k].stdPower.map((a) => a/Math.sqrt(availableSnapshots.Recordings[j].PSDs[k].nObservation))
@@ -228,7 +229,21 @@ function NeuralActivitySnapshot() {
                 {availableSnapshots.Analyses.length > 0 ? (
                 <Grid container>
                   <Grid item xs={12}>
-                    <MDBox p={2} lineHeight={1}>
+                    <MDBox pt={2} px={2} lineHeight={1} display={"flex"} flexDirection={"row"} justifyContent={"space-between"} alignItems={"center"}>
+                      <MDTypography variant="h6" fontSize={24}>
+                        {"Neural Activity PSDs"}
+                      </MDTypography>
+                      <MDButton color={"info"} style={{marginLeft: 10}} onClick={() => {
+                        const url = SessionController.getDownloadLink("/api/downloadData", {
+                          ParticipantId: participant_uid,
+                          CacheType: "queryNeuralActivitySnapshot"
+                        });
+                        window.location.href=url;
+                      }}>
+                        {"Export All PSDs"}
+                      </MDButton>
+                    </MDBox>
+                    <MDBox pb={2} px={2} lineHeight={1}>
                       <Autocomplete
                         value={viewSnapshot}
                         options={availableSnapshots.Analyses.map((a) => a.Date + " | " + " (" + getRecordingType(a.Type) + ") " + a.Overview)}

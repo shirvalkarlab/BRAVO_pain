@@ -156,7 +156,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
       for (let j in dataToRender[i].ChannelNames) {
         if (dataToRender[i].Description[j].Bypass) continue;
         if (dataToRender[i].ChannelNames[j].endsWith(" LFP")) {
-          const channelName = dataToRender[i].Device.Heritage + ": " + dataToRender[i].ChannelNames[j].replace(" LFP", "");
+          const channelName = dataToRender[i].ChannelNames[j].replace(" LFP", "");
           const therapyName = channelName + " (" + dataToRender[i].Description[j].Stimulation + " Sense: " + dataToRender[i].Description[j].SensingFrequency + ")";
           if (activeChannel == therapyName) {
             for (let k in dataToRender[i].ChannelNames) {

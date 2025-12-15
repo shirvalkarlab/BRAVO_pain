@@ -25,12 +25,14 @@ import rest_framework.parsers as RestParsers
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
+from django.http import HttpResponse, FileResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from modules.HelperFunctions import sanitize_input, get_or_none, get_token
 from modules import Database, DataAnalysis
+from modules.DataCurator import ExportBRAVOStructure
 from Server import models
 
 def queryParticipantFunc(user):
@@ -130,6 +132,27 @@ class QueryParticipantInformation(RestViews.APIView):
 
         ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"], deidentified=Permissions["Deidentified"])
         return Response(status=200, data=ParticipantInfo)
+
+class ExportParticipant(RestViews.APIView):
+    
+    permission_classes = [IsAuthenticated,]
+    parser_classes = [RestParsers.JSONParser]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def get(self, request):
+        ParticipantId = self.request.query_params.get('ParticipantId')
+        Deidentified = self.request.query_params.get('Deidentified')
+        Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
+                            study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        
+        Participant = models.Participant.find(uid=ParticipantId)
+        filePath = ExportBRAVOStructure(Participant, deidentified=Permissions["Deidentified"] or Deidentified=="True")
+        fid = open(filePath, "rb")
+        filename = ParticipantId + ".bdat"
+        response = FileResponse(fid, as_attachment=True, filename=filename)
+        return response
 
 class UpdateParticipantInformation(RestViews.APIView):
     
