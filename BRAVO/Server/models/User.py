@@ -260,3 +260,11 @@ class BlacklistRecords(models.Model):
     
     def exists(*args, **kwargs):
         return BlacklistRecords.objects.filter(**kwargs).exists()
+
+class AuthenticationTokens(models.Model):
+    uid = models.CharField(max_length=32, default=uuid4_hex, primary_key=True)
+    user = models.ForeignKey("PlatformUser", on_delete=models.CASCADE)
+    type = models.CharField(max_length=128, default="Desktop")
+    token = models.CharField(max_length=128, default=newToken)
+    date = models.FloatField(default=current_time)
+    ip_address = models.CharField(max_length=32, default="")
