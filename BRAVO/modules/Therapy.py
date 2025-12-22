@@ -227,7 +227,7 @@ def createTherapyTimeline(TherapyHistory):
                             KnownSettings = []
                             for therapy in UniqueSettings:
                                 for j in range(len(therapy["StimulationSettings"])):
-                                    if therapy["StimulationSettings"][j]["Electrode"]["Target"] == electrode["Target"]:
+                                    if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
                                         KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
                             DefinedTherapy["Stimulation"].append(KnownSettings)
                             DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
@@ -238,7 +238,7 @@ def createTherapyTimeline(TherapyHistory):
                             KnownSettings = []
                             for therapy in UniqueSettings:
                                 for j in range(len(therapy["StimulationSettings"])):
-                                    if therapy["StimulationSettings"][j]["Electrode"]["Target"] == electrode["Target"]:
+                                    if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
                                         KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
                             DefinedTherapy["Adaptive"].append(KnownSettings)
                             DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
