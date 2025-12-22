@@ -70,6 +70,7 @@ class UserRegister(RestViews.APIView):
 
         user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
         login(request, user)
+        
         return Response(status=200, data=user.get_info())
 
 class UserLogin(RestViews.APIView):
@@ -90,6 +91,18 @@ class UserLogin(RestViews.APIView):
                 else:
                     request.session.set_expiry(3600)
             login(request, user)
+            
+            if "DesktopAuthentication" in request.data:
+                x_forwarded_for = request.META.get('HTTP_X_FORWARD_FOR')
+                if x_forwarded_for:
+                    ip = x_forwarded_for.split(',')[0]
+                else:
+                    ip = request.META.get('REMOTE_ADDR')
+
+                token = models.AuthenticationTokens(user=user, ip_address=ip, type="Desktop")
+                token.save()
+                return Response(status=200, data={**user.get_info(), "AuthToken": token.token})
+
             return Response(status=200, data=user.get_info())
         return Response(status=400, data={"message": "Incorrect Email or Password"})
 

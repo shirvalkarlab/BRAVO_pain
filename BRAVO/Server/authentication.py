@@ -13,6 +13,20 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             user.api_access = True
             return (user, None)
 
+        elif "X-Secure-Auth-Token" in request.headers:
+            auth_token = request.headers["X-Secure-Auth-Token"]
+            auth_record = models.AuthenticationTokens.objects.filter(token=auth_token, date__lte=models.current_time() + 3600*5).first()
+            if not auth_record:
+                return None
+            
+            user = auth_record.user
+            if not user:
+                return None
+            
+            request.csrf_processing_done = True
+            user.api_access = True
+            return (user, None)
+
         return None
 
 from django.middleware.csrf import CsrfViewMiddleware
