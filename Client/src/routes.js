@@ -67,6 +67,7 @@ const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
 const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMedicationCycle'));
+const PredictTherapyParameters = lazy(() => import('views/Experimental/PredictTherapyParameters'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
