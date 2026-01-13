@@ -118,7 +118,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         device: dataToRender.TherapyModification[i].Device,
         therapyBlocks: TherapyBlocks
       });
-
+      
       TherapyChangeHistory = dataToRender.TherapyModification[i].History.filter((a) => a.Type === "AdaptiveTherapyStatus").sort((a,b) => a.Date-b.Date);
       let therapyStatusBlock = [];
       for (let j in TherapyChangeHistory) {
@@ -188,6 +188,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
     for (let i in data) {
       if (showDevice.includes(data[i].device.Id)) {
         for (let j in data[i].therapyStatus) {
+          /*
           fig.addShadedArea([new Date(data[i].therapyStatus[j].start*1000), new Date(data[i].therapyStatus[j].end*1000)], [-1,5], {
             size: 10,
             color: data[i].therapyStatus[j].type === "TherapyStatus" ? "#ff0000" : "#ff00ff", 
@@ -202,7 +203,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
             hovertemplate: `Therapy OFF<extra></extra>`,
             name: "Therapy OFF"
           });
-
+          */
         }
       }
     }
@@ -267,6 +268,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
       });
     }
     fig.setYlim([-0.5, uniqueGroups.length-0.5]);
+    fig.setXlim([new Date(xLim[0]*1000), new Date(xLim[1]*1000)]);
 
     fig.render();
 

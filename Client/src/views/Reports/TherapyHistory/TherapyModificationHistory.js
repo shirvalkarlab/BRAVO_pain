@@ -41,8 +41,11 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   const [interleavingSwitch, setInterleavingSwitch] = React.useState({});
   const [therapyDateSlider, setTherapyDateSlider] = React.useState({active: 0, options: []});
   const [therapyHistory, setTherapyHistory] = React.useState(therapyHistoryRaw);
+  const [mostUsedConfig, setMostUsedConfig] = React.useState([]);
 
   const [therapyOptions, setTherapyOptions] = React.useState({active: null, options: []});
+
+  const sliderRef = React.useRef(null);
 
   const [alert, setAlert] = React.useState(null);
   const { participant_uid } = useParams();
@@ -82,7 +85,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
               for (let k in therapyHistory.TherapyTimeline[i].Therapies[l].Processed) {
                 if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Device.Id == therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Device.Id) {
                   if (!options.options.map((a) => a.TherapyIds).includes(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds)) {
-                  options.options.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
+                    options.options.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
                   }
                   if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Pre)) {
                     options.pre.push(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k]);
@@ -111,6 +114,120 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
       }
     }
   }, [therapyHistory, therapyDateSlider]);
+
+  React.useEffect(() => {
+    setMostUsedConfig(() => {
+      let mostUsed = [];
+      for (let i in therapyHistory.TherapyTimeline) {
+        let activeConfigs = {
+          LeftAmplitude: "", LeftContact: "", LeftFrequency: "", LeftPulsewidth: "", PercentUsage: 0,
+          RightAmplitude: "", RightContact: "", RightFrequency: "", RightPulsewidth: "", Date: therapyHistory.TherapyTimeline[i].Date,
+        };
+        for (let j in therapyHistory.TherapyTimeline[i].DefinedTherapies) {
+          if (therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Device.GenericName != device) continue;
+          if (therapyHistory.TherapyTimeline[i].DefinedTherapies[j].PercentUsage > activeConfigs.PercentUsage) {
+            activeConfigs = {
+              LeftAmplitude: "", LeftContact: "", LeftFrequency: "", LeftPulsewidth: "", PercentUsage: 0,
+              RightAmplitude: "", RightContact: "", RightFrequency: "", RightPulsewidth: "", Date: therapyHistory.TherapyTimeline[i].Date,
+            };
+            for (let l in therapyHistory.TherapyTimeline[i].Therapies) {
+              for (let k in therapyHistory.TherapyTimeline[i].Therapies[l].Processed) {
+                if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Device.Id == therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Device.Id) {
+                  if (listMatch(therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].TherapyIds, therapyHistory.TherapyTimeline[i].DefinedTherapies[j].Pre)) {
+                    for (let m in therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation) {
+                      if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m].length == 0) continue;
+                      for (let n in therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m]) {
+                        if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Electrodes[m].Target.startsWith("Left")) {
+                          activeConfigs.LeftAmplitude += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Amplitude.toFixed(1) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].AmplitudeUnit;
+                          let contacts = [];
+                          for (let c of therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Contact) {
+                            if (!contacts.includes(c.split("-")[0])) {
+                              contacts.push(c.split("-")[0]);
+                            }
+                          }
+                          activeConfigs.LeftContact += contacts.join(", ");
+                          activeConfigs.LeftFrequency += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Frequency.toFixed(0) + " Hz";
+                          activeConfigs.LeftPulsewidth += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Pulsewidth.toFixed(0) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].PulsewidthUnit;
+                        } else {
+                          activeConfigs.RightAmplitude += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Amplitude.toFixed(1) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].AmplitudeUnit;
+                          let contacts = [];
+                          for (let c of therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Contact) {
+                            if (!contacts.includes(c.split("-")[0])) {
+                              contacts.push(c.split("-")[0]);
+                            }
+                          }
+                          activeConfigs.RightContact += contacts.join(", ");
+                          activeConfigs.RightFrequency += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Frequency.toFixed(0) + " Hz";
+                          activeConfigs.RightPulsewidth += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Pulsewidth.toFixed(0) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].PulsewidthUnit;
+                        }
+                      }
+                    }
+                    activeConfigs.PercentUsage = therapyHistory.TherapyTimeline[i].DefinedTherapies[j].PercentUsage;
+                  }
+                }
+              }
+            }
+          }
+        }
+        mostUsed.push(activeConfigs);
+      }
+      return mostUsed;
+    });
+  }, [therapyHistory]);
+
+  const sliderMin = therapyDateSlider.options.length > 0 ? therapyDateSlider.options[0] : 0;
+  const sliderMax = therapyDateSlider.options.length > 0 ? therapyDateSlider.options[therapyDateSlider.options.length-1] : sliderMin;
+  const formatMarkTooltip = (ts) => {
+    let tableRows = [];
+    for (let i in mostUsedConfig) {
+      if (mostUsedConfig[i].Date == ts) {
+        const rowIndex = ["Current", "Last Visit", "2 Visits Ago"];
+        tableRows.push(["", "Left Amplitude", "Left Contact", "Left Frequency", "Left Pulsewidth",
+                      "Right Amplitude", "Right Contact", "Right Frequency", "Right Pulsewidth"]);
+        for (let j = i; (j > 0 && j > i-3); j--) {
+          tableRows.push([rowIndex[i-j], mostUsedConfig[j].LeftAmplitude, mostUsedConfig[j].LeftContact, mostUsedConfig[j].LeftFrequency, mostUsedConfig[j].LeftPulsewidth,
+                        mostUsedConfig[j].RightAmplitude, mostUsedConfig[j].RightContact, mostUsedConfig[j].RightFrequency, mostUsedConfig[j].RightPulsewidth]);
+        }
+        break;
+      }
+    }
+
+    return <MDBox p={1}>
+      <MDTypography variant={"h6"} fontWeight={"bold"} color={"light"}> 
+        {new Date(ts*1000).toLocaleDateString("en-US", {
+          month: "2-digit",
+          day: "2-digit",
+          year: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}
+      </MDTypography>
+
+      <div style={{ marginTop: 6 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 180 }}>
+          <tbody>
+            {tableRows.map((row, rIdx) => (
+              <tr key={rIdx}>
+                {row.map((cell, cIdx) => (
+                  <td key={cIdx} style={{
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "6px 8px",
+                    textAlign: "center",
+                    background: rIdx % 2 === 0 ? "rgba(0,0,0,0.02)" : "transparent",
+                    fontSize: 12,
+                  }}>
+                    <MDTypography variant={"p"} fontWeight={rIdx === 0 ? "bold" : "regular"} color={"light"}>
+                      {cell}
+                    </MDTypography>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </MDBox>
+  };
 
   const getPreTherapySettingsBilateral = (config) => {
     if (!config) return;
@@ -258,7 +375,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
             {"Active Contact: "}
           </MDTypography>
           {config.Stimulation[index][0].Contact.map((a, sindex) => {
-            return <MDBox>
+            return <MDBox key={a}>
               <MDBadge badgeContent={a} color={"error"} size={"xs"} container sx={{marginLeft: 1, cursor: "pointer"}} />
               <MDTypography variant={"h6"} fontSize={12} fontWeight={"regular"} lineHeight={1} ml={1}>
                 {(config.Stimulation[index][0].FractionalAmplitudes[sindex]).toFixed(1) + " " + config.Stimulation[index][0].AmplitudeUnit}
@@ -391,61 +508,128 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   return useMemo(() => (
     <MDBox>
       {alert}
-      {therapyDateSlider.options.length > 1 && (<MDBox p={2} mt={2} pb={0}>
-        <Slider aria-label="TherapyDates"
-          value={therapyDateSlider.active} getAriaValueText={(value) => {
-            return new Date(value*1000).toLocaleDateString("en-US", {
-              month: "2-digit",
-              day: "2-digit",
-              year: "2-digit"
-            });
-          }}
-          marks={therapyDateSlider.options.map((date,i) => {
-            if (i > 0) {
-              const minScale = therapyDateSlider.options[therapyDateSlider.options.length-1] - therapyDateSlider.options[0];
-              if (date - therapyDateSlider.options[i-1] < minScale*.01) {
-                return {value: date, label: ""};
+      {therapyDateSlider.options.length > 1 && (
+        <MDBox p={2} mt={2} pb={0}>
+          <div style={{ position: "relative" }}>
+            {/* The real slider - leave props unchanged but attach a ref if desired */}
+            <Slider
+              ref={sliderRef}
+              aria-label="TherapyDates"
+              value={therapyDateSlider.active}
+              getAriaValueText={(value) => {
+                return new Date(value*1000).toLocaleDateString("en-US", {
+                  month: "2-digit",
+                  day: "2-digit",
+                  year: "2-digit"
+                });
+              }}
+              marks={therapyDateSlider.options.map((date,i) => {
+                // keep existing logic for label visibility
+                if (i > 0) {
+                  const minScale = therapyDateSlider.options[therapyDateSlider.options.length-1] - therapyDateSlider.options[0];
+                  if (date - therapyDateSlider.options[i-1] < minScale * 0.01) {
+                    return { value: date, label: "" };
+                  }
+                }
+                return { value: date, label: new Date(date*1000).toLocaleDateString("en-US", {
+                  month: "2-digit", day: "2-digit", year: "2-digit"
+                }) };
+              })}
+              valueLabelDisplay="on"
+              valueLabelFormat={value =>
+                new Date(value * 1000).toLocaleDateString("en-US", {
+                  month: "2-digit",
+                  day: "2-digit",
+                  year: "2-digit"
+                })
               }
-            }
-            return {value: date, label: new Date(date*1000).toLocaleDateString("en-US", {
-              month: "2-digit",
-              day: "2-digit",
-              year: "2-digit"
-            })}
-          })}
-          valueLabelDisplay="on"
-          valueLabelFormat={value =>
-            new Date(value * 1000).toLocaleDateString("en-US", {
-              month: "2-digit",
-              day: "2-digit",
-              year: "2-digit"
-            })
-          }
-          step={null}
-          min={therapyDateSlider.options.length > 0 ? therapyDateSlider.options[0] : 0}
-          max={therapyDateSlider.options.length > 0 ? therapyDateSlider.options[therapyDateSlider.options.length-1] : 0}
-          onChange={(event, newValue) => {
-            setTherapyDateSlider((state) => ({...state, active: newValue}));
-          }}
-          sx={{
-            '& .MuiSlider-markLabel': {
-              transform: 'rotate(-45deg) translate(-50px, -40px)',
-              whiteSpace: 'nowrap',
-              fontSize: '0.85em',
-              minWidth: '40px',
-              textAlign: 'left',
-              display: "none"
-            },
-            '& .MuiSlider-mark': {
-              width: '4px',
-              height: '4px',
-              borderRadius: '50%',
-              backgroundColor: '#f53131ff', // optional: change color
-              marginLeft: '-6px', // center the dot
-            }
-          }}
-        />
-      </MDBox>)}
+              step={null}
+              min={therapyDateSlider.options.length > 0 ? therapyDateSlider.options[0] : 0}
+              max={therapyDateSlider.options.length > 0 ? therapyDateSlider.options[therapyDateSlider.options.length-1] : 0}
+              onChange={(event, newValue) => {
+                setTherapyDateSlider((state) => ({ ...state, active: newValue }));
+              }}
+              sx={{
+                '& .MuiSlider-markLabel': {
+                  transform: 'rotate(-45deg) translate(-50px, -40px)',
+                  whiteSpace: 'nowrap',
+                  fontSize: '0.85em',
+                  minWidth: '40px',
+                  textAlign: 'left',
+                  display: "none"
+                },
+                '& .MuiSlider-mark': {
+                  width: '4px',
+                  height: '4px',
+                  borderRadius: '50%',
+                  backgroundColor: '#f53131ff',
+                  marginLeft: '-6px',
+                }
+              }}
+            />
+
+            {/* Overlay container: pointer-events none so it does not break slider interactions,
+                but each marker sets pointerEvents:'auto' so it captures hover/click */}
+            <div style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              right: 0,
+              bottom: 0,
+              pointerEvents: "none",
+            }}>
+              {therapyDateSlider.options.map((date, i) => {
+                // handle edge-case where min==max (single value)
+                const percent = sliderMax !== sliderMin ? ((date - sliderMin) / (sliderMax - sliderMin)) * 100 : 0;
+                // hide labels for points you were hiding before? This overlay only controls tooltip.
+                return (
+                  <Tooltip
+                    key={i}
+                    title={formatMarkTooltip(date)}
+                    placement="bottom"
+                    interactive arrow
+                    componentsProps={{
+                      tooltip: {
+                        sx: {
+                          maxWidth: '700px', // Or '6rem', '400px', etc.
+                          whiteSpace: 'normal', // To wrap long text
+                        },
+                      },
+                    }}
+                  >
+                    <div
+                      onClick={(e) => {
+                        // jump to this mark when clicked
+                        setTherapyDateSlider((state) => ({ ...state, active: date }));
+                      }}
+                      style={{
+                        position: "absolute",
+                        left: `${percent}%`,
+                        top: "30px",
+                        transform: "translateX(-50%)",
+                        pointerEvents: "auto", // allow this element to capture hover/click
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {/* visual marker (tweak size/color as needed) */}
+                      <div style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "#f53131",
+                        boxShadow: "0 0 4px rgba(0,0,0,0.3)"
+                      }} />
+                    </div>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </div>
+        </MDBox>
+      )}
       
       {therapyTable.Date ? (
         <MDBox p={2} pt={0}>

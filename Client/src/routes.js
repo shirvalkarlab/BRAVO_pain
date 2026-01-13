@@ -399,6 +399,13 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/medication-cycle/:participant_uid",
         component: <InClinicMedicationCycle />,
+      },
+      {
+        key: "PredictTherapyParameters",
+        name: "Predict Therapy Parameters",
+        icon: <MdBuildCircle />,
+        route: "/predict-therapy-parameters/:participant_uid",
+        component: <PredictTherapyParameters />,
       }
     ]
   },

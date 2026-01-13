@@ -59,6 +59,7 @@ class QueryGroupAnalysis(RestViews.APIView):
             if request.data["RequestType"] == "RequestTable":
                 Participants = queryParticipantFunc(request.user)
                 result = ExtractSpectralFeaturesDuringStimulation.QueryAnalysisResultTable(Participants)
+                result = json_compliant_handler(result)
                 return Response(status=200, data=result)
             
             elif request.data["RequestType"] == "RequestRefresh":

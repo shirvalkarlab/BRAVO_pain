@@ -73,7 +73,7 @@ def extractTherapySettings(therapyList):
             if hemisphere in therapy.keys():
                 therapyObject = {
                     "hemisphere": "Left" if hemisphere == "LeftHemisphere" else "Right",
-                    "group_type": "",
+                    "group_type": "Active" if therapy["ActiveGroup"] else "",
                     "group_name": therapy["GroupName"],
                     "group_id": therapy["GroupId"],
                     "stimulation_type": therapy[hemisphere]["Mode"],

@@ -40,6 +40,8 @@ from modules.Resources.ProcessingTemplates import ProcessingNodes
 from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
 from modules.Empatica import DataManager as EmpaticaDataManager
+from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation
+#from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -2661,9 +2663,15 @@ def handleSurveybasedContactSelection(participant_uid, config):
         RecordingList = []
         for recording in Recordings:
             Description = recording.get_info()
-
+            
             # This only give us results without segments
-            if "ZERO_THREE_LEFT" in Description["Metadata"]["ChannelNames"] or "ZERO_THREE_RIGHT" in Description["Metadata"]["ChannelNames"]:
+            Found = False
+            for i in range(len(Description["Metadata"]["ChannelNames"])):
+                if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
+                    Found = True 
+                    break
+
+            if Found:
                 DBSDevice = DBSDeviceDictionary[Description["Device"]]
                 for i in range(len(Description["Metadata"]["ChannelNames"])):
                     ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], DBSDevice["Electrodes"])
@@ -2687,16 +2695,77 @@ def handleSurveybasedContactSelection(participant_uid, config):
             DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
 
         # This only give us results without segments
-        if not "ZERO_THREE_LEFT" in Description["Metadata"]["ChannelNames"] and not "ZERO_THREE_RIGHT" in Description["Metadata"]["ChannelNames"]:
+        Found = False
+        for i in range(len(Description["Metadata"]["ChannelNames"])):
+            if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
+                Found = True 
+                break
+
+        if not Found:
             return None
         
         # Run your AI Model here
-        
-        return {}
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+            "TimeSeriesRecording": {
+                "StandardFilter": {
+                    "value": "Butterworth 1-100Hz"
+                },
+                "CardiacFilter": {
+                    "value": "No Filter"
+                },
+                "SpectrogramMethod": {
+                    "value": "Welch's Periodogram"
+                }
+            }
+        }})
+        userConfig["APIAccess"] = True
+
+        Data = processNeuralActivitySnapshot(recording, Data, userConfig)
+        Data["Channels"] = []
+        for i in range(len(Data["ChannelNames"])):
+            DBSDevice = DBSDeviceDictionary[recording.source.metadata["Device"]]
+            Data["Channels"].append(DBSDevice["Heritage"] + ": " + BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"]))
+        Data["PSDs"] = Data["PSD"]
+        Results = ContactPredictor(Data)
+        return Results
+
+def handleAutomatedBetaDetection(participant_uid, config):
+    Participant = models.Participant.find(uid=participant_uid)
+
+    if config["RequestType"] == "RequestQualifyRecordings":
+        RecordingList = ExtractSpectralFeaturesDuringStimulation.ExtractAvailableDates(Participant.get_info())
+        return RecordingList
+    
+    elif config["RequestType"] == "RequestAIResult":
+        RecordingList = ExtractSpectralFeaturesDuringStimulation.ExtractAvailableDates(Participant.get_info())
+        userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+            "TimeSeriesRecording": {
+                "StandardFilter": {
+                    "value": "Butterworth 1-100Hz"
+                },
+                "CardiacFilter": {
+                    "value": "No Filter"
+                },
+                "SpectrogramMethod": {
+                    "value": "Welch's Periodogram"
+                }
+            }
+        }})
+        userConfig["APIAccess"] = True
+
+        Results = []
+        for collection in RecordingList:
+            print(config)
+            if collection["Date"] == config["RecordingType"] and collection["TherapyParameters"] == config["TherapyParameters"] and collection["Contact"].startswith(config["Contact"]):
+                Results.append(ExtractSpectralFeaturesDuringStimulation.ProcessCollection(collection, userConfig))
+
+        return Results
 
 def extractMachineLearningModels(participant_uid, model_key=None, config={}):
     models = {
-        "Survey-based Contact Selection (Lavu et. al., 2025)": handleSurveybasedContactSelection
+        "Survey-based Contact Selection (Lavu et. al., 2025)": handleSurveybasedContactSelection,
+        "Automated Beta Detection (BRAVO)": handleAutomatedBetaDetection,
     }
 
     if model_key and model_key in models.keys():
