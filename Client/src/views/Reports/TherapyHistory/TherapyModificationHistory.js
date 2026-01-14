@@ -232,6 +232,11 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
   const getPreTherapySettingsBilateral = (config) => {
     if (!config) return;
 
+    for (let i = 0; i < config.Electrodes.length; i++) {
+      config.Adaptive[i] = config.Adaptive[i].filter((a,j) => config.Stimulation[i][j].Electrode.Target == config.Electrodes[i].Target);
+      config.Stimulation[i] = config.Stimulation[i].filter((a) => a.Electrode.Target == config.Electrodes[i].Target);
+    }
+
     return (
       <MDBox px={2} pt={1} pb={2}>
         <MDTypography variant={"h6"} fontWeight={"bold"}>
@@ -245,6 +250,11 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
 
   const getPostTherapySettingsBilateral = (config) => {
     if (!config) return;
+
+    for (let i = 0; i < config.Electrodes.length; i++) {
+      config.Adaptive[i] = config.Adaptive[i].filter((a,j) => config.Stimulation[i][j].Electrode.Target == config.Electrodes[i].Target);
+      config.Stimulation[i] = config.Stimulation[i].filter((a) => a.Electrode.Target == config.Electrodes[i].Target);
+    }
 
     return (
       <MDBox px={2} pt={1} pb={2}>
