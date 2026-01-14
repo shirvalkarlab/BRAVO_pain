@@ -2756,7 +2756,6 @@ def handleAutomatedBetaDetection(participant_uid, config):
 
         Results = []
         for collection in RecordingList:
-            print(config)
             if collection["Date"] == config["RecordingType"] and collection["TherapyParameters"] == config["TherapyParameters"] and collection["Contact"].startswith(config["Contact"]):
                 Results.append(ExtractSpectralFeaturesDuringStimulation.ProcessCollection(collection, userConfig))
 

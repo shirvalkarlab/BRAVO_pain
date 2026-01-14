@@ -339,9 +339,15 @@ function PredictTherapyParameters() {
                       <MDTypography variant="h6" fontSize={18}>
                         {`Target: ${result.target}`}
                       </MDTypography>
-                      <MDTypography variant="body2" color={"error"} fontSize={20}>
-                        <b>{`Suggested Contact: ` + (result.results[0].Threshold > result.results[1].Threshold ? result.results[0].Contact : result.results[1].Contact)}</b>
-                      </MDTypography>
+                      {result.results[0].Threshold == result.results[1].Threshold ? (
+                        <MDTypography variant="body2" color={"error"} fontSize={20}>
+                          <b>{`Threshold-based Suggested Contact: ` + (result.results[0].BaselinePower > result.results[1].BaselinePower ? result.results[0].Contact : (result.results[0].BaselinePower == result.results[1].BaselinePower ? "Tie" : result.results[1].Contact))}</b>
+                        </MDTypography>
+                      ) : (
+                        <MDTypography variant="body2" color={"error"} fontSize={20}>
+                          <b>{`Power-based Suggested Contact: ` + (result.results[0].Threshold > result.results[1].Threshold ? result.results[0].Contact : (result.results[0].Threshold == result.results[1].Threshold ? "Tie" : result.results[1].Contact))}</b>
+                        </MDTypography>
+                      )}
                     </MDBox>
                   ))}
                 </MDBox>
