@@ -62,6 +62,7 @@ function PredictTherapyParameters() {
   const [recordingList, setRecordingList] = useState({active: null, options: []});
 
   const [surveyResults, setSurveyResults] = useState([]);
+  const [surveyAIResults, setSurveyAIResults] = useState([]);
   const [betaResults, setBetaResults] = useState([]);
 
   const [drawerOpen, setDrawerOpen] = useState({open: false, config: {}});
@@ -83,7 +84,6 @@ function PredictTherapyParameters() {
         }
         surveyResponse.data[i].Label = `${new Date(surveyResponse.data[i].Date*1000).toLocaleDateString("en-US", {month: '2-digit', day: '2-digit', year: 'numeric'})}`;
       }
-      console.log(surveyResponse.data); 
       setSurveyList({active: recordingDates.length > 0 ? recordingDates[0] : null, options: recordingDates, list: surveyResponse.data});
 
       const betaResponse = await SessionController.query("/api/queryAIModels", {
@@ -135,6 +135,7 @@ function PredictTherapyParameters() {
       }
       setThresholdList({active: uniqueAvailableSessions.length > 0 ? uniqueAvailableSessions[0] : null, options: uniqueAvailableSessions, sessions: availableSessions});
       
+
       setAlert(null);
     } catch (error) {
       SessionController.displayError(error, setAlert);
@@ -166,7 +167,7 @@ function PredictTherapyParameters() {
       }
     }
 
-    setSurveyResults(() => {
+    setSurveyAIResults(() => {
       let options = [];
       for (let target in results) {
         options.push({
@@ -175,6 +176,60 @@ function PredictTherapyParameters() {
           E02: results[target].E02,
           E01_Percent: (results[target].E01 / results[target].Total * 100).toFixed(1),
           E02_Percent: (results[target].E02 / results[target].Total * 100).toFixed(1),
+        });
+      }
+      return options; 
+    });
+
+    let betaPeakResults = {}
+    for (let i = 0; i < surveyList.list.length; i++) {
+      if (surveyList.list[i].Label === surveyList.active) {
+        const response = await SessionController.query("/api/queryAIModels", {
+          RequestType: "RequestAIResult",
+          ModelType: "Peak Beta Power in Survey",
+          ParticipantId: participant_uid,
+          RecordingId: surveyList.list[i].Id,
+        });
+        
+        let resultComparison = {};
+        for (let j = 0; j < response.data.Channels.length; j++) {
+          const channelSplit = response.data.Channels[j].split(" ");
+          const channel = channelSplit[channelSplit.length - 1];
+          if (channel == "E00-E02" || channel == "E01-E03") {
+            const target = response.data.Channels[j].replace(" "+channel, "");
+            if (!resultComparison[target]) {
+              resultComparison[target] = {E01: 0, E02: 0, Total: 0}
+            }
+            if (response.data.Channels[j].endsWith(" E00-E02")) {
+              resultComparison[target].E01 = response.data.BandPowers[j].Beta.Power;
+            } else if (response.data.Channels[j].endsWith(" E01-E03")) {
+              resultComparison[target].E02 += response.data.BandPowers[j].Beta.Power;
+            }
+          }
+        }
+        
+        for (let target in resultComparison) {
+          if (!betaPeakResults[target]) {
+            betaPeakResults[target] = {E01: 0, E02: 0, Total: 0}
+          }
+          if (resultComparison[target].E01 > resultComparison[target].E02) {
+            betaPeakResults[target].E01 += 1;
+          } else if (resultComparison[target].E01 < resultComparison[target].E02) {
+            betaPeakResults[target].E02 += 1;
+          }
+          betaPeakResults[target].Total += 1;
+        }
+      }
+    }
+    setSurveyResults(() => {
+      let options = [];
+      for (let target in betaPeakResults) {
+        options.push({
+          target: target,
+          E01: betaPeakResults[target].E01,
+          E02: betaPeakResults[target].E02,
+          E01_Percent: (betaPeakResults[target].E01 / betaPeakResults[target].Total * 100).toFixed(1),
+          E02_Percent: (betaPeakResults[target].E02 / betaPeakResults[target].Total * 100).toFixed(1),
         });
       }
       return options; 
@@ -277,7 +332,43 @@ function PredictTherapyParameters() {
               <Grid item xs={6}>
                 <MDBox px={2} pt={2} lineHeight={1}>
                   <MDTypography variant="h6" fontSize={20}>
-                    {"Survey-based Contact Selection (Lavu et. al., 2025)"}
+                    {"Survey-based AI Contact Selection (Lavu et. al., 2025)"}
+                  </MDTypography>
+                </MDBox>
+                <MDBox px={2} pb={2} lineHeight={1}>
+                  <Autocomplete
+                    value={surveyList.active}
+                    options={surveyList.options}
+                    onChange={(event, value) => {
+                      setSurveyList({...surveyList, active: value})
+                    }}
+                    renderInput={(params) => (
+                      <FormField
+                        {...params}
+                        label={"Select Session Date"}
+                        InputLabelProps={{ shrink: true }}
+                      />
+                    )}
+                    disableClearable
+                  />
+                </MDBox>
+                <MDBox px={2} pb={2} lineHeight={1}>
+                  {surveyAIResults.map((result, index) => (
+                    <MDBox key={index} mb={2}>
+                      <MDTypography variant="h6" fontSize={18}>
+                        {`Target: ${result.target}`}
+                      </MDTypography>
+                      <MDTypography variant="body2" color={"error"} fontSize={20}>
+                        <b>{`Suggested Contact: ` + (result.E01 > result.E02 ? "E01" : result.E02 > result.E01 ? "E02" : "Tie")}</b>
+                      </MDTypography>
+                    </MDBox>
+                  ))}
+                </MDBox>
+              </Grid>
+              <Grid item xs={6}>
+                <MDBox px={2} pt={2} lineHeight={1}>
+                  <MDTypography variant="h6" fontSize={20}>
+                    {"Survey-based Contact Selection (Peak Beta Method)"}
                   </MDTypography>
                 </MDBox>
                 <MDBox px={2} pb={2} lineHeight={1}>
@@ -310,48 +401,6 @@ function PredictTherapyParameters() {
                   ))}
                 </MDBox>
               </Grid>
-              <Grid item xs={6}>
-                <MDBox px={2} pt={2} lineHeight={1}>
-                  <MDTypography variant="h6" fontSize={20}>
-                    {"Beta Desynchronization Detection (BRAVO Method)"}
-                  </MDTypography>
-                </MDBox>
-                <MDBox px={2} pb={2} lineHeight={1}>
-                  <Autocomplete
-                    value={thresholdList.active}
-                    options={thresholdList.options}
-                    onChange={(event, value) => {
-                      setThresholdList({...thresholdList, active: value})
-                    }}
-                    renderInput={(params) => (
-                      <FormField
-                        {...params}
-                        label={"Select Session Date"}
-                        InputLabelProps={{ shrink: true }}
-                      />
-                    )}
-                    disableClearable
-                  />
-                </MDBox>
-                <MDBox px={2} pb={2} lineHeight={1}>
-                  {betaResults.map((result, index) => (
-                    <MDBox key={index} mb={2}>
-                      <MDTypography variant="h6" fontSize={18}>
-                        {`Target: ${result.target}`}
-                      </MDTypography>
-                      {result.results[0].Threshold == result.results[1].Threshold ? (
-                        <MDTypography variant="body2" color={"error"} fontSize={20}>
-                          <b>{`Threshold-based Suggested Contact: ` + (result.results[0].BaselinePower > result.results[1].BaselinePower ? result.results[0].Contact : (result.results[0].BaselinePower == result.results[1].BaselinePower ? "Tie" : result.results[1].Contact))}</b>
-                        </MDTypography>
-                      ) : (
-                        <MDTypography variant="body2" color={"error"} fontSize={20}>
-                          <b>{`Power-based Suggested Contact: ` + (result.results[0].Threshold > result.results[1].Threshold ? result.results[0].Contact : (result.results[0].Threshold == result.results[1].Threshold ? "Tie" : result.results[1].Contact))}</b>
-                        </MDTypography>
-                      )}
-                    </MDBox>
-                  ))}
-                </MDBox>
-              </Grid>
             </Grid>
           </Card> 
         </MDBox>
@@ -364,6 +413,42 @@ function PredictTherapyParameters() {
                     <MDBox p={2} lineHeight={1}>
                       <MDTypography variant="h6" fontSize={24}>
                         {"Survey-based Contact Selection (Lavu et. al., 2025)"}
+                      </MDTypography>
+                    </MDBox>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <MDBox p={2}>
+                      {surveyAIResults.length === 0 ? (
+                        <MDTypography variant="body2" color="text">
+                          {"No survey results found for the selected date."}
+                        </MDTypography>
+                      ) : (
+                        surveyAIResults.map((result, index) => (
+                          <MDBox key={index} mb={2}>
+                            <MDTypography variant="h6" fontSize={18}>
+                              {`Target: ${result.target}`}
+                            </MDTypography>
+                            <MDTypography variant="body2" color={result.E01 > result.E02 ? "error" : "text"}>
+                              {`Contact E01: ${result.E01} selections (${result.E01_Percent}%)`}
+                            </MDTypography>
+                            <MDTypography variant="body2" color={result.E02 > result.E01 ? "error" : "text"}>
+                              {`Contact E02: ${result.E02} selections (${result.E02_Percent}%)`}
+                            </MDTypography>
+                          </MDBox>
+                        ))
+                      )}
+                    </MDBox>
+                  </Grid>
+                </Grid>
+              </Card>
+            </Grid>
+            <Grid item xs={12}>
+              <Card sx={{width: "100%"}}>
+                <Grid container>
+                  <Grid item xs={12}>
+                    <MDBox p={2} lineHeight={1}>
+                      <MDTypography variant="h6" fontSize={24}>
+                        {"Survey-based Contact Selection (Survey Peak Beta Detection)"}
                       </MDTypography>
                     </MDBox>
                   </Grid>

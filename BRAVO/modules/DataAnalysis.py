@@ -2648,7 +2648,7 @@ def queryChronicNeuralActivity(participant_uid, config):
 
     return ChronicNeuralActivity
 
-def handleSurveybasedContactSelection(participant_uid, config):
+def handleSurveybasedAIContactSelection(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
 
     if config["RequestType"] == "RequestQualifyRecordings":
@@ -2730,6 +2730,116 @@ def handleSurveybasedContactSelection(participant_uid, config):
         Results = ContactPredictor(Data)
         return Results
 
+def handleSurveybasedContactSelection(participant_uid, config):
+    Participant = models.Participant.find(uid=participant_uid)
+
+    if config["RequestType"] == "RequestQualifyRecordings":
+        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+
+        DBSDevices = models.DBSDevice.find_all(owner=Participant)
+        DBSDeviceDictionary = {}
+        for i in range(len(DBSDevices)):
+            DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
+
+        RecordingList = []
+        for recording in Recordings:
+            Description = recording.get_info()
+            
+            # This only give us results without segments
+            Found = False
+            for i in range(len(Description["Metadata"]["ChannelNames"])):
+                if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
+                    Found = True 
+                    break
+
+            if Found:
+                DBSDevice = DBSDeviceDictionary[Description["Device"]]
+                for i in range(len(Description["Metadata"]["ChannelNames"])):
+                    ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], DBSDevice["Electrodes"])
+                    Description["Metadata"]["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + ElectrodeIdentifier
+
+                RecordingList.append(Description)
+        
+        return RecordingList
+
+    elif config["RequestType"] == "RequestAIResult":
+        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        recording = models.Recording.find(uid=config["RecordingId"], source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+
+        if not recording:
+            return None
+        Description = recording.get_info()
+
+        DBSDevices = models.DBSDevice.find_all(owner=Participant)
+        DBSDeviceDictionary = {}
+        for i in range(len(DBSDevices)):
+            DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
+
+        # This only give us results without segments
+        Found = False
+        for i in range(len(Description["Metadata"]["ChannelNames"])):
+            if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
+                Found = True 
+                break
+
+        if not Found:
+            return None
+        
+        # Run your AI Model here
+        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+        userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+            "TimeSeriesRecording": {
+                "StandardFilter": {
+                    "value": "Butterworth 1-100Hz"
+                },
+                "CardiacFilter": {
+                    "value": "No Filter"
+                },
+                "SpectrogramMethod": {
+                    "value": "Welch's Periodogram"
+                }
+            }
+        }})
+        userConfig["APIAccess"] = True
+
+        Data = processNeuralActivitySnapshot(recording, Data, userConfig)
+        Data["Channels"] = []
+        for i in range(len(Data["ChannelNames"])):
+            DBSDevice = DBSDeviceDictionary[recording.source.metadata["Device"]]
+            Data["Channels"].append(BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"]))
+        Data["PSDs"] = Data["PSD"]
+        
+        BandPowers = {
+            "Channels": Data["Channels"],
+            "BandPowers": []
+        }
+        for i in range(len(Data["PSDs"])):
+            Peaks = []
+            for f in range(1, len(Data["PSDs"][i]["Power"])-1):
+                if Data["PSDs"][i]["Power"][f] > Data["PSDs"][i]["Power"][f-1] and Data["PSDs"][i]["Power"][f] > Data["PSDs"][i]["Power"][f+1]:
+                    Peaks.append({
+                        "Frequency": Data["PSDs"][i]["Frequency"][f],
+                        "Power": Data["PSDs"][i]["Power"][f]
+                    })
+
+            BandPowers["BandPowers"].append({})
+            for band in [("Delta", 1, 4), ("Theta", 4, 8), ("Alpha", 8, 12), ("Beta", 12, 30), ("Gamma", 30, 100)]:
+                bandPower = 0
+                bandFrequency = 0
+                for p in range(len(Peaks)):
+                    if Peaks[p]["Frequency"] >= band[1] and Peaks[p]["Frequency"] < band[2]:
+                        if Peaks[p]["Power"] > bandPower:
+                            bandPower = Peaks[p]["Power"]
+                            bandFrequency = Peaks[p]["Frequency"]
+
+                BandPowers["BandPowers"][i][band[0]] = {
+                    "Frequency": bandFrequency,
+                    "Power": bandPower
+                }
+
+        return BandPowers
+
 def handleAutomatedBetaDetection(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
 
@@ -2763,7 +2873,8 @@ def handleAutomatedBetaDetection(participant_uid, config):
 
 def extractMachineLearningModels(participant_uid, model_key=None, config={}):
     models = {
-        "Survey-based Contact Selection (Lavu et. al., 2025)": handleSurveybasedContactSelection,
+        "Survey-based Contact Selection (Lavu et. al., 2025)": handleSurveybasedAIContactSelection,
+        "Peak Beta Power in Survey": handleSurveybasedContactSelection,
         "Automated Beta Detection (BRAVO)": handleAutomatedBetaDetection,
     }
 
