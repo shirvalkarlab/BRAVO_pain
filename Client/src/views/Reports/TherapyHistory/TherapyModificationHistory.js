@@ -137,7 +137,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                     for (let m in therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation) {
                       if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m].length == 0) continue;
                       for (let n in therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m]) {
-                        if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Electrodes[m].Target.startsWith("Left")) {
+                        if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Electrodes[m].Target.startsWith("Left") && therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Electrode.Target.startsWith("Left")) {
                           activeConfigs.LeftAmplitude += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Amplitude.toFixed(1) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].AmplitudeUnit;
                           let contacts = [];
                           for (let c of therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Contact) {
@@ -148,7 +148,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
                           activeConfigs.LeftContact += contacts.join(", ");
                           activeConfigs.LeftFrequency += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Frequency.toFixed(0) + " Hz";
                           activeConfigs.LeftPulsewidth += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Pulsewidth.toFixed(0) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].PulsewidthUnit;
-                        } else {
+                        } else if (therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Electrodes[m].Target.startsWith("Right") && therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Electrode.Target.startsWith("Right")) {
                           activeConfigs.RightAmplitude += therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Amplitude.toFixed(1) + " " + therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].AmplitudeUnit;
                           let contacts = [];
                           for (let c of therapyHistory.TherapyTimeline[i].Therapies[l].Processed[k].Stimulation[m][n].Contact) {
