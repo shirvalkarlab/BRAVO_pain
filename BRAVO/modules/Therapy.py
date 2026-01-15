@@ -190,6 +190,7 @@ def createTherapyTimeline(TherapyHistory):
         
         for id in AllTherapyGroups:
             GroupEntries = [history for history in KnownTherapyEntries if history["GroupId"] == id]
+            GroupEntries.sort(key=lambda x: (x["Date"], x["Type"]))
             TimelineEntry["Therapies"].append({
                 "GroupId": id,
                 "GroupEntries": GroupEntries,
@@ -208,43 +209,46 @@ def createTherapyTimeline(TherapyHistory):
                     if len(AvailableTherapies) == 0:
                         continue
                     
+
                     UniqueDates = np.unique([AvailableTherapies[i]["Date"] for i in range(len(AvailableTherapies))])
                     for date in UniqueDates:
-                        UniqueSettings = [AvailableTherapies[i] for i in range(len(AvailableTherapies)) if AvailableTherapies[i]["Date"] == date]
-                        DefinedTherapy = {
-                            "Device": device,
-                            "Name": "",  "Type": therapyType,
-                            "Date": date, "Timezone": "",
-                            "GroupId": GroupId, "GroupName": "", "GroupType": "",
-                            "TherapyLabel": "",
-                            "Electrodes": [], "Stimulation": [], "Adaptive": [],
-                            "TherapyIds": []
-                        }
+                        UniqueSources = np.unique([AvailableTherapies[i]["SourceId"] for i in range(len(AvailableTherapies)) if AvailableTherapies[i]["Date"] == date])
+                        for source in UniqueSources:
+                            UniqueSettings = [AvailableTherapies[i] for i in range(len(AvailableTherapies)) if AvailableTherapies[i]["Date"] == date and AvailableTherapies[i]["SourceId"] == source]
+                            DefinedTherapy = {
+                                "Device": device,
+                                "Name": "",  "Type": therapyType,
+                                "Date": date, "Timezone": "", "SourceId": source,
+                                "GroupId": GroupId, "GroupName": "", "GroupType": "",
+                                "TherapyLabel": "",
+                                "Electrodes": [], "Stimulation": [], "Adaptive": [],
+                                "TherapyIds": []
+                            }
 
-                        for electrode in device["Electrodes"]:
-                            DefinedTherapy["Electrodes"].append(electrode)
+                            for electrode in device["Electrodes"]:
+                                DefinedTherapy["Electrodes"].append(electrode)
 
-                            KnownSettings = []
-                            for therapy in UniqueSettings:
-                                for j in range(len(therapy["StimulationSettings"])):
-                                    if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
-                                        KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
-                            DefinedTherapy["Stimulation"].append(KnownSettings)
-                            DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
-                            for j in range(len(KnownSettings)):
-                                if KnownSettings[j]["Label"] != "":
-                                    DefinedTherapy["TherapyLabel"] = KnownSettings[j]["Label"]
+                                KnownSettings = []
+                                for therapy in UniqueSettings:
+                                    for j in range(len(therapy["StimulationSettings"])):
+                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
+                                            KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
+                                DefinedTherapy["Stimulation"].append(KnownSettings)
+                                DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
+                                for j in range(len(KnownSettings)):
+                                    if KnownSettings[j]["Label"] != "":
+                                        DefinedTherapy["TherapyLabel"] = KnownSettings[j]["Label"]
 
-                            KnownSettings = []
-                            for therapy in UniqueSettings:
-                                for j in range(len(therapy["StimulationSettings"])):
-                                    if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
-                                        KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
-                            DefinedTherapy["Adaptive"].append(KnownSettings)
-                            DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
-                        
-                        DefinedTherapy["TherapyIds"] = list(np.unique(DefinedTherapy["TherapyIds"]))
-                        TherapyTimeline[n]["Therapies"][g]["Processed"].append(DefinedTherapy)
+                                KnownSettings = []
+                                for therapy in UniqueSettings:
+                                    for j in range(len(therapy["StimulationSettings"])):
+                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
+                                            KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
+                                DefinedTherapy["Adaptive"].append(KnownSettings)
+                                DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
+                            
+                            DefinedTherapy["TherapyIds"] = list(np.unique(DefinedTherapy["TherapyIds"]))
+                            TherapyTimeline[n]["Therapies"][g]["Processed"].append(DefinedTherapy)
                         
     for n in range(len(TherapyTimeline)):
         TherapyTimeline[n]["DefinedTherapies"] = []
