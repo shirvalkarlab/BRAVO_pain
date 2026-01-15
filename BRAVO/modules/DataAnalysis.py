@@ -2666,13 +2666,13 @@ def handleSurveybasedAIContactSelection(participant_uid, config):
             
             # This only give us results without segments
             Found = False
-            if Description["Metadata"]["Type"] == "MedtronicBrainSenseSurvey":
+            if "Type" in Description["Metadata"] and Description["Metadata"]["Type"] == "MedtronicBrainSenseSurvey":
                 for i in range(len(Description["Metadata"]["ChannelNames"])):
                     if "SEGMENT" in Description["Metadata"]["ChannelNames"][i]:
                         Found = True 
                         break
 
-            if Found:
+            if not Found:
                 DBSDevice = DBSDeviceDictionary[Description["Device"]]
                 for i in range(len(Description["Metadata"]["ChannelNames"])):
                     ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Description["Metadata"]["ChannelNames"][i], DBSDevice["Electrodes"])
