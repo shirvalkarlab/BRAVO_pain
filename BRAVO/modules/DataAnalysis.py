@@ -2810,12 +2810,17 @@ def handleSurveybasedContactSelection(participant_uid, config):
             Data["Channels"].append(BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"]))
         Data["PSDs"] = Data["PSD"]
         
+        def MovingAverageFilter(signal, window_size):
+            window = np.ones(window_size) / window_size
+            return np.convolve(signal, window, mode='same')
+
         BandPowers = {
             "Channels": Data["Channels"],
             "BandPowers": []
         }
         for i in range(len(Data["PSDs"])):
             Peaks = []
+            Data["PSDs"][i]["Power"] = MovingAverageFilter(Data["PSDs"][i]["Power"], 5)
             for f in range(1, len(Data["PSDs"][i]["Power"])-1):
                 if Data["PSDs"][i]["Power"][f] > Data["PSDs"][i]["Power"][f-1] and Data["PSDs"][i]["Power"][f] > Data["PSDs"][i]["Power"][f+1]:
                     Peaks.append({
