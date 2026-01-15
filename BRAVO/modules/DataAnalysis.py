@@ -2666,10 +2666,11 @@ def handleSurveybasedAIContactSelection(participant_uid, config):
             
             # This only give us results without segments
             Found = False
-            for i in range(len(Description["Metadata"]["ChannelNames"])):
-                if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
-                    Found = True 
-                    break
+            if Description["Metadata"]["Type"] == "MedtronicBrainSenseSurvey":
+                for i in range(len(Description["Metadata"]["ChannelNames"])):
+                    if "SEGMENT" in Description["Metadata"]["ChannelNames"][i]:
+                        Found = True 
+                        break
 
             if Found:
                 DBSDevice = DBSDeviceDictionary[Description["Device"]]
@@ -2694,16 +2695,6 @@ def handleSurveybasedAIContactSelection(participant_uid, config):
         for i in range(len(DBSDevices)):
             DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
 
-        # This only give us results without segments
-        Found = False
-        for i in range(len(Description["Metadata"]["ChannelNames"])):
-            if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
-                Found = True 
-                break
-
-        if not Found:
-            return None
-        
         # Run your AI Model here
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
@@ -2748,10 +2739,11 @@ def handleSurveybasedContactSelection(participant_uid, config):
             
             # This only give us results without segments
             Found = False
-            for i in range(len(Description["Metadata"]["ChannelNames"])):
-                if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
-                    Found = True 
-                    break
+            if Description["Metadata"]["Type"] == "MedtronicBrainSenseSurvey":
+                for i in range(len(Description["Metadata"]["ChannelNames"])):
+                    if "SEGMENT" in Description["Metadata"]["ChannelNames"][i]:
+                        Found = True 
+                        break
 
             if Found:
                 DBSDevice = DBSDeviceDictionary[Description["Device"]]
@@ -2776,16 +2768,6 @@ def handleSurveybasedContactSelection(participant_uid, config):
         for i in range(len(DBSDevices)):
             DBSDeviceDictionary[DBSDevices[i].uid] = DBSDevices[i].get_info()
 
-        # This only give us results without segments
-        Found = False
-        for i in range(len(Description["Metadata"]["ChannelNames"])):
-            if Description["Metadata"]["ChannelNames"][i].startswith("ZERO_THREE"):
-                Found = True 
-                break
-
-        if not Found:
-            return None
-        
         # Run your AI Model here
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
