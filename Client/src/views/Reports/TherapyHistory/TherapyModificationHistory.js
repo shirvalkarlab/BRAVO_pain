@@ -233,8 +233,8 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
     if (!config) return;
 
     for (let i = 0; i < config.Electrodes.length; i++) {
-      config.Adaptive[i] = config.Adaptive[i].filter((a,j) => config.Stimulation[i][j].Electrode.Target == config.Electrodes[i].Target);
-      config.Stimulation[i] = config.Stimulation[i].filter((a) => a.Electrode.Target == config.Electrodes[i].Target);
+      config.Adaptive[i] = config.Adaptive[i].filter((a,j) => config.Stimulation[i][j].Electrode.Target.split(" ")[0] == config.Electrodes[i].Target.split(" ")[0]);
+      config.Stimulation[i] = config.Stimulation[i].filter((a) => a.Electrode.Target.split(" ")[0] == config.Electrodes[i].Target.split(" ")[0]);
     }
 
     return (
@@ -311,7 +311,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
       <MDBox pt={1} pb={2}>
         <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"}>
           <MDTypography variant={"h6"} fontWeight={"bold"} color={"primary"}>
-            {config.Electrodes[index].CustomName}
+            {config.Stimulation[index][0].Electrode.CustomName}
           </MDTypography>
           <MDTypography variant={"subtitle1"} color={"secondary"} fontSize={15} fontWeight={"medium"} lineHeight={1} style={{cursor: "pointer"}}>
             {" ( " + new Date(interleaving ? (config.Stimulation[index][0].Date*1000) : (config.Stimulation[index][0].Date*1000)).toLocaleString("en-US", {...SessionController.getTimezoneName(config.Stimulation[index][0].Timezone),
