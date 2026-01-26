@@ -71,7 +71,7 @@ function TherapyHistory() {
   const [therapyConfigurations, setTherapyConfigurations] = React.useState([]);
 
   const [impedanceLogs, setImpedanceLogs] = React.useState([]);
-  const [impedanceMode, setImpedanceMode] = React.useState("Bipolar");
+  const [impedanceMode, setImpedanceMode] = React.useState({show: false, history: [], config: null});
   const [availableDevices, setAvailableDevices] = React.useState({active: "", options: []});
   const [therapyConfig, setTherapyConfig] = React.useState({show: false, config: null});
   const [currentTherapy, setCurrentTherapy] = React.useState({show: false, configs: []});
@@ -350,10 +350,17 @@ function TherapyHistory() {
                   onContactSelect={(index) => {
                     setImpedanceMode({
                       show: true,
-                      history: impedanceLogs.filter((a) => a.DeviceHeritage == availableDevices.active && a.Recording.length > 0).map((a) => {
+                      history: impedanceLogs.filter((a) => a.DeviceHeritage == availableDevices.active && a.Recording.length > 0 && a.Recording[0].Metadata[index.curveNumber == 0 ? "Left" : "Right"]).map((a) => {
+                        if (a.Recording[0].Metadata[index.curveNumber == 0 ? "Left" : "Right"]["Bipolar"].length < index.data.x.length) {
+                          return {
+                            date: a.Date,
+                            data: null
+                          }
+                        }
+
                         return {
                           date: a.Date,
-                          data: a.Recording[0].Metadata[index.curveNumber == 0 ? "Left" : "Right"].Bipolar[index.y][index.x]
+                          data: a.Recording[0].Metadata[index.curveNumber == 0 ? "Left" : "Right"]["Bipolar"][index.y][index.x]
                         }
                       }),
                       config: (index.curveNumber == 0 ? "Left" : "Right") + " Hemisphere Contact "
@@ -377,7 +384,7 @@ function TherapyHistory() {
           </Grid>
           
           <Grid item xs={12}>
-            <MDBox fullWidth>
+            <MDBox>
               <TherapyModificationHistory therapyHistoryRaw={therapyHistory} device={availableDevices.active} viewConfigurationTable={() => {}} />
             </MDBox>
           </Grid>
