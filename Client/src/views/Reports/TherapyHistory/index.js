@@ -39,9 +39,6 @@ import {
   Tooltip,
 } from "@mui/material"
 
-import TabletAndroidIcon from '@mui/icons-material/TabletAndroid';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-
 // core components
 import MDTypography from "components/MDTypography";
 import MDBox from "components/MDBox";
@@ -73,7 +70,7 @@ function TherapyHistory() {
   const [therapyDate, setTherapyDate] = React.useState({active: false, options: []});
   const [therapyConfigurations, setTherapyConfigurations] = React.useState([]);
 
-  const [impedanceLogs, setImpedanceLogs] = React.useState({});
+  const [impedanceLogs, setImpedanceLogs] = React.useState([]);
   const [impedanceMode, setImpedanceMode] = React.useState("Bipolar");
   const [availableDevices, setAvailableDevices] = React.useState({active: "", options: []});
   const [therapyConfig, setTherapyConfig] = React.useState({show: false, config: null});
@@ -105,6 +102,7 @@ function TherapyHistory() {
         }
       }
       setAvailableDevices({active: availableDevices[0], options: availableDevices});
+      setImpedanceLogs(response.data.DeviceImpedance);
       setTherapyHistory(response.data);
       setAlert(null);
     }).catch((error) => {
@@ -329,6 +327,43 @@ function TherapyHistory() {
             </Card>
           </Grid>
           ) : null}
+
+          <Grid item xs={12}>
+            <Card>
+              <MDBox p={2} fullWidth >
+                <Autocomplete
+                  value={availableDevices.active}
+                  options={availableDevices.options}   
+                  onChange={(event, value) => setAvailableDevices({...availableDevices, active: value})}
+                  renderOption={(props, option) => <li {...props}>{option}</li>}
+                  renderInput={(params) => (
+                    <FormField
+                      {...params}
+                      label={"Select Percept Device"}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                  )}
+                />
+              </MDBox>
+              <MDBox p={2}>
+                <ImpedanceHeatmap 
+                  onContactSelect={(index) => {
+                    setImpedanceMode({
+                      show: true,
+                      history: impedanceLogs.filter((a) => a.DeviceHeritage == availableDevices.active && a.Recording.length > 0).map((a) => {
+                        return {
+                          date: a.Date,
+                          data: a.Recording[0].Metadata[index.curveNumber == 0 ? "Left" : "Right"].Bipolar[index.y][index.x]
+                        }
+                      }),
+                      config: (index.curveNumber == 0 ? "Left" : "Right") + " Hemisphere Contact "
+                    });
+                  }}
+                  dataToRender={impedanceLogs.filter((a) => a.DeviceHeritage == availableDevices.active && a.Recording.length > 0)} 
+                  height={600} logType={"Bipolar"} figureTitle={"Impedance Heatmap - "+availableDevices.active}/>
+              </MDBox>
+            </Card>
+          </Grid>
           
           <Grid item xs={12}>
             <MDBox display={"flex"} justifyContent={"space-between"}>
@@ -343,26 +378,24 @@ function TherapyHistory() {
           
           <Grid item xs={12}>
             <MDBox fullWidth>
-              <Autocomplete
-                value={availableDevices.active}
-                options={availableDevices.options}   
-                onChange={(event, value) => setAvailableDevices({...availableDevices, active: value})}
-                renderOption={(props, option) => <li {...props}>{option}</li>}
-                renderInput={(params) => (
-                  <FormField
-                    {...params}
-                    label={"Select Percept Device"}
-                    InputLabelProps={{ shrink: true }}
-                  />
-                )}
-              />
-            </MDBox>
-            <MDBox fullWidth>
               <TherapyModificationHistory therapyHistoryRaw={therapyHistory} device={availableDevices.active} viewConfigurationTable={() => {}} />
             </MDBox>
           </Grid>
         </Grid>
       </MDBox>
+
+      <Dialog open={impedanceMode.show} onClose={() => setImpedanceMode({show: false, config: null})} maxWidth={"md"} fullWidth={true}>
+        <DialogContent>
+          <MDBox p={2}>
+            <ImpedanceHistory dataToRender={impedanceMode.history} height={500} figureTitle={"Impedance History - " + impedanceMode.config}/>
+          </MDBox>
+        </DialogContent>
+        <DialogActions>
+          <MDButton variant="text" color="info" onClick={() => setImpedanceMode({show: false, config: null})}>
+            {"Close"}
+          </MDButton>
+        </DialogActions>
+      </Dialog>
     </DatabaseLayout>
   );
 }

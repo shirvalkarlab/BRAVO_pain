@@ -39,13 +39,13 @@ function ImpedanceHistory({dataToRender, height, figureTitle}) {
       fig.setXlabel("Time (local time)", {fontSize: 15}, ax[ax.length-1]);
       
       fig.setYlabel(dictionaryLookup(dictionary.TherapyHistory.Figure, "Impedance", language), {fontSize: 15});
-      fig.setTitle(data.title + dictionaryLookup(dictionary.TherapyHistory.Figure, "ImpedanceHistory", language));
+      //fig.setTitle(data.title + dictionaryLookup(dictionary.TherapyHistory.Figure, "ImpedanceHistory", language));
     }
     
-    let impedanceHistoryValues = data.data.map((item) => item.value);
+    let impedanceHistoryValues = data.map((item) => item.data);
     fig.setYlim([0, Math.max(...impedanceHistoryValues)*1.1]); 
 
-    let impedanceHistoryDates = data.data.map((item) => Math.floor(item.timestamps / 3600 / 15 / 24)*3600*24*15).map((item) => new Date(item*1000));
+    let impedanceHistoryDates = data.map((item) => Math.floor(item.date / 3600 / 15 / 24)*3600*24*15).map((item) => new Date(item*1000));
     
     fig.box(impedanceHistoryDates, impedanceHistoryValues, {
       hoveron: "points",

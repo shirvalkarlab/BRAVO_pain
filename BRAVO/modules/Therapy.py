@@ -423,6 +423,15 @@ def queryElectrodeImpedances(participant):
     for impedance in ImpedanceRecordss:
         Descriptor = impedance.get_info(data=True)
         ElectrodeImpedances.append(Descriptor)
+    
+    ElectrodeImpedances = sorted(ElectrodeImpedances, key=lambda x: x["Date"])
+    
+    DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=participant)]
+    for impedance in ElectrodeImpedances:
+        for device in DBSDevices:
+            if len(impedance["Recording"]) > 0 and impedance["Recording"][0]["Device"] == device["Id"]:
+                impedance["DeviceHeritage"] = device["Heritage"]
+
     return ElectrodeImpedances
     
 def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):

@@ -36,11 +36,11 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
     }
 
     let ax = fig.getAxes();
-    if (data.log.Left) {
+    if (data.Recording[0].Metadata && data.Recording[0].Metadata.Left) {
       if (logType == "Bipolar") {
-        let contactArrayY = Array(data.log.Left[logType].length).fill(0).map((value, index) => index);
-        let contactArrayX = Array(data.log.Left[logType][0].length).fill(0).map((value, index) => index);
-        fig.surf(contactArrayX, contactArrayY, data.log.Left[logType], {
+        let contactArrayY = Array(data.Recording[0].Metadata.Left[logType].length).fill(0).map((value, index) => index);
+        let contactArrayX = Array(data.Recording[0].Metadata.Left[logType][0].length).fill(0).map((value, index) => index);
+        fig.surf(contactArrayX, contactArrayY, data.Recording[0].Metadata.Left[logType], {
           hovertemplate: `  %{z:d} Impedance <extra></extra>`,
           zsmooth: false,
           coloraxis: fig.createColorAxis({
@@ -65,9 +65,9 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
           showticklabels: true
         }, "y", ax[0]);
       } else {
-        let contactArrayY = Array(data.log.Left[logType].length).fill(0).map((value, index) => index);
-        let contactArrayX = Array(data.log.Left[logType][0].length).fill(0).map((value, index) => index);
-        fig.surf(contactArrayX, contactArrayY, data.log.Left[logType].map((value) => [value]), {
+        let contactArrayY = Array(data.Recording[0].Metadata.Left[logType].length).fill(0).map((value, index) => index);
+        let contactArrayX = Array(data.Recording[0].Metadata.Left[logType][0].length).fill(0).map((value, index) => index);
+        fig.surf(contactArrayX, contactArrayY, data.Recording[0].Metadata.Left[logType].map((value) => [value]), {
           hovertemplate: `  %{z:d} Impedance <extra></extra>`,
           zsmooth: false,
           coloraxis: fig.createColorAxis({
@@ -93,11 +93,11 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
       }
     }
 
-    if (data.log.Right) {
+    if (data.Recording[0].Metadata && data.Recording[0].Metadata.Right) {
       if (logType == "Bipolar") {
-        let contactArrayY = Array(data.log.Right[logType].length).fill(0).map((value, index) => index);
-        let contactArrayX = Array(data.log.Right[logType][0].length).fill(0).map((value, index) => index);
-        fig.surf(contactArrayX, contactArrayY, data.log.Right[logType], {
+        let contactArrayY = Array(data.Recording[0].Metadata.Right[logType].length).fill(0).map((value, index) => index);
+        let contactArrayX = Array(data.Recording[0].Metadata.Right[logType][0].length).fill(0).map((value, index) => index);
+        fig.surf(contactArrayX, contactArrayY, data.Recording[0].Metadata.Right[logType], {
           hovertemplate: `  %{z:d} Impedance <extra></extra>`,
           zsmooth: false,
           coloraxis: fig.createColorAxis({
@@ -122,9 +122,9 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
           showticklabels: true
         }, "y", ax[1]);
       } else {
-        let contactArrayY = Array(data.log.Right[logType].length).fill(0).map((value, index) => index);
-        let contactArrayX = Array(data.log.Right[logType][0].length).fill(0).map((value, index) => index);
-        fig.surf(contactArrayX, contactArrayY, data.log.Right[logType].map((value) => [value]), {
+        let contactArrayY = Array(data.Recording[0].Metadata.Right[logType].length).fill(0).map((value, index) => index);
+        let contactArrayX = Array(data.Recording[0].Metadata.Right[logType][0].length).fill(0).map((value, index) => index);
+        fig.surf(contactArrayX, contactArrayY, data.Recording[0].Metadata.Right[logType].map((value) => [value]), {
           hovertemplate: `  %{z:d} Impedance <extra></extra>`,
           zsmooth: false,
           coloraxis: fig.createColorAxis({
@@ -200,7 +200,7 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
   }, [ref.current, dataToRender]);
 
   return (
-    <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: height, width: "100%", display: show ? "" : "none"}}/>
+    <MDBox ref={ref} id={figureTitle} style={{height: height, width: "100%", display: show ? "" : "none"}}/>
   );
 }
 
