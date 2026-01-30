@@ -134,9 +134,8 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
         for recording in recordings:
             if not recording.source.metadata["Device"] in DBSDeviceIds:
                 continue
-
+            
             Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-
             for i in range(len(Timestamps)):
                 DataSelected = (Data["Time"] > Timestamps[i])
                 if i < len(Timestamps) - 1:
@@ -189,14 +188,21 @@ def extractChronicNeuralActivity(participant, devices, recordings, config):
                     else:
                         leadId = -1
                         for k in range(len(TherapyList[j]["Electrodes"])):
+                            indexToInclude = []
+                            for l in range(len(TherapyList[j]["Stimulation"][k])):
+                                if TherapyList[j]["Stimulation"][k][l]["Electrode"]["Target"] == TherapyList[j]["Electrodes"][k]["Target"]:
+                                    indexToInclude.append(l)
+                            TherapyList[j]["Stimulation"][k] = [TherapyList[j]["Stimulation"][k][m] for m in indexToInclude]
+                            TherapyList[j]["Adaptive"][k] = [TherapyList[j]["Adaptive"][k][m] for m in indexToInclude]
+
                             if ChannelNames[j].startswith("LeftHemisphere") and TherapyList[j]["Electrodes"][k]["Target"].startswith("Left"):
                                 leadId = k
                             elif ChannelNames[j].startswith("RightHemisphere") and TherapyList[j]["Electrodes"][k]["Target"].startswith("Right"):
                                 leadId = k
-
+                        
                         if leadId >= 0 and len(TherapyList[j]["Stimulation"][leadId]) > 0:
                             TherapyList[j] = {
-                                "Stimulation": TherapyList[j]["Stimulation"][leadId][0],
+                                "Stimulation": TherapyList[j]["Stimulation"][leadId],
                                 "Adaptive": TherapyList[j]["Adaptive"][leadId][0]
                             }
                         else:
