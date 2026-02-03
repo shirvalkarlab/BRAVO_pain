@@ -10,6 +10,44 @@ import numpy as np
 def listSort(oldList, newIndexes):
     return [oldList[i] for i in newIndexes]
 
+def uniqueListOfDicts(listOfDicts, keys):
+    uniqueDicts = []
+    for dictItem in listOfDicts:
+        found = False
+        for currentItem in uniqueDicts:
+            match = True
+            for key in keys:
+                if key not in dictItem or key not in currentItem:
+                    match = False
+                    break
+
+                val1 = dictItem[key]
+                val2 = currentItem[key]
+
+                if isinstance(val1, list) and isinstance(val2, list):
+                    if len(val1) != len(val2):
+                        match = False
+                        break
+                    for n, (a, b) in enumerate(zip(val1, val2)):
+                        if a != b:
+                            match = False
+                            break
+                    if not match:
+                        break
+                else:
+                    if val1 != val2:
+                        match = False
+                        break
+
+            if match:
+                found = True
+                break
+
+        if not found:
+            uniqueDicts.append(dictItem)
+
+    return uniqueDicts
+
 def unwrap(x, cap=None):
     if cap is None:
         cap = np.max(x) + 1

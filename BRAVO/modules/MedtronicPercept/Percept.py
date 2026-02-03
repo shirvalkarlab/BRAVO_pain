@@ -134,6 +134,43 @@ def estimateSessionDateTime(JSON):
     
     return SessionStartDate
 
+def estimateSessionEndDateTime(JSON):
+    SessionEndDate = 0
+    if "SessionEndDate" in JSON.keys() and not JSON["SessionEndDate"] == "":
+        try:
+            SessionEndDate = datetime.fromisoformat(JSON["SessionEndDate"].replace("Z","+00:00")).timestamp()
+        except:
+            pass
+    
+    if SessionEndDate > 0:
+        return SessionEndDate
+    
+    sessionDatePools = list()
+    if "CalibrationTests" in JSON.keys():
+        for i in range(len(JSON["CalibrationTests"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["CalibrationTests"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "SenseChannelTests" in JSON.keys():
+        for i in range(len(JSON["SenseChannelTests"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["SenseChannelTests"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "BrainSenseTimeDomain" in JSON.keys():
+        for i in range(len(JSON["BrainSenseTimeDomain"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["BrainSenseTimeDomain"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    if "BrainSenseLfp" in JSON.keys():
+        for i in range(len(JSON["BrainSenseLfp"])):
+            sessionDatePools.append(datetime.fromisoformat(JSON["BrainSenseLfp"][i]["FirstPacketDateTime"][:-4]+"+00:00").timestamp())
+    
+    if len(sessionDatePools) == 0:
+        if "EventSummary" in JSON.keys():
+            sessionDatePools.append(datetime.fromisoformat(JSON["EventSummary"]["SessionEndDate"].replace("Z","+00:00")).timestamp())
+
+    sessionDatePools = np.array(sessionDatePools)
+    sessionDatePools = sessionDatePools[sessionDatePools > 1420088400]
+    if len(sessionDatePools) > 0:
+        return np.max(sessionDatePools)
+    
+    return 0
+
+
 def estimateSessionDateTime_Old(JSON):
     """ Find all common occurance of Session DateTime String
 

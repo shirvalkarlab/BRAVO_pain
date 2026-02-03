@@ -37,7 +37,7 @@ import { usePlatformContext } from "context";
 
 const filter = createFilterOptions();
 
-export default function MedtronicChronicTimeline({data, availableChannels, onSelection, showAdaptiveMode, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
+export default function MedtronicChronicTimeline({data, surveyResults, availableChannels, onSelection, showAdaptiveMode, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
@@ -53,6 +53,72 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
     const fig = new PlotlyRenderManager(figureTitle, language);
     setFig(fig);
   }, [figureTitle]);
+
+  const renderSurveyReports = () => {
+    let dualAxis = [];
+    const ax = fig.getAxes();
+    for (let k in availableChannels.active) { 
+      const dualY = fig.addDualYAxis(ax[k*2]);
+      fig.setAxisProps({
+        title: {
+          font: {
+            color: "#FF0000"
+          }
+        },
+        tickcolor:  "#FF0000",
+        tickfont: {
+          color: "#FF0000"
+        },
+        showgrid: false
+      }, "y", dualY);
+      dualAxis.push(dualY);
+    }
+
+    let nResults = 0;
+    for (let i in surveyResults.form) {
+      for (let j in surveyResults.form[i].questions) {
+        if (surveyResults.form[i].questions[j].type === "redcapForm") {
+          if (surveyResults.form[i].questions[j].text === "Time") continue;
+          nResults += 1;
+        }
+      }
+    }
+
+    const cmap = colormap({
+      colormap: 'jet',
+      nshades: nResults < 10 ? 10 : nResults,
+      format: 'hex',
+      alpha: 1,
+    });
+
+    nResults = 0;
+    for (let i in surveyResults.form) {
+      for (let j in surveyResults.form[i].questions) {
+        if (surveyResults.form[i].questions[j].type === "redcapForm") {
+          if (surveyResults.form[i].questions[j].text === "Time") continue;
+          let scores = [];
+          let times = surveyResults.records.map((a) => new Date(a.Date*1000));
+          for (let k in surveyResults.records) {
+            const result = parseFloat(surveyResults.records[k].Result[i][j]) || null;
+            scores.push(result);
+          }
+          
+          for (let k in dualAxis) { 
+            fig.scatter(times, scores, {
+              color: cmap[nResults],
+              size: 5,
+              visible: "legendonly",
+              name: surveyResults.form[i].questions[j].text,
+              showlegend: k == 0,
+              legendgroup: surveyResults.form[i].questions[j].text,
+              hovertemplate: "  %{x} <br>  " + (surveyResults.form[i].questions[j].text) + "<extra></extra>"
+            }, dualAxis[k]);
+          }
+          nResults += 1;
+        }
+      }
+    }
+  }
 
   useEffect(() => {
     if (!fig) return;
@@ -103,6 +169,10 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
         if (subAx) {
           fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, subAx);
         }
+      }
+
+      if (surveyResults.records && surveyResults.records.length > 0) {
+        renderSurveyReports();
       }
       fig.render();
     }
@@ -313,6 +383,11 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
 
       if (!renderData[i].options.hidden) fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
     }
+    
+    if (surveyResults.records && surveyResults.records.length > 0) {
+      renderSurveyReports();
+    }
+
     fig.render();
 
     const ref = document.getElementById(figureTitle);
@@ -326,7 +401,7 @@ export default function MedtronicChronicTimeline({data, availableChannels, onSel
         document.addEventListener("PlotlyRelayout", plotly_onZoom);
       }
     };
-  }, [fig, renderData]);
+  }, [fig, renderData, surveyResults]);
 
   const plotly_onClick = (evt) => {
     setEventInfo((eventInfo) => {

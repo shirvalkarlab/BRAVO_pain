@@ -66,7 +66,10 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
   const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false, histogram: false});
   const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
+  const [showSurveyOverlay, setShowSurveyOverlay] = useState(false);
   const [availableTherapy, setAvailableTherapy] = useState({active: null, options: []});
+  const [availableForms, setAvailableForms] = useState({active: {}, options: [], forms: []});
+  const [surveyResults, setSurveyResults] = useState({});
  
   const [annotationState, setAnnotationState] = useState({});
   const [circadianData, setCircadianData] = useState({});
@@ -141,27 +144,64 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
   const updateAnnotationColor = (data) => {
     setAnnotationState({...data})
   };
-  
-  useEffect(() => {
-    /*
-    if (data) {
-      const eventNames = [];
-      for (var i = 0; i < data.ChronicData.length; i++) {
-        for (var j = 0; j < data.ChronicData[i].EventName.length; j++) {
-          for (var name of data.ChronicData[i].EventName[j]) {
-            if (!eventNames.includes(name)) {
-              eventNames.push(name);
+
+  const querySurveyOverlay = () => {
+    SessionController.query("/api/queryParticipantSurveyRecords", {
+      RequestType: "RequestAll",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setAvailableForms(() => {
+        let options = [];
+        for (let i in response.data.Links) {
+          for (let j in response.data.Forms) {
+            if (response.data.Forms[j].Id == response.data.Links[i].FormId) {
+              const form = {
+                ...response.data.Forms[j],
+                LinkCode: response.data.Links[i].Id,
+              }
+              options.push(form);
             }
           }
         }
-      }
-      setEventList(eventNames);
 
-      populateCircadianRhythmSelector(data.ChronicData);
-      populateEventLockedPowerSelector(data.ChronicData);
-      populateEventPSDSelector(data.EventPSDs)
-    }
-      */
+        const includedForms = options.map((a) => a.Id);
+        for (let i in response.data.Forms) {
+          if (!includedForms.includes(response.data.Forms[i].Id) && response.data.Forms[i].Count > 0) {
+            const form = {
+              ...response.data.Forms[i],
+            }
+            options.push(form);
+          }
+        }
+
+        return {active: options.length > 0 ? options[0] : {}, options, forms: response.data.Forms}
+      })
+      setAlert(null);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
+
+  useEffect(() => {
+    if (!data || !showSurveyOverlay || !availableForms.active.Id) return;
+
+    SessionController.query("/api/queryParticipantSurveyRecords", {
+      RequestType: "RequestRecords",
+      ParticipantId: participant_uid,
+      FormId: availableForms.active.Id
+    }).then((response) => {
+      setSurveyResults({
+        form: availableForms.active.Record,
+        records: response.data
+      });
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+
+  }, [availableForms.active, showSurveyOverlay]);
+  
+  useEffect(() => {
+    
   }, [data]);
 
   const handleAddEvent = async (eventInfo) => {
@@ -301,8 +341,43 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               {"Show Adaptive Duty Cycle on Timeline"}
                             </MDTypography>
                           </Stack>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Switch value={showSurveyOverlay} onClick={() => {
+                              setShowSurveyOverlay(!showSurveyOverlay);
+                              if (!showSurveyOverlay) {
+                                querySurveyOverlay();
+                              }
+                            }} />
+                            <MDTypography variant={"subtitle"} fontSize={15}>
+                              {"Show Survey Scores as Overlay"}
+                            </MDTypography>
+                          </Stack>
                           </MDBox>
-                          <ChronicTimeline data={data} showAdaptiveMode={showAdaptiveMode} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
+                          {showSurveyOverlay ? (
+                            <MDBox px={2} lineHeight={1}>
+                              <Autocomplete
+                                value={availableForms.active}
+                                options={availableForms.options}
+                                getOptionLabel={(option) => option.Type + " - " + option.Name}
+                                onChange={(event, value) => {
+                                  setAvailableForms({...availableForms, active: value})
+                                }}
+                                renderInput={(params) => (
+                                  <FormField
+                                    {...params}
+                                    label={"Select Survey Form for Overlay"}
+                                    InputLabelProps={{ shrink: true }}
+                                  />
+                                )}
+                                disableClearable
+                              />
+                            </MDBox>
+                          ) : null}
+                        </Grid>
+                        <Grid item xs={12} lg={12}>
+                          <ChronicTimeline data={data} showAdaptiveMode={showAdaptiveMode} height={400} availableChannels={availableChannels} annotations={annotations}
+                            surveyResults={showSurveyOverlay ? surveyResults : {}}
+                            handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
                         </Grid>
                       </>
                     ) : (

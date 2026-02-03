@@ -169,6 +169,255 @@ def extractParticipantInformation(participant_uid, deidentified=False):
 
     return ParticipantInfo
 
+def extractParticipantContext(participant_uid, check_files=[], deidentified=False):
+    Participant = models.Participant.find(uid=participant_uid)
+    ParticipantContext = list()
+
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
+    for device in DBSDevices:
+        SourceFiles = models.SourceFile.find_all(owner=Participant, type="MedtronicJSON", metadata__Device=device.uid)
+        SourceFiles = sorted(SourceFiles, key=lambda x: -x.date)
+
+        TherapyModificationList = list()
+        TherapyModifications = models.TherapyModification.find_all(source__in=SourceFiles)
+        for modification in TherapyModifications:
+            TherapyModificationList.append({
+                "Name": "",
+                "Timestamp": modification.date*1000,
+                "PreviousState": modification.previous_state,
+                "NewState": modification.new_state,
+                "Type": modification.type
+            })
+
+        for n in range(len(SourceFiles)):
+            source = SourceFiles[n]
+            if source.metadata["hashed_id"] in check_files:
+                Context = {
+                    "Id": source.uid, "OnlineFile": True, "HashedId": source.metadata["hashed_id"],
+                }
+                ParticipantContext.append(Context)
+                continue
+                
+            Context = {"Id": source.uid, "HashedId": source.metadata["hashed_id"] if "hashed_id" in source.metadata.keys() else "", "PatientInfo": {
+                "SessionTimestamp": source.date*1000,
+                "SessionTimezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else "",
+                "Name": Participant.name,
+                "MRN": Participant.mrn,
+                "Diagnosis": Participant.diagnosis,
+                "Sex": Participant.sex,
+                "DOB": Participant.date_of_birth*1000,
+                "Device": {}
+            }, "TherapyInformation": [], "TherapyModification": TherapyModificationList, "ChronicBrainSense": [], "Recordings": [], "TherapyRecordings": []}
+
+            Context["PatientInfo"]["Device"]["Id"] = device.uid
+            Context["PatientInfo"]["Device"]["Type"] = device.type
+            Context["PatientInfo"]["Device"]["Name"] = device.name
+            Context["PatientInfo"]["Device"]["SerialNumber"] = device.serial_number
+            Context["PatientInfo"]["Device"]["BatteryPercent"] = 0
+            Context["PatientInfo"]["Device"]["EOL"] = 0
+            Context["PatientInfo"]["Device"]["Location"] = device.implanted_location
+            Context["PatientInfo"]["Device"]["ImplantDate"] = int(device.implanted_date*1000) if device.implanted_date else 0
+            Context["PatientInfo"]["Device"]["ConnectedLeads"] = list()
+            for lead in device.electrodes.all():
+                LeadInfo = {
+                    "Id": lead.uid,
+                    "Target": lead.target.split(" ")[1],
+                    "Hemisphere": lead.target.split(" ")[0],
+                    "CustomName": lead.custom_name,
+                    "ChannelCount": lead.channel_count,
+                    "LeadType": lead.type,
+                }
+                Context["PatientInfo"]["Device"]["ConnectedLeads"].append(LeadInfo)
+
+            Therapies = models.ElectricalTherapy.find_all(therapy__source=source, therapy__type__in=["Pre-visit Therapy", "Post-visit Therapy"])
+            TherapyDates = np.unique([therapy.therapy.date for therapy in Therapies])
+            for date in TherapyDates:
+                DateTherapies = [therapy for therapy in Therapies if therapy.therapy.date == date]
+                TherapyGroups = np.unique([therapy.group_id for therapy in DateTherapies])
+                for therapyType in ["Pre-visit Therapy", "Post-visit Therapy"]:
+                    for group in TherapyGroups:
+                        GroupTherapies = [therapy for therapy in DateTherapies if therapy.group_id == group and therapy.therapy.type == therapyType]
+                        if len(GroupTherapies) == 0:
+                            continue
+
+                        therapy = GroupTherapies[0]
+                        TherapyInformation = {
+                            "Active": therapy.group_type == "Active",
+                            "SourceId": therapy.therapy.source.uid,
+                            "GroupId": therapy.group_id,
+                            "GroupName": therapy.group_name,
+                            "ProgramName": therapy.therapy.type,
+                            "Timestamp": therapy.therapy.date*1000,
+                            "StimulationConfigurations": []
+                        }
+
+                        for therapy in GroupTherapies:
+                            AdaptiveSettings = therapy.adaptive_settings.all()
+                            StimulationSettings = therapy.stimulation_settings.all()
+                            for i in range(len(StimulationSettings)):
+                                setting = StimulationSettings[i]
+                                StimulationConfiguration = {
+                                    "Mode": therapy.stimulation_type,
+                                    "ActiveContacts": [],
+                                    "ReturnContacts": [],
+                                    "Amplitude": setting.amplitude,
+                                    "PulseWidth": setting.pulsewidth,
+                                    "Frequency": setting.frequency,
+                                    "CyclingEnabled": setting.cycling < 0,
+                                    "CyclingOnDuration": setting.cycling * setting.cycling_period,
+                                    "CyclingOffDuration": setting.cycling_period * (1-setting.cycling),
+                                    "SensingConfiguration": {}, "AdaptiveConfiguration": {}
+                                }
+
+                                KnownContacts = []
+                                for contact in setting.contact:
+                                    for electrode in Context["PatientInfo"]["Device"]["ConnectedLeads"]:
+                                        if electrode["Id"] == setting.electrode.uid:
+                                            StimulationConfiguration["ActiveContacts"].append({
+                                                "Electrode": electrode,
+                                                "ContactName": setting.electrode.channel_names[contact] if contact < len(setting.electrode.channel_names) else f"Contact {contact}",
+                                                "ContactIndex": contact,
+                                                "Amplitude": 0
+                                            })
+                                            if "02" in StimulationConfiguration["ActiveContacts"][-1]["ContactName"]:
+                                                KnownContacts.append(2)
+                                            elif "01" in StimulationConfiguration["ActiveContacts"][-1]["ContactName"]:
+                                                KnownContacts.append(1)
+                                            elif "00" in StimulationConfiguration["ActiveContacts"][-1]["ContactName"]:
+                                                KnownContacts.append(0)
+                                            elif "03" in StimulationConfiguration["ActiveContacts"][-1]["ContactName"]:
+                                                KnownContacts.append(3)
+                                KnownContacts = np.unique(KnownContacts)
+
+                                for contact in setting.return_contact:
+                                    for electrode in Context["PatientInfo"]["Device"]["ConnectedLeads"]:
+                                        if electrode["Id"] == setting.electrode.uid:
+                                            if contact < 0:
+                                                StimulationConfiguration["ReturnContacts"].append({
+                                                    "Electrode": electrode,
+                                                    "ContactName": "CAN",
+                                                    "ContactIndex": contact,
+                                                    "Amplitude": 0
+                                                })
+                                            else:
+                                                StimulationConfiguration["ReturnContacts"].append({
+                                                    "Electrode": electrode,
+                                                    "ContactName": setting.electrode.channel_names[contact] if contact < len(setting.electrode.channel_names) else f"Contact {contact}",
+                                                    "ContactIndex": contact,
+                                                    "Amplitude": 0
+                                                })
+
+                                if "SensingSetup" in AdaptiveSettings[i].sensing.keys():
+                                    StimulationConfiguration["SensingConfiguration"]["SensingFrequency"] = AdaptiveSettings[i].sensing["SensingSetup"]["FrequencyInHertz"]
+                                    StimulationConfiguration["SensingConfiguration"]["AveragingDuration"] = AdaptiveSettings[i].sensing["SensingSetup"]["AveragingDurationInMilliSeconds"]
+                                    if 2 in KnownContacts and 1 in KnownContacts:
+                                        StimulationConfiguration["SensingConfiguration"]["SensingChannel"] = "ZERO_AND_THREE"
+                                    elif 2 in KnownContacts:
+                                        StimulationConfiguration["SensingConfiguration"]["SensingChannel"] = "ONE_AND_THREE"
+                                    elif 1 in KnownContacts:
+                                        StimulationConfiguration["SensingConfiguration"]["SensingChannel"] = "ZERO_AND_TWO"
+                                    else:
+                                        StimulationConfiguration["SensingConfiguration"]["SensingChannel"] = ""
+                                    StimulationConfiguration["SensingConfiguration"]["Status"] = "ENABLED"
+                                
+                                if "Mode" in AdaptiveSettings[i].adaptive.keys():
+                                    StimulationConfiguration["AdaptiveConfiguration"]["Configured"] = True
+                                    StimulationConfiguration["AdaptiveConfiguration"]["Status"] = AdaptiveSettings[i].adaptive["Status"].split(".")[1]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["Mode"] = AdaptiveSettings[i].adaptive["Mode"].split(".")[1]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["RampUpDuration"] = AdaptiveSettings[i].adaptive["RampUpTime"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["RampDownDuration"] = AdaptiveSettings[i].adaptive["RampDownTime"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["OnsetDuration"] = AdaptiveSettings[i].adaptive["UpperThresholdOnsetInMilliSeconds"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["TerminationDuration"] = AdaptiveSettings[i].adaptive["LowerThresholdOnsetInMilliSeconds"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["DetectionBlankingDuration"] = AdaptiveSettings[i].adaptive["DetectionBlankingDurationInMilliSeconds"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["AdaptiveStartupDelay"] = AdaptiveSettings[i].adaptive["AdaptiveStartupDelayInMilliSeconds"]
+
+                                if "Thresholds" in AdaptiveSettings[i].sensing.keys():
+                                    StimulationConfiguration["AdaptiveConfiguration"]["AdaptiveThresholds"] = AdaptiveSettings[i].sensing["Thresholds"]["LFPThresholds"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["DefaultThresholds"] = AdaptiveSettings[i].sensing["Thresholds"]["MeasuredLFP"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["AdaptiveAmplitudes"] = AdaptiveSettings[i].sensing["Thresholds"]["AmplitudeThreshold"]
+                                    StimulationConfiguration["AdaptiveConfiguration"]["CaptureAmplitudes"] = AdaptiveSettings[i].sensing["Thresholds"]["CaptureAmplitudes"]
+                                    
+                                TherapyInformation["StimulationConfigurations"].append(StimulationConfiguration)
+                        Context["TherapyInformation"].append(TherapyInformation)
+            
+            Recordings = models.Recording.find_all(source=source, type__in=["MedtronicChronicBrainSense"])
+            for recording in Recordings:
+                Data = loadSourceFile(recording.pointer, recording.hashed)
+                Context["ChronicBrainSense"].append({
+                    "Id": recording.uid,
+                    "Name": recording.name,
+                    "Timestamp": recording.date*1000,
+                    "Data": Data["Data"], 
+                    "Time": Data["Time"],
+                    "ChannelNames": Data["ChannelNames"],
+                })
+
+            Recordings = models.Recording.find_all(source=source, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
+            for recording in Recordings:
+                Data = loadSourceFile(recording.pointer, recording.hashed)
+                Context["Recordings"].append({
+                    "Id": recording.uid,
+                    "Name": recording.name,
+                    "Type": recording.type,
+                    "Timestamp": recording.date*1000,
+                    "Duration": recording.metadata["Duration"]*1000,
+                    "DataURL": "getRawData?CacheType=queryTimeSeriesData&ParticipantId=" + participant_uid + "&RecordingId=" + recording.uid,
+                    "SamplingRate": Data["SamplingRate"],
+                    "ChannelNames": Data["ChannelNames"],
+                })
+
+            Recordings = models.Recording.find_all(source=source, type__in=["MedtronicBrainSenseTimeDomain"])
+            for recording in Recordings:
+                Data = loadSourceFile(recording.pointer, recording.hashed)
+                Context["Recordings"].append({
+                    "Id": recording.uid,
+                    "Name": recording.name,
+                    "Type": recording.type,
+                    "Timestamp": recording.date*1000,
+                    "Duration": recording.metadata["Duration"]*1000,
+                    "DataURL": "getRawData?CacheType=queryTimeSeriesData&ParticipantId=" + participant_uid + "&RecordingId=" + recording.uid,
+                    "SamplingRate": Data["SamplingRate"],
+                    "ChannelNames": Data["ChannelNames"],
+                })
+            
+            Recordings = models.Recording.find_all(source=source, type__in=["MedtronicBrainSensePowerDomain"])
+            for recording in Recordings:
+                Data = loadSourceFile(recording.pointer, recording.hashed)
+                device = models.DBSDevice.find(uid=recording.source.metadata["Device"])
+                ChannelNames = []
+                for name in Data["ChannelNames"]:
+                    Channel = name.split(" ")[0]
+                    if not Channel in ChannelNames:
+                        ChannelNames.append(Channel)
+                
+                for name in ChannelNames:
+                    Context["Recordings"].append({
+                        "Id": recording.uid + "|" + name,
+                        "Name": recording.name,
+                        "Type": recording.type,
+                        "Timestamp": recording.date*1000,
+                        "Duration": recording.metadata["Duration"]*1000,
+                        "SamplingRate": Data["SamplingRate"],
+                        "ChannelName": name,
+                        "TherapySnapshot": Data["Descriptor"]["Therapy"],
+                    })
+
+                """
+                Context["TherapyRecordings"].append({
+                    "Id": recording.uid,
+                    "Name": recording.name,
+                    "Type": recording.type,
+                    "Timestamp": recording.date*1000,
+                    "Duration": recording.metadata["Duration"]*1000,
+                    "DataURL": "getRawData?CacheType=queryTimeSeriesData&ParticipantId=" + participant_uid + "&RecordingId=" + recording.uid,
+                    "SamplingRate": Data["SamplingRate"],
+                    "ChannelName": Data["ChannelName"],
+                })
+                """
+
+            ParticipantContext.append(Context)
+    return ParticipantContext
+
 def extractParticipantDevices(participant):
     return [i.get_info() for i in models.DBSDevice.find_all(owner=participant)]
 

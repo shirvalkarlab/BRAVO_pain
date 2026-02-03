@@ -48,6 +48,7 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 import { dictionary } from "assets/translation.js";
+import MuiAlertDialog from "components/MuiAlertDialog";
 
 function ParticipantSurveyRecords() {
   const navigate = useNavigate();
@@ -108,10 +109,25 @@ function ParticipantSurveyRecords() {
   }, [participant_uid]);
 
   const addNewFormLink = () => {
+    if (!newLinkDialog.form) return;
+
+    if (newLinkDialog.form.Type == "Redcap Linked Survey" && !newLinkDialog.redcapId) {
+      setAlert(
+        <MuiAlertDialog open={true} type={"error"}
+          title={"Redcap Record Id Required"}
+          message={"Please enter the Redcap Record Id to link this form."}
+          handleClose={() => setAlert(null)}
+          handleConfirm={() => setAlert(null)}
+        />
+      );
+      return;
+    }
+
     SessionController.query("/api/queryParticipantSurveyRecords", {
       RequestType: "AddLink",
       ParticipantId: participant_uid,
-      FormId: newLinkDialog.form.Id
+      FormId: newLinkDialog.form.Id,
+      RecordId: newLinkDialog.redcapId ? newLinkDialog.redcapId : null,
     }).then((response) => {
       setAvailableForms((availableForms) => {
         for (let i in availableForms.forms) {
@@ -194,37 +210,45 @@ function ParticipantSurveyRecords() {
             </MDTypography>
           </MDBox>
           <DialogContent>
-            <Autocomplete
-              value={newLinkDialog.form}
-              options={newLinkDialog.options}
-              onChange={(event, value) => {
-                setNewLinkDialog({...newLinkDialog, form: value})
-              }}
-              isOptionEqualToValue={(option, value) => {
-                return option.Id === value.Id;
-              }}
-              renderOption={(props, option) => <li {...props}>{option.Name + " (Version: " + option.Version + ")"}</li>}
-              getOptionLabel={(option) => {
-                if (typeof option === 'string') {
-                  return option;
-                }
-                if (option.inputValue) {
-                  return option.inputValue;
-                }
-                return option.Name + " (Version: " + option.Version + ")";
-              }}
-              renderInput={(params) => (
-                <FormField
-                  {...params}
-                  label={"Choose Available Form for Participant"}
-                  InputLabelProps={{ shrink: true }}
-                />
-              )}
-              disableClearable
-            />
+            <MDBox>
+              <Autocomplete
+                value={newLinkDialog.form}
+                options={newLinkDialog.options}
+                onChange={(event, value) => {
+                  setNewLinkDialog({...newLinkDialog, form: value})
+                }}
+                isOptionEqualToValue={(option, value) => {
+                  return option.Id === value.Id;
+                }}
+                renderOption={(props, option) => <li {...props}>{option.Name + " (Version: " + option.Version + ")"}</li>}
+                getOptionLabel={(option) => {
+                  if (typeof option === 'string') {
+                    return option;
+                  }
+                  if (option.inputValue) {
+                    return option.inputValue;
+                  }
+                  return option.Name + " (Version: " + option.Version + ")";
+                }}
+                renderInput={(params) => (
+                  <FormField
+                    {...params}
+                    label={"Choose Available Form for Participant"}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                )}
+                disableClearable
+              />
+            </MDBox>
+            {newLinkDialog.form && newLinkDialog.form.Type == "Redcap Linked Survey" ? (
+              <MDBox mt={2}>
+                <TextField variant={"standard"} value={newLinkDialog.redcapId} label={"Please Enter the Redcap Record Id here"} onChange={(event) => setNewLinkDialog({...newLinkDialog, redcapId: event.target.value})} rows={1} sx={{marginX: 1}} fullWidth>
+                </TextField>
+              </MDBox>
+            ) : null}
           </DialogContent>
           <DialogActions>
-            <MDButton color="secondary" onClick={() => setNewLinkDialog({...newLinkDialog, show: false})}>Cancel</MDButton>
+            <MDButton color="secondary" onClick={() => setNewLinkDialog({...newLinkDialog, show: false})}>Close</MDButton>
             <MDButton color="info" onClick={() => addNewFormLink()}>Create</MDButton>
           </DialogActions>
         </Dialog>
@@ -239,6 +263,33 @@ function ParticipantSurveyRecords() {
                       <MDTypography variant={"h6"} fontSize={24}>
                         {"Record Timeline"}
                       </MDTypography>
+                      
+                      {availableForms.active.Type === "Redcap Linked Survey" ? (
+                        <MDButton variant="contained" color="error" style={{minWidth: 200}} onClick={() => setAlert(<MuiAlertDialog open={true} type={"warning"}
+                          title={"Remove Form Link"}
+                          message={"Are you sure you want to remove the link to this form for the participant? This will delete any existing records."}
+                          denyButton={true}
+                          handleDeny={() => setAlert(null)}
+                          handleClose={() => setAlert(null)}
+                          handleConfirm={() => {
+                            SessionController.query("/api/queryParticipantSurveyRecords", {
+                              RequestType: "RemoveLink",
+                              ParticipantId: participant_uid,
+                              FormId: availableForms.active.Id
+                            }).then((response) => {
+                              setAvailableForms((availableForms) => {
+                                const newOptions = availableForms.options.filter((a) => a.Id != availableForms.active.Id);
+                                return {...availableForms, active: newOptions.length > 0 ? newOptions[0] : {}, options: newOptions}
+                              })
+                              setAlert(null);
+                            }).catch((error) => {
+                              SessionController.displayError(error, setAlert);
+                            });
+                          }}
+                        />)}>
+                          {"Remove Link"} 
+                        </MDButton>
+                      ) : null}
                       {availableForms.active.LinkCode ? (
                         <MDButton variant="contained" color="success" style={{minWidth: 200}} onClick={() => setNewRecordDialog((newRecordDialog) => {
                           return {...newRecordDialog, show: true}
@@ -304,7 +355,7 @@ function ParticipantSurveyRecords() {
             </MDBox>
           </DialogContent>
           <DialogActions>
-            <MDButton color="secondary" onClick={() => setNewRecordDialog({...newRecordDialog, show: false})}>Cancel</MDButton>
+            <MDButton color="secondary" onClick={() => setNewRecordDialog({...newRecordDialog, show: false})}>Close</MDButton>
             <MDButton color="info" onClick={() => {
               let date = new Date(newRecordDialog.date.toISOString().split("T")[0] + "T" + newRecordDialog.time.toISOString().split("T")[1]).getTime();
               date -= (newRecordDialog.date.utcOffset() - newRecordDialog.time.utcOffset()) * 60000;

@@ -14,30 +14,22 @@
 import { useEffect, useState } from "react";
 
 import {
+  Autocomplete,
   Card,
   Grid,
   Dialog,
   DialogContent,
   DialogActions,
   TextField,
-  Step,
-  StepLabel,
-  Stepper,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel
 } from "@mui/material";
-
-import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
-import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { TimePicker } from '@mui/x-date-pickers/TimePicker';
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import MuiAlertDialog from "components/MuiAlertDialog";
+import FormField from "components/MDInput/FormField";
+
 import LoadingProgress from "components/LoadingProgress";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
@@ -74,18 +66,46 @@ export default function FormList() {
   };
 
   const addNewSurvey = () => {
-    SessionController.query("/api/setSurveyForms", {
-      RequestType: "Create",
-      Institute: user.InstituteId,
-      FormName: newSurveyDialog.surveyName,
-      FormType: newSurveyDialog.surveyType,
-      FormContent: []
-    }).then((response) => {
-      setSurveys([...surveys, response.data]);
-      setNewSurveyDialog({surveyName: "", surveyType: "", state: false});
-    }).catch((error) => {
-      SessionController.displayError(error, setAlert);
-    });
+    if (newSurveyDialog.surveyType == "Redcap Linked Survey") {
+      if (newSurveyDialog.surveyName == "" || newSurveyDialog.redcapApiEndpoint == "" || newSurveyDialog.redcapApiCode == "") {
+        setAlert(
+          <MuiAlertDialog title={"Incomplete Information"} message={"Please fill out all fields before creating the survey."}
+            handleClose={() => setAlert()} 
+            handleConfirm={() => setAlert()}/>)
+        return;
+      }
+      
+      SessionController.query("/api/setSurveyForms", {
+        RequestType: "Create",
+        Institute: user.InstituteId,
+        FormName: newSurveyDialog.surveyName,
+        FormType: newSurveyDialog.surveyType,
+        FormContent: [],
+        RedcapInfo: {
+          API: newSurveyDialog.redcapApiEndpoint,
+          Token: newSurveyDialog.redcapApiCode
+        }
+      }).then((response) => {
+        setSurveys([...surveys, response.data]);
+        setNewSurveyDialog({surveyName: "", surveyType: "", state: false});
+      }).catch((error) => {
+        SessionController.displayError(error, setAlert);
+      });
+
+    } else {
+      SessionController.query("/api/setSurveyForms", {
+        RequestType: "Create",
+        Institute: user.InstituteId,
+        FormName: newSurveyDialog.surveyName,
+        FormType: newSurveyDialog.surveyType,
+        FormContent: []
+      }).then((response) => {
+        setSurveys([...surveys, response.data]);
+        setNewSurveyDialog({surveyName: "", surveyType: "", state: false});
+      }).catch((error) => {
+        SessionController.displayError(error, setAlert);
+      });
+    }
   };
 
   const deleteSurvey = (id) => {
@@ -202,23 +222,71 @@ export default function FormList() {
           </MDTypography>
         </MDBox>
         <DialogContent>
-          <TextField
-            variant="standard"
-            margin="dense" id="survey_name"
-            value={newSurveyDialog.surveyName}
-            onChange={(event) => setNewSurveyDialog({...newSurveyDialog, surveyName: event.target.value})}
-            label={"Form Name"} type="text"
-            fullWidth
-          />
-          <TextField
-            variant="standard"
-            margin="dense" id="survey_type"
-            value={newSurveyDialog.surveyType}
-            onChange={(event) => setNewSurveyDialog({...newSurveyDialog, surveyType: event.target.value})}
-            placeholder={"Participant-oriented Survey or Researcher-conducted Questionnaires?"}
-            label={"Form Type"} type="text"
-            fullWidth
-          />
+          <MDBox px={2} lineHeight={1}>
+            <Autocomplete
+              value={newSurveyDialog.surveyType}
+              options={["Normal Survey", "Redcap Linked Survey"]}
+              onChange={(event, value) => {
+                setNewSurveyDialog({...newSurveyDialog, surveyType: value})
+              }}
+              renderInput={(params) => (
+                <FormField
+                  {...params}
+                  label={"Survey Type"}
+                  InputLabelProps={{ shrink: true }}
+                />
+              )}
+              disableClearable
+            />
+          </MDBox>
+          {newSurveyDialog.surveyType == "Redcap Linked Survey" ? (
+            <MDBox px={2} lineHeight={1} component="form" autoComplete="off">
+              <TextField
+                variant="standard"
+                margin="dense" id="survey_name"
+                value={newSurveyDialog.surveyName}
+                onChange={(event) => setNewSurveyDialog({...newSurveyDialog, surveyName: event.target.value})}
+                label={"Form Name"} type="text"
+                fullWidth
+                autoComplete="off"
+                inputProps={{ autoComplete: 'off' }}
+              />
+              <TextField
+                variant="standard"
+                margin="dense" id="redcap_api_endpoint"
+                value={newSurveyDialog.redcapApiEndpoint}
+                onChange={(event) => setNewSurveyDialog({...newSurveyDialog, redcapApiEndpoint: event.target.value})}
+                label={"Redcap API Endpoint"} type="text"
+                fullWidth
+                autoComplete="off"
+                inputProps={{ autoComplete: 'off' }}
+              />
+              <TextField
+                variant="standard"
+                margin="dense" id="redcap_api_code"
+                value={newSurveyDialog.redcapApiCode}
+                onChange={(event) => setNewSurveyDialog({...newSurveyDialog, redcapApiCode: event.target.value})}
+                label={"Redcap API Code"} type="text"
+                fullWidth
+                // use a non-standard autocomplete value to discourage password managers
+                autoComplete="new-password"
+                inputProps={{ autoComplete: 'new-password' }}
+              />
+            </MDBox>
+          ) : (
+            <MDBox px={2} lineHeight={1} component="form" autoComplete="off">
+              <TextField
+                variant="standard"
+                margin="dense" id="survey_name"
+                value={newSurveyDialog.surveyName}
+                onChange={(event) => setNewSurveyDialog({...newSurveyDialog, surveyName: event.target.value})}
+                label={"Form Name"} type="text"
+                fullWidth
+                autoComplete="off"
+                inputProps={{ autoComplete: 'off' }}
+              />
+            </MDBox>
+          )}
         </DialogContent>
         <DialogActions>
           <MDButton color="secondary" onClick={() => setNewSurveyDialog({surveyName: "", surveyType: "", state: false})}>Cancel</MDButton>

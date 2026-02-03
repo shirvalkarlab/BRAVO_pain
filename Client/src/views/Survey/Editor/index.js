@@ -245,6 +245,16 @@ export default function FormEditor({match}) {
         activeView: false,
         show: true
       };
+    } else if (type === "redcapForm") {
+      contents.contents[index].questions[questionId] = {
+        text: contents.contents[index].questions[questionId].text,
+        type: type,
+        value: "",
+        default: "",
+        validation: "variable",
+        activeView: false,
+        show: true
+      };
     } else if (type === "text") {
       contents.contents[index].questions[questionId] = {
         text: contents.contents[index].questions[questionId].text,
@@ -427,6 +437,7 @@ export default function FormEditor({match}) {
                                   value={question.type}
                                   onChange={(event) => setQuestionType(index, questionId, event.target.value)}
                                 >
+                                  <MenuItem value={"redcapForm"}>{"Redcap Variable"}</MenuItem>
                                   <MenuItem value={"score"}>{"Score"}</MenuItem>
                                   <MenuItem value={"text"}>{"Text"}</MenuItem>
                                   <MenuItem value={"multiple-choice"}>{"Multiple Choice"}</MenuItem>
@@ -452,6 +463,12 @@ export default function FormEditor({match}) {
                               />
                             </MDBox>
                               
+                            {question.type === "redcapForm" ? (
+                            <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginY: 1}}>
+                              <TextField variant={"standard"} value={question.value} label={"Please Enter the Redcap Variable Here"} onChange={(event) => setTextQuestionValue(index, questionId, event.target.value)} rows={1} sx={{marginX: 1}} fullWidth>
+                              </TextField>
+                            </MDBox>
+                            ) : null}
                             {question.type === "text" ? (
                             <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginY: 1}}>
                               <TextField variant={"standard"} value={question.value} label={"Default Text Field"} onChange={(event) => setTextQuestionValue(index, questionId, event.target.value)} rows={4} sx={{marginX: 1}} fullWidth multiline>

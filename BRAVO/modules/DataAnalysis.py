@@ -33,7 +33,7 @@ from specparam import SpectralModel
 
 from Server import models
 import modules.utility.SignalProcessingUtility as SPU
-from modules.utility.PythonUtility import rangeSelection, uniqueList
+from modules.utility.PythonUtility import rangeSelection, uniqueList, uniqueListOfDicts
 from modules import Database, Therapy, Event
 from modules.MedtronicPercept import BrainSenseStream, ChronicBrainSense, BrainSenseEvent, Percept
 from modules.Resources.ProcessingTemplates import ProcessingNodes
@@ -41,7 +41,7 @@ from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
 from modules.Empatica import DataManager as EmpaticaDataManager
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation
-#from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
+from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -1473,6 +1473,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
         Data = Database.loadSourceFile(recording.pointer, recording.hashed)
         if not config["APIAccess"]:
             Data = downsampleTimeDomainStreaming(Data)
+            config["TimeSeriesRecording"]["CardiacFilter"]["value"] = "Skipped for Non-APIAccess"
         
         Data = processTimeDomainStreaming(recording, Data, config)
         Data["Data"] = Data["Data"].T
@@ -1518,6 +1519,20 @@ def downloadNeuralActivitySnapshot(participant_uid, config):
         else:
             raise Exception("Neural Activity Snapshot Query found a recording whose DeviceId does not belongs to the Participant")
 
+        MedtronicPSDs = []
+        if "MedtronicPSD" in Data["Descriptor"].keys():
+            for channel in Data["ChannelNames"]:
+                found = False
+                for psd in Data["Descriptor"]["MedtronicPSD"]:
+                    if psd and psd["Hemisphere"].split(".")[1]:
+                        if channel.startswith(psd["SensingElectrodes"].split(".")[1]):
+                            MedtronicPSDs.append(psd)
+                            found = True
+                            break
+
+                if not found:
+                    MedtronicPSDs.append(None)
+
         for i in range(len(Data["ChannelNames"])):
             ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
             if ElectrodeIdentifier.startswith("Left"):
@@ -1525,10 +1540,10 @@ def downloadNeuralActivitySnapshot(participant_uid, config):
 
             Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + ElectrodeIdentifier
             Data["ChannelNames"][i] = Data["ChannelNames"][i].replace(".1","A").replace(".2","B").replace(".3","C")
-
+        
         AllSnapshots.append({**Description, **{
             "Type": recording.type,
-            "MedtronicPSDs": Data["Descriptor"]["MedtronicPSD"] if "MedtronicPSD" in Data["Descriptor"].keys() else None,
+            "MedtronicPSDs": MedtronicPSDs if "MedtronicPSD" in Data["Descriptor"].keys() else None,
             "RecordingId": recording.uid,
             "Channels": Data["ChannelNames"],
             "PSDs": Data["PSD"],
@@ -1537,6 +1552,35 @@ def downloadNeuralActivitySnapshot(participant_uid, config):
     
     return AllSnapshots
         
+def downloadRawRecordings(participant_uid, recording_uid, channel, config):
+    recording = models.Recording.find(uid=recording_uid)
+    if not recording.source.owner.pk == participant_uid:
+        raise Exception("Permission Denied. Accessing Denied Recordings")
+    
+    Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+    if recording.type in ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]:
+        Data = processTimeDomainStreaming(recording, Data, config)
+        Data["Data"] = Data["Data"].T
+        for i in range(Data["Data"].shape[0]):
+            if (Data["ChannelNames"][i] == channel):
+                return Data["Data"][i,:].astype(np.float64).tobytes()
+    
+    elif recording.type in ["MedtronicBrainSensePowerDomain"]:
+        BrainSenseLfp = [{"Time": (i / Data["SamplingRate"] + Data["StartTime"]) * 1000, "LFP": 0, "Amplitude": 0} for i in range(len(Data["Data"]))]
+        for j in range(len(Data["Data"])):
+            for i in range(len(Data["ChannelNames"])):
+                if Data["ChannelNames"][i].startswith(channel):
+                    if Data["ChannelNames"][i].endswith("Stimulation"):
+                        BrainSenseLfp[j]["Amplitude"] = Data["Data"][j][i]
+                    elif Data["ChannelNames"][i].endswith("Power"):
+                        BrainSenseLfp[j]["LFP"] = Data["Data"][j][i]
+
+        rawBytes = bytearray()
+        for i in range(len(BrainSenseLfp)):
+            rawBytes.extend(np.array([BrainSenseLfp[i]["Time"], BrainSenseLfp[i]["LFP"], BrainSenseLfp[i]["Amplitude"]], dtype=np.float64).tobytes())
+        return rawBytes
+
+    return bytearray()
 
 def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
     Analysis = processTimeseriesAnalysis(participant_uid, recording_uid, config)
@@ -1857,7 +1901,6 @@ def handleCardiacFilter(data, config, recording=None):
         ProcessedData.save()
     return data
 
-
 def handleTimeFrequencyAnalysis(data, config, recording=None):
     if recording:
         ProcessedData = models.Recording.find(original=recording, type="TimeFrequencyAnalysis", metadata=config)
@@ -2168,6 +2211,20 @@ def queryNeuralActivitySnapshot(participant_uid, config):
         else:
             raise Exception("Neural Activity Snapshot Query found a recording whose DeviceId does not belongs to the Participant")
 
+        MedtronicPSDs = []
+        if "MedtronicPSD" in Data["Descriptor"].keys():
+            for channel in Data["ChannelNames"]:
+                found = False
+                for psd in Data["Descriptor"]["MedtronicPSD"]:
+                    if psd and psd["Hemisphere"].split(".")[1]:
+                        if channel.startswith(psd["SensingElectrodes"].split(".")[1]):
+                            MedtronicPSDs.append(psd)
+                            found = True
+                            break
+
+                if not found:
+                    MedtronicPSDs.append(None)
+
         for i in range(len(Data["ChannelNames"])):
             ElectrodeIdentifier = BrainSenseStream.reformatChannelName(Data["ChannelNames"][i], DBSDevice["Electrodes"])
             if ElectrodeIdentifier.startswith("Left"):
@@ -2175,10 +2232,10 @@ def queryNeuralActivitySnapshot(participant_uid, config):
 
             Data["ChannelNames"][i] = DBSDevice["Heritage"] + ": " + ElectrodeIdentifier
             Data["ChannelNames"][i] = Data["ChannelNames"][i].replace(".1","A").replace(".2","B").replace(".3","C")
-
+        
         NeuralActivitySnapshot["Recordings"].append({**Description, **{
             "Type": recording.type,
-            "MedtronicPSDs": Data["Descriptor"]["MedtronicPSD"] if "MedtronicPSD" in Data["Descriptor"].keys() else None,
+            "MedtronicPSDs": MedtronicPSDs if "MedtronicPSD" in Data["Descriptor"].keys() else None,
             "RecordingId": recording.uid,
             "Channels": Data["ChannelNames"],
             "PSDs": Data["PSD"],
@@ -2250,9 +2307,11 @@ def queryChronicTimeline(participant_uid, config):
     TimelineAnnotation = []
 
     Annotations = Event.queryDBSEvents(participant_uid, "PatientControllerEvent", source_files=SourceFiles, data=True)
+    Annotations = uniqueListOfDicts(Annotations, ["Name", "Type", "Date"])
     TimelineAnnotation.extend(Annotations)
 
     Annotations = Event.queryAnnotations(participant_uid, "ChronicCustomEvent")
+    Annotations = uniqueListOfDicts(Annotations, ["Name", "Type", "Date"])
     TimelineAnnotation.extend(Annotations)
     
     if models.Recording.include(source__in=SourceFiles, type__in=["CustomizedTimelineData"]):
@@ -2295,7 +2354,7 @@ def queryChronicTimeline(participant_uid, config):
                 }
 
                 ChronicTimeline.append(Activity)
-
+            
     if models.Recording.include(source__in=SourceFiles, type__in=["AppleWatchData"]):
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["AppleWatchData"])
         for recording in Recordings:
@@ -2588,10 +2647,14 @@ def queryChronicNeuralActivity(participant_uid, config):
     ChronicNeuralActivity = {"AnalysisType": "", "ChronicNeuralActivity": [], "Annotations": []}
 
     Annotations = Event.queryDBSEvents(participant_uid, "PatientControllerEvent", source_files=SourceFiles, data=True)
+    Annotations = uniqueListOfDicts(Annotations, ["Name", "Type", "Date"])
     ChronicNeuralActivity["Annotations"].extend(Annotations)
 
     Annotations = Event.queryAnnotations(participant_uid, "ChronicCustomEvent")
+    Annotations = uniqueListOfDicts(Annotations, ["Name", "Type", "Date"])
     ChronicNeuralActivity["Annotations"].extend(Annotations)
+
+    ChronicNeuralActivity["Annotations"]
     
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
         ChronicNeuralActivity["AnalysisType"] = "MedtronicChronicBrainSense"
@@ -2599,6 +2662,7 @@ def queryChronicNeuralActivity(participant_uid, config):
         if not Recording:
             Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
             Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
+            Activity = uniqueListOfDicts(Activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
             ChronicNeuralActivity["ChronicNeuralActivity"] = Activity
 
             source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)

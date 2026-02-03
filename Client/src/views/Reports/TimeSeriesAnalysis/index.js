@@ -446,9 +446,9 @@ function TimeSeriesAnalysis() {
                           onChange={(event, value) => {
                             getRecordingData(data.Analysis, value);
                           }}
-                          renderOption={(props, option) => <li {...props}>{option.split(": ")[1]}</li>}
+                          renderOption={(props, option) => <li {...props}>{option.includes(":") ? option.split(": ")[1] : option}</li>}
                           getOptionLabel={(option) => {
-                            return option.split(": ")[1];
+                            return option.includes(":") ? option.split(": ")[1] : option;
                           }}
                           renderInput={(params) => (
                             <FormField

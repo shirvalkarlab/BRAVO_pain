@@ -30,6 +30,7 @@ key = os.environ.get('DATASERVER_ENCRYPTION')
 def extractPatientInformation(JSON):
     PatientOverview = {}
     PatientOverview["SessionTimestamp"] = Percept.estimateSessionDateTime(JSON)
+    PatientOverview["SessionEndTimestamp"] = Percept.estimateSessionEndDateTime(JSON)
     PatientOverview["SessionTimezone"] = "UTC" + JSON["ProgrammerUtcOffset"]
 
     PatientInformation = JSON["PatientInformation"]["Final"]

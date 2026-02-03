@@ -58,7 +58,11 @@ class DataUploadHandler(RestViews.APIView):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "DataType", "Institute", "Metadata", "File"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
-        institute = models.Institute.find(name=request.data["Institute"])
+        if request.data["Institute"] == "":
+            institute = request.user.institute
+        else:
+            institute = models.Institute.find(name=request.data["Institute"])
+
         if not institute:
             return Response(status=403)
         

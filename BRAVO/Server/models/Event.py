@@ -169,6 +169,9 @@ class ScaleForms(models.Model):
         if count:
             info["Count"] = ScaleRecord.objects.filter(source=self, participant=count).count()
 
+        if self.record_type == "Redcap Linked Survey":
+            info["Record"] = info["Record"].get("FieldMapping", [])
+
         return info
 
 class ParticipantLinkRel(models.Model):

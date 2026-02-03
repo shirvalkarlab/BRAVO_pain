@@ -70,8 +70,8 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
         
-        fig.setSubtitle(`${activeChannels[i].split(": ")[1]}`,ax[i*2]);
-        fig.setSubtitle(`${activeChannels[i].split(": ")[1]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+        fig.setSubtitle(activeChannels[i].includes(":") ? `${activeChannels[i].split(": ")[1]}` : activeChannels[i],ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i].includes(":") ? activeChannels[i].split(": ")[1] : activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
       }
       fig.setSubtitle(`${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "Stimulation", language)}`,ax[ax.length-1]);
       fig.setYlim([0, 5], ax[ax.length-1]);
@@ -91,8 +91,8 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)} (Unit)`, {fontSize: 15}, ax[i*2]);
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Frequency", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "Hertz", language)})`, {fontSize: 15}, ax[1+i*2]);
         
-        fig.setSubtitle(`${activeChannels[i].split(": ")[1]}`,ax[i*2]);
-        fig.setSubtitle(`${activeChannels[i].split(": ")[1]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
+        fig.setSubtitle(activeChannels[i].includes(":") ? `${activeChannels[i].split(": ")[1]}` : activeChannels[i],ax[i*2]);
+        fig.setSubtitle(`${activeChannels[i].includes(":") ? activeChannels[i].split(": ")[1] : activeChannels[i]} ${dictionaryLookup(dictionary.TherapeuticAnalysis.Figure, "TimeFrequencyAnalysis", language)}`,ax[i*2 + 1]);
       }
     }
 

@@ -178,6 +178,27 @@ while True:
                                 Recording["Missing"] = np.zeros(Recording["Data"].shape)
                                 Recording["Time"] = np.arange(len(Recording["Data"])) / Recording["SamplingRate"]
                                 Recordings.append(Recording)
+                                
+                                if int(Recording["SamplingRate"]*10) > 500:
+                                    Recording = createPlaceholderRecording(data["rawData"][key]["timestampStart"] / 1000000)
+                                    Recording["Metadata"] = Metadata
+
+                                    Recording["SamplingRate"] = data["rawData"][key]["samplingFrequency"]
+                                    Recording["Descriptor"] = data["rawData"][key]["imuParams"]
+                                    Recording["ChannelNames"] = ["ACC.Magnitude.Smoothed.10s"]
+                                    Recording["ChannelUnits"] = ["g", "g", "g"]
+                                    Recording["Data"] = np.zeros((len(data["rawData"][key]["x"]), 3))
+                                    Recording["Data"][:, 0] = np.array(data["rawData"][key]["x"], dtype=float) * Recording["Descriptor"]["conversionFactor"]
+                                    Recording["Data"][:, 1] = np.array(data["rawData"][key]["y"], dtype=float) * Recording["Descriptor"]["conversionFactor"]
+                                    Recording["Data"][:, 2] = np.array(data["rawData"][key]["z"], dtype=float) * Recording["Descriptor"]["conversionFactor"]
+                                    Recording["Data"] = SPU.rssq(Recording["Data"], axis=1).reshape(-1,1)
+                                    
+                                    Recording["Time"] = np.arange(len(Recording["Data"])) / Recording["SamplingRate"]
+                                    Recording["Data"] = SPU.smooth(Recording["Data"].flatten(), int(Recording["SamplingRate"]*10))[::int(Recording["SamplingRate"]*10)].reshape(-1,1)
+                                    Recording["Time"] = Recording["Time"][::int(Recording["SamplingRate"]*10)]
+                                    Recording["SamplingRate"] = 1 / 10
+                                    Recording["Missing"] = np.zeros(Recording["Data"].shape)
+                                    Recordings.append(Recording)
                             
                             elif key == "gyroscope":
                                 if len(data["rawData"][key]["x"]) == 0:

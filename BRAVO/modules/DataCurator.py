@@ -327,6 +327,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".json"
     source_file.metadata["Timezone"] = DatabaseEntries["SessionOverview"]["SessionTimezone"]
     source_file.metadata["Device"] = device.uid
+    source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
     source_file.save()

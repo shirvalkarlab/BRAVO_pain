@@ -76,6 +76,14 @@ function RecordScoreTimeline({dataToRender, form, figureTitle}) {
             index: i,
             defaultActive: form[page].questions[i].activeView
           });
+        } else if (form[page].questions[i].type == "redcapForm") {
+          options.push({
+            type: "score",
+            label: form[page].questions[i].text,
+            page: page,
+            index: i,
+            defaultActive: form[page].questions[i].activeView
+          });
         } else if (form[page].questions[i].type == "cumulativeScore") {
           options.push({
             type: "cumulativeScore",
@@ -121,6 +129,24 @@ function RecordScoreTimeline({dataToRender, form, figureTitle}) {
         for (let j in dataToRender) {
           xData.push(new Date(dataToRender[j].Date*1000));
           yData.push(dataToRender[j].Result[activeScores[i].page][activeScores[i].index])
+        }
+        graphSeries.push({
+          type: "line", x: xData, y: yData, 
+          options: {
+            mode: "lines+markers",
+            linewidth: 2,
+            name: activeScores[i].label,
+            color: colors[i],
+            hovertemplate: `  ${activeScores[i].label}:  %{y:.2f}<extra></extra>`,
+            showlegend: true
+          }
+        })
+        
+      } else if (activeScores[i].type == "redcapForm") {
+        let xData = [], yData = [];
+        for (let j in dataToRender) {
+          xData.push(new Date(dataToRender[j].Date*1000));
+          yData.push(parseFloat(dataToRender[j].Result[activeScores[i].page][activeScores[i].index]) || 0)
         }
         graphSeries.push({
           type: "line", x: xData, y: yData, 

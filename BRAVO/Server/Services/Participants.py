@@ -18,8 +18,6 @@ Database Participant APIs
 @email: jackson.cagle@neurology.ufl.edu
 """
 
-from django.contrib.auth import authenticate, login, logout
-
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 from rest_framework.response import Response
@@ -34,6 +32,7 @@ from modules.HelperFunctions import sanitize_input, get_or_none, get_token
 from modules import Database, DataAnalysis
 from modules.DataCurator import ExportBRAVOStructure
 from Server import models
+import datetime
 
 def queryParticipantFunc(user):
     AllParticipants = []
@@ -79,50 +78,41 @@ class QueryParticipants(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        AllParticipants = []
         AllParticipantInfos = []
+        institute = request.user.institute
+        if institute:
+            AllParticipants = models.Participant.from_institute(institute)
+            for i in range(len(AllParticipants)):
+                ParticipantInfo = {
+                    "Id": AllParticipants[i].uid,
+                    "Name": AllParticipants[i].name,
+                    "MRN": AllParticipants[i].mrn,
+                    "DateOfBirth": AllParticipants[i].date_of_birth * 1000 if AllParticipants[i].date_of_birth else 0,
+                    "Diagnosis": AllParticipants[i].diagnosis,
+                    "Gender": AllParticipants[i].sex,
+                    "Notes": "",
+                    "Tags": [tag.name for tag in AllParticipants[i].tags.all()],
+                    "Targets": [],
+                    "LastUpdated": int(AllParticipants[i].last_update * 1000),
+                }
+                DBSDevices = Database.extractParticipantDevices(AllParticipants[i])
+                for device in DBSDevices:
+                    for electrode in device["Electrodes"]:
+                        if not electrode["CustomName"] in ParticipantInfo["Targets"]:
+                            ParticipantInfo["Targets"].append(electrode["CustomName"])
 
-        if "ActiveStudy" in request.user.configuration.keys():
-            study = models.Study.find(uid=request.user.configuration["ActiveStudy"])
-            if not study:
-                request.user.configuration["ActiveStudy"] = ""
-            else:
-                rel = models.StudyRel.find(member=request.user, study=study)
-                if rel:
-                    deidentified = True
-                    if rel.permission["Position"] == "Admin" or "PHIAllowed" in rel.permission.keys():
-                        deidentified = False
-
-                    AllParticipants = study.participants.all()
-                    for i in range(len(AllParticipants)):
-                        ParticipantInfo = AllParticipants[i].get_info()
-                        ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
-                        if deidentified:
-                            ParticipantInfo["Name"] = ParticipantInfo["Id"]
-                            ParticipantInfo["MRN"] = ""
-                            ParticipantInfo["DOB"] = 0
-                                
-                        AllParticipantInfos.append(ParticipantInfo)
-
-        else:
-            institute = request.user.institute
-            if institute:
-                AllParticipants = models.Participant.from_institute(institute)
-                for i in range(len(AllParticipants)):
-                    ParticipantInfo = AllParticipants[i].get_info()
-                    ParticipantInfo["DBSDevices"] = Database.extractParticipantDevices(AllParticipants[i])
-                    AllParticipantInfos.append(ParticipantInfo)
+                AllParticipantInfos.append(ParticipantInfo)
 
         return Response(status=200, data=AllParticipantInfos)
 
-class QueryParticipantInformation(RestViews.APIView):
+class QueryParticipantContext(RestViews.APIView):
     
     permission_classes = [IsAuthenticated,]
     parser_classes = [RestParsers.JSONParser]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"], accepted_keys=["ParticipantId", "LocalSessions"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
@@ -130,8 +120,8 @@ class QueryParticipantInformation(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
 
-        ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"], deidentified=Permissions["Deidentified"])
-        return Response(status=200, data=ParticipantInfo)
+        ParticipantContext = Database.extractParticipantContext(request.data["ParticipantId"], check_files=request.data.get("LocalSessions", []), deidentified=Permissions["Deidentified"])
+        return Response(status=200, data=ParticipantContext)
 
 class ExportParticipant(RestViews.APIView):
     
@@ -314,7 +304,7 @@ class CreateParticipantInformation(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
-        if not get_or_none(sanitize_input)(request.data, required_keys=["Name"], accepted_keys=["Name", "MRN", "DOB", "Sex", "Diagnosis", "DiseaseStartTime"]):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["Name"], accepted_keys=["Name", "DOB", "Sex", "Diagnosis", "DiseaseStartTime"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
         person, person_created = models.Participant.find_or_create(request.data["Name"], "", request.user.institute.uid)
@@ -323,8 +313,6 @@ class CreateParticipantInformation(RestViews.APIView):
                 person.date_of_birth = request.data["DOB"]
             if "Sex" in request.data.keys():
                 person.sex = request.data["Sex"]
-            if "MRN" in request.data.keys():
-                person.mrn = request.data["MRN"]
             if "Diagnosis" in request.data.keys():
                 person.diagnosis = request.data["Diagnosis"]
             if "DiseaseStartTime" in request.data.keys():

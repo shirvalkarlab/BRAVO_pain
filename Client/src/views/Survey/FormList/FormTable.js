@@ -65,7 +65,6 @@ const FormTable = ({data, onDelete}) => {
   }, [paginationControl]);
 
   const viewSurvey = (id) => {
-    //navigate(`/survey/${id}`, {params: {}, replace: false});
     window.open(`/survey/${id}`,'_blank');
   };
 

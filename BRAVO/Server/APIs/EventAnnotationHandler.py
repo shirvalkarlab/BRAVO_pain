@@ -37,6 +37,7 @@ from django.conf import settings
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none
 from modules import Database, Event
+from modules.SurveyForms import RedcapForm
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -89,6 +90,8 @@ class QuerySurveyForms(RestViews.APIView):
 
             Form = form.get_info()
             Form["Editable"] = form.institute.has_permission(request.user, "Edit")
+            if Form["Type"] == "Redcap Linked Survey" and type(Form["Record"]) == dict:
+                Form["Record"] = Form["Record"]["FieldMapping"]
             return Response(status=200, data=Form)
 
         elif request.data["RequestType"] == "SubmitForm":
@@ -124,7 +127,7 @@ class SetSurveyForms(RestViews.APIView):
             return Response(status=400, data={"message": "Malformed Input"})
         
         if request.data["RequestType"] == "Create":
-            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "Institute", "FormName", "FormType", "FormContent"]):
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "Institute", "FormName", "FormType", "FormContent"], accepted_keys=["RequestType", "Institute", "FormName", "FormType", "FormContent", "RedcapInfo"]):
                 return Response(status=400, data={"message": "Malformed Input"})
                 
             Institute = models.Institute.find(uid=request.data["Institute"])
@@ -135,6 +138,18 @@ class SetSurveyForms(RestViews.APIView):
 
             try:
                 form = models.ScaleForms.create(Institute, request.data["FormName"], request.data["FormType"])
+                if request.data["FormType"] == "Redcap Linked Survey" and "RedcapInfo" in request.data.keys():
+                    if not RedcapForm.validateRedcapAPI(request.data["RedcapInfo"]["API"], request.data["RedcapInfo"]["Token"]):
+                        form.delete()
+                        raise Exception("Redcap API Validation Failed")
+                        
+                    form.record = {
+                        "RedcapURL": request.data["RedcapInfo"]["API"],
+                        "RedcapToken": request.data["RedcapInfo"]["Token"],
+                        "FieldMapping": []
+                    }
+                    form.save()
+                    
             except Exception as e:
                 print(traceback.format_exc())
                 return Response(status=400, data={"message": str(e)})
@@ -153,7 +168,23 @@ class SetSurveyForms(RestViews.APIView):
 
             try:
                 Record = json.loads(json.dumps(request.data["FormContent"]))
-                form.update_version(Record)
+                if form.record_type == "Redcap Linked Survey":
+                    timeVariableFound = False
+                    for page in Record:
+                        for question in page["questions"]:
+                            if question["text"] == "Time" and question["type"] == "redcapForm":
+                                timeVariableFound = True
+                                
+                    if not timeVariableFound:
+                        raise Exception("Redcap Linked Survey must contain a 'Time' variable of type 'redcapForm' to record submission time.")
+                    
+                    form.update_version({
+                        "RedcapURL": form.record["RedcapURL"],
+                        "RedcapToken": form.record["RedcapToken"],
+                        "FieldMapping": Record
+                    })
+                else:
+                    form.update_version(Record)
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -227,6 +258,30 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
             try:
                 form = models.ScaleForms.find(uid=request.data["FormId"])
                 rel = models.ParticipantLinkRel.create(Participant, form)
+                if form.record_type == "Redcap Linked Survey" and type(form.record) == dict and "RecordId" in request.data.keys():
+                    rel.link_code = request.data["RecordId"]
+                    rel.save()
+
+            except Exception as e:
+                print(traceback.format_exc())
+                return Response(status=400, data={"message": str(e)})
+            
+            return Response(status=200, data=rel.link_code)
+
+        elif request.data["RequestType"] == "RemoveLink":
+            if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "FormId"]):
+                return Response(status=400, data={"message": "Malformed Input"})
+
+            if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Edit"):
+                return Response(status=403)
+            
+            try:
+                form = models.ScaleForms.find(uid=request.data["FormId"])
+                rel = models.ParticipantLinkRel.find(participant=Participant, record=form)
+                if rel and form.record_type == "Redcap Linked Survey":
+                    rel.delete()
+                else:
+                    raise Exception("Link Not Found")
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -240,9 +295,13 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
 
             try:
                 form = models.ScaleForms.find(uid=request.data["FormId"])
-                AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
-                AllRecords = [i.get_info() for i in AllRecords]
-                AllRecords.sort(key=lambda x: x["Date"])
+                if form.record_type == "Redcap Linked Survey":
+                    rel = models.ParticipantLinkRel.find(participant=Participant, record=form)
+                    AllRecords = RedcapForm.queryRedcapFormRecords(Participant, form, recordId=rel.link_code)
+                else:
+                    AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
+                    AllRecords = [i.get_info() for i in AllRecords]
+                    AllRecords.sort(key=lambda x: x["Date"])
 
             except Exception as e:
                 print(traceback.format_exc())
