@@ -41,7 +41,7 @@ from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
 from modules.Empatica import DataManager as EmpaticaDataManager
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation
-from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
+#from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
