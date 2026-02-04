@@ -21,9 +21,13 @@ import PropTypes from "prop-types";
 // Custom styles for MDInput
 import MDInputRoot from "components/MDInput/MDInputRoot";
 
-const MDInput = forwardRef(({ error, success, disabled, ...rest }, ref) => (
-  <MDInputRoot {...rest} ref={ref} ownerState={{ error, success, disabled }} />
-));
+const MDInput = forwardRef(({ error, success, disabled, ...rest }, ref) => {
+  const { autoComplete, ...others } = rest;
+  const autoCompleteProp = typeof autoComplete !== "undefined" ? autoComplete : "off";
+  return (
+    <MDInputRoot autoComplete={autoCompleteProp} {...others} ref={ref} ownerState={{ error, success, disabled }} />
+  );
+});
 
 // Setting default values for the props of MDInput
 MDInput.defaultProps = {

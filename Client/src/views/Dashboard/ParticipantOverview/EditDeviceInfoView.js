@@ -82,12 +82,14 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
               value={editDeviceInfo.Name}
               onChange={(event) => setEditDeviceInfo({...editDeviceInfo, Name: event.target.value})}
               fullWidth
+              autoComplete="off"
             />
           </Grid>
           {editDeviceInfo.Electrodes.map((lead, index) => (
             <Grid key={lead.Target} item xs={6}>
               <TextField
-                id="lead-name"
+                id={`lead-name-${index}`}
+                name={`lead-name-${index}`}
                 variant="standard"
                 margin="dense"
                 label={`Lead #${index+1}`}
@@ -98,6 +100,7 @@ function EditDeviceInfoView({show, deviceInfo, onUpdate, onCancel}) {
                   return oldLead;
                 })})}
                 fullWidth
+                autoComplete="off"
               />
             </Grid>
           ))}

@@ -81,6 +81,7 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
               onChange={(event) => setEditParticipantInfo({...editParticipantInfo, Name: event.target.value})}
               label={"Participant Name"} type="text"
               fullWidth
+              autoComplete="off"
             />
           </Grid>
           <Grid item xs={12} md={6}>
@@ -91,12 +92,13 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
               onChange={(event) => setEditParticipantInfo({...editParticipantInfo, Diagnosis: event.target.value})}
               label={"Diagnosis"} type="text"
               fullWidth
+              autoComplete="off"
             />
           </Grid>
           <Grid item xs={12} md={6}>
             <Autocomplete selectOnFocus clearOnBlur
               renderInput={(params) => (
-                <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} />
+                <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} autoComplete="off" />
               )}
               isOptionEqualToValue={(option, value) => {
                 return option === value;
@@ -118,6 +120,7 @@ function EditParticipantInfoView({show, participantInfo, onUpdate, onCancel, rem
                   {...params}
                   variant="standard" id="participant_tags"
                   placeholder={dictionary.ParticipantOverview.TagNames[language]}
+                  autoComplete="off"
                 />
               }}
             />

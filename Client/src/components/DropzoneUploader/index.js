@@ -38,6 +38,7 @@ const DropzoneUploader = forwardRef(({ options }, ref) => {
       component="form"
       ref={ref}
       className="form-control dropzone"
+      autoComplete="off"
     >
       <MDBox className="fallback" bgColor="transparent">
         <MDBox component="input" name="file" type="file" multiple />

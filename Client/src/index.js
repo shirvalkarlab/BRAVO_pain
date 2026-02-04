@@ -12,6 +12,7 @@
 */
 
 import { useState, useEffect } from "react";
+import "./setupDisableAutocomplete";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, useLocation, useNavigate } from "react-router-dom";
 import App from "App";

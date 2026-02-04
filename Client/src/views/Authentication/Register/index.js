@@ -96,16 +96,16 @@ export default function Register() {
         <MDBox pt={4} pb={3} px={3}>
           <MDBox component="form" role="form">
             <MDBox mb={2}>
-              <MDInput type="text" id="name" label={dictionary.Register.UserName[language]} value={authInfo.username} onChange={(event) => setAuthInfo({...authInfo, username: event.currentTarget.value})} fullWidth/>
+              <MDInput type="text" id="name" label={dictionary.Register.UserName[language]} value={authInfo.username} onChange={(event) => setAuthInfo({...authInfo, username: event.currentTarget.value})} autoComplete="off" fullWidth/>
             </MDBox>
             <MDBox mb={2}>
-              <MDInput type="email" id="email" label={dictionary.Register.Email[language]} value={authInfo.email} onChange={(event) => setAuthInfo({...authInfo, email: event.currentTarget.value})} fullWidth/>
+              <MDInput type="email" id="email" label={dictionary.Register.Email[language]} value={authInfo.email} onChange={(event) => setAuthInfo({...authInfo, email: event.currentTarget.value})} autoComplete="off" fullWidth/>
             </MDBox>
             <MDBox mb={2}>
-              <MDInput type="password" id="password" label={dictionary.Register.Password[language]} value={authInfo.password} onChange={(event) => setAuthInfo({...authInfo, password: event.currentTarget.value})} fullWidth/>
+              <MDInput type="password" id="password" label={dictionary.Register.Password[language]} value={authInfo.password} onChange={(event) => setAuthInfo({...authInfo, password: event.currentTarget.value})} autoComplete="new-password" fullWidth/>
             </MDBox>
             <MDBox mb={2}>
-              <MDInput type="text" id="institute-invite-code" label={"Institute Invitation Code (Optional)"} value={authInfo.institute} onChange={(event) => setAuthInfo({...authInfo, institute: event.currentTarget.value})} fullWidth/>
+              <MDInput type="text" id="institute-invite-code" label={"Institute Invitation Code (Optional)"} value={authInfo.institute} onChange={(event) => setAuthInfo({...authInfo, institute: event.currentTarget.value})} autoComplete="off" fullWidth/>
             </MDBox>
             <MDBox display="flex" alignItems="center" ml={-1}>
               <Checkbox value={agree} onClick={() => setAgreeDisclaimer(!agree)} />

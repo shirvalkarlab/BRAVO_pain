@@ -185,7 +185,7 @@ export default function DashboardOverview() {
                   <MDTypography variant="h3">
                     {dictionary.Dashboard.ParticipantTable[language]}
                   </MDTypography>
-                  <MDInput label={dictionary.Dashboard.SearchParticipant[language]} value={filterOptions.text} onChange={(value) => handleParticipantFilter(value)} sx={{paddingRight: 2, marginTop: 2, width: "100%"}}/>
+                  <MDInput label={dictionary.Dashboard.SearchParticipant[language]} value={filterOptions.text} onChange={(value) => handleParticipantFilter(value)} autoComplete="off" sx={{paddingRight: 2, marginTop: 2, width: "100%"}}/>
                 </MDBox>
               </Grid>
               <Grid item xs={12} md={4}>
@@ -229,6 +229,7 @@ export default function DashboardOverview() {
                     {...params}
                     variant="standard"
                     placeholder={"Select Data Type (Required)"}
+                    autoComplete="off"
                   />
                 )}
                 isOptionEqualToValue={(option, value) => {
@@ -268,12 +269,13 @@ export default function DashboardOverview() {
                   onChange={(event) => setParticipantInformation({...participantInformation, name: event.target.value})}
                   label={"Study Participant Name (Required)"} type="text"
                   fullWidth
+                  autoComplete="off"
                 />
               </Grid>
               <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
                 <Autocomplete selectOnFocus clearOnBlur
                   renderInput={(params) => (
-                    <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} />
+                    <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} autoComplete="off" />
                   )}
                   isOptionEqualToValue={(option, value) => {
                     return option === value;
@@ -293,7 +295,7 @@ export default function DashboardOverview() {
                     onChange={(newDate) => {
                       setParticipantInformation({...participantInformation, dob: newDate});
                     }}
-                    renderInput={(params) => <TextField {...params} fullWidth/>}
+                    renderInput={(params) => <TextField {...params} fullWidth autoComplete="off"/>}
                   />
                 </LocalizationProvider>
               </Grid>
@@ -304,6 +306,7 @@ export default function DashboardOverview() {
                       {...params}
                       variant="standard"
                       placeholder={"Select Diagnosis (Optional)"}
+                      autoComplete="off"
                     />
                   )}
                   isOptionEqualToValue={(option, value) => {
@@ -324,7 +327,7 @@ export default function DashboardOverview() {
                     onChange={(newDate) => {
                       setParticipantInformation({...participantInformation, disease_start_time: newDate});
                     }}
-                    renderInput={(params) => <TextField {...params} fullWidth/>}
+                    renderInput={(params) => <TextField {...params} fullWidth autoComplete="off"/>}
                   />
                 </LocalizationProvider>
               </Grid>
