@@ -71,6 +71,8 @@ class PlatformUser(AbstractBaseUser):
     def create(email, password, user_name):
         user = PlatformUser.objects.create_user(email=email, password=password, user_name=user_name)
         institute = Institute.create(email)
+        if not institute:
+            institute = Institute.find(name=email)
         user.institute = institute
         user.save()
         institute.members.add(user)
