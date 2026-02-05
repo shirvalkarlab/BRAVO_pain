@@ -64,6 +64,7 @@ def queryDBSEvents(participant_uid, type=None, source_files=[], start_time=0, du
     if start_time > 0 and duration > 0:
         QueryDict["date__gte"] = start_time
         QueryDict["date__lte"] = start_time+duration
+    
     return [i.get_info(data=data) for i in models.DBSEvent.find_all(**QueryDict)]
         
 def addAnnotation(participant_uid, type, name, date, duration=0):

@@ -139,6 +139,31 @@ export default function GenericTimeline({data, availableChannels, annotations, h
             });
           }
         }
+      } else if (data[i].AnalysisType === "CustomizedSurveyData") {
+        let xData = [];
+        for (let t in data[i].Time) {
+          xData.push(new Date(data[i].Time[t]*1000));
+        }
+
+        for (let j in data[i].ChannelNames) {
+          const yData = [];
+          for (let t in data[i].Time) {
+            yData.push(data[i]["Data"][j][t]);
+          }
+          if ( yData.filter((a,i) => yData[i]).length === 0 ) continue;
+
+          lineSeries.push({
+            type: "scatter",
+            x: xData.filter((a,i) => yData[i]), y: yData.filter((a,i) => yData[i]),
+            options: {
+              id: data[i].ChannelNames[j],
+              color: "#000000",
+              hovertemplate: "%{y}<extra></extra>"
+            }, 
+            axName: data[i].ChannelNames[j]
+          });
+        }
+
       } else if (data[i].AnalysisType === "ChronicSpectrum") {
         for (let j in data[i].ChannelNames) {
           lineSeries.push({
@@ -292,6 +317,22 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           fig.setScaleType("linear", "y", ax);
           fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax);
         }
+      } else if (renderData[i].type === "scatter") {
+        if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
+        if (!renderData[i].options.hidden && ax) {
+          const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
+          if (currentMax > yLim[renderData[i].axName][1]) {
+            yLim[renderData[i].axName][1] = currentMax*1.1;
+          };
+          const currentMin = Math.min(renderData[i].y.filter((a) => a !== null));
+          if (currentMin < yLim[renderData[i].axName][0]) {
+            yLim[renderData[i].axName][0] = currentMin*1.1;
+          };
+          fig.setYlim(yLim[renderData[i].axName], ax);
+          fig.setScaleType("linear", "y", ax);
+          fig.scatter(renderData[i].x, renderData[i].y, renderData[i].options, ax);
+        }
+        
       } else if (renderData[i].type === "surf") {
         if (!renderData[i].options.hidden && ax) {
           fig.setScaleType("linear", "y", ax);
@@ -378,55 +419,8 @@ export default function GenericTimeline({data, availableChannels, annotations, h
 
   return (
     <Grid container spacing={2} sx={{marginTop: 1}}>
-      <Grid item xs={12} sx={{marginLeft: 5, marginRight: 5}}>
-        <Grid container spacing={2}>
-          {Object.keys(annotationState).map((name) => {
-            return <Grid item key={name} xs={6} sm={4} md={3} lg={2}>
-              <Card sx={{background: annotationState[name].show ? "" : "darkgrey"}}>
-              <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} px={2} py={1}>
-                <IconButton
-                  style={{padding: 0, marginRight: 3, borderStyle: "solid", borderColor: "#000000", borderWidth: 1, height: "100%"}} 
-                  onClick={(event) => setPopupState({item: name, anchorEl: event.currentTarget})}
-                >
-                  <img style={{background: annotationState[name].color, padding: 8, borderRadius: "50%"}}/>
-                </IconButton>
-                <Popover 
-                  open={popup.item == name}
-                  onClose={() => setPopupState({item: "", anchorEl: null})}
-                  anchorEl={popup.anchorEl}
-                  anchorOrigin={{
-                    vertical: 'bottom',
-                    horizontal: 'left',
-                  }}
-                  transformOrigin={{
-                    vertical: "top",
-                    horizontal: 'left',
-                  }}
-                  PaperProps={{sx: {boxShadow: "none"}}}
-                >
-                  <TwitterPicker color={annotationState[name].color} onChange={(color) => {
-                    setAnnotationState((annotationState) => {
-                      annotationState[name].color = color.hex;
-                      return {...annotationState}
-                    });
-                  }}/>
-                </Popover>
-                <MDTypography variant="h6" fontSize={15} color={"dark"} style={{cursor: "pointer"}} onClick={() => {
-                  setAnnotationState((annotationState) => {
-                    annotationState[name].show = !annotationState[name].show;
-                    return {...annotationState}
-                  });
-                }}>
-                  {name}
-                </MDTypography>
-              </MDBox>
-              </Card>
-            </Grid>
-          })}
-        </Grid>
-      </Grid>
       <Grid item xs={12}>
-        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 400*availableChannels.active.length+100, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}>
+        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 200*availableChannels.active.length+100, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}>
           <Menu
             open={contextMenu !== null}
             onClose={() => setContextMenu(null)}

@@ -275,7 +275,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                           </MDBox>
                         </Grid>
                         <Grid item xs={12} lg={12}>
-                          <GenericTimeline data={data} height={400} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
+                          <GenericTimeline data={data} height={150} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
                         </Grid>
                       </>
                     ) : (

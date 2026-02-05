@@ -25,6 +25,7 @@ import json
 import copy
 import pandas as pd
 from filelock import Timeout, FileLock
+import datetime
 
 import numpy as np
 from scipy import signal, stats, optimize
@@ -41,6 +42,7 @@ from modules.Fitbit import DataManager as FitbitDataManager
 from modules.OURA import DataManager as OuraDataManager
 from modules.Empatica import DataManager as EmpaticaDataManager
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation
+from modules.SurveyForms import RedcapForm
 #from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -2616,6 +2618,39 @@ def queryChronicTimeline(participant_uid, config):
 
         ChronicTimeline.append(Activity)
 
+    AllLinks = models.ParticipantLinkRel.find_all(participant=Participant)
+    for link in AllLinks:
+        form = link.record
+        
+        Activity = {
+            "AnalysisType": "CustomizedSurveyData",
+            "Time": [],
+            "ChannelNames": [],
+            "ChannelUnits": [],
+            "Data": [],
+        }
+
+        if form.record_type == "Redcap Linked Survey":
+            AllRecords = RedcapForm.queryRedcapFormRecords(Participant, form, recordId=link.link_code)
+            for pageId in range(len(form.record["FieldMapping"])):
+                for questionId in range(len(form.record["FieldMapping"][pageId]["questions"])):
+                    if form.record["FieldMapping"][pageId]["questions"][questionId]["text"] == "Time":
+                        for record in AllRecords:
+                            Activity["Time"].append(datetime.datetime.fromisoformat(record["Result"][pageId][questionId]).timestamp())
+                    else:
+                        Activity["ChannelNames"].append("[REDCap] " + form.name + " - " + form.record["FieldMapping"][pageId]["questions"][questionId]["text"])
+                        Activity["ChannelUnits"].append("")
+                        Responses = []
+                        for record in AllRecords:
+                            Responses.append(record["Result"][pageId][questionId])
+                        Activity["Data"].append(Responses)
+        else:
+            AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
+            AllRecords = [i.get_info() for i in AllRecords]
+            AllRecords.sort(key=lambda x: x["Date"])
+        
+        ChronicTimeline.append(Activity)
+        
     return ChronicTimeline, TimelineAnnotation
 
 def queryChronicTimelineData(participant_uid, data_ids, channel, config):
