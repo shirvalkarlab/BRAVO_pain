@@ -209,7 +209,6 @@ def createTherapyTimeline(TherapyHistory):
                     if len(AvailableTherapies) == 0:
                         continue
                     
-
                     UniqueDates = np.unique([AvailableTherapies[i]["Date"] for i in range(len(AvailableTherapies))])
                     for date in UniqueDates:
                         UniqueSources = np.unique([AvailableTherapies[i]["SourceId"] for i in range(len(AvailableTherapies)) if AvailableTherapies[i]["Date"] == date])
@@ -430,7 +429,7 @@ def queryElectrodeImpedances(participant):
     for impedance in ElectrodeImpedances:
         for device in DBSDevices:
             if len(impedance["Recording"]) > 0 and impedance["Recording"][0]["Device"] == device["Id"]:
-                impedance["DeviceHeritage"] = device["Heritage"]
+                impedance["DeviceHeritage"] = device["Name"]
 
     return ElectrodeImpedances
     
