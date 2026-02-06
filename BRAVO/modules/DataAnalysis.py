@@ -2103,7 +2103,6 @@ def calculateBurstParameters(envelop, fs):
         "Amplitude": burst_amplitudes,
     }
 
-
 def handlePowerSpectralEstimation(recording, data, config):
     Spectrum = handleTimeFrequencyAnalysis(data, config, recording=recording)
 
@@ -2333,6 +2332,17 @@ def queryChronicTimeline(participant_uid, config):
 
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
         Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
+        if not Recording:
+            Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
+            Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
+            Activity = uniqueListOfDicts(Activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
+            source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
+            source.save()
+            Recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
+            Recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + Recording.source.owner.uid + os.path.sep + Recording.uid + ".bdat"
+            Recording.hashed = Database.saveSourceFile(Activity, Recording.pointer)
+            Recording.save()
+        
         if Recording:
             ChronicNeuralActivity = Database.loadSourceFile(Recording.pointer, Recording.hashed)
 
@@ -2356,7 +2366,7 @@ def queryChronicTimeline(participant_uid, config):
                 }
 
                 ChronicTimeline.append(Activity)
-            
+    
     if models.Recording.include(source__in=SourceFiles, type__in=["AppleWatchData"]):
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["AppleWatchData"])
         for recording in Recordings:
