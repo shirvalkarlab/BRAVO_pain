@@ -201,7 +201,11 @@ function TimeSeriesAnalysis() {
           }
         }
         data.Signal.push(...response.data.Signal);
+        
         if (response.data.Therapy) {
+          if (!data.Therapy) {
+            data.Therapy = [];
+          }
           data.Therapy.push(...response.data.Therapy);
         }
         if (!data.Analysis.includes(analysis)) {

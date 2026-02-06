@@ -314,7 +314,7 @@ export default function DashboardOverview() {
                   }}
                   renderOption={(props, option) => <li {...props}>{option}</li>}
                   value={participantInformation.diagnosis}
-                  options={["Parkinson's Disease", "Essential Tremor", "Other"]}
+                  options={["Parkinson's Disease", "Essential Tremor", "SCA6", "Other"]}
                   onChange={(event, newValue) => setParticipantInformation({...participantInformation, diagnosis: newValue})}
                 />
               </Grid>
