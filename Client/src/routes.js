@@ -36,6 +36,7 @@ import { PiWavesBold } from "react-icons/pi";
 import { FcSurvey } from "react-icons/fc";
 
 // Images
+import DevicesOtherIcon from '@mui/icons-material/DevicesOther';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import DescriptionIcon from '@mui/icons-material/Description';
 import BoltIcon from '@mui/icons-material/Bolt';
@@ -70,6 +71,7 @@ const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMe
 const PredictTherapyParameters = lazy(() => import('views/Experimental/PredictTherapyParameters'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
+const TherapySummary = lazy(() => import('views/Reports/TherapySummary'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
 const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
@@ -216,6 +218,13 @@ const routes = {
         hide: true
       },
       {
+        key: "therapySummary",
+        name: "Therapy Summary",
+        icon: <BoltIcon />,
+        route: "/reports/therapy-summary/:participant_uid",
+        component: <TherapySummary />,
+      },
+      {
         key: "therapyHistory",
         name: "Therapy History",
         icon: <BoltIcon />,
@@ -244,10 +253,10 @@ const routes = {
         component: <ChronicNeuralActivity />,
       },
       {
-        key: "chronic-timeline",
-        name: "Generic Timeline Report",
-        icon: <TimelineIcon />,
-        route: "/reports/chronic-timeline/:participant_uid",
+        key: "multimodal-timeline-report",
+        name: "Multi-Modality Timeline Report",
+        icon: <DevicesOtherIcon />,
+        route: "/reports/multimodal-timeline-report/:participant_uid",
         component: <ChronicTimeline />,
       },
       {
