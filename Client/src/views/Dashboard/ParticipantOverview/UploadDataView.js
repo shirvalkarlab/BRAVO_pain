@@ -34,6 +34,7 @@ import MDInput from "components/MDInput";
 import MDButton from "components/MDButton";
 import DropzoneUploader from "components/DropzoneUploader";
 
+import DefaultUploader from "../UploadDataView/DefaultUploader";
 import MedtronicJSONUploader from "../UploadDataView/MedtronicJSONUploader";
 import AlphaOmegaMPXUploader from "../UploadDataView/AlphaOmegaMPXUploader";
 import HPFCSVUploader from "../UploadDataView/HPFCSVUploader";
@@ -77,7 +78,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
                 <TextField
                   {...params}
                   variant="standard"
-                  placeholder={"Select Data Type (Required)"}
+                  placeholder={"Select Data Type"}
                 />
               )}
               isOptionEqualToValue={(option, value) => {
@@ -85,12 +86,15 @@ function UploadDataView({show, participant_uid, onCancel}) {
               }}
               renderOption={(props, option) => <li {...props}>{option}</li>}
               value={uploadDataType}
-              options={["Medtronic JSON Files", "AlphaOmega MPX Files", "BRAVO Recording Structure (Binary)", 
+              options={["Default", "Medtronic JSON Files", "AlphaOmega MPX Files", "BRAVO Recording Structure (Binary)", 
                 "BRAVO Offline Synchronized Recordings", "HDF CSV Format", "Event Annotation CSV", "UF MDAT Files", ".MAT Data File", "3D Images"]}
-              onChange={(event, newValue) => setUploadDataType(newValue)}
+              onChange={(event, newValue) => setUploadDataType(newValue == "Default" ? "" : newValue)}
             />
           </Grid>
           <Grid item xs={12}>
+            {uploadDataType === "" ? (
+              <DefaultUploader institute={user.Institute} participant={participant_uid}/>
+            ) : null}
             {uploadDataType === "Medtronic JSON Files" ? (
               <MedtronicJSONUploader institute={user.Institute} participant={participant_uid}/>
             ) : null}
@@ -124,7 +128,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
               <MDButton color={"secondary"} style={{marginLeft: 10}} 
                 onClick={onCancel}
               >
-                Cancel
+                Close
               </MDButton>
             </MDBox>
           </Grid>

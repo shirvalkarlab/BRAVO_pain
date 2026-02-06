@@ -89,6 +89,40 @@ class DataUploadHandler(RestViews.APIView):
                 return Response(status=301)
         
         lockFile = source_file.pointer + ".lock"
+        if request.data["DataType"] == "DefaultType":
+            try:
+                if not request.data["ParticipantId"] == "batch-upload":
+                    if not Database.checkManagePermission(request.user, request.data["ParticipantId"], "Upload"):
+                        return Response(status=403)
+
+                    person = models.Participant.find(uid=request.data["ParticipantId"])
+                    if not person:
+                        return Response(status=400, data={"message": "Participant not found."})
+                    
+                    if not person.institute.uid == institute.uid:
+                        return Response(status=403)
+                    source_file.owner = person
+                    source_file.save()
+                
+                if source_file.pointer.endswith(".json"):
+                    source_file.metadata = {**source_file.metadata, **{"device_location": "", "automatic_deidentification": False, "infer_from_device": True, "automatic_concatenation": False}}
+                    DataCurator.MedtronicPerceptJSONDecoder(source_file, person=source_file.owner)
+                elif source_file.pointer.endswith(".mpx"):
+                    source_file.metadata = {**source_file.metadata, **{"device_location": "", "infer_from_device": True}}
+                    DataCurator.AlphaOmegaMPXDecoder(source_file, person=source_file.owner, name=request.data["File"].name)
+                elif source_file.pointer.endswith(".mdat"):
+                    DataCurator.UFMDATv2Decoder(source_file, person=source_file.owner)
+                elif source_file.pointer.endswith(".mat"):
+                    DataCurator.MATFileDecoder(source_file, person=source_file.owner)
+                else:
+                    raise Exception("File type not supported for Default Upload. Please specify the Data Type for this file.")
+
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
         if request.data["DataType"] == "MedtronicJSON":
             try:
                 if not request.data["ParticipantId"] == "batch-upload":
