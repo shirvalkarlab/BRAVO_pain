@@ -71,7 +71,6 @@ const InClinicMedicationCycle = lazy(() => import('views/Experimental/InClinicMe
 const PredictTherapyParameters = lazy(() => import('views/Experimental/PredictTherapyParameters'));
 
 const TherapyHistory = lazy(() => import('views/Reports/TherapyHistory'));
-const TherapySummary = lazy(() => import('views/Reports/TherapySummary'));
 const NeuralActivitySnapshot = lazy(() => import('views/Reports/NeuralActivitySnapshot'));
 const ParticipantEvents = lazy(() => import('views/Reports/ParticipantEvents'));
 const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects'));
@@ -216,13 +215,6 @@ const routes = {
         icon: <PersonIcon/>,
         noCollapse: false,
         hide: true
-      },
-      {
-        key: "therapySummary",
-        name: "Therapy Summary",
-        icon: <BoltIcon />,
-        route: "/reports/therapy-summary/:participant_uid",
-        component: <TherapySummary />,
       },
       {
         key: "therapyHistory",
