@@ -66,7 +66,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
     fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)})`, {fontSize: 15}, ax[0]);
     fig.setLayoutProps({
       bargap: 0.01,
-      hovermode: "xy",
+      hovermode: "x",
       dragmode: onSelection ? "select" : "zoom",
     });
 
@@ -140,6 +140,22 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
         hovertemplate: `  %{x} ${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)}<extra></extra>`,
         showlegend: false,
       }
+    }, {
+      type: "threshold", x: [], y: [],
+      options: {
+        linewidth: 2,
+        color: "#00942c",
+        hovertemplate: `  25% Threshold: %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)}<extra></extra>`,
+        showlegend: false
+      }
+    }, {
+      type: "threshold", x: [], y: [],
+      options: {
+        linewidth: 2,
+        color: "#00942c",
+        hovertemplate: `  75% Threshold: %{y:.2f} ${dictionaryLookup(dictionary.FigureStandardUnit, "AU", language)}<extra></extra>`,
+        showlegend: false
+      }
     }];
 
     let timePeriods = [0,0];
@@ -194,6 +210,17 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
       return false
     }
 
+    // Thresholds
+    let thresholdXData = [3600*10*1000, 3600*18*1000];
+    let thresholdYData = yData.filter((a,t) => inRange(xData[t],3600*14*1000,3600*4*1000));
+    if (thresholdYData.length > 5) {
+      let thresholds = math.quantileSeq(thresholdYData, [0.25, 0.75]);
+      graphSeries[4].x = thresholdXData.map((a) => new Date(a+timezoneOffset*60000));
+      graphSeries[4].y = [thresholds[0], thresholds[0]];
+      graphSeries[5].x = thresholdXData.map((a) => new Date(a+timezoneOffset*60000));
+      graphSeries[5].y = [thresholds[1], thresholds[1]];
+    }
+
     setCacheData({xData: xData.map((a) => a+timezoneOffset*60000), yData: yData, yStim: yStim});
 
     const window = 1200000;
@@ -201,6 +228,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
     for (let i = 0; i < defaultTimeArray.length; i++) {
       graphSeries[0].x.push(new Date(defaultTimeArray[i]+timezoneOffset*60000));
       graphSeries[1].x.push(new Date(defaultTimeArray[i]+timezoneOffset*60000));
+
       if (i == 0 || i == 144) {
         let windowedData = yData.filter((a,t) => inRange(xData[t],defaultTimeArray[0],window) || inRange(xData[t],defaultTimeArray[144],window));
         if (windowedData.length > 0) {
@@ -266,6 +294,8 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
         fig.setYlim([math.min(renderData[i].y) - 0.1, math.max(renderData[i].y) + 0.1], ax[1]);
 
         fig.setYlabel("Stimulation Amplitude (mA)", {fontSize: 15}, ax[1]);
+      } else if (renderData[i].type === "threshold" && !circadianState.histogram && !circadianState.eventCount) {
+        fig.plot(renderData[i].x, renderData[i].y, renderData[i].options, ax[0]);
       } else if (renderData[i].type === "bar" && circadianState.eventCount) {
         fig.bar(renderData[i].x, renderData[i].y, [], renderData[i].options, ax[1]);
         fig.setYlim([0, math.max(renderData[i].y) || 1], ax[1]);
@@ -313,7 +343,11 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
     if (!fig || !renderData) return;
     
     fig.traces = [];
+    try {
     refreshRender();
+    } catch (error) {
+      console.log(error);
+    }
     
     const ref = document.getElementById(figureTitle);
     if (ref) {
