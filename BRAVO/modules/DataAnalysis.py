@@ -1596,6 +1596,7 @@ def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
     Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
 
     df = pd.DataFrame(Data)
+    df["Time"] = df["Time"].astype(np.float64)
     return df
 
 def downloadChronicNeuralActivity(participant_uid, config):
@@ -1615,6 +1616,8 @@ def downloadChronicNeuralActivity(participant_uid, config):
         Data["RecordingConfig"].extend([Analysis["ChronicNeuralActivity"][i]["RecordingString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
 
     df = pd.DataFrame(Data)
+    if "Time" in df.columns:
+        df["Time"] = df["Time"].astype(np.float64)
     return df
 
 def getTherapyChanges(Analysis, key):
@@ -1781,6 +1784,8 @@ def downloadTherapeuticAnalysis(participant_uid, analysis_uid, config):
 
     Data["Time"] += Analysis["Signal"][i]["SignalSeries"]["StartTime"] + Analysis["Signal"][i]["Alignment"]
     df = pd.DataFrame(Data)
+    if "Time" in df.columns:
+        df["Time"] = df["Time"].astype(np.float64)
     return df
 
 def downsampleTimeDomainStreaming(data):
@@ -2216,12 +2221,12 @@ def queryNeuralActivitySnapshot(participant_uid, config):
         if "MedtronicPSD" in Data["Descriptor"].keys():
             for channel in Data["ChannelNames"]:
                 found = False
-                for psd in Data["Descriptor"]["MedtronicPSD"]:
-                    if psd and psd["Hemisphere"].split(".")[1]:
-                        if channel.startswith(psd["SensingElectrodes"].split(".")[1]):
-                            MedtronicPSDs.append(psd)
-                            found = True
-                            break
+                #for psd in Data["Descriptor"]["MedtronicPSD"]:
+                #    if psd and psd["Hemisphere"].split(".")[1]:
+                #        if channel.startswith(psd["SensingElectrodes"].split(".")[1]):
+                #            MedtronicPSDs.append(psd)
+                #            found = True
+                #            break
 
                 if not found:
                     MedtronicPSDs.append(None)
