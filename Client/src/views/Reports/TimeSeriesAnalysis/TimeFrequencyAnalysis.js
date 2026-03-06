@@ -247,8 +247,10 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           fig.setYlim([-renderData[i].ylim*1.1, renderData[i].ylim*1.1], subAx);
         } else if (renderData[i].type === "surf") {
           if (coloraxis.limit[0] === null) {
-            const range = Math.std(renderData[i].z)
-            const meanPower = Math.quantileSeq(renderData[i].z, [0.11, 0.99]);
+            //const range = Math.std(renderData[i].z)
+            //const meanPower = Math.quantileSeq(renderData[i].z, [0.11, 0.99]);
+            const meanPower = [-20, 20];
+            const range = 0;
             setColorAxis({...coloraxis, limit: [meanPower[0]+range, meanPower[1]+range], limit_temp: [meanPower[0]+range, meanPower[1]+range]});
           }
           const caxis = fig.createColorAxis({
