@@ -432,6 +432,19 @@ class BRAVOPlatformRequest:
             else:
                 raise Exception(f"Network Error: {response.status_code}")
 
+    def RequestAnalysisPipeline(self, request_type, participant_uid):
+        data = {"RequestType": request_type, "AnalysisName": request_type, "ParticipantId": participant_uid}
+        response = self.query("/api/queryAnalysisPipeline", data)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 301:
+            return True
+        else:
+            if response.status_code == 400:
+                raise Exception(f"Network Error: {response.json()}")
+            else:
+                raise Exception(f"Network Error: {response.status_code}")
+
     def RequestAIPrediction(self, request_type, data):
         data = {"RequestType": request_type, "AnalysisName": request_type, "Data": data}
         response = self.query("/api/requestAIPrediction", data)

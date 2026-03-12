@@ -16,6 +16,86 @@ DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 AnalysisScriptType = "ExtractSpectralFeaturesDuringSurvey"
 AnalysisMethodVersion = "1.0.0"
 
+def MovingAverageFilter(signal, window_size):
+    window = np.ones(window_size) / window_size
+    return np.convolve(signal, window, mode='same')
+
+def ExtractAperiodicComponents(Frequency, Power):
+    FrequencySelection = ((Frequency > 55) & (Frequency < 90)) | ((Frequency > 30) & (Frequency < 40)) 
+    YData = np.log10(Power[FrequencySelection])
+    XData = np.log10(Frequency[FrequencySelection])
+    coe = np.polyfit(XData, YData, 1)
+    AperiodicBaseline = np.polyval(coe, np.log10(Frequency))
+    for j in range(len(AperiodicBaseline)):
+        if np.isnan(AperiodicBaseline[-j-1]):
+            AperiodicBaseline[-j-1] = AperiodicBaseline[-j]
+    AperiodicBaseline = np.power(10,AperiodicBaseline)
+    return AperiodicBaseline
+
+def ExtractFTGPeak(Frequency, Power):
+    FrequencySelection = ((Frequency > 55) & (Frequency < 95))
+    GammaBand = Power[FrequencySelection,:]
+    GammaFluctuation = signal.detrend(np.mean(GammaBand, axis=1), type="linear")
+    GammaCI = np.zeros((GammaBand.shape[0],2))
+    for i in range(GammaBand.shape[0]):
+        GammaCI[i,:] = stats.t.interval(0.95, len(GammaFluctuation)-1, loc=GammaFluctuation[i], scale=np.std(GammaFluctuation))
+    
+    MaxGammaIndex = np.argmax(GammaCI[:,1])
+    GammaParameters = {"MaxGamma": GammaCI[MaxGammaIndex,:], "GammaFrequency": Frequency[FrequencySelection][MaxGammaIndex], "Significant": False}
+
+    GammaDetection = np.array(GammaCI[MaxGammaIndex,0] > GammaFluctuation, dtype=float)
+    StartPeak = np.where(np.diff(GammaDetection) == -1)[0]
+    EndPeak = np.where(np.diff(GammaDetection) == 1)[0]
+    if len(StartPeak) == 1 and len(EndPeak) == 1 and GammaCI[MaxGammaIndex,1] > 2:
+        GammaParameters["PeakStart"] = Frequency[FrequencySelection][StartPeak[0]]
+        GammaParameters["PeakEnd"] = Frequency[FrequencySelection][EndPeak[0]]
+        GammaParameters["Significant"] = True
+    return GammaParameters
+
+def find_peak(power):
+    peaks = []
+    peak_indexes = []
+    for i in range(1, len(power)-1):
+        if power[i] >= power[i-1] and power[i] > power[i+1]:
+            peaks.append(power[i])
+            peak_indexes.append(i)
+    return peaks, peak_indexes
+
+def ExtractBetaPeak(Frequency, Power):
+    LBetaPeak = (Frequency > 12) & (Frequency < 21)
+    HBetaPeak = (Frequency > 20) & (Frequency < 31)
+    LBetaPeakPower, LBetaIndex = find_peak(Power[LBetaPeak])
+    HBetaPeakPower, HBetaIndex = find_peak(Power[HBetaPeak])
+
+    Result = {
+        "LBeta_Peak_Power": 0,
+        "LBeta_Peak_Frequency": 0,
+        "HBeta_Peak_Power": 0,
+        "HBeta_Peak_Frequency": 0
+    }
+
+    if len(LBetaPeakPower) > 0:
+        MaxLBetaIndex = np.argmax(LBetaPeakPower)
+        Result["LBeta_Peak_Power"] = max(LBetaPeakPower)
+        Result["LBeta_Peak_Frequency"] = Frequency[LBetaPeak][LBetaIndex][MaxLBetaIndex]
+    if len(HBetaPeakPower) > 0:
+        MaxHBetaIndex = np.argmax(HBetaPeakPower)
+        Result["HBeta_Peak_Power"] = max(HBetaPeakPower)
+        Result["HBeta_Peak_Frequency"] = Frequency[HBetaPeak][HBetaIndex][MaxHBetaIndex]
+
+    return Result
+
+def ProcessCollection(collection, userConfig):
+    MeanPSD = collection["PowerSpectrum"]
+    StdPSD = collection["StdPower"]
+    Frequency = collection["Frequency"]
+    AperiodicComponent = ExtractAperiodicComponents(Frequency, MeanPSD)
+    NormalizedSpectrum = MeanPSD / AperiodicComponent.reshape(-1,1)
+    GammaParameters = ExtractFTGPeak(Frequency, NormalizedSpectrum)
+    collection["AperiodicComponent"] = AperiodicComponent
+    collection["FTGStats"] = GammaParameters
+    return collection
+
 def HandleRefreshAnalysis():
     Participants = [participant.get_info() for participant in models.Participant.find_all()]
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
@@ -59,42 +139,6 @@ def HandleRefreshAnalysis():
         }
     }})
     userConfig["APIAccess"] = True
-
-    def MovingAverageFilter(signal, window_size):
-        window = np.ones(window_size) / window_size
-        return np.convolve(signal, window, mode='same')
-
-    def ExtractAperiodicComponents(Frequency, Power):
-        FrequencySelection = ((Frequency > 55) & (Frequency < 90)) | ((Frequency > 30) & (Frequency < 40)) 
-        YData = np.log10(Power[FrequencySelection])
-        XData = np.log10(Frequency[FrequencySelection])
-        coe = np.polyfit(XData, YData, 1)
-        AperiodicBaseline = np.polyval(coe, np.log10(Frequency))
-        for j in range(len(AperiodicBaseline)):
-            if np.isnan(AperiodicBaseline[-j-1]):
-                AperiodicBaseline[-j-1] = AperiodicBaseline[-j]
-        AperiodicBaseline = np.power(10,AperiodicBaseline)
-        return AperiodicBaseline
-    
-    def ExtractFTGPeak(Frequency, Power):
-        FrequencySelection = ((Frequency > 55) & (Frequency < 95))
-        GammaBand = Power[FrequencySelection,:]
-        GammaFluctuation = signal.detrend(np.mean(GammaBand, axis=1), type="linear")
-        GammaCI = np.zeros((GammaBand.shape[0],2))
-        for i in range(GammaBand.shape[0]):
-            GammaCI[i,:] = stats.t.interval(0.95, len(GammaFluctuation)-1, loc=GammaFluctuation[i], scale=np.std(GammaFluctuation))
-        
-        MaxGammaIndex = np.argmax(GammaCI[:,1])
-        GammaParameters = {"MaxGamma": GammaCI[MaxGammaIndex,:], "GammaFrequency": Frequency[FrequencySelection][MaxGammaIndex], "Significant": False}
-
-        GammaDetection = np.array(GammaCI[MaxGammaIndex,0] > GammaFluctuation, dtype=float)
-        StartPeak = np.where(np.diff(GammaDetection) == -1)[0]
-        EndPeak = np.where(np.diff(GammaDetection) == 1)[0]
-        if len(StartPeak) == 1 and len(EndPeak) == 1 and GammaCI[MaxGammaIndex,1] > 2:
-            GammaParameters["PeakStart"] = Frequency[FrequencySelection][StartPeak[0]]
-            GammaParameters["PeakEnd"] = Frequency[FrequencySelection][EndPeak[0]]
-            GammaParameters["Significant"] = True
-        return GammaParameters
 
     for participant in Participants:
         Data = DataAnalysis.queryAvailableAnalyses(participant["Id"], "TimeSeriesAnalysis")
@@ -141,9 +185,9 @@ def HandleRefreshAnalysis():
                             
                             MeanPSD = MovingAverageFilter(MeanPSD, 5)
                             AperiodicComponent = ExtractAperiodicComponents(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], MeanPSD)
-
                             NormalizedSpectrum = Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Power"] / AperiodicComponent.reshape(-1,1)
                             GammaParameters = ExtractFTGPeak(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], NormalizedSpectrum)
+                            BetaParameters = ExtractBetaPeak(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], MeanPSD)
 
                             collection = {
                                 "ParticipantId": participant["Id"],
@@ -154,7 +198,8 @@ def HandleRefreshAnalysis():
                                 "StdPower": StdPSD,
                                 "Frequency": Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"],
                                 "AperiodicComponent": AperiodicComponent,
-                                "FTGStats": GammaParameters
+                                "FTGStats": GammaParameters,
+                                "BetaStats": BetaParameters
                             }
                             RecordingCollections.append(collection)
 
@@ -162,6 +207,85 @@ def HandleRefreshAnalysis():
     source_file.metadata["Version"] = AnalysisMethodVersion
     source_file.hashed = hashed
     source_file.save()
+
+def ProcessParticipant(participantId):
+    RecordingCollections = []
+    
+    userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+        "TimeSeriesRecording": {
+            "StandardFilter": {
+                "value": "Butterworth 1-100Hz"
+            },
+            "CardiacFilter": {
+                "value": "No Filter"
+            },
+            "SpectrogramMethod": {
+                "value": "Welch's Periodogram"
+            }
+        }
+    }})
+    userConfig["APIAccess"] = True
+
+    Data = DataAnalysis.queryAvailableAnalyses(participantId, "TimeSeriesAnalysis")
+    Data["Recordings"].sort(key=lambda x: x["Date"])
+    ChannelsIncluded = []
+    for i in range(len(Data["Recordings"])):
+        if Data["Recordings"][i]["Timezone"] == "":
+            Data["Recordings"][i]["Timezone"] = "UTC-04:00"
+        RecordingDate = datetime.datetime.fromtimestamp(Data["Recordings"][i]["Date"]).astimezone(utc_offset_to_timezone(Data["Recordings"][i]["Timezone"])).strftime("%Y-%m-%d")
+        Data["Recordings"][i]["LocalDate"] = RecordingDate
+
+        if "DBS Snapshots" == Data["Recordings"][i]["Type"]:
+            ToLoad = True
+            for j in range(len(Data["Recordings"][i]["Metadata"]["ChannelNames"])):
+                if not Data["Recordings"][i]["Metadata"]["ChannelNames"][j] in ChannelsIncluded:
+                    ToLoad = True
+
+            if not ToLoad:
+                continue 
+
+            Analysis = DataAnalysis.processTimeseriesAnalysis(participantId, Data["Recordings"][i]["Id"], userConfig)
+            for recording in Analysis["Signal"]:
+                for j in range(len(recording["SignalSeries"]["ChannelNames"])):
+                    if Data["Recordings"][i]["Metadata"]["ChannelNames"][j] in ChannelsIncluded:
+                        continue
+                    ChannelsIncluded.append(Data["Recordings"][i]["Metadata"]["ChannelNames"][j])
+
+                    collection = {
+                        "ParticipantId": participantId,
+                        "Contact": Data["Recordings"][i]["Metadata"]["ChannelNames"][j],
+                        "Date": RecordingDate,
+                    }
+
+                    MeanPSD = np.nanmedian(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Power"],axis=1)
+
+                    if np.any(np.isnan(MeanPSD)):
+                        continue
+
+                    StdPSD = np.nanstd(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Power"],axis=1)
+                    if np.any(StdPSD == 0):
+                        continue 
+                    
+                    MeanPSD = MovingAverageFilter(MeanPSD, 5)
+                    AperiodicComponent = ExtractAperiodicComponents(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], MeanPSD)
+                    NormalizedSpectrum = Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Power"] / AperiodicComponent.reshape(-1,1)
+                    GammaParameters = ExtractFTGPeak(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], NormalizedSpectrum)
+                    BetaParameters = ExtractBetaPeak(Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"], MeanPSD)
+
+                    collection = {
+                        "ParticipantId": participantId,
+                        "Contact": Data["Recordings"][i]["Metadata"]["ChannelNames"][j],
+                        "Date": RecordingDate,
+                        "PowerSpectrum": MeanPSD,
+                        "StdPower": StdPSD,
+                        "Frequency": Analysis["Signal"][0]["SignalSeries"]["Spectrum"][j]["Frequency"],
+                        "AperiodicComponent": AperiodicComponent,
+                        "FTGStats": GammaParameters,
+                        "BetaStats": BetaParameters
+                    }
+                    RecordingCollections.append(collection)
+
+    return RecordingCollections
 
 def QueryAnalysisResultTable(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={

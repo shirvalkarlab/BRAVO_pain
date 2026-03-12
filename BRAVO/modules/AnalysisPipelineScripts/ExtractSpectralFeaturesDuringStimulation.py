@@ -405,6 +405,78 @@ def HandleRefreshAnalysis():
     source_file.hashed = hashed
     source_file.save()
 
+def ProcessParticipant(participantId):
+    RecordingCollections = []
+    Data = DataAnalysis.queryAvailableAnalyses(participantId, "TimeSeriesAnalysis")
+    Dates = {}
+    for i in range(len(Data["Recordings"])):
+        if Data["Recordings"][i]["Timezone"] == "":
+            Data["Recordings"][i]["Timezone"] = "UTC-04:00"
+        RecordingDate = datetime.datetime.fromtimestamp(Data["Recordings"][i]["Date"]).astimezone(utc_offset_to_timezone(Data["Recordings"][i]["Timezone"])).strftime("%Y-%m-%d")
+        Data["Recordings"][i]["LocalDate"] = RecordingDate
+        if "Therapy" in Data["Recordings"][i].keys():
+            for j in range(len(Data["Recordings"][i]["Therapy"])):
+                TherapyParameter = str(Data["Recordings"][i]["Therapy"][j]["Frequency"]) + "Hz " + str(Data["Recordings"][i]["Therapy"][j]["Pulsewidth"]) + "uSec"
+
+                if not Data["Recordings"][i]["Therapy"][j]["Contact"] in Dates.keys():
+                    Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]] = {}
+                
+                if not TherapyParameter in Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]].keys():
+                    Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter] = {}
+                    
+                if not RecordingDate in Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter].keys():
+                    Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter][RecordingDate] = []
+                
+                Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter][RecordingDate].extend(Data["Recordings"][i]["Therapy"][j]["UniqueAmplitudes"])
+
+    for contact in Dates.keys():
+        for therapyParam in Dates[contact].keys():
+            for date in Dates[contact][therapyParam].keys():
+                Dates[contact][therapyParam][date] = np.unique(Dates[contact][therapyParam][date])
+                if len(Dates[contact][therapyParam][date]) > 3 and 0 in Dates[contact][therapyParam][date]:
+                    Recordings = []
+                    for i in range(len(Data["Recordings"])):
+                        if "Therapy" in Data["Recordings"][i].keys():
+                            if Data["Recordings"][i]["LocalDate"] == date:
+                                for j in range(len(Data["Recordings"][i]["Therapy"])):
+                                    if Data["Recordings"][i]["Therapy"][j]["Contact"] == contact:
+                                        TherapyParameter = str(Data["Recordings"][i]["Therapy"][j]["Frequency"]) + "Hz " + str(Data["Recordings"][i]["Therapy"][j]["Pulsewidth"]) + "uSec"
+                                        if TherapyParameter == therapyParam:
+                                            Recordings.append({
+                                                "TimeSeries": Data["Recordings"][i]["Id"],
+                                                "Therapy": Data["Recordings"][i]["Therapy"][j]["Id"]
+                                            })
+
+                    collection = {
+                        "ParticipantId": participantId,
+                        "Contact": contact,
+                        "Date": date,
+                        "TherapyParameters": therapyParam,
+                        "UniqueAmplitudes": Dates[contact][therapyParam][date],
+                        "Recordings": Recordings
+                    }
+                    
+                    RecordingCollections.append(collection)
+    
+    userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+        "TimeSeriesRecording": {
+            "StandardFilter": {
+                "value": "Butterworth 1-100Hz"
+            },
+            "CardiacFilter": {
+                "value": "No Filter"
+            },
+            "SpectrogramMethod": {
+                "value": "Welch's Periodogram"
+            }
+        }
+    }})
+    userConfig["APIAccess"] = True
+    for collection in RecordingCollections:
+        collection = ProcessCollection(collection, userConfig)
+    
+    return RecordingCollections
+
 def QueryAnalysisResultTable(Participants):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
         "User": "Admin",

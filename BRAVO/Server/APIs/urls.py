@@ -89,6 +89,7 @@ urlpatterns = [
     path('requestAIPrediction', AIModels.RequestPrediction.as_view()),
     
     path('queryGroupAnalysis', GroupAnalysis.QueryGroupAnalysis.as_view()),
+    path('queryAnalysisPipeline', GroupAnalysis.QueryAnalysisPipeline.as_view()),
     path('queryAsyncJobQueue', AsyncJobScheduling.QueryAsyncJobQueue.as_view()),
     
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
