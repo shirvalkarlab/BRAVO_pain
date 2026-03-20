@@ -1095,7 +1095,7 @@ def handleCustomTimeFrequencyAnalysis(Data, config):
                     Spectrum = SPU.welchSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"], frequency_resolution=frequencyResolution)
                     Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                 elif config["Configurations"][0]["Value"] == "Autoregressive Model":
-                    Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=frequencyResolution, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
+                    Spectrum = SPU.autoRegressiveSpectrogram(data["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=frequencyResolution, fs=data["SamplingRate"], order=int(data["SamplingRate"]/10))
                     Spectrum["Missing"] = SPU.calculateMissingLabel(data["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                 data["Spectrum"].append({**Spectrum, **{"Method": config["Configurations"][0]["Value"], 
                                                         "Channel": data["ChannelNames"][Channel], 
@@ -1109,7 +1109,7 @@ def handleCustomTimeFrequencyAnalysis(Data, config):
                         Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                         
                     elif config["Configurations"][0]["Value"] == "Autoregressive Model":
-                        Spectrum = SPU.autoregressiveSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]*0.2))
+                        Spectrum = SPU.autoRegressiveSpectrogram(data["Epochs"][i]["Data"][:,Channel], window=windowSec, overlap=overlapSec, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]/10))
                         Spectrum["Missing"] = SPU.calculateMissingLabel(data["Epochs"][i]["Missing"][:,Channel], window=windowSec, overlap=overlapSec, fs=data["SamplingRate"])
                     data["Spectrum"].append({**Spectrum,  **{"Method": config["Configurations"][0]["Value"], 
                                                              "Channel": data["ChannelNames"][Channel], 
@@ -1936,7 +1936,7 @@ def handleTimeFrequencyAnalysis(data, config, recording=None):
             Spectrum["Time"] = Spectrum["Time"][::int(data["SamplingRate"]/2)] + 0.5
 
         elif config["SpectrogramMethod"] == "Autoregressive Model (Yule-Walker)":
-            Spectrum = SPU.autoregressiveSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"], order=30)
+            Spectrum = SPU.autoRegressiveSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"], order=int(data["SamplingRate"]/10))
 
         else: # Default Welch's Periodogram
             Spectrum = SPU.welchSpectrogram(data["Data"][:,i], window=1.0, overlap=0.5, frequency_resolution=0.5, fs=data["SamplingRate"])
@@ -2429,8 +2429,11 @@ def queryChronicTimeline(participant_uid, config):
                 for i in range(len(Data[key])):
                     if len(Data[key][i]["Data"]) > 0:
                         for j in range(len(Data[key][i]["ChannelNames"])):
-                            chanIndex = Activity["ChannelNames"].index("[Fitbit] " + key + " " + Data[key][i]["ChannelNames"][j])
-                            Activity["Data"][chanIndex, Count] = Data[key][i]["Data"][0][j]
+                            try:
+                                chanIndex = Activity["ChannelNames"].index("[Fitbit] " + key + " " + Data[key][i]["ChannelNames"][j])
+                                Activity["Data"][chanIndex, Count] = Data[key][i]["Data"][0][j]
+                            except Exception as e:
+                                pass
                         Count += 1
 
                 ChronicTimeline.append(Activity)

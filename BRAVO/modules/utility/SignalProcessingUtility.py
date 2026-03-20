@@ -5,8 +5,8 @@
 @date: Fri Oct 17 2020
 """
 
-from spectrum import pyule
 import numpy as np
+from scipy.linalg import solve_toeplitz
 import scipy.signal as signal
 import pywt
 import scipy.stats as stats
@@ -303,20 +303,32 @@ def normalizeSpectrogram(data, label, axis=0, log=False):
                 
     return normData
 
-def autoregressiveSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, fs=100, order=50):
-    configuration = {"Window": window, "Overlap": overlap}
-    window = int(window * fs)
-    overlap = int(overlap * fs)
-    NFFT = int(fs / frequency_resolution)
-    epochs = getIndices(len(data),window,overlap)
-    frequency = np.array(pyule(np.array(1),order,NFFT=NFFT, sampling=fs).frequencies())
-    spectrum = np.ndarray((len(frequency), len(epochs)))
-    for index in range(len(epochs)):
-        p = pyule(data[epochs[index]:epochs[index]+window], order, NFFT=NFFT, sampling=fs)
-        spectrum[:,index] = p.psd
-    time = (epochs + window) / fs
-    
-    return dict({"Time": time, "Frequency": frequency, "Power": spectrum, "logPower": 10*np.log10(spectrum), "Config": configuration})
+def estimateARCoefficients(x, p):
+    x = np.asarray(x, dtype=float) - np.mean(x)
+    n = len(x)
+    acov = np.correlate(x, x, mode='full')[n-1:] / n
+    r_col = acov[:p]
+    rhs = acov[1:p+1]
+    phi = solve_toeplitz((r_col, r_col), rhs)
+    sigma2 = acov[0] - np.dot(phi, rhs)
+    return phi, sigma2
+
+def autoregressivePSD(phi, sigma2, fs=250, nfft=256):
+    a = np.concatenate([[1.0], -np.asarray(phi, dtype=float)])
+    freq, h = signal.freqz([1.0], a, worN=nfft, fs=fs)
+    psd = sigma2 * (np.abs(h) ** 2) / float(fs)
+    psd *= 2
+    return freq, psd
+
+def estimateOrderByBIC(x, max_order):
+    bic = np.zeros(max_order)
+    for p in range(1, max_order+1):
+        phi, sigma2 = estimateARCoefficients(x, p)
+        bic[p-1] = np.log(len(x))*p + len(x) * np.log(sigma2)
+        if p > 1 and bic[p-1] > bic[p-2]:
+            return p-1
+        
+    return np.argmin(bic) + 1
 
 def MedtronicPSD(data, packets=[24,38,25,38], fs=250):
     window = 256
@@ -351,6 +363,26 @@ def defaultSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, 
     NFFT = int(fs / frequency_resolution)
     frequency, time, spectrum = signal.spectrogram(data, window="hamming", nperseg=window, noverlap=overlap, nfft=NFFT, fs=fs)
     return dict({"Time": time, "Frequency": frequency, "Power": np.abs(spectrum), "logPower": 10*np.log10(np.abs(spectrum)), "Config": configuration})
+
+def autoRegressiveSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, max_frequency=100, fs=100, order=0):
+    configuration = {"Window": window, "Overlap": overlap}
+    window = int(window * fs)
+    overlap = int(overlap * fs)
+    NFFT = int(fs / frequency_resolution)
+    epochs = getIndices(len(data),window,overlap)
+    
+    if order == 0:
+        order = estimateOrderByBIC(data, int(fs / 5))
+    
+    for index in range(len(epochs)):
+        phi, sigma2 = estimateARCoefficients(data[epochs[index]:epochs[index]+window], order)
+        frequency, p = autoregressivePSD(phi, sigma2, fs=fs, nfft=NFFT)
+        if index == 0:
+            spectrum = np.ndarray((len(frequency), len(epochs)))
+        spectrum[:,index] = p
+    time = (epochs + window) / fs
+    
+    return dict({"Time": time, "Frequency": frequency, "Power": spectrum, "logPower": 10*np.log10(spectrum), "Config": configuration})
 
 def welchSpectrogram(data, window=2.0, overlap=1.0, frequency_resolution=0.5, max_frequency=100, fs=100):
     configuration = {"Window": window, "Overlap": overlap}

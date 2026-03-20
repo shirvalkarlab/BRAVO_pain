@@ -86,7 +86,9 @@ function SnapshotPSDs({dataToRender, figureTitle}) {
 
     let graphSeries = [];
     for (let i in dataToRender) {
-      const ylim = math.quantileSeq(dataToRender[i].Power, [0.25, 1]).map((a) => Math.round(Math.log10(a)));
+      let ylim = math.quantileSeq(dataToRender[i].Power, [0.25, 1]);
+      ylim[0] = Math.floor(Math.log10(ylim[0]));
+      ylim[1] = Math.ceil(Math.log10(ylim[1]));
       graphSeries.push({
         type: "line", x: dataToRender[i].Frequency, y: dataToRender[i].Power, error_y: dataToRender[i].stdPower,
         ylim: ylim,

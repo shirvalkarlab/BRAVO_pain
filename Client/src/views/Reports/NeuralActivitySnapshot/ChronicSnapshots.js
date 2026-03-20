@@ -104,7 +104,9 @@ function ChronicSnapshots({dataToRender, figureTitle}) {
       const allPSDs = dataToRender.filter((a) => a.Date == uniqueDates[d].label).map((a) => a.Power);
       const PSD = math.mean(math.matrix(allPSDs),0);
       const stdPSD = math.std(math.matrix(allPSDs),0);
-      const ylim = math.quantileSeq(PSD._data, [0.25, 1]).map((a) => Math.round(Math.log10(a)));
+      let ylim = math.quantileSeq(PSD._data, [0.25, 1]);
+      ylim[0] = Math.floor(Math.log10(ylim[0]));
+      ylim[1] = Math.ceil(Math.log10(ylim[1]));
       graphSeries.push({
         type: "line", x: dataToRender[0].Frequency, y: PSD._data, error_y: stdPSD._data.map((a) => a / math.sqrt(allPSDs.length)),
         ylim: ylim,

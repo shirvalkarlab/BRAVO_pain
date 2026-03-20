@@ -191,7 +191,9 @@ function BurstDynamics({dataToRender, participant_uid, annotations, figureTitle}
           for (let annotation in cacheData[channel]) {
             if (cacheData[channel][annotation].power) {
               counter += 1;
-              const ylim = math.quantileSeq(math.abs(math.matrix(cacheData[channel][annotation].power)), [0.25, 1]).map((a) => Math.round(Math.log10(a)));
+              let ylim = math.quantileSeq(math.abs(math.matrix(cacheData[channel][annotation].power)), [0.25, 1]);
+              ylim[0] = Math.floor(Math.log10(ylim[0]));
+              ylim[1] = Math.ceil(Math.log10(ylim[1]));
               graphSeries.push({
                 type: "line",
                 x: cacheData[channel][annotation].freq, y: math.mean(cacheData[channel][annotation].power, 1)._data, error_y: math.std(cacheData[channel][annotation].power, 1)._data.map((a) => a/math.sqrt(cacheData[channel][annotation].power._size[1])),

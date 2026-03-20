@@ -149,7 +149,7 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
               );
             })
           });
-          if (selected_data[0].length > 0) {
+          if (selected_data[0].length > 50) {
             cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].freq = dataToRender.Signal[i].SignalSeries.Spectrum.Frequency;
             cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].power = math.matrix(selected_data);
             cacheData[dataToRender.Signal[i].SignalSeries.ChannelNames][parameter][stage].state = therapySeries[parameter][stage].state;
@@ -191,7 +191,9 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
             
             for (let stage in cacheData[label][channel][parameter]) {
               const stageColor = colorMapper(parseFloat(cacheData[label][channel][parameter][stage].State)*10);
-              const ylim = math.quantileSeq(math.abs(math.matrix(cacheData[label][channel][parameter][stage].MeanPower)), [0.25, 1]).map((a) => Math.round(Math.log10(a)));
+              let ylim = math.quantileSeq(math.abs(math.matrix(cacheData[label][channel][parameter][stage].MeanPower)), [0.25, 1]);
+              ylim[0] = Math.floor(Math.log10(ylim[0]));
+              ylim[1] = Math.ceil(Math.log10(ylim[1]));
               graphSeries.push({
                 type: "line",
                 x: cacheData[label][channel][parameter][stage].Frequency, y: cacheData[label][channel][parameter][stage].MeanPower, error_y: cacheData[label][channel][parameter][stage].StdErrPower,
@@ -267,7 +269,9 @@ function StimulationPSD({dataToRender, activeChannels, onRequestServerAnalysis, 
             }
 
             if (matrix && frequency) {
-              const ylim = math.quantileSeq(math.abs(matrix), [0.25, 1]).map((a) => Math.round(Math.log10(a)));
+              let ylim = math.quantileSeq(math.abs(matrix), [0.25, 1]);
+              ylim[0] = Math.floor(Math.log10(ylim[0]));
+              ylim[1] = Math.ceil(Math.log10(ylim[1]));
               graphSeries.push({
                 type: "line",
                 x: frequency, y: math.mean(matrix, 1)._data, error_y: math.std(matrix, 1)._data.map((a) => a/math.sqrt(math.size(matrix)._data[1])),
