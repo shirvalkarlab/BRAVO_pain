@@ -329,7 +329,11 @@ def HandleRefreshAnalysis():
     RecordingCollections = []
 
     for participant in Participants:
-        Data = DataAnalysis.queryAvailableAnalyses(participant["Id"], "TimeSeriesAnalysis")
+        try:
+            Data = DataAnalysis.queryAvailableAnalyses(participant["Id"], "TimeSeriesAnalysis")
+        except Exception as e:
+            print(f"Error occurred while querying available analyses for participant {participant['Id']}: {e}")
+            continue
         Dates = {}
         for i in range(len(Data["Recordings"])):
             if Data["Recordings"][i]["Timezone"] == "":
@@ -548,7 +552,7 @@ def SetExpertLabel(ParticipantId, Contact, Label):
     source_file.save()
     return True
 
-def QueryAnalysisResultRaw(Participants):
+def QueryAnalysisResultRaw(Participants, refresh=False):
     source_file = models.SourceFile.find(type=AnalysisScriptType, metadata={
         "User": "Admin",
         "Version": AnalysisMethodVersion
@@ -559,7 +563,27 @@ def QueryAnalysisResultRaw(Participants):
     ParticipantIds = [participant["Id"] for participant in Participants]
     RecordingCollections = Database.loadSourceFile(source_file.pointer, source_file.hashed)
     RecordingCollections = [collection for collection in RecordingCollections if collection["ParticipantId"] in ParticipantIds]
-    
+
+    if refresh:
+        userConfig, _ = Database.retrieveProcessingSettings({"ProcessingConfiguration": {
+            "TimeSeriesRecording": {
+                "StandardFilter": {
+                    "value": "Butterworth 1-100Hz"
+                },
+                "CardiacFilter": {
+                    "value": "No Filter"
+                },
+                "SpectrogramMethod": {
+                    "value": "Welch's Periodogram"
+                }
+            }
+        }})
+        userConfig["APIAccess"] = True
+
+        for collection in RecordingCollections:
+            print(collection["ParticipantId"] + " " + collection["Contact"])
+            collection = ProcessCollection(collection, userConfig)
+        
     return pickle.dumps(RecordingCollections)
 
 def CommandLineAsyncUpdate():
