@@ -355,6 +355,9 @@ def HandleRefreshAnalysis():
                     if not RecordingDate in Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter].keys():
                         Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter][RecordingDate] = []
                     
+                    if not "UniqueAmplitudes" in Data["Recordings"][i]["Therapy"][j].keys():
+                        Data["Recordings"][i]["Therapy"][j]["UniqueAmplitudes"] = []
+                        
                     Dates[Data["Recordings"][i]["Therapy"][j]["Contact"]][TherapyParameter][RecordingDate].extend(Data["Recordings"][i]["Therapy"][j]["UniqueAmplitudes"])
 
         for contact in Dates.keys():
