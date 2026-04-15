@@ -242,10 +242,11 @@ def createTherapyTimeline(TherapyHistory):
                                 for therapy in UniqueSettings:
                                     for j in range(len(therapy["StimulationSettings"])):
                                         if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
+                                            DefinedTherapy["GroupType"] = therapy["GroupType"]
                                             KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
                                 DefinedTherapy["Adaptive"].append(KnownSettings)
                                 DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
-                            
+
                             DefinedTherapy["TherapyIds"] = list(np.unique(DefinedTherapy["TherapyIds"]))
                             TherapyTimeline[n]["Therapies"][g]["Processed"].append(DefinedTherapy)
                         

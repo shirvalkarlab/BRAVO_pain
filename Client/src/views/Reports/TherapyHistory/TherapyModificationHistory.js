@@ -236,7 +236,7 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
       config.Adaptive[i] = config.Adaptive[i].filter((a,j) => config.Stimulation[i][j].Electrode.Target.split(" ")[0] == config.Electrodes[i].Target.split(" ")[0]);
       config.Stimulation[i] = config.Stimulation[i].filter((a) => a.Electrode.Target.split(" ")[0] == config.Electrodes[i].Target.split(" ")[0]);
     }
-
+    
     return (
       <MDBox px={2} pt={1} pb={2}>
         <MDTypography variant={"h6"} fontWeight={"bold"}>
@@ -261,6 +261,11 @@ function TherapyModificationHistory({therapyHistoryRaw, device, viewConfiguratio
         <MDTypography variant={"h6"} fontWeight={"bold"}>
           {"Therapy Settings After Visit:"}
         </MDTypography>
+        {config.GroupType == "Active" ? (
+        <MDTypography variant={"h5"} fontWeight={"bold"} color={"error"}>
+          {"(Active)"}
+        </MDTypography>
+        ) : null}
         {getTherapySettings(config, 0)}
         {getTherapySettings(config, 1)}
       </MDBox>
