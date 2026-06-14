@@ -587,7 +587,54 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
-        
+
+
+class QueryBiomarkerAnalysis(RestViews.APIView):
+    """
+    API View for pain-biomarker analysis (Shirvalkar Lab Biomarkers module).
+
+    **URL:** ``/queryBiomarkerAnalysis``  **Methods:** POST
+
+    Computes the selectable-source biomarker timeline (time-domain streaming PSD<->pain and/or
+    the ~10-min chronic LFP threshold detector) for a participant, aligned to REDCap PROs, and
+    returns the unified "combined" timeline the React Biomarkers card plots.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param source: "timedomain" | "chronic" | "both" (default "both")
+    :param ProcessedPRO: optional list of PRO record dicts (else REDCap env vars are used)
+    :param RedcapRecordId: optional REDCap record_id filter
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface the error as a friendly message it can render.
+            return Response(status=200, data={
+                "source": request.data.get("source", "both"),
+                "channels": [], "timeline": [], "summary": {},
+                "message": "Biomarker computation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryBurstAnalysis(RestViews.APIView):
     """
     API View for neural burst analysis. 

@@ -21,3 +21,4 @@ waitress==3.0.2
 setuptools==75.8.0
 pywavelets==1.8.0
 nibabel==5.3.2
+PyCap==2.6.0  # REDCap PRO pull (modules/Biomarkers/routines/redcap_client.py)

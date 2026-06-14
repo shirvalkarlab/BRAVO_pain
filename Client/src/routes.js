@@ -77,6 +77,7 @@ const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects')
 const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
+const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
@@ -250,6 +251,13 @@ const routes = {
         icon: <DevicesOtherIcon />,
         route: "/reports/multimodal-timeline-report/:participant_uid",
         component: <ChronicTimeline />,
+      },
+      {
+        key: "biomarkers",
+        name: "Pain Biomarkers",
+        icon: <TimelineIcon />,
+        route: "/reports/biomarkers/:participant_uid",
+        component: <Biomarkers />,
       },
       {
         key: "events",
