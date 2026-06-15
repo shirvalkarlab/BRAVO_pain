@@ -21,7 +21,9 @@ from Server import models
 from modules import Database
 
 from . import pipeline
+from . import adapter
 from .routines import redcap_client
+from .routines import analytics
 
 # DB recording types that decode to 250 Hz time-domain LFP and to the ~10-min chronic trend.
 TIMEDOMAIN_TYPES = ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]
@@ -94,21 +96,26 @@ def _demo_inputs():
     chan_order = ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]
     rng = np.random.default_rng(0)
 
-    # Streaming time-domain recordings, one every 2 days.
+    days = 14
+
+    # Streaming time-domain recordings, ONE PER DAY, with 30 Hz power scaling with that day's
+    # pain (even days = high). So the streaming PSD<->pain correlation is real: the spectrum
+    # peaks near 30 Hz and the selected-band biomarker series tracks pain across sessions.
     recordings = []
-    for k in range(6):
+    for d in range(days):
+        pain = 8.0 if d % 2 == 0 else 2.0
         n = int(8 * fs)
         t = np.arange(n) / fs
-        ch0 = np.sin(2 * np.pi * 20 * t) + 0.3 * rng.standard_normal(n)
-        ch1 = np.sin(2 * np.pi * 30 * t) + 0.3 * rng.standard_normal(n)
+        amp30 = 1.0 + 0.15 * pain  # 30 Hz amplitude grows with pain
+        ch0 = np.sin(2 * np.pi * 20 * t) + 0.3 * rng.standard_normal(n)          # 20 Hz, pain-independent
+        ch1 = amp30 * np.sin(2 * np.pi * 30 * t) + 0.3 * rng.standard_normal(n)  # 30 Hz, ∝ pain
         recordings.append({
             "SamplingRate": fs, "ChannelNames": list(chan_order),
             "Data": np.column_stack([ch0, ch1]),
-            "StartTime": midnight + (2 * k) * 86_400, "Duration": n / fs,
+            "StartTime": midnight + d * 86_400 + 12 * 3_600, "Duration": n / fs,
         })
 
-    # Chronic ~10-min trend over 14 days (sampled every 2 h here).
-    days = 14
+    # Chronic ~10-min trend over the same days (sampled every 2 h here).
     times, lfp, amp = [], [], []
     for d in range(days):
         high = (d % 2 == 0)
@@ -136,9 +143,38 @@ def _demo_run(source):
     ch = chronic if source in ("chronic", "both") else None
     run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
                                  train_days=3, gap_days=1, test_days=2)
-    out = _serialize_run(run)
+    out = _serialize_run(run, _compute_analytics(run, ch, pro))
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
     return out
+
+
+def _compute_analytics(run, chronic, pro_df, label_metric="nrs"):
+    """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
+    cluster scatter, and the streaming correlation spectrum). Each piece is guarded so an
+    analytics failure never breaks the main timeline response.
+    """
+    result = {"timedomain": None, "chronic": None}
+
+    td = run.get("timedomain")
+    if td is not None:
+        try:
+            result["timedomain"] = {"corr_spectrum": analytics.corr_spectrum(td["detail"])}
+        except Exception as e:
+            result["timedomain"] = {"error": str(e)}
+
+    if chronic is not None and pro_df is not None and len(pro_df) > 0:
+        try:
+            cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric)
+            result["chronic"] = {
+                "sliding_window": analytics.sliding_window_analytics(cv_df),
+                "roc": analytics.roc_analysis(cv_df),
+                "lfp_distribution": analytics.lfp_distribution(cv_df),
+                "cluster_scatter": analytics.cluster_scatter(cv_df),
+            }
+        except Exception as e:
+            result["chronic"] = {"error": str(e)}
+
+    return result
 
 
 def run_for_participant(request_data):
@@ -177,10 +213,10 @@ def run_for_participant(request_data):
     chronic = chronic_list if chronic_list else None
 
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic)
-    return _serialize_run(run)
+    return _serialize_run(run, _compute_analytics(run, chronic, pro_df))
 
 
-def _serialize_run(run):
+def _serialize_run(run, analytics_data=None):
     """Convert a run_biomarker result into the JSON-able dict the card consumes."""
     combined = run["combined"]
     if hasattr(combined, "to_dict"):
@@ -204,5 +240,6 @@ def _serialize_run(run):
             "timedomain": run["timedomain"]["summary"] if run.get("timedomain") else None,
             "chronic": run["chronic"]["summary"] if run.get("chronic") else None,
         },
+        "analytics": analytics_data,
         "message": "",
     }

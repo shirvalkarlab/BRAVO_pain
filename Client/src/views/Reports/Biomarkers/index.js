@@ -16,6 +16,7 @@ import MDTypography from "components/MDTypography";
 import LoadingProgress from "components/LoadingProgress";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
+import BiomarkerAnalytics from "./BiomarkerAnalytics";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -127,6 +128,10 @@ function Biomarkers() {
                 </Grid>
               </Card>
             </Grid>
+
+            {data && data.analytics ? (
+              <BiomarkerAnalytics analytics={data.analytics} />
+            ) : null}
           </Grid>
         </MDBox>
       </DatabaseLayout>
