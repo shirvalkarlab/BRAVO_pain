@@ -38,7 +38,7 @@ function Biomarkers() {
       navigate("/database", { replace: false });
       return;
     }
-    setContextState(dispatch, "report", "GeneralReports");
+    setContextState(dispatch, "report", "CustomizedAnalysis");
 
     setAlert(<LoadingProgress />);
     SessionController.query("/api/queryBiomarkerAnalysis", {

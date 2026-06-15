@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import Plotly from "plotly.js-dist";
-import { Card, Grid } from "@mui/material";
+import { Card, Chip, Grid, Stack } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -56,19 +56,21 @@ function MetricChart({ metric, color }) {
 }
 
 // All metrics on one normalized [0,1] axis (each scaled by its own range) to compare trajectories.
-function NormalizedOverlay({ metrics }) {
+function NormalizedOverlay({ metrics, active }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !metrics.length) return;
-    const traces = metrics.map((m, i) => {
+    const traces = [];
+    metrics.forEach((m, i) => {
+      if (active && !active.includes(m.key)) return;  // toggle affects the overlay only
       const [lo, hi] = m.range;
       const color = PALETTE[i % PALETTE.length];
-      return {
+      traces.push({
         x: m.points.map((p) => new Date(p.t)),
         y: m.points.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
         name: m.label, type: "scatter", mode: "lines+markers",
         line: { color, width: 2 }, marker: { size: 3, color }, connectgaps: false,
-      };
+      });
     });
     Plotly.react(ref.current, traces, {
       height: 400, margin: { l: 52, r: 16, t: 12, b: 40 },
@@ -98,7 +100,8 @@ function CorrelationHeatmap({ correlation }) {
     }
     Plotly.react(ref.current, [{
       type: "heatmap", z, x: labels, y: labels, zmin: -1, zmax: 1,
-      colorscale: "RdBu", reversescale: true, colorbar: { title: "r" },
+      // blue (negative) -> white (0) -> red (positive)
+      colorscale: [[0, "#2166AC"], [0.5, "#F7F7F7"], [1, "#B2182B"]], colorbar: { title: "r" },
       hovertemplate: "%{y} ↔ %{x}<br>r = %{z:.2f}<extra></extra>",
     }], {
       height: 480, margin: { l: 140, r: 20, t: 16, b: 140 },
@@ -116,6 +119,7 @@ function PainScores() {
   const { participant_uid } = useParams();
 
   const [data, setData] = useState(false);
+  const [overlayActive, setOverlayActive] = useState(null);  // keys shown in the overlay
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -123,11 +127,19 @@ function PainScores() {
     setContextState(dispatch, "report", "SurveyReports");
     setAlert(<LoadingProgress />);
     SessionController.query("/api/queryPainScores", { ParticipantId: participant_uid })
-      .then((response) => { setData(response.data); setAlert(null); })
+      .then((response) => {
+        setData(response.data);
+        setOverlayActive((response.data.metrics || []).map((m) => m.key));
+        setAlert(null);
+      })
       .catch((error) => { SessionController.displayError(error, setAlert); });
   }, [participant_uid]);
 
   const metrics = (data && data.metrics) || [];
+  const toggleOverlay = (key) => setOverlayActive((cur) => {
+    const base = cur || metrics.map((m) => m.key);
+    return base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+  });
 
   return (
     <>
@@ -160,7 +172,19 @@ function PainScores() {
                 <Card sx={{ width: "100%" }}>
                   <MDBox p={2}>
                     <MDTypography variant="h6" fontSize={18} mb={0.5}>Normalized trajectories (all metrics)</MDTypography>
-                    <NormalizedOverlay metrics={metrics} />
+                    <Stack direction="row" flexWrap="wrap" sx={{ gap: 0.6, mb: 1 }}>
+                      {metrics.map((m, i) => {
+                        const on = overlayActive ? overlayActive.includes(m.key) : true;
+                        const c = PALETTE[i % PALETTE.length];
+                        return (
+                          <Chip key={m.key} label={m.label} size="small" onClick={() => toggleOverlay(m.key)}
+                            variant={on ? "filled" : "outlined"}
+                            sx={{ bgcolor: on ? c : "transparent", color: on ? "#fff" : "text.primary",
+                                  borderColor: c, cursor: "pointer", "&:hover": { opacity: 0.85 } }} />
+                        );
+                      })}
+                    </Stack>
+                    <NormalizedOverlay metrics={metrics} active={overlayActive || metrics.map((m) => m.key)} />
                   </MDBox>
                 </Card>
               </Grid>

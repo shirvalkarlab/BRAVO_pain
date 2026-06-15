@@ -254,13 +254,6 @@ const routes = {
         component: <ChronicTimeline />,
       },
       {
-        key: "biomarkers",
-        name: "Pain Biomarkers",
-        icon: <TimelineIcon />,
-        route: "/reports/biomarkers/:participant_uid",
-        component: <Biomarkers />,
-      },
-      {
         key: "events",
         name: "Chronic Events",
         icon: <MdOutlineEventAvailable />,
@@ -403,6 +396,13 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,
+      },
+      {
+        key: "biomarkers",
+        name: "Pain Biomarkers",
+        icon: <TimelineIcon />,
+        route: "/reports/biomarkers/:participant_uid",
+        component: <Biomarkers />,
       },
       {
         key: "AIHealthcare",
