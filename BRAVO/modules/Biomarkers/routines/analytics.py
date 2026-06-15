@@ -14,6 +14,48 @@ import pandas as pd
 from .threshold_biomarker import _sens_spec
 
 
+# --- Channel-name formatting -----------------------------------------------------------------
+_WORD2DIGIT = {"ZERO": "0", "ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4",
+               "FIVE": "5", "SIX": "6", "SEVEN": "7", "EIGHT": "8", "NINE": "9"}
+
+# Brain-region labels per channel. Real recordings should pass regions from the electrode
+# metadata (Target/CustomName); these demo defaults are plausible chronic-pain DBS targets so
+# the formatted label is visible in the demo.
+_DEMO_REGIONS = {
+    "ZERO_TWO_LEFT": "Sensory Thalamus (VPL)",
+    "ZERO_TWO_RIGHT": "Ant. Cingulate (ACC)",
+}
+
+
+def format_channel(name, region=None):
+    """Turn a raw Percept channel name (e.g. 'ZERO_TWO_LEFT') into a clean bipolar-pair label.
+
+    Uses contact NUMBERS (not words), marks polarity for the bipolar sensing pair (lower contact
+    cathode '−', higher contact anode '+'), the hemisphere, and the brain region.
+    Returns {raw, label, short, hemisphere, contacts, region}. `region` arg (from electrode
+    metadata) wins over the demo map.
+    """
+    raw = str(name)
+    up = raw.upper()
+    hemi = "L" if "LEFT" in up else ("R" if "RIGHT" in up else "")
+    hemi_full = "Left" if hemi == "L" else ("Right" if hemi == "R" else "")
+
+    toks = [t for t in up.replace("-", "_").split("_") if t in _WORD2DIGIT or t.isdigit()]
+    digits = [(_WORD2DIGIT[t] if t in _WORD2DIGIT else t) for t in toks]
+    if len(digits) >= 2:
+        contacts = f"{digits[0]}⁻-{digits[1]}⁺"   # e.g. 0⁻-2⁺  (cathode/anode)
+    elif len(digits) == 1:
+        contacts = digits[0]
+    else:
+        contacts = raw
+
+    reg = region or _DEMO_REGIONS.get(up) or _DEMO_REGIONS.get(raw) or ""
+    short = (f"{hemi} {contacts}").strip()
+    label = f"{short} · {reg}" if reg else short
+    return {"raw": raw, "label": label, "short": short, "hemisphere": hemi_full,
+            "contacts": contacts, "region": reg}
+
+
 def _f(x):
     """Float or None (JSON-safe, NaN -> None)."""
     try:
@@ -188,7 +230,7 @@ def corr_spectrum(td_detail, ignore_band=(55, 66), p_significant=0.001):
 
     channels = []
     for ci in range(corr.shape[0]):
-        name = chans[ci] if ci < len(chans) else f"ch{ci}"
+        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
         r_row = corr[ci].copy()
         p_row = pval[ci].copy()
         r_row[ignore] = np.nan
@@ -196,10 +238,75 @@ def corr_spectrum(td_detail, ignore_band=(55, 66), p_significant=0.001):
         sig = [(_f(r_row[k]) if (np.isfinite(p_row[k]) and p_row[k] < p_significant and not ignore[k]) else None)
                for k in range(len(f))]
         channels.append({
-            "name": name,
+            "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": [_f(x) for x in r_row],
             "p": [_f(x) for x in p_row],
             "significant": sig,
         })
     return {"freqs": [float(x) for x in f], "channels": channels,
             "transform": td_detail.get("transform", "log"), "p_significant": p_significant}
+
+
+# --- Time-domain (streaming) analytics -------------------------------------------------------
+def psd_spectra(td_detail, db=True):
+    """Mean PSD per channel split by pain group (high vs low, by median label).
+    Returns {freqs, unit, channels:[{name, short, region, high:[...], low:[...]}]}.
+    `td_detail` is the streaming_psd result (psd (E,C,F), labels (E,), f_set, chan_order).
+    """
+    if not td_detail:
+        return None
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    if psd.ndim != 3 or psd.shape[0] == 0:
+        return None
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    f = np.asarray(td_detail["f_set"], dtype=float)
+    chans = td_detail.get("chan_order", [])
+
+    valid = np.isfinite(labels)
+    if valid.sum() >= 2 and np.unique(labels[valid]).size >= 2:
+        thr = np.nanmedian(labels[valid])
+        hi = labels >= thr
+        lo = labels < thr
+    else:  # not enough label variety -> everything is one group
+        hi = np.ones(len(labels), bool)
+        lo = np.zeros(len(labels), bool)
+
+    def grp(mask, ci):
+        if mask.sum() == 0:
+            return [None] * len(f)
+        m = np.nanmean(psd[mask, ci, :], axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            m = 10 * np.log10(m) if db else m
+        return [_f(x) for x in m]
+
+    channels = []
+    for ci in range(psd.shape[1]):
+        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
+        channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
+                         "high": grp(hi, ci), "low": grp(lo, ci)})
+    return {"freqs": [float(x) for x in f], "unit": "dB" if db else "power", "channels": channels}
+
+
+def psd_spectrogram(td_detail, times, db=True, fmax=100.0):
+    """Per-channel PSD heatmap over sessions (z = freq x session). times: list[str] per epoch."""
+    if not td_detail:
+        return None
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    if psd.ndim != 3 or psd.shape[0] == 0:
+        return None
+    f = np.asarray(td_detail["f_set"], dtype=float)
+    chans = td_detail.get("chan_order", [])
+    fmask = f <= fmax
+    fz = f[fmask]
+
+    channels = []
+    for ci in range(psd.shape[1]):
+        z = psd[:, ci, :][:, fmask]  # (E, Fz)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z = 10 * np.log10(z) if db else z
+        zt = z.T  # (Fz, E) -> rows=freq, cols=session
+        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
+        channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
+                         "z": [[_f(v) for v in row] for row in zt]})
+    return {"freqs": [float(x) for x in fz], "times": list(times),
+            "unit": "dB" if db else "power", "channels": channels}

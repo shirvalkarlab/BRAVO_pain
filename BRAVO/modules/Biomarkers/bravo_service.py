@@ -158,7 +158,14 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs"):
     td = run.get("timedomain")
     if td is not None:
         try:
-            result["timedomain"] = {"corr_spectrum": analytics.corr_spectrum(td["detail"])}
+            det = td["detail"]
+            tl = td.get("timeline")
+            times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
+            result["timedomain"] = {
+                "corr_spectrum": analytics.corr_spectrum(det),
+                "psd_spectra": analytics.psd_spectra(det),
+                "spectrogram": analytics.psd_spectrogram(det, times),
+            }
         except Exception as e:
             result["timedomain"] = {"error": str(e)}
 

@@ -1,7 +1,8 @@
 /**
- * BiomarkerTimeline -- plots the unified biomarker `timeline` (td_* + chronic_* series + PRO)
- * returned by /api/queryBiomarkerAnalysis. Uses plotly.js-dist directly so the component is
- * self-contained (no dependency on the platform's PlotlyRenderManager API).
+ * BiomarkerTimeline -- clean stacked-subplot timeline for the unified biomarker frame.
+ * Each measure (time-domain biomarker, chronic LFP + threshold, pain/NRS, stim amplitude) gets
+ * its own row sharing one time axis, with human-readable names -- avoids a cluttered single plot
+ * with a long horizontal legend. Self-contained via plotly.js-dist.
  */
 
 import { useEffect, useRef } from "react";
@@ -9,79 +10,99 @@ import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
 
-// Columns routed to the right-hand (PRO / pain-label) axis; everything else is a biomarker series.
-const PRO_HINTS = ["nrs", "vas", "mpq", "pain_level", "pred"];
-
-function isProSeries(name) {
-  const n = name.toLowerCase();
-  return PRO_HINTS.some((h) => n.includes(h));
-}
+const C = {
+  td: "#1A73E8",        // time-domain biomarker
+  lfp: "#00897B",       // chronic LFP power
+  threshold: "#8E8E8E", // learned threshold
+  pain: "#E53935",      // NRS / pain
+  stim: "#FB8C00",      // stim amplitude
+};
 
 function parseTime(t) {
   if (t === null || t === undefined) return null;
-  if (typeof t === "number") return new Date(t < 1e12 ? t * 1000 : t); // unix s vs ms
-  return new Date(t); // ISO string
+  if (typeof t === "number") return new Date(t < 1e12 ? t * 1000 : t);
+  return new Date(t);
 }
 
-function BiomarkerTimeline({ data, figureTitle = "BiomarkerTimeline", height = 420 }) {
+function BiomarkerTimeline({ data, height }) {
   const ref = useRef(null);
 
   useEffect(() => {
     if (!ref.current || !data || !data.timeline || data.timeline.length === 0) return;
 
-    const records = data.timeline;
-    const columns = (data.channels || Object.keys(records[0])).filter(
-      (c) => c !== "time" && c !== "date"
-    );
-    const x = records.map((r) => parseTime(r.time));
+    const recs = data.timeline;
+    const cols = new Set(data.channels || Object.keys(recs[0]));
+    const x = recs.map((r) => parseTime(r.time));
+    const col = (n) => recs.map((r) => (typeof r[n] === "number" ? r[n] : null));
+    const has = (n) => cols.has(n) && col(n).some((v) => v !== null);
+    const pick = (...names) => names.find((n) => has(n));
 
-    const traces = [];
-    for (const col of columns) {
-      // Keep only numeric, not-entirely-null series.
-      let anyValue = false;
-      const y = records.map((r) => {
-        const v = r[col];
-        if (v === null || v === undefined || typeof v !== "number") return null;
-        anyValue = true;
-        return v;
-      });
-      if (!anyValue) continue;
-
-      const pro = isProSeries(col);
-      traces.push({
-        x,
-        y,
-        name: col,
-        type: "scatter",
-        mode: col.includes("pred") || col.includes("pain_level") ? "lines" : "lines+markers",
-        line: { shape: col.includes("threshold") ? "hv" : "linear", width: col.includes("threshold") ? 1 : 2, dash: col.includes("threshold") ? "dash" : "solid" },
-        marker: { size: 4 },
-        yaxis: pro ? "y2" : "y",
-        connectgaps: false,
+    // Rows, top -> bottom.
+    const rows = [];
+    if (has("td_biomarker_value")) {
+      const b = data.summary && data.summary.timedomain && data.summary.timedomain.band;
+      rows.push({
+        title: b ? `Time-domain biomarker — ${b[4].toFixed(1)} Hz` : "Time-domain biomarker (PSD)",
+        unit: "PSD power",
+        traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
     }
+    if (has("chronic_biomarker_value")) {
+      const tr = [{ name: "LFP power", y: col("chronic_biomarker_value"), color: C.lfp }];
+      if (has("chronic_threshold")) {
+        tr.push({ name: "Threshold", y: col("chronic_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
+      }
+      rows.push({ title: "Chronic LFP power", unit: "LFP (a.u.)", traces: tr });
+    }
+    const painCol = pick("chronic_nrs", "td_nrs_min", "td_nrs_mean", "nrs");
+    if (painCol) rows.push({ title: "Pain (NRS)", unit: "NRS", traces: [{ name: "NRS", y: col(painCol), color: C.pain }] });
+    const stimCol = pick("chronic_stim_amplitude", "td_stim_amplitude");
+    if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
+    const n = Math.max(rows.length, 1);
+    const gap = 0.11;
+    const h = (1 - gap * (n - 1)) / n;
+
+    const traces = [];
     const layout = {
-      title: { text: `Biomarker timeline (source: ${data.source || "?"})`, font: { size: 16 } },
-      height,
-      margin: { l: 60, r: 60, t: 50, b: 50 },
-      xaxis: { type: "date", title: "Time" },
-      yaxis: { title: "Biomarker value", zeroline: false },
-      yaxis2: { title: "PRO / pain", overlaying: "y", side: "right", zeroline: false },
-      legend: { orientation: "h", y: -0.2 },
+      height: height || 165 * n + 96,
+      margin: { l: 64, r: 18, t: 44, b: 48 },
       hovermode: "x unified",
+      legend: { orientation: "h", y: 1.04, x: 0, font: { size: 11 } },
+      annotations: [],
     };
+
+    rows.forEach((row, di) => {
+      const axisNum = n - di; // bottom row = y1
+      const yk = axisNum === 1 ? "y" : "y" + axisNum;
+      const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
+      const top = 1 - di * (h + gap);
+      const bottom = Math.max(0, top - h);
+      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } }, zeroline: false };
+      row.traces.forEach((tr) => {
+        traces.push({
+          x, y: tr.y, name: tr.name, type: "scatter", mode: tr.mode || "lines+markers",
+          line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
+          marker: { size: 4, color: tr.color }, yaxis: yk, xaxis: "x", connectgaps: false,
+          hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
+        });
+      });
+      layout.annotations.push({
+        xref: "paper", yref: "paper", x: 0, y: Math.min(top + 0.012, 1),
+        xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,
+        showarrow: false, font: { size: 12, color: "#344767" },
+      });
+    });
+
+    layout.xaxis = { domain: [0, 1], type: "date", anchor: "y", title: "Time" };
 
     Plotly.react(ref.current, traces, layout, { responsive: true, displaylogo: false });
-
-    return () => {
-      if (ref.current) Plotly.purge(ref.current);
-    };
+    return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [data, height]);
 
   return (
-    <MDBox p={2}>
-      <div id={figureTitle} ref={ref} style={{ width: "100%", height: height }} />
+    <MDBox p={1}>
+      <div ref={ref} style={{ width: "100%" }} />
     </MDBox>
   );
 }
