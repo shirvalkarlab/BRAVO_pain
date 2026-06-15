@@ -10,3 +10,7 @@ services:
       - ./BRAVO:/usr/src/BRAVO
       - ./Client/build:/usr/share/nginx/html
       - ./BRAVO/bravo_nginx.dev.conf:/etc/nginx/sites-enabled/default
+    # Local REDCap credentials (gitignored secrets/redcap.env). Provides REDCAP_API_URL /
+    # REDCAP_API_TOKEN so the Biomarkers module can pull real PRO surveys.
+    env_file:
+      - ./secrets/redcap.env

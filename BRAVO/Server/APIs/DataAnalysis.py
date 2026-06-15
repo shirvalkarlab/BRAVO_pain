@@ -602,7 +602,10 @@ class QueryBiomarkerAnalysis(RestViews.APIView):
     **Request Parameters:**
 
     :param ParticipantId: participant uid (required)
-    :param source: "timedomain" | "chronic" | "both" (default "both")
+    :param source: "timedomain" | "powerdomain" | "both" (default "both"). "powerdomain" is the
+        chronic BrainSense Timeline LFP-power source; "chronic" is accepted as a legacy alias.
+    :param LabelMetric: pain metric the biomarker is computed against (nrs | vas | left_leg_vas |
+        back_vas | mpq_sum | composite_mpq_leftleg; default nrs)
     :param ProcessedPRO: optional list of PRO record dicts (else REDCap env vars are used)
     :param RedcapRecordId: optional REDCap record_id filter
     """

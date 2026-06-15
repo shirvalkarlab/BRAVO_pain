@@ -30,6 +30,7 @@ DEFERRED HOOKS (intentionally not built here -- see plan):
 import os
 import json
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -60,19 +61,23 @@ def decode_percept_session(*_args, **_kwargs):
     )
 
 
-def select_biomarker_band(result, p_threshold=0.05, ignore_band=(55, 66)):
+def select_biomarker_band(result, p_threshold=0.05, ignore_band=None):
     """Pick the (channel, frequency) with the strongest significant |corr| vs pain.
 
-    Mirrors the notebook's band-selection (cells 13/16): ignore the 55-66 Hz mains region,
-    require p < threshold, maximize |r|. Returns (chan_index, freq_index, r, p, freq_hz).
+    Require p < threshold, maximize |r|. Returns (chan_index, freq_index, r, p, freq_hz).
+
+    `ignore_band`: optional (lo, hi) Hz to exclude from selection. Default None — NO exclusion,
+    so a biomarker at 60 Hz CAN be selected (per PI request). The notebook (cells 13/16) excluded
+    the 55-66 Hz mains region; pass `ignore_band=(55, 66)` to restore that behavior.
     """
     corr = result["corr"].copy()
     pval = result["pval"].copy()
     f_set = result["f_set"]
 
     mask = np.isfinite(corr) & np.isfinite(pval) & (pval < p_threshold)
-    ignore = (f_set > ignore_band[0]) & (f_set < ignore_band[1])
-    mask[:, ignore] = False
+    if ignore_band is not None:
+        ignore = (f_set > ignore_band[0]) & (f_set < ignore_band[1])
+        mask[:, ignore] = False
     if not mask.any():
         return None
     masked = np.where(mask, np.abs(corr), -np.inf)
@@ -134,19 +139,22 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
             "timeline": timeline, "detail": result, "summary": summary}
 
 
-def run_chronic_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
-                       label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
-                       thresholds=None, train_days=7, gap_days=1, test_days=2):
-    """Chronic (~10-min trend) sliding-window threshold branch -> SourceRun with a chronic_* timeline.
+def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
+                           label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
+                           thresholds=None, train_days=7, gap_days=1, test_days=2):
+    """Power-domain (band-power-over-time) sliding-window threshold branch -> SourceRun with a
+    powerdomain_* timeline. The "power domain" is the complement to the time domain: it merges the
+    ~10-min Chronic LFP-power timeline with the per-session BrainSense Power-Domain band power
+    (both already concatenated into `chronic` upstream as chronic-shaped power dicts).
 
-    `chronic` is a BRAVO Chronic recording dict OR a list of them (concatenated into one long
-    trend -- the detector needs ~train+gap+test days of data, far more than one recording).
+    `chronic` is one chronic-shaped power recording dict OR a list of them (concatenated +
+    time-sorted into one long trend -- the detector needs ~train+gap+test days of data).
     `label_strategy` ("kmeans" | "cutoff") selects the pain_level labeler; "kmeans" matches the
     source notebook (clusters [left_leg_vas, mpq_sum]) and falls back to "cutoff" if those
     columns are absent from pro_df.
     """
     if chronic is None:
-        raise ValueError('a "chronic" source requires `chronic` (a Chronic recording or list).')
+        raise ValueError('a "powerdomain" source requires `chronic` (a power recording or list).')
     cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
                                             pain_cutoff=pain_cutoff, label_strategy=label_strategy,
                                             kmeans_features=kmeans_features)
@@ -158,14 +166,14 @@ def run_chronic_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
     timeline = pd.DataFrame({
         "time": pd.to_datetime(cv_df["timestamp"]),
         "date": pd.to_datetime(cv_df["timestamp"]).dt.date,
-        "chronic_biomarker_value": lfp_s,
-        "chronic_lfp_raw": cv_df["LFP"].to_numpy(dtype=float),
-        "chronic_threshold": thr,
-        "chronic_stim_amplitude": cv_df["stim_amplitude"].to_numpy(dtype=float),
-        "chronic_pain_level": cv_df["pain_level"].to_numpy(dtype=float),
+        "powerdomain_biomarker_value": lfp_s,
+        "powerdomain_lfp_raw": cv_df["LFP"].to_numpy(dtype=float),
+        "powerdomain_threshold": thr,
+        "powerdomain_stim_amplitude": cv_df["stim_amplitude"].to_numpy(dtype=float),
+        "powerdomain_pain_level": cv_df["pain_level"].to_numpy(dtype=float),
     })
-    timeline["chronic_pred"] = (lfp_s >= thr).astype(float) if np.isfinite(thr) else np.nan
-    timeline[f"chronic_{label_metric}"] = cv_df[label_metric].to_numpy(dtype=float)
+    timeline["powerdomain_pred"] = (lfp_s >= thr).astype(float) if np.isfinite(thr) else np.nan
+    timeline[f"powerdomain_{label_metric}"] = cv_df[label_metric].to_numpy(dtype=float)
 
     # run_sliding_window_dual is a DUAL detector: it returns two independent operating points
     # -- a sensitivity-optimized threshold (mean_thr_sens, with mean_test_*_sens metrics) and a
@@ -188,8 +196,13 @@ def run_chronic_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
         "spec_objective_spec": detail.get("mean_test_spec_spec", np.nan),
         "spec_objective_acc": detail.get("mean_test_acc_spec", np.nan),
     }
-    return {"source": "chronic", "code_version": CHRONIC_CODE_VERSION,
+    return {"source": "powerdomain", "code_version": CHRONIC_CODE_VERSION,
             "timeline": timeline, "detail": detail, "summary": summary}
+
+
+# Back-compat: the chronic branch was renamed to the power-domain branch (chronic timeline is now
+# merged with per-session power-domain band power upstream). Keep the old name as an alias.
+run_chronic_branch = run_powerdomain_branch
 
 
 def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chronic=None,
@@ -201,33 +214,48 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
     """
     Run biomarker identification with a selectable data source.
 
-    source : {"timedomain", "chronic", "both"}
-        "timedomain" -> 250 Hz streaming PSD<->pain (needs `recordings`).
-        "chronic"    -> ~10-min trend threshold detector (needs `chronic`).
-        "both"       -> run each independently and merge onto one timeline.
+    source : {"timedomain", "powerdomain", "both"}  ("chronic" accepted as alias of "powerdomain")
+        "timedomain"  -> 250 Hz streaming PSD<->pain (needs `recordings`).
+        "powerdomain" -> band-power-over-time threshold detector (needs `chronic`: the merged
+                         Chronic timeline + per-session Power-Domain band power as chronic-shaped dicts).
+        "both"        -> run each independently and merge onto one timeline.
 
     Returns
     -------
-    dict: {"source", "timedomain": SourceRun|None, "chronic": SourceRun|None,
+    dict: {"source", "timedomain": SourceRun|None, "powerdomain": SourceRun|None,
            "combined": DataFrame}  -- `combined` is the unified, NaN-tolerant same-page timeline.
     """
-    if source not in ("timedomain", "chronic", "both"):
-        raise ValueError('source must be "timedomain", "chronic", or "both"')
+    if source == "chronic":           # back-compat alias
+        source = "powerdomain"
+    if source not in ("timedomain", "powerdomain", "both"):
+        raise ValueError('source must be "timedomain", "powerdomain", or "both"')
+
+    def _td():
+        return run_timedomain_branch(recordings, pro_df, chan_order, align=align,
+                                     label_metric=label_metric, label_reduce=label_reduce,
+                                     transform=transform, stim_amplitudes=stim_amplitudes)
+
+    def _power():
+        return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,
+                                      pain_cutoff=pain_cutoff, label_strategy=label_strategy,
+                                      kmeans_features=kmeans_features, thresholds=thresholds,
+                                      train_days=train_days, gap_days=gap_days, test_days=test_days)
 
     td = ch = None
-    if source in ("timedomain", "both"):
-        td = run_timedomain_branch(recordings, pro_df, chan_order, align=align,
-                                   label_metric=label_metric, label_reduce=label_reduce,
-                                   transform=transform, stim_amplitudes=stim_amplitudes)
-    if source in ("chronic", "both"):
-        ch = run_chronic_branch(pro_df, chronic=chronic, label_metric=label_metric,
-                                pain_cutoff=pain_cutoff, label_strategy=label_strategy,
-                                kmeans_features=kmeans_features, thresholds=thresholds,
-                                train_days=train_days, gap_days=gap_days, test_days=test_days)
+    if source == "both":
+        # The two branches are independent (separate data sources + science), so compute them
+        # concurrently — "both" wall-clock becomes max(td, powerdomain) instead of their sum.
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fut_td, fut_power = ex.submit(_td), ex.submit(_power)
+            td, ch = fut_td.result(), fut_power.result()
+    elif source == "timedomain":
+        td = _td()
+    elif source == "powerdomain":
+        ch = _power()
 
     combined = adapter.merge_timelines(td["timeline"] if td else None,
                                        ch["timeline"] if ch else None)
-    return {"source": source, "timedomain": td, "chronic": ch, "combined": combined}
+    return {"source": source, "timedomain": td, "powerdomain": ch, "combined": combined}
 
 
 def run_streaming_biomarker(recordings, pro_df, chan_order, *, align="session",

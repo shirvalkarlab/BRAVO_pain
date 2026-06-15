@@ -3,13 +3,13 @@
 * UF BRAVO Platform -- Pain Biomarkers report (Shirvalkar Lab)
 =========================================================
 * Renders the selectable-source biomarker timeline (time-domain PSD<->pain and/or the
-* ~10-min chronic LFP threshold detector) returned by /api/queryBiomarkerAnalysis.
+* power-domain ~10-min LFP threshold detector) returned by /api/queryBiomarkerAnalysis.
 */
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl, InputLabel } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -23,6 +23,17 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
 
+// Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
+// echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
+const DEFAULT_METRIC_OPTIONS = [
+  { key: "nrs", label: "NRS (0–10)" },
+  { key: "vas", label: "Overall VAS" },
+  { key: "left_leg_vas", label: "Left Leg VAS" },
+  { key: "back_vas", label: "Back VAS" },
+  { key: "mpq_sum", label: "MPQ Sum" },
+  { key: "composite_mpq_leftleg", label: "Composite (MPQ + Left Leg VAS)" },
+];
+
 function Biomarkers() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
@@ -31,6 +42,7 @@ function Biomarkers() {
 
   const [data, setData] = useState(false);
   const [source, setSource] = useState("both");
+  const [metric, setMetric] = useState("nrs");
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -44,13 +56,14 @@ function Biomarkers() {
     SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid,
       source: source,
+      LabelMetric: metric,
     }).then((response) => {
       setData(response.data);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
-  }, [participant_uid, source]);
+  }, [participant_uid, source, metric]);
 
   const summaryLine = (label, s) => {
     if (!s) return null;
@@ -85,16 +98,31 @@ function Biomarkers() {
                       <MDTypography variant="h6" fontSize={24}>
                         {"Pain Biomarkers"}
                       </MDTypography>
-                      <ToggleButtonGroup
-                        value={source}
-                        exclusive
-                        size="small"
-                        onChange={(e, v) => { if (v) setSource(v); }}
-                      >
-                        <ToggleButton value="timedomain">Time-domain</ToggleButton>
-                        <ToggleButton value="chronic">Chronic</ToggleButton>
-                        <ToggleButton value="both">Both</ToggleButton>
-                      </ToggleButtonGroup>
+                      <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
+                        <FormControl size="small" sx={{ minWidth: 240 }}>
+                          <InputLabel id="biomarker-metric-label">Pain metric</InputLabel>
+                          <Select
+                            labelId="biomarker-metric-label"
+                            label="Pain metric"
+                            value={metric}
+                            onChange={(e) => setMetric(e.target.value)}
+                          >
+                            {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <ToggleButtonGroup
+                          value={source}
+                          exclusive
+                          size="small"
+                          onChange={(e, v) => { if (v) setSource(v); }}
+                        >
+                          <ToggleButton value="timedomain">Time-domain</ToggleButton>
+                          <ToggleButton value="powerdomain">Power-domain</ToggleButton>
+                          <ToggleButton value="both">Both</ToggleButton>
+                        </ToggleButtonGroup>
+                      </MDBox>
                     </MDBox>
                   </Grid>
 
@@ -114,8 +142,15 @@ function Biomarkers() {
                   {data && data.summary ? (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
+                        {data.label_metric ? (
+                          <MDTypography variant="button" fontWeight="medium" color="text" display="block">
+                            {"Biomarker computed against: "}
+                            {(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+                              .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
+                          </MDTypography>
+                        ) : null}
                         {summaryLine("Time-domain", data.summary.timedomain)}
-                        {summaryLine("Chronic", data.summary.chronic)}
+                        {summaryLine("Power-domain", data.summary.powerdomain)}
                       </MDBox>
                     </Grid>
                   ) : null}

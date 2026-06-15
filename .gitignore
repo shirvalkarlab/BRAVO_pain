@@ -317,3 +317,7 @@ BRAVO/Certificates
 
 *.sql
 
+
+# Local secrets (REDCap tokens, etc.)
+secrets/
+*.env

@@ -49,8 +49,15 @@ services:
       - '80:80'
       - '443:443'
       - '27286:27286'
+    # Multi-worker ASGI (gunicorn + uvicorn workers) instead of single-thread runserver, so
+    # concurrent Percept uploads decode in parallel rather than queueing. -w $$(nproc) = one worker
+    # per CPU core ($$ escapes $ so bash, not compose, expands nproc). --reload keeps dev hot-reload
+    # on code changes; --timeout 600 tolerates the slow synchronous JSON decode of large sessions.
     command: >
-      bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate && python3 manage.py runserver 0:27286"
+      bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate &&
+      gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w $$(nproc)
+      -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload
+      --access-logfile - --error-logfile -"
   
   redis:
     image: redis:5

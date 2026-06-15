@@ -205,6 +205,74 @@ def _concat_chronic(chronic):
     }
 
 
+# Medtronic power-domain packets flag a missing sample with a ~2^32 sentinel (uint32 max).
+_POWER_SENTINEL = 4.0e9
+
+
+def bravo_powerdomain_to_chronic_like(recordings):
+    """Convert BrainSense Power-Domain recordings (per-session band power, ~2 Hz) into
+    chronic-shaped power dicts so they concatenate with the ~10-min Chronic timeline through the
+    SAME `_concat_chronic` + `bravo_chronic_to_lfp_df` path — i.e. one merged power-domain series.
+
+    A power-domain recording has no `Time` array (it carries `StartTime` + `SamplingRate`), and its
+    `Data` columns are per-contact band power + stimulation (e.g. ['ZERO_THREE_LEFT Power',
+    'ZERO_THREE_RIGHT Power', 'ZERO_THREE_LEFT Stimulation', 'ZERO_THREE_RIGHT Stimulation']).
+    Each '<contact> Power' column becomes its own chronic-shaped series, paired with the matching
+    '<contact> Stimulation' column when present; missing/sentinel samples are dropped.
+
+    Output dicts match the Chronic shape: {SamplingRate:-1, Time:(M,), Data:(M,2) [power, stim],
+    ChannelNames:['<hemi> LFP', '<hemi> Amplitude']}.
+
+    SCALE NOTE: power-domain band power and the chronic ~10-min LFP power are on different scales
+    (different sensing band/averaging). By design these are concatenated in RAW device units (no
+    normalization), so the merged series mixes scales — interpret the combined threshold with that
+    in mind.
+    """
+    out = []
+    for r in recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r["Data"], dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        n = data.shape[0]
+        fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        start = float(r.get("StartTime") or 0.0)
+        time = start + np.arange(n) / fs
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+
+        ncols = data.shape[1]
+        # Guard against ChannelNames longer than Data columns (malformed packet) -> only index
+        # columns that actually exist.
+        power_cols = [i for i, nm in enumerate(names) if "POWER" in nm.upper() and i < ncols]
+        for pi in power_cols:
+            nm_up = names[pi].upper()
+            hemi = "LEFT" if "LEFT" in nm_up else ("RIGHT" if "RIGHT" in nm_up else "")
+            pw = data[:, pi].copy()
+            bad = (missing[:, pi] > 0) | (pw >= _POWER_SENTINEL) | (pw < 0) | ~np.isfinite(pw)
+            pw[bad] = np.nan
+            # Stimulation column for the same hemisphere, else any stim column, else NaN.
+            si = next((i for i, s in enumerate(names)
+                       if "STIM" in s.upper() and hemi and hemi in s.upper() and i < ncols), None)
+            if si is None:
+                si = next((i for i, s in enumerate(names) if "STIM" in s.upper() and i < ncols), None)
+            stim = data[:, si] if si is not None else np.full(n, np.nan)
+            valid = np.isfinite(pw)
+            if not valid.any():
+                continue
+            label = hemi.title() if hemi else "PowerDomain"
+            out.append({
+                "SamplingRate": -1,
+                "Time": time[valid],
+                "Data": np.column_stack([pw[valid], np.asarray(stim, dtype=float)[valid]]),
+                "ChannelNames": [f"{label} LFP", f"{label} Amplitude"],
+            })
+    return out
+
+
 def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=None,
                             label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
                             timestamp_col="date_time_s1_daily", smooth_window=7):

@@ -81,6 +81,63 @@ def pull_redcap(redcap_config=None, save=False, save_path=None):
     return redcap_data
 
 
+# Canonical timestamp column the Pain Scores / Biomarker endpoints expect downstream.
+TIDY_TIMESTAMP_COL = "date_time_s1_daily"
+
+
+def process_redcap(redcap_data, field_map):
+    """Turn a raw REDCap export into the tidy per-report PRO table the module consumes.
+
+    Ports the filter -> subset -> rename/sum -> sort -> fillna processing from
+    `dbs_stage2_percept/redcap_pull.py` so raw REDCap column names map to the canonical metric
+    keys (`nrs`, `vas`, `mpq_sum`, ...) that `bravo_service` / the Pain Scores endpoint read.
+
+    Driven by a patient field map (the relevant `pt_config` keys):
+      instruments      list of `redcap_repeat_instrument` values to keep (the PRO survey rows)
+      timestamp_label  raw REDCap column holding the report timestamp; emitted as the canonical
+                       `date_time_s1_daily`
+      metric_labels    {canonical_key: raw_column}  OR  {canonical_key: [raw_col, ...]}. A list is
+                       summed row-wise into the key (e.g. MPQ item subscores).
+      pt / record_id   optional; restricts to this patient's `record_id`.
+
+    (The notebook also kept each list component under `raw_col[:-9]`; that fixed-suffix slice
+    collides for some field-naming schemes and is unused downstream, so only the summed canonical
+    key is emitted here.)
+
+    Pure pandas (no Django, no network) so it is unit-testable and reusable from library mode.
+    """
+    timestamp_label = field_map.get("timestamp_label")
+    metric_labels = field_map.get("metric_labels") or {}
+    if not (timestamp_label and metric_labels):
+        raise ValueError("field_map must define 'timestamp_label' and a non-empty 'metric_labels'.")
+
+    df = redcap_data.reset_index()
+
+    instruments = field_map.get("instruments")
+    if instruments and "redcap_repeat_instrument" in df.columns:
+        df = df[df["redcap_repeat_instrument"].isin(instruments)]
+    record_id = field_map.get("pt", field_map.get("record_id"))
+    if record_id is not None and "record_id" in df.columns:
+        df = df[df["record_id"].astype(str) == str(record_id)]
+    df = df.reset_index(drop=True)
+
+    if timestamp_label not in df.columns:
+        raise ValueError(f"timestamp column {timestamp_label!r} not found in the REDCap export.")
+
+    proc = pd.DataFrame(index=df.index)
+    for key, value in metric_labels.items():
+        if isinstance(value, list):
+            present = [v for v in value if v in df.columns]
+            if present:
+                proc[key] = df[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        elif value in df.columns:
+            proc[key] = df[value]
+
+    proc[TIDY_TIMESTAMP_COL] = df[timestamp_label]
+    proc = proc.sort_values(TIDY_TIMESTAMP_COL).reset_index(drop=True)
+    return proc.fillna(0)
+
+
 def load_processed_pro_csv(csv_path):
     """
     Load a pre-processed PRO CSV (the `pt_data/<pt>_redcap_proc.csv` produced by the

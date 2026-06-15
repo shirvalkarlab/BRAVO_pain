@@ -245,10 +245,10 @@ def test_run_biomarker_both_unified_timeline():
     out = pipeline.run_biomarker(recs, pro, CHAN_ORDER, source="both", chronic=chronic,
                                  train_days=3, gap_days=1, test_days=2)
     assert out["source"] == "both"
-    assert out["timedomain"] is not None and out["chronic"] is not None
+    assert out["timedomain"] is not None and out["powerdomain"] is not None
     cols = set(out["combined"].columns)
-    assert "td_biomarker_value" in cols and "chronic_biomarker_value" in cols
-    assert out["chronic"]["summary"]["n_windows"] >= 1
+    assert "td_biomarker_value" in cols and "powerdomain_biomarker_value" in cols
+    assert out["powerdomain"]["summary"]["n_windows"] >= 1
 
 
 def test_chronic_summary_is_self_consistent():
@@ -328,6 +328,39 @@ def test_kmeans_falls_back_to_cutoff_and_warns():
     assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
 
 
+def test_bravo_powerdomain_to_chronic_like():
+    """Power-Domain packets (StartTime+fs, per-contact Power/Stim, sentinel + Missing) convert to
+    chronic-shaped power dicts: one series per Power channel, sentinel/missing samples dropped,
+    timestamps = StartTime + index/fs of the surviving samples, paired with same-hemi stim."""
+    fs, start, n = 2.0, _MIDNIGHT_UTC, 5
+    data = np.array([
+        [10.0, 100.0, 1.0, 2.0],
+        [4.3e9, 110.0, 1.0, 2.0],   # L power sentinel -> dropped from L series
+        [12.0, 120.0, 1.0, 2.0],
+        [13.0, 130.0, 1.0, 2.0],
+        [14.0, 140.0, 1.0, 2.0],
+    ])
+    missing = np.zeros_like(data); missing[3, 0] = 1.0   # L power idx3 flagged missing
+    rec = {"SamplingRate": fs, "StartTime": start, "Duration": n / fs,
+           "ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_RIGHT Power",
+                            "ZERO_THREE_LEFT Stimulation", "ZERO_THREE_RIGHT Stimulation"],
+           "Data": data, "Missing": missing}
+    out = adapter.bravo_powerdomain_to_chronic_like([rec])
+    assert len(out) == 2, "one chronic-shaped series per Power channel"
+    left = next(o for o in out if o["ChannelNames"][0].startswith("Left"))
+    right = next(o for o in out if o["ChannelNames"][0].startswith("Right"))
+    # L: sentinel (idx1) + missing (idx3) dropped -> 10,12,14 at idx 0,2,4
+    assert list(left["Data"][:, 0]) == [10.0, 12.0, 14.0]
+    assert (left["Data"][:, 1] == 1.0).all()                 # paired with LEFT stim col
+    assert np.allclose(left["Time"], [start + 0 / fs, start + 2 / fs, start + 4 / fs])
+    assert list(right["Data"][:, 0]) == [100.0, 110.0, 120.0, 130.0, 140.0]
+    assert all(o["SamplingRate"] == -1 for o in out)         # chronic-shaped marker
+    # Feeds the chronic tidy-frame builder unchanged (cutoff strategy avoids kmeans feature needs).
+    cv = adapter.bravo_chronic_to_lfp_df(out, _make_pro_df(), label_metric="nrs",
+                                         label_strategy="cutoff")
+    assert "LFP" in cv.columns and "LFP_smoothed" in cv.columns and len(cv) == 8
+
+
 if __name__ == "__main__":
     test_adapter_reshape_preserves_psd()
     test_compute_psd_pain_correlation_runs()
@@ -344,4 +377,5 @@ if __name__ == "__main__":
     test_kmeans_pain_level_labels_high_pain_as_one()
     test_bravo_chronic_kmeans_strategy()
     test_kmeans_falls_back_to_cutoff_and_warns()
+    test_bravo_powerdomain_to_chronic_like()
     print("All adapter tests passed.")

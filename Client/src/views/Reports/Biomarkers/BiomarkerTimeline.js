@@ -1,6 +1,6 @@
 /**
  * BiomarkerTimeline -- clean stacked-subplot timeline for the unified biomarker frame.
- * Each measure (time-domain biomarker, chronic LFP + threshold, pain/NRS, stim amplitude) gets
+ * Each measure (time-domain biomarker, power-domain LFP + threshold, pain, stim amplitude) gets
  * its own row sharing one time axis, with human-readable names -- avoids a cluttered single plot
  * with a long horizontal legend. Self-contained via plotly.js-dist.
  */
@@ -12,7 +12,7 @@ import MDBox from "components/MDBox";
 
 const C = {
   td: "#1A73E8",        // time-domain biomarker
-  lfp: "#00897B",       // chronic LFP power
+  lfp: "#00897B",       // power-domain LFP power
   threshold: "#8E8E8E", // learned threshold
   pain: "#E53935",      // NRS / pain
   stim: "#FB8C00",      // stim amplitude
@@ -47,16 +47,17 @@ function BiomarkerTimeline({ data, height }) {
         traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
     }
-    if (has("chronic_biomarker_value")) {
-      const tr = [{ name: "LFP power", y: col("chronic_biomarker_value"), color: C.lfp }];
-      if (has("chronic_threshold")) {
-        tr.push({ name: "Threshold", y: col("chronic_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
+    if (has("powerdomain_biomarker_value")) {
+      const tr = [{ name: "LFP power", y: col("powerdomain_biomarker_value"), color: C.lfp }];
+      if (has("powerdomain_threshold")) {
+        tr.push({ name: "Threshold", y: col("powerdomain_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
       }
-      rows.push({ title: "Chronic LFP power", unit: "LFP (a.u.)", traces: tr });
+      rows.push({ title: "Power-domain LFP power", unit: "LFP (a.u.)", traces: tr });
     }
-    const painCol = pick("chronic_nrs", "td_nrs_min", "td_nrs_mean", "nrs");
-    if (painCol) rows.push({ title: "Pain (NRS)", unit: "NRS", traces: [{ name: "NRS", y: col(painCol), color: C.pain }] });
-    const stimCol = pick("chronic_stim_amplitude", "td_stim_amplitude");
+    const m = data.label_metric || "nrs";
+    const painCol = pick(`powerdomain_${m}`, `td_${m}_min`, `td_${m}_mean`, m, "powerdomain_nrs", "td_nrs_min", "nrs");
+    if (painCol) rows.push({ title: `Pain (${m})`, unit: m, traces: [{ name: m, y: col(painCol), color: C.pain }] });
+    const stimCol = pick("powerdomain_stim_amplitude", "td_stim_amplitude");
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
     const n = Math.max(rows.length, 1);

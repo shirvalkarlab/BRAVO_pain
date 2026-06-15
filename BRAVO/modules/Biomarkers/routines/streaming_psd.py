@@ -12,8 +12,9 @@ What is verbatim vs. ported:
     `pearson_corr_psd_label`, `zscore_per_freq`, `remove_aperiodic`, `relative_power`,
     `align_and_standardize_label`) are copied BYTE-FOR-BYTE from the notebook (cell 19).
   * `welch_psd_for_instance` ports the signal-processing logic of notebook cell 8
-    (Butterworth high-pass + 60 Hz notch + Welch nperseg=1024 + interp to F_SET). The
-    filter design, Welch parameters, and interpolation are identical to the notebook.
+    (Butterworth high-pass + Welch nperseg=1024 + interp to F_SET). The Welch parameters and
+    interpolation are identical to the notebook. The cell-8 60 Hz IIR notch is INTENTIONALLY
+    OMITTED here (PI request: preserve 60 Hz — no powerline notch).
     Two LATENT INDEXING/GLUE issues in the original cell are corrected here and flagged:
       (a) time-axis truncation to 5 min: the notebook used `len(inst_data)` which truncates
           only single-channel (1-D) groups, never multi-channel (2-D) groups. Here we always
@@ -31,7 +32,7 @@ The transform functions operate on PSD arrays of shape (E, C, F):
 """
 
 import numpy as np
-from scipy.signal import welch, butter, iirnotch, filtfilt
+from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
 
 # Frequency grid the notebook interpolates every PSD onto (cell 8).
@@ -248,8 +249,9 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
                            f_set=F_SET, max_seconds=5 * 60):
     """
     Compute one PSD epoch, shaped (1, len(chan_order), len(f_set)), from one streaming
-    group. Signal-processing identical to notebook cell 8: 4th-order Butterworth high-pass
-    at Wn=1/nyq, 60 Hz IIR notch (Q=30), Welch nperseg=1024, linear interp onto `f_set`.
+    group. Signal-processing: 4th-order Butterworth high-pass at Wn=1/nyq, Welch nperseg=1024,
+    linear interp onto `f_set`. (The notebook cell 8's 60 Hz IIR notch is intentionally omitted
+    per PI request — 60 Hz is preserved, not attenuated.)
 
     Parameters
     ----------
@@ -268,9 +270,10 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     """
     fs = float(fs)
     nyq = fs / 2.0
-    # Butterworth high-pass (cell 8: `butter(4, 1/nyq, btype='high')`) + 60 Hz notch.
+    # Butterworth high-pass (cell 8: `butter(4, 1/nyq, btype='high')`) for DC/drift removal.
+    # NOTE: the notebook's 60 Hz IIR notch is INTENTIONALLY OMITTED (per PI request: no powerline
+    # notch, so 60 Hz is preserved in the PSD and can be a biomarker). This deviates from cell 8.
     b, a = butter(4, 1 / nyq, btype='high', analog=False, output='ba')
-    b_notch, a_notch = iirnotch(60, 30, fs)
 
     data = np.atleast_2d(np.asarray(channel_data, dtype=float))  # (n_ch, n_samples)
 
@@ -280,7 +283,6 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
         data = data[:, :n_keep]
 
     data = filtfilt(b, a, data, axis=-1)
-    data = filtfilt(b_notch, a_notch, data, axis=-1)
 
     f, Pxx = welch(data, fs=fs, nperseg=1024, axis=-1)  # (n_ch, F_welch)
     Pxx = np.array([np.interp(f_set, f, Pxx[i, :]) for i in range(Pxx.shape[0])])

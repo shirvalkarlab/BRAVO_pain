@@ -13,6 +13,8 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 """
 
 import os
+import json
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -25,9 +27,76 @@ from . import adapter
 from .routines import redcap_client
 from .routines import analytics
 
-# DB recording types that decode to 250 Hz time-domain LFP and to the ~10-min chronic trend.
+# DB recording types. Time-domain = raw 250 Hz LFP. The "power domain" source merges TWO
+# band-power-over-time streams: the ~10-min Chronic (BrainSense Timeline) trend AND the per-session
+# BrainSense Power-Domain band power — concatenated so power is compared apples-to-apples.
 TIMEDOMAIN_TYPES = ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]
 CHRONIC_TYPES = ["MedtronicChronicBrainSense"]
+POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
+
+# How many worker threads the recording loader uses. Decoding each .bdat is independent and
+# largely GIL-friendly (file I/O + numpy), so threads give near-linear speedup. Defaults to all
+# available cores; override with BRAVO_BIOMARKER_THREADS.
+def _loader_threads():
+    try:
+        env = int(os.environ.get("BRAVO_BIOMARKER_THREADS", "0"))
+        if env > 0:
+            return env
+    except (TypeError, ValueError):
+        pass
+    return os.cpu_count() or 4
+
+
+# Pain metrics the LFP biomarker can be computed against (correlated for time-domain; clustered
+# into the binary pain_level for the chronic detector). The composite is a normalized blend of
+# MPQ sum + left-leg VAS. `key` must be a column in the tidy PRO table (composite is synthesized).
+BIOMARKER_METRICS = [
+    {"key": "nrs", "label": "NRS (0–10)"},
+    {"key": "vas", "label": "Overall VAS"},
+    {"key": "left_leg_vas", "label": "Left Leg VAS"},
+    {"key": "back_vas", "label": "Back VAS"},
+    {"key": "mpq_sum", "label": "MPQ Sum"},
+    {"key": "composite_mpq_leftleg", "label": "Composite (MPQ + Left Leg VAS)"},
+]
+DEFAULT_BIOMARKER_METRIC = "nrs"
+COMPOSITE_METRIC = "composite_mpq_leftleg"
+COMPOSITE_PARTS = ("mpq_sum", "left_leg_vas")
+
+
+def _resolve_biomarker_metric(request_data, pro_df):
+    """Resolve the requested `LabelMetric` against `pro_df`.
+
+    Returns (pro_df, label_metric, kmeans_features):
+      * label_metric   : PRO column the biomarker is computed against (time-domain PSD<->pain
+                         correlation; chronic carried/display metric). For the composite this is
+                         a freshly-added, min-max-normalized (0–100) blend column.
+      * kmeans_features: feature(s) the chronic detector clusters into the binary pain_level —
+                         a single selected metric -> [metric]; the composite -> [mpq_sum,
+                         left_leg_vas] (which is also the source notebook's 2-D KMeans labeler).
+    Unknown selections, or a composite whose parts are absent, fall back to the default metric.
+    """
+    metric = request_data.get("LabelMetric") or DEFAULT_BIOMARKER_METRIC
+    if metric not in {m["key"] for m in BIOMARKER_METRICS}:
+        metric = DEFAULT_BIOMARKER_METRIC
+
+    if metric == COMPOSITE_METRIC:
+        parts = [p for p in COMPOSITE_PARTS if p in pro_df.columns]
+        if parts:
+            df = pro_df.copy()
+            norms = []
+            for p in parts:
+                v = pd.to_numeric(df[p], errors="coerce")
+                arr = v.to_numpy(dtype=float)
+                if np.isfinite(arr).any():
+                    lo, hi = np.nanmin(arr), np.nanmax(arr)
+                    norms.append((v - lo) / (hi - lo) if hi > lo else v * 0.0)
+                else:
+                    norms.append(v * 0.0)
+            df[COMPOSITE_METRIC] = 100.0 * sum(norms) / len(norms)
+            return df, COMPOSITE_METRIC, tuple(parts)
+        metric = DEFAULT_BIOMARKER_METRIC  # composite parts unavailable -> fall back
+
+    return pro_df, metric, (metric,)
 
 
 def _load_recordings(participant_uid, types):
@@ -38,17 +107,27 @@ def _load_recordings(participant_uid, types):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     if not SourceFiles:
         return []
-    Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=types)
-    loaded = []
-    for rec in Recordings:
+    Recordings = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
+    if not Recordings:
+        return []
+
+    # Decode the .bdat files concurrently — independent reads, so this scales with cores. Only
+    # the file pointer/hash (already-fetched attrs) are touched per task, so no ORM call runs in
+    # a worker thread. Each task returns the decoded payload (or None on failure).
+    def _decode(rec):
         try:
-            data = Database.loadSourceFile(rec.pointer, rec.hashed)
+            return Database.loadSourceFile(rec.pointer, rec.hashed)
         except Exception:
-            continue
-        if isinstance(data, list):
-            loaded.extend([d for d in data if isinstance(d, dict)])
-        elif isinstance(data, dict):
-            loaded.append(data)
+            return None
+
+    workers = max(1, min(len(Recordings), _loader_threads()))
+    loaded = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for data in pool.map(_decode, Recordings):
+            if isinstance(data, list):
+                loaded.extend([d for d in data if isinstance(d, dict)])
+            elif isinstance(data, dict):
+                loaded.append(data)
     return loaded
 
 
@@ -61,17 +140,64 @@ def _derive_chan_order(td_recordings):
     return order
 
 
-def _load_pros(request_data):
-    """Resolve the PRO DataFrame.
+def _pt_config_dir():
+    """Directory holding per-patient `<name>_config.json` field maps. Defaults to the
+    live-mounted `<BRAVO>/pt_config`; override with the BRAVO_PT_CONFIG_DIR env var."""
+    env = os.environ.get("BRAVO_PT_CONFIG_DIR")
+    if env:
+        return env
+    # this file: <BRAVO>/modules/Biomarkers/bravo_service.py -> BRAVO base is three dirs up.
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(base, "pt_config")
 
-    Priority: (1) `ProcessedPRO` records passed in the request body (list of dicts);
-    (2) a REDCap pull when REDCAP_API_URL / REDCAP_API_TOKEN are set (optionally filtered to
-    `RedcapRecordId`). Returns None when no PRO source is configured.
+
+def _load_pt_config(participant, request_data):
+    """Locate and parse a participant's pt_config (the same file the library-mode pipeline reads
+    for channel order; it also carries the REDCap field map). Resolution order:
+    explicit `PtConfig` in the request, then `<dir>/<RedcapRecordId>_config.json`, then
+    `<dir>/<participant name>_config.json`. Returns the dict, or None if no file is found."""
+    cfg_dir = _pt_config_dir()
+    candidates = []
+    explicit = request_data.get("PtConfig")
+    if explicit:
+        candidates += [explicit, os.path.join(cfg_dir, explicit),
+                       os.path.join(cfg_dir, f"{explicit}_config.json")]
+    rid = request_data.get("RedcapRecordId")
+    if rid:
+        candidates.append(os.path.join(cfg_dir, f"{rid}_config.json"))
+    if participant is not None and getattr(participant, "name", ""):
+        candidates.append(os.path.join(cfg_dir, f"{participant.name}_config.json"))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            with open(path, "r") as fp:
+                return json.load(fp)
+    return None
+
+
+def _resolve_field_map(request_data, participant):
+    """A REDCap field map for `process_redcap`: an inline `RedcapFieldMap` in the request takes
+    precedence, else the participant's pt_config file. None if neither is available."""
+    return request_data.get("RedcapFieldMap") or _load_pt_config(participant, request_data)
+
+
+def _load_pros(request_data, participant=None):
+    """Resolve the tidy PRO DataFrame (canonical columns: `date_time_s1_daily`, `nrs`, `vas`, ...).
+
+    Priority:
+      1. `ProcessedPRO` in the request body (a list of already-tidy dicts).
+      2. A REDCap pull (REDCAP_API_URL / REDCAP_API_TOKEN set). If a field map is available
+         (inline `RedcapFieldMap` or the participant's pt_config), the raw export is mapped to
+         tidy columns via `redcap_client.process_redcap`; otherwise the raw rows are returned
+         filtered only by `RedcapRecordId` (legacy fallback).
+    Returns None when no PRO source is configured.
     """
     if request_data.get("ProcessedPRO"):
         return pd.DataFrame(request_data["ProcessedPRO"])
     if os.environ.get("REDCAP_API_URL") and os.environ.get("REDCAP_API_TOKEN"):
         df = redcap_client.pull_redcap()  # token via env vars
+        field_map = _resolve_field_map(request_data, participant)
+        if field_map:
+            return redcap_client.process_redcap(df, field_map)
         df = df.reset_index()
         rid = request_data.get("RedcapRecordId")
         if rid is not None and "record_id" in df.columns:
@@ -137,23 +263,47 @@ def _demo_inputs():
     return recordings, chronic, pro, chan_order
 
 
-def _demo_run(source):
+def _demo_run(source, request_data=None):
     recordings, chronic, pro, chan_order = _demo_inputs()
     td = recordings if source in ("timedomain", "both") else []
-    ch = chronic if source in ("chronic", "both") else None
+    ch = chronic if source in ("powerdomain", "both") else None
+    pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data or {}, pro)
     run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
-                                 train_days=3, gap_days=1, test_days=2)
-    out = _serialize_run(run, _compute_analytics(run, ch, pro))
+                                 train_days=3, gap_days=1, test_days=2,
+                                 label_metric=label_metric, kmeans_features=kmeans_features)
+    out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
+                                                 kmeans_features=kmeans_features))
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
+    out["label_metric"] = label_metric
+    out["available_metrics"] = BIOMARKER_METRICS
     return out
 
 
-def _compute_analytics(run, chronic, pro_df, label_metric="nrs"):
+def _run_parallel(tasks):
+    """Run a dict of {key: zero-arg callable} concurrently (threads) and return {key: result}.
+    Each task is guarded independently so one failing analytic stores {'error': ...} under its key
+    instead of sinking the rest. numpy/pandas/sklearn release the GIL on the heavy ops, so these
+    run truly in parallel."""
+    if not tasks:
+        return {}
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(tasks), _loader_threads())) as pool:
+        futures = {key: pool.submit(fn) for key, fn in tasks.items()}
+        for key, fut in futures.items():
+            try:
+                out[key] = fut.result()
+            except Exception as e:
+                out[key] = {"error": str(e)}
+    return out
+
+
+def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
+                       kmeans_features=("left_leg_vas", "mpq_sum")):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
-    cluster scatter, and the streaming correlation spectrum). Each piece is guarded so an
-    analytics failure never breaks the main timeline response.
+    cluster scatter, and the streaming correlation spectrum). The independent pieces run
+    concurrently; each is guarded so an analytics failure never breaks the main timeline response.
     """
-    result = {"timedomain": None, "chronic": None}
+    result = {"timedomain": None, "powerdomain": None}
 
     td = run.get("timedomain")
     if td is not None:
@@ -161,25 +311,26 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs"):
             det = td["detail"]
             tl = td.get("timeline")
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
-            result["timedomain"] = {
-                "corr_spectrum": analytics.corr_spectrum(det),
-                "psd_spectra": analytics.psd_spectra(det),
-                "spectrogram": analytics.psd_spectrogram(det, times),
-            }
+            result["timedomain"] = _run_parallel({
+                "corr_spectrum": lambda: analytics.corr_spectrum(det),
+                "psd_spectra": lambda: analytics.psd_spectra(det),
+                "spectrogram": lambda: analytics.psd_spectrogram(det, times),
+            })
         except Exception as e:
             result["timedomain"] = {"error": str(e)}
 
     if chronic is not None and pro_df is not None and len(pro_df) > 0:
         try:
-            cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric)
-            result["chronic"] = {
-                "sliding_window": analytics.sliding_window_analytics(cv_df),
-                "roc": analytics.roc_analysis(cv_df),
-                "lfp_distribution": analytics.lfp_distribution(cv_df),
-                "cluster_scatter": analytics.cluster_scatter(cv_df),
-            }
+            cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
+                                                    kmeans_features=kmeans_features)
+            result["powerdomain"] = _run_parallel({
+                "sliding_window": lambda: analytics.sliding_window_analytics(cv_df),
+                "roc": lambda: analytics.roc_analysis(cv_df),
+                "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
+                "cluster_scatter": lambda: analytics.cluster_scatter(cv_df),
+            })
         except Exception as e:
-            result["chronic"] = {"error": str(e)}
+            result["powerdomain"] = {"error": str(e)}
 
     return result
 
@@ -193,23 +344,36 @@ def run_for_participant(request_data):
     """
     participant_uid = request_data["ParticipantId"]
     source = request_data.get("source", "both")
-    if source not in ("timedomain", "chronic", "both"):
+    # "powerdomain" is the canonical name for the band-power-over-time source (complementary to
+    # "timedomain"). It merges the ~10-min Chronic timeline with the per-session Power-Domain band
+    # power. "chronic" is accepted as a back-compat alias.
+    if source == "chronic":
+        source = "powerdomain"
+    if source not in ("timedomain", "powerdomain", "both"):
         source = "both"
 
     # Demo participant -> synthetic timeline (lets the card render before real data exists).
     Participant = models.Participant.find(uid=participant_uid)
     if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
-        return _demo_run(source)
+        return _demo_run(source, request_data)
 
     td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES) if source in ("timedomain", "both") else []
-    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES) if source in ("chronic", "both") else []
-    pro_df = _load_pros(request_data)
+
+    # Power domain = Chronic ~10-min LFP power + per-session Power-Domain band power, concatenated
+    # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
+    power_list = []
+    if source in ("powerdomain", "both"):
+        chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+        powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+        power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
+
+    pro_df = _load_pros(request_data, Participant)
 
     missing = []
     if source in ("timedomain", "both") and not td:
         missing.append("time-domain BrainSense recordings")
-    if source in ("chronic", "both") and not chronic_list:
-        missing.append("chronic BrainSense Timeline recordings")
+    if source in ("powerdomain", "both") and not power_list:
+        missing.append("power-domain recordings (Chronic BrainSense Timeline or Power Domain)")
     if pro_df is None or len(pro_df) == 0:
         missing.append("REDCap PRO data (set REDCAP_API_URL/REDCAP_API_TOKEN, or pass ProcessedPRO)")
     if missing:
@@ -217,17 +381,35 @@ def run_for_participant(request_data):
                 "message": "Cannot compute biomarker — missing: " + "; ".join(missing) + "."}
 
     chan_order = _derive_chan_order(td)
-    chronic = chronic_list if chronic_list else None
+    chronic = power_list if power_list else None
 
-    run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic)
-    return _serialize_run(run, _compute_analytics(run, chronic, pro_df))
+    pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
+    run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
+                                 label_metric=label_metric, kmeans_features=kmeans_features)
+    out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
+                                                 kmeans_features=kmeans_features))
+    out["label_metric"] = label_metric
+    out["available_metrics"] = BIOMARKER_METRICS
+    return out
+
+
+# Cap the timeline returned for plotting. The power-domain merge can produce 100k+ rows (2 Hz
+# Power-Domain over long sessions), which is far more than a browser can plot and would bloat the
+# response to ~100 MB. The detector, summary, and analytics already ran on FULL resolution; this
+# only thins what is sent for the chart.
+_TIMELINE_MAX_POINTS = 6000
 
 
 def _serialize_run(run, analytics_data=None):
     """Convert a run_biomarker result into the JSON-able dict the card consumes."""
     combined = run["combined"]
+    n_full = len(combined) if hasattr(combined, "__len__") else 0
     if hasattr(combined, "to_dict"):
         combined = combined.copy()
+        # Decimate (stride) for transport/plotting only — science already used full resolution.
+        if len(combined) > _TIMELINE_MAX_POINTS:
+            stride = int(np.ceil(len(combined) / _TIMELINE_MAX_POINTS))
+            combined = combined.iloc[::stride].reset_index(drop=True)
         # Stringify datetime/date columns so DRF's JSON renderer can serialize them.
         for col in combined.columns:
             dtype = str(combined[col].dtype)
@@ -243,9 +425,11 @@ def _serialize_run(run, analytics_data=None):
         "source": run["source"],
         "channels": channels,
         "timeline": records,
+        "timeline_points": len(records),
+        "timeline_points_full": n_full,   # full-resolution row count (pre-decimation)
         "summary": {
             "timedomain": run["timedomain"]["summary"] if run.get("timedomain") else None,
-            "chronic": run["chronic"]["summary"] if run.get("chronic") else None,
+            "powerdomain": run["powerdomain"]["summary"] if run.get("powerdomain") else None,
         },
         "analytics": analytics_data,
         "message": "",
@@ -326,7 +510,7 @@ def pain_scores_for_participant(request_data):
     Participant = models.Participant.find(uid=participant_uid)
     demo = Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN
 
-    pro = _demo_pain_scores() if demo else _load_pros(request_data)
+    pro = _demo_pain_scores() if demo else _load_pros(request_data, Participant)
     if pro is None or len(pro) == 0:
         return {"metrics": [], "n_reports": 0,
                 "message": "No pain-score reports found. Set REDCAP_API_URL / REDCAP_API_TOKEN "

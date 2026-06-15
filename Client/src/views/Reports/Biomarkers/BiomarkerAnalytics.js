@@ -57,7 +57,7 @@ const HI = "#E53935", LO = "#1A73E8";
 export default function BiomarkerAnalytics({ analytics }) {
   if (!analytics) return null;
   const td = analytics.timedomain || {};
-  const chronic = analytics.chronic || {};
+  const chronic = analytics.powerdomain || analytics.chronic || {};
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
@@ -144,7 +144,7 @@ export default function BiomarkerAnalytics({ analytics }) {
         line: { width: 1, color: "#9E9E9E", dash: "dash" }, hoverinfo: "skip" },
     ];
     chPanels.push(
-      <Panel key="roc" title="ROC curve (chronic LFP vs pain)">
+      <Panel key="roc" title="ROC curve (power-domain LFP vs pain)">
         <Fig traces={traces} layout={{ xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] }, legend: { orientation: "h", y: -0.25 } }} />
       </Panel>
@@ -182,7 +182,7 @@ export default function BiomarkerAnalytics({ analytics }) {
       <Section title="Time-domain analysis (250 Hz streaming PSD)"
                subtitle="Pearson-R spectrum, mean PSD by pain state, and PSD spectrogram per contact pair."
                panels={tdPanels} />
-      <Section title="Chronic analysis (10-min LFP trend)"
+      <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle="Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, LFP distribution, and pain clusters."
                panels={chPanels} />
     </>
