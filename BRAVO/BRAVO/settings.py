@@ -43,14 +43,30 @@ os.makedirs(DATASERVER_PATH + "visualization", exist_ok=True)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = not (os.environ.get('DJANGO_MODE') == "PRODUCTION")
 
-CSRF_TRUSTED_ORIGINS = ["http://localhost:27286", os.environ.get('SERVER_ADDRESS')]
+CSRF_TRUSTED_ORIGINS = [o for o in [
+    "http://localhost:27286", "http://localhost", "http://localhost:80",
+    "http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1:27286",
+    os.environ.get('SERVER_ADDRESS'),
+] if o]
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_SAMESITE = "Lax"
 #SESSION_COOKIE_HTTPONLY = True
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 3600*1  # 1 hour
 
-ALLOWED_HOSTS = ["localhost", os.environ.get('SERVER_HOST')]
+ALLOWED_HOSTS = [h for h in ["localhost", "127.0.0.1", os.environ.get('SERVER_HOST')] if h]
+
+# LOCAL DEV (DEBUG): make a localhost Docker instance "just work" -- accept any host and let the
+# SPA origin (served on :80) call the API with credentials whether same-origin or cross-origin to
+# :27286. Production (DJANGO_MODE=PRODUCTION) keeps the strict lists above.
+if DEBUG:
+    ALLOWED_HOSTS = ["*"]
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost", "http://localhost:80", "http://localhost:27286",
+        "http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1:27286",
+    ]
+    CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
 

@@ -125,14 +125,22 @@ def checkConfiguration(metadata, config):
     return True
 
 def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=None):
+    from django.conf import settings
+
     Permission = {
         "Deidentified": True,
     }
 
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
-        return False 
-    
+        return False
+
+    # LOCAL DEV (DEBUG): grant full access to any authenticated user so a localhost instance
+    # never blocks data with "you do not have permission to perform this action". Production
+    # (DJANGO_MODE=PRODUCTION) falls through to the real institute/study checks below.
+    if settings.DEBUG:
+        return {"Deidentified": False}
+
     if Participant.institute.has_permission(user):
         Permission["Deidentified"] = False
         return Permission
