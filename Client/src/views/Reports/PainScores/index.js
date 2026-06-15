@@ -55,6 +55,61 @@ function MetricChart({ metric, color }) {
   return <div ref={ref} style={{ width: "100%" }} />;
 }
 
+// All metrics on one normalized [0,1] axis (each scaled by its own range) to compare trajectories.
+function NormalizedOverlay({ metrics }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !metrics.length) return;
+    const traces = metrics.map((m, i) => {
+      const [lo, hi] = m.range;
+      const color = PALETTE[i % PALETTE.length];
+      return {
+        x: m.points.map((p) => new Date(p.t)),
+        y: m.points.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
+        name: m.label, type: "scatter", mode: "lines+markers",
+        line: { color, width: 2 }, marker: { size: 3, color }, connectgaps: false,
+      };
+    });
+    Plotly.react(ref.current, traces, {
+      height: 400, margin: { l: 52, r: 16, t: 12, b: 40 },
+      xaxis: { type: "date", title: "Time" },
+      yaxis: { title: "Normalized (0 = best, 1 = worst of range)", range: [-0.03, 1.05] },
+      legend: { orientation: "h", y: -0.2 }, hovermode: "x unified",
+    }, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
+  }, [metrics]);
+  return <div ref={ref} style={{ width: "100%" }} />;
+}
+
+// Pearson correlation heatmap: every metric vs every other metric.
+function CorrelationHeatmap({ correlation }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !correlation || !correlation.matrix || correlation.matrix.length < 2) return;
+    const labels = correlation.labels;
+    const z = correlation.matrix;
+    const ann = [];
+    for (let i = 0; i < z.length; i++) {
+      for (let j = 0; j < z.length; j++) {
+        const v = z[i][j];
+        if (v != null) ann.push({ x: labels[j], y: labels[i], text: v.toFixed(2), showarrow: false,
+          font: { size: 10, color: Math.abs(v) > 0.55 ? "white" : "#344767" } });
+      }
+    }
+    Plotly.react(ref.current, [{
+      type: "heatmap", z, x: labels, y: labels, zmin: -1, zmax: 1,
+      colorscale: "RdBu", reversescale: true, colorbar: { title: "r" },
+      hovertemplate: "%{y} ↔ %{x}<br>r = %{z:.2f}<extra></extra>",
+    }], {
+      height: 480, margin: { l: 140, r: 20, t: 16, b: 140 },
+      annotations: ann, xaxis: { tickangle: -40, automargin: true },
+      yaxis: { autorange: "reversed", automargin: true },
+    }, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
+  }, [correlation]);
+  return <div ref={ref} style={{ width: "100%" }} />;
+}
+
 function PainScores() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
@@ -99,6 +154,28 @@ function PainScores() {
                 ) : null}
               </Card>
             </Grid>
+
+            {metrics.length > 0 ? (
+              <Grid item xs={12}>
+                <Card sx={{ width: "100%" }}>
+                  <MDBox p={2}>
+                    <MDTypography variant="h6" fontSize={18} mb={0.5}>Normalized trajectories (all metrics)</MDTypography>
+                    <NormalizedOverlay metrics={metrics} />
+                  </MDBox>
+                </Card>
+              </Grid>
+            ) : null}
+
+            {data && data.correlation && data.correlation.matrix && data.correlation.matrix.length > 1 ? (
+              <Grid item xs={12} lg={8}>
+                <Card sx={{ width: "100%" }}>
+                  <MDBox p={2}>
+                    <MDTypography variant="h6" fontSize={18} mb={0.5}>Metric correlation (Pearson r)</MDTypography>
+                    <CorrelationHeatmap correlation={data.correlation} />
+                  </MDBox>
+                </Card>
+              </Grid>
+            ) : null}
 
             {metrics.map((m, i) => (
               <Grid item xs={12} md={6} lg={4} key={m.key}>

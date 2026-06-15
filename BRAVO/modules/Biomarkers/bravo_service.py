@@ -332,5 +332,18 @@ def pain_scores_for_participant(request_data):
             pts.sort(key=lambda p: p["t"])
             metrics.append({"key": key, "label": label, "range": rng_, "points": pts})
 
-    return {"metrics": metrics, "n_reports": int(t.notna().sum()),
+    # Pearson correlation between metrics (pairwise over aligned reports).
+    present = [m["key"] for m in metrics]
+    correlation = {"keys": [], "labels": [], "matrix": []}
+    if len(present) >= 2:
+        num = pro[present].apply(pd.to_numeric, errors="coerce")
+        cmat = num.corr(method="pearson")
+        label_of = {m["key"]: m["label"] for m in metrics}
+        correlation = {
+            "keys": present,
+            "labels": [label_of[k] for k in present],
+            "matrix": [[_f(cmat.loc[a, b]) for b in present] for a in present],
+        }
+
+    return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
             "message": "DEMO DATA — synthetic pain-score reports." if demo else ""}
