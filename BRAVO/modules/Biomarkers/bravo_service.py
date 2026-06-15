@@ -264,18 +264,24 @@ def _demo_inputs():
 
 
 def _demo_run(source, request_data=None):
+    request_data = request_data or {}
     recordings, chronic, pro, chan_order = _demo_inputs()
     td = recordings if source in ("timedomain", "both") else []
     ch = chronic if source in ("powerdomain", "both") else None
-    pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data or {}, pro)
+    pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro)
+    train_days, sliding, window_months = _window_params(request_data)
+    demo_train_days = train_days if train_days is not None else 3   # demo spans ~14 days
     run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
-                                 train_days=3, gap_days=1, test_days=2,
+                                 train_days=demo_train_days, gap_days=1, test_days=2, sliding=sliding,
                                  label_metric=label_metric, kmeans_features=kmeans_features)
     out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
-                                                 kmeans_features=kmeans_features))
+                                                 kmeans_features=kmeans_features,
+                                                 train_days=train_days, sliding=sliding))
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
+    out["sliding_window"] = sliding
+    out["window_months"] = window_months
     return out
 
 
@@ -298,7 +304,8 @@ def _run_parallel(tasks):
 
 
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
-                       kmeans_features=("left_leg_vas", "mpq_sum")):
+                       kmeans_features=("left_leg_vas", "mpq_sum"),
+                       train_days=None, sliding=True):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -321,10 +328,18 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
 
     if chronic is not None and pro_df is not None and len(pro_df) > 0:
         try:
-            cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
-                                                    kmeans_features=kmeans_features)
+            # Reuse the branch's full-resolution cv_df if available (avoids a second KMeans +
+            # smoothing over 100k+ rows); fall back to building it when running analytics alone.
+            pr = run.get("powerdomain")
+            cv_df = pr.get("cv_df") if isinstance(pr, dict) and pr.get("cv_df") is not None else None
+            if cv_df is None:
+                cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
+                                                        kmeans_features=kmeans_features)
+            sw_kwargs = {"sliding": sliding}
+            if train_days is not None:
+                sw_kwargs["train_days"] = train_days
             result["powerdomain"] = _run_parallel({
-                "sliding_window": lambda: analytics.sliding_window_analytics(cv_df),
+                "sliding_window": lambda: analytics.sliding_window_analytics(cv_df, **sw_kwargs),
                 "roc": lambda: analytics.roc_analysis(cv_df),
                 "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
                 "cluster_scatter": lambda: analytics.cluster_scatter(cv_df),
@@ -333,6 +348,37 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             result["powerdomain"] = {"error": str(e)}
 
     return result
+
+
+_DAYS_PER_MONTH = 30.44
+
+
+def _window_params(request_data):
+    """Resolve the sliding-window controls from the request.
+
+    Returns (train_days, sliding, window_months):
+      * window_months: `WindowMonths` request value (float) or None — the training-window
+        duration the user picked; converted to train_days = round(months * 30.44).
+      * train_days: None when WindowMonths absent (callers keep each function's own default).
+      * sliding: `SlidingWindow` bool (default True). False -> the power-domain detector and the
+        sliding-window analytic run on ALL data at once (no temporal windows).
+    """
+    sliding = request_data.get("SlidingWindow", True)
+    if isinstance(sliding, str):
+        sliding = sliding.strip().lower() not in ("false", "0", "no", "off", "")
+    sliding = bool(sliding)
+
+    months = request_data.get("WindowMonths")
+    train_days = None
+    window_months = None
+    if months is not None and months != "":
+        try:
+            window_months = float(months)
+            train_days = max(1, int(round(window_months * _DAYS_PER_MONTH)))
+        except (TypeError, ValueError):
+            window_months = None
+            train_days = None
+    return train_days, sliding, window_months
 
 
 def run_for_participant(request_data):
@@ -384,12 +430,21 @@ def run_for_participant(request_data):
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
+    train_days, sliding, window_months = _window_params(request_data)
+    rb_kwargs = {"sliding": sliding}
+    if train_days is not None:
+        rb_kwargs["train_days"] = train_days
+
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
-                                 label_metric=label_metric, kmeans_features=kmeans_features)
+                                 label_metric=label_metric, kmeans_features=kmeans_features,
+                                 **rb_kwargs)
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
-                                                 kmeans_features=kmeans_features))
+                                                 kmeans_features=kmeans_features,
+                                                 train_days=train_days, sliding=sliding))
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
+    out["sliding_window"] = sliding
+    out["window_months"] = window_months
     return out
 
 
@@ -401,23 +456,27 @@ _TIMELINE_MAX_POINTS = 6000
 
 
 def _serialize_run(run, analytics_data=None):
-    """Convert a run_biomarker result into the JSON-able dict the card consumes."""
+    """Convert a run_biomarker result into the JSON-able dict the card consumes.
+
+    INVARIANT: `analytics_data` (from _compute_analytics) and `run[...]['summary']` are computed
+    UPSTREAM on FULL-resolution data and are passed through here verbatim. This function ONLY thins
+    `run['combined']` for plotting (via adapter.decimate_for_plot) — it must never recompute a
+    metric from the thinned frame. Callers MUST evaluate _compute_analytics(run, ...) BEFORE
+    calling _serialize_run (Python arg-eval order guarantees this at the existing call sites).
+    """
     combined = run["combined"]
     n_full = len(combined) if hasattr(combined, "__len__") else 0
     if hasattr(combined, "to_dict"):
-        combined = combined.copy()
-        # Decimate (stride) for transport/plotting only — science already used full resolution.
-        if len(combined) > _TIMELINE_MAX_POINTS:
-            stride = int(np.ceil(len(combined) / _TIMELINE_MAX_POINTS))
-            combined = combined.iloc[::stride].reset_index(drop=True)
+        # PLOT-ONLY decimation on a COPY — full-resolution run['combined'] is left untouched.
+        combined_plot = adapter.decimate_for_plot(combined, _TIMELINE_MAX_POINTS).copy()
         # Stringify datetime/date columns so DRF's JSON renderer can serialize them.
-        for col in combined.columns:
-            dtype = str(combined[col].dtype)
+        for col in combined_plot.columns:
+            dtype = str(combined_plot[col].dtype)
             if "datetime" in dtype or "date" in dtype or col in ("time", "date"):
-                combined[col] = combined[col].astype(str)
-        combined = combined.replace({np.nan: None})
-        records = combined.to_dict(orient="records")
-        channels = list(combined.columns)
+                combined_plot[col] = combined_plot[col].astype(str)
+        combined_plot = combined_plot.replace({np.nan: None})
+        records = combined_plot.to_dict(orient="records")
+        channels = list(combined_plot.columns)
     else:
         records, channels = [], []
 

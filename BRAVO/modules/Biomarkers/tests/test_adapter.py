@@ -27,6 +27,7 @@ from modules.Biomarkers import adapter
 from modules.Biomarkers import pipeline
 from modules.Biomarkers.routines import streaming_psd
 from modules.Biomarkers.routines import threshold_biomarker
+from modules.Biomarkers.routines import analytics
 
 
 FS = 250.0
@@ -194,6 +195,50 @@ def test_run_chronic_threshold_runs():
     # Threshold should fall between the two class levels and separate them well.
     assert 110.0 <= out["mean_thr_sens"] <= 150.0
     assert out["mean_test_acc_sens"] == 1.0
+
+
+def _make_cv_df(days=14):
+    """Synthetic chronic cv_df: even days high-pain (LFP 150), odd days low (LFP 110)."""
+    rows = []
+    for d in range(days):
+        pain = 1.0 if d % 2 == 0 else 0.0
+        for h in range(0, 24, 2):
+            ts = pd.Timestamp(_dt.datetime.utcfromtimestamp(_MIDNIGHT_UTC + d * 86_400 + h * 3_600))
+            rows.append({"timestamp": ts, "LFP_smoothed": 150.0 if pain else 110.0,
+                         "LFP": 150.0 if pain else 110.0, "stim_amplitude": 2.0, "pain_level": pain})
+    return pd.DataFrame(rows)
+
+
+def test_run_chronic_threshold_no_sliding():
+    """sliding=False -> ONE all-data fit (no temporal windows): n_windows==1, threshold separates
+    the classes, std==0 (single fit). Proves the no-sliding-window toggle path."""
+    out = threshold_biomarker.run_chronic_threshold(_make_cv_df(), sliding=False)
+    assert out["n_windows"] == 1
+    assert np.isfinite(out["mean_thr_sens"]) and 110.0 <= out["mean_thr_sens"] <= 150.0
+    assert out["mean_test_acc_sens"] == 1.0
+    assert out["std_thr_sens"] == 0.0
+
+
+def test_sliding_window_analytics_no_sliding():
+    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on."""
+    cv = _make_cv_df()
+    full = analytics.sliding_window_analytics(cv, sliding=True)
+    one = analytics.sliding_window_analytics(cv, sliding=False)
+    assert len(one) == 1 and one[0].get("all_data") is True
+    assert one[0]["threshold"] is not None
+    assert len(full) > 1   # sliding produces many windows on the same data
+
+
+def test_decimate_for_plot_thins_only():
+    """decimate_for_plot thins rows FOR PLOTTING ONLY: a strict row-subset, columns + values
+    unchanged (no interpolation), under-cap frames returned as-is. Locks the plot-only invariant."""
+    df = pd.DataFrame({"time": list(range(100)), "v": [x * 1.5 for x in range(100)]})
+    out = adapter.decimate_for_plot(df, 10)
+    assert len(out) <= 10
+    assert list(out.columns) == ["time", "v"]            # columns preserved
+    assert out["v"].iloc[0] == 0.0                        # first row kept
+    assert set(out["v"]).issubset(set(df["v"]))           # strict subset: no interpolated values
+    assert len(adapter.decimate_for_plot(df.head(5), 10)) == 5   # under cap -> unchanged
 
 
 def test_merge_timelines_both_and_degenerate():
@@ -378,4 +423,7 @@ if __name__ == "__main__":
     test_bravo_chronic_kmeans_strategy()
     test_kmeans_falls_back_to_cutoff_and_warns()
     test_bravo_powerdomain_to_chronic_like()
+    test_run_chronic_threshold_no_sliding()
+    test_sliding_window_analytics_no_sliding()
+    test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")

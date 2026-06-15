@@ -210,10 +210,60 @@ def run_sliding_window_dual(cv_df, series_start, series_end, thresholds, train_d
 # Thin wrapper (NEW glue -- not science)
 # ============================================================================
 
-def run_chronic_threshold(cv_df, *, thresholds=None, train_days=7, gap_days=1, test_days=2):
+def _global_threshold_fit(cv_df, thresholds):
+    """All-data (NO sliding window) fit: class-balance the whole series by pain_level, pick the
+    sens- and spec-objective thresholds on it, and evaluate on the whole series. Returns the SAME
+    dict shape as `run_sliding_window_dual` with n_windows=1 so downstream code is unchanged.
+
+    This is GLUE (not verbatim science) -- it reuses the verbatim `_find_best_threshold_for_metric`
+    and `_sens_spec` helpers. It is an in-sample fit (train == test == all data): no temporal
+    cross-validation, so its sens/spec are optimistic vs the sliding-window estimates. Used when the
+    user turns the sliding window OFF to characterize the whole dataset with one threshold.
+    """
+    data = cv_df.dropna(subset=["pain_level"])
+    nan_result = dict(
+        n_windows=0,
+        mean_thr_sens=np.nan, std_thr_sens=np.nan,
+        mean_test_acc_sens=np.nan, mean_test_sens_sens=np.nan, mean_test_spec_sens=np.nan,
+        mean_thr_spec=np.nan, std_thr_spec=np.nan,
+        mean_test_acc_spec=np.nan, mean_test_sens_spec=np.nan, mean_test_spec_spec=np.nan,
+    )
+    if len(data) == 0 or data["pain_level"].nunique() < 2:
+        return nan_result
+
+    min_count = int(data["pain_level"].value_counts().min())
+    balanced = pd.concat([
+        data[data["pain_level"] == cls].sample(min_count, random_state=42)
+        for cls in sorted(data["pain_level"].unique())
+    ]).reset_index(drop=True)
+
+    thr_sens, _, _, _ = _find_best_threshold_for_metric(balanced, thresholds, metric="sens")
+    thr_spec, _, _, _ = _find_best_threshold_for_metric(balanced, thresholds, metric="spec")
+
+    true = data["pain_level"].astype(int).values
+    pred_sens = (data["LFP_smoothed"] >= thr_sens).astype(int).values
+    acc_sens = metrics.accuracy_score(true, pred_sens)
+    sens_sens, spec_sens = _sens_spec(true, pred_sens)
+    pred_spec = (data["LFP_smoothed"] >= thr_spec).astype(int).values
+    acc_spec = metrics.accuracy_score(true, pred_spec)
+    sens_spec, spec_spec = _sens_spec(true, pred_spec)
+
+    return dict(
+        n_windows=1,
+        mean_thr_sens=float(thr_sens), std_thr_sens=0.0,
+        mean_test_acc_sens=float(acc_sens), mean_test_sens_sens=float(sens_sens),
+        mean_test_spec_sens=float(spec_sens),
+        mean_thr_spec=float(thr_spec), std_thr_spec=0.0,
+        mean_test_acc_spec=float(acc_spec), mean_test_sens_spec=float(sens_spec),
+        mean_test_spec_spec=float(spec_spec),
+    )
+
+
+def run_chronic_threshold(cv_df, *, thresholds=None, train_days=7, gap_days=1, test_days=2,
+                          sliding=True):
     """
     Convenience wrapper: derive the series bounds from `cv_df` and call the verbatim
-    `run_sliding_window_dual` unchanged.
+    `run_sliding_window_dual` unchanged -- OR, when `sliding=False`, a single all-data fit.
 
     Parameters
     ----------
@@ -222,9 +272,15 @@ def run_chronic_threshold(cv_df, *, thresholds=None, train_days=7, gap_days=1, t
         Candidate LFP thresholds; default np.arange(60, 200, 1) (the notebook grid).
     train_days, gap_days, test_days : int
         Sliding-window geometry (notebook defaults 7 / 1 / 2 -> needs >= ~10 days of data).
+        `train_days` is driven by the user's window-months selection upstream.
+    sliding : bool
+        True (default) -> temporal sliding-window cross-validation (verbatim detector).
+        False -> one threshold fit/evaluated on ALL data (no windows); see `_global_threshold_fit`.
     """
     if thresholds is None:
         thresholds = np.arange(60, 200, 1)
+    if not sliding:
+        return _global_threshold_fit(cv_df, thresholds)
     ts = pd.to_datetime(cv_df["timestamp"])
     series_start = ts.min().normalize()
     series_end = ts.max()

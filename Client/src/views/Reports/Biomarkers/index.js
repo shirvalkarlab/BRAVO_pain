@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl, InputLabel } from "@mui/material";
+import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl, InputLabel,
+  Switch, Slider, TextField, FormControlLabel, Divider } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -43,7 +44,12 @@ function Biomarkers() {
   const [data, setData] = useState(false);
   const [source, setSource] = useState("both");
   const [metric, setMetric] = useState("nrs");
+  const [slidingWindow, setSlidingWindow] = useState(true);
+  const [windowMonths, setWindowMonths] = useState(1);   // committed value -> drives the query
+  const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
   const [alert, setAlert] = useState(null);
+
+  const showWindowControls = source !== "timedomain";   // power-domain detector only
 
   useEffect(() => {
     if (!participant_uid) {
@@ -57,13 +63,15 @@ function Biomarkers() {
       ParticipantId: participant_uid,
       source: source,
       LabelMetric: metric,
+      SlidingWindow: slidingWindow,
+      WindowMonths: windowMonths,
     }).then((response) => {
       setData(response.data);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
-  }, [participant_uid, source, metric]);
+  }, [participant_uid, source, metric, slidingWindow, windowMonths]);
 
   const summaryLine = (label, s) => {
     if (!s) return null;
@@ -125,6 +133,45 @@ function Biomarkers() {
                       </MDBox>
                     </MDBox>
                   </Grid>
+
+                  {showWindowControls ? (
+                    <Grid item xs={12}>
+                      <Divider sx={{ my: 0 }} />
+                      <MDBox px={2} py={1.5} display="flex" flexDirection="row" alignItems="center" gap={3} flexWrap="wrap">
+                        <FormControlLabel
+                          control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
+                          label={<MDTypography variant="button" fontWeight="medium">{"Sliding window"}</MDTypography>}
+                        />
+                        {slidingWindow ? (
+                          <MDBox display="flex" flexDirection="row" alignItems="center" gap={2} sx={{ minWidth: 360 }}>
+                            <MDTypography variant="button" color="text" sx={{ whiteSpace: "nowrap" }}>
+                              {"Window (months)"}
+                            </MDTypography>
+                            <Slider
+                              value={typeof monthsDraft === "number" ? monthsDraft : 1}
+                              min={0.25} max={12} step={0.25}
+                              valueLabelDisplay="auto"
+                              marks={[{ value: 0.25, label: "0.25" }, { value: 3, label: "3" }, { value: 6, label: "6" }, { value: 12, label: "12" }]}
+                              onChange={(e, v) => setMonthsDraft(v)}
+                              onChangeCommitted={(e, v) => setWindowMonths(v)}
+                              sx={{ flex: 1, minWidth: 160 }}
+                            />
+                            <TextField
+                              type="number" size="small" value={monthsDraft}
+                              inputProps={{ min: 0.25, max: 60, step: 0.25, style: { width: 64 } }}
+                              onChange={(e) => setMonthsDraft(e.target.value === "" ? "" : Number(e.target.value))}
+                              onBlur={() => { const v = Number(monthsDraft) || 1; setMonthsDraft(v); setWindowMonths(v); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(monthsDraft) || 1; setMonthsDraft(v); setWindowMonths(v); } }}
+                            />
+                          </MDBox>
+                        ) : (
+                          <MDTypography variant="button" color="text">
+                            {"Using all data (one threshold, no sliding window)"}
+                          </MDTypography>
+                        )}
+                      </MDBox>
+                    </Grid>
+                  ) : null}
 
                   {data && data.message ? (
                     <Grid item xs={12}>

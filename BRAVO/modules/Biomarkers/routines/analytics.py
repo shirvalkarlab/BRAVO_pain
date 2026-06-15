@@ -93,13 +93,65 @@ def _otsu_threshold(values, nbins=128):
     return float(best_t)
 
 
+def _all_data_window(df, thresholds):
+    """Single all-data 'window' (sliding OFF): threshold by AUC on the class-balanced full series,
+    then sens/spec/acc/AUC/R on the full series. Same dict shape as a sliding window (+ all_data:
+    True) so the frontend renders it as one point. In-sample, so optimistic vs sliding windows."""
+    from sklearn import metrics
+    from scipy.stats import pearsonr
+
+    data = df.dropna(subset=["pain_level"])
+    if len(data) == 0 or data["pain_level"].nunique() < 2:
+        return []
+    min_count = int(data["pain_level"].value_counts().min())
+    btr = pd.concat([data[data["pain_level"] == c].sample(min_count, random_state=42)
+                     for c in data["pain_level"].unique()])
+    best_auc, best_thr = -1.0, float(thresholds[0])
+    for thr in thresholds:
+        cls = (btr["LFP_smoothed"] >= thr).astype(int)
+        if cls.nunique() < 2:
+            continue
+        try:
+            a = metrics.roc_auc_score(btr["pain_level"].astype(int).values, cls.values)
+            a = max(a, 1 - a)
+            if a > best_auc:
+                best_auc, best_thr = a, float(thr)
+        except Exception:
+            continue
+    true = data["pain_level"].astype(int).values
+    score = data["LFP_smoothed"].astype(float).values
+    pred = (score >= best_thr).astype(int)
+    sens, spec = _sens_spec(true, pred)
+    acc = metrics.accuracy_score(true, pred)
+    auc = r = np.nan
+    if len(np.unique(true)) > 1:
+        try:
+            auc = metrics.roc_auc_score(true, score)
+            auc = max(auc, 1 - auc)
+        except Exception:
+            pass
+        if np.std(score) > 0:
+            try:
+                r = pearsonr(score, true.astype(float))[0]
+            except Exception:
+                pass
+    return [{
+        "test_start": df["timestamp"].min().isoformat(),
+        "threshold": _f(best_thr), "sens": _f(sens), "spec": _f(spec),
+        "acc": _f(acc), "auc": _f(auc), "r": _f(r), "all_data": True,
+    }]
+
+
 def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2,
-                             test_days=4, step_days=1):
+                             test_days=4, step_days=None, sliding=True):
     """Per-sliding-window metrics over time (mirrors threshold_biomarker.ipynb cells 12 & 14).
 
     For each window: pick the LFP threshold maximizing train AUC, then on the held-out test fold
     report sensitivity, specificity, accuracy, AUC (roc_auc on the continuous LFP_smoothed), and a
     point-biserial Pearson R (LFP_smoothed vs pain_level). Returns a list of per-window dicts.
+
+    `train_days` is driven by the user's window-months selection. When `sliding=False`, returns a
+    single all-data entry (no temporal windows) via `_all_data_window`.
     """
     from sklearn import metrics
     from scipy.stats import pearsonr
@@ -112,6 +164,16 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
     df = df.dropna(subset=["timestamp", "pain_level"]).sort_values("timestamp").reset_index(drop=True)
     if len(df) == 0:
         return []
+
+    if not sliding:
+        return _all_data_window(df, thresholds)
+
+    # Step between windows. Default scales with the training window (step ~ train/14) so a large
+    # multi-month window doesn't produce hundreds of near-identical windows (which is slow and
+    # over-plots); small windows keep step=1 (unchanged behavior). This only changes how densely
+    # the performance curve is SAMPLED in time -- each window's metric is still computed on full data.
+    if step_days is None:
+        step_days = max(1, int(round(train_days / 14.0)))
 
     series_start = df["timestamp"].min().normalize()
     series_end = df["timestamp"].max()

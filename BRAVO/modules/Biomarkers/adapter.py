@@ -353,6 +353,21 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     return df[out_cols]
 
 
+def decimate_for_plot(df, max_points):
+    """Stride-thin a timeline DataFrame to <= `max_points` rows, FOR PLOTTING/TRANSPORT ONLY.
+
+    Pure: returns a row-subset (no interpolation, columns and value scale unchanged); the original
+    is never mutated. This must NEVER feed a calculation — every biomarker / threshold / AUC /
+    frequency value is computed upstream on the FULL-resolution frames (run_biomarker,
+    _compute_analytics) and only the display timeline is thinned here. Keeping this a named, pure
+    function makes that invariant explicit and testable.
+    """
+    if df is None or not hasattr(df, "__len__") or max_points <= 0 or len(df) <= max_points:
+        return df
+    stride = int(np.ceil(len(df) / max_points))
+    return df.iloc[::stride].reset_index(drop=True)
+
+
 def _as_naive(series):
     """Return a tz-naive datetime Series (no-op if already naive)."""
     s = pd.to_datetime(series, errors="coerce")

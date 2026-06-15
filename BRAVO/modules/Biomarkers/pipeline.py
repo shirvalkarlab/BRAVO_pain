@@ -141,7 +141,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
 
 def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
                            label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
-                           thresholds=None, train_days=7, gap_days=1, test_days=2):
+                           thresholds=None, train_days=7, gap_days=1, test_days=2, sliding=True):
     """Power-domain (band-power-over-time) sliding-window threshold branch -> SourceRun with a
     powerdomain_* timeline. The "power domain" is the complement to the time domain: it merges the
     ~10-min Chronic LFP-power timeline with the per-session BrainSense Power-Domain band power
@@ -159,7 +159,8 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                                             pain_cutoff=pain_cutoff, label_strategy=label_strategy,
                                             kmeans_features=kmeans_features)
     detail = threshold_biomarker.run_chronic_threshold(
-        cv_df, thresholds=thresholds, train_days=train_days, gap_days=gap_days, test_days=test_days)
+        cv_df, thresholds=thresholds, train_days=train_days, gap_days=gap_days, test_days=test_days,
+        sliding=sliding)
     thr = detail.get("mean_thr_sens", np.nan)
 
     lfp_s = cv_df["LFP_smoothed"].to_numpy(dtype=float)
@@ -197,7 +198,10 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
         "spec_objective_acc": detail.get("mean_test_acc_spec", np.nan),
     }
     return {"source": "powerdomain", "code_version": CHRONIC_CODE_VERSION,
-            "timeline": timeline, "detail": detail, "summary": summary}
+            "timeline": timeline, "detail": detail, "summary": summary,
+            # Expose the full-resolution tidy frame so the analytics step can reuse it instead of
+            # rebuilding (a second KMeans + Savitzky-Golay over 100k+ rows). Not serialized.
+            "cv_df": cv_df}
 
 
 # Back-compat: the chronic branch was renamed to the power-domain branch (chronic timeline is now
@@ -210,7 +214,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
                   pain_cutoff=None, label_strategy="kmeans",
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
-                  stim_amplitudes=None):
+                  stim_amplitudes=None, sliding=True):
     """
     Run biomarker identification with a selectable data source.
 
@@ -239,7 +243,8 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,
                                       pain_cutoff=pain_cutoff, label_strategy=label_strategy,
                                       kmeans_features=kmeans_features, thresholds=thresholds,
-                                      train_days=train_days, gap_days=gap_days, test_days=test_days)
+                                      train_days=train_days, gap_days=gap_days, test_days=test_days,
+                                      sliding=sliding)
 
     td = ch = None
     if source == "both":
@@ -290,7 +295,7 @@ def write_combined(run_output, patient, out_dir="."):
 
     arrays = {"source": source}
     td = run_output.get("timedomain")
-    ch = run_output.get("chronic")
+    ch = run_output.get("powerdomain") or run_output.get("chronic")  # back-compat key
     if td is not None:
         r = td["detail"]
         arrays.update({
@@ -363,7 +368,7 @@ def main(argv=None):
     print(f"Wrote {csv_path}\nWrote {npz_path}")
 
     td = run_output.get("timedomain")
-    ch = run_output.get("chronic")
+    ch = run_output.get("powerdomain") or run_output.get("chronic")  # back-compat key
     if td is not None:
         b = td["summary"]["band"]
         if b is not None:
