@@ -62,6 +62,7 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+const PainScores = lazy(() => import('views/Reports/PainScores'));
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
@@ -294,6 +295,13 @@ const routes = {
         icon: <FaClipboardList />,
         route: "/form-records/:participant_uid",
         component: <ParticipantSurveyRecords />,
+      },
+      {
+        key: "PainScores",
+        name: "Pain Scores",
+        icon: <TimelineIcon />,
+        route: "/pain-scores/:participant_uid",
+        component: <PainScores />,
       }
     ]
   },

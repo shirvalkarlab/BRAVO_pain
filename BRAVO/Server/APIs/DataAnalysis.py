@@ -635,6 +635,40 @@ class QueryBiomarkerAnalysis(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryPainScores(RestViews.APIView):
+    """
+    API View for patient-reported pain-score reports (Surveys & Questionnaires).
+
+    **URL:** ``/queryPainScores``  **Methods:** POST
+
+    Returns the participant's REDCap pain metrics (NRS, VAS, MPQ subscales, etc.) over time so
+    the Pain Scores report can plot every metric. Demo participant returns synthetic reports.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.pain_scores_for_participant(request.data)
+        except Exception as e:
+            return Response(status=200, data={"metrics": [], "n_reports": 0,
+                                              "message": "Pain-score error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryBurstAnalysis(RestViews.APIView):
     """
     API View for neural burst analysis. 

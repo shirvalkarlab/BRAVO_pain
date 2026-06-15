@@ -250,3 +250,87 @@ def _serialize_run(run, analytics_data=None):
         "analytics": analytics_data,
         "message": "",
     }
+
+
+# =============================================================================================
+# Pain-score reports (Surveys & Questionnaires) -- visualizes the REDCap PRO pain metrics over
+# time, the way Yiyuan's redcap_pull / full_trend_pain_score figures do.
+# =============================================================================================
+
+# (key, display label, [y-min, y-max]) -- mirrors dbs_stage2_percept/redcap_pull.py.
+PAIN_METRICS = [
+    ("nrs", "NRS (0–10)", [0, 10]),
+    ("vas", "Overall VAS", [0, 100]),
+    ("left_leg_vas", "Left Leg VAS", [0, 100]),
+    ("back_vas", "Back VAS", [0, 100]),
+    ("relief", "Relief (%)", [0, 100]),
+    ("mpq_sum", "MPQ Sum", [0, 72]),
+    ("mpq_aff", "MPQ Affective", [0, 16]),
+    ("mpq_sen", "MPQ Sensory", [0, 56]),
+    ("electrocuting", "Electrocuting", [0, 3]),
+    ("tingly", "Tingly", [0, 3]),
+]
+
+
+def _demo_pain_scores():
+    """Synthetic daily pain-score reports over ~30 days (gradual improvement + daily variation,
+    with a few missing days to show gaps). Deterministic."""
+    midnight = 1_699_920_000.0
+    days = 30
+    rng = np.random.default_rng(1)
+    rows = []
+    for d in range(days):
+        if rng.random() < 0.15:  # missed report
+            continue
+        frac = d / (days - 1)
+        nrs = float(np.clip(8 - 4.5 * frac + rng.normal(0, 0.9), 0, 10))
+        relief = float(np.clip(10 + 55 * frac + rng.normal(0, 8), 0, 100))
+        rows.append({
+            "date_time_s1_daily": pd.Timestamp(midnight + d * 86_400 + 12 * 3_600, unit="s").isoformat(),
+            "nrs": round(nrs, 1),
+            "vas": float(np.clip(nrs * 10 + rng.normal(0, 6), 0, 100)),
+            "left_leg_vas": float(np.clip(nrs * 9 + rng.normal(0, 8), 0, 100)),
+            "back_vas": float(np.clip(nrs * 7 + rng.normal(0, 10), 0, 100)),
+            "relief": round(relief, 0),
+            "mpq_sum": float(np.clip(42 - 22 * frac + rng.normal(0, 4), 0, 72)),
+            "mpq_aff": float(np.clip(11 - 6 * frac + rng.normal(0, 1.5), 0, 16)),
+            "mpq_sen": float(np.clip(31 - 16 * frac + rng.normal(0, 3), 0, 56)),
+        })
+    return pd.DataFrame(rows)
+
+
+def pain_scores_for_participant(request_data):
+    """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
+
+    Demo participant -> synthetic; otherwise REDCap PROs (env vars) or `ProcessedPRO` in the body.
+    """
+    from .routines.analytics import _f
+
+    participant_uid = request_data["ParticipantId"]
+    Participant = models.Participant.find(uid=participant_uid)
+    demo = Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN
+
+    pro = _demo_pain_scores() if demo else _load_pros(request_data)
+    if pro is None or len(pro) == 0:
+        return {"metrics": [], "n_reports": 0,
+                "message": "No pain-score reports found. Set REDCAP_API_URL / REDCAP_API_TOKEN "
+                           "(or pass ProcessedPRO) to load this patient's REDCap surveys."}
+
+    ts_col = "date_time_s1_daily"
+    if ts_col not in pro.columns:
+        return {"metrics": [], "n_reports": 0,
+                "message": "PRO data has no 'date_time_s1_daily' timestamp column."}
+
+    t = pd.to_datetime(pro[ts_col], errors="coerce")
+    metrics = []
+    for key, label, rng_ in PAIN_METRICS:
+        if key not in pro.columns:
+            continue
+        vals = pd.to_numeric(pro[key], errors="coerce")
+        pts = [{"t": str(tt), "v": _f(v)} for tt, v in zip(t, vals) if pd.notna(tt) and pd.notna(v)]
+        if pts:
+            pts.sort(key=lambda p: p["t"])
+            metrics.append({"key": key, "label": label, "range": rng_, "points": pts})
+
+    return {"metrics": metrics, "n_reports": int(t.notna().sum()),
+            "message": "DEMO DATA — synthetic pain-score reports." if demo else ""}
