@@ -79,7 +79,7 @@ function NormalizedOverlay({ metrics, active }) {
       legend: { orientation: "h", y: -0.2 }, hovermode: "x unified",
     }, { responsive: true, displaylogo: false });
     return () => { if (ref.current) Plotly.purge(ref.current); };
-  }, [metrics]);
+  }, [metrics, active]);
   return <div ref={ref} style={{ width: "100%" }} />;
 }
 
