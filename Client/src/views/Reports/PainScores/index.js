@@ -33,12 +33,41 @@ function movingAverage(y, w = 3) {
   });
 }
 
-function MetricChart({ metric, color }) {
+// --- Stage helpers (trial stages: pre-op / Stage 0 / 1 / 2) -----------------------------------
+function hexA(hex, a) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Background bands for the active stages.
+function stageShapes(stages, active) {
+  if (!stages) return [];
+  return stages
+    .filter((s) => !active || active.includes(s.key))
+    .map((s) => ({ type: "rect", xref: "x", yref: "paper", x0: s.start, x1: s.end, y0: 0, y1: 1,
+      fillcolor: hexA(s.color, 0.13), line: { width: 0 }, layer: "below" }));
+}
+
+// A point is hidden only if it falls inside an INACTIVE stage; un-staged points always show.
+function inActiveStage(t, stages, active) {
+  if (!stages || !stages.length) return true;
+  const ms = typeof t === "string" ? Date.parse(t) : new Date(t).getTime();
+  let owning = null;
+  for (const s of stages) {
+    if (ms >= Date.parse(s.start) && ms < Date.parse(s.end)) { owning = s; break; }
+  }
+  if (!owning) return true;
+  return !active || active.includes(owning.key);
+}
+
+function MetricChart({ metric, color, stages, stageActive }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current) return;
-    const x = metric.points.map((p) => new Date(p.t));
-    const y = metric.points.map((p) => p.v);
+    const pts = metric.points.filter((p) => inActiveStage(p.t, stages, stageActive));
+    const x = pts.map((p) => new Date(p.t));
+    const y = pts.map((p) => p.v);
     const traces = [
       { x, y, name: "report", type: "scatter", mode: "lines+markers",
         line: { color, width: 1.5 }, marker: { size: 5, color }, opacity: 0.55 },
@@ -49,25 +78,27 @@ function MetricChart({ metric, color }) {
       height: 240, margin: { l: 46, r: 14, t: 12, b: 34 }, showlegend: false,
       xaxis: { type: "date" },
       yaxis: { range: [metric.range[0], metric.range[1] * 1.02], title: { text: metric.label, font: { size: 12 } } },
+      shapes: stageShapes(stages, stageActive),
     }, { responsive: true, displaylogo: false });
     return () => { if (ref.current) Plotly.purge(ref.current); };
-  }, [metric, color]);
+  }, [metric, color, stages, stageActive]);
   return <div ref={ref} style={{ width: "100%" }} />;
 }
 
 // All metrics on one normalized [0,1] axis (each scaled by its own range) to compare trajectories.
-function NormalizedOverlay({ metrics, active }) {
+function NormalizedOverlay({ metrics, active, stages, stageActive }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !metrics.length) return;
     const traces = [];
     metrics.forEach((m, i) => {
-      if (active && !active.includes(m.key)) return;  // toggle affects the overlay only
+      if (active && !active.includes(m.key)) return;  // metric toggle affects the overlay only
       const [lo, hi] = m.range;
       const color = PALETTE[i % PALETTE.length];
+      const pts = m.points.filter((p) => inActiveStage(p.t, stages, stageActive));
       traces.push({
-        x: m.points.map((p) => new Date(p.t)),
-        y: m.points.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
+        x: pts.map((p) => new Date(p.t)),
+        y: pts.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
         name: m.label, type: "scatter", mode: "lines+markers",
         line: { color, width: 2 }, marker: { size: 3, color }, connectgaps: false,
       });
@@ -77,9 +108,10 @@ function NormalizedOverlay({ metrics, active }) {
       xaxis: { type: "date", title: "Time" },
       yaxis: { title: "Normalized (0 = best, 1 = worst of range)", range: [-0.03, 1.05] },
       legend: { orientation: "h", y: -0.2 }, hovermode: "x unified",
+      shapes: stageShapes(stages, stageActive),
     }, { responsive: true, displaylogo: false });
     return () => { if (ref.current) Plotly.purge(ref.current); };
-  }, [metrics, active]);
+  }, [metrics, active, stages, stageActive]);
   return <div ref={ref} style={{ width: "100%" }} />;
 }
 
@@ -119,7 +151,8 @@ function PainScores() {
   const { participant_uid } = useParams();
 
   const [data, setData] = useState(false);
-  const [overlayActive, setOverlayActive] = useState(null);  // keys shown in the overlay
+  const [overlayActive, setOverlayActive] = useState(null);  // metric keys shown in the overlay
+  const [stageActive, setStageActive] = useState(null);      // visible trial stages (all plots)
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
@@ -130,14 +163,21 @@ function PainScores() {
       .then((response) => {
         setData(response.data);
         setOverlayActive((response.data.metrics || []).map((m) => m.key));
+        setStageActive((response.data.stages || []).map((s) => s.key));
         setAlert(null);
       })
       .catch((error) => { SessionController.displayError(error, setAlert); });
   }, [participant_uid]);
 
   const metrics = (data && data.metrics) || [];
+  const stages = (data && data.stages) || [];
+  const activeStages = stageActive || stages.map((s) => s.key);
   const toggleOverlay = (key) => setOverlayActive((cur) => {
     const base = cur || metrics.map((m) => m.key);
+    return base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+  });
+  const toggleStage = (key) => setStageActive((cur) => {
+    const base = cur || stages.map((s) => s.key);
     return base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
   });
 
@@ -164,6 +204,22 @@ function PainScores() {
                     </MDTypography>
                   </MDBox>
                 ) : null}
+                {stages.length ? (
+                  <MDBox px={2} pb={2}>
+                    <MDTypography variant="button" fontWeight="medium" color="text">Stages (applies to all time plots):</MDTypography>
+                    <Stack direction="row" flexWrap="wrap" sx={{ gap: 0.6, mt: 0.5 }}>
+                      {stages.map((s) => {
+                        const on = activeStages.includes(s.key);
+                        return (
+                          <Chip key={s.key} label={s.name} size="small" onClick={() => toggleStage(s.key)}
+                            variant={on ? "filled" : "outlined"}
+                            sx={{ bgcolor: on ? s.color : "transparent", color: on ? "#fff" : "text.primary",
+                                  borderColor: s.color, cursor: "pointer", "&:hover": { opacity: 0.85 } }} />
+                        );
+                      })}
+                    </Stack>
+                  </MDBox>
+                ) : null}
               </Card>
             </Grid>
 
@@ -184,7 +240,8 @@ function PainScores() {
                         );
                       })}
                     </Stack>
-                    <NormalizedOverlay metrics={metrics} active={overlayActive || metrics.map((m) => m.key)} />
+                    <NormalizedOverlay metrics={metrics} active={overlayActive || metrics.map((m) => m.key)}
+                      stages={stages} stageActive={activeStages} />
                   </MDBox>
                 </Card>
               </Grid>
@@ -206,7 +263,7 @@ function PainScores() {
                 <Card sx={{ width: "100%", height: "100%" }}>
                   <MDBox p={2}>
                     <MDTypography variant="h6" fontSize={16} mb={0.5}>{m.label}</MDTypography>
-                    <MetricChart metric={m} color={PALETTE[i % PALETTE.length]} />
+                    <MetricChart metric={m} color={PALETTE[i % PALETTE.length]} stages={stages} stageActive={activeStages} />
                   </MDBox>
                 </Card>
               </Grid>

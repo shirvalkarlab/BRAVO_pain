@@ -299,6 +299,22 @@ def _demo_pain_scores():
     return pd.DataFrame(rows)
 
 
+def _demo_stages():
+    """Trial stages over the demo window (pre-op / Stage 0 / 1 / 2), colored like the
+    full_trend_pain_score notebook. Real patients supply stage boundaries via pt_config."""
+    midnight = 1_699_920_000.0
+
+    def iso(day):
+        return pd.Timestamp(midnight + day * 86_400, unit="s").isoformat()
+
+    return [
+        {"key": "preop", "name": "Pre-op (baseline)", "color": "#9E9E9E", "start": iso(0), "end": iso(7)},
+        {"key": "stage0", "name": "Stage 0", "color": "#FA8072", "start": iso(7), "end": iso(14)},
+        {"key": "stage1", "name": "Stage 1", "color": "#FFCA28", "start": iso(14), "end": iso(22)},
+        {"key": "stage2", "name": "Stage 2", "color": "#26C6DA", "start": iso(22), "end": iso(31)},
+    ]
+
+
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 
@@ -345,5 +361,8 @@ def pain_scores_for_participant(request_data):
             "matrix": [[_f(cmat.loc[a, b]) for b in present] for a in present],
         }
 
+    stages = _demo_stages() if demo else (request_data.get("Stages") or [])
+
     return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
+            "stages": stages,
             "message": "DEMO DATA — synthetic pain-score reports." if demo else ""}
