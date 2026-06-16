@@ -14,6 +14,7 @@ import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormCont
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
 import LoadingProgress from "components/LoadingProgress";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
@@ -45,8 +46,10 @@ function Biomarkers() {
   const [source, setSource] = useState("both");
   const [metric, setMetric] = useState("nrs");
   const [slidingWindow, setSlidingWindow] = useState(true);
-  const [windowMonths, setWindowMonths] = useState(1);   // committed value
+  const [windowMonths, setWindowMonths] = useState(1);   // committed window (training) length
   const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
+  const [windowStep, setWindowStep] = useState(0.5);     // committed window step (months)
+  const [stepDraft, setStepDraft] = useState(0.5);       // live step value
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
   // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
@@ -56,7 +59,8 @@ function Biomarkers() {
   const showWindowControls = source !== "timedomain";   // power-domain detector only
 
   const snapshot = () => ({
-    source, LabelMetric: metric, SlidingWindow: slidingWindow, WindowMonths: windowMonths,
+    source, LabelMetric: metric, SlidingWindow: slidingWindow,
+    WindowMonths: windowMonths, WindowStep: windowStep,
   });
   const compute = () => setRequestParams(snapshot());
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
@@ -117,13 +121,15 @@ function Biomarkers() {
                       so the user can set source / metric / window freely before running. */}
                   <Grid item xs={12}>
                     <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                      <Button
+                      <MDButton
                         variant="contained" color="error" size="large"
                         onClick={compute}
-                        sx={{ color: "#fff !important", fontWeight: "bold", fontSize: 16, px: 3, py: 1.25 }}
+                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
+                              backgroundColor: "#d32f2f", color: "#ffffff",
+                              "&:hover": { backgroundColor: "#b71c1c" } }}
                       >
                         {data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now"}
-                      </Button>
+                      </MDButton>
                       {dirty && data ? (
                         <MDTypography variant="button" color="error" fontWeight="medium">
                           {"Settings changed — click to recompute."}
@@ -138,72 +144,86 @@ function Biomarkers() {
                   </Grid>
 
                   <Grid item xs={12}>
-                    <MDBox px={2} pb={2} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center">
-                      <MDTypography variant="h6" fontSize={24}>
+                    <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
                         {"Pain Biomarkers"}
                       </MDTypography>
-                      <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
-                        <FormControl size="small" sx={{ minWidth: 240 }}>
-                          <InputLabel id="biomarker-metric-label">Pain metric</InputLabel>
-                          <Select
-                            labelId="biomarker-metric-label"
-                            label="Pain metric"
-                            value={metric}
-                            onChange={(e) => setMetric(e.target.value)}
-                          >
-                            {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key}>{m.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                        <ToggleButtonGroup
-                          value={source}
-                          exclusive
-                          size="small"
-                          onChange={(e, v) => { if (v) setSource(v); }}
+                      <ToggleButtonGroup
+                        value={source}
+                        exclusive
+                        size="medium"
+                        onChange={(e, v) => { if (v) setSource(v); }}
+                      >
+                        <ToggleButton value="timedomain">Time-domain</ToggleButton>
+                        <ToggleButton value="powerdomain">Power-domain</ToggleButton>
+                        <ToggleButton value="both">Both</ToggleButton>
+                      </ToggleButtonGroup>
+                    </MDBox>
+                  </Grid>
+
+                  {/* Pain-metric selector — larger box + text, centered (the biomarker target). */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pb={2} display="flex" flexDirection="column" alignItems="center">
+                      <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 16 }} mb={0.5}>
+                        {"Pain metric (biomarker target)"}
+                      </MDTypography>
+                      <FormControl sx={{ minWidth: 380 }}>
+                        <Select
+                          value={metric}
+                          onChange={(e) => setMetric(e.target.value)}
+                          sx={{ fontSize: 20, "& .MuiSelect-select": { py: 1.5, textAlign: "center" } }}
                         >
-                          <ToggleButton value="timedomain">Time-domain</ToggleButton>
-                          <ToggleButton value="powerdomain">Power-domain</ToggleButton>
-                          <ToggleButton value="both">Both</ToggleButton>
-                        </ToggleButtonGroup>
-                      </MDBox>
+                          {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                            <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
                     </MDBox>
                   </Grid>
 
                   {showWindowControls ? (
                     <Grid item xs={12}>
                       <Divider sx={{ my: 0 }} />
-                      <MDBox px={2} py={1.5} display="flex" flexDirection="row" alignItems="center" gap={3} flexWrap="wrap">
+                      <MDBox px={2} py={1.5} display="flex" flexDirection="column" gap={1.5}>
                         <FormControlLabel
                           control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
-                          label={<MDTypography variant="button" fontWeight="medium">{"Sliding window"}</MDTypography>}
+                          label={<MDTypography variant="button" fontWeight="medium">{"Sliding window (power-domain detector & performance)"}</MDTypography>}
                         />
                         {slidingWindow ? (
-                          <MDBox display="flex" flexDirection="row" alignItems="center" gap={2} sx={{ minWidth: 360 }}>
-                            <MDTypography variant="button" color="text" sx={{ whiteSpace: "nowrap" }}>
-                              {"Window (months)"}
-                            </MDTypography>
-                            <Slider
-                              value={typeof monthsDraft === "number" ? monthsDraft : 1}
-                              min={0.25} max={12} step={0.25}
-                              valueLabelDisplay="auto"
-                              marks={[{ value: 0.25, label: "0.25" }, { value: 3, label: "3" }, { value: 6, label: "6" }, { value: 12, label: "12" }]}
-                              onChange={(e, v) => setMonthsDraft(v)}
-                              onChangeCommitted={(e, v) => setWindowMonths(v)}
-                              sx={{ flex: 1, minWidth: 160 }}
-                            />
-                            <TextField
-                              type="number" size="small" value={monthsDraft}
-                              inputProps={{ min: 0.25, max: 12, step: 0.25, style: { width: 64 } }}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw === "") { setMonthsDraft(""); return; }
-                                const n = Number(raw);
-                                if (!Number.isNaN(n)) setMonthsDraft(n);   // ignore transient invalid input (e.g. "1e")
-                              }}
-                              onBlur={() => { const v = commitMonths(monthsDraft); setMonthsDraft(v); setWindowMonths(v); }}
-                              onKeyDown={(e) => { if (e.key === "Enter") { const v = commitMonths(monthsDraft); setMonthsDraft(v); setWindowMonths(v); } }}
-                            />
+                          <MDBox display="flex" flexDirection="column" gap={1.5}>
+                            {[
+                              { lbl: "Window (months)", draft: monthsDraft, setDraft: setMonthsDraft, setVal: setWindowMonths,
+                                commit: commitMonths, min: 0.25, max: 12, step: 0.25,
+                                marks: [{ value: 1, label: "1" }, { value: 3, label: "3" }, { value: 6, label: "6" }, { value: 9, label: "9" }, { value: 12, label: "12" }] },
+                              { lbl: "Step (months)", draft: stepDraft, setDraft: setStepDraft, setVal: setWindowStep,
+                                commit: commitStep, min: 0.1, max: 6, step: 0.1,
+                                marks: [{ value: 0.25, label: "0.25" }, { value: 1, label: "1" }, { value: 3, label: "3" }, { value: 6, label: "6" }] },
+                            ].map((c) => (
+                              <MDBox key={c.lbl} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                                <MDTypography variant="button" color="text" sx={{ whiteSpace: "nowrap", minWidth: 150 }}>
+                                  {c.lbl}
+                                </MDTypography>
+                                <Slider
+                                  value={typeof c.draft === "number" ? c.draft : c.min}
+                                  min={c.min} max={c.max} step={c.step} valueLabelDisplay="auto" marks={c.marks}
+                                  onChange={(e, v) => c.setDraft(v)}
+                                  onChangeCommitted={(e, v) => c.setVal(v)}
+                                  sx={{ flex: 1, minWidth: 200, maxWidth: 420 }}
+                                />
+                                <TextField
+                                  type="number" size="small" value={c.draft}
+                                  inputProps={{ min: c.min, max: c.max, step: c.step, style: { width: 64 } }}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === "") { c.setDraft(""); return; }
+                                    const n = Number(raw);
+                                    if (!Number.isNaN(n)) c.setDraft(n);
+                                  }}
+                                  onBlur={() => { const v = c.commit(c.draft); c.setDraft(v); c.setVal(v); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter") { const v = c.commit(c.draft); c.setDraft(v); c.setVal(v); } }}
+                                />
+                              </MDBox>
+                            ))}
                           </MDBox>
                         ) : (
                           <MDTypography variant="button" color="text">
@@ -278,6 +298,13 @@ function commitMonths(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 1;
   return Math.min(12, Math.max(0.25, n));
+}
+
+// Clamp the window step to [0.1, 6] months; fall back to 0.5 on invalid input.
+function commitStep(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0.5;
+  return Math.min(6, Math.max(0.1, n));
 }
 
 function fmt(x) {

@@ -272,19 +272,23 @@ def _demo_run(source, request_data=None):
     td = recordings if source in ("timedomain", "both") else []
     ch = chronic if source in ("powerdomain", "both") else None
     pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro)
-    train_days, sliding, window_months = _window_params(request_data)
+    train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     demo_train_days = train_days if train_days is not None else 3   # demo spans ~14 days
+    demo_test_days = step_days if step_days is not None else 2
     run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
-                                 train_days=demo_train_days, gap_days=1, test_days=2, sliding=sliding,
+                                 train_days=demo_train_days, gap_days=1, test_days=demo_test_days,
+                                 sliding=sliding,
                                  label_metric=label_metric, kmeans_features=kmeans_features)
     out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
-                                                 train_days=train_days, sliding=sliding))
+                                                 train_days=train_days, step_days=step_days,
+                                                 sliding=sliding))
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
     out["sliding_window"] = sliding
     out["window_months"] = window_months
+    out["window_step_months"] = window_step_months
     return out
 
 
@@ -308,7 +312,7 @@ def _run_parallel(tasks):
 
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
-                       train_days=None, sliding=True):
+                       train_days=None, step_days=None, sliding=True):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -341,6 +345,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             sw_kwargs = {"sliding": sliding}
             if train_days is not None:
                 sw_kwargs["train_days"] = train_days
+            if step_days is not None:
+                sw_kwargs["step_days"] = step_days
             result["powerdomain"] = _run_parallel({
                 "sliding_window": lambda: analytics.sliding_window_analytics(cv_df, **sw_kwargs),
                 "roc": lambda: analytics.roc_analysis(cv_df),
@@ -356,13 +362,25 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
 _DAYS_PER_MONTH = 30.44
 
 
+def _months_to_days(value):
+    """Parse a months value (float) -> whole days (>=1), or (None, None) if absent/invalid."""
+    if value is None or value == "":
+        return None, None
+    try:
+        months = float(value)
+        return max(1, int(round(months * _DAYS_PER_MONTH))), months
+    except (TypeError, ValueError):
+        return None, None
+
+
 def _window_params(request_data):
     """Resolve the sliding-window controls from the request.
 
-    Returns (train_days, sliding, window_months):
-      * window_months: `WindowMonths` request value (float) or None — the training-window
-        duration the user picked; converted to train_days = round(months * 30.44).
-      * train_days: None when WindowMonths absent (callers keep each function's own default).
+    Returns (train_days, step_days, sliding, window_months, window_step_months):
+      * window_months / train_days: `WindowMonths` -> the sliding-window TRAINING duration
+        (train_days = round(months * 30.44)). None -> callers keep their own default.
+      * window_step_months / step_days: `WindowStep` -> how far the window advances each step
+        (also the detector's per-window test-fold size). None -> defaults.
       * sliding: `SlidingWindow` bool (default True). False -> the power-domain detector and the
         sliding-window analytic run on ALL data at once (no temporal windows).
     """
@@ -371,17 +389,9 @@ def _window_params(request_data):
         sliding = sliding.strip().lower() not in ("false", "0", "no", "off", "")
     sliding = bool(sliding)
 
-    months = request_data.get("WindowMonths")
-    train_days = None
-    window_months = None
-    if months is not None and months != "":
-        try:
-            window_months = float(months)
-            train_days = max(1, int(round(window_months * _DAYS_PER_MONTH)))
-        except (TypeError, ValueError):
-            window_months = None
-            train_days = None
-    return train_days, sliding, window_months
+    train_days, window_months = _months_to_days(request_data.get("WindowMonths"))
+    step_days, window_step_months = _months_to_days(request_data.get("WindowStep"))
+    return train_days, step_days, sliding, window_months, window_step_months
 
 
 def run_for_participant(request_data):
@@ -433,21 +443,25 @@ def run_for_participant(request_data):
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
-    train_days, sliding, window_months = _window_params(request_data)
+    train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding}
     if train_days is not None:
         rb_kwargs["train_days"] = train_days
+    if step_days is not None:
+        rb_kwargs["test_days"] = step_days   # detector advances by (and tests on) one step
 
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
                                  label_metric=label_metric, kmeans_features=kmeans_features,
                                  **rb_kwargs)
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
-                                                 train_days=train_days, sliding=sliding))
+                                                 train_days=train_days, step_days=step_days,
+                                                 sliding=sliding))
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
     out["sliding_window"] = sliding
     out["window_months"] = window_months
+    out["window_step_months"] = window_step_months
     return out
 
 

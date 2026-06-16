@@ -61,14 +61,15 @@ function BiomarkerTimeline({ data, height }) {
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
     const n = Math.max(rows.length, 1);
-    const gap = 0.11;
+    const gap = 0.14;   // more breathing room so row titles don't sit on the row above
     const h = (1 - gap * (n - 1)) / n;
 
     const traces = [];
     const layout = {
-      height: height || 165 * n + 96,
-      margin: { l: 64, r: 18, t: 44, b: 48 },
+      height: height || 170 * n + 100,
+      margin: { l: 64, r: 18, t: 52, b: 48 },
       hovermode: "x unified",
+      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 12, color: "#344767" },
       legend: { orientation: "h", y: 1.04, x: 0, font: { size: 11 } },
       annotations: [],
     };
@@ -79,25 +80,35 @@ function BiomarkerTimeline({ data, height }) {
       const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
       const top = 1 - di * (h + gap);
       const bottom = Math.max(0, top - h);
-      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } }, zeroline: false };
+      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } },
+        zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true };
       row.traces.forEach((tr) => {
+        // Drop point markers on dense series (lines-only is cleaner/faster); keep them when sparse.
+        const nPts = (tr.y || []).filter((v) => v !== null && v !== undefined).length;
         traces.push({
-          x, y: tr.y, name: tr.name, type: "scatter", mode: tr.mode || "lines+markers",
+          x, y: tr.y, name: tr.name, type: "scatter",
+          mode: tr.mode || (nPts > 200 ? "lines" : "lines+markers"),
           line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
           marker: { size: 4, color: tr.color }, yaxis: yk, xaxis: "x", connectgaps: false,
           hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });
       });
       layout.annotations.push({
-        xref: "paper", yref: "paper", x: 0, y: Math.min(top + 0.012, 1),
+        xref: "paper", yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
         xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,
         showarrow: false, font: { size: 12, color: "#344767" },
+        bgcolor: "rgba(255,255,255,0.7)",   // halo so the title reads over traces
       });
     });
 
-    layout.xaxis = { domain: [0, 1], type: "date", anchor: "y", title: "Time" };
+    layout.xaxis = { domain: [0, 1], type: "date", anchor: "y", title: { text: "Time", font: { size: 12 } },
+      showgrid: true, gridcolor: "#F0F0F0" };
 
-    Plotly.react(ref.current, traces, layout, { responsive: true, displaylogo: false });
+    Plotly.react(ref.current, traces, layout, {
+      responsive: true, displaylogo: false,
+      modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
+      toImageButtonOptions: { format: "png", scale: 2 },
+    });
     return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [data, height]);
 

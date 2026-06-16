@@ -14,13 +14,24 @@ import { Card, Grid } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-function Fig({ traces, layout, height = 320 }) {
+function Fig({ traces, layout = {}, height = 320 }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !traces || traces.length === 0) return;
-    Plotly.react(ref.current, traces,
-      { autosize: true, height, margin: { l: 58, r: 30, t: 36, b: 46 }, ...layout },
-      { responsive: true, displaylogo: false });
+    // Shared styling for every panel: one font, faint gridlines, and automargin so axis titles
+    // never clip. xaxis/yaxis merge per-axis so a panel's own axis props are preserved.
+    const base = {
+      autosize: true, height, margin: { l: 60, r: 28, t: 40, b: 48 },
+      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 12, color: "#344767" },
+      ...layout,
+      xaxis: { automargin: true, gridcolor: "#F0F0F0", ...(layout.xaxis || {}) },
+      yaxis: { automargin: true, gridcolor: "#F0F0F0", ...(layout.yaxis || {}) },
+    };
+    Plotly.react(ref.current, traces, base, {
+      responsive: true, displaylogo: false,
+      modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
+      toImageButtonOptions: { format: "png", scale: 2 },   // crisp 2x PNG export for figures/slides
+    });
     return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [traces, layout, height]);
   return <div ref={ref} style={{ width: "100%", height }} />;
@@ -43,11 +54,12 @@ function Section({ title, subtitle, panels }) {
   if (!panels || panels.length === 0) return null;
   return (
     <Grid item xs={12}>
-      <MDBox mt={1} mb={1}>
-        <MDTypography variant="h5" fontSize={20}>{title}</MDTypography>
-        {subtitle ? <MDTypography variant="button" color="text">{subtitle}</MDTypography> : null}
+      <MDBox mt={4} mb={2}>
+        {/* Section header at ~2x the prior size for clear hierarchy between TD / power-domain. */}
+        <MDTypography variant="h3" fontSize={40} fontWeight="bold">{title}</MDTypography>
+        {subtitle ? <MDTypography variant="body2" color="text">{subtitle}</MDTypography> : null}
       </MDBox>
-      <Grid container spacing={2}>{panels}</Grid>
+      <Grid container spacing={3}>{panels}</Grid>
     </Grid>
   );
 }
