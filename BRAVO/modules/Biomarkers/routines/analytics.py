@@ -49,7 +49,13 @@ def format_channel(name, region=None):
     else:
         contacts = raw
 
-    reg = region or _DEMO_REGIONS.get(up) or _DEMO_REGIONS.get(raw) or ""
+    # region=None -> fall back to the demo map (back-compat for direct callers / demo data).
+    # region="" (explicit) -> NO region: show the numeric label only, never a static/guessed region.
+    # region=<str> (from device metadata) -> use it.
+    if region is None:
+        reg = _DEMO_REGIONS.get(up) or _DEMO_REGIONS.get(raw) or ""
+    else:
+        reg = region or ""
     short = (f"{hemi} {contacts}").strip()
     label = f"{short} · {reg}" if reg else short
     return {"raw": raw, "label": label, "short": short, "hemisphere": hemi_full,
@@ -278,42 +284,159 @@ def cluster_scatter(cv_df):
     }
 
 
-def corr_spectrum(td_detail, ignore_band=(55, 66), p_significant=0.001):
+def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, min_sessions=3,
+                             region_map=None):
+    """Sliding R-vs-frequency-over-time heatmap for the time-domain biomarker.
+
+    For every sliding TIME window, computes the Pearson R between each (channel, frequency) PSD
+    power and the pain label, across the streaming sessions whose StartTime falls in that window.
+    Result is a correlation heatmap of R over (frequency x window-time) per channel.
+
+    FULLY VECTORIZED — no per-window or per-frequency Python loop. A window-membership matrix
+    `W` (n_windows x n_sessions, 0/1) reduces every window's mean/variance/covariance to a handful
+    of BLAS matmuls (`W @ X`), so the whole heatmap is a few matrix products that run multithreaded
+    in BLAS. At this scale (hundreds of sessions x ~100 freqs x a few channels) this is far faster
+    than a GPU, whose host<->device transfer/launch overhead would dominate — hence no TensorFlow/
+    Metal path (also unavailable: a Linux container cannot reach the macOS Metal GPU).
+
+    Pearson R per window/element uses the single-pass identity
+        r = (Sxy - Sx*Sy/n) / sqrt((Sxx - Sx^2/n) * (Syy - Sy^2/n)),
+    with all of Sx, Sxx, Sxy, Sy, Syy obtained as `W @ ...`. Windows with < `min_sessions` finite
+    sessions, or a constant x or y (zero variance), yield NaN.
+
+    Parameters
+    ----------
+    td_detail : streaming_psd result dict (needs "psd" (E,C,F), "labels" (E,), "f_set" (F,), "chan_order").
+    times : per-session StartTimes (E,) — anything pandas can parse to datetime.
+    window_days, step_days : sliding-window length and stride (days).
+
+    Returns {"channels":[{channel, freqs:[F], window_starts:[W ISO], r:[F][W]}], "window_days", "step_days"}.
+    """
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float).ravel()
+    f_set = np.asarray(td_detail.get("f_set"), dtype=float).ravel()
+    chans = list(td_detail.get("chan_order") or [])
+    empty = {"channels": [], "window_days": window_days, "step_days": step_days}
+    if psd.ndim != 3 or psd.shape[0] == 0 or labels.size != psd.shape[0]:
+        return empty
+    E, C, F = psd.shape
+
+    tv = pd.to_datetime(pd.Series(times), errors="coerce").values.astype("datetime64[ns]").astype("float64")
+    if tv.size != E:
+        return empty
+    day_ns = 86400.0e9
+    w = float(window_days) * day_ns
+    s = max(float(step_days), 1e-9) * day_ns
+
+    X = psd.reshape(E, C * F)                                   # (E, M)
+    # A session is usable only if its time, label, and all PSD values are finite.
+    finite_sess = np.isfinite(tv) & np.isfinite(labels) & np.isfinite(X).all(axis=1)
+    if finite_sess.sum() < min_sessions:
+        return empty
+    # Robust time span: some sessions decode to corrupt StartTimes (e.g. ~1677, pandas' min date),
+    # which would stretch the grid to centuries and create thousands of empty windows. A percentile
+    # clip fails when the corrupt cluster is more than ~1% of sessions, so use a MAD filter on the
+    # timestamps (drop |t - median| > 5*MAD) — robust as long as corrupt times are a minority — and
+    # hard-cap the window count as a backstop.
+    ft = tv[finite_sess]
+    med = np.median(ft)
+    mad = np.median(np.abs(ft - med))
+    tkeep = (np.abs(ft - med) <= 5.0 * mad) if mad > 0 else np.ones(ft.shape, bool)
+    ftk = ft[tkeep] if tkeep.any() else ft
+    tmin, tmax = float(np.min(ftk)), float(np.max(ftk))
+    if not (tmax > tmin):
+        tmin, tmax = float(np.nanmin(ft)), float(np.nanmax(ft))
+    end = max(tmax - w, tmin)
+    max_windows = 400
+    if s > 0 and (end - tmin) / s > max_windows:
+        s = (end - tmin) / max_windows
+    starts = np.arange(tmin, end + s, s)                       # (Wn,)
+    if starts.size == 0:
+        starts = np.array([tmin])
+
+    inwin = (tv[None, :] >= starts[:, None]) & (tv[None, :] < starts[:, None] + w)
+    Wm = (inwin & finite_sess[None, :]).astype(float)          # (Wn, E)
+    Xf = np.where(np.isfinite(X), X, 0.0)                       # excluded sessions get weight 0
+    y = np.where(np.isfinite(labels), labels, 0.0)             # (E,)
+
+    n = Wm.sum(axis=1)                                          # (Wn,)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        nn = n[:, None]
+        Sx = Wm @ Xf; Sxx = Wm @ (Xf * Xf); Sxy = Wm @ (Xf * y[:, None])
+        Sy = Wm @ y;  Syy = Wm @ (y * y)
+        cov = Sxy - Sx * Sy[:, None] / nn
+        vx = Sxx - Sx * Sx / nn
+        vy = (Syy - Sy * Sy / n)[:, None]
+        r = cov / np.sqrt(vx * vy)                             # (Wn, M)
+    r[n < min_sessions, :] = np.nan
+    r[~np.isfinite(r)] = np.nan
+    R = r.reshape(-1, C, F)                                     # (Wn, C, F)
+
+    win_iso = [str(pd.Timestamp(int(st))) for st in starts]
+    channels = []
+    for ci in range(C):
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
+        name = fmt["label"] if fmt["region"] else fmt["short"]
+        rc = R[:, ci, :].T                                      # (F, Wn)
+        channels.append({
+            "channel": name,
+            "freqs": [float(v) for v in f_set],
+            "window_starts": win_iso,
+            "r": [[_f(v) for v in row] for row in rc],
+        })
+    return {"channels": channels, "window_days": window_days, "step_days": step_days}
+
+
+def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=None, n_peaks=6):
     """Pearson-R-vs-frequency correlation spectrum per channel
     (biomarker_analysis_streaming.ipynb cell 12). `td_detail` is the streaming_psd result dict.
+
+    `ignore_band` defaults to None (no 55–66 Hz mask — 60 Hz is preserved, consistent with the
+    notch removal). Each channel also gets `peaks`: the strongest |R| local maxima (freq, r) so the
+    UI can HIGHLIGHT peaks instead of relying on hover. `region_map` (raw-channel -> region) lets
+    the brain region come from the patient's device metadata instead of a static map.
     """
     if not td_detail:
         return None
+    from scipy.signal import find_peaks
     f = np.asarray(td_detail["f_set"], dtype=float)
     corr = np.asarray(td_detail["corr"], dtype=float)   # (C, F)
     pval = np.asarray(td_detail["pval"], dtype=float)
     chans = td_detail.get("chan_order", [])
-    ignore = (f > ignore_band[0]) & (f < ignore_band[1])
+    ignore = np.zeros(len(f), bool) if not ignore_band else ((f > ignore_band[0]) & (f < ignore_band[1]))
 
     channels = []
     for ci in range(corr.shape[0]):
-        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
         r_row = corr[ci].copy()
         p_row = pval[ci].copy()
         r_row[ignore] = np.nan
-        # Significant points (for the "+" markers in the notebook).
         sig = [(_f(r_row[k]) if (np.isfinite(p_row[k]) and p_row[k] < p_significant and not ignore[k]) else None)
                for k in range(len(f))]
+        # Peaks: strongest |R| local maxima, for highlighting (no hover tips needed on the TD plot).
+        absr = np.abs(np.nan_to_num(r_row, nan=0.0))
+        pk, _props = find_peaks(absr, prominence=0.05)
+        pk = sorted(pk, key=lambda k: -absr[k])[:n_peaks]
+        peaks = [{"freq": float(f[k]), "r": _f(r_row[k])} for k in sorted(pk)]
         channels.append({
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": [_f(x) for x in r_row],
             "p": [_f(x) for x in p_row],
             "significant": sig,
+            "peaks": peaks,
         })
     return {"freqs": [float(x) for x in f], "channels": channels,
             "transform": td_detail.get("transform", "log"), "p_significant": p_significant}
 
 
 # --- Time-domain (streaming) analytics -------------------------------------------------------
-def psd_spectra(td_detail, db=True):
+def psd_spectra(td_detail, db=True, region_map=None):
     """Mean PSD per channel split by pain group (high vs low, by median label).
     Returns {freqs, unit, channels:[{name, short, region, high:[...], low:[...]}]}.
     `td_detail` is the streaming_psd result (psd (E,C,F), labels (E,), f_set, chan_order).
+    `region_map` (raw-channel -> region) sources the region from device metadata.
     """
     if not td_detail:
         return None
@@ -343,14 +466,16 @@ def psd_spectra(td_detail, db=True):
 
     channels = []
     for ci in range(psd.shape[1]):
-        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
         channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
                          "high": grp(hi, ci), "low": grp(lo, ci)})
     return {"freqs": [float(x) for x in f], "unit": "dB" if db else "power", "channels": channels}
 
 
-def psd_spectrogram(td_detail, times, db=True, fmax=100.0):
-    """Per-channel PSD heatmap over sessions (z = freq x session). times: list[str] per epoch."""
+def psd_spectrogram(td_detail, times, db=True, fmax=100.0, region_map=None):
+    """Per-channel PSD heatmap over sessions (z = freq x session). times: list[str] per epoch.
+    `region_map` (raw-channel -> region) sources the region from device metadata."""
     if not td_detail:
         return None
     psd = np.asarray(td_detail.get("psd"), dtype=float)
@@ -367,7 +492,8 @@ def psd_spectrogram(td_detail, times, db=True, fmax=100.0):
         with np.errstate(divide="ignore", invalid="ignore"):
             z = 10 * np.log10(z) if db else z
         zt = z.T  # (Fz, E) -> rows=freq, cols=session
-        fmt = format_channel(chans[ci] if ci < len(chans) else f"ch{ci}")
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
         channels.append({"name": fmt["label"], "short": fmt["short"], "region": fmt["region"],
                          "z": [[_f(v) for v in row] for row in zt]})
     return {"freqs": [float(x) for x in fz], "times": list(times),

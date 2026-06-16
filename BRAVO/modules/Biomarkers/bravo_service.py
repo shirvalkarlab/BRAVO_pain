@@ -143,6 +143,53 @@ def _derive_chan_order(td_recordings):
     return order
 
 
+def _recorded_powers(powerdomain_list, region_map=None):
+    """Which band-power channels were actually recorded — the '<contact> Power' columns of the
+    BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
+    device metadata when available. Lets the card state which powers were recorded for each channel.
+    """
+    seen = {}
+    for r in powerdomain_list or []:
+        for nm in r.get("ChannelNames", []) or []:
+            s = str(nm)
+            if "POWER" in s.upper():
+                contact = s.rsplit(" ", 1)[0] if " " in s else s   # strip the trailing " Power"
+                if contact not in seen:
+                    fmt = analytics.format_channel(contact, region=(region_map or {}).get(contact))
+                    seen[contact] = {"raw": contact, "label": fmt["short"], "region": fmt["region"]}
+    return list(seen.values())
+
+
+def _region_map(participant, chan_order):
+    """Map each raw sensing-channel name (e.g. 'ZERO_THREE_LEFT') to a brain region inferred from
+    the PARTICIPANT'S DEVICE METADATA (Electrode.custom_name / target), not a static map. The
+    hemisphere is taken from the channel name and matched to the electrode whose name/target names
+    that hemisphere. Returns {} when no electrode metadata is available (callers fall back)."""
+    if participant is None:
+        return {}
+    try:
+        from Server.models.Device import Electrode
+    except Exception:
+        return {}
+    hemi_region = {}
+    for e in Electrode.objects.filter(owner=participant):
+        reg = (getattr(e, "custom_name", "") or getattr(e, "target", "") or "").strip()
+        if not reg:
+            continue
+        ru = reg.upper()
+        hemi = "LEFT" if ("LEFT" in ru or ru.startswith("L ")) else (
+               "RIGHT" if ("RIGHT" in ru or ru.startswith("R ")) else "")
+        if hemi:
+            hemi_region.setdefault(hemi, reg)
+    out = {}
+    for raw in chan_order or []:
+        ru = str(raw).upper()
+        h = "LEFT" if "LEFT" in ru else ("RIGHT" if "RIGHT" in ru else "")
+        if h and h in hemi_region:
+            out[raw] = hemi_region[h]
+    return out
+
+
 def _pt_config_dir():
     """Directory holding per-patient `<name>_config.json` field maps. Defaults to the
     live-mounted `<BRAVO>/pt_config`; override with the BRAVO_PT_CONFIG_DIR env var."""
@@ -312,7 +359,7 @@ def _run_parallel(tasks):
 
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
-                       train_days=None, step_days=None, sliding=True):
+                       train_days=None, step_days=None, sliding=True, region_map=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -325,11 +372,20 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             det = td["detail"]
             tl = td.get("timeline")
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
-            result["timedomain"] = _run_parallel({
-                "corr_spectrum": lambda: analytics.corr_spectrum(det),
-                "psd_spectra": lambda: analytics.psd_spectra(det),
-                "spectrogram": lambda: analytics.psd_spectrogram(det, times),
-            })
+            td_window_days = train_days if train_days is not None else 30
+            td_step_days = step_days if step_days is not None else 7
+            td_tasks = {
+                "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
+                "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
+                "spectrogram": lambda: analytics.psd_spectrogram(det, times, region_map=region_map),
+            }
+            # The sliding R-vs-frequency-over-time HEATMAP is computed ONLY in sliding mode (a window
+            # is selected). With no window (all data) the card shows the static R-vs-frequency
+            # spectrum (corr_spectrum) with peaks highlighted instead.
+            if sliding:
+                td_tasks["sliding_corr_spectrum"] = lambda: analytics.td_sliding_corr_spectrum(
+                    det, times, window_days=td_window_days, step_days=td_step_days, region_map=region_map)
+            result["timedomain"] = _run_parallel(td_tasks)
         except Exception as e:
             result["timedomain"] = {"error": str(e)}
 
@@ -421,9 +477,15 @@ def run_for_participant(request_data):
     # Power domain = Chronic ~10-min LFP power + per-session Power-Domain band power, concatenated
     # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
     power_list = []
+    powerdomain_list = []
     if source in ("powerdomain", "both"):
         chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
         powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+        # Tag each Chronic recording with its sensing modality so the merged-series two-source
+        # batch/scale confound can be diagnosed downstream (the power-domain dicts self-tag).
+        for c in chronic_list:
+            if isinstance(c, dict):
+                c.setdefault("Source", "chronic")
         power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
 
     pro_df = _load_pros(request_data, Participant)
@@ -450,18 +512,35 @@ def run_for_participant(request_data):
     if step_days is not None:
         rb_kwargs["test_days"] = step_days   # detector advances by (and tests on) one step
 
+    recorded_powers = _recorded_powers(powerdomain_list)
+    # Region map covers both TD sensing channels and the recorded power-domain contacts.
+    region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
+    for p in recorded_powers:   # backfill region now that the map is built
+        p["region"] = region_map.get(p["raw"], p["region"])
+
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
                                  label_metric=label_metric, kmeans_features=kmeans_features,
                                  **rb_kwargs)
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
                                                  train_days=train_days, step_days=step_days,
-                                                 sliding=sliding))
+                                                 sliding=sliding, region_map=region_map))
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
     out["sliding_window"] = sliding
     out["window_months"] = window_months
     out["window_step_months"] = window_step_months
+    out["recorded_powers"] = recorded_powers
+    # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
+    # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
+    # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
+    # a single pooled threshold mixes physiologically distinct signals — surface that to the user.
+    distinct_regions = sorted({(p.get("region") or "").strip() for p in recorded_powers if p.get("region")})
+    out["powerdomain_pooled_warning"] = (
+        f"Power-domain biomarker pools {len(distinct_regions)} targets/hemispheres "
+        f"({', '.join(distinct_regions)}) into one threshold at raw (un-normalized) scale; "
+        f"interpret per target rather than as a single combined biomarker."
+        if len(distinct_regions) > 1 else None)
     return out
 
 

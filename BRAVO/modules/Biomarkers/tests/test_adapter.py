@@ -164,7 +164,9 @@ def _make_chronic_trend(days=14, step_hours=2):
 def test_bravo_chronic_to_lfp_df_shape():
     chronic, pro = _make_chronic_trend()
     cv = adapter.bravo_chronic_to_lfp_df(chronic, pro, label_metric="nrs")
-    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs"]
+    # `source` is carried (defaults to "chronic") for the two-source batch-confound diagnostic.
+    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs", "source"]
+    assert set(cv["source"].unique()) == {"chronic"}
     levels = set(cv["pain_level"].dropna().unique())
     assert levels <= {0.0, 1.0} and len(levels) == 2  # both classes present
     # High-pain (even) days should be labeled 1.
@@ -227,6 +229,42 @@ def test_sliding_window_analytics_no_sliding():
     assert len(one) == 1 and one[0].get("all_data") is True
     assert one[0]["threshold"] is not None
     assert len(full) > 1   # sliding produces many windows on the same data
+
+
+def test_td_sliding_corr_spectrum_matches_scipy():
+    """The fully-vectorized sliding R-vs-frequency heatmap must equal scipy.stats.pearsonr computed
+    the naive way for each (window, channel, freq) — proving the W@X matmul math is correct."""
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(0)
+    E, C, F = 40, 2, 5
+    times = [pd.Timestamp(_dt.datetime.utcfromtimestamp(_MIDNIGHT_UTC + d * 86_400)) for d in range(E)]
+    psd = rng.standard_normal((E, C, F))
+    labels = rng.standard_normal(E)
+    detail = {"psd": psd, "labels": labels, "f_set": np.arange(F) * 1.0,
+              "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]}
+    out = analytics.td_sliding_corr_spectrum(detail, times, window_days=10, step_days=10, min_sessions=3)
+    chans = out["channels"]
+    assert len(chans) == C
+    starts = chans[0]["window_starts"]
+    assert len(starts) >= 2
+    assert chans[0]["channel"] == "L 0⁻-2⁺"   # numeric contact label, not word form
+
+    tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
+    w_ns = 10 * 86_400 * 1e9
+    checked = 0
+    for (wi, ci, fi) in [(0, 0, 0), (1, 1, F - 1)]:
+        if wi >= len(starts):
+            continue
+        w0 = pd.Timestamp(starts[wi]).value
+        idx = np.where((tv >= w0) & (tv < w0 + w_ns))[0]
+        if len(idx) < 3:
+            continue
+        r_ref = pearsonr(psd[idx, ci, fi], labels[idx])[0]
+        r_got = chans[ci]["r"][fi][wi]   # r is [freq][window]
+        assert abs(r_got - r_ref) < 1e-9, (wi, ci, fi, r_got, r_ref)
+        checked += 1
+    assert checked >= 1
+    print("OK td_sliding_corr_spectrum matches scipy (checked %d cells)" % checked)
 
 
 def test_decimate_for_plot_thins_only():
@@ -425,5 +463,6 @@ if __name__ == "__main__":
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
     test_sliding_window_analytics_no_sliding()
+    test_td_sliding_corr_spectrum_matches_scipy()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")

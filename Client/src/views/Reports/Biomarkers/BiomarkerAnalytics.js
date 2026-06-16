@@ -78,17 +78,24 @@ export default function BiomarkerAnalytics({ analytics }) {
     const f = spectrum.freqs;
     const traces = [];
     spectrum.channels.forEach((ch) => {
-      traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines", line: { width: 2 }, connectgaps: false });
-      if (ch.significant && ch.significant.some((v) => v !== null)) {
-        traces.push({ x: f, y: ch.significant, type: "scatter", mode: "markers",
-          marker: { symbol: "cross", size: 7, color: "black" }, showlegend: false, hoverinfo: "skip" });
+      // No hover data-tips on the time-domain spectrum; peaks are HIGHLIGHTED with star markers
+      // (+ a static Hz label) instead.
+      traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines",
+        line: { width: 2 }, connectgaps: false, hoverinfo: "skip" });
+      if (ch.peaks && ch.peaks.length) {
+        traces.push({ x: ch.peaks.map((p) => p.freq), y: ch.peaks.map((p) => p.r),
+          type: "scatter", mode: "markers+text",
+          text: ch.peaks.map((p) => `${p.freq.toFixed(1)} Hz`), textposition: "top center",
+          textfont: { size: 10 }, cliponaxis: false,
+          marker: { symbol: "star", size: 12, color: "#111", line: { width: 1, color: "#fff" } },
+          name: `${ch.name} peaks`, showlegend: false, hoverinfo: "skip" });
       }
     });
     tdPanels.push(
-      <Panel key="spec" title="PSD correlation with pain (Pearson R vs frequency)" lg={12}>
-        <Fig traces={traces} layout={{ xaxis: { title: "Frequency (Hz)" },
+      <Panel key="spec" title="PSD correlation with pain (Pearson R vs frequency) — peaks highlighted" lg={12}>
+        <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
           yaxis: { title: "Correlation with pain (R)", range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.25 } }} />
+          legend: { orientation: "h", y: -0.2 } }} />
       </Panel>
     );
   }
@@ -119,6 +126,23 @@ export default function BiomarkerAnalytics({ analytics }) {
         <Panel key={"sg" + i} title={`PSD over sessions — ${ch.short}`}>
           <Fig traces={traces} layout={{ xaxis: { title: "Session", type: "date" }, yaxis: { title: "Frequency (Hz)" },
             title: { text: ch.region || "", font: { size: 11 } } }} />
+        </Panel>
+      );
+    });
+  }
+
+  const scs = td.sliding_corr_spectrum || null;
+  if (scs && scs.channels && scs.channels.length) {
+    scs.channels.forEach((ch, i) => {
+      const traces = [{ type: "heatmap", z: ch.r, x: ch.window_starts, y: ch.freqs,
+        colorscale: "RdBu", reversescale: true, zmid: 0, zmin: -1, zmax: 1,
+        colorbar: { title: { text: "R", side: "right" }, thickness: 12, len: 0.9 },
+        hovertemplate: "%{x|%b %d %Y} · %{y:.1f} Hz · R=%{z:.2f}<extra></extra>" }];
+      tdPanels.push(
+        <Panel key={"scs" + i} lg={12}
+          title={`Sliding correlation with pain (R: frequency × time) — ${ch.channel}`}>
+          <Fig traces={traces} height={360}
+            layout={{ xaxis: { title: "Window start", type: "date" }, yaxis: { title: "Frequency (Hz)" } }} />
         </Panel>
       );
     });

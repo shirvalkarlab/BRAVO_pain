@@ -9,13 +9,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl, InputLabel,
-  Switch, Slider, TextField, FormControlLabel, Divider, Button } from "@mui/material";
+import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl,
+  Switch, Slider, TextField, FormControlLabel, Divider, LinearProgress, CircularProgress } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
-import LoadingProgress from "components/LoadingProgress";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
@@ -54,9 +53,14 @@ function Biomarkers() {
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
   // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
   const [requestParams, setRequestParams] = useState(null);
+  const [computing, setComputing] = useState(false);
   const [alert, setAlert] = useState(null);
 
-  const showWindowControls = source !== "timedomain";   // power-domain detector only
+  // Window/step now drive BOTH the time-domain sliding correlation heatmap and the power-domain
+  // detector/performance, so show them for every source. The sliding ON/OFF switch is
+  // power-domain-specific (all-data vs sliding), so it's hidden on the time-domain-only tab.
+  const showWindowControls = true;
+  const showSlidingSwitch = source !== "timedomain";
 
   const snapshot = () => ({
     source, LabelMetric: metric, SlidingWindow: slidingWindow,
@@ -75,34 +79,102 @@ function Biomarkers() {
     setContextState(dispatch, "report", "CustomizedAnalysis");
   }, [participant_uid]);
 
-  // Fetch ONLY when a compute was requested (requestParams set by the Compute button).
+  // Fetch ONLY when a compute was requested (requestParams set by the Compute button). Progress is
+  // shown INLINE (a labeled bar in the card) instead of the generic "loading data" overlay.
   useEffect(() => {
     if (!participant_uid || !requestParams) return;
-    setAlert(<LoadingProgress />);
+    setComputing(true);
     SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
     }).then((response) => {
       setData(response.data);
-      setAlert(null);
+      setComputing(false);
     }).catch((error) => {
+      setComputing(false);
       SessionController.displayError(error, setAlert);
     });
   }, [participant_uid, requestParams]);
 
+  // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
+  // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
+  // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
   const summaryLine = (label, s) => {
     if (!s) return null;
+    const Line = ({ children, color = "text", bold = false }) => (
+      <MDTypography variant="button" fontWeight={bold ? "medium" : "regular"} color={color} display="block">
+        {children}
+      </MDTypography>
+    );
+    // Small italic caption for honesty caveats (provenance, CI conditions, label source).
+    const Note = ({ children, color = "text" }) => (
+      <MDTypography variant="caption" fontStyle="italic" color={color} display="block">
+        {children}
+      </MDTypography>
+    );
+
+    // Power-domain (threshold detector) branch.
     if (s.best_threshold !== undefined) {
+      const aucTxt = s.auc != null ? `  AUC=${fmt(s.auc)} (in-sample)` : "";
+      const rhoTxt = s.lfp_vs_continuous_pain_spearman != null
+        ? `  Spearman ρ(LFP, pain)=${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
       return (
-        <MDTypography variant="button" fontWeight="regular" color="text" display="block">
-          {`${label}: threshold=${fmt(s.best_threshold)}  sens=${fmt(s.sens)}  spec=${fmt(s.spec)}  n_windows=${s.n_windows}`}
-        </MDTypography>
+        <MDBox mb={0.5}>
+          <Line bold>
+            {`${label}: threshold=${fmt(s.best_threshold)}  sens=${fmt(s.sens)}  spec=${fmt(s.spec)}  n_windows=${s.n_windows ?? "—"}`}
+          </Line>
+          <Line>
+            {`balanced accuracy=${fmt(s.balanced_accuracy)} vs chance=${fmt(s.chance_accuracy)} (whole series)` +
+             `  (prevalence=${fmt(s.prevalence)})${aucTxt}${rhoTxt}`}
+          </Line>
+          {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
+          {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
+          {s.in_sample ? (
+            <Line color="warning">{`⚠ ${s.note || "All-data fit: scored on the same data (in-sample, optimistic — not a generalization estimate)."}`}</Line>
+          ) : null}
+          {s.pain_level_note ? <Note>{s.pain_level_note}</Note> : null}
+        </MDBox>
       );
     }
+
+    // Time-domain (PSD↔pain correlation) branch.
     if (s.band !== undefined || s.freq_hz !== undefined) {
+      const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
+      const ciTxt = ci && ci[0] != null && ci[1] != null ? `  95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
+      const fdrTxt = s.fdr_q != null ? `  FDR q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
+      // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
+      // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
+      const permTxt = s.perm_p != null ? `  perm p=${fmtP(s.perm_p)}` : `  p=${fmtP(s.p)}`;
+      const nTxt = s.n != null
+        ? `n=${s.n}${s.n_effective != null ? ` (effective n=${fmt(s.n_effective)} after autocorrelation)` : ""}`
+        : "";
+      // Honest significance verdict: the band is "real" only if it survives BOTH the selection-
+      // aware permutation test AND the per-cell FDR. perm_p is the primary statement.
+      const permSig = s.perm_p != null && s.perm_p < 0.05;
+      const notSignificant = (s.perm_p != null || s.fdr_q != null) && !permSig && !s.fdr_significant;
       return (
-        <MDTypography variant="button" fontWeight="regular" color="text" display="block">
-          {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz  r=${fmt(s.r)}  p=${fmt(s.p)}`}
-        </MDTypography>
+        <MDBox mb={0.5}>
+          <Line bold>
+            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz  r=${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
+          </Line>
+          {nTxt ? <Line>{nTxt}</Line> : null}
+          {s.stim_adjusted_r != null ? (
+            <Line>{`stim-adjusted r=${fmt(s.stim_adjusted_r)} (partial correlation removing stim amplitude)`}</Line>
+          ) : s.stim_adjusted_note ? (
+            <Line>{`stim adjustment: ${s.stim_adjusted_note}`}</Line>
+          ) : null}
+          {s.mains_region_warning ? (
+            <Line color="warning">{"⚠ Selected band is within the mains-noise region (55–66 Hz) — may reflect line noise rather than neural signal."}</Line>
+          ) : null}
+          {s.narrow_peak_warning ? (
+            <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
+          ) : null}
+          {notSignificant ? (
+            <Line color="error">{"⚠ NOT statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as a negative/exploratory result, not a validated biomarker."}</Line>
+          ) : (!s.fdr_significant && permSig ? (
+            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — treat the permutation result as primary."}</Line>
+          ) : null)}
+          {s.r_ci_note ? <Note>{`r and CI are ${s.r_ci_note}`}</Note> : null}
+        </MDBox>
       );
     }
     return null;
@@ -123,14 +195,17 @@ function Biomarkers() {
                     <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
                       <MDButton
                         variant="contained" color="error" size="large"
-                        onClick={compute}
+                        onClick={compute} disabled={computing}
                         sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
                               backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" } }}
+                              "&:hover": { backgroundColor: "#b71c1c" },
+                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
                       >
-                        {data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now"}
+                        {computing ? (
+                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
+                        ) : (data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now")}
                       </MDButton>
-                      {dirty && data ? (
+                      {!computing && dirty && data ? (
                         <MDTypography variant="button" color="error" fontWeight="medium">
                           {"Settings changed — click to recompute."}
                         </MDTypography>
@@ -142,6 +217,17 @@ function Biomarkers() {
                       ) : null}
                     </MDBox>
                   </Grid>
+
+                  {computing ? (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1}>
+                        <MDTypography variant="button" fontWeight="medium" color="text" display="block" mb={0.5}>
+                          {`Computing ${source === "both" ? "time-domain + power-domain" : source === "timedomain" ? "time-domain" : "power-domain"} biomarker on full-resolution data — this can take ~10–40 s…`}
+                        </MDTypography>
+                        <LinearProgress color="error" />
+                      </MDBox>
+                    </Grid>
+                  ) : null}
 
                   <Grid item xs={12}>
                     <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
@@ -185,11 +271,13 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <Divider sx={{ my: 0 }} />
                       <MDBox px={2} py={1.5} display="flex" flexDirection="column" gap={1.5}>
-                        <FormControlLabel
-                          control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
-                          label={<MDTypography variant="button" fontWeight="medium">{"Sliding window (power-domain detector & performance)"}</MDTypography>}
-                        />
-                        {slidingWindow ? (
+                        {showSlidingSwitch ? (
+                          <FormControlLabel
+                            control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
+                            label={<MDTypography variant="button" fontWeight="medium">{"Sliding window (power-domain detector & performance)"}</MDTypography>}
+                          />
+                        ) : null}
+                        {(source !== "powerdomain" || slidingWindow) ? (
                           <MDBox display="flex" flexDirection="column" gap={1.5}>
                             {[
                               { lbl: "Window (months)", draft: monthsDraft, setDraft: setMonthsDraft, setVal: setWindowMonths,
@@ -225,11 +313,12 @@ function Biomarkers() {
                               </MDBox>
                             ))}
                           </MDBox>
-                        ) : (
+                        ) : null}
+                        {(showSlidingSwitch && !slidingWindow) ? (
                           <MDTypography variant="button" color="text">
-                            {"Using all data (one threshold, no sliding window)"}
+                            {"Power-domain: using all data (one threshold, no sliding window)."}
                           </MDTypography>
-                        )}
+                        ) : null}
                       </MDBox>
                     </Grid>
                   ) : null}
@@ -270,6 +359,17 @@ function Biomarkers() {
                         ) : null}
                         {summaryLine("Time-domain", data.summary.timedomain)}
                         {summaryLine("Power-domain", data.summary.powerdomain)}
+                        {data.powerdomain_pooled_warning ? (
+                          <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
+                            {`⚠ ${data.powerdomain_pooled_warning}`}
+                          </MDTypography>
+                        ) : null}
+                        {data.recorded_powers && data.recorded_powers.length ? (
+                          <MDTypography variant="button" fontWeight="regular" color="text" display="block">
+                            {"Powers recorded per channel: "}
+                            {data.recorded_powers.map((p) => p.region ? `${p.label} (${p.region})` : p.label).join(",  ")}
+                          </MDTypography>
+                        ) : null}
                       </MDBox>
                     </Grid>
                   ) : null}
@@ -311,6 +411,15 @@ function fmt(x) {
   if (x === null || x === undefined || Number.isNaN(x)) return "—";
   if (typeof x === "number") return Math.abs(x) >= 100 ? x.toFixed(1) : x.toFixed(3);
   return String(x);
+}
+
+// Compact p-value formatter: scientific notation for tiny p, 3 decimals otherwise.
+function fmtP(x) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "—";
+  const n = Number(x);
+  if (!Number.isFinite(n)) return "—";
+  if (n > 0 && n < 1e-3) return n.toExponential(1);
+  return n.toFixed(3);
 }
 
 export default Biomarkers;

@@ -284,7 +284,10 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
 
     data = filtfilt(b, a, data, axis=-1)
 
-    f, Pxx = welch(data, fs=fs, nperseg=1024, axis=-1)  # (n_ch, F_welch)
+    # nperseg can't exceed the (possibly short) segment length; guard explicitly so Welch averages
+    # over real segments and doesn't emit a "nperseg > input length" warning + degenerate estimate.
+    nper = int(min(1024, data.shape[-1]))
+    f, Pxx = welch(data, fs=fs, nperseg=max(nper, 8), axis=-1)  # (n_ch, F_welch)
     Pxx = np.array([np.interp(f_set, f, Pxx[i, :]) for i in range(Pxx.shape[0])])
 
     psd = np.zeros((1, len(chan_order), len(f_set)))

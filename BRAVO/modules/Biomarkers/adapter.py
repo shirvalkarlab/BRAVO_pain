@@ -183,24 +183,64 @@ def _session_stim_amplitude(recording):
 # ---------------------------------------------------------------------------
 # 4) Chronic (10-min trend) glue for the threshold biomarker
 # ---------------------------------------------------------------------------
-def _concat_chronic(chronic):
+def mad_outlier_mask(x, k=3.0):
+    """Boolean KEEP-mask: True for samples within k median-absolute-deviations of the median.
+    Excludes artifact spikes where |x - median| > k*MAD (NaN/non-finite are excluded). Returns the
+    finite mask when MAD==0 (all equal) or fewer than 3 finite points (MAD undefined/unstable).
+    Robust (median/MAD), so a few extreme values don't move the threshold like mean/SD would.
+    """
+    x = np.asarray(x, dtype=float)
+    finite = np.isfinite(x)
+    if finite.sum() < 3:
+        return finite
+    med = np.median(x[finite])
+    mad = np.median(np.abs(x[finite] - med))
+    if mad <= 0:
+        return finite
+    return finite & (np.abs(x - med) <= k * mad)
+
+
+def _concat_chronic(chronic, mad_k=3.0):
     """Accept one Chronic recording dict OR a list of them, returning a single dict with a
     time-sorted, concatenated Time/Data. The threshold detector needs many days of trend
     (train+gap+test, default ~10 days); a single Chronic recording spans only minutes, so
     multiple visits must be concatenated into one long trend before detection.
+
+    `mad_k`: per-recording MAD outlier rejection on the LFP-power column (Data[:,0]) BEFORE
+    concatenation. Applied PER RECORDING (each recording is one homogeneous-scale source —
+    Chronic ~10-min LFP vs per-session Power-Domain band power differ ~8x), so a global MAD
+    wouldn't wrongly flag an entire lower-scale source. Set mad_k=None to disable.
     """
     if isinstance(chronic, dict):
-        return chronic
+        chronic = [chronic]
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
-    times = np.concatenate([np.asarray(c["Time"], dtype=float) for c in chronic])
-    datas = np.concatenate([np.asarray(c["Data"], dtype=float) for c in chronic], axis=0)
+    times_list, datas_list, src_list = [], [], []
+    for c in chronic:
+        t = np.asarray(c["Time"], dtype=float)
+        d = np.asarray(c["Data"], dtype=float)
+        # Sensing-modality tag per recording, repeated per sample so it survives the merge+sort and
+        # downstream can diagnose the two-source batch/scale confound. Default "chronic".
+        src = str(c.get("Source", "chronic"))
+        if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
+            keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
+            t, d = t[keep], d[keep]
+        if t.size:
+            times_list.append(t)
+            datas_list.append(d)
+            src_list.append(np.full(t.shape[0], src, dtype=object))
+    if not times_list:
+        raise ValueError("no chronic samples survived outlier rejection.")
+    times = np.concatenate(times_list)
+    datas = np.concatenate(datas_list, axis=0)
+    sources = np.concatenate(src_list)
     order = np.argsort(times)
     return {
         "SamplingRate": -1,
         "Time": times[order],
         "Data": datas[order],
+        "Source": sources[order],
         "ChannelNames": chronic[0].get("ChannelNames"),
     }
 
@@ -269,6 +309,9 @@ def bravo_powerdomain_to_chronic_like(recordings):
                 "Time": time[valid],
                 "Data": np.column_stack([pw[valid], np.asarray(stim, dtype=float)[valid]]),
                 "ChannelNames": [f"{label} LFP", f"{label} Amplitude"],
+                # Sensing-modality tag so the merged-series batch/scale confound can be diagnosed
+                # downstream (per-session Power-Domain band power vs the ~10-min Chronic LFP power).
+                "Source": "powerdomain",
             })
     return out
 
@@ -323,6 +366,11 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
                     metrics=tuple(carry), timestamp_col=timestamp_col)
     df = df.rename(columns={"time": "timestamp", "lfp": "LFP"})
     df["timestamp"] = _as_naive(df["timestamp"])
+    # align_pros emits one row per chronic sample in Time order, so the per-sample Source array maps
+    # 1:1 onto these rows — carry it through for the downstream two-source batch-confound diagnostic.
+    src = chronic.get("Source")
+    if src is not None and len(src) == len(df):
+        df["source"] = np.asarray(src, dtype=object)
 
     lfp = df["LFP"].to_numpy(dtype=float)
     n = len(lfp)
@@ -335,10 +383,17 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
         df["LFP_smoothed"] = lfp
 
     if use_kmeans:
-        # VERBATIM notebook labeler on [left_leg_vas, mpq_sum] joined onto each chronic sample.
+        # KMeans pain labeler on the cluster features. Z-SCORE each feature first so a larger-scale
+        # feature (e.g. left_leg_vas 0–100 vs mpq_sum 0–72) doesn't dominate the Euclidean cluster
+        # distance — otherwise the "pain_level" split is effectively driven by one metric. (Rigor
+        # fix; the verbatim kmeans_pain_level itself is unchanged.)
         from .routines.threshold_biomarker import kmeans_pain_level
         feats = df[list(kmeans_features)].to_numpy(dtype=float)
-        df["pain_level"] = kmeans_pain_level(feats)
+        mu = np.nanmean(feats, axis=0)
+        sd = np.nanstd(feats, axis=0)
+        sd[~np.isfinite(sd) | (sd == 0)] = 1.0
+        feats_z = (feats - mu) / sd
+        df["pain_level"] = kmeans_pain_level(feats_z)
     else:
         metric_vals = df[label_metric].to_numpy(dtype=float)
         cutoff = np.nanmedian(metric_vals) if pain_cutoff is None else float(pain_cutoff)
@@ -347,6 +402,8 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
         df["pain_level"] = pl
 
     out_cols = ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", label_metric]
+    if "source" in df.columns:
+        out_cols.append("source")
     for f in kmeans_features:
         if f in df.columns and f not in out_cols:
             out_cols.append(f)

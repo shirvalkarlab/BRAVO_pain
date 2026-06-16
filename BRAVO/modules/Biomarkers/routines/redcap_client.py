@@ -129,13 +129,18 @@ def process_redcap(redcap_data, field_map):
         if isinstance(value, list):
             present = [v for v in value if v in df.columns]
             if present:
-                proc[key] = df[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+                # min_count=1: a row where EVERY component item is missing stays NaN (truly
+                # missing), instead of being fabricated as a real 0 subscale.
+                proc[key] = df[present].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
         elif value in df.columns:
-            proc[key] = df[value]
+            proc[key] = pd.to_numeric(df[value], errors="coerce")
 
     proc[TIDY_TIMESTAMP_COL] = df[timestamp_label]
     proc = proc.sort_values(TIDY_TIMESTAMP_COL).reset_index(drop=True)
-    return proc.fillna(0)
+    # IMPORTANT: do NOT fillna(0) the pain metrics — an unreported survey day must stay NaN so the
+    # median cutoff, correlations, and KMeans labeler DROP it rather than treat it as a real
+    # zero-pain report. (Rigor-review fix; deviates from the source notebook's fillna(0).)
+    return proc
 
 
 def load_processed_pro_csv(csv_path):
