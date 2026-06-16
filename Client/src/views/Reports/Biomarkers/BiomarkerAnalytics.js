@@ -66,6 +66,18 @@ function Section({ title, subtitle, panels }) {
 
 const HI = "#E53935", LO = "#1A73E8";
 
+// Distinct per-channel colors so a curve and its peak stars share one color (and read as a pair).
+const PALETTE = ["#1A73E8", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00ACC1", "#6D4C41", "#C0CA33"];
+
+// Power line-noise band (~60 Hz US mains). A faint caution shade + subtle label so peaks that land
+// here are read as likely line-noise artifact, not a neural pain rhythm. Reused across freq panels.
+const mainsBand = () => ({
+  shapes: [{ type: "rect", xref: "x", yref: "paper", x0: 55, x1: 65, y0: 0, y1: 1,
+    fillcolor: "rgba(120,120,120,0.10)", line: { width: 0 }, layer: "below" }],
+  annotations: [{ xref: "x", yref: "paper", x: 60, y: 1, yanchor: "bottom", text: "mains ~60 Hz",
+    showarrow: false, font: { size: 9, color: "#9E9E9E" } }],
+});
+
 export default function BiomarkerAnalytics({ analytics }) {
   if (!analytics) return null;
   const td = analytics.timedomain || {};
@@ -77,25 +89,29 @@ export default function BiomarkerAnalytics({ analytics }) {
   if (spectrum && spectrum.channels && spectrum.channels.length) {
     const f = spectrum.freqs;
     const traces = [];
-    spectrum.channels.forEach((ch) => {
-      // No hover data-tips on the time-domain spectrum; peaks are HIGHLIGHTED with star markers
-      // (+ a static Hz label) instead.
+    spectrum.channels.forEach((ch, ci) => {
+      const color = PALETTE[ci % PALETTE.length];
+      // Hover (not fixed labels) gives the value on demand, matching the other panels. The curve and
+      // its peaks share a color + legendgroup, so toggling the curve in the legend also hides its stars.
       traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines",
-        line: { width: 2 }, connectgaps: false, hoverinfo: "skip" });
+        line: { width: 2, color }, connectgaps: false, legendgroup: ch.name,
+        hovertemplate: "%{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
       if (ch.peaks && ch.peaks.length) {
+        // Stars only MARK the peaks (no permanent text); the value is read by hovering.
         traces.push({ x: ch.peaks.map((p) => p.freq), y: ch.peaks.map((p) => p.r),
-          type: "scatter", mode: "markers+text",
-          text: ch.peaks.map((p) => `${p.freq.toFixed(1)} Hz`), textposition: "top center",
-          textfont: { size: 10 }, cliponaxis: false,
-          marker: { symbol: "star", size: 12, color: "#111", line: { width: 1, color: "#fff" } },
-          name: `${ch.name} peaks`, showlegend: false, hoverinfo: "skip" });
+          type: "scatter", mode: "markers", legendgroup: ch.name, showlegend: false,
+          marker: { symbol: "star", size: 12, color, line: { width: 1, color: "#fff" } },
+          name: `${ch.name} peak`,
+          hovertemplate: "peak · %{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
       }
     });
+    const mb = mainsBand();
     tdPanels.push(
-      <Panel key="spec" title="PSD correlation with pain (Pearson R vs frequency) — peaks highlighted" lg={12}>
+      <Panel key="spec" title="PSD correlation with pain (Pearson R vs frequency) — peaks marked with ★" lg={12}>
         <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
           yaxis: { title: "Correlation with pain (R)", range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.2 } }} />
+          legend: { orientation: "h", y: -0.2, groupclick: "togglegroup" },
+          shapes: mb.shapes, annotations: mb.annotations }} />
       </Panel>
     );
   }
@@ -107,11 +123,13 @@ export default function BiomarkerAnalytics({ analytics }) {
         { x: spectra.freqs, y: ch.high, name: "High pain", type: "scatter", mode: "lines", line: { color: HI, width: 2 }, connectgaps: false },
         { x: spectra.freqs, y: ch.low, name: "Low pain", type: "scatter", mode: "lines", line: { color: LO, width: 2 }, connectgaps: false },
       ];
+      const mb = mainsBand();
       tdPanels.push(
         <Panel key={"psd" + i} title={`Mean PSD by pain — ${ch.short}`}>
           <Fig traces={traces} layout={{ xaxis: { title: "Frequency (Hz)" },
             yaxis: { title: `Power (${spectra.unit})` }, legend: { orientation: "h", y: -0.25 },
-            title: { text: ch.region || "", font: { size: 11 } } }} />
+            title: { text: ch.region || "", font: { size: 11 } },
+            shapes: mb.shapes, annotations: mb.annotations }} />
         </Panel>
       );
     });
@@ -121,7 +139,8 @@ export default function BiomarkerAnalytics({ analytics }) {
   if (sg && sg.channels) {
     sg.channels.forEach((ch, i) => {
       const traces = [{ type: "heatmap", z: ch.z, x: sg.times, y: sg.freqs, colorscale: "Viridis",
-        colorbar: { title: sg.unit, titleside: "right" } }];
+        colorbar: { title: sg.unit, titleside: "right" },
+        hovertemplate: `%{x|%b %d %Y} · %{y:.1f} Hz · %{z:.1f} ${sg.unit}<extra></extra>` }];
       tdPanels.push(
         <Panel key={"sg" + i} title={`PSD over sessions — ${ch.short}`}>
           <Fig traces={traces} layout={{ xaxis: { title: "Session", type: "date" }, yaxis: { title: "Frequency (Hz)" },
@@ -175,7 +194,8 @@ export default function BiomarkerAnalytics({ analytics }) {
   if (roc && roc.fpr && roc.fpr.length) {
     const traces = [
       { x: roc.fpr, y: roc.tpr, name: `ROC (AUC=${(roc.auc ?? 0).toFixed(3)})`, type: "scatter", mode: "lines",
-        line: { width: 3, color: "#1A73E8" }, fill: "tozeroy", fillcolor: "rgba(26,115,232,0.1)" },
+        line: { width: 3, color: "#1A73E8" }, fill: "tozeroy", fillcolor: "rgba(26,115,232,0.1)",
+        hovertemplate: "FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>" },
       { x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
         line: { width: 1, color: "#9E9E9E", dash: "dash" }, hoverinfo: "skip" },
     ];
@@ -192,7 +212,8 @@ export default function BiomarkerAnalytics({ analytics }) {
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
     chPanels.push(
       <Panel key="dist" title="LFP power distribution + Otsu threshold">
-        <Fig traces={[{ x: centers, y: dist.counts, type: "bar", marker: { color: "#1A73E8" } }]}
+        <Fig traces={[{ x: centers, y: dist.counts, type: "bar", marker: { color: "#1A73E8" },
+          hovertemplate: "LFP≈%{x:.0f} · %{y} samples<extra></extra>" }]}
           layout={{ xaxis: { title: "LFP power (device units)" }, yaxis: { title: "Count" }, bargap: 0.02,
             shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper", y0: 0, y1: 1, line: { color: "#E91E63", width: 2, dash: "dash" } }] : [],
             annotations: dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1, text: `Otsu ${dist.otsu.toFixed(0)}`, showarrow: false, font: { color: "#E91E63" }, xanchor: "left" }] : [] }} />
@@ -200,15 +221,39 @@ export default function BiomarkerAnalytics({ analytics }) {
     );
   }
   const cluster = chronic.cluster_scatter || null;
-  if (cluster && cluster.pain_level && cluster.pain_level.length) {
-    const colors = cluster.pain_level.map((p) => (p === 1 ? HI : LO));
-    chPanels.push(
-      <Panel key="cluster" title="Pain-level clusters (Left Leg VAS vs MPQ Sum)">
-        <Fig traces={[{ x: cluster.left_leg_vas, y: cluster.mpq_sum, type: "scatter", mode: "markers",
-          marker: { color: colors, size: 8, opacity: 0.6 }, text: cluster.pain_level.map((p) => (p === 1 ? "high pain" : "low pain")) }]}
-          layout={{ xaxis: { title: "Left Leg VAS" }, yaxis: { title: "MPQ Sum" } }} />
-      </Panel>
-    );
+  if (cluster && cluster.x && cluster.x.length) {
+    const lvl = cluster.pain_level || [];
+    const xlab = cluster.x_label || "feature";
+    if (cluster.y && cluster.y.length) {
+      // 2-D clustering features (e.g. the MPQ+VAS composite): scatter colored by pain level.
+      const colors = lvl.map((p) => (p === 1 ? HI : LO));
+      const ylab = cluster.y_label || "feature 2";
+      chPanels.push(
+        <Panel key="cluster" title={`Pain-level clusters (${xlab} vs ${ylab})`}>
+          <Fig traces={[{ x: cluster.x, y: cluster.y, type: "scatter", mode: "markers",
+            marker: { color: colors, size: 8, opacity: 0.6 },
+            customdata: lvl.map((p) => (p === 1 ? "high pain" : "low pain")),
+            hovertemplate: `${xlab}=%{x}<br>${ylab}=%{y}<br>%{customdata}<extra></extra>` }]}
+            layout={{ xaxis: { title: xlab }, yaxis: { title: ylab } }} />
+        </Panel>
+      );
+    } else {
+      // 1-D clustering feature (e.g. nrs / vas): overlaid high/low-pain histograms so the KMeans
+      // split on the single metric is visible (where the binary cut landed).
+      const hi = cluster.x.filter((_, i) => lvl[i] === 1);
+      const lo = cluster.x.filter((_, i) => lvl[i] === 0);
+      chPanels.push(
+        <Panel key="cluster" title={`Pain-level clusters (${xlab})`}>
+          <Fig traces={[
+            { x: lo, type: "histogram", name: "low pain", marker: { color: LO }, opacity: 0.6,
+              hovertemplate: `${xlab}=%{x}<br>low pain · %{y}<extra></extra>` },
+            { x: hi, type: "histogram", name: "high pain", marker: { color: HI }, opacity: 0.6,
+              hovertemplate: `${xlab}=%{x}<br>high pain · %{y}<extra></extra>` },
+          ]} layout={{ barmode: "overlay", xaxis: { title: xlab }, yaxis: { title: "Count" },
+            legend: { orientation: "h", y: -0.25 } }} />
+        </Panel>
+      );
+    }
   }
 
   if (tdPanels.length === 0 && chPanels.length === 0) return null;

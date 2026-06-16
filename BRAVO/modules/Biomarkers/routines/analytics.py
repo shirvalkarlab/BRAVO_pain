@@ -243,8 +243,14 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
     return windows
 
 
-def roc_analysis(cv_df):
-    """Overall ROC curve (FPR/TPR) + AUC for LFP_smoothed vs pain_level."""
+def roc_analysis(cv_df, max_points=400):
+    """Overall ROC curve (FPR/TPR) + AUC for LFP_smoothed vs pain_level.
+
+    The AUC is computed on the FULL data; only the plotted curve is thinned. roc_curve emits one
+    vertex per unique score, which for the ~60k-sample merged series is tens of thousands of points —
+    far more than a browser needs and a bloated payload. Downsample to `max_points` evenly-spaced,
+    monotonicity-preserving vertices (endpoints kept) for display.
+    """
     from sklearn import metrics
 
     df = cv_df.dropna(subset=["pain_level", "LFP_smoothed"])
@@ -257,7 +263,11 @@ def roc_analysis(cv_df):
     # Orient so the LFP-high = pain-high direction gives AUC >= 0.5 (matches the notebook's max(auc,1-auc)).
     use_score = score if raw_auc >= 0.5 else -score
     fpr, tpr, _ = metrics.roc_curve(y, use_score)
-    return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr], "auc": float(max(raw_auc, 1 - raw_auc))}
+    if max_points and len(fpr) > max_points:                  # thin for plotting only (keep endpoints)
+        idx = np.unique(np.linspace(0, len(fpr) - 1, int(max_points)).astype(int))
+        fpr, tpr = fpr[idx], tpr[idx]
+    return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr],
+            "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df))}
 
 
 def lfp_distribution(cv_df, bins=40):
@@ -270,18 +280,28 @@ def lfp_distribution(cv_df, bins=40):
             "otsu": _otsu_threshold(lfp)}
 
 
-def cluster_scatter(cv_df):
-    """KMeans pain-level cluster scatter on [left_leg_vas, mpq_sum] (cell 10), if present."""
-    if "left_leg_vas" not in cv_df.columns or "mpq_sum" not in cv_df.columns:
+def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):
+    """KMeans pain-level clusters over the ACTUAL clustering feature(s) (cell 10), colored by the
+    derived pain_level. Generic in the number of features so it renders for ANY selected metric:
+      * 2 features (e.g. the MPQ+VAS composite -> [left_leg_vas, mpq_sum]) -> a 2-D scatter;
+      * 1 feature (e.g. nrs / vas)                                         -> a 1-D distribution.
+    cv_df is per-LFP-sample (the daily PRO values repeat across thousands of 10-min samples), so we
+    DE-DUPLICATE to the unique (feature(s), pain_level) observations — both correct (one point per
+    PRO reading, not per LFP sample) and far lighter than emitting ~280k overplotted points."""
+    feats = [f for f in kmeans_features if f in cv_df.columns]
+    if not feats:
         return None
-    d = cv_df.dropna(subset=["left_leg_vas", "mpq_sum"])
+    subset = feats + (["pain_level"] if "pain_level" in cv_df.columns else [])
+    d = cv_df.dropna(subset=subset).drop_duplicates(subset=subset)
     if len(d) == 0:
         return None
-    return {
-        "left_leg_vas": [float(x) for x in d["left_leg_vas"]],
-        "mpq_sum": [float(x) for x in d["mpq_sum"]],
-        "pain_level": [None if pd.isna(x) else int(x) for x in d["pain_level"]],
-    }
+    out = {"features": feats, "x": [float(v) for v in d[feats[0]]], "x_label": feats[0],
+           "pain_level": ([None if pd.isna(x) else int(x) for x in d["pain_level"]]
+                          if "pain_level" in d.columns else [])}
+    if len(feats) >= 2:
+        out["y"] = [float(v) for v in d[feats[1]]]
+        out["y_label"] = feats[1]
+    return out
 
 
 def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, min_sessions=3,
