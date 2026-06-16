@@ -38,6 +38,7 @@ import pandas as pd
 from .routines import streaming_psd
 from .routines import threshold_biomarker
 from .routines import redcap_client
+from .routines.analytics import format_channel
 from . import adapter
 
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
@@ -118,7 +119,8 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     if band is not None:
         c_idx, f_idx, r, p, f_hz = band
         timeline["td_biomarker_value"] = result["psd"][:, c_idx, f_idx]
-        timeline["td_biomarker_channel"] = result["chan_order"][c_idx]
+        # Numeric contact-pair label (e.g. "R 0⁻-2⁺"), never the raw word form ("ZERO_TWO_RIGHT").
+        timeline["td_biomarker_channel"] = format_channel(result["chan_order"][c_idx])["short"]
         timeline["td_biomarker_freq_hz"] = f_hz
         timeline["td_biomarker_r"] = r
         timeline["td_biomarker_p"] = p
@@ -133,7 +135,8 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
 
     summary = {"band": band}
     if band is not None:
-        summary.update({"channel": result["chan_order"][band[0]],
+        ch = format_channel(result["chan_order"][band[0]])
+        summary.update({"channel": ch["short"], "channel_raw": ch["raw"],
                         "freq_hz": band[4], "r": band[2], "p": band[3]})
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,
             "timeline": timeline, "detail": result, "summary": summary}

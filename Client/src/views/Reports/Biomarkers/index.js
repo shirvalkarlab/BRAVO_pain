@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl, InputLabel,
-  Switch, Slider, TextField, FormControlLabel, Divider } from "@mui/material";
+  Switch, Slider, TextField, FormControlLabel, Divider, Button } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -45,11 +45,23 @@ function Biomarkers() {
   const [source, setSource] = useState("both");
   const [metric, setMetric] = useState("nrs");
   const [slidingWindow, setSlidingWindow] = useState(true);
-  const [windowMonths, setWindowMonths] = useState(1);   // committed value -> drives the query
+  const [windowMonths, setWindowMonths] = useState(1);   // committed value
   const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
+  // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
+  // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
+  // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
+  const [requestParams, setRequestParams] = useState(null);
   const [alert, setAlert] = useState(null);
 
   const showWindowControls = source !== "timedomain";   // power-domain detector only
+
+  const snapshot = () => ({
+    source, LabelMetric: metric, SlidingWindow: slidingWindow, WindowMonths: windowMonths,
+  });
+  const compute = () => setRequestParams(snapshot());
+  // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
+  // so the shown results are stale and a (re)compute is needed.
+  const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
 
   useEffect(() => {
     if (!participant_uid) {
@@ -57,21 +69,21 @@ function Biomarkers() {
       return;
     }
     setContextState(dispatch, "report", "CustomizedAnalysis");
+  }, [participant_uid]);
 
+  // Fetch ONLY when a compute was requested (requestParams set by the Compute button).
+  useEffect(() => {
+    if (!participant_uid || !requestParams) return;
     setAlert(<LoadingProgress />);
     SessionController.query("/api/queryBiomarkerAnalysis", {
-      ParticipantId: participant_uid,
-      source: source,
-      LabelMetric: metric,
-      SlidingWindow: slidingWindow,
-      WindowMonths: windowMonths,
+      ParticipantId: participant_uid, ...requestParams,
     }).then((response) => {
       setData(response.data);
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
-  }, [participant_uid, source, metric, slidingWindow, windowMonths]);
+  }, [participant_uid, requestParams]);
 
   const summaryLine = (label, s) => {
     if (!s) return null;
@@ -101,8 +113,32 @@ function Biomarkers() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <Grid container>
+                  {/* Big red COMPUTE button at the top — biomarkers (re)compute ONLY when clicked,
+                      so the user can set source / metric / window freely before running. */}
                   <Grid item xs={12}>
-                    <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center">
+                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                      <Button
+                        variant="contained" color="error" size="large"
+                        onClick={compute}
+                        sx={{ color: "#fff !important", fontWeight: "bold", fontSize: 16, px: 3, py: 1.25 }}
+                      >
+                        {data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now"}
+                      </Button>
+                      {dirty && data ? (
+                        <MDTypography variant="button" color="error" fontWeight="medium">
+                          {"Settings changed — click to recompute."}
+                        </MDTypography>
+                      ) : null}
+                      {data && data.timeline_points_full ? (
+                        <MDTypography variant="caption" color="text">
+                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
+                        </MDTypography>
+                      ) : null}
+                    </MDBox>
+                  </Grid>
+
+                  <Grid item xs={12}>
+                    <MDBox px={2} pb={2} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center">
                       <MDTypography variant="h6" fontSize={24}>
                         {"Pain Biomarkers"}
                       </MDTypography>
@@ -174,6 +210,17 @@ function Biomarkers() {
                             {"Using all data (one threshold, no sliding window)"}
                           </MDTypography>
                         )}
+                      </MDBox>
+                    </Grid>
+                  ) : null}
+
+                  {!data && !alert ? (
+                    <Grid item xs={12}>
+                      <MDBox p={2}>
+                        <MDTypography variant="button" color="text">
+                          {"Choose a source, pain metric, and (for Power-domain) the window above, then click "}
+                          <strong>Compute biomarker now</strong>{" to run the analysis."}
+                        </MDTypography>
                       </MDBox>
                     </Grid>
                   ) : null}
