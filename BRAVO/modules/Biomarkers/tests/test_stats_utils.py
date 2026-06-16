@@ -74,6 +74,27 @@ def test_fisher_z_ci():
     assert su.fisher_z_ci(0.5, 3) == (float("nan"), float("nan")) or np.isnan(su.fisher_z_ci(0.5, 3)[0])
 
 
+def test_circular_block_perm_matrix_valid():
+    """The vectorized generator must return (n_perm, n) with EVERY row a valid permutation of
+    range(n), for block==1 and block>1 (including a block that does not divide n)."""
+    rng = np.random.default_rng(5)
+    for n in (7, 50, 113):
+        for block in (1, 2, 7, max(1, n // 4)):
+            P = su.circular_block_perm_matrix(n, block, 150, rng)
+            assert P.shape == (150, n)
+            assert np.array_equal(np.sort(P, axis=1), np.tile(np.arange(n), (150, 1)))
+
+
+def test_block_length_for():
+    rng = np.random.default_rng(6)
+    iid = rng.normal(size=400)
+    assert su.block_length_for(iid) == 1                       # ~no autocorrelation -> block 1
+    ar = np.zeros(400); e = rng.normal(size=400)
+    for t in range(1, 400):
+        ar[t] = 0.9 * ar[t - 1] + e[t]
+    assert su.block_length_for(ar) > 1                          # strong autocorrelation -> longer block
+
+
 if __name__ == "__main__":
     test_bh_fdr()
     test_partial_corr_removes_confound()
@@ -81,4 +102,6 @@ if __name__ == "__main__":
     test_balanced_metrics()
     test_block_perm_pvalue()
     test_fisher_z_ci()
+    test_circular_block_perm_matrix_valid()
+    test_block_length_for()
     print("All stats_utils tests passed.")

@@ -226,6 +226,58 @@ def _maxabs_corr(X, y, min_n=4):
     return float(np.max(np.abs(rr))) if rr.size else np.nan
 
 
+def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4):
+    """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
+    pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
+    x n_perm) with a handful of matrix ops.
+
+    `X` (N x K) feature columns, `y` (N,) labels. Subset to label-valid rows UPSTREAM so y is finite;
+    then each column's NaN mask is FIXED across permutations (only y is permuted), which lets every
+    permutation's column correlations be computed as three matmuls. For P permutations:
+        Sxy = Yp @ Xm,  Sy = Yp @ M,  Syy = (Yp*Yp) @ M           (each P x K)
+    with Xm = mask*X, M the 0/1 column mask, and the per-column sx/sxx/n/vx precomputed once. The
+    Pearson r per (permutation, column) then follows in closed form and we take max|r| over columns.
+    Mathematically identical to looping _maxabs_corr over circular_block permutations.
+
+    Returns (empirical_p, n_perm_used)."""
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    N, K = X.shape
+    obs = _maxabs_corr(X, y, min_n=min_n)
+    if not np.isfinite(obs) or N < 4:
+        return (np.nan, 0)
+    if block is None:
+        block = stats_utils.block_length_for(y, N)
+    rng = np.random.default_rng(seed)
+    perm = stats_utils.circular_block_perm_matrix(N, block, int(n_perm), rng)   # (P, N)
+
+    M = np.isfinite(X).astype(float)                  # (N, K) fixed column masks (y is finite)
+    Xm = np.where(M > 0, X, 0.0)                      # (N, K)
+    nj = M.sum(axis=0)                                # (K,)
+    sx = Xm.sum(axis=0)                               # (K,)
+    sxx = (Xm * Xm).sum(axis=0)                       # (K,)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        vx = sxx - sx * sx / nj                       # (K,)
+
+    Yp = y[perm]                                      # (P, N) permuted labels
+    Sxy = Yp @ Xm                                     # (P, K)
+    Sy = Yp @ M                                       # (P, K)
+    Syy = (Yp * Yp) @ M                               # (P, K)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cov = Sxy - Sy * sx[None, :] / nj[None, :]
+        vy = Syy - Sy * Sy / nj[None, :]
+        rr = cov / np.sqrt(vx[None, :] * vy)          # (P, K)
+    good = (nj >= min_n)[None, :] & np.isfinite(rr)
+    rr = np.where(good, np.abs(rr), -np.inf)
+    stat = rr.max(axis=1)                             # (P,) family max|R| per permutation
+    finite = np.isfinite(stat) & (stat > -np.inf)
+    used = int(finite.sum())
+    if used == 0:
+        return (np.nan, 0)
+    ge = int(np.sum(stat[finite] >= obs))
+    return ((ge + 1) / (used + 1), used)              # +1: never report p=0
+
+
 def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000):
     """Honest inference for the selected time-domain band.
 
@@ -301,9 +353,7 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     if perm_valid.sum() >= 4:
         X = feat.reshape(feat.shape[0], -1)[perm_valid]
         yv = labels[perm_valid]
-        obs = _maxabs_corr(X, yv)
-        perm_p, perm_used = stats_utils.block_perm_pvalue(obs, X, yv, _maxabs_corr,
-                                                          n_perm=n_perm, seed=0)
+        perm_p, perm_used = _block_perm_maxcorr_pvalue(X, yv, n_perm=n_perm, seed=0)
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
         "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner

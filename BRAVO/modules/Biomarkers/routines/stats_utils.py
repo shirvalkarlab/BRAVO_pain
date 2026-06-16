@@ -127,6 +127,18 @@ def balanced_metrics(sens, spec, n_pos, n_neg):
     return out
 
 
+def block_length_for(labels, n=None):
+    """Default circular-block length = the lag-1 autocorrelation (decorrelation) timescale of the
+    labels, -1/ln(r1), clipped to [1, n//4]. 1 when there is no positive autocorrelation. Shared by
+    both the scalar and the vectorized permutation paths so they always agree."""
+    labels = np.asarray(labels, dtype=float)
+    n = int(labels.size if n is None else n)
+    r1 = abs(lag1_autocorr(labels))
+    if r1 <= 0:
+        return 1
+    return int(np.clip(round(1.0 / max(1e-6, -np.log(max(r1, 1e-6)))), 1, max(1, n // 4)))
+
+
 def circular_block_indices(n, block, rng):
     """One circular-block-permuted index vector of length n (block length `block`). Preserves
     within-block temporal structure, breaking only the cross-block label-feature alignment."""
@@ -142,6 +154,33 @@ def circular_block_indices(n, block, rng):
     return np.concatenate(blocks)[:n]
 
 
+def circular_block_perm_matrix(n, block, n_perm, rng):
+    """VECTORIZED generation of `n_perm` circular-block permutations at once -> (n_perm, n) int array,
+    each row a valid permutation of range(n) with the same distribution as circular_block_indices.
+
+    Per row: a random circular shift, then the shifted index vector is cut into ceil(n/block)
+    contiguous blocks whose ORDER is randomly permuted (within-block order preserved). Built with
+    array ops only (no Python per-permutation loop), so the whole null is a couple of NumPy calls."""
+    block = max(1, int(block))
+    n = int(n); n_perm = int(n_perm)
+    shifts = rng.integers(0, n, size=n_perm)
+    base = (np.arange(n)[None, :] + shifts[:, None]) % n          # (P, n) circularly shifted
+    if block <= 1:
+        return base
+    nb = int(np.ceil(n / block))
+    pad = nb * block - n
+    if pad:                                                       # pad with sentinel == n (out of range)
+        base = np.concatenate([base, np.full((n_perm, pad), n, dtype=base.dtype)], axis=1)
+    blk = base.reshape(n_perm, nb, block)                         # (P, nb, block) contiguous blocks
+    order = np.argsort(rng.random((n_perm, nb)), axis=1)          # independent block-order permutation per row
+    blk = np.take_along_axis(blk, order[:, :, None], axis=1)
+    flat = blk.reshape(n_perm, nb * block)
+    if not pad:
+        return flat
+    # Drop the sentinels; each row has exactly `pad` of them, so row-major masking reshapes cleanly.
+    return flat[flat < n].reshape(n_perm, n)
+
+
 def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=1000,
                       block=None, seed=0):
     """Empirical p-value for a max-type statistic via circular-block label permutation.
@@ -149,14 +188,16 @@ def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=100
     `feature_matrix` (N x M), `labels` (N,), `stat_fn(feature_matrix, permuted_labels) -> scalar`
     (e.g. max |R| over all channels x freqs). The block length defaults to the lag-1
     autocorrelation timescale of the labels so the null preserves temporal dependence (otherwise
-    p is anti-conservative). Returns (empirical_p, n_perm_used)."""
+    p is anti-conservative). Returns (empirical_p, n_perm_used).
+
+    NOTE: generic (arbitrary stat_fn), so it loops over permutations. When the statistic is the
+    NaN-aware family max|R|, prefer the fully vectorized pipeline._block_perm_maxcorr_pvalue."""
     labels = np.asarray(labels, dtype=float)
     n = labels.size
     if n < 4 or not np.isfinite(observed_stat):
         return (np.nan, 0)
     if block is None:
-        r1 = abs(lag1_autocorr(labels))
-        block = int(np.clip(round(1.0 / max(1e-6, -np.log(max(r1, 1e-6)))), 1, max(1, n // 4))) if r1 > 0 else 1
+        block = block_length_for(labels, n)
     rng = np.random.default_rng(seed)
     ge = 0
     used = 0
