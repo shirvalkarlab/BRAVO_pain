@@ -1,5 +1,18 @@
-from rest_framework.authentication import BaseAuthentication
+from rest_framework.authentication import BaseAuthentication, SessionAuthentication
 from . import models
+
+
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    """Session auth that does NOT enforce CSRF.
+
+    DRF's stock SessionAuthentication enforces CSRF on any request that already carries a
+    session cookie -- even one the view marked csrf_exempt -- so a stale/mismatched CSRF cookie
+    in the browser 403s EVERY request, including /api/login, surfacing as "You do not have the
+    permission". For the local/standalone DEBUG instance we skip that check so login always works.
+    Production keeps the stock SessionAuthentication (see settings REST_FRAMEWORK).
+    """
+    def enforce_csrf(self, request):
+        return
 
 class BRAVOAPIAuthentication(BaseAuthentication):
     def authenticate(self, request):

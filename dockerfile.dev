@@ -1,0 +1,28 @@
+FROM ubuntu/nginx:1.24-24.04_beta
+
+ENV DATASERVER_PATH=/usr/src/BRAVO/BRAVOStorage/
+
+WORKDIR /usr/src/BRAVO
+
+# System packages (cached unless this layer changes).
+RUN mkdir -p BRAVOStorage && \
+    apt-get update && \
+    apt-get install pkg-config python3 python3-pip libjpeg-dev libjpeg8-dev libpng-dev libmysqlclient-dev -y
+
+# Python dependencies FIRST, keyed only on requirements.txt, so app-code/frontend changes
+# do NOT bust the (slow) pip layer -- subsequent rebuilds are seconds, not ~10 minutes.
+COPY ./BRAVO/requirements.txt ./requirements.txt
+RUN pip3 install -r requirements.txt --break-system-packages
+
+# Multi-worker ASGI server for dev: gunicorn (process manager) + uvicorn workers. Lets concurrent
+# Percept uploads decode in parallel instead of queueing behind runserver's single thread. Kept in
+# its own layer so it does NOT bust the slow requirements.txt layer above (rebuilds stay seconds).
+RUN pip3 install --break-system-packages gunicorn "uvicorn[standard]"
+
+# Frontend build + app code (cheap layers that change often).
+COPY ./Client/build /usr/share/nginx/html
+COPY ./BRAVO/bravo_nginx.conf /etc/nginx/sites-enabled/default
+COPY ./BRAVO .
+
+EXPOSE 80
+EXPOSE 27286

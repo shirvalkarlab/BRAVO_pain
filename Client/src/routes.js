@@ -62,6 +62,7 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+const PainScores = lazy(() => import('views/Reports/PainScores'));
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
@@ -77,6 +78,7 @@ const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects')
 const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
+const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
@@ -286,6 +288,13 @@ const routes = {
         icon: <FaClipboardList />,
         route: "/form-records/:participant_uid",
         component: <ParticipantSurveyRecords />,
+      },
+      {
+        key: "PainScores",
+        name: "Pain Scores",
+        icon: <TimelineIcon />,
+        route: "/pain-scores/:participant_uid",
+        component: <PainScores />,
       }
     ]
   },
@@ -387,6 +396,13 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,
+      },
+      {
+        key: "biomarkers",
+        name: "Pain Biomarkers",
+        icon: <TimelineIcon />,
+        route: "/reports/biomarkers/:participant_uid",
+        component: <Biomarkers />,
       },
       {
         key: "AIHealthcare",

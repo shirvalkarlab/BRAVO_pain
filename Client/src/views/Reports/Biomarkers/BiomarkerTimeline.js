@@ -1,0 +1,111 @@
+/**
+ * BiomarkerTimeline -- clean stacked-subplot timeline for the unified biomarker frame.
+ * Each measure (time-domain biomarker, power-domain LFP + threshold, pain, stim amplitude) gets
+ * its own row sharing one time axis, with human-readable names -- avoids a cluttered single plot
+ * with a long horizontal legend. Self-contained via plotly.js-dist.
+ */
+
+import { useEffect, useRef } from "react";
+import Plotly from "plotly.js-dist";
+
+import MDBox from "components/MDBox";
+
+const C = {
+  td: "#1A73E8",        // time-domain biomarker
+  lfp: "#00897B",       // power-domain LFP power
+  threshold: "#8E8E8E", // learned threshold
+  pain: "#E53935",      // NRS / pain
+  stim: "#FB8C00",      // stim amplitude
+};
+
+function parseTime(t) {
+  if (t === null || t === undefined) return null;
+  if (typeof t === "number") return new Date(t < 1e12 ? t * 1000 : t);
+  return new Date(t);
+}
+
+function BiomarkerTimeline({ data, height }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!ref.current || !data || !data.timeline || data.timeline.length === 0) return;
+
+    const recs = data.timeline;
+    const cols = new Set(data.channels || Object.keys(recs[0]));
+    const x = recs.map((r) => parseTime(r.time));
+    const col = (n) => recs.map((r) => (typeof r[n] === "number" ? r[n] : null));
+    const has = (n) => cols.has(n) && col(n).some((v) => v !== null);
+    const pick = (...names) => names.find((n) => has(n));
+
+    // Rows, top -> bottom.
+    const rows = [];
+    if (has("td_biomarker_value")) {
+      const b = data.summary && data.summary.timedomain && data.summary.timedomain.band;
+      rows.push({
+        title: b ? `Time-domain biomarker — ${b[4].toFixed(1)} Hz` : "Time-domain biomarker (PSD)",
+        unit: "PSD power",
+        traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
+      });
+    }
+    if (has("powerdomain_biomarker_value")) {
+      const tr = [{ name: "LFP power", y: col("powerdomain_biomarker_value"), color: C.lfp }];
+      if (has("powerdomain_threshold")) {
+        tr.push({ name: "Threshold", y: col("powerdomain_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
+      }
+      rows.push({ title: "Power-domain LFP power", unit: "LFP (a.u.)", traces: tr });
+    }
+    const m = data.label_metric || "nrs";
+    const painCol = pick(`powerdomain_${m}`, `td_${m}_min`, `td_${m}_mean`, m, "powerdomain_nrs", "td_nrs_min", "nrs");
+    if (painCol) rows.push({ title: `Pain (${m})`, unit: m, traces: [{ name: m, y: col(painCol), color: C.pain }] });
+    const stimCol = pick("powerdomain_stim_amplitude", "td_stim_amplitude");
+    if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
+
+    const n = Math.max(rows.length, 1);
+    const gap = 0.11;
+    const h = (1 - gap * (n - 1)) / n;
+
+    const traces = [];
+    const layout = {
+      height: height || 165 * n + 96,
+      margin: { l: 64, r: 18, t: 44, b: 48 },
+      hovermode: "x unified",
+      legend: { orientation: "h", y: 1.04, x: 0, font: { size: 11 } },
+      annotations: [],
+    };
+
+    rows.forEach((row, di) => {
+      const axisNum = n - di; // bottom row = y1
+      const yk = axisNum === 1 ? "y" : "y" + axisNum;
+      const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
+      const top = 1 - di * (h + gap);
+      const bottom = Math.max(0, top - h);
+      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } }, zeroline: false };
+      row.traces.forEach((tr) => {
+        traces.push({
+          x, y: tr.y, name: tr.name, type: "scatter", mode: tr.mode || "lines+markers",
+          line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
+          marker: { size: 4, color: tr.color }, yaxis: yk, xaxis: "x", connectgaps: false,
+          hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
+        });
+      });
+      layout.annotations.push({
+        xref: "paper", yref: "paper", x: 0, y: Math.min(top + 0.012, 1),
+        xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,
+        showarrow: false, font: { size: 12, color: "#344767" },
+      });
+    });
+
+    layout.xaxis = { domain: [0, 1], type: "date", anchor: "y", title: "Time" };
+
+    Plotly.react(ref.current, traces, layout, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
+  }, [data, height]);
+
+  return (
+    <MDBox p={1}>
+      <div ref={ref} style={{ width: "100%" }} />
+    </MDBox>
+  );
+}
+
+export default BiomarkerTimeline;

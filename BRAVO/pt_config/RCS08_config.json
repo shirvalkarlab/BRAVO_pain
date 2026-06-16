@@ -1,0 +1,29 @@
+{
+  "_README": "Field map for RCS08, verified against live REDCap on 2026-06-15. Project '19-28757 Percept DBS for Chronic Pain' (pid 53369). record_id == 'RCS08'; daily PRO instrument = stage_1_daily_surveys_vasnrsmpq; 676 reports 2025-07-20..2026-06-14. Used by bravo_service._load_pros -> redcap_client.process_redcap (Pain Scores) and the pipeline channel order. Token in secrets/redcap.env (PERCEPT/active).",
+
+  "pt": "RCS08",
+  "instruments": ["stage_1_daily_surveys_vasnrsmpq"],
+  "timestamp_label": "date_time_s1_daily",
+
+  "metric_labels": {
+    "nrs": "pain_nrs_s1_daily",
+    "vas": "pain_vas_s1_daily",
+    "left_leg_vas": "left_leg_vas_s1_daily",
+    "back_vas": "back_vas_s1_daily",
+    "relief": "relief_vas_s1_daily",
+    "mpq_sum": "mpq_s1_daily",
+    "mpq_sen": ["throbbing_s1_daily", "shooting_s1_daily", "stabbing_s1_daily", "sharp_s1_daily", "cramping_s1_daily", "gnawing_s1_daily", "hot_burning_s1_daily", "aching_s1_daily", "heavy_s1_daily", "tender_s1_daily", "splitting_s1_daily"],
+    "mpq_aff": ["tiring_exhausting_s1_daily", "sickening_s1_daily", "fearful_s1_daily", "cruel_punishing_s1_daily"],
+    "electrocuting": "electrocuting_s1_daily",
+    "tingly": "tingly_s1_daily"
+  },
+  "_metric_labels_note": "Scalars + mpq_sum (the REDCap MPQsum calc field) are verified against live data. mpq_sen (11) / mpq_aff (4) use the STANDARD SF-MPQ subscale grouping summed from the daily descriptor items; if Yiyuan's RCS08_config.json groups them differently, replace these two lists. SF-MPQ-2 neuropathic items (firey/tingly/electrocuting) are intentionally excluded from sen/aff; electrocuting & tingly are their own metrics.",
+
+  "program_dates": [],
+
+  "channel_names": {
+    "ZERO_TWO_LEFT": "L sensing 0-2",
+    "ZERO_TWO_RIGHT": "R sensing 0-2"
+  },
+  "_channel_names_note": "PLACEHOLDER — only used by library-mode pipeline channel order (NOT by Pain Scores or the server biomarker path, which derive channels from the uploaded recordings). Replace with RCS08's real Percept sensing montage if running library mode."
+}

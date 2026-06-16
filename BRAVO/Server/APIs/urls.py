@@ -78,6 +78,8 @@ urlpatterns = [
     path('queryNeuralActivitySnapshot', DataAnalysis.QueryNeuralActivitySnapshot.as_view()),
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),
     path('queryChronicTimeline', DataAnalysis.QueryChronicTimeline.as_view()),
+    path('queryBiomarkerAnalysis', DataAnalysis.QueryBiomarkerAnalysis.as_view()),
+    path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
     path('queryBurstAnalysis', DataAnalysis.QueryBurstAnalysis.as_view()),
 
