@@ -321,3 +321,6 @@ BRAVO/Certificates
 # Local secrets (REDCap tokens, etc.)
 secrets/
 *.env
+
+# Transient async-job scripts generated at runtime
+BRAVO/modules/AsyncJobScheduler/*.sh
