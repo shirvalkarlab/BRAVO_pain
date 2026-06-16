@@ -161,6 +161,12 @@ def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=N
     return False
 
 def checkManagePermission(user, participant_uid, type="View"):
+    from django.conf import settings
+    # LOCAL DEV (DEBUG): grant all manage rights (Edit/Upload/Delete/AddEvent) to any authenticated
+    # user so a localhost instance never blocks edits (device metadata, deletes, uploads) with
+    # "you do not have permission". Production (DJANGO_MODE=PRODUCTION) uses the real checks below.
+    if settings.DEBUG:
+        return True
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return False
