@@ -162,9 +162,6 @@ function Biomarkers() {
           ) : s.stim_adjusted_note ? (
             <Line>{`stim adjustment: ${s.stim_adjusted_note}`}</Line>
           ) : null}
-          {s.mains_region_warning ? (
-            <Line color="warning">{"⚠ Selected band is within the mains-noise region (55–66 Hz) — may reflect line noise rather than neural signal."}</Line>
-          ) : null}
           {s.narrow_peak_warning ? (
             <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
           ) : null}
@@ -384,7 +381,9 @@ function Biomarkers() {
             </Grid>
 
             {data && data.analytics ? (
-              <BiomarkerAnalytics analytics={data.analytics} />
+              <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
+                metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+                  .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
           </Grid>
         </MDBox>

@@ -58,9 +58,25 @@ def test_cluster_scatter_missing_features():
     assert analytics.cluster_scatter(df, kmeans_features=("not_a_col",)) is None
 
 
+def test_lfp_distribution_robust_range():
+    """Extreme outliers from the un-normalized merged sources must NOT collapse the histogram into a
+    single bar: binning is over the 1st-99th percentile, with the outliers reported as n_clipped."""
+    rng = np.random.default_rng(0)
+    bulk = rng.normal(1300, 50, size=5000)                 # the dense bulk
+    outliers = np.array([-20000.0, 146000.0, 99000.0])     # a few extreme merged-source outliers
+    df = pd.DataFrame({"LFP_smoothed": np.concatenate([bulk, outliers]),
+                       "pain_level": np.r_[np.ones(2500), np.zeros(2503)]})
+    d = analytics.lfp_distribution(df, bins=40)
+    edges = d["bin_edges"]
+    assert d["n_clipped"] >= 3 and d["n_total"] == 5003
+    assert edges[-1] - edges[0] < 2000                     # range zoomed to the bulk, not [-20k, 146k]
+    assert max(d["counts"]) < sum(d["counts"])             # not all samples in one bar
+
+
 if __name__ == "__main__":
     test_roc_downsampled_for_plot()
     test_cluster_scatter_one_feature()
     test_cluster_scatter_two_features()
     test_cluster_scatter_missing_features()
+    test_lfp_distribution_robust_range()
     print("All analytics tests passed.")

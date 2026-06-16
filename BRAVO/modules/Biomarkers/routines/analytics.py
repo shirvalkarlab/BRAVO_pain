@@ -271,13 +271,25 @@ def roc_analysis(cv_df, max_points=400):
 
 
 def lfp_distribution(cv_df, bins=40):
-    """LFP histogram + Otsu threshold (threshold_biomarker.ipynb cell 9)."""
+    """LFP histogram + Otsu threshold (threshold_biomarker.ipynb cell 9).
+
+    The raw merged power-domain series (Chronic + per-session band power, un-normalized) can span an
+    enormous device-unit range with a few extreme outliers, which collapses a naive histogram into a
+    single bar. Bin over a ROBUST display range (1st-99th percentile) so the bulk distribution is
+    visible; the Otsu threshold is still computed on the FULL data, and n_clipped reports how many
+    out-of-range samples were excluded from the plot only."""
     lfp = cv_df["LFP_smoothed"].dropna().astype(float).values
     if lfp.size == 0:
-        return {"bin_edges": [], "counts": [], "otsu": None}
-    counts, edges = np.histogram(lfp, bins=bins)
+        return {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0}
+    otsu = _otsu_threshold(lfp)
+    lo, hi = np.percentile(lfp, [1, 99])
+    if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+        lo, hi = float(np.min(lfp)), float(np.max(lfp))
+    counts, edges = np.histogram(lfp, bins=bins, range=(float(lo), float(hi)))
+    n_clipped = int(np.count_nonzero((lfp < lo) | (lfp > hi)))
     return {"bin_edges": [float(x) for x in edges], "counts": [int(x) for x in counts],
-            "otsu": _otsu_threshold(lfp)}
+            "otsu": (None if otsu is None else float(otsu)), "n_clipped": n_clipped,
+            "n_total": int(lfp.size)}
 
 
 def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):

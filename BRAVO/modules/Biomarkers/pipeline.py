@@ -226,7 +226,7 @@ def _maxabs_corr(X, y, min_n=4):
     return float(np.max(np.abs(rr))) if rr.size else np.nan
 
 
-def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4):
+def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, return_null=False):
     """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
     pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
     x n_perm) with a handful of matrix ops.
@@ -239,13 +239,14 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4):
     Pearson r per (permutation, column) then follows in closed form and we take max|r| over columns.
     Mathematically identical to looping _maxabs_corr over circular_block permutations.
 
-    Returns (empirical_p, n_perm_used)."""
+    Returns (empirical_p, n_perm_used); with return_null=True returns (p, used, obs, null_stats) so
+    the UI can plot the null distribution of the family max|R| against the observed value."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     N, K = X.shape
     obs = _maxabs_corr(X, y, min_n=min_n)
     if not np.isfinite(obs) or N < 4:
-        return (np.nan, 0)
+        return (np.nan, 0, obs, None) if return_null else (np.nan, 0)
     if block is None:
         block = stats_utils.block_length_for(y, N)
     rng = np.random.default_rng(seed)
@@ -273,9 +274,11 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4):
     finite = np.isfinite(stat) & (stat > -np.inf)
     used = int(finite.sum())
     if used == 0:
-        return (np.nan, 0)
-    ge = int(np.sum(stat[finite] >= obs))
-    return ((ge + 1) / (used + 1), used)              # +1: never report p=0
+        return (np.nan, 0, obs, None) if return_null else (np.nan, 0)
+    null_stats = stat[finite]
+    ge = int(np.sum(null_stats >= obs))
+    p = (ge + 1) / (used + 1)                          # +1: never report p=0
+    return (p, used, float(obs), null_stats) if return_null else (p, used)
 
 
 def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000):
@@ -349,11 +352,12 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     # Restricts to label-valid rows; the block-permutation block length comes from the (now time-
     # ordered) label autocorrelation, so the null preserves serial dependence.
     perm_valid = np.isfinite(labels)
-    perm_p, perm_used = (np.nan, 0)
+    perm_p, perm_used, perm_obs, perm_null = (np.nan, 0, np.nan, None)
     if perm_valid.sum() >= 4:
         X = feat.reshape(feat.shape[0], -1)[perm_valid]
         yv = labels[perm_valid]
-        perm_p, perm_used = _block_perm_maxcorr_pvalue(X, yv, n_perm=n_perm, seed=0)
+        perm_p, perm_used, perm_obs, perm_null = _block_perm_maxcorr_pvalue(
+            X, yv, n_perm=n_perm, seed=0, return_null=True)
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
         "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner
@@ -363,7 +367,11 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         "r_ci": [None if not np.isfinite(r_lo) else r_lo, None if not np.isfinite(r_hi) else r_hi],
         "r_ci_note": ci_note,
         "perm_p": (None if not np.isfinite(perm_p) else float(perm_p)), "perm_n": int(perm_used),
-        "mains_region_warning": bool(55.0 <= f_hz <= 66.0),
+        # The null distribution itself (family max|R| under block-permuted labels) + the observed
+        # value, so the UI can PLOT the permutation test, not just report its p. Rounded to shrink
+        # the payload; this is the strongest |R| over all contacts x freqs per shuffle.
+        "perm_obs": (None if not np.isfinite(perm_obs) else round(float(perm_obs), 4)),
+        "perm_null": ([round(float(s), 4) for s in perm_null] if perm_null is not None else None),
         "narrow_peak_warning": narrow_peak,
     }
 
