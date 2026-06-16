@@ -83,18 +83,21 @@ def _resolve_biomarker_metric(request_data, pro_df):
         parts = [p for p in COMPOSITE_PARTS if p in pro_df.columns]
         if parts:
             df = pro_df.copy()
+            # Min-max each part to 0..1 and average. Only parts that actually VARY contribute —
+            # a constant or all-NaN part carries no discriminative signal, and including it as
+            # zeros would silently halve the composite's scale (e.g. one flat part -> 0..50).
             norms = []
             for p in parts:
                 v = pd.to_numeric(df[p], errors="coerce")
                 arr = v.to_numpy(dtype=float)
                 if np.isfinite(arr).any():
                     lo, hi = np.nanmin(arr), np.nanmax(arr)
-                    norms.append((v - lo) / (hi - lo) if hi > lo else v * 0.0)
-                else:
-                    norms.append(v * 0.0)
-            df[COMPOSITE_METRIC] = 100.0 * sum(norms) / len(norms)
-            return df, COMPOSITE_METRIC, tuple(parts)
-        metric = DEFAULT_BIOMARKER_METRIC  # composite parts unavailable -> fall back
+                    if hi > lo:
+                        norms.append((v - lo) / (hi - lo))
+            if norms:
+                df[COMPOSITE_METRIC] = 100.0 * sum(norms) / len(norms)
+                return df, COMPOSITE_METRIC, tuple(parts)
+        metric = DEFAULT_BIOMARKER_METRIC  # no usable composite signal -> fall back
 
     return pro_df, metric, (metric,)
 

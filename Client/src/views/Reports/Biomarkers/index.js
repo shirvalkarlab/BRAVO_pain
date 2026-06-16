@@ -158,10 +158,15 @@ function Biomarkers() {
                             />
                             <TextField
                               type="number" size="small" value={monthsDraft}
-                              inputProps={{ min: 0.25, max: 60, step: 0.25, style: { width: 64 } }}
-                              onChange={(e) => setMonthsDraft(e.target.value === "" ? "" : Number(e.target.value))}
-                              onBlur={() => { const v = Number(monthsDraft) || 1; setMonthsDraft(v); setWindowMonths(v); }}
-                              onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(monthsDraft) || 1; setMonthsDraft(v); setWindowMonths(v); } }}
+                              inputProps={{ min: 0.25, max: 12, step: 0.25, style: { width: 64 } }}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === "") { setMonthsDraft(""); return; }
+                                const n = Number(raw);
+                                if (!Number.isNaN(n)) setMonthsDraft(n);   // ignore transient invalid input (e.g. "1e")
+                              }}
+                              onBlur={() => { const v = commitMonths(monthsDraft); setMonthsDraft(v); setWindowMonths(v); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") { const v = commitMonths(monthsDraft); setMonthsDraft(v); setWindowMonths(v); } }}
                             />
                           </MDBox>
                         ) : (
@@ -219,6 +224,13 @@ function Biomarkers() {
       </DatabaseLayout>
     </>
   );
+}
+
+// Clamp a typed month value to the slider's range [0.25, 12]; fall back to 1 on invalid input.
+function commitMonths(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(12, Math.max(0.25, n));
 }
 
 function fmt(x) {
