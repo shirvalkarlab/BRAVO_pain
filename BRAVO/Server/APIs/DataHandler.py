@@ -20,6 +20,7 @@ Data Upload Handler Module
 
 import os
 import json
+import time
 import traceback
 from copy import deepcopy
 import pickle
@@ -72,7 +73,14 @@ class DataUploadHandler(RestViews.APIView):
         if ".." in request.data["File"].name or os.path.sep in request.data["File"].name:
             return Response(status=400, data={"message": "Filename not Supported"})
         
+        _t_start = time.time()
+        def _stage(label, _last=[time.time()]):
+            now = time.time()
+            print(f"[upload-timing] {label}: {now - _last[0]:.3f}s (total {now - _t_start:.3f}s)", flush=True)
+            _last[0] = now
+
         rawBytes = request.data["File"].read()
+        _stage("read upload bytes (%d KB)" % (len(rawBytes) // 1024))
         unique_hashed = hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
         metadata = {**{
             "UploadType": request.data["DataType"],
@@ -90,15 +98,25 @@ class DataUploadHandler(RestViews.APIView):
         # the post-write locked check below still resolves two concurrent identical NEW uploads.
         if models.SourceFile.objects.filter(unique_hashed=unique_hashed, metadata__Institute=institute.pk).exists():
             print("Duplicate File Found (pre-write fast path)")
+            _stage("pre-write duplicate check (HIT -> 301)")
             return Response(status=301)
+        _stage("pre-write duplicate check (miss)")
 
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
+        _stage("saveCacheFile (encrypt + write cache)")
         lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
+        _t_lock = time.time()
         with lock.acquire(timeout=60):
+            _waited = time.time() - _t_lock
+            if _waited > 0.5:
+                print(f"[upload-timing] WARNING: waited {_waited:.1f}s for SourceFileDuplicateCheck.lock "
+                      f"(a prior upload held it, or a crashed upload left it stale)", flush=True)
+            _stage("acquire global dedup lock")
             if models.SourceFile.objects.exclude(pk=source_file.pk).filter(unique_hashed=metadata["UniqueHashed"], metadata__Institute=institute.pk).exists():
                 print("Duplicate File Found")
                 source_file.delete()
                 return Response(status=301)
+        _stage("post-write locked dedup check")
         
         lockFile = source_file.pointer + ".lock"
         if request.data["DataType"] == "DefaultType":
@@ -119,6 +137,7 @@ class DataUploadHandler(RestViews.APIView):
                 if source_file.pointer.endswith(".json"):
                     source_file.metadata = {**source_file.metadata, **{"device_location": "", "automatic_deidentification": False, "infer_from_device": True, "automatic_concatenation": False}}
                     DataCurator.MedtronicPerceptJSONDecoder(source_file, person=source_file.owner)
+                    _stage("MedtronicPerceptJSONDecoder (DefaultType: decode + DB inserts)")
                 elif source_file.pointer.endswith(".mpx"):
                     source_file.metadata = {**source_file.metadata, **{"device_location": "", "infer_from_device": True}}
                     DataCurator.AlphaOmegaMPXDecoder(source_file, person=source_file.owner, name=request.data["File"].name)
@@ -151,8 +170,10 @@ class DataUploadHandler(RestViews.APIView):
                     source_file.save()
                     
                     DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
+                    _stage("MedtronicPerceptJSONDecoder (decode + DB inserts)")
                 else:
                     DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    _stage("MedtronicPerceptJSONDecoder (batch: decode + DB inserts)")
                     
             except Exception as e:
                 print(request.data["File"].name)

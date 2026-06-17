@@ -19,6 +19,7 @@ Data Curators
 """
 
 import os, pathlib
+import time
 import uuid
 import shutil
 import datetime
@@ -32,6 +33,7 @@ import pandas as pd
 from io import BytesIO
 import blosc2
 from filelock import Timeout, FileLock
+from concurrent.futures import ThreadPoolExecutor
 
 from Server import models
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
@@ -128,14 +130,23 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     return True
 
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
+    _t0 = time.time()
+    def _dstage(label, _last=[time.time()]):
+        now = time.time()
+        print(f"[decode-timing] {label}: {now - _last[0]:.3f}s (total {now - _t0:.3f}s)", flush=True)
+        _last[0] = now
+
     rawBytes = loadCacheFile(source_file)
+    _dstage("loadCacheFile (read + decrypt cache)")
     JSON = json.loads(rawBytes)
+    _dstage("json.loads")
     if source_file.metadata["automatic_concatenation"]:
         JSON["AutomaticStreamingFix"] = True
     else:
         JSON["AutomaticStreamingFix"] = False
     
     DatabaseEntries = decodeMedtronicJSON(JSON)
+    _dstage("decodeMedtronicJSON (CPU structural decode)")
     
     if source_file.metadata["automatic_deidentification"]:
         DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
@@ -145,7 +156,13 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Process Patient/Device/Electrode Information for Storage and Query
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
+    _t_lock = time.time()
     with lock.acquire(timeout=180):
+        _waited = time.time() - _t_lock
+        if _waited > 0.5:
+            print(f"[decode-timing] WARNING: waited {_waited:.1f}s for ParticipantInfoLookup.lock "
+                  f"(another upload held it, or a crashed upload left it stale)", flush=True)
+        _dstage("acquire ParticipantInfoLookup.lock")
         if not device:
             device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], 
                                                                      DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], 
@@ -196,6 +213,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         
         source_file.owner = person
         source_file.save()
+    _dstage("device/person/electrode find_or_create (under lock)")
 
     
     electrodes = device.electrodes.all()
@@ -250,6 +268,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             continue
         AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
     models.TherapyModification.objects.bulk_create(AllEntries)
+    _dstage("therapy/stimulation/modification inserts")
     
     for survey in DatabaseEntries["SurveyRecordings"]:
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
@@ -314,6 +333,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if full_recording:
             full_recording.delete()
 
+    _dstage("survey/streaming/chronic recording inserts (saveSourceFile + Recording.save)")
     for event in DatabaseEntries["EventRecordings"]:
         if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
