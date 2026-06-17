@@ -124,5 +124,32 @@ Frontend (`Client/src/views/Reports/Biomarkers/`):
 - **`BiomarkerAnalytics.js`** — binarization panel draws two cuts + a shaded excluded-middle band for
   tertile (single cut otherwise) and a strategy-specific caption.
 
+---
+
+## Follow-up: viz + analytics fixes (this session)
+
+Three issues reported on the live card, all addressed:
+
+1. **Sliding-window AUC trace looked like "one point" with tertile labels.** `sliding_window_analytics`
+   was emitting half-NaN rows (`auc=None`) whenever the short test fold landed in a single tertile —
+   on RCS08 that was 76 of 88 windows. Now: the test fold is **expanded forward by `step_days`**
+   up to a cap (`max_test_days`, default `min(14, max(3·test_days, test_days+2))`); windows still
+   one-class after expansion are **skipped** (not half-NaN); the panel reports
+   `n_with_auc / n_total / n_skipped_test_one_class / n_skipped_no_data` so the coverage is
+   explicit. RCS08 tertile run: **51 of 134 valid windows** (vs 12 of 88 before).
+2. **Power-domain only "shows one channel."** Confirmed by design — `_concat_chronic` pools every
+   recorded contact into one threshold. Now `run_powerdomain_branch` ALSO splits the input by
+   `ChannelNames[0]` (e.g. `Left LFP` / `Right LFP`) and computes the same analytics per group;
+   the card exposes a **Pooled / per-channel ToggleButton** that swaps the LFP histogram /
+   sliding-window curve / ROC / honest-perf panels in place (no re-fetch — the payload carries
+   everything). This is also the §7-C honest per-target separation the rigor memo asked for.
+3. **LFP histogram was squished.** Repainted with proper height (340), axis units
+   (`LFP power (device units, 1st–99th pct display range)`), Okabe-Ito palette, and a caption
+   that reports total samples + clipped-outlier count.
+
+Viz pass: every panel now uses a shared layout template (one font, faint gridlines, automargin,
+axis-title standoff, x-unified hover where applicable) and the **Okabe-Ito colorblind-safe palette**
+(`#0072B2` low / `#D55E00` high) so the figures read in print and grayscale.
+
 _Figures: `binarization_comparison_RCS08.png`. Tables: `binarization_comparison_RCS08.csv`,
 `binarization_density_confound_RCS08.csv`._
