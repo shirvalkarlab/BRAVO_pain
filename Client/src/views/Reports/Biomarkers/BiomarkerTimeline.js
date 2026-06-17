@@ -58,8 +58,14 @@ function BiomarkerTimeline({ data, height }) {
     const rows = [];
     if (has("td_biomarker_value")) {
       const b = data.summary && data.summary.timedomain && data.summary.timedomain.band;
+      // Defensive: the biomarker is capped to < 50 Hz at selection time. If a stale/cached run still
+      // carries an above-cap band, don't print a misleading >50 Hz frequency in the title.
+      const fhz = b && typeof b[4] === "number" ? b[4] : null;
+      const title = (fhz != null && fhz < 50)
+        ? `Time-domain biomarker — ${fhz.toFixed(1)} Hz`
+        : "Time-domain biomarker (PSD)";
       rows.push({
-        title: b ? `Time-domain biomarker — ${b[4].toFixed(1)} Hz` : "Time-domain biomarker (PSD)",
+        title,
         unit: "PSD power",
         traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
@@ -81,12 +87,12 @@ function BiomarkerTimeline({ data, height }) {
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
     const n = Math.max(rows.length, 1);
-    const gap = 0.14;   // more breathing room so row titles don't sit on the row above
+    const gap = 0.09;   // tighter inter-row gap fills vertical whitespace; titles still clear (halo)
     const h = (1 - gap * (n - 1)) / n;
 
     const traces = [];
     const layout = {
-      height: height || 170 * n + 100,
+      height: height || 200 * n + 90,
       margin: { l: 64, r: 18, t: 52, b: 48 },
       hovermode: "x unified",
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 12, color: "#344767" },
@@ -142,13 +148,17 @@ function BiomarkerTimeline({ data, height }) {
           }
           return;
         }
-        // Drop point markers on dense series (lines-only is cleaner/faster); keep them when sparse.
-        const nPts = (tr.y || []).filter((v) => v !== null && v !== undefined).length;
-        const mode = tr.mode || (nPts > 200 ? "lines" : "lines+markers");
+        // Biomarker/LFP rows are sparse session series (streaming PSD only runs on some days), so
+        // rendering them as pure lines with connectgaps=false turns isolated sessions into thin
+        // vertical spikes separated by whitespace. Always include markers (small dots) so each
+        // session is visible and the plot reads as data rather than empty space; dashed reference
+        // traces (threshold) stay lines-only.
+        const isDashRef = tr.dash === "dash";
+        const mode = tr.mode || (isDashRef ? "lines" : "lines+markers");
         traces.push({
           x, y: tr.y, name: tr.name, type: "scatter", mode,
-          line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
-          marker: { size: 4, color: tr.color },
+          line: { color: tr.color, width: isDashRef ? 2 : 1.4, dash: tr.dash || "solid" },
+          marker: { size: 3.5, color: tr.color },
           yaxis: yk, xaxis: "x", connectgaps: false,
           hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });
