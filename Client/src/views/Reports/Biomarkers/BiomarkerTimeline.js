@@ -10,12 +10,15 @@ import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
 
+// Okabe-Ito colorblind-safe palette, aligned with BiomarkerAnalytics.js. Pain uses vermillion
+// (the HI color) so a viewer reading the histogram and the timeline together gets the same
+// color identity for "pain" across panels.
 const C = {
-  td: "#1A73E8",        // time-domain biomarker
-  lfp: "#00897B",       // power-domain LFP power
-  threshold: "#8E8E8E", // learned threshold
-  pain: "#E53935",      // NRS / pain
-  stim: "#FB8C00",      // stim amplitude
+  td: "#0072B2",        // time-domain biomarker (blue)
+  lfp: "#009E73",       // power-domain LFP power (green)
+  threshold: "#7E8794", // learned threshold
+  pain: "#D55E00",      // NRS / pain (vermillion = HI)
+  stim: "#E69F00",      // stim amplitude (orange)
 };
 
 function parseTime(t) {
@@ -56,7 +59,10 @@ function BiomarkerTimeline({ data, height }) {
     }
     const m = data.label_metric || "nrs";
     const painCol = pick(`powerdomain_${m}`, `td_${m}_min`, `td_${m}_mean`, m, "powerdomain_nrs", "td_nrs_min", "nrs");
-    if (painCol) rows.push({ title: `Pain (${m})`, unit: m, traces: [{ name: m, y: col(painCol), color: C.pain }] });
+    // Always show the pain row as markers, not just a connecting line — each marker is one
+    // pain observation (the standalone Pain Scores report renders them this way).
+    if (painCol) rows.push({ title: `Pain (${m})`, unit: m, isPain: true,
+      traces: [{ name: m, y: col(painCol), color: C.pain, forceMarkers: true }] });
     const stimCol = pick("powerdomain_stim_amplitude", "td_stim_amplitude");
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
@@ -74,6 +80,15 @@ function BiomarkerTimeline({ data, height }) {
       annotations: [],
     };
 
+    // Build a translucent "pain-event rug" — every timepoint where pain was recorded — so it can
+    // be overlaid on the LFP / time-domain biomarker rows. Reading biomarker activity against
+    // the pain dots is the whole point of these stacked plots; without them, the LFP trace floats
+    // free of when the patient actually rated their pain.
+    const painRugX = painCol
+      ? recs.map((r, i) => (typeof r[painCol] === "number" && Number.isFinite(r[painCol]) ? x[i] : null))
+            .filter((t) => t !== null)
+      : [];
+
     rows.forEach((row, di) => {
       const axisNum = n - di; // bottom row = y1
       const yk = axisNum === 1 ? "y" : "y" + axisNum;
@@ -84,15 +99,34 @@ function BiomarkerTimeline({ data, height }) {
         zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true };
       row.traces.forEach((tr) => {
         // Drop point markers on dense series (lines-only is cleaner/faster); keep them when sparse.
+        // forceMarkers=true (pain row) always renders dots — every marker is one observation.
         const nPts = (tr.y || []).filter((v) => v !== null && v !== undefined).length;
+        const mode = tr.mode || (tr.forceMarkers ? "markers" : (nPts > 200 ? "lines" : "lines+markers"));
         traces.push({
-          x, y: tr.y, name: tr.name, type: "scatter",
-          mode: tr.mode || (nPts > 200 ? "lines" : "lines+markers"),
+          x, y: tr.y, name: tr.name, type: "scatter", mode,
           line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
-          marker: { size: 4, color: tr.color }, yaxis: yk, xaxis: "x", connectgaps: false,
+          marker: { size: tr.forceMarkers ? 6 : 4, color: tr.color,
+                    line: tr.forceMarkers ? { color: "white", width: 0.5 } : undefined },
+          yaxis: yk, xaxis: "x", connectgaps: false,
           hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });
       });
+      // Pain-event rug at the bottom of NON-pain rows: vertical line shapes (translucent vermillion)
+      // anchored to this row's paper-y domain so they sit just inside the bottom of the row,
+      // regardless of the row's auto-scaled data range. yref="paper" + small fraction of the row
+      // height keeps them visible without dominating the trace.
+      if (painRugX.length && !row.isPain) {
+        const rowH = top - bottom;
+        const rugY0 = bottom;
+        const rugY1 = bottom + rowH * 0.10;   // 10% of row height — visible but unobtrusive
+        if (!layout.shapes) layout.shapes = [];
+        painRugX.forEach((tx) => {
+          layout.shapes.push({
+            type: "line", xref: "x", yref: "paper", x0: tx, x1: tx, y0: rugY0, y1: rugY1,
+            line: { color: C.pain, width: 1, dash: "solid" }, opacity: 0.30,
+          });
+        });
+      }
       layout.annotations.push({
         xref: "paper", yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
         xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,
