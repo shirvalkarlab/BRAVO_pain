@@ -92,6 +92,74 @@ def test_lfp_distribution_robust_range():
     assert max(d["counts"]) < sum(d["counts"])             # not all samples in one bar
 
 
+def test_corr_spectrum_enforces_50hz_cap():
+    """50 Hz cap in the correlation spectrum: a planted, dominant correlation at a >=50 Hz bin must
+    be excluded from peak-picking, the per-frequency significance markers, AND the peak-scatter — a
+    biomarker can never be drawn from there, so the panel must not surface it."""
+    from Biomarkers.routines import streaming_psd
+    f = streaming_psd.F_SET
+    Ff = len(f)
+    rng = np.random.default_rng(1)
+    E = 40
+    labels = np.linspace(0, 10, E)
+    feat = rng.normal(0, 1, (E, 2, Ff))
+    hi = int(np.argmin(np.abs(f - 70)))                 # plant the strongest |R| at 70 Hz
+    feat[:, 0, hi] = labels * 3
+    corr = np.array([[ (np.corrcoef(feat[:, c, j], labels)[0, 1] if np.std(feat[:, c, j]) > 0 else 0.0)
+                       for j in range(Ff)] for c in range(2)])
+    det = {"f_set": f, "corr": corr, "pval": np.full((2, Ff), 1e-4), "feature": feat,
+           "labels": labels, "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "transform": "log"}
+    # The global argmax |R| for ch0 IS the >=50 Hz cell -- the cap must keep it out of the outputs.
+    assert f[int(np.argmax(np.abs(corr[0])))] >= 50.0
+    cs = analytics.corr_spectrum(det, max_freq_hz=50.0)
+    ch0 = cs["channels"][0]
+    assert all(p["freq"] < 50.0 for p in ch0["peaks"]), "a >=50 Hz peak leaked past the cap"
+    assert all(ch0["significant"][k] is None for k in range(Ff) if f[k] >= 50.0)
+    if ch0["peak_scatter"] is not None:
+        assert ch0["peak_scatter"]["peak_freq"] < 50.0
+    # r is NaN'd at every >=50 Hz bin so nothing downstream can pick it.
+    assert all(ch0["r"][k] is None for k in range(Ff) if f[k] >= 50.0)
+
+
+def test_lfp_distribution_otsu_on_mad_filtered_data():
+    """The Otsu split must be computed on the MAD-filtered LFP (within 3 MADs of the median), so a
+    handful of artifact spikes cannot drag the threshold. The returned otsu sits between the two
+    real classes, whereas an UNFILTERED Otsu on the same data is pulled far above by the spikes."""
+    rng = np.random.default_rng(2)
+    low = rng.normal(110, 3, 2000)
+    high = rng.normal(150, 3, 2000)
+    spikes = np.array([1e5, 1.2e5, -5e4])               # extreme merged-source artifacts
+    df = pd.DataFrame({"LFP_smoothed": np.concatenate([low, high, spikes]),
+                       "pain_level": np.r_[np.zeros(2000), np.ones(2000), np.ones(3)]})
+    d = analytics.lfp_distribution(df, bins=40)
+    assert 110.0 <= d["otsu"] <= 150.0, f"otsu {d['otsu']} dragged out of the class range by spikes"
+    naive = analytics._otsu_threshold(df["LFP_smoothed"].values)   # unfiltered, for contrast
+    assert naive > 150.0, "control: a naive Otsu IS distorted by the spikes (proves MAD matters)"
+    assert d["n_total"] == 4003
+
+
+def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
+    """Sliding-corr time-span fix: with a SKEWED session distribution (dense early block + sparse
+    recent tail, the RCS08 shape) plus one corrupt ~1677 StartTime, the window grid must (a) NOT be
+    anchored back to 1677 by the corrupt date and (b) still extend to within one window of the last
+    REAL recording — the bug the 5*MAD clip introduced (truncating the grid months early)."""
+    rng = np.random.default_rng(5)
+    base = pd.Timestamp("2024-01-01")
+    times = [base + pd.Timedelta(days=k * 0.33) for k in range(30)]      # dense early block
+    times += [base + pd.Timedelta(days=15 + k * 8) for k in range(19)]   # sparse recent tail
+    times.append(pd.Timestamp("1677-09-22"))                             # one corrupt StartTime
+    times = list(pd.to_datetime(times))
+    E = len(times)
+    last_real = max(t for t in times if t.year > 2000)
+    det = {"psd": rng.normal(0, 1, (E, 2, 5)), "labels": rng.normal(5, 1, E),
+           "f_set": np.arange(5.0), "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]}
+    out = analytics.td_sliding_corr_spectrum(det, times, window_days=30, step_days=7, min_sessions=3)
+    starts = pd.to_datetime(out["channels"][0]["window_starts"])
+    assert starts.min().year > 2000, "corrupt 1677 date wrongly anchored the grid"
+    # Last window start must be within `window_days` of the final real session (grid reaches the end).
+    assert (last_real - starts.max()).days <= 30, "grid terminated before the last real session"
+
+
 def test_power_center_freqs_standard_path():
     """Sensing-band center frequency is read from Descriptor.Therapy.<hemi>.SensingSetup and
     matched to each power contact by its hemisphere token."""
@@ -146,6 +214,9 @@ if __name__ == "__main__":
     test_cluster_scatter_missing_features()
     test_pain_binarization()
     test_lfp_distribution_robust_range()
+    test_corr_spectrum_enforces_50hz_cap()
+    test_lfp_distribution_otsu_on_mad_filtered_data()
+    test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates()
     test_power_center_freqs_standard_path()
     test_power_center_freqs_direct_hemisphere_key()
     test_power_center_freqs_nested_recordingconfig()

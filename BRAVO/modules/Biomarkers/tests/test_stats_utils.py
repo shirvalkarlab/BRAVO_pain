@@ -57,6 +57,23 @@ def test_balanced_metrics():
     assert abs(m["majority_accuracy"] - 0.9) < 1e-9
 
 
+def test_balanced_metrics_chance_invariant_across_imbalance():
+    """The BALANCED-accuracy chance level is ALWAYS 0.5, no matter the class imbalance, while the
+    majority fraction (the RAW-accuracy reference) tracks max(n_pos,n_neg)/total. Balanced accuracy
+    itself is mean(sens,spec) and is likewise independent of the prevalence."""
+    for n_pos, n_neg in [(10, 90), (50, 50), (1, 999), (80, 20)]:
+        m = su.balanced_metrics(sens=0.7, spec=0.6, n_pos=n_pos, n_neg=n_neg)
+        total = n_pos + n_neg
+        assert abs(m["chance_accuracy"] - 0.5) < 1e-12        # chance is 0.5 for EVERY ratio
+        assert abs(m["majority_accuracy"] - max(n_pos, n_neg) / total) < 1e-12
+        assert abs(m["balanced_accuracy"] - 0.65) < 1e-12     # mean(0.7,0.6), prevalence-free
+        assert abs(m["prevalence"] - n_pos / total) < 1e-12
+    # Degenerate folds must not divide-by-zero: chance stays 0.5, majority well-defined.
+    m0 = su.balanced_metrics(sens=0.0, spec=1.0, n_pos=0, n_neg=50)
+    assert abs(m0["chance_accuracy"] - 0.5) < 1e-12
+    assert m0["prevalence"] == 0.0 and m0["majority_accuracy"] == 1.0
+
+
 def test_block_perm_pvalue():
     rng = np.random.default_rng(2)
     N, M = 120, 20
@@ -103,6 +120,7 @@ if __name__ == "__main__":
     test_partial_corr_removes_confound()
     test_effective_n_shrinks_with_autocorrelation()
     test_balanced_metrics()
+    test_balanced_metrics_chance_invariant_across_imbalance()
     test_block_perm_pvalue()
     test_fisher_z_ci()
     test_circular_block_perm_matrix_valid()

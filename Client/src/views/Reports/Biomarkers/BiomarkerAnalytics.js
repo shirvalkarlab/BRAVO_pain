@@ -249,9 +249,17 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       );
 
       // Scatter panel (right half of row) — per-session log-power at peak freq vs pain.
-      if (ps && ps.x && ps.x.length) {
+      // Require a finite peakFreq too: the title/axis format it with .toFixed and would throw on null.
+      if (ps && ps.x && ps.x.length && peakFreq != null && Number.isFinite(peakFreq)) {
         const trendLine = (() => {
-          const xs = ps.x.filter((v) => v != null), ys = ps.y.filter((v) => v != null);
+          // Filter x/y JOINTLY: independent .filter() calls misalign the pair when a null sits at
+          // different indices in x vs y (and make the two arrays different lengths), corrupting the
+          // slope. Keep only sessions where BOTH coordinates are finite.
+          const xs = [], ys = [];
+          (ps.x || []).forEach((vx, i) => {
+            const vy = ps.y ? ps.y[i] : null;
+            if (vx != null && Number.isFinite(vx) && vy != null && Number.isFinite(vy)) { xs.push(vx); ys.push(vy); }
+          });
           if (xs.length < 3) return null;
           const n = xs.length;
           const mx = xs.reduce((s, v) => s + v, 0) / n;
@@ -353,16 +361,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const scs = td.sliding_corr_spectrum || null;
   if (scs && scs.channels && scs.channels.length) {
     scs.channels.forEach((ch, i) => {
+      if (!Array.isArray(ch.freqs) || !ch.freqs.length) return;   // skip channels with no freq axis
       const traces = [{ type: "heatmap", z: ch.r, x: ch.window_starts, y: ch.freqs,
         colorscale: "RdBu", reversescale: true, zmid: 0, zmin: -1, zmax: 1,
         colorbar: { title: { text: "R", side: "right" }, thickness: 12, len: 0.9 },
         hovertemplate: "%{x|%b %d %Y} · %{y:.1f} Hz · R=%{z:.2f}<extra></extra>" }];
+      // 50 Hz biomarker cap: never display a sliding-correlation axis above 50 Hz.
+      const fLo = Math.min(...ch.freqs);
       tdPanels.push(
         <Panel key={"scs" + i} lg={12}
           title={`Sliding correlation with ${pain} (R: frequency × time) — ${ch.channel}`}>
           <Fig traces={traces} height={360}
             layout={{ xaxis: { title: "Window start", type: "date" },
-              yaxis: { title: "Frequency (Hz)", range: [Math.min(...ch.freqs), 50] } }} />
+              yaxis: { title: "Frequency (Hz)", range: [Number.isFinite(fLo) ? fLo : 0, 50] } }} />
         </Panel>
       );
     });
@@ -462,7 +473,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     );
   }
   const dist = chronic.lfp_distribution || null;
-  if (dist && dist.counts && dist.counts.length) {
+  // Need one more edge than counts to form bin centers; without it every center is NaN.
+  if (dist && dist.counts && dist.counts.length
+      && Array.isArray(dist.bin_edges) && dist.bin_edges.length >= dist.counts.length + 1) {
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
     chPanels.push(
@@ -561,12 +574,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
             {`Daily ${name} split into high vs low pain by the ${STRAT_LABEL[binStrategy] || binStrategy}, ` +
              `with the cut computed on the daily distribution (not the density-weighted samples). ` +
              (isTertile
-               ? (binData.low_pct != null
+               ? (binData.low_pct != null && binData.high_pct != null
                    ? `Days ≤ ${binData.low_pct.toFixed(0)}th pct → low, ≥ ${binData.high_pct.toFixed(0)}th pct → high; ` +
                      `the shaded middle band (${nMid.toLocaleString()} of ${ft.n_obs} days) is excluded from training. `
                    : `The shaded middle band is excluded from training. `)
                : (ft.boundary != null
-                   ? `The cut falls at ${ft.boundary.toFixed(1)} — the ${ft.boundary_percentile.toFixed(0)}th percentile ` +
+                   ? `The cut falls at ${ft.boundary.toFixed(1)}` +
+                     `${ft.boundary_percentile != null ? ` — the ${ft.boundary_percentile.toFixed(0)}th percentile` : ""} ` +
                      `(${ft.n_low} low / ${ft.n_high} high of ${ft.n_obs} days). Dotted lines mark the 30th/70th percentiles for reference. `
                    : ""))}
           </MDTypography>

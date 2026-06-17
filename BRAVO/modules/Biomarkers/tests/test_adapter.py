@@ -327,6 +327,79 @@ def test_pearson_corr_psd_label_rejects_mad_outliers():
     print("OK pearson_corr_psd_label MAD rejection: clean=%.3f filtered=%.3f naive=%.3f" % (rc, rf, rn))
 
 
+def test_mad_outlier_mask_behavior():
+    """mad_outlier_mask: KEEP-mask True within k MADs of the median. Drops |x-med|>k*MAD spikes,
+    excludes non-finite, and (deliberately) returns the plain finite mask when MAD is undefined
+    (all-equal) or there are < 3 finite points — those are the documented no-op fallbacks."""
+    m = adapter.mad_outlier_mask(np.array([1.0, 2.0, 3.0, 4.0, 100.0]), k=3.0)
+    assert m.tolist() == [True, True, True, True, False]          # 100 is the spike
+    # all-equal -> MAD==0 -> keep everything (no false positives on a constant series)
+    assert adapter.mad_outlier_mask(np.array([5.0, 5.0, 5.0, 5.0])).all()
+    # < 3 finite points -> MAD unstable -> return the finite mask unchanged (NaN excluded)
+    assert adapter.mad_outlier_mask(np.array([1.0, np.nan])).tolist() == [True, False]
+    # NaN excluded from the keep set AND the spike still dropped, simultaneously
+    assert adapter.mad_outlier_mask(np.array([1.0, 2.0, 3.0, np.nan, 100.0])).tolist() == \
+        [True, True, True, False, False]
+
+
+def test_concat_chronic_mad_is_per_recording_not_global():
+    """_concat_chronic applies MAD outlier rejection PER RECORDING, not globally. A small low-scale
+    source (~10) concatenated with a large high-scale source (~100): per-recording MAD keeps BOTH
+    sources intact, whereas a GLOBAL MAD (dominated by the high source) would erase the entire
+    low-scale source. A within-source spike is still dropped; mad_k=None disables rejection."""
+    tA = _MIDNIGHT_UTC + np.arange(8) * 3600.0
+    dA = np.column_stack([np.full(8, 10.0), np.full(8, 2.0)])      # tight low-scale source
+    tB = _MIDNIGHT_UTC + (50 + np.arange(60)) * 3600.0
+    dB = np.column_stack([np.full(60, 100.0), np.full(60, 2.0)])   # tight high-scale source
+    rec_a = {"Time": tA, "Data": dA, "ChannelNames": ["L LFP", "L Amplitude"]}
+    rec_b = {"Time": tB, "Data": dB, "ChannelNames": ["L LFP", "L Amplitude"]}
+    lfp = adapter._concat_chronic([rec_a, rec_b], mad_k=3.0)["Data"][:, 0]
+    assert (lfp == 10.0).sum() == 8 and (lfp == 100.0).sum() == 60   # both sources fully survive
+    # Control: a GLOBAL MAD would flag every low-scale sample as an outlier.
+    allv = np.concatenate([dA[:, 0], dB[:, 0]])
+    med = np.median(allv); mad = np.median(np.abs(allv - med))
+    assert (np.abs(allv[:8] - med) <= 3.0 * mad).sum() == 0
+    # A within-source spike IS dropped (give the source spread so MAD is defined).
+    rng = np.random.default_rng(3)
+    dS = np.column_stack([rng.normal(10, 1, 40), np.full(40, 2.0)]); dS[5, 0] = 9000.0
+    rec_s = {"Time": _MIDNIGHT_UTC + np.arange(40) * 3600.0, "Data": dS,
+             "ChannelNames": ["L LFP", "L Amplitude"]}
+    assert 9000.0 not in set(adapter._concat_chronic(rec_s, mad_k=3.0)["Data"][:, 0])
+    # mad_k=None disables rejection -> the spike survives.
+    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=None)["Data"][:, 0])
+
+
+def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():
+    """The test-fold expansion must actually FIRE (a window's test_days_used grows beyond the
+    requested test_days when the short window is single-class) and skips must be CATEGORIZED into
+    one-class vs no-data with the summary counts reconciling to n_total. Every returned window has a
+    defined AUC (no half-NaN rows leak out)."""
+    days = pd.date_range("2025-01-01", periods=40, freq="D")
+    rows = []
+    for i, d in enumerate(days):
+        if i < 20:
+            lab = float(i % 2)            # alternating classes -> usable training
+        elif i < 28:
+            lab = 0.0                     # homogeneous block -> short test fold is single-class
+        else:
+            lab = 1.0                     # class flips -> expansion reaches both classes
+        for k in range(15):
+            rows.append({"timestamp": d + pd.Timedelta(minutes=5 * k),
+                         "LFP_smoothed": 100 + 30 * lab + np.random.default_rng(i * 15 + k).normal(0, 2),
+                         "pain_level": lab})
+    cv = pd.DataFrame(rows)
+    out = analytics.sliding_window_analytics(cv, train_days=10, gap_days=1, test_days=2,
+                                             step_days=1, sliding=True, max_test_days=8)
+    used = [w["test_days_used"] for w in out["windows"]]
+    assert any(u > 2 for u in used), "expansion never fired (no test_days_used grew past test_days)"
+    assert all(u <= 8 for u in used)                              # never exceeds max_test_days
+    assert all(w["auc"] is not None for w in out["windows"])      # no half-NaN rows
+    s = out["summary"]
+    assert s["n_skipped_test_one_class"] >= 1                     # at least one genuine one-class skip
+    assert s["n_total"] == len(out["windows"]) + s["n_skipped_test_one_class"] + s["n_skipped_no_data"]
+    assert s["max_test_days"] == 8 and s["test_days"] == 2
+
+
 def test_decimate_for_plot_thins_only():
     """decimate_for_plot thins rows FOR PLOTTING ONLY: a strict row-subset, columns + values
     unchanged (no interpolation), under-cap frames returned as-is. Locks the plot-only invariant."""
@@ -625,5 +698,8 @@ if __name__ == "__main__":
     test_sliding_window_skips_one_class_test_folds()
     test_td_sliding_corr_spectrum_matches_scipy()
     test_pearson_corr_psd_label_rejects_mad_outliers()
+    test_mad_outlier_mask_behavior()
+    test_concat_chronic_mad_is_per_recording_not_global()
+    test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")

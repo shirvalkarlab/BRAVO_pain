@@ -85,10 +85,76 @@ def test_block_perm_maxcorr_pvalue_behavior():
     assert np.mean(null_ps) > 0.1 and np.mean(null_ps) > p_real   # nulls average well above the floor
 
 
+def test_select_biomarker_band_enforces_50hz_cap():
+    """The 50 Hz biomarker cap: even when the globally strongest |R| sits at/above 50 Hz, the
+    selector must NEVER pick it — it returns the strongest band strictly below 50 Hz. A grid whose
+    only finite cells are >=50 Hz returns None (nothing selectable)."""
+    rng = np.random.default_rng(0)
+    N = 60
+    f_set = np.array([10.0, 20.0, 40.0, 55.0, 60.0])
+    labels = np.linspace(0, 10, N) + rng.normal(0, 0.3, N)
+    feat = rng.normal(0, 1, (N, 1, f_set.size))
+    feat[:, 0, 4] = labels * 2 + rng.normal(0, 0.05, N)   # 60 Hz: near-perfect, strongest GLOBALLY
+    feat[:, 0, 1] = labels + rng.normal(0, 0.6, N)         # 20 Hz: strong but weaker, < 50
+    corr = np.array([[np.corrcoef(feat[:, 0, j], labels)[0, 1] for j in range(f_set.size)]])
+    result = {"corr": corr, "f_set": f_set, "feature": feat, "labels": labels,
+              "pval": np.full((1, f_set.size), 0.001)}
+    # The global argmax |R| is the 60 Hz cell -- the cap must override it.
+    assert f_set[int(np.argmax(np.abs(corr[0])))] >= 50.0
+    sel = pipeline.select_biomarker_band(result, q_threshold=0.05)
+    assert sel is not None
+    assert sel[4] < pipeline.MAX_BIOMARKER_FREQ_HZ, f"selected band {sel[4]} Hz violates the 50 Hz cap"
+    assert sel[4] == 20.0
+    # When every finite cell is >= 50 Hz, NOTHING is selectable.
+    res_all_high = dict(result, f_set=np.array([50.0, 55.0, 60.0, 70.0, 80.0]))
+    assert pipeline.select_biomarker_band(res_all_high) is None
+
+
+def test_band_inference_mad_rejection_and_50hz_perm_family():
+    """_band_inference must (a) apply MAD>=3 rejection on the selected band's feature AND label, so a
+    single artifact session is excluded from the reported n / partial r / CI, and (b) restrict the
+    family-max permutation null to cells STRICTLY below the 50 Hz cap — a planted dominant
+    correlation at a >=50 Hz bin must NOT inflate perm_obs."""
+    from Biomarkers.routines import streaming_psd
+    f = streaming_psd.F_SET
+    Ff = len(f)
+    rng = np.random.default_rng(11)
+    E = 40
+    labels = np.linspace(0, 10, E)
+    lo = int(np.argmin(np.abs(f - 20.0)))                 # a genuine sub-50 Hz signal bin
+    feat = rng.normal(0, 1, (E, 2, Ff))
+    feat[:, 0, lo] = labels + rng.normal(0, 0.3, E)
+    corr = np.array([[(np.corrcoef(feat[:, c, j], labels)[0, 1] if np.std(feat[:, c, j]) > 0 else 0.0)
+                      for j in range(Ff)] for c in range(2)])
+    base = {"f_set": f, "corr": corr, "pval": np.full((2, Ff), 0.001), "feature": feat,
+            "labels": labels, "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "transform": "log"}
+
+    # (a) MAD rejection: plant a label spike, n must drop below E (the spike session is excluded).
+    labels_spk = labels.copy(); labels_spk[E // 2] = 1e6
+    inf = pipeline._band_inference(dict(base, labels=labels_spk), 0, lo, corr[0, lo], 0.001,
+                                   float(f[lo]), 0.01, True, stim=None, n_perm=200)
+    assert inf["n"] < E, "MAD>=3 did not drop the artifact-label session from the band's n"
+    assert inf["perm_n"] > 0
+
+    # (b) Plant a near-perfect correlation at a >=50 Hz bin and (artificially) select it; the
+    # family-max null is computed over <50 Hz cells ONLY, so perm_obs must stay modest, not ~1.0.
+    hi = int(np.argmin(np.abs(f - 70.0)))
+    feat2 = rng.normal(0, 1, (E, 2, Ff))
+    feat2[:, 0, hi] = labels * 5.0                         # corr ~1.0 at 70 Hz
+    corr2 = np.array([[(np.corrcoef(feat2[:, c, j], labels)[0, 1] if np.std(feat2[:, c, j]) > 0 else 0.0)
+                       for j in range(Ff)] for c in range(2)])
+    inf2 = pipeline._band_inference(dict(base, feature=feat2, corr=corr2), 0, hi, corr2[0, hi],
+                                    0.001, float(f[hi]), 0.01, True, stim=None, n_perm=300)
+    assert inf2["perm_obs"] is None or inf2["perm_obs"] < 0.9, \
+        f"perm family included the >=50 Hz cell (perm_obs={inf2['perm_obs']})"
+
+
 if __name__ == "__main__":
     test_maxabs_corr_pairwise_nan()
     test_maxabs_corr_degenerate()
     test_maxabs_corr_matches_full_when_no_nan()
     test_vectorized_perm_matches_loop_statistic()
     test_block_perm_maxcorr_pvalue_behavior()
+    test_select_biomarker_band_enforces_50hz_cap()
+    test_band_inference_mad_rejection_and_50hz_perm_family()
     print("All pipeline_stats tests passed.")

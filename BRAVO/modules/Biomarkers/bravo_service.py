@@ -14,6 +14,7 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 
 import os
 import json
+import math
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -215,25 +216,55 @@ def _pt_config_dir():
     return os.path.join(base, "pt_config")
 
 
+def _safe_config_name(value):
+    """Reduce a request-supplied config selector to a bare filename component that cannot escape
+    the pt_config directory. `PtConfig`/`RedcapRecordId`/participant name are authenticated-user
+    input that gets interpolated into a filesystem path; without this, values like
+    `../../../etc/foo`, an absolute path, or one containing a path separator would let a caller
+    read arbitrary JSON files on the server (e.g. a REDCap config holding the API token). We keep
+    only the basename and reject anything that still contains a separator, is empty, or is a
+    dot-entry — so only files that live DIRECTLY inside the pt_config dir are reachable."""
+    if value is None:
+        return None
+    name = os.path.basename(str(value).strip())
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        return None
+    return name
+
+
 def _load_pt_config(participant, request_data):
     """Locate and parse a participant's pt_config (the same file the library-mode pipeline reads
     for channel order; it also carries the REDCap field map). Resolution order:
     explicit `PtConfig` in the request, then `<dir>/<RedcapRecordId>_config.json`, then
-    `<dir>/<participant name>_config.json`. Returns the dict, or None if no file is found."""
+    `<dir>/<participant name>_config.json`. Returns the dict, or None if no file is found.
+
+    All candidates are confined to `cfg_dir`: the request-supplied selectors are reduced to a bare
+    basename (see `_safe_config_name`) and every resolved path is verified to sit inside `cfg_dir`
+    before it is opened, so no `PtConfig`/`RedcapRecordId` value can traverse out of that dir."""
     cfg_dir = _pt_config_dir()
+    cfg_root = os.path.realpath(cfg_dir)
     candidates = []
-    explicit = request_data.get("PtConfig")
+    explicit = _safe_config_name(request_data.get("PtConfig"))
     if explicit:
-        candidates += [explicit, os.path.join(cfg_dir, explicit),
+        candidates += [os.path.join(cfg_dir, explicit),
                        os.path.join(cfg_dir, f"{explicit}_config.json")]
-    rid = request_data.get("RedcapRecordId")
+    rid = _safe_config_name(request_data.get("RedcapRecordId"))
     if rid:
         candidates.append(os.path.join(cfg_dir, f"{rid}_config.json"))
     if participant is not None and getattr(participant, "name", ""):
-        candidates.append(os.path.join(cfg_dir, f"{participant.name}_config.json"))
+        pname = _safe_config_name(participant.name)
+        if pname:
+            candidates.append(os.path.join(cfg_dir, f"{pname}_config.json"))
     for path in candidates:
-        if path and os.path.isfile(path):
-            with open(path, "r") as fp:
+        if not path:
+            continue
+        # Defence in depth: even after basename-sanitising, confirm the real path stays under
+        # cfg_root before touching the filesystem (guards against symlinks in the dir, too).
+        real = os.path.realpath(path)
+        if real != cfg_root and not real.startswith(cfg_root + os.sep):
+            continue
+        if os.path.isfile(real):
+            with open(real, "r") as fp:
                 return json.load(fp)
     return None
 
@@ -460,15 +491,28 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
 _DAYS_PER_MONTH = 30.44
 
 
+# Clamp ceiling for request-supplied window sizes. 10 years is comfortably longer than any
+# Percept implant record, while bounding the windowing work an authenticated caller can schedule.
+_MAX_WINDOW_MONTHS = 120.0
+
+
 def _months_to_days(value):
-    """Parse a months value (float) -> whole days (>=1), or (None, None) if absent/invalid."""
+    """Parse a months value (float) -> whole days (>=1), or (None, None) if absent/invalid.
+
+    Request-supplied (`WindowMonths`/`WindowStep`), so guard the conversion: a non-finite value
+    (`inf`/`nan`) would otherwise raise OverflowError/ValueError out of `int()`, and an absurdly
+    large value would schedule a runaway amount of windowing work. Require months > 0 and finite,
+    and clamp to `_MAX_WINDOW_MONTHS`."""
     if value is None or value == "":
         return None, None
     try:
         months = float(value)
-        return max(1, int(round(months * _DAYS_PER_MONTH))), months
     except (TypeError, ValueError):
         return None, None
+    if not math.isfinite(months) or months <= 0:
+        return None, None
+    months = min(months, _MAX_WINDOW_MONTHS)
+    return max(1, int(round(months * _DAYS_PER_MONTH))), months
 
 
 def _window_params(request_data):

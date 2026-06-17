@@ -455,7 +455,13 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     lfp = df["LFP"].to_numpy(dtype=float)
     n = len(lfp)
     if n >= 5:
-        wl = smooth_window if (n >= smooth_window and smooth_window % 2 == 1) else (n if n % 2 == 1 else n - 1)
+        # Savitzky-Golay needs an ODD window length. An EVEN smooth_window must be rounded down to
+        # the nearest odd value FIRST — the old expression fell through to the series-length branch
+        # for any even smooth_window, silently setting wl≈n (over-smoothing LFP into a flatline).
+        sw = int(smooth_window)
+        if sw % 2 == 0:
+            sw -= 1
+        wl = sw if (n >= sw and sw >= 3) else (n if n % 2 == 1 else n - 1)
         wl = max(wl, 3)
         poly = min(2, wl - 1)
         df["LFP_smoothed"] = savgol_filter(lfp, window_length=wl, polyorder=poly)
