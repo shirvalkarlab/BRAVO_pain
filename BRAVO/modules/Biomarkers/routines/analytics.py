@@ -615,6 +615,12 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     notch removal). Each channel also gets `peaks`: the strongest |R| local maxima (freq, r) so the
     UI can HIGHLIGHT peaks instead of relying on hover. `region_map` (raw-channel -> region) lets
     the brain region come from the patient's device metadata instead of a static map.
+
+    Each channel also carries `peak_scatter`: per-session (feature value at the peak frequency,
+    pain label, date) for the scatterplot of observed correlation at the peak frequency vs pain.
+    The peak is the frequency with the single largest |R| for that channel — NOT the family max
+    over all channels (which is what `perm_obs` captures). This is the biologically meaningful
+    "best frequency for this electrode" that the permutation test is really interrogating.
     """
     if not td_detail:
         return None
@@ -625,6 +631,13 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     chans = td_detail.get("chan_order", [])
     ignore = np.zeros(len(f), bool) if not ignore_band else ((f > ignore_band[0]) & (f < ignore_band[1]))
 
+    # Per-session feature (E, C, F) and labels (E,) for scatter data.
+    feature = td_detail.get("feature")   # may be None for legacy callers
+    feat = np.asarray(feature, dtype=float) if feature is not None else None
+    raw_labels = td_detail.get("labels")
+    labels_arr = np.asarray(raw_labels, dtype=float) if raw_labels is not None else None
+    times = td_detail.get("times")   # (E,) ISO strings or None
+
     channels = []
     for ci in range(corr.shape[0]):
         raw = chans[ci] if ci < len(chans) else f"ch{ci}"
@@ -634,17 +647,38 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
         r_row[ignore] = np.nan
         sig = [(_f(r_row[k]) if (np.isfinite(p_row[k]) and p_row[k] < p_significant and not ignore[k]) else None)
                for k in range(len(f))]
-        # Peaks: strongest |R| local maxima, for highlighting (no hover tips needed on the TD plot).
+
+        # Peaks: strongest |R| local maxima, for highlighting.
         absr = np.abs(np.nan_to_num(r_row, nan=0.0))
         pk, _props = find_peaks(absr, prominence=0.05)
         pk = sorted(pk, key=lambda k: -absr[k])[:n_peaks]
         peaks = [{"freq": float(f[k]), "r": _f(r_row[k])} for k in sorted(pk)]
+
+        # Peak-scatter: per-session feature at this channel's single best-|R| frequency.
+        # Uses argmax |R| (the strongest individual correlation for this channel), NOT the
+        # family-max used by perm_obs (which ranges over ALL channels x frequencies).
+        peak_scatter = None
+        best_fi = int(np.argmax(absr)) if absr.any() else None
+        if best_fi is not None and feat is not None and labels_arr is not None:
+            peak_feat = feat[:, ci, best_fi]           # (E,) feature values at peak freq
+            valid = np.isfinite(peak_feat) & np.isfinite(labels_arr)
+            if valid.sum() >= 3:
+                peak_scatter = {
+                    "peak_freq": float(f[best_fi]),
+                    "peak_r": _f(r_row[best_fi]),
+                    "x": [_f(v) for v in peak_feat[valid]],   # feature (log power) per session
+                    "y": [_f(v) for v in labels_arr[valid]],  # pain label per session
+                    "dates": ([str(times[i]) for i, ok in enumerate(valid) if ok]
+                              if times is not None else None),
+                }
+
         channels.append({
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": [_f(x) for x in r_row],
             "p": [_f(x) for x in p_row],
             "significant": sig,
             "peaks": peaks,
+            "peak_scatter": peak_scatter,
         })
     return {"freqs": [float(x) for x in f], "channels": channels,
             "transform": td_detail.get("transform", "log"), "p_significant": p_significant}

@@ -115,22 +115,18 @@ const FEATURE_LABELS = {
 const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) {
-  if (!analytics) return null;
-  const td = analytics.timedomain || {};
-  const pdRoot = analytics.powerdomain || analytics.chronic || {};
-
-  // Per-channel split (rigor review §7-C): the backend now ships analytics for each LFP series
-  // (e.g. "Left LFP" / "Right LFP") alongside the pooled run. Default to pooled — switching to a
-  // channel swaps the LFP histogram, sliding-window curve, ROC, and headline summary in place;
-  // no re-fetch (the per-channel payload is part of the same response).
+  // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
+  const td = analytics ? (analytics.timedomain || {}) : {};
+  const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
   const perChannel = pdRoot.per_channel || {};
   const channelKeys = Object.keys(perChannel);
   const [chSel, setChSel] = useState("pooled");
-  // If the response no longer carries the previously-selected channel, reset to pooled.
   const safeChSel = (chSel === "pooled" || perChannel[chSel]) ? chSel : "pooled";
   const chronic = useMemo(() => (
     safeChSel === "pooled" ? pdRoot : { ...pdRoot, ...perChannel[safeChSel] }
   ), [safeChSel, pdRoot, perChannel]);
+
+  if (!analytics) return null;
 
   // Human-readable pain score these correlations / AUCs are computed against (biological best
   // practice: every correlation/AUC panel should say what it is correlated WITH). Falls back gracefully.
@@ -173,41 +169,114 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     );
   }
 
-  // Permutation null for the strongest correlation — placed right after the spectrum it tests, so the
-  // correlation and its significance test read together. Each null value is the largest |R| over ALL
-  // contacts x frequencies when the pain labels are circularly block-shuffled (preserving day-to-day
-  // autocorrelation); the observed strongest |R| is the red line. p = fraction of the null >= observed.
-  if (tdSum.perm_null && tdSum.perm_null.length && tdSum.perm_obs != null) {
-    const obs = tdSum.perm_obs;
+  // Permutation null + per-session scatter — one row per hemisphere (Left, then Right).
+  // Each row: LEFT panel = perm-null histogram with THIS channel's observed |R| marked;
+  //           RIGHT panel = scatter of per-session log-power at peak freq vs pain label.
+  // The "observed" line uses the channel's own max-|R| peak (argmax |R| for that electrode),
+  // NOT the family-max perm_obs — so the title correctly shows e.g. "R Med. Thal @ 27.7 Hz".
+  // The global perm_null (family-max under block-permuted labels) is still the background null;
+  // a channel-specific |R| that exceeds the family-max null is very conservative and fair.
+  if (tdSum.perm_null && tdSum.perm_null.length && spectrum && spectrum.channels) {
     const pStr = tdSum.perm_p == null ? "—" : fmtP(tdSum.perm_p);
-    const sig = tdSum.perm_p != null && tdSum.perm_p < 0.05;
-    const verdict = sig ? "stronger than chance" : "within the chance distribution → not significant";
-    const nCells = (spectrum && spectrum.channels ? spectrum.channels.length : 0) *
-                   (spectrum && spectrum.freqs ? spectrum.freqs.length : 0);
-    tdPanels.push(
-      <Panel key="perm" lg={12}
-        title={`Permutation null — strongest PSD↔${pain} correlation vs chance (p=${pStr})`}>
-        <Fig height={320} traces={[
-          { x: tdSum.perm_null, type: "histogram", name: "null (shuffled pain)",
-            marker: { color: "#90A4AE" }, opacity: 0.85, nbinsx: 40,
-            hovertemplate: "max|R|≈%{x:.2f} · %{y} shuffles<extra></extra>" },
-        ]} layout={{
-          xaxis: { title: "Family-max |R| over all contacts × frequencies", range: [0, 1] },
-          yaxis: { title: "Permutations" }, bargap: 0.02, showlegend: false,
-          shapes: [{ type: "line", x0: obs, x1: obs, yref: "paper", y0: 0, y1: 1,
-            line: { color: "#E53935", width: 3 } }],
-          annotations: [{ x: obs, yref: "paper", y: 1, yanchor: "bottom", xanchor: "center",
-            text: `observed R=${obs.toFixed(2)}`, showarrow: false, font: { color: "#E53935", size: 11 } }],
-        }} />
-        <MDTypography variant="caption" color="text" display="block" mt={1}>
-          {`The observed strongest correlation (R=${obs.toFixed(2)}) is ${verdict} (permutation p=${pStr}, ` +
-           `${tdSum.perm_n || tdSum.perm_null.length} block-permutations). This corrects for BOTH the ` +
-           `~${nCells}-cell band search (it compares the strongest correlation anywhere in the grid) AND the ` +
-           `day-to-day autocorrelation of ${pain} (block shuffling preserves it). It is the honest ` +
-           `significance statement for the selected band; the per-cell FDR q is a more conservative companion.`}
-        </MDTypography>
-      </Panel>
-    );
+    const nCells = spectrum.channels.length * (spectrum.freqs ? spectrum.freqs.length : 0);
+
+    // Group channels by hemisphere so Left and Right each get their own row.
+    const hemiOrder = ["Left", "Right"];
+    const byHemi = {};
+    spectrum.channels.forEach((ch) => {
+      const h = ch.short && ch.short.startsWith("L") ? "Left"
+              : ch.short && ch.short.startsWith("R") ? "Right" : "Other";
+      if (!byHemi[h]) byHemi[h] = [];
+      byHemi[h].push(ch);
+    });
+
+    hemiOrder.forEach((hemi) => {
+      const hChans = byHemi[hemi] || [];
+      if (!hChans.length) return;
+      // Best channel for this hemisphere = highest |peak_r| (or highest |r| anywhere).
+      const best = hChans.reduce((a, b) => {
+        const ar = a.peak_scatter ? Math.abs(a.peak_scatter.peak_r || 0)
+                                   : Math.max(...(a.r || [0]).map(Math.abs));
+        const br = b.peak_scatter ? Math.abs(b.peak_scatter.peak_r || 0)
+                                   : Math.max(...(b.r || [0]).map(Math.abs));
+        return br > ar ? b : a;
+      });
+      const ps = best.peak_scatter;
+      const peakFreq = ps ? ps.peak_freq : null;
+      const peakR    = ps ? ps.peak_r    : null;
+      const obsR     = peakR != null ? Math.abs(peakR) : tdSum.perm_obs;
+      const chLabel  = best.region ? `${best.short} (${best.region})` : best.short;
+      const freqLabel = peakFreq != null ? ` @ ${peakFreq.toFixed(1)} Hz` : "";
+      const permColor = hemi === "Left" ? LO : HI;
+
+      // Perm-null panel (left half of row).
+      tdPanels.push(
+        <Panel key={`perm_${hemi}`} lg={6}
+          title={`${hemi} — perm. null vs observed: ${chLabel}${freqLabel} (p=${pStr})`}>
+          <Fig height={300} traces={[
+            { x: tdSum.perm_null, type: "histogram", name: "null (shuffled labels)",
+              marker: { color: "#90A4AE" }, opacity: 0.82, nbinsx: 40,
+              hovertemplate: "max|R|≈%{x:.2f} · %{y} shuffles<extra></extra>" },
+          ]} layout={{
+            xaxis: { title: "Family-max |R| (all contacts × freqs)", range: [0, 1] },
+            yaxis: { title: "Permutations" }, bargap: 0.02, showlegend: false,
+            shapes: obsR != null ? [{ type: "line", x0: obsR, x1: obsR,
+              yref: "paper", y0: 0, y1: 1, line: { color: permColor, width: 2.5 } }] : [],
+            annotations: obsR != null ? [{ x: obsR, yref: "paper", y: 1.04,
+              yanchor: "bottom", xanchor: "center",
+              text: `|R|=${obsR.toFixed(2)}${freqLabel}`,
+              showarrow: false, font: { color: permColor, size: 10 } }] : [],
+          }} />
+          <MDTypography variant="caption" color="text" display="block" mt={0.5}>
+            {obsR != null
+              ? `${chLabel}${freqLabel}: |R|=${obsR.toFixed(2)}, perm p=${pStr} ` +
+                `(${tdSum.perm_n || tdSum.perm_null.length} block-shuffles, ~${nCells}-cell search).`
+              : `Permutation null (${tdSum.perm_null.length} shuffles, perm p=${pStr}).`}
+          </MDTypography>
+        </Panel>
+      );
+
+      // Scatter panel (right half of row) — per-session log-power at peak freq vs pain.
+      if (ps && ps.x && ps.x.length) {
+        const trendLine = (() => {
+          const xs = ps.x.filter((v) => v != null), ys = ps.y.filter((v) => v != null);
+          if (xs.length < 3) return null;
+          const n = xs.length;
+          const mx = xs.reduce((s, v) => s + v, 0) / n;
+          const my = ys.reduce((s, v) => s + v, 0) / n;
+          const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
+          const den = xs.reduce((s, v) => s + (v - mx) ** 2, 0);
+          if (den === 0) return null;
+          const slope = num / den, int = my - slope * mx;
+          const xmin = Math.min(...xs), xmax = Math.max(...xs);
+          return { x: [xmin, xmax], y: [xmin * slope + int, xmax * slope + int] };
+        })();
+        const scatterTraces = [
+          { x: ps.x, y: ps.y, type: "scatter", mode: "markers", name: "sessions",
+            marker: { color: permColor, size: 6, opacity: 0.7 },
+            text: ps.dates || [],
+            hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}%{text}<extra></extra>` },
+        ];
+        if (trendLine) scatterTraces.push({
+          x: trendLine.x, y: trendLine.y, type: "scatter", mode: "lines",
+          name: "linear fit", line: { color: permColor, width: 1.5, dash: "dot" },
+          hoverinfo: "skip", showlegend: false,
+        });
+        tdPanels.push(
+          <Panel key={`scatter_${hemi}`} lg={6}
+            title={`${hemi} — log power at ${peakFreq.toFixed(1)} Hz vs ${pain}: ${chLabel}`}>
+            <Fig height={300} traces={scatterTraces} layout={{
+              xaxis: { title: `Log PSD at ${peakFreq.toFixed(1)} Hz` },
+              yaxis: { title: pain },
+              legend: { orientation: "h", y: -0.2 },
+            }} />
+            <MDTypography variant="caption" color="text" display="block" mt={0.5}>
+              {`Each dot = one recording session. R=${(peakR || 0).toFixed(2)} at the peak frequency.`}
+            </MDTypography>
+          </Panel>
+        );
+      }
+    });
   }
 
   const spectra = td.psd_spectra || null;
@@ -460,7 +529,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     });
   }
 
-  if (tdPanels.length === 0 && chPanels.length === 0 && binPanels.length === 0) return null;
+  if (tdPanels.length === 0 && chPanels.length === 0) return null;
 
   // Channel selector — visible only when the backend split the chronic stream into per-channel
   // analytics. Default "Pooled" preserves the legacy single-detector view; the other buttons swap
@@ -489,9 +558,6 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
 
   return (
     <>
-      <Section title="How the pain score is binarized"
-               subtitle="Raw distribution of the selected pain score and the high/low cut the detector is trained on."
-               panels={binPanels} />
       <Section title="Time-domain analysis (250 Hz streaming PSD)"
                subtitle="Pearson-R spectrum, mean PSD by pain state, and PSD spectrogram per contact pair."
                panels={tdPanels} />

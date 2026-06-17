@@ -385,6 +385,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
             td_window_days = train_days if train_days is not None else 30
             td_step_days = step_days if step_days is not None else 7
+            # Inject times into det so corr_spectrum can build per-session scatter data.
+            det["times"] = times
             td_tasks = {
                 "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
