@@ -58,6 +58,25 @@ def test_cluster_scatter_missing_features():
     assert analytics.cluster_scatter(df, kmeans_features=("not_a_col",)) is None
 
 
+def test_pain_binarization():
+    """Binarization panel: per-feature raw distribution + the empirical high/low boundary derived
+    from the actual labels, with the boundary's percentile and 30th/70th references."""
+    rng = np.random.default_rng(3)
+    nrs = np.clip(np.round(rng.normal(5, 2, size=4000)), 0, 10)
+    pain = (nrs >= 6).astype(float)                         # monotone split at 6
+    cv = pd.DataFrame({"nrs": nrs, "pain_level": pain})
+    pro = pd.DataFrame({"nrs": nrs[:600]})                  # PRO-level distribution source
+    out = analytics.pain_binarization(cv, "nrs", kmeans_features=("nrs",), pro_df=pro)
+    assert out is not None and len(out["features"]) == 1
+    ft = out["features"][0]
+    assert ft["name"] == "nrs" and ft["n_obs"] == 600       # distribution drawn from pro_df
+    assert 5.0 <= ft["boundary"] <= 6.0                     # boundary between low(<6) and high(>=6)
+    assert 0 <= ft["boundary_percentile"] <= 100
+    assert ft["p30"] <= ft["p70"]
+    # missing pain_level -> None
+    assert analytics.pain_binarization(pd.DataFrame({"nrs": nrs}), "nrs", kmeans_features=("nrs",)) is None
+
+
 def test_lfp_distribution_robust_range():
     """Extreme outliers from the un-normalized merged sources must NOT collapse the histogram into a
     single bar: binning is over the 1st-99th percentile, with the outliers reported as n_clipped."""
@@ -78,5 +97,6 @@ if __name__ == "__main__":
     test_cluster_scatter_one_feature()
     test_cluster_scatter_two_features()
     test_cluster_scatter_missing_features()
+    test_pain_binarization()
     test_lfp_distribution_robust_range()
     print("All analytics tests passed.")

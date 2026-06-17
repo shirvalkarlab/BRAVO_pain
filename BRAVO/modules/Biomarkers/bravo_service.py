@@ -408,6 +408,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "roc": lambda: analytics.roc_analysis(cv_df),
                 "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
                 "cluster_scatter": lambda: analytics.cluster_scatter(cv_df, kmeans_features=kmeans_features),
+                "pain_binarization": lambda: analytics.pain_binarization(
+                    cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df),
             })
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}

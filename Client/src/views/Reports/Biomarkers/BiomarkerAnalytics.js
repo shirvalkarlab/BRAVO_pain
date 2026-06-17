@@ -40,7 +40,7 @@ function Fig({ traces, layout = {}, height = 320 }) {
 function Panel({ title, children, lg = 6 }) {
   return (
     <Grid item xs={12} lg={lg}>
-      <Card sx={{ width: "100%", height: "100%" }}>
+      <Card sx={{ width: "100%", height: "100%", scrollMarginTop: "96px" }}>
         <MDBox p={2}>
           <MDTypography variant="h6" fontSize={17} mb={0.5}>{title}</MDTypography>
           {children}
@@ -76,6 +76,13 @@ const fmtP = (x) => {
   if (n > 0 && n < 1e-3) return n.toExponential(1);
   return n.toFixed(3);
 };
+
+// Friendly display names for the raw PRO feature keys (fallback: title-case the key).
+const FEATURE_LABELS = {
+  nrs: "NRS", vas: "Overall VAS", left_leg_vas: "Left Leg VAS", back_vas: "Back VAS",
+  mpq_sum: "MPQ Sum", mpq_sen: "MPQ Sensory", mpq_aff: "MPQ Affective",
+};
+const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) {
   if (!analytics) return null;
@@ -324,10 +331,64 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     }
   }
 
-  if (tdPanels.length === 0 && chPanels.length === 0) return null;
+  // ---------------- PAIN-LABEL BINARIZATION (top of the report) ----------------
+  // Show the raw distribution of the SELECTED pain score and exactly how it is split into the binary
+  // high/low pain_level the detector is trained against — the foundation for every correlation/AUC below.
+  const binData = chronic.pain_binarization || null;
+  const binPanels = [];
+  if (binData && binData.features && binData.features.length) {
+    binData.features.forEach((ft, i) => {
+      const name = featLabel(ft.name);
+      const lo = ft.values.filter((v) => ft.boundary == null || v < ft.boundary);
+      const hi = ft.values.filter((v) => ft.boundary != null && v >= ft.boundary);
+      const shapes = [];
+      const anns = [];
+      if (ft.boundary != null) {
+        shapes.push({ type: "line", x0: ft.boundary, x1: ft.boundary, yref: "paper", y0: 0, y1: 1,
+          line: { color: "#111", width: 2.5 } });
+        anns.push({ x: ft.boundary, yref: "paper", y: 1, yanchor: "bottom", xanchor: "center",
+          text: `cut ${ft.boundary.toFixed(1)}${ft.boundary_percentile != null ? ` (${ft.boundary_percentile.toFixed(0)}th pct)` : ""}`,
+          showarrow: false, font: { size: 10, color: "#111" } });
+      }
+      [["30th", ft.p30], ["70th", ft.p70]].forEach(([lbl, val]) => {
+        if (val != null) {
+          shapes.push({ type: "line", x0: val, x1: val, yref: "paper", y0: 0, y1: 1,
+            line: { color: "#9E9E9E", width: 1, dash: "dot" } });
+          anns.push({ x: val, yref: "paper", y: 0.9, yanchor: "top", xanchor: "center",
+            text: lbl, showarrow: false, font: { size: 9, color: "#9E9E9E" } });
+        }
+      });
+      binPanels.push(
+        <Panel key={"bin" + i} lg={binData.features.length > 1 ? 6 : 12}
+          title={`Pain-score binarization — ${name}`}>
+          <Fig height={320} traces={[
+            { x: lo, type: "histogram", name: "low pain", marker: { color: LO }, opacity: 0.65,
+              hovertemplate: `${name}=%{x}<br>low pain · %{y} day(s)<extra></extra>` },
+            { x: hi, type: "histogram", name: "high pain", marker: { color: HI }, opacity: 0.65,
+              hovertemplate: `${name}=%{x}<br>high pain · %{y} day(s)<extra></extra>` },
+          ]} layout={{ barmode: "overlay", xaxis: { title: name },
+            yaxis: { title: "PRO observations (days)" }, legend: { orientation: "h", y: -0.25 },
+            shapes, annotations: anns }} />
+          <MDTypography variant="caption" color="text" display="block" mt={1}>
+            {`Daily ${name} split into high vs low pain by the detector's 2-cluster KMeans labeler. ` +
+             (ft.boundary != null
+               ? `The cut falls at ${ft.boundary.toFixed(1)} — the ${ft.boundary_percentile.toFixed(0)}th percentile ` +
+                 `(${ft.n_low} low / ${ft.n_high} high of ${ft.n_obs} days). `
+               : "") +
+             `Dotted lines mark the 30th/70th percentiles for reference; the solid line is the actual cut.`}
+          </MDTypography>
+        </Panel>
+      );
+    });
+  }
+
+  if (tdPanels.length === 0 && chPanels.length === 0 && binPanels.length === 0) return null;
 
   return (
     <>
+      <Section title="How the pain score is binarized"
+               subtitle="Raw distribution of the selected pain score and the high/low cut the detector is trained on."
+               panels={binPanels} />
       <Section title="Time-domain analysis (250 Hz streaming PSD)"
                subtitle="Pearson-R spectrum, mean PSD by pain state, and PSD spectrogram per contact pair."
                panels={tdPanels} />

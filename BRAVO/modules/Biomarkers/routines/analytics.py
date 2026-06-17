@@ -316,6 +316,58 @@ def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):
     return out
 
 
+def pain_binarization(cv_df, label_metric, kmeans_features=("left_leg_vas", "mpq_sum"),
+                      pro_df=None):
+    """Demonstrate how the SELECTED pain score is split into the binary pain_level the detector uses.
+
+    For each clustering feature: the raw value distribution (the daily PRO observations when pro_df is
+    supplied — one per reading, not per LFP sample), the EMPIRICAL decision boundary derived from the
+    actual labels in cv_df, the percentile that boundary lands at, and 30th/70th-percentile reference
+    lines. The binarizer is the notebook's 2-cluster KMeans (kmeans_pain_level), so for a single
+    feature the boundary is the cluster split (NOT a fixed percentile) — we report where it lands."""
+    if "pain_level" not in cv_df.columns:
+        return None
+    feats = [f for f in kmeans_features if f in cv_df.columns]
+    if not feats:
+        return None
+    items = []
+    for f in feats:
+        d = cv_df[[f, "pain_level"]].dropna()
+        if d.empty:
+            continue
+        lo = d.loc[d["pain_level"] == 0, f].to_numpy(dtype=float)
+        hi = d.loc[d["pain_level"] == 1, f].to_numpy(dtype=float)
+        # Orient so `hi` is the higher-value (higher-pain) cluster, regardless of KMeans label order.
+        if lo.size and hi.size and np.nanmean(lo) > np.nanmean(hi):
+            lo, hi = hi, lo
+        boundary = None
+        if lo.size and hi.size:
+            a, b = float(np.max(lo)), float(np.min(hi))
+            boundary = (a + b) / 2.0 if a <= b else (float(np.median(lo)) + float(np.median(hi))) / 2.0
+        # Distribution: prefer the PRO-level daily values (one per reading); else the cv values.
+        if pro_df is not None and f in pro_df.columns:
+            vals = pd.to_numeric(pro_df[f], errors="coerce").dropna().to_numpy(dtype=float)
+        else:
+            vals = d[f].to_numpy(dtype=float)
+        if vals.size == 0:
+            continue
+        pct = float(np.mean(vals < boundary) * 100.0) if boundary is not None else None
+        n_low = int(np.count_nonzero(vals < boundary)) if boundary is not None else None
+        n_high = int(np.count_nonzero(vals >= boundary)) if boundary is not None else None
+        items.append({
+            "name": f,
+            "values": [float(v) for v in vals],
+            "boundary": (None if boundary is None else float(boundary)),
+            "boundary_percentile": pct,
+            "p30": float(np.percentile(vals, 30)),
+            "p70": float(np.percentile(vals, 70)),
+            "n_low": n_low, "n_high": n_high, "n_obs": int(vals.size),
+        })
+    if not items:
+        return None
+    return {"strategy": "kmeans", "metric": label_metric, "features": items}
+
+
 def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, min_sessions=3,
                              region_map=None):
     """Sliding R-vs-frequency-over-time heatmap for the time-domain biomarker.
