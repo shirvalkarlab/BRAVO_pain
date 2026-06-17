@@ -317,7 +317,7 @@ def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):
 
 
 def pain_binarization(cv_df, label_metric, kmeans_features=("left_leg_vas", "mpq_sum"),
-                      pro_df=None):
+                      pro_df=None, strategy="kmeans", low_pct=None, high_pct=None):
     """Demonstrate how the SELECTED pain score is split into the binary pain_level the detector uses.
 
     For each clustering feature: the raw value distribution (the daily PRO observations when pro_df is
@@ -354,7 +354,7 @@ def pain_binarization(cv_df, label_metric, kmeans_features=("left_leg_vas", "mpq
         pct = float(np.mean(vals < boundary) * 100.0) if boundary is not None else None
         n_low = int(np.count_nonzero(vals < boundary)) if boundary is not None else None
         n_high = int(np.count_nonzero(vals >= boundary)) if boundary is not None else None
-        items.append({
+        item = {
             "name": f,
             "values": [float(v) for v in vals],
             "boundary": (None if boundary is None else float(boundary)),
@@ -362,10 +362,26 @@ def pain_binarization(cv_df, label_metric, kmeans_features=("left_leg_vas", "mpq
             "p30": float(np.percentile(vals, 30)),
             "p70": float(np.percentile(vals, 70)),
             "n_low": n_low, "n_high": n_high, "n_obs": int(vals.size),
-        })
+        }
+        # For the tertile/percentile labeler, surface the two daily-distribution cuts so the panel
+        # can draw both lines + the excluded middle band (the cut is on the DAILY values).
+        if strategy in ("tertile", "percentile") and low_pct is not None and high_pct is not None:
+            item["p_low"] = float(np.percentile(vals, float(low_pct)))
+            item["p_high"] = float(np.percentile(vals, float(high_pct)))
+        items.append(item)
     if not items:
         return None
-    return {"strategy": "kmeans", "metric": label_metric, "features": items}
+    out = {"strategy": strategy, "metric": label_metric, "features": items}
+    if strategy in ("tertile", "percentile") and low_pct is not None and high_pct is not None:
+        # The middle band (between the low and high cuts) is EXCLUDED from training — surface
+        # the cut percentiles and how many days were dropped so the abstention is explicit.
+        out["low_pct"] = float(low_pct)
+        out["high_pct"] = float(high_pct)
+        if "pain_level" in cv_df.columns:
+            pl = cv_df["pain_level"].to_numpy(dtype=float)
+            out["n_excluded_middle"] = int(np.isnan(pl).sum())
+            out["n_labeled"] = int(np.isfinite(pl).sum())
+    return out
 
 
 def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, min_sessions=3,

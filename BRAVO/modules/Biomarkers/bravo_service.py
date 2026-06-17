@@ -83,19 +83,24 @@ def _resolve_biomarker_metric(request_data, pro_df):
         parts = [p for p in COMPOSITE_PARTS if p in pro_df.columns]
         if parts:
             df = pro_df.copy()
-            # Min-max each part to 0..1 and average. Only parts that actually VARY contribute —
-            # a constant or all-NaN part carries no discriminative signal, and including it as
-            # zeros would silently halve the composite's scale (e.g. one flat part -> 0..50).
-            norms = []
+            # Z-SCORE each part across all surveys, then average the available parts per row.
+            # Standardizing by spread (not min-max range) means outliers don't set the scale and
+            # each PRO contributes equal variance to the blend. Averaging only the parts present on
+            # a row (skipna) also keeps a day whenever EITHER part exists, instead of dropping it
+            # when one is missing — on RCS08 this lifted composite coverage 253 -> 312 days and
+            # improved both LFP separability and balance over the old min-max blend
+            # (see docs/binarization_recommendation_RCS08.md). Only parts that actually VARY
+            # (finite, non-constant) contribute.
+            zcols = []
             for p in parts:
                 v = pd.to_numeric(df[p], errors="coerce")
                 arr = v.to_numpy(dtype=float)
                 if np.isfinite(arr).any():
-                    lo, hi = np.nanmin(arr), np.nanmax(arr)
-                    if hi > lo:
-                        norms.append((v - lo) / (hi - lo))
-            if norms:
-                df[COMPOSITE_METRIC] = 100.0 * sum(norms) / len(norms)
+                    mu, sd = np.nanmean(arr), np.nanstd(arr)
+                    if sd > 0:
+                        zcols.append((v - mu) / sd)
+            if zcols:
+                df[COMPOSITE_METRIC] = pd.concat(zcols, axis=1).mean(axis=1, skipna=True)
                 return df, COMPOSITE_METRIC, tuple(parts)
         metric = DEFAULT_BIOMARKER_METRIC  # no usable composite signal -> fall back
 
@@ -359,6 +364,7 @@ def _run_parallel(tasks):
 
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
+                       label_strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                        train_days=None, step_days=None, sliding=True, region_map=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
@@ -397,7 +403,9 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             cv_df = pr.get("cv_df") if isinstance(pr, dict) and pr.get("cv_df") is not None else None
             if cv_df is None:
                 cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
-                                                        kmeans_features=kmeans_features)
+                                                        kmeans_features=kmeans_features,
+                                                        label_strategy=label_strategy,
+                                                        low_pct=low_pct, high_pct=high_pct)
             sw_kwargs = {"sliding": sliding}
             if train_days is not None:
                 sw_kwargs["train_days"] = train_days
@@ -409,7 +417,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
                 "cluster_scatter": lambda: analytics.cluster_scatter(cv_df, kmeans_features=kmeans_features),
                 "pain_binarization": lambda: analytics.pain_binarization(
-                    cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df),
+                    cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df,
+                    strategy=label_strategy, low_pct=low_pct, high_pct=high_pct),
             })
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}
@@ -446,6 +455,43 @@ def _window_params(request_data):
     if isinstance(sliding, str):
         sliding = sliding.strip().lower() not in ("false", "0", "no", "off", "")
     sliding = bool(sliding)
+    return _window_params_body(request_data, sliding)
+
+
+# Pain-score binarization strategies exposed to the card. "tertile" (default) splits the metric
+# into low/high tertiles and EXCLUDES the ambiguous middle (best detector target on RCS08);
+# "median" keeps every day at a 50/50 split; "kmeans" is the legacy 2-cluster notebook labeler.
+# See docs/binarization_recommendation_RCS08.md.
+BINARIZATION_STRATEGIES = [
+    {"key": "tertile", "label": "Tertile (low/high, drop middle)"},
+    {"key": "median",  "label": "Median split"},
+    {"key": "kmeans",  "label": "KMeans (legacy)"},
+]
+DEFAULT_BINARIZATION = "tertile"
+
+
+def _label_strategy_params(request_data):
+    """Resolve the binarization strategy + percentile cuts from the request.
+
+    Returns (label_strategy, low_pct, high_pct). `LabelStrategy` selects the labeler (default
+    'tertile'); `PercentileLow`/`PercentileHigh` override the tertile cuts when the strategy is
+    'tertile'/'percentile'. Unknown strategies fall back to the default.
+    """
+    strat = (request_data.get("LabelStrategy") or DEFAULT_BINARIZATION)
+    valid = {s["key"] for s in BINARIZATION_STRATEGIES} | {"percentile", "cutoff"}
+    if strat not in valid:
+        strat = DEFAULT_BINARIZATION
+    try:
+        low = float(request_data.get("PercentileLow", 33.3333))
+        high = float(request_data.get("PercentileHigh", 66.6667))
+    except (TypeError, ValueError):
+        low, high = 33.3333, 66.6667
+    if not (0 <= low < high <= 100):
+        low, high = 33.3333, 66.6667
+    return strat, low, high
+
+
+def _window_params_body(request_data, sliding):
 
     train_days, window_months = _months_to_days(request_data.get("WindowMonths"))
     step_days, window_step_months = _months_to_days(request_data.get("WindowStep"))
@@ -507,8 +553,10 @@ def run_for_participant(request_data):
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
+    label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
-    rb_kwargs = {"sliding": sliding}
+    rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
+                 "low_pct": low_pct, "high_pct": high_pct}
     if train_days is not None:
         rb_kwargs["train_days"] = train_days
     if step_days is not None:
@@ -525,10 +573,16 @@ def run_for_participant(request_data):
                                  **rb_kwargs)
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
+                                                 label_strategy=label_strategy,
+                                                 low_pct=low_pct, high_pct=high_pct,
                                                  train_days=train_days, step_days=step_days,
                                                  sliding=sliding, region_map=region_map))
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
+    out["label_strategy"] = label_strategy
+    out["available_strategies"] = BINARIZATION_STRATEGIES
+    out["percentile_low"] = low_pct
+    out["percentile_high"] = high_pct
     out["sliding_window"] = sliding
     out["window_months"] = window_months
     out["window_step_months"] = window_step_months

@@ -411,6 +411,61 @@ def test_kmeans_falls_back_to_cutoff_and_warns():
     assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
 
 
+def test_threshold_pain_level_tertile_drops_middle():
+    """tertile labeler: low tertile -> 0, high tertile -> 1, ambiguous middle -> NaN."""
+    # 90 samples, metric ramps 0..89 -> tertiles at 30th/60th value-ish
+    df = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=90, freq="D"),
+                       "nrs": np.arange(90, dtype=float)})
+    pl = adapter._threshold_pain_level(df, "nrs", strategy="tertile", daily_broadcast=True)
+    assert set(np.unique(pl[np.isfinite(pl)])) <= {0.0, 1.0}
+    assert np.isnan(pl).sum() > 0, "the middle band must be excluded (NaN)"
+    # lowest values labeled low, highest labeled high
+    assert pl[0] == 0.0 and pl[-1] == 1.0
+    # middle value excluded
+    assert np.isnan(pl[45])
+
+
+def test_threshold_pain_level_median_keeps_all():
+    """median labeler: every sample labeled (no NaN middle), ~50/50 on a symmetric metric."""
+    df = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=100, freq="D"),
+                       "nrs": np.arange(100, dtype=float)})
+    pl = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=True)
+    assert np.isnan(pl).sum() == 0
+    assert abs(pl.mean() - 0.5) < 0.02
+
+
+def test_daily_broadcast_fixes_density_confound():
+    """The cut is computed on DAILY values, not the density-inflated per-sample array.
+
+    Over-record the low-pain days: per-sample the median sits at the low value (everything would
+    label high), but daily-broadcast puts the cut at the true daily median.
+    """
+    rows = []
+    days = pd.date_range("2025-01-01", periods=60, freq="D")
+    for i, d in enumerate(days):
+        val = 3.0 if i < 20 else (6.0 if i < 40 else 9.0)
+        k = 50 if i < 20 else 2   # low days heavily over-recorded
+        rows += [(d + pd.Timedelta(minutes=10 * j), val) for j in range(k)]
+    df = pd.DataFrame(rows, columns=["timestamp", "nrs"])
+    pl_db = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=True)
+    pl_raw = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=False)
+    # legacy per-sample median collapses to all-high; daily-broadcast does not
+    assert pl_raw.mean() == 1.0
+    assert pl_db.mean() < 0.2
+    # the value-3 (low) days must be labeled low under daily-broadcast
+    assert (pl_db[df["nrs"].to_numpy() == 3.0] == 0.0).all()
+
+
+def test_bravo_chronic_tertile_strategy_end_to_end():
+    """tertile strategy flows through bravo_chronic_to_lfp_df and yields 0/1/NaN labels."""
+    chronic, pro = _make_chronic_trend_with_kmeans_features()
+    cv = adapter.bravo_chronic_to_lfp_df(chronic, pro, label_metric="nrs", label_strategy="tertile")
+    assert set(cv["pain_level"].dropna().unique()) <= {0.0, 1.0}
+    # high-pain days (nrs 8) end up high, low-pain days (nrs 2) end up low
+    assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
+    assert cv.loc[cv["nrs"] == 2, "pain_level"].eq(0.0).all()
+
+
 def test_bravo_powerdomain_to_chronic_like():
     """Power-Domain packets (StartTime+fs, per-contact Power/Stim, sentinel + Missing) convert to
     chronic-shaped power dicts: one series per Power channel, sentinel/missing samples dropped,
@@ -460,6 +515,10 @@ if __name__ == "__main__":
     test_kmeans_pain_level_labels_high_pain_as_one()
     test_bravo_chronic_kmeans_strategy()
     test_kmeans_falls_back_to_cutoff_and_warns()
+    test_threshold_pain_level_tertile_drops_middle()
+    test_threshold_pain_level_median_keeps_all()
+    test_daily_broadcast_fixes_density_confound()
+    test_bravo_chronic_tertile_strategy_end_to_end()
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
     test_sliding_window_analytics_no_sliding()

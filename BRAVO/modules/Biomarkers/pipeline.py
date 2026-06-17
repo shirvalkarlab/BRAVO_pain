@@ -378,6 +378,7 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
 
 def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
                            label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
+                           low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                            thresholds=None, train_days=7, gap_days=1, test_days=2, sliding=True):
     """Power-domain (band-power-over-time) sliding-window threshold branch -> SourceRun with a
     powerdomain_* timeline. The "power domain" is the complement to the time domain: it merges the
@@ -394,7 +395,9 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
         raise ValueError('a "powerdomain" source requires `chronic` (a power recording or list).')
     cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
                                             pain_cutoff=pain_cutoff, label_strategy=label_strategy,
-                                            kmeans_features=kmeans_features)
+                                            kmeans_features=kmeans_features,
+                                            low_pct=low_pct, high_pct=high_pct,
+                                            daily_broadcast=daily_broadcast)
     detail = threshold_biomarker.run_chronic_threshold(
         cv_df, thresholds=thresholds, train_days=train_days, gap_days=gap_days, test_days=test_days,
         sliding=sliding)
@@ -550,6 +553,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
                   align="session", label_metric="nrs", label_reduce="min", transform="log",
                   pain_cutoff=None, label_strategy="kmeans",
                   kmeans_features=("left_leg_vas", "mpq_sum"),
+                  low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
                   stim_amplitudes=None, sliding=True):
     """
@@ -579,7 +583,9 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
     def _power():
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,
                                       pain_cutoff=pain_cutoff, label_strategy=label_strategy,
-                                      kmeans_features=kmeans_features, thresholds=thresholds,
+                                      kmeans_features=kmeans_features,
+                                      low_pct=low_pct, high_pct=high_pct,
+                                      daily_broadcast=daily_broadcast, thresholds=thresholds,
                                       train_days=train_days, gap_days=gap_days, test_days=test_days,
                                       sliding=sliding)
 

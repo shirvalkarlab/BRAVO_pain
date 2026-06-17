@@ -335,15 +335,34 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   // Show the raw distribution of the SELECTED pain score and exactly how it is split into the binary
   // high/low pain_level the detector is trained against — the foundation for every correlation/AUC below.
   const binData = chronic.pain_binarization || null;
+  const binStrategy = (binData && binData.strategy) || "kmeans";
+  const isTertile = binStrategy === "tertile" || binStrategy === "percentile";
+  const STRAT_LABEL = { tertile: "tertile split (drop middle)", percentile: "percentile split (drop middle)",
+    median: "median split", kmeans: "2-cluster KMeans labeler", cutoff: "fixed cutoff" };
   const binPanels = [];
   if (binData && binData.features && binData.features.length) {
     binData.features.forEach((ft, i) => {
       const name = featLabel(ft.name);
-      const lo = ft.values.filter((v) => ft.boundary == null || v < ft.boundary);
-      const hi = ft.values.filter((v) => ft.boundary != null && v >= ft.boundary);
+      // Tertile: the two cuts are the low/high percentile lines; the middle band is excluded.
+      // Single-threshold strategies (median/kmeans/cutoff): one empirical boundary.
+      let loCut = ft.boundary, hiCut = ft.boundary;
+      if (isTertile && ft.p_low != null && ft.p_high != null) { loCut = ft.p_low; hiCut = ft.p_high; }
+      const lo = ft.values.filter((v) => loCut != null && v <= loCut);
+      const hi = ft.values.filter((v) => hiCut != null && v >= hiCut);
+      const mid = isTertile ? ft.values.filter((v) => loCut != null && hiCut != null && v > loCut && v < hiCut) : [];
       const shapes = [];
       const anns = [];
-      if (ft.boundary != null) {
+      if (isTertile && loCut != null && hiCut != null) {
+        // shade the excluded middle band
+        shapes.push({ type: "rect", x0: loCut, x1: hiCut, yref: "paper", y0: 0, y1: 1,
+          fillcolor: "#9E9E9E", opacity: 0.12, line: { width: 0 } });
+        [[loCut, "low cut"], [hiCut, "high cut"]].forEach(([val, lbl]) => {
+          shapes.push({ type: "line", x0: val, x1: val, yref: "paper", y0: 0, y1: 1,
+            line: { color: "#111", width: 2 } });
+          anns.push({ x: val, yref: "paper", y: 1, yanchor: "bottom", xanchor: "center",
+            text: `${lbl} ${val.toFixed(1)}`, showarrow: false, font: { size: 10, color: "#111" } });
+        });
+      } else if (ft.boundary != null) {
         shapes.push({ type: "line", x0: ft.boundary, x1: ft.boundary, yref: "paper", y0: 0, y1: 1,
           line: { color: "#111", width: 2.5 } });
         anns.push({ x: ft.boundary, yref: "paper", y: 1, yanchor: "bottom", xanchor: "center",
@@ -351,31 +370,45 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
           showarrow: false, font: { size: 10, color: "#111" } });
       }
       [["30th", ft.p30], ["70th", ft.p70]].forEach(([lbl, val]) => {
-        if (val != null) {
+        if (val != null && !isTertile) {
           shapes.push({ type: "line", x0: val, x1: val, yref: "paper", y0: 0, y1: 1,
             line: { color: "#9E9E9E", width: 1, dash: "dot" } });
           anns.push({ x: val, yref: "paper", y: 0.9, yanchor: "top", xanchor: "center",
             text: lbl, showarrow: false, font: { size: 9, color: "#9E9E9E" } });
         }
       });
+      const traces = [
+        { x: lo, type: "histogram", name: "low pain", marker: { color: LO }, opacity: 0.65,
+          hovertemplate: `${name}=%{x}<br>low pain · %{y} day(s)<extra></extra>` },
+        { x: hi, type: "histogram", name: "high pain", marker: { color: HI }, opacity: 0.65,
+          hovertemplate: `${name}=%{x}<br>high pain · %{y} day(s)<extra></extra>` },
+      ];
+      if (isTertile && mid.length) {
+        traces.push({ x: mid, type: "histogram", name: "excluded (middle)", marker: { color: "#9E9E9E" }, opacity: 0.45,
+          hovertemplate: `${name}=%{x}<br>excluded · %{y} day(s)<extra></extra>` });
+      }
+      // Daily excluded-middle count — matches the histogram bars (drawn over ft.values, n_obs days).
+      // (binData.n_excluded_middle is the PER-SAMPLE excluded count and does not match these bars.)
+      const nMid = isTertile ? mid.length : 0;
       binPanels.push(
         <Panel key={"bin" + i} lg={binData.features.length > 1 ? 6 : 12}
           title={`Pain-score binarization — ${name}`}>
-          <Fig height={320} traces={[
-            { x: lo, type: "histogram", name: "low pain", marker: { color: LO }, opacity: 0.65,
-              hovertemplate: `${name}=%{x}<br>low pain · %{y} day(s)<extra></extra>` },
-            { x: hi, type: "histogram", name: "high pain", marker: { color: HI }, opacity: 0.65,
-              hovertemplate: `${name}=%{x}<br>high pain · %{y} day(s)<extra></extra>` },
-          ]} layout={{ barmode: "overlay", xaxis: { title: name },
+          <Fig height={320} traces={traces}
+            layout={{ barmode: "overlay", xaxis: { title: name },
             yaxis: { title: "PRO observations (days)" }, legend: { orientation: "h", y: -0.25 },
             shapes, annotations: anns }} />
           <MDTypography variant="caption" color="text" display="block" mt={1}>
-            {`Daily ${name} split into high vs low pain by the detector's 2-cluster KMeans labeler. ` +
-             (ft.boundary != null
-               ? `The cut falls at ${ft.boundary.toFixed(1)} — the ${ft.boundary_percentile.toFixed(0)}th percentile ` +
-                 `(${ft.n_low} low / ${ft.n_high} high of ${ft.n_obs} days). `
-               : "") +
-             `Dotted lines mark the 30th/70th percentiles for reference; the solid line is the actual cut.`}
+            {`Daily ${name} split into high vs low pain by the ${STRAT_LABEL[binStrategy] || binStrategy}, ` +
+             `with the cut computed on the daily distribution (not the density-weighted samples). ` +
+             (isTertile
+               ? (binData.low_pct != null
+                   ? `Days ≤ ${binData.low_pct.toFixed(0)}th pct → low, ≥ ${binData.high_pct.toFixed(0)}th pct → high; ` +
+                     `the shaded middle band (${nMid.toLocaleString()} of ${ft.n_obs} days) is excluded from training. `
+                   : `The shaded middle band is excluded from training. `)
+               : (ft.boundary != null
+                   ? `The cut falls at ${ft.boundary.toFixed(1)} — the ${ft.boundary_percentile.toFixed(0)}th percentile ` +
+                     `(${ft.n_low} low / ${ft.n_high} high of ${ft.n_obs} days). Dotted lines mark the 30th/70th percentiles for reference. `
+                   : ""))}
           </MDTypography>
         </Panel>
       );

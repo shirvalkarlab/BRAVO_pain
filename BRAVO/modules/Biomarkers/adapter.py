@@ -316,8 +316,53 @@ def bravo_powerdomain_to_chronic_like(recordings):
     return out
 
 
+def _threshold_pain_level(df, label_metric, *, strategy="median", pain_cutoff=None,
+                          low_pct=33.3333, high_pct=66.6667, daily_broadcast=True):
+    """Binary pain_level (0/1, with NaN for the excluded middle) from a single metric column.
+
+    The decision boundary is derived from the DAILY metric distribution (one value per calendar
+    day) when `daily_broadcast` is True, then applied to every per-sample row — this prevents
+    over-recorded days from dominating the cut (see bravo_chronic_to_lfp_df docstring). Strategies:
+      * "cutoff"            : pain_level = metric >= pain_cutoff (default = daily median).
+      * "median"            : pain_level = metric >= daily median.
+      * "tertile"/"percentile": metric <= low_pct-quantile -> 0, >= high_pct-quantile -> 1,
+                               middle -> NaN. "tertile" uses 33.33/66.67; "percentile" uses the args.
+    Returns an ndarray aligned to df rows.
+    """
+    metric_vals = df[label_metric].to_numpy(dtype=float)
+
+    # Build the distribution the thresholds are computed on.
+    if daily_broadcast and "timestamp" in df.columns:
+        day = pd.to_datetime(df["timestamp"], errors="coerce").dt.floor("D")
+        # one value per day: mean of that day's (already nearest-date-aligned) metric values
+        daily = pd.Series(metric_vals, index=day).groupby(level=0).mean()
+        ref = daily.to_numpy(dtype=float)
+    else:
+        ref = metric_vals
+    ref = ref[np.isfinite(ref)]
+    if ref.size == 0:
+        return np.full(len(df), np.nan)
+
+    if strategy in ("tertile", "percentile"):
+        lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
+        hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
+        lo = float(np.percentile(ref, lo_q))
+        hi = float(np.percentile(ref, hi_q))
+        pl = np.full(len(df), np.nan)
+        with np.errstate(invalid="ignore"):
+            pl[metric_vals <= lo] = 0.0
+            pl[metric_vals >= hi] = 1.0
+        return pl
+
+    # median / cutoff: single threshold
+    cutoff = float(np.median(ref)) if pain_cutoff is None else float(pain_cutoff)
+    with np.errstate(invalid="ignore"):
+        return np.where(np.isnan(metric_vals), np.nan, (metric_vals >= cutoff).astype(float))
+
+
 def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=None,
                             label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
+                            low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                             timestamp_col="date_time_s1_daily", smooth_window=7):
     """
     Build the tidy `cv_df` the chronic threshold detector consumes from a BRAVO Chronic
@@ -341,6 +386,17 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
       * "cutoff": transparent single-metric threshold `pain_level = label_metric >= pain_cutoff`
         (default `pain_cutoff` = the metric's median). Simpler; use when you don't have the
         two cluster features or want an explicit cutoff.
+      * "median": single-metric split at the metric's median (keeps every day; balanced ~50/50).
+      * "tertile" / "percentile": two-threshold split — days at/below `low_pct` -> 0 (low),
+        at/above `high_pct` -> 1 (high), the ambiguous middle -> NaN (excluded from training).
+        "tertile" defaults to 33.33/66.67; "percentile" uses the supplied `low_pct`/`high_pct`.
+        Dropping the middle gives the detector its cleanest target (best LFP separability in the
+        RCS08 study) at the cost of labeling fewer days. See docs/binarization_recommendation_RCS08.md.
+
+    For every threshold labeler (`median`/`tertile`/`percentile`/`cutoff`) the boundary is computed
+    on the DAILY metric distribution and broadcast to each sample (`daily_broadcast=True`), so the
+    cut reflects pain across days rather than recording density. Set `daily_broadcast=False` to fit
+    the cut on the raw per-sample array (legacy behavior).
     """
     import warnings
 
@@ -349,6 +405,11 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     # Carry the columns we need onto each chronic sample: the label metric, plus (for KMeans)
     # the two cluster features. align_pros adds a NaN column for any metric absent from pro_df.
     carry = [label_metric]
+    _THRESHOLD_STRATS = ("cutoff", "median", "tertile", "percentile")
+    if label_strategy not in ("kmeans",) + _THRESHOLD_STRATS:
+        warnings.warn(
+            f"unknown label_strategy={label_strategy!r}; falling back to 'kmeans'.", RuntimeWarning)
+        label_strategy = "kmeans"
     use_kmeans = label_strategy == "kmeans"
     if use_kmeans:
         missing = [f for f in kmeans_features if f not in pro_df.columns]
@@ -395,11 +456,14 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
         feats_z = (feats - mu) / sd
         df["pain_level"] = kmeans_pain_level(feats_z)
     else:
-        metric_vals = df[label_metric].to_numpy(dtype=float)
-        cutoff = np.nanmedian(metric_vals) if pain_cutoff is None else float(pain_cutoff)
-        with np.errstate(invalid="ignore"):
-            pl = np.where(np.isnan(metric_vals), np.nan, (metric_vals >= cutoff).astype(float))
-        df["pain_level"] = pl
+        # Threshold labelers (median / tertile / percentile / cutoff). The decision boundary is
+        # derived from the DAILY metric distribution (one value per calendar day), NOT the
+        # per-sample array — chronic recording density varies wildly per day (6..70k samples),
+        # so a per-sample quantile lets a few over-recorded days set the cut. We compute the
+        # threshold(s) on the deduplicated daily series, then broadcast the label to every sample.
+        df["pain_level"] = _threshold_pain_level(
+            df, label_metric, strategy=label_strategy, pain_cutoff=pain_cutoff,
+            low_pct=low_pct, high_pct=high_pct, daily_broadcast=daily_broadcast)
 
     out_cols = ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", label_metric]
     if "source" in df.columns:

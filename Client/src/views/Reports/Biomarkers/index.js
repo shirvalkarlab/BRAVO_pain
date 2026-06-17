@@ -35,6 +35,18 @@ const DEFAULT_METRIC_OPTIONS = [
   { key: "composite_mpq_leftleg", label: "Composite (MPQ + Left Leg VAS)" },
 ];
 
+// How the continuous pain score is turned into the binary high/low pain_level the detector trains
+// on (sent as LabelStrategy). "tertile" (default) splits low/high and drops the ambiguous middle —
+// the cleanest detector target on RCS08; "median" keeps every day at a 50/50 split; "kmeans" is the
+// legacy 2-cluster notebook labeler. The cut is computed on the DAILY PRO distribution and
+// broadcast to samples, so recording density no longer biases the split.
+// See docs/binarization_recommendation_RCS08.md.
+const DEFAULT_STRATEGY_OPTIONS = [
+  { key: "tertile", label: "Tertile (low/high, drop middle)" },
+  { key: "median", label: "Median split" },
+  { key: "kmeans", label: "KMeans (legacy)" },
+];
+
 function Biomarkers() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
@@ -44,6 +56,9 @@ function Biomarkers() {
   const [data, setData] = useState(false);
   const [source, setSource] = useState("both");
   const [metric, setMetric] = useState("nrs");
+  const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
+  const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
+  const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
   const [slidingWindow, setSlidingWindow] = useState(true);
   const [windowMonths, setWindowMonths] = useState(1);   // committed window (training) length
   const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
@@ -63,7 +78,9 @@ function Biomarkers() {
   const showSlidingSwitch = source !== "timedomain";
 
   const snapshot = () => ({
-    source, LabelMetric: metric, SlidingWindow: slidingWindow,
+    source, LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLow, PercentileHigh: percentileHigh,
+    SlidingWindow: slidingWindow,
     WindowMonths: windowMonths, WindowStep: windowStep,
   });
   const compute = () => setRequestParams(snapshot());
@@ -264,6 +281,53 @@ function Biomarkers() {
                     </MDBox>
                   </Grid>
 
+                  {/* Binarization strategy — how the continuous PRO is split into high/low pain_level. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pb={2} display="flex" flexDirection="column" alignItems="center">
+                      <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 16 }} mb={0.5}>
+                        {"Binarization (high vs low pain label)"}
+                      </MDTypography>
+                      <FormControl sx={{ minWidth: 380 }}>
+                        <Select
+                          value={strategy}
+                          onChange={(e) => setStrategy(e.target.value)}
+                          sx={{ fontSize: 18, "& .MuiSelect-select": { py: 1.25, textAlign: "center" } }}
+                        >
+                          {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
+                            <MenuItem key={s.key} value={s.key} sx={{ fontSize: 16 }}>{s.label}</MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      {strategy === "tertile" || strategy === "percentile" ? (
+                        <MDBox display="flex" flexDirection="row" alignItems="center" gap={2} mt={1.5} flexWrap="wrap" justifyContent="center">
+                          <MDTypography variant="caption" color="text" sx={{ minWidth: 90 }}>
+                            {"Low ≤ pct"}
+                          </MDTypography>
+                          <Slider
+                            value={percentileLow} min={5} max={50} step={1}
+                            valueLabelDisplay="auto" sx={{ width: 140 }}
+                            onChange={(e, v) => { const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo); }}
+                          />
+                          <MDTypography variant="caption" color="text" sx={{ minWidth: 90 }}>
+                            {"High ≥ pct"}
+                          </MDTypography>
+                          <Slider
+                            value={percentileHigh} min={50} max={95} step={1}
+                            valueLabelDisplay="auto" sx={{ width: 140 }}
+                            onChange={(e, v) => { const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi); }}
+                          />
+                        </MDBox>
+                      ) : null}
+                      <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 11, mt: 0.5, textAlign: "center", maxWidth: 460 }}>
+                        {strategy === "tertile" || strategy === "percentile"
+                          ? "Days between the cuts are excluded from training (the detector sees only clearly-high vs clearly-low days)."
+                          : strategy === "median"
+                            ? "Every day is labeled at the median split (~50/50)."
+                            : "Legacy 2-cluster KMeans labeler (data-driven but less transparent and density-sensitive)."}
+                      </MDTypography>
+                    </MDBox>
+                  </Grid>
+
                   {showWindowControls ? (
                     <Grid item xs={12}>
                       <Divider sx={{ my: 0 }} />
@@ -352,6 +416,17 @@ function Biomarkers() {
                             {"Biomarker computed against: "}
                             {(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                               .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
+                          </MDTypography>
+                        ) : null}
+                        {data.label_strategy ? (
+                          <MDTypography variant="caption" color="text" display="block">
+                            {"Binarized by: "}
+                            {(((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS)
+                              .find((s) => s.key === data.label_strategy) || {}).label || data.label_strategy}
+                            {(data.label_strategy === "tertile" || data.label_strategy === "percentile")
+                              && data.percentile_low != null
+                              ? ` (≤${Number(data.percentile_low).toFixed(0)}th / ≥${Number(data.percentile_high).toFixed(0)}th pct, daily)`
+                              : ""}
                           </MDTypography>
                         ) : null}
                         {summaryLine("Time-domain", data.summary.timedomain)}
