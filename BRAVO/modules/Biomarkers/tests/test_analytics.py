@@ -104,6 +104,18 @@ def test_power_center_freqs_standard_path():
     assert freqs == {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}
 
 
+def test_power_center_freqs_direct_hemisphere_key():
+    """Streaming Power-Domain (BrainSenseLfp) TherapySnapshot stores FrequencyInHertz DIRECTLY on
+    the hemisphere dict (not inside a SensingSetup subdict) — the real RCS08 shape. Verified values
+    from RCS008 raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT @ 13.67 Hz."""
+    rec = {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
+           "Descriptor": {"Therapy": {
+               "Left":  {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
+                         "SensingChannel": "SensingChannelDef.ZERO_THREE_LEFT"},
+               "Right": {"FrequencyInHertz": 13.67, "FrequencyIndex": 14}}}}
+    assert analytics.power_center_freqs([rec]) == {"ZERO_THREE_LEFT": 12.7, "ZERO_TWO_RIGHT": 13.67}
+
+
 def test_power_center_freqs_nested_recordingconfig():
     """Firmware variant: SensingSetup nested under RecordingConfiguration.Config still resolves."""
     rec = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
@@ -135,6 +147,7 @@ if __name__ == "__main__":
     test_pain_binarization()
     test_lfp_distribution_robust_range()
     test_power_center_freqs_standard_path()
+    test_power_center_freqs_direct_hemisphere_key()
     test_power_center_freqs_nested_recordingconfig()
     test_power_center_freqs_missing_is_safe()
     print("All analytics tests passed.")

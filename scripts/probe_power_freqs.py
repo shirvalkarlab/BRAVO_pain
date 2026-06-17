@@ -17,6 +17,8 @@ pd_list = bs._load_recordings(PARTICIPANT_UID, bs.POWERDOMAIN_TYPES)
 print(f"Loaded {len(pd_list)} Power-Domain recordings")
 
 # Show one raw Descriptor.Therapy snapshot so we can see exactly where the frequency lives.
+# (Streaming Power-Domain stores FrequencyInHertz DIRECTLY on the hemisphere dict; chronic/other
+#  firmware nests it under SensingSetup — the extractor probes both.)
 for r in pd_list:
     desc = r.get("Descriptor") if isinstance(r, dict) else None
     therapy = desc.get("Therapy") if isinstance(desc, dict) else None
@@ -24,8 +26,8 @@ for r in pd_list:
         for hemi in ("Left", "Right"):
             h = therapy.get(hemi)
             if isinstance(h, dict):
-                ss = h.get("SensingSetup")
-                print(f"  sample {hemi}.SensingSetup keys:", list(ss.keys()) if isinstance(ss, dict) else ss)
+                print(f"  sample {hemi} keys:", list(h.keys()))
+                print(f"    {hemi}.FrequencyInHertz =", h.get("FrequencyInHertz"))
         break
 
 freqs = analytics.power_center_freqs(pd_list)

@@ -72,6 +72,10 @@ def sensing_center_hz(therapy_hemi):
     if not isinstance(therapy_hemi, dict):
         return None
     setups = []
+    # Streaming Power-Domain (BrainSenseLfp) TherapySnapshot puts FrequencyInHertz DIRECTLY on the
+    # hemisphere dict — so the hemisphere dict itself is the first candidate.
+    setups.append(therapy_hemi)
+    # Chronic / other firmware paths nest it inside a SensingSetup subdict.
     ss = therapy_hemi.get("SensingSetup")
     if isinstance(ss, dict):
         setups.append(ss)
