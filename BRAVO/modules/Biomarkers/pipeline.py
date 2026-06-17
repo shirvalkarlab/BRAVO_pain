@@ -45,6 +45,12 @@ from . import adapter
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
 STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
+
+# Upper frequency bound for biomarker band SELECTION and the permutation family. The Percept RC
+# senses physiologically-relevant LFP rhythms (theta ~4–8, alpha ~8–12, beta ~13–30, low-gamma
+# ~30–50 Hz); the at-home chronic biomarker is a 5 Hz band picked from those. Bands at/above this
+# cut are excluded from selection so a high-frequency artifact can never win the max|R| search.
+MAX_BIOMARKER_FREQ_HZ = 50.0
 # Back-compat alias (old name referenced the streaming version).
 CODE_VERSION = STREAMING_CODE_VERSION
 
@@ -124,6 +130,8 @@ def select_biomarker_band(result, q_threshold=0.05, ignore_band=None):
     finite = np.isfinite(corr) & np.isfinite(pval)
     if ignore_band is not None:
         finite[:, (f_set > ignore_band[0]) & (f_set < ignore_band[1])] = False
+    # Enforce the biomarker frequency cap: bands at/above MAX_BIOMARKER_FREQ_HZ are never selectable.
+    finite[:, f_set >= MAX_BIOMARKER_FREQ_HZ] = False
     if not finite.any():
         return None
     q = stats_utils.bh_fdr(np.where(finite, pval, np.nan))
@@ -354,7 +362,12 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     perm_valid = np.isfinite(labels)
     perm_p, perm_used, perm_obs, perm_null = (np.nan, 0, np.nan, None)
     if perm_valid.sum() >= 4:
-        X = feat.reshape(feat.shape[0], -1)[perm_valid]
+        # Restrict the family to the SAME ≤ MAX_BIOMARKER_FREQ_HZ band the selector searches, so the
+        # family-max null (perm_obs) is over exactly the cells a biomarker could be drawn from.
+        f_set_all = np.asarray(result["f_set"], dtype=float)
+        keep_f = f_set_all < MAX_BIOMARKER_FREQ_HZ
+        feat_capped = feat[:, :, keep_f]
+        X = feat_capped.reshape(feat_capped.shape[0], -1)[perm_valid]
         yv = labels[perm_valid]
         perm_p, perm_used, perm_obs, perm_null = _block_perm_maxcorr_pvalue(
             X, yv, n_perm=n_perm, seed=0, return_null=True)

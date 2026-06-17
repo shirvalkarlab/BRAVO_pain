@@ -607,7 +607,8 @@ def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, m
     return {"channels": channels, "window_days": window_days, "step_days": step_days}
 
 
-def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=None, n_peaks=6):
+def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=None, n_peaks=6,
+                  max_freq_hz=50.0):
     """Pearson-R-vs-frequency correlation spectrum per channel
     (biomarker_analysis_streaming.ipynb cell 12). `td_detail` is the streaming_psd result dict.
 
@@ -630,6 +631,10 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     pval = np.asarray(td_detail["pval"], dtype=float)
     chans = td_detail.get("chan_order", [])
     ignore = np.zeros(len(f), bool) if not ignore_band else ((f > ignore_band[0]) & (f < ignore_band[1]))
+    # Enforce the biomarker frequency cap: frequencies at/above max_freq_hz are excluded from peak
+    # picking, the peak-scatter, and significance markers (a biomarker can't be selected there).
+    if max_freq_hz is not None:
+        ignore = ignore | (f >= float(max_freq_hz))
 
     # Per-session feature (E, C, F) and labels (E,) for scatter data.
     feature = td_detail.get("feature")   # may be None for legacy callers

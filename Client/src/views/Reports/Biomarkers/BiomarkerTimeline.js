@@ -109,8 +109,19 @@ function BiomarkerTimeline({ data, height }) {
       const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
       const top = 1 - di * (h + gap);
       const bottom = Math.max(0, top - h);
+      // Explicit padded y-range so the top data value never touches the row's upper edge (where the
+      // row title sits) — auto-range alone clipped the peak of the first row. Pad 12% above max and
+      // a small margin below min; fall back to autorange if the row has no finite data.
+      const allY = row.traces.flatMap((tr) => (tr.y || [])).filter((v) => v != null && Number.isFinite(v));
+      let yrange = null;
+      if (allY.length) {
+        const ymin = Math.min(...allY), ymax = Math.max(...allY);
+        const span = ymax - ymin || Math.abs(ymax) || 1;
+        yrange = [ymin - span * 0.06, ymax + span * 0.12];
+      }
       layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } },
-        zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true };
+        zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true,
+        ...(yrange ? { range: yrange } : { autorange: true }) };
       row.traces.forEach((tr) => {
         // PAIN ROW (isPain): render in the standalone Pain Scores report style — translucent
         // thin raw markers+line PLUS a thick 3-point moving-average trend line over the top, so

@@ -165,8 +165,12 @@ def _recorded_powers(powerdomain_list, region_map=None):
                 contact = s.rsplit(" ", 1)[0] if " " in s else s   # strip the trailing " Power"
                 if contact not in seen:
                     fmt = analytics.format_channel(contact, region=(region_map or {}).get(contact))
+                    chz = center_hz.get(contact)
+                    # Flag a sensing band at/above the biomarker frequency cap so the card can warn
+                    # that it falls outside the validated theta/alpha/beta/low-gamma range.
+                    above = bool(chz is not None and chz >= pipeline.MAX_BIOMARKER_FREQ_HZ)
                     seen[contact] = {"raw": contact, "label": fmt["short"], "region": fmt["region"],
-                                     "center_hz": center_hz.get(contact)}
+                                     "center_hz": chz, "above_cap": above}
     return list(seen.values())
 
 

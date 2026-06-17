@@ -537,10 +537,19 @@ function Biomarkers() {
                           const other = data.recorded_powers.filter((p) =>
                             !(/\bL\b|Left/i.test(p.label)) && !(/\bR\b|Right/i.test(p.label)));
                           const noFreq = data.recorded_powers.every((p) => p.center_hz == null);
+                          const anyAboveCap = data.recorded_powers.some((p) => p.above_cap);
                           const fmt = (p) => {
                             const base = p.region ? `${p.label} (${p.region})` : p.label;
-                            return p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
+                            const withHz = p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
+                            return p.above_cap ? `${withHz} ⚠︎` : withHz;
                           };
+                          // Above-cap (≥50 Hz) sensing bands are rendered in the warning color.
+                          const rowLine = (p, i) => (
+                            <MDTypography key={i} variant="caption"
+                              color={p.above_cap ? "warning" : "text"} sx={{ fontSize: 12 }}>
+                              {fmt(p)}
+                            </MDTypography>
+                          );
                           return (
                             <MDBox display="flex" flexDirection="column" alignItems="center" mt={0.5}>
                               <MDTypography variant="button" fontWeight="medium" color="text" mb={0.25}>
@@ -552,11 +561,7 @@ function Biomarkers() {
                                     <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 11, textDecoration: "underline" }}>
                                       {"Left"}
                                     </MDTypography>
-                                    {left.map((p, i) => (
-                                      <MDTypography key={i} variant="caption" color="text" sx={{ fontSize: 12 }}>
-                                        {fmt(p)}
-                                      </MDTypography>
-                                    ))}
+                                    {left.map(rowLine)}
                                   </MDBox>
                                 )}
                                 {right.length > 0 && (
@@ -564,19 +569,16 @@ function Biomarkers() {
                                     <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 11, textDecoration: "underline" }}>
                                       {"Right"}
                                     </MDTypography>
-                                    {right.map((p, i) => (
-                                      <MDTypography key={i} variant="caption" color="text" sx={{ fontSize: 12 }}>
-                                        {fmt(p)}
-                                      </MDTypography>
-                                    ))}
+                                    {right.map(rowLine)}
                                   </MDBox>
                                 )}
-                                {other.map((p, i) => (
-                                  <MDTypography key={i} variant="caption" color="text" sx={{ fontSize: 12 }}>
-                                    {fmt(p)}
-                                  </MDTypography>
-                                ))}
+                                {other.map(rowLine)}
                               </MDBox>
+                              {anyAboveCap && (
+                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
+                                  {"⚠︎ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
+                                </MDTypography>
+                              )}
                               {noFreq && (
                                 <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
                                   {"Sensing-band center frequency not present in this device export."}

@@ -160,11 +160,23 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
           hovertemplate: "peak · %{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
       }
     });
+    // Biomarker frequency cap: the band selection and peak picking are restricted to < 50 Hz
+    // (the validated theta/alpha/beta/low-gamma sensing range). Shade ≥ 50 Hz so the limit is
+    // visible; the spectrum curve is still drawn full-range for context.
+    const FCAP = 50;
+    const fMax = (spectrum.freqs && spectrum.freqs.length) ? spectrum.freqs[spectrum.freqs.length - 1] : 100;
     tdPanels.push(
       <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★`} lg={12}>
         <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
           yaxis: { title: `Correlation with ${pain} (R)`, range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.2, groupclick: "togglegroup" } }} />
+          legend: { orientation: "h", y: -0.2, groupclick: "togglegroup" },
+          shapes: fMax > FCAP ? [{ type: "rect", xref: "x", yref: "paper", x0: FCAP, x1: fMax,
+            y0: 0, y1: 1, fillcolor: "#9E9E9E", opacity: 0.12, line: { width: 0 } },
+            { type: "line", xref: "x", yref: "paper", x0: FCAP, x1: FCAP, y0: 0, y1: 1,
+              line: { color: "#7E8794", width: 1.5, dash: "dot" } }] : [],
+          annotations: fMax > FCAP ? [{ x: FCAP, yref: "paper", y: 1.0, yanchor: "bottom",
+            xanchor: "left", text: " ≥50 Hz excluded from biomarker selection", showarrow: false,
+            font: { size: 10, color: "#7E8794" } }] : [] }} />
       </Panel>
     );
   }
