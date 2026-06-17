@@ -92,11 +92,11 @@ function BiomarkerTimeline({ data, height }) {
 
     const traces = [];
     const layout = {
-      height: height || 200 * n + 90,
-      margin: { l: 64, r: 18, t: 52, b: 48 },
+      height: height || 200 * n + 70,
+      margin: { l: 64, r: 18, t: 24, b: 48 },   // tight top margin — kills the whitespace above the first row
       hovermode: "x unified",
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 12, color: "#344767" },
-      legend: { orientation: "h", y: 1.04, x: 0, font: { size: 11 } },
+      legend: { orientation: "h", y: 1.012, x: 0, font: { size: 11 } },
       annotations: [],
     };
 
