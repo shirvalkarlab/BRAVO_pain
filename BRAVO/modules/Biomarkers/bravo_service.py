@@ -152,6 +152,12 @@ def _recorded_powers(powerdomain_list, region_map=None):
     """Which band-power channels were actually recorded — the '<contact> Power' columns of the
     BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
     device metadata when available. Lets the card state which powers were recorded for each channel.
+
+    TODO (next step): also surface the CENTER FREQUENCY (Hz) of each recorded power column. The
+    Power-Domain recordings carry a Frequency/SweepFrequency field per channel; pulling it here
+    and shipping it as e.g. {raw, label, region, center_hz: 22.5} lets the card display
+    'L 0⁻-3⁺ (GPi) @ 22.5 Hz' so the clinician sees which BAND was actually sensed, not just
+    which contact pair. Today the line just lists contacts and reads as ambiguous.
     """
     seen = {}
     for r in powerdomain_list or []:

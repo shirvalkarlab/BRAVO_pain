@@ -373,41 +373,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       </Panel>
     );
   }
-  const cluster = chronic.cluster_scatter || null;
-  if (cluster && cluster.x && cluster.x.length) {
-    const lvl = cluster.pain_level || [];
-    const xlab = cluster.x_label || "feature";
-    if (cluster.y && cluster.y.length) {
-      // 2-D clustering features (e.g. the MPQ+VAS composite): scatter colored by pain level.
-      const colors = lvl.map((p) => (p === 1 ? HI : LO));
-      const ylab = cluster.y_label || "feature 2";
-      chPanels.push(
-        <Panel key="cluster" title={`Pain-level clusters (${xlab} vs ${ylab})`}>
-          <Fig traces={[{ x: cluster.x, y: cluster.y, type: "scatter", mode: "markers",
-            marker: { color: colors, size: 8, opacity: 0.6 },
-            customdata: lvl.map((p) => (p === 1 ? "high pain" : "low pain")),
-            hovertemplate: `${xlab}=%{x}<br>${ylab}=%{y}<br>%{customdata}<extra></extra>` }]}
-            layout={{ xaxis: { title: xlab }, yaxis: { title: ylab } }} />
-        </Panel>
-      );
-    } else {
-      // 1-D clustering feature (e.g. nrs / vas): overlaid high/low-pain histograms so the KMeans
-      // split on the single metric is visible (where the binary cut landed).
-      const hi = cluster.x.filter((_, i) => lvl[i] === 1);
-      const lo = cluster.x.filter((_, i) => lvl[i] === 0);
-      chPanels.push(
-        <Panel key="cluster" title={`Pain-level clusters (${xlab})`}>
-          <Fig traces={[
-            { x: lo, type: "histogram", name: "low pain", marker: { color: LO }, opacity: 0.6,
-              hovertemplate: `${xlab}=%{x}<br>low pain · %{y}<extra></extra>` },
-            { x: hi, type: "histogram", name: "high pain", marker: { color: HI }, opacity: 0.6,
-              hovertemplate: `${xlab}=%{x}<br>high pain · %{y}<extra></extra>` },
-          ]} layout={{ barmode: "overlay", xaxis: { title: xlab }, yaxis: { title: "Count" },
-            legend: { orientation: "h", y: -0.25 } }} />
-        </Panel>
-      );
-    }
-  }
+  // (The "Pain-level clusters" panel was removed — it duplicated the binarization preview card
+  // at the top of the report, which already shows the high/low split on the selected metric.)
 
   // ---------------- PAIN-LABEL BINARIZATION (top of the report) ----------------
   // Show the raw distribution of the SELECTED pain score and exactly how it is split into the binary

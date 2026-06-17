@@ -18,6 +18,7 @@ import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
+import BinarizationPreview from "./BinarizationPreview";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -71,6 +72,13 @@ function Biomarkers() {
   const [computing, setComputing] = useState(false);
   const [alert, setAlert] = useState(null);
 
+  // Raw pain-score distribution for the LIVE binarization preview card. Fetched once per
+  // participant (lightweight — daily PRO survey rows only, no LFP); the card recomputes the
+  // high/low cuts client-side as the user changes strategy or drags the percentile sliders,
+  // so no /queryBiomarkerAnalysis roundtrip is needed for the preview.
+  const [painScores, setPainScores] = useState(null);
+  const [painLoading, setPainLoading] = useState(false);
+
   // Window/step now drive BOTH the time-domain sliding correlation heatmap and the power-domain
   // detector/performance, so show them for every source. The sliding ON/OFF switch is
   // power-domain-specific (all-data vs sliding), so it's hidden on the time-domain-only tab.
@@ -111,6 +119,28 @@ function Biomarkers() {
       SessionController.displayError(error, setAlert);
     });
   }, [participant_uid, requestParams]);
+
+  // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
+  // binarization preview card can show a live histogram with cuts before any heavy compute.
+  useEffect(() => {
+    if (!participant_uid) return;
+    setPainLoading(true);
+    SessionController.query("/api/queryPainScores", { ParticipantId: participant_uid })
+      .then((response) => {
+        setPainScores(response.data);
+        setPainLoading(false);
+      })
+      .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
+  }, [participant_uid]);
+
+  // The points array for the currently-selected pain metric, fed straight into the preview card.
+  const previewPoints = (() => {
+    if (!painScores || !Array.isArray(painScores.metrics)) return [];
+    const m = painScores.metrics.find((x) => x.key === metric);
+    return m ? m.points : [];
+  })();
+  const previewMetricLabel = (((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+    .find((m) => m.key === metric) || {}).label || metric;
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -281,13 +311,16 @@ function Biomarkers() {
                     </MDBox>
                   </Grid>
 
-                  {/* Binarization strategy — how the continuous PRO is split into high/low pain_level. */}
-                  <Grid item xs={12}>
+                  {/* Binarization controls + LIVE preview card. Two-column row: strategy/sliders
+                      on the left, histogram preview on the right. Preview updates instantly when
+                      the strategy or sliders change (pure client-side); it does NOT require a
+                      "Compute biomarker" run. Source-independent — shows on every tab.            */}
+                  <Grid item xs={12} md={6}>
                     <MDBox px={2} pb={2} display="flex" flexDirection="column" alignItems="center">
                       <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 16 }} mb={0.5}>
                         {"Binarization (high vs low pain label)"}
                       </MDTypography>
-                      <FormControl sx={{ minWidth: 380 }}>
+                      <FormControl sx={{ minWidth: 320 }}>
                         <Select
                           value={strategy}
                           onChange={(e) => setStrategy(e.target.value)}
@@ -325,6 +358,18 @@ function Biomarkers() {
                             ? "Every day is labeled at the median split (~50/50)."
                             : "Legacy 2-cluster KMeans labeler (data-driven but less transparent and density-sensitive)."}
                       </MDTypography>
+                    </MDBox>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <MDBox px={2} pb={2} sx={{ height: "100%" }}>
+                      <BinarizationPreview
+                        points={previewPoints}
+                        strategy={strategy}
+                        percentileLow={percentileLow}
+                        percentileHigh={percentileHigh}
+                        metricLabel={previewMetricLabel}
+                        loading={painLoading}
+                      />
                     </MDBox>
                   </Grid>
 
