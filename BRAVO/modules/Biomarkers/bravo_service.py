@@ -420,6 +420,25 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                     cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df,
                     strategy=label_strategy, low_pct=low_pct, high_pct=high_pct),
             })
+            # Per-channel analytics (e.g. Left LFP vs Right LFP) — pipeline.run_powerdomain_branch
+            # already split the chronic input by ChannelNames[0]; here we run the same panel-driving
+            # analytics on each per-channel cv_df so the card can toggle between them.
+            per_ch = pr.get("per_channel") if isinstance(pr, dict) else None
+            if per_ch:
+                per_ch_analytics = {}
+                for ch_label, ch_data in per_ch.items():
+                    ch_cv = ch_data.get("cv_df")
+                    if ch_cv is None or len(ch_cv) == 0:
+                        continue
+                    ch_tasks = {
+                        "sliding_window": (lambda d=ch_cv: analytics.sliding_window_analytics(d, **sw_kwargs)),
+                        "roc": (lambda d=ch_cv: analytics.roc_analysis(d)),
+                        "lfp_distribution": (lambda d=ch_cv: analytics.lfp_distribution(d)),
+                    }
+                    per_ch_analytics[ch_label] = _run_parallel(ch_tasks)
+                    # Carry the channel summary alongside so the panel can display per-channel AUC.
+                    per_ch_analytics[ch_label]["summary"] = ch_data.get("summary") or {}
+                result["powerdomain"]["per_channel"] = per_ch_analytics
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}
 

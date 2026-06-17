@@ -149,15 +149,25 @@ def _all_data_window(df, thresholds):
 
 
 def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2,
-                             test_days=4, step_days=None, sliding=True):
+                             test_days=4, step_days=None, sliding=True,
+                             max_test_days=None):
     """Per-sliding-window metrics over time (mirrors threshold_biomarker.ipynb cells 12 & 14).
 
     For each window: pick the LFP threshold maximizing train AUC, then on the held-out test fold
     report sensitivity, specificity, accuracy, AUC (roc_auc on the continuous LFP_smoothed), and a
-    point-biserial Pearson R (LFP_smoothed vs pain_level). Returns a list of per-window dicts.
+    point-biserial Pearson R (LFP_smoothed vs pain_level). Returns a dict
+    `{windows: [...], summary: {n_total, n_with_auc, n_skipped_test_one_class, n_skipped_no_data,
+                                test_days, test_days_expanded}}`.
 
-    `train_days` is driven by the user's window-months selection. When `sliding=False`, returns a
-    single all-data entry (no temporal windows) via `_all_data_window`.
+    When `sliding=False`, returns a single all-data window in the same shape via `_all_data_window`.
+
+    Test-fold robustness: when the user-supplied `test_days` window contains only one pain class
+    (common with tertile binarization — the middle band is excluded, so most short windows are
+    homogeneous), the window is EXPANDED forward by `step_days` until both classes appear or the
+    expansion reaches `max_test_days` (default 3 * test_days, capped at 14d). Windows that still
+    have only one class after expansion are skipped (no half-NaN row) and counted in the summary.
+
+    `train_days` is driven by the user's window-months selection.
     """
     from sklearn import metrics
     from scipy.stats import pearsonr
@@ -169,10 +179,20 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df.dropna(subset=["timestamp", "pain_level"]).sort_values("timestamp").reset_index(drop=True)
     if len(df) == 0:
-        return []
+        return {"windows": [], "summary": {"n_total": 0, "n_with_auc": 0,
+                                            "n_skipped_test_one_class": 0,
+                                            "n_skipped_no_data": 0,
+                                            "test_days": int(test_days),
+                                            "max_test_days": None}}
 
     if not sliding:
-        return _all_data_window(df, thresholds)
+        w = _all_data_window(df, thresholds)
+        with_auc = sum(1 for r in w if r.get("auc") is not None)
+        return {"windows": w, "summary": {"n_total": len(w), "n_with_auc": with_auc,
+                                          "n_skipped_test_one_class": 0,
+                                          "n_skipped_no_data": 0,
+                                          "test_days": int(test_days),
+                                          "max_test_days": None}}
 
     # Step between windows. Default scales with the training window (step ~ train/14) so a large
     # multi-month window doesn't produce hundreds of near-identical windows (which is slow and
@@ -180,22 +200,50 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
     # the performance curve is SAMPLED in time -- each window's metric is still computed on full data.
     if step_days is None:
         step_days = max(1, int(round(train_days / 14.0)))
+    # Test-fold expansion cap. Default to 3x test_days, but never exceed 14 days (or the training
+    # window, whichever is smaller — expanding past `train_days` makes the test fold the dominant
+    # signal, which defeats the point of a held-out test).
+    if max_test_days is None:
+        max_test_days = min(14, max(int(test_days) * 3, int(test_days) + 2))
+    max_test_days = max(int(test_days), int(max_test_days))
 
     series_start = df["timestamp"].min().normalize()
     series_end = df["timestamp"].max()
 
     windows = []
+    n_skipped_one_class = 0
+    n_skipped_no_data = 0
     t = series_start + pd.Timedelta(days=train_days + gap_days)
     while t < series_end:
         test_start = t
-        test_end = test_start + pd.Timedelta(days=test_days)
+        # Try the requested test window first; if it has only one pain class, EXPAND forward by
+        # step_days until both classes appear or we hit max_test_days. Common with tertile labels:
+        # consecutive days within one tertile collapse a short test window to a single class.
+        test = df.iloc[0:0]
+        eff_test_days = int(test_days)
+        for cur in range(int(test_days), int(max_test_days) + 1, max(1, int(step_days))):
+            test_end = test_start + pd.Timedelta(days=cur)
+            test = df[(df["timestamp"] >= test_start) & (df["timestamp"] < test_end)].dropna(subset=["pain_level"])
+            eff_test_days = cur
+            if len(test) > 0 and test["pain_level"].nunique() >= 2:
+                break
         gap_start = test_start - pd.Timedelta(days=gap_days)
         train_start = gap_start - pd.Timedelta(days=train_days)
         t += pd.Timedelta(days=step_days)
 
-        test = df[(df["timestamp"] >= test_start) & (df["timestamp"] < test_end)].dropna(subset=["pain_level"])
         train = df[(df["timestamp"] >= train_start) & (df["timestamp"] < gap_start)].dropna(subset=["pain_level"])
-        if len(test) == 0 or len(train) == 0 or train["pain_level"].nunique() < 2:
+        # Categorize skips for the panel caption:
+        #   NO_DATA   = either fold is empty, OR train has only one pain class (no usable
+        #               threshold can be picked).
+        #   ONE_CLASS = both folds non-empty and train has both classes, but test never
+        #               reached both classes within the expansion cap.
+        train_unusable = (len(train) == 0) or (train["pain_level"].nunique() < 2)
+        test_unusable = (len(test) == 0) or (test["pain_level"].nunique() < 2)
+        if train_unusable or len(test) == 0:
+            n_skipped_no_data += 1
+            continue
+        if test_unusable:
+            n_skipped_one_class += 1
             continue
 
         # Class-balance the train fold, then pick threshold by train AUC (cell 14).
@@ -221,26 +269,31 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
         sens, spec = _sens_spec(true, pred)
         acc = metrics.accuracy_score(true, pred)
 
-        auc = np.nan
-        r = np.nan
-        if len(np.unique(true)) > 1:
-            try:
-                auc = metrics.roc_auc_score(true, score)
-                auc = max(auc, 1 - auc)
-            except Exception:
-                pass
-            if np.std(score) > 0:
-                try:
-                    r = pearsonr(score, true.astype(float))[0]
-                except Exception:
-                    pass
+        # Both classes are guaranteed here (loop above), so AUC/R are always defined.
+        try:
+            auc = metrics.roc_auc_score(true, score)
+            auc = max(auc, 1 - auc)
+        except Exception:
+            auc = np.nan
+        try:
+            r = pearsonr(score, true.astype(float))[0] if np.std(score) > 0 else np.nan
+        except Exception:
+            r = np.nan
 
         windows.append({
             "test_start": test_start.isoformat(),
+            "test_days_used": int(eff_test_days),
             "threshold": _f(best_thr), "sens": _f(sens), "spec": _f(spec),
             "acc": _f(acc), "auc": _f(auc), "r": _f(r),
         })
-    return windows
+    n_with_auc = sum(1 for w in windows if w.get("auc") is not None)
+    summary = {"n_total": len(windows) + n_skipped_one_class + n_skipped_no_data,
+               "n_with_auc": n_with_auc,
+               "n_skipped_test_one_class": n_skipped_one_class,
+               "n_skipped_no_data": n_skipped_no_data,
+               "test_days": int(test_days),
+               "max_test_days": int(max_test_days)}
+    return {"windows": windows, "summary": summary}
 
 
 def roc_analysis(cv_df, max_points=400):

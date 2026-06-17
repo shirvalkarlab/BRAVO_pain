@@ -537,8 +537,53 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     summary["in_sample"] = (not sliding)
     summary["note"] = ("All-data fit: threshold chosen and scored on the same data (in-sample, "
                        "optimistic — not a generalization estimate)." if not sliding else None)
+    # PER-CHANNEL split (rigor review §7-C: the pooled detector mixes hemispheres and modalities).
+    # Group the input chronic-shaped entries by the LFP series label (typically "Left LFP" /
+    # "Right LFP" after `bravo_powerdomain_to_chronic_like`) so the user can see the detector run
+    # independently on each anatomical target — without re-fetching anything.
+    per_channel = {}
+    chronic_list = chronic if isinstance(chronic, list) else [chronic]
+    chronic_list = [c for c in chronic_list if c is not None]
+    if len(chronic_list) >= 2:
+        groups = {}
+        for c in chronic_list:
+            names = c.get("ChannelNames") or []
+            key = str(names[0]) if names else "Unknown LFP"
+            groups.setdefault(key, []).append(c)
+        # Skip degenerate "one group" case (would just duplicate the pooled run).
+        if len(groups) >= 2:
+            for ch_label, ch_list in groups.items():
+                try:
+                    cv_ch = adapter.bravo_chronic_to_lfp_df(
+                        ch_list, pro_df, label_metric=label_metric, pain_cutoff=pain_cutoff,
+                        label_strategy=label_strategy, kmeans_features=kmeans_features,
+                        low_pct=low_pct, high_pct=high_pct, daily_broadcast=daily_broadcast)
+                    ch_detail = threshold_biomarker.run_chronic_threshold(
+                        cv_ch, thresholds=thresholds, train_days=train_days,
+                        gap_days=gap_days, test_days=test_days, sliding=sliding)
+                    pl_ch = cv_ch["pain_level"].to_numpy(dtype=float)
+                    lfp_ch = cv_ch["LFP_smoothed"].to_numpy(dtype=float)
+                    n_pos_ch = int(np.nansum(pl_ch == 1)); n_neg_ch = int(np.nansum(pl_ch == 0))
+                    sens_ch = ch_detail.get("mean_test_sens_sens", np.nan)
+                    spec_ch = ch_detail.get("mean_test_spec_sens", np.nan)
+                    ch_summary = {
+                        "channel": ch_label,
+                        "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
+                        "sens": sens_ch, "spec": spec_ch,
+                        "acc": ch_detail.get("mean_test_acc_sens", np.nan),
+                        "n_windows": ch_detail.get("n_windows", 0),
+                        "auc_in_sample": _auc(pl_ch, lfp_ch),
+                        "n_samples": int(len(cv_ch)),
+                    }
+                    ch_summary.update(stats_utils.balanced_metrics(sens_ch, spec_ch, n_pos_ch, n_neg_ch))
+                    per_channel[ch_label] = {"summary": ch_summary, "cv_df": cv_ch}
+                except Exception as exc:
+                    per_channel[ch_label] = {"summary": {"channel": ch_label, "error": str(exc)},
+                                              "cv_df": None}
+
     return {"source": "powerdomain", "code_version": CHRONIC_CODE_VERSION,
             "timeline": timeline, "detail": detail, "summary": summary,
+            "per_channel": per_channel,
             # Expose the full-resolution tidy frame so the analytics step can reuse it instead of
             # rebuilding (a second KMeans + Savitzky-Golay over 100k+ rows). Not serialized.
             "cv_df": cv_df}

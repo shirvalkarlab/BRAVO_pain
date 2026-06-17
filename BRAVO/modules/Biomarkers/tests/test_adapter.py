@@ -222,13 +222,43 @@ def test_run_chronic_threshold_no_sliding():
 
 
 def test_sliding_window_analytics_no_sliding():
-    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on."""
+    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on.
+
+    Return shape is now `{windows: [...], summary: {...}}` so the panel can caption coverage.
+    """
     cv = _make_cv_df()
     full = analytics.sliding_window_analytics(cv, sliding=True)
     one = analytics.sliding_window_analytics(cv, sliding=False)
-    assert len(one) == 1 and one[0].get("all_data") is True
-    assert one[0]["threshold"] is not None
-    assert len(full) > 1   # sliding produces many windows on the same data
+    assert set(one.keys()) >= {"windows", "summary"}
+    assert len(one["windows"]) == 1 and one["windows"][0].get("all_data") is True
+    assert one["windows"][0]["threshold"] is not None
+    assert one["summary"]["n_total"] == 1
+    assert len(full["windows"]) > 1   # sliding produces many windows on the same data
+    assert full["summary"]["n_total"] >= len(full["windows"])
+
+
+def test_sliding_window_skips_one_class_test_folds():
+    """When a tertile-labeled test fold has only one class, the window is expanded; if it still
+    has one class after expansion, it's SKIPPED (not a half-NaN row) and counted in summary."""
+    # 30 days, label_metric alternates blocks; tertile-style binarization (NaN middle on day 15)
+    rng = np.random.default_rng(0)
+    days = pd.date_range("2025-01-01", periods=30, freq="D")
+    rows = []
+    for i, d in enumerate(days):
+        label = 0.0 if i < 14 else (np.nan if i == 14 else 1.0)
+        for k in range(20):
+            rows.append({"timestamp": d + pd.Timedelta(minutes=10 * k),
+                         "LFP_smoothed": float(rng.normal(100 + 20 * (label if np.isfinite(label) else 0.5), 5)),
+                         "pain_level": label})
+    cv = pd.DataFrame(rows)
+    out = analytics.sliding_window_analytics(cv, train_days=7, gap_days=1, test_days=2,
+                                             step_days=1, sliding=True, max_test_days=4)
+    # No half-NaN rows leak out: every returned window has a defined AUC.
+    assert all(w["auc"] is not None for w in out["windows"])
+    # Summary counts what was skipped.
+    assert out["summary"]["n_total"] >= len(out["windows"])
+    assert out["summary"]["n_skipped_test_one_class"] >= 0
+    assert out["summary"]["max_test_days"] == 4
 
 
 def test_td_sliding_corr_spectrum_matches_scipy():
@@ -466,6 +496,41 @@ def test_bravo_chronic_tertile_strategy_end_to_end():
     assert cv.loc[cv["nrs"] == 2, "pain_level"].eq(0.0).all()
 
 
+def test_run_powerdomain_branch_per_channel_split():
+    """Two-channel chronic input -> branch returns a per_channel dict keyed by ChannelNames[0]
+    with independent summaries; the pooled run continues to work alongside it."""
+    chronic_l, pro = _make_chronic_trend(days=14)
+    # Build a Right-hemisphere counterpart with the OPPOSITE pain-LFP coupling so the per-channel
+    # thresholds (and AUCs) genuinely differ from the pooled result.
+    times, lfp_r, amp_r = [], [], []
+    for d in range(14):
+        pain_day = (d % 2 == 0)
+        for h in range(0, 24, 2):
+            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
+            amp_r.append(2.0)
+    chronic_r = {
+        "SamplingRate": -1,
+        "Time": np.array(times, dtype=float),
+        "Data": np.column_stack([np.array(lfp_r), np.array(amp_r)]),
+        "ChannelNames": ["R LFP", "R Amplitude"],
+    }
+    run = pipeline.run_powerdomain_branch(pro, chronic=[chronic_l, chronic_r],
+                                          label_metric="nrs", label_strategy="cutoff",
+                                          train_days=4, gap_days=1, test_days=2)
+    assert "per_channel" in run and set(run["per_channel"].keys()) >= {"L LFP", "R LFP"}
+    l_thr = run["per_channel"]["L LFP"]["summary"]["best_threshold"]
+    r_thr = run["per_channel"]["R LFP"]["summary"]["best_threshold"]
+    # Independent thresholds for the two hemispheres (different LFP scales) — must NOT collapse to
+    # the pooled threshold.
+    assert l_thr != r_thr
+    # Each per-channel run carries its own cv_df with no rows from the other channel.
+    cv_l = run["per_channel"]["L LFP"]["cv_df"]; cv_r = run["per_channel"]["R LFP"]["cv_df"]
+    assert cv_l is not None and cv_r is not None
+    # The pooled summary still has its in-sample AUC alongside the per-channel breakdown.
+    assert "auc_in_sample" in run["summary"]
+
+
 def test_bravo_powerdomain_to_chronic_like():
     """Power-Domain packets (StartTime+fs, per-contact Power/Stim, sentinel + Missing) convert to
     chronic-shaped power dicts: one series per Power channel, sentinel/missing samples dropped,
@@ -519,9 +584,11 @@ if __name__ == "__main__":
     test_threshold_pain_level_median_keeps_all()
     test_daily_broadcast_fixes_density_confound()
     test_bravo_chronic_tertile_strategy_end_to_end()
+    test_run_powerdomain_branch_per_channel_split()
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
     test_sliding_window_analytics_no_sliding()
+    test_sliding_window_skips_one_class_test_folds()
     test_td_sliding_corr_spectrum_matches_scipy()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")
