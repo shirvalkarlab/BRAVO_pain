@@ -1,121 +1,293 @@
 # BRAVO Pain Biomarkers — Session Handoff
 
-> Working notes for continuing this work in a new session. Everything below is live as of
-> commit `6f119f6` on branch `PS_biomarker_module`.
+> Single source of truth for continuing this work. Live as of commit `f57e9c0` on branch
+> `PS_biomarker_module` (pushed to `github.com/shirvalkarlab/BRAVO_pain`).
+> This supersedes the original handoff (folded in below, with **corrected** facts where the repo
+> moved / the stack changed). Handing off to **Operon**.
 
-## TL;DR
-We added a **Pain Biomarkers** analysis module + card and a **Pain Scores** report to a fork of
-the UF BRAVO platform, and we run the whole platform **locally in Docker**. Everything works with
-a **demo participant**. Next step: load **real patient data** (REDCap + a Percept upload).
+---
 
-## Where things live (IMPORTANT)
-- **Repo (use this path — local, NOT OneDrive):** `/Users/pshirvalkar/Documents/GitHub/BRAVO_pain`
-  - OneDrive's `CloudStorage/...GitHub` copies are unreliable (they dehydrate/de-root mid-session).
-    Work only in `~/Documents/GitHub/BRAVO_pain`.
-- **Git:** branch `PS_biomarker_module`, pushed to `github.com/shirvalkarlab/BRAVO_pain` (public).
-  Our commits start at `2a9a42e`. To push, plain `git push origin PS_biomarker_module` works.
-- **Yiyuan's notebooks** (reference for the science/plots): clone fresh —
-  `git clone https://github.com/shirvalkarlab/dbs_stage2_percept` (public). Key files:
-  `threshold_biomarker.ipynb` (chronic), `biomarker_analysis_streaming.ipynb` (time-domain),
-  `redcap_pull.py` / `full_trend_pain_score.ipynb` (pain-score metrics + stages).
+## 0. TL;DR
 
-## Running platform (Docker, already up)
-- App: **http://localhost/** (nginx serves the React SPA + proxies `/api`). Django dev server on `:27286`.
-- **Login: `demo@bravo.local` / `biomarker123`.** If asked for a "Server Host", use `localhost`.
-- **Demo participant** (synthetic data): name "Demo Biomarker Patient", **MRN `DEMO_BIOMARKER`**,
-  uid `e30b54dc17d3488dbe1945bb911f5549`. Any participant with that MRN returns synthetic demo data.
-- Compose: top-level `docker-compose.yml` + `docker-compose.override.yml` (builds from `dockerfile.dev`,
-  live-mounts `./BRAVO` + `./Client/build`, and `./BRAVO/bravo_nginx.dev.conf` as the SPA nginx config).
-- Commands (run from repo root):
-  - Bring up / restart: `docker compose up -d` · `docker compose restart bravo-server`
-  - Logs: `docker compose logs bravo-server --since 5m`
-  - Shell: `docker compose exec bravo-server python3 manage.py shell`
+A **Pain Biomarkers** analysis module + card and a **Pain Scores** report were added to a fork of the
+UF BRAVO platform, run **locally in Docker (OrbStack)**. It now runs on **real patient data (RCS08)**.
+The most recent work was a **statistical-rigor pass** + a **plot review** that made the analysis and
+its figures honest.
 
-## Dev workflow
-- **Python is live-mounted** → the Django dev server auto-reloads on save. No rebuild needed for
-  backend changes (`BRAVO/...`).
-- **React requires a rebuild** (the served bundle is `Client/build`, mounted into nginx):
+**Headline scientific result (RCS08):** after correcting for the band search and temporal
+autocorrelation, **neither biomarker branch is statistically validated** — the time-domain beta
+correlation is not significant (permutation p≈0.62, FDR q≈0.23) and the power-domain detector's
+in-sample AUC≈0.79 does not generalize (cross-validated balanced accuracy≈chance) and carries a
+merged-source batch confound. This is an honest negative/exploratory result, surfaced clearly on the
+card. See §5.
+
+---
+
+## 1. Environment (CORRECTED — read this, the old paths are wrong)
+
+- **Repo (USE THIS PATH):** `/Users/pshirvalkar/dev/BRAVO_pain`
+  - ⚠️ The original handoff said `~/Documents/GitHub/BRAVO_pain` (OneDrive) — that copy corrupted
+    (OneDrive dehydrates files mid-session). The repo was re-cloned to `~/dev/BRAVO_pain`. Work ONLY here.
+- **Docker = OrbStack**, not Docker Desktop. Context `orbstack`. If `docker` commands fail with a
+  socket error, run `open -a OrbStack` and wait for `docker info` to succeed before retrying.
+- **Containers** (compose project `bravo_pain`): `bravo_pain-bravo-server-1` (Django+gunicorn+uvicorn+nginx),
+  `bravo_pain-mysql-1`, `bravo_pain-redis-1`.
+- **Server stack:** gunicorn with `-w $(nproc)` uvicorn workers (multi-worker ASGI; the old
+  single-threaded `runserver` is gone — the slow-upload issue below is largely resolved).
+- **Ports:** the app is at **http://localhost/** (port **80**, nginx — serves the React SPA from the
+  live-mounted `Client/build` and proxies `/api`). **Port 27286 is raw uvicorn** (the ASGI app / API),
+  which serves Django's *collected* static — do NOT eyeball the UI there, it serves a stale bundle.
+  Use **http://localhost/** for the real, current frontend.
+- **Git:** branch `PS_biomarker_module`. `git push origin PS_biomarker_module` works. Main/PR base
+  in this fork has been `v3.0.0-alpha`.
+- **Reference notebooks** (the science of record): `git clone https://github.com/shirvalkarlab/dbs_stage2_percept`.
+  Key files: `threshold_biomarker.ipynb` (power-domain), `biomarker_analysis_streaming.ipynb`
+  (time-domain), `redcap_pull.py` / `full_trend_pain_score.ipynb` (PRO metrics + stages).
+
+### Secrets (NEVER commit)
+- `secrets/redcap.env` is gitignored. REDCap tokens also live at `~/.bravo/redcap_api_info.json`
+  (perms 600). Active = Percept token `3AF88F28…`. Do not echo or commit these.
+
+---
+
+## 2. Dev workflow
+
+- **Python is live-mounted** (`./BRAVO` → `/usr/src/BRAVO`). gunicorn runs `--reload`, but it is
+  occasionally stale — **`docker restart bravo_pain-bravo-server-1`** after backend edits to be safe.
+- **React requires a rebuild** (the served bundle is `Client/build`, live-mounted into nginx). Host
+  Node is new enough now (v24):
   ```bash
-  cd /Users/pshirvalkar/Documents/GitHub/BRAVO_pain/Client
-  docker run --rm -v "$PWD":/app -w /app node:16 bash -lc \
-    "CI=false GENERATE_SOURCEMAP=false npm run build"
+  cd /Users/pshirvalkar/dev/BRAVO_pain/Client && npm run build
   ```
-  (Use Node 16 — the repo pins 14–16; the host Node is too new. `node_modules` already exists.)
-  Then **hard-refresh the browser (Cmd+Shift+R)**.
-- **Tests** (15, all pass) against the pinned scientific stack, inside the container:
+  Then **`docker restart bravo_pain-bravo-server-1`** (OrbStack's virtiofs mount can lag — nginx may
+  serve a stale `index.html` until the container restarts) and hard-refresh the browser.
+  Verify the served bundle matches the build:
   ```bash
-  docker compose exec -w /usr/src/BRAVO bravo-server python3 -W ignore \
-    modules/Biomarkers/tests/test_adapter.py
+  curl -s "http://localhost/?cb=$(date +%s)" | grep -oE "main\.[a-z0-9]+\.js" | head -1
+  grep -oE "main\.[a-z0-9]+\.js" Client/build/index.html | head -1     # must match
   ```
-- **Verify a Python env locally** (for quick checks): `/Users/pshirvalkar/miniconda3/envs/py313/bin/python`
-  has numpy/scipy/sklearn/pandas. Container has the BRAVO-pinned versions (numpy 2.1.3, sklearn 1.5.2…).
+- **Tests** (all pass) — run each inside the container:
+  ```bash
+  docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore \
+    modules/Biomarkers/tests/<NAME>.py
+  ```
+  Suites: `test_adapter.py`, `test_process_redcap.py`, `test_stats_utils.py`,
+  `test_pipeline_stats.py`, `test_analytics.py`.
+- **Live-verify a run** without the browser (exercises the real code path):
+  ```bash
+  docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore manage.py shell -c "
+  from modules.Biomarkers import bravo_service; from Server import models
+  p = models.Participant.find(name='RCS08')
+  out = bravo_service.run_for_participant({'ParticipantId': p.uid, 'source':'both'})
+  print(out['summary']['timedomain']); print(out['summary']['powerdomain'])"
+  ```
+- **Browser verification** (Claude-in-Chrome / computer-use): the user is already logged in; navigate
+  http://localhost/ → Database → RCS08 → "Pain Biomarkers" → select **Both** → **Compute** (~10–40 s).
+  NOTE: clicking the source toggle re-renders and can swallow an immediately-following Compute click —
+  click Compute as a *separate* action. The MCP screenshot captures ~1092 px wide regardless of window;
+  use JS (`document.scrollingElement` / `scrollIntoView` / read `.js-plotly-plot[].data`) to verify
+  off-screen panels rather than trusting screenshot width.
 
-## What we built
+---
+
+## 3. What exists (architecture map)
+
 ### Backend — `BRAVO/modules/Biomarkers/`
-- `routines/streaming_psd.py` — time-domain PSD↔pain (verbatim from `biomarker_analysis_streaming.ipynb`).
-- `routines/threshold_biomarker.py` — chronic sliding-window LFP threshold detector + KMeans
-  `pain_level` labeler (verbatim from `threshold_biomarker.ipynb`).
-- `routines/redcap_client.py` — REDCap PRO pull (PyCap; token via env vars).
-- `routines/analytics.py` — visualization analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram,
-  cluster scatter, streaming corr-spectrum, PSD spectra/spectrogram) + `format_channel()`
-  (contact numbers + cathode⁻/anode⁺ polarity + brain region).
-- `adapter.py` — maps BRAVO recording dicts → routine inputs; PRO alignment; `merge_timelines`.
-- `pipeline.py` — `run_biomarker(source="timedomain"|"chronic"|"both", ...)`.
-- `bravo_service.py` — **Django-coupled** glue: loads a participant's decoded recordings + REDCap PROs,
-  runs the pipeline, and serves JSON. Has demo-data paths. Also `pain_scores_for_participant()`.
-- `requirements.txt` adds `PyCap`.
-
-### Backend — API (`BRAVO/Server/APIs/`)
-- `DataAnalysis.py`: `QueryBiomarkerAnalysis`, `QueryPainScores` (DRF views, `IsAuthenticated`).
-- `urls.py`: `/api/queryBiomarkerAnalysis`, `/api/queryPainScores`.
+- `routines/streaming_psd.py` — time-domain PSD↔pain (transform/correlation **verbatim** from the
+  streaming notebook). `pearson_corr_psd_label` computes the (channel×freq) corr/p grid.
+- `routines/threshold_biomarker.py` — power-domain sliding-window LFP threshold detector +
+  **`kmeans_pain_level`** (the 2-cluster KMeans pain labeler) — **byte-for-byte** from the notebook.
+- `routines/redcap_client.py` — REDCap PRO pull (PyCap; token via env). `process_redcap` (NaN-preserving).
+- `routines/analytics.py` — all figure data: `corr_spectrum`, `psd_spectra`, `psd_spectrogram`,
+  `td_sliding_corr_spectrum`, `sliding_window_analytics`, `roc_analysis`, `lfp_distribution`,
+  `cluster_scatter`, **`pain_binarization`** (new), `format_channel()`.
+- `routines/stats_utils.py` — **NEW (rigor)**: `bh_fdr`, `fisher_z_ci`, `lag1_autocorr`,
+  `effective_n`, `partial_corr`, `block_length_for`, `circular_block_indices`,
+  `circular_block_perm_matrix` (vectorized), `block_perm_pvalue`, `balanced_metrics`. Pure numpy/scipy.
+- `adapter.py` — recording dicts → routine inputs; PRO alignment; `bravo_chronic_to_lfp_df` (the merged
+  power-domain tidy frame + KMeans label, z-scored features); MAD outlier rejection; plot decimation.
+- `pipeline.py` — `run_biomarker(source="timedomain"|"powerdomain"|"both", …)`; per-branch runners;
+  `select_biomarker_band` (FDR-gated), `_band_inference` (the honest TD stats),
+  `_maxabs_corr` + `_block_perm_maxcorr_pvalue` (vectorized permutation null).
+- `bravo_service.py` — Django glue: `run_for_participant`, `_compute_analytics`, `_region_map`
+  (infers contact region from **device metadata**), `_recorded_powers`, window params.
+- API: `BRAVO/Server/APIs/DataAnalysis.py` → `/api/queryBiomarkerAnalysis`, `/api/queryPainScores`.
 
 ### Frontend — `Client/src/views/Reports/`
-- `Biomarkers/` — **Pain Biomarkers** card: source toggle (Time-domain/Chronic/Both), stacked-subplot
-  timeline, and `BiomarkerAnalytics.js` (Time-domain section + Chronic section of Yiyuan's figures).
-  Registered in `routes.js` under the **Customized Analysis** group; route
-  `/reports/biomarkers/:participant_uid`.
-- `PainScores/` — **Pain Scores** report under **Surveys & Questionnaires**; route
-  `/pain-scores/:participant_uid`. Per-metric grid + normalized all-metric overlay (with metric
-  toggles) + Pearson correlation heatmap (red=positive) + **trial stage** bands & global stage toggles.
+- `Biomarkers/index.js` — the card: red **Compute** button (recompute only on click) + progress
+  indicator, source toggle, **pain-metric selector**, window/step (months) controls, and the honest
+  **summary block** (perm p / FDR q / effective n / CI / overfit + batch + pooled warnings / label
+  provenance). Route `/reports/biomarkers/:participant_uid`.
+- `Biomarkers/BiomarkerTimeline.js` — stacked-subplot timeline (TD biomarker, LFP+threshold, pain, stim).
+- `Biomarkers/BiomarkerAnalytics.js` — the plot panels, in three sections: **"How the pain score is
+  binarized"** (new, top), **Time-domain analysis**, **Power-domain analysis**.
+- `PainScores/` — Pain Scores report (per-metric grid, normalized overlay, correlation heatmap,
+  trial-stage bands). Route `/pain-scores/:participant_uid`.
 
-### Local-dev auth (commits `efd6b02`, `6e72525`)
-For the standalone local instance we relaxed auth (DEBUG only; production paths untouched):
-`Server/authentication.CsrfExemptSessionAuthentication` (used in `settings.py` when `DEBUG`) fixed
-the "You do not have the permission" login 403 (stale CSRF cookie), plus DEBUG-open participant
-access + localhost CSRF/hosts.
+### Local-dev auth / permissions (DEBUG only; production untouched)
+- `Server/authentication.CsrfExemptSessionAuthentication` (login 403 fix).
+- DEBUG bypass in `Database.checkManagePermission` and `Server/models/User.Institute.has_permission`
+  (so a localhost instance never blocks edits/deletes/uploads). Authentication still required.
 
-## NEXT: load real patient data (the current goal)
-1. **REDCap** — set on the `bravo-server` service env (compose), then `docker compose up -d`:
-   - `REDCAP_API_URL`, `REDCAP_API_TOKEN`. (Currently NOT set → only demo data flows.)
-   - The patient's REDCap **field map** lives in your `pt_config/<pt>_config.json`
-     (`instruments`, `timestamp_label`, `metric_labels`, `program_dates`). The endpoints expect tidy
-     columns `date_time_s1_daily`, `nrs`, `vas`, `left_leg_vas`, `back_vas`, `relief`,
-     `mpq_sum/aff/sen`, `electrocuting`, `tingly`. **TODO:** wire `redcap_pull.py`'s processing
-     (filter instrument + pivot) into `redcap_client`/`bravo_service` so raw REDCap column names map
-     correctly. Until then you can POST `ProcessedPRO` (a list of tidy dicts) in the request body.
-   - Trial **stages**: pass `Stages` in the request (or derive from `pt_config.program_dates`
-     server-side). Demo uses `_demo_stages()`.
-2. **Percept data** (for the biomarker time-domain/chronic, not needed for Pain Scores) — upload a
-   Percept session JSON through BRAVO's normal upload flow for the participant, so `Recording` rows
-   (types `MedtronicBrainSenseTimeDomain`, `MedtronicChronicBrainSense`) exist.
-   `bravo_service._load_recordings` reads them.
-3. Create/choose a **real participant** in the same institute as the login user (so access checks pass),
-   navigate to the Biomarkers / Pain Scores reports, and validate. On real data, AUC/R won't be the
-   demo's perfect 1.0.
+---
 
-## Known issue to investigate: slow uploads
-Large Percept files (~73 MB) "spin" for ~a minute. Likely cause: the **single-threaded Django dev
-server (`runserver`)** doing the **synchronous Percept JSON decode** (CPU-heavy) on upload, plus
-macOS Docker bind-mount overhead. It's working, just slow. Options for the new session:
-- Switch the `bravo-server` command to a real ASGI server with workers
-  (`Docker/docker-compose.yml` shows a `daphne -p 3001 ... BRAVO.asgi:application` variant), or
-- Offload decode to the existing `modules/AsyncJobScheduler` background processing, or
-- Just upload fewer/smaller sessions to start. (nginx `client_max_body_size` is already 500M.)
+## 4. What changed in the rigor + plot sessions (the recent work)
 
-## Quick API smoke (session/cookie path)
+Commits (newest first):
+- `f57e9c0` top **pain-binarization** histogram + sticky-navbar `scroll-margin`.
+- `91e2456` plot review v2 — remove mains band, **label the pain score on every panel**, permutation +
+  overfit plots.
+- `de90195` plot review — hover-on-demand (no fixed labels), peaks tied to curves (legendgroup), cleanups.
+- `1204e63` **fully vectorize** the block-permutation null (~12× faster, float-identical).
+- `0f735bd` **statistical-rigor pass** — honest inference + reporting.
+- `47d0b34` DEBUG-only permission bypass.
+
+### Rigor fixes (all live-verified on RCS08)
+1. **Two root-cause bugs** that had inflated significance:
+   - **TD recordings were ~47% out of time order** → daily-pain lag-1 autocorrelation collapsed from
+     its true ~0.86 to ~0, silently neutralizing every serial-dependence correction. Fixed by
+     time-sorting sessions in `run_timedomain_branch` (this also fixed the spectrogram time axis).
+   - The family-max **permutation null ran on the raw-PSD grid while r/FDR used the feature grid** →
+     it tested a different, spuriously-stronger cell. Fixed with a NaN-aware pairwise feature-grid
+     `_maxabs_corr`; perm p went 0.001→~0.6 and now *agrees* with the independent FDR.
+2. **Effective-N FDR** (`_autocorr_adjusted_pgrid`) drives band selection + `fdr_significant`.
+3. **Honest TD summary**: perm p (headline), FDR q, effective n, Fisher-z CI + caveat, stim-adjusted
+   partial r + provenance note, selection-bias flag, narrow-peak (instrumental-line) warning.
+4. **Honest power-domain summary**: balanced accuracy vs chance/prevalence, **directed** in-sample AUC,
+   **overfit warning** (in-sample AUC vs CV balanced accuracy), **batch-confound diagnostic**
+   (undirected source↔LFP and source↔pain separation), KMeans-label provenance + Spearman, pooled-
+   targets warning.
+5. **Permutation fully vectorized** (`circular_block_perm_matrix` + `_block_perm_maxcorr_pvalue`):
+   all permutations as matrix ops; float-identical to the loop, ~12× faster; empirically calibrated.
+
+### Plot review (BiomarkerAnalytics.js + analytics.py)
+- **Removed the "mains ~60 Hz" caution band** and `mains_region_warning` — the device is an implanted
+  IPG, not wall-powered, so there is no line-noise reference.
+- **Pain score labeled on every correlation/AUC/ROC/PSD panel** (title + axis say e.g. "NRS (0–10)").
+- Correlation spectrum: **no fixed per-peak labels** — values on hover; ★ peak markers **color-paired
+  and legendgroup-linked** to their curve (deselecting a curve hides its stars).
+- **NEW permutation-null panel** (directly under the spectrum): histogram of the family max|R| under
+  block-shuffled pain, observed value marked, p-value + plain-language caption.
+- **NEW power-domain "honest performance" bar**: in-sample AUC vs CV balanced accuracy vs chance.
+- **ROC downsampled** to ≤400 plotted vertices (AUC still on full data).
+- **`cluster_scatter` made generic** over the actual KMeans feature(s) (was hard-coded to
+  left_leg_vas/mpq_sum → silently empty for single metrics); de-duplicated to unique PRO observations.
+- **LFP-distribution histogram** binned over the robust 1st–99th percentile (the un-normalized merged
+  sources span ~−20k…146k device units with sparse outliers and collapsed it to one bar).
+- **NEW "How the pain score is binarized" section (top)** — see §6.
+
+---
+
+## 5. Key scientific findings (carry these forward)
+
+- **RCS08, NRS:** TD best band r=0.36 @ 23.7 Hz (Left GPi) — **not significant** (perm p≈0.62,
+  FDR q≈0.23, effective n≈70 from n=114). Power-domain in-sample AUC≈0.79 but **CV balanced
+  accuracy≈0.52 ≈ chance (0.59)** → does not generalize; plus a **batch/scale confound** (the merged
+  Chronic + per-session Power-Domain sources are separable by LFP scale ≈0.79 and differ in pain
+  prevalence ≈0.68, so the pooled AUC partly measures *which sensing modality*, not pain).
+- **NRS is heavily skewed high** for this patient: the KMeans binarization cut lands at 6.4 — the
+  **12th percentile** (82 low / 596 high of 678 days). The high/low split is very imbalanced.
+- Memory notes (in `~/.claude/projects/-Users-pshirvalkar-dev-BRAVO-pain/memory/`):
+  `biomarker-rigor-finding.md`, `biomarker-deferred-rigor.md`.
+
+---
+
+## 6. The binarization panel (context for the open question below)
+
+`analytics.pain_binarization(cv_df, label_metric, kmeans_features, pro_df)` → for the **selected** pain
+score (any metric; two panels for the composite), returns the raw daily-PRO value distribution, the
+**empirical** high/low decision boundary derived from the *actual* labels, the percentile that boundary
+lands at, and 30th/70th percentile references. The frontend renders overlaid low/high histograms with
+a solid "cut" line + dotted percentile lines, at the top of the analytics.
+
+**Important:** the labeler is the notebook's **2-cluster KMeans** (`kmeans_pain_level`), NOT a fixed
+percentile. The panel shows where the KMeans cut lands (and annotates its percentile) — the 30th/70th
+lines are reference context only.
+
+---
+
+## 7. TODO / handoff items
+
+### A. Binarization (Prasad's open design question — START HERE)
+- [ ] **Add a percentile-based binarization option** (e.g. user picks a percentile cut, or a
+      two-threshold low<30th / high>70th scheme with the middle excluded). Today the only labeler is
+      2-cluster KMeans on z-scored feature(s) (`kmeans` strategy) with a `median` `cutoff` fallback.
+      Wire a `label_strategy="percentile"` (+ percentile params) through
+      `adapter.bravo_chronic_to_lfp_df` → `_resolve_biomarker_metric` → the card, and surface it in the
+      pain-metric / binarization UI. `pain_binarization` already reports percentiles, so the panel is ready.
+- [ ] **DECISION for Prasad:** what is the most robust / rigorous way to binarize these PROs? KMeans
+      (data-driven but unstable + imbalanced here — 88% "high"), fixed percentile (transparent but
+      arbitrary), median, or a tertile (drop the ambiguous middle)? And **does a 2- vs 3-metric
+      composite binarization make more sense** (e.g. NRS + MPQ + Left-Leg-VAS) than a single metric?
+      The skew (NRS cut at the 12th pct) and the imbalance/overfit findings make this the highest-leverage
+      methodological choice. Consider per-target / per-source labels too (see C).
+
+### B. REDCap field-map wiring
+- [ ] Wire `redcap_pull.py`'s processing (filter instrument + pivot) into `redcap_client`/`bravo_service`
+      so raw REDCap column names map to the tidy columns (`nrs`, `vas`, `left_leg_vas`, `back_vas`,
+      `relief`, `mpq_sum/aff/sen`, `date_time_s1_daily`, …). Field map lives in
+      `pt_config/<pt>_config.json`. Until wired, you can POST `ProcessedPRO` (tidy dicts) in the request.
+- [ ] Trial **stages**: pass `Stages` or derive from `pt_config.program_dates` server-side.
+
+### C. Deferred rigor (larger / touch verbatim science — see `biomarker-deferred-rigor.md`)
+- [ ] **Per-target / per-source separation:** the power-domain detector pools Left GPi + Right medial
+      thalamus and Chronic vs Power-Domain sources into ONE raw-scale threshold (flagged by the pooled +
+      batch-confound warnings). Fit/report per target & per source, or z-normalize per source before merge.
+- [ ] **Train-fold KMeans:** `pain_level` is KMeans over the WHOLE series → label leakage across the
+      sliding-window folds. Re-fit the labeler inside each train fold (touches verbatim `kmeans_pain_level`).
+- [ ] **Block-bootstrap CIs** for the detector metrics (sens/spec/balanced accuracy), not point estimates.
+- [ ] **Pre-specified confirmatory band test** (e.g. beta-only on GPi) to avoid the ~600-cell multiple-
+      comparison penalty that is killing TD power.
+- [ ] **Data-quality:** at the selected TD band, ~170/284 sessions have zero/NaN PSD (n drops 284→114).
+      Investigate why so many sessions are zero at that frequency.
+
+### D. Smaller / verify
+- [ ] Slow Percept uploads (~73 MB "spin"): the multi-worker ASGI likely fixed this — confirm; if not,
+      offload decode to `modules/AsyncJobScheduler`.
+- [ ] Re-run CodeRabbit (CLI not installed here; sends diffs to an external API — get consent for
+      patient-research code before enabling).
+
+---
+
+## 8. Gotchas (things that cost time)
+- **OrbStack mount lag:** after `npm run build`, nginx may serve a stale `index.html` until the
+  container is restarted. Always restart + verify the served hash (§2).
+- **Port 27286 is uvicorn, not the app** — its static is stale; use http://localhost/ (nginx :80).
+- **gunicorn `--reload` is sometimes stale** — restart after backend edits.
+- **MCP screenshots cap ~1092 px** regardless of window width → "content cut off at right" / "navbar
+  mid-screen with blank gaps" are *capture artifacts*, NOT layout bugs (verified: `overflowX=0`,
+  standard `position:sticky` navbar). Don't chase them; verify layout with JS.
+- **Verbatim-science invariant:** `run_sliding_window_dual`, `kmeans_pain_level`,
+  `_find_best_threshold_for_metric`, and the streaming transform/correlation funcs must stay
+  byte-for-byte. Only glue/orchestration/visualization changes.
+- **Region names come from device metadata** (`_region_map`), not a static map. RCS08 = Left GPi +
+  Right medial thalamus (the "Percept Benchtop" device + its orphaned electrodes were deleted).
+
+---
+
+## 9. Quick API smoke (session/cookie path)
 ```bash
 J=/tmp/j; curl -s -c $J -b $J -X POST -H 'Content-Type: application/json' \
-  -d '{"Email":"demo@bravo.local","Password":"biomarker123"}' http://localhost/api/login
+  -d '{"Email":"<your-login>","Password":"<your-pw>"}' http://localhost/api/login
+# RCS08 uid: 1eda36458758461383721208bbe6bb87
 curl -s -c $J -b $J -X POST -H 'Content-Type: application/json' \
-  -d '{"ParticipantId":"e30b54dc17d3488dbe1945bb911f5549"}' http://localhost/api/queryPainScores
+  -d '{"ParticipantId":"1eda36458758461383721208bbe6bb87","source":"both"}' \
+  http://localhost/api/queryBiomarkerAnalysis | head -c 800
 ```
+
+---
+
+## Appendix — original handoff (foundation; some facts superseded above)
+
+> From commit `6f119f6`. Kept for the "what we built" foundation. **Superseded:** repo path is now
+> `~/dev/BRAVO_pain` (NOT `~/Documents/GitHub`); the server is multi-worker gunicorn+uvicorn (not
+> `runserver`); React builds with host `npm run build` (not the Node-16 docker one-liner); the module
+> is no longer "library mode only" (it has the Django endpoint + React card).
+
+- **What we built (foundation):** the Biomarkers module (`routines/` verbatim science, `adapter.py`,
+  `pipeline.py`, `bravo_service.py`), the DRF APIs (`QueryBiomarkerAnalysis`, `QueryPainScores`), the
+  React **Pain Biomarkers** card and **Pain Scores** report, and local-dev auth relaxations (DEBUG only).
+- **Demo participant** (synthetic; still works): MRN `DEMO_BIOMARKER`,
+  uid `e30b54dc17d3488dbe1945bb911f5549` — any participant with that MRN returns synthetic demo data.
+- **REDCap env:** set `REDCAP_API_URL` / `REDCAP_API_TOKEN` on the `bravo-server` service (compose) for
+  live PRO pulls; otherwise only demo data flows.
