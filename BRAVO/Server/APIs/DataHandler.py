@@ -88,14 +88,14 @@ class DataUploadHandler(RestViews.APIView):
         # write+encrypt+delete cycle and serialized on the lock, which is the long hang on redundant
         # uploads. This pre-check matches an ALREADY-COMMITTED record, so there is no TOCTOU race;
         # the post-write locked check below still resolves two concurrent identical NEW uploads.
-        if models.SourceFile.objects.filter(metadata__Institute=institute.pk, metadata__UniqueHashed=unique_hashed).exists():
+        if models.SourceFile.objects.filter(unique_hashed=unique_hashed, metadata__Institute=institute.pk).exists():
             print("Duplicate File Found (pre-write fast path)")
             return Response(status=301)
 
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
         lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
         with lock.acquire(timeout=60):
-            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(metadata__Institute=institute.pk, metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(unique_hashed=metadata["UniqueHashed"], metadata__Institute=institute.pk).exists():
                 print("Duplicate File Found")
                 source_file.delete()
                 return Response(status=301)

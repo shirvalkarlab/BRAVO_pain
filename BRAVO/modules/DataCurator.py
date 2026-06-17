@@ -58,6 +58,9 @@ def loadCacheFile(source_file):
 def saveCacheFile(filename, metadata, raw_bytes):
     source_file = models.SourceFile.create(type=metadata["UploadType"], metadata=metadata)
     source_file.name = filename
+    # Mirror the dedup hash into the indexed column so the duplicate check is an index seek
+    # (see SourceFile.unique_hashed). Kept in lockstep with metadata["UniqueHashed"].
+    source_file.unique_hashed = metadata.get("UniqueHashed", "")
     source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.uid + "_" + filename
     hashed = Database.saveSourceFile(secureEncoder.encrypt(raw_bytes), source_file.pointer, bytes=True)
     source_file.hashed = hashed
@@ -814,7 +817,7 @@ def ImportBRAVOExport(source_file):
 
             json_file = saveCacheFile(person.uid + "_" + uuid.uuid4().hex + ".json", metadata, PacketContent)
             #lockFile = json_file.pointer + ".lock"
-            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(metadata__Institute=metadata["Institute"], metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(unique_hashed=metadata["UniqueHashed"], metadata__Institute=metadata["Institute"]).exists():
                 json_file.delete()
             else:
                 try:

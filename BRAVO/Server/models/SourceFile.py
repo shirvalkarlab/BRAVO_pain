@@ -39,6 +39,11 @@ class SourceFile(models.Model):
     pointer = models.CharField(max_length=1024, default="")
     hashed = models.CharField(max_length=64, default="")
     metadata = models.JSONField(default=dict)
+    # Indexed mirror of metadata["UniqueHashed"] (HMAC-SHA256 of the raw upload bytes). The duplicate
+    # check filters on this; querying it via the JSON field (metadata__UniqueHashed) forces a
+    # full-table JSON-extract scan on MySQL that grows with every stored file, so the dedup query got
+    # slower the more uploads existed. A plain indexed CharField makes that lookup an index seek.
+    unique_hashed = models.CharField(max_length=64, default="", db_index=True)
 
     owner = models.ForeignKey('Participant', models.CASCADE, null=True)
     
