@@ -281,12 +281,17 @@ def test_td_sliding_corr_spectrum_matches_scipy():
 
     tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
     w_ns = 10 * 86_400 * 1e9
+    # The function applies session-level MAD outlier rejection on the label (>=3 MADs from the
+    # median dropped from every window), so the scipy reference must use the SAME surviving sessions.
+    lmed = np.median(labels)
+    lmad = np.median(np.abs(labels - lmed))
+    label_keep = (np.abs(labels - lmed) <= 3.0 * lmad) if lmad > 0 else np.ones(labels.shape, bool)
     checked = 0
     for (wi, ci, fi) in [(0, 0, 0), (1, 1, F - 1)]:
         if wi >= len(starts):
             continue
         w0 = pd.Timestamp(starts[wi]).value
-        idx = np.where((tv >= w0) & (tv < w0 + w_ns))[0]
+        idx = np.where((tv >= w0) & (tv < w0 + w_ns) & label_keep)[0]
         if len(idx) < 3:
             continue
         r_ref = pearsonr(psd[idx, ci, fi], labels[idx])[0]
@@ -295,6 +300,31 @@ def test_td_sliding_corr_spectrum_matches_scipy():
         checked += 1
     assert checked >= 1
     print("OK td_sliding_corr_spectrum matches scipy (checked %d cells)" % checked)
+
+
+def test_pearson_corr_psd_label_rejects_mad_outliers():
+    """MAD>=3 outlier rejection: a single artifact session must be excluded from the PSD<->pain
+    correlation so it cannot fabricate (or destroy) a correlation. The MAD-filtered R on data with
+    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R."""
+    pearson_corr_psd_label = streaming_psd.pearson_corr_psd_label
+    rng = np.random.default_rng(7)
+    E = 60
+    label = np.linspace(0, 10, E)
+    feat_clean = (label + rng.normal(0, 1.0, E))           # genuinely correlated feature
+    psd_clean = feat_clean.reshape(E, 1, 1)
+    r_clean, _ = pearson_corr_psd_label(psd_clean, label, mad_k=3.0)
+
+    # Plant one extreme artifact session (huge feature, mid-range label) that would distort a naive R.
+    feat_spk = feat_clean.copy(); feat_spk[E // 2] += 500.0
+    psd_spk = feat_spk.reshape(E, 1, 1)
+    r_filtered, _ = pearson_corr_psd_label(psd_spk, label, mad_k=3.0)     # MAD drops the spike
+    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=None)       # naive keeps it
+
+    rc, rf, rn = float(r_clean[0, 0]), float(r_filtered[0, 0]), float(r_naive[0, 0])
+    # Filtered R recovers the clean correlation; naive R is corrupted by the spike.
+    assert abs(rf - rc) < 0.05, (rc, rf)
+    assert abs(rn - rc) > 0.1, (rc, rn)
+    print("OK pearson_corr_psd_label MAD rejection: clean=%.3f filtered=%.3f naive=%.3f" % (rc, rf, rn))
 
 
 def test_decimate_for_plot_thins_only():
@@ -594,5 +624,6 @@ if __name__ == "__main__":
     test_sliding_window_analytics_no_sliding()
     test_sliding_window_skips_one_class_test_folds()
     test_td_sliding_corr_spectrum_matches_scipy()
+    test_pearson_corr_psd_label_rejects_mad_outliers()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")

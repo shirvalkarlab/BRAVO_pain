@@ -84,10 +84,30 @@ def normalize_psd_across_epochs(psd, method="zscore", scale_gaussian=True):
 
 
 # ---------- Pearson correlation (NaN-safe) ----------
-def pearson_corr_psd_label(psd_feat, label):
+def _mad_keep(x, k=3.0):
+    """Boolean KEEP-mask: True for finite samples within k median-absolute-deviations of the median.
+    Excludes artifact spikes where |x - median| > k*MAD. Returns the finite mask when MAD==0 (all
+    equal) or fewer than 3 finite points (MAD undefined). Robust (median/MAD), so a few extreme
+    sessions can't drag a Pearson correlation. Mirrors adapter.mad_outlier_mask; duplicated here to
+    keep streaming_psd dependency-free."""
+    x = np.asarray(x, dtype=float)
+    finite = np.isfinite(x)
+    if finite.sum() < 3:
+        return finite
+    med = np.median(x[finite])
+    mad = np.median(np.abs(x[finite] - med))
+    if mad <= 0:
+        return finite
+    return finite & (np.abs(x - med) <= k * mad)
+
+
+def pearson_corr_psd_label(psd_feat, label, mad_k=3.0):
     """
     psd_feat: (E, C, F) features AFTER daywise normalization
     label:    (E,)
+    mad_k:    MAD outlier rejection (>=k MADs from the median is dropped) applied per (channel,
+              frequency) on the feature AND on the label before each correlation, so a single
+              artifact session can't drive the Pearson R. Set None to disable.
     Returns: corr (C,F), pval (C,F)
     """
     X = np.asarray(psd_feat, dtype=float)
@@ -96,19 +116,22 @@ def pearson_corr_psd_label(psd_feat, label):
     corr = np.full((C, F), np.nan)
     pval = np.full((C, F), np.nan)
 
-    # z-score across valid epochs for numeric stability
     yv = np.isfinite(y)
-    y_z = (y - np.nanmean(y)) / (np.nanstd(y) + 1e-12)
+    # Label-side MAD keep-mask (computed once; the feature side is per (c,f) below).
+    y_keep = _mad_keep(y, k=mad_k) if mad_k else yv
 
     for c in range(C):
         for f in range(F):
             x = X[:, c, f]
-            v = np.isfinite(x) & yv
+            x_keep = _mad_keep(x, k=mad_k) if mad_k else np.isfinite(x)
+            v = x_keep & y_keep
             n = v.sum()
             if n < 3:
                 continue
+            # z-score on the SURVIVING samples (robust median/MAD already removed the outliers).
             x_z = (x[v] - np.nanmean(x[v])) / (np.nanstd(x[v]) + 1e-12)
-            r = np.mean(x_z * y_z[v])
+            y_z = (y[v] - np.nanmean(y[v])) / (np.nanstd(y[v]) + 1e-12)
+            r = np.mean(x_z * y_z)
             corr[c, f] = r
             tstat = r * np.sqrt((n - 2) / (1 - r**2 + 1e-12))
             pval[c, f] = 2 * (1 - t.cdf(abs(tstat), df=n - 2))

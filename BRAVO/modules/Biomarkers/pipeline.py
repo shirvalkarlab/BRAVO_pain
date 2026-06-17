@@ -306,7 +306,10 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     feat = np.asarray(result["feature"], dtype=float)        # (N, C, F) — the correlated feature
     labels = np.asarray(result["labels"], dtype=float)
     bandpow = feat[:, c_idx, f_idx]                          # feature slice == what produced r
-    valid = np.isfinite(labels) & np.isfinite(bandpow)
+    # Robust MAD outlier rejection (>=3 MADs from the median is dropped) on BOTH the band-power
+    # feature and the label, consistent with the correlation spectrum and the chronic detector, so a
+    # single artifact session cannot inflate the partial r / effective N / Fisher-z CI for the band.
+    valid = adapter.mad_outlier_mask(bandpow, k=3.0) & adapter.mad_outlier_mask(labels, k=3.0)
     n = int(valid.sum())
 
     # Stim-adjusted partial correlation. Only meaningful when stim amplitude was actually recorded

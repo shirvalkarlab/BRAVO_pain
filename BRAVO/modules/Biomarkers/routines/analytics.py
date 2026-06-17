@@ -395,12 +395,20 @@ def lfp_distribution(cv_df, bins=40):
     The raw merged power-domain series (Chronic + per-session band power, un-normalized) can span an
     enormous device-unit range with a few extreme outliers, which collapses a naive histogram into a
     single bar. Bin over a ROBUST display range (1st-99th percentile) so the bulk distribution is
-    visible; the Otsu threshold is still computed on the FULL data, and n_clipped reports how many
+    visible. The Otsu split is computed on the MAD-filtered data (samples within 3 MADs of the
+    median) so a handful of artifact spikes can't drag the threshold; n_clipped reports how many
     out-of-range samples were excluded from the plot only."""
     lfp = cv_df["LFP_smoothed"].dropna().astype(float).values
     if lfp.size == 0:
         return {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0}
-    otsu = _otsu_threshold(lfp)
+    # MAD outlier rejection (>=3 MADs from the median) before Otsu, consistent with the rest of the
+    # analysis. Falls back to the full series when MAD is undefined (all-equal or < 3 samples).
+    med = np.median(lfp)
+    mad = np.median(np.abs(lfp - med))
+    lfp_robust = lfp[np.abs(lfp - med) <= 3.0 * mad] if (mad > 0 and lfp.size >= 3) else lfp
+    if lfp_robust.size < 3:
+        lfp_robust = lfp
+    otsu = _otsu_threshold(lfp_robust)
     lo, hi = np.percentile(lfp, [1, 99])
     if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
         lo, hi = float(np.min(lfp)), float(np.max(lfp))
@@ -550,6 +558,16 @@ def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, m
     X = psd.reshape(E, C * F)                                   # (E, M)
     # A session is usable only if its time, label, and all PSD values are finite.
     finite_sess = np.isfinite(tv) & np.isfinite(labels) & np.isfinite(X).all(axis=1)
+    # Session-level MAD outlier rejection on the pain label (>=3 MADs from the median), consistent
+    # with the correlation spectrum and the chronic detector — an extreme-label session is dropped
+    # from every window rather than distorting the windowed R. (Per-frequency feature MAD is left to
+    # the static spectrum; the windowed correlation here is a vectorized diagnostic over many cells.)
+    lv = labels[np.isfinite(labels)]
+    if lv.size >= 3:
+        lmed = np.median(lv)
+        lmad = np.median(np.abs(lv - lmed))
+        if lmad > 0:
+            finite_sess = finite_sess & (np.abs(labels - lmed) <= 3.0 * lmad)
     if finite_sess.sum() < min_sessions:
         return empty
     # Robust time span: some sessions decode to corrupt StartTimes (e.g. ~1677, pandas' min date),
