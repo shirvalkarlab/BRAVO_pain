@@ -73,12 +73,24 @@ class DataUploadHandler(RestViews.APIView):
             return Response(status=400, data={"message": "Filename not Supported"})
         
         rawBytes = request.data["File"].read()
+        unique_hashed = hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
         metadata = {**{
             "UploadType": request.data["DataType"],
             "Institute": institute.pk,
             "Uploader": request.user.pk,
-            "UniqueHashed": hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
+            "UniqueHashed": unique_hashed
         }, **json.loads(request.data["Metadata"])}
+
+        # Fast path for re-uploading an existing/redundant file: reject BEFORE the expensive
+        # encrypt + cache-file write. Previously every upload (duplicates included) was written and
+        # encrypted to disk, and only THEN checked against the existing SourceFiles under a single
+        # global lock — so re-uploading files that are already stored paid the full
+        # write+encrypt+delete cycle and serialized on the lock, which is the long hang on redundant
+        # uploads. This pre-check matches an ALREADY-COMMITTED record, so there is no TOCTOU race;
+        # the post-write locked check below still resolves two concurrent identical NEW uploads.
+        if models.SourceFile.objects.filter(metadata__Institute=institute.pk, metadata__UniqueHashed=unique_hashed).exists():
+            print("Duplicate File Found (pre-write fast path)")
+            return Response(status=301)
 
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
         lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
