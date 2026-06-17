@@ -114,16 +114,30 @@ def _residualize(v, covar):
 
 
 def balanced_metrics(sens, spec, n_pos, n_neg):
-    """Honest summary for an imbalanced binary test set: balanced accuracy = (sens+spec)/2, the
-    prevalence, and the majority-class (chance) accuracy to compare raw accuracy against."""
-    out = {"balanced_accuracy": None, "prevalence": None, "chance_accuracy": None,
+    """Honest summary for an imbalanced binary test set.
+
+    Two DIFFERENT chance baselines, because the headline metric is BALANCED accuracy:
+      * `balanced_accuracy` = (sens + spec) / 2. Its chance level is ALWAYS 0.5, independent of
+        class imbalance — a majority-class, random-at-prevalence, or coin-flip classifier all
+        score balanced accuracy ≈ 0.5 (verified empirically with sklearn.balanced_accuracy_score).
+        So `chance_accuracy` (the value to compare balanced_accuracy against) is 0.5.
+      * `majority_accuracy` = max(n_pos, n_neg) / total is the chance level for RAW (unbalanced)
+        accuracy only — it is NOT the comparator for balanced accuracy. Kept for reference and
+        labeled as such so it is never again compared head-to-head with balanced accuracy.
+
+    Previously `chance_accuracy` was set to the majority fraction (e.g. 0.88 at 88% prevalence)
+    and compared against balanced accuracy (~0.52), which made the model look far below chance.
+    """
+    out = {"balanced_accuracy": None, "prevalence": None,
+           "chance_accuracy": 0.5,          # chance level FOR BALANCED ACCURACY (always 0.5)
+           "majority_accuracy": None,       # chance level for RAW accuracy (reference only)
            "n_pos": int(n_pos), "n_neg": int(n_neg)}
     if np.isfinite(sens) and np.isfinite(spec):
         out["balanced_accuracy"] = float((sens + spec) / 2.0)
     total = n_pos + n_neg
     if total > 0:
         out["prevalence"] = float(n_pos / total)
-        out["chance_accuracy"] = float(max(n_pos, n_neg) / total)
+        out["majority_accuracy"] = float(max(n_pos, n_neg) / total)
     return out
 
 

@@ -553,15 +553,18 @@ def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, m
     if finite_sess.sum() < min_sessions:
         return empty
     # Robust time span: some sessions decode to corrupt StartTimes (e.g. ~1677, pandas' min date),
-    # which would stretch the grid to centuries and create thousands of empty windows. A percentile
-    # clip fails when the corrupt cluster is more than ~1% of sessions, so use a MAD filter on the
-    # timestamps (drop |t - median| > 5*MAD) — robust as long as corrupt times are a minority — and
-    # hard-cap the window count as a backstop.
+    # which would stretch the grid to centuries and create thousands of empty windows. Earlier code
+    # used a 5*MAD clip, but with a legitimately SKEWED distribution (a dense stage-0 block + a
+    # sparse chronic tail, as in RCS08) the MAD is tiny and the clip wrongly truncated valid recent
+    # sessions — terminating the grid months before the true last recording. Instead, drop only
+    # timestamps that are ABSOLUTELY implausible (outside a sane calendar window) and keep every
+    # real session, so the grid always extends to the most recent recording. A hard window cap is
+    # the backstop against any corrupt time that slips through.
     ft = tv[finite_sess]
-    med = np.median(ft)
-    mad = np.median(np.abs(ft - med))
-    tkeep = (np.abs(ft - med) <= 5.0 * mad) if mad > 0 else np.ones(ft.shape, bool)
-    ftk = ft[tkeep] if tkeep.any() else ft
+    lo_bound = pd.Timestamp("2015-01-01").value          # device era; corrupt ~1677 dates fall below
+    hi_bound = (pd.Timestamp.utcnow().tz_localize(None) + pd.Timedelta(days=365)).value
+    plausible = (ft >= lo_bound) & (ft <= hi_bound)
+    ftk = ft[plausible] if plausible.any() else ft
     tmin, tmax = float(np.min(ftk)), float(np.max(ftk))
     if not (tmax > tmin):
         tmin, tmax = float(np.nanmin(ft)), float(np.nanmax(ft))

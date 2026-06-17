@@ -51,7 +51,10 @@ def test_balanced_metrics():
     m = su.balanced_metrics(sens=1.0, spec=0.0, n_pos=10, n_neg=90)
     assert abs(m["balanced_accuracy"] - 0.5) < 1e-9
     assert abs(m["prevalence"] - 0.1) < 1e-9
-    assert abs(m["chance_accuracy"] - 0.9) < 1e-9         # raw acc of 0.9 here would be chance-level
+    # Chance for BALANCED accuracy is ALWAYS 0.5, independent of imbalance.
+    assert abs(m["chance_accuracy"] - 0.5) < 1e-9
+    # The majority fraction (0.9 here) is the RAW-accuracy chance level, reported separately.
+    assert abs(m["majority_accuracy"] - 0.9) < 1e-9
 
 
 def test_block_perm_pvalue():

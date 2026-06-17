@@ -176,9 +176,12 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     });
     if (cuts.kind === "two-cut") {
       annotations.push(badge(0.10, LO, "Low", stats.nLow));
-      // Excluded badge sits lower (y in `badge` is 0.94 top-anchored) so it never rides up into
-      // the staggered cut-line labels above the plot when the two cuts are close together.
-      annotations.push({ ...badge(0.50, MID, "Excluded", stats.nMid), y: 0.78 });
+      // Excluded badge sits at the very BOTTOM-CENTER of the plot (bottom-anchored just above the
+      // x-axis), clear of the staggered cut-line labels above the plot. Alpha is also lowered so it
+      // reads as a translucent overlay — any bar behind it still shows through (combined fix:
+      // bottom placement keeps it off the cut labels, lower alpha keeps it from occluding a bar).
+      annotations.push({ ...badge(0.50, MID, "Excluded", stats.nMid),
+                         y: 0.02, yanchor: "bottom", opacity: 0.78 });
       annotations.push(badge(0.90, HI, "High", stats.nHigh));
     } else if (cuts.kind === "one-cut") {
       annotations.push(badge(0.18, LO, "Low", stats.nLow));
@@ -210,7 +213,7 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   }, [vals, cuts, stats, metricLabel]);
 
   return (
-    <MDBox display="flex" flexDirection="column" sx={{ width: "100%", minHeight: 240 }}>
+    <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>
       <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
         <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
           {"Binarization preview"}
@@ -219,7 +222,7 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
           {vals.length ? `${vals.length} daily PRO observations` : (loading ? "loading…" : "no data yet")}
         </MDTypography>
       </MDBox>
-      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 200 }} />
+      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 380 }} />
       <MDTypography variant="caption" color="text" sx={{ fontSize: 10, textAlign: "center" }}>
         {cuts.kind === "two-cut"
           ? `Tertile cuts at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — middle ${stats.nMid} days excluded from training.`

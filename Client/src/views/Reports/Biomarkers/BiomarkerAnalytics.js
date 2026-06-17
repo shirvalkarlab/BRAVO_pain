@@ -361,7 +361,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
         <Panel key={"scs" + i} lg={12}
           title={`Sliding correlation with ${pain} (R: frequency × time) — ${ch.channel}`}>
           <Fig traces={traces} height={360}
-            layout={{ xaxis: { title: "Window start", type: "date" }, yaxis: { title: "Frequency (Hz)" } }} />
+            layout={{ xaxis: { title: "Window start", type: "date" },
+              yaxis: { title: "Frequency (Hz)", range: [Math.min(...ch.freqs), 50] } }} />
         </Panel>
       );
     });
@@ -414,8 +415,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   // cross-validated balanced accuracy (the generalization estimate) sits near the chance baseline.
   // Plotting them side by side makes the generalization gap explicit. (new honest-stats panel)
   if (pdSumEff.auc != null || pdSumEff.balanced_accuracy != null) {
+    const chanceLvl = pdSumEff.chance_accuracy != null ? pdSumEff.chance_accuracy : 0.5;
     const labels = ["In-sample AUC", "CV balanced accuracy", "Chance"];
-    const vals = [pdSumEff.auc, pdSumEff.balanced_accuracy, pdSumEff.chance_accuracy];
+    const vals = [pdSumEff.auc, pdSumEff.balanced_accuracy, chanceLvl];
     const colors = [PALETTE[0], PALETTE[2], "#7E8794"];
     chPanels.push(
       <Panel key="honest" title={`Honest performance: in-sample vs cross-validated — LFP vs ${pain}${chSuffix}`}>
@@ -426,13 +428,18 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
           hovertemplate: "%{x}: %{y:.3f}<extra></extra>" }]}
           layout={{ yaxis: { title: "Score", range: [0, 1.05] }, xaxis: { title: "" },
             showlegend: false,
-            shapes: pdSumEff.chance_accuracy != null ? [{ type: "line", x0: -0.5, x1: 2.5,
-              y0: pdSumEff.chance_accuracy, y1: pdSumEff.chance_accuracy,
-              line: { color: "#7E8794", width: 1, dash: "dot" } }] : [] }} />
+            shapes: [{ type: "line", x0: -0.5, x1: 2.5,
+              y0: chanceLvl, y1: chanceLvl,
+              line: { color: "#7E8794", width: 1, dash: "dot" } }] }} />
         <MDTypography variant="caption" color="text" display="block" mt={1} sx={{ fontSize: 11 }}>
-          {`In-sample AUC is computed on all data with no train/test split (optimistic). ` +
-           `Cross-validated balanced accuracy is the held-out generalization estimate — when it sits ` +
-           `near chance, the in-sample AUC is not reproduced out-of-fold.${pdSumEff.overfit_warning ? "  ⚠ " + pdSumEff.overfit_warning : ""}`}
+          {`Chance for BALANCED accuracy is 0.50 regardless of class imbalance (sens & spec each ` +
+           `0.5 at chance). ` +
+           (pdSumEff.majority_accuracy != null
+             ? `The majority-class baseline (${pdSumEff.majority_accuracy.toFixed(2)}) is the chance level for RAW accuracy only and is NOT the comparator here. `
+             : "") +
+           `In-sample AUC has no train/test split (optimistic); CV balanced accuracy is the held-out ` +
+           `generalization estimate — near 0.5 means the in-sample AUC is not reproduced out-of-fold.` +
+           `${pdSumEff.overfit_warning ? "  ⚠ " + pdSumEff.overfit_warning : ""}`}
         </MDTypography>
       </Panel>
     );

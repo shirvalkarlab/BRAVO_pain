@@ -94,15 +94,6 @@ function BiomarkerTimeline({ data, height }) {
       annotations: [],
     };
 
-    // Build a translucent "pain-event rug" — every timepoint where pain was recorded — so it can
-    // be overlaid on the LFP / time-domain biomarker rows. Reading biomarker activity against
-    // the pain dots is the whole point of these stacked plots; without them, the LFP trace floats
-    // free of when the patient actually rated their pain.
-    const painRugX = painCol
-      ? recs.map((r, i) => (typeof r[painCol] === "number" && Number.isFinite(r[painCol]) ? x[i] : null))
-            .filter((t) => t !== null)
-      : [];
-
     rows.forEach((row, di) => {
       const axisNum = n - di; // bottom row = y1
       const yk = axisNum === 1 ? "y" : "y" + axisNum;
@@ -123,22 +114,32 @@ function BiomarkerTimeline({ data, height }) {
         zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true,
         ...(yrange ? { range: yrange } : { autorange: true }) };
       row.traces.forEach((tr) => {
-        // PAIN ROW (isPain): render in the standalone Pain Scores report style — translucent
-        // thin raw markers+line PLUS a thick 3-point moving-average trend line over the top, so
-        // the trajectory is legible without losing individual observations.
+        // PAIN ROW (isPain): render exactly like the standalone Pain Scores report — translucent
+        // thin raw markers+line plus a thick moving-average trend over the top. CRITICAL: the pain
+        // column is sparse (one value per survey) embedded in a per-sample array full of nulls, so
+        // a moving average over ARRAY indices just re-traces the raw values (a redundant double
+        // line). Compact to the non-null (x, y) observations FIRST, then smooth over consecutive
+        // observations — that produces a real trend identical to the PainScores report (which is
+        // fed one point per survey with no gaps).
         if (row.isPain) {
+          const cx = [], cy = [];
+          (tr.y || []).forEach((v, i) => {
+            if (v != null && Number.isFinite(v)) { cx.push(x[i]); cy.push(v); }
+          });
           traces.push({
-            x, y: tr.y, name: tr.name, type: "scatter", mode: "lines+markers",
+            x: cx, y: cy, name: tr.name, type: "scatter", mode: "lines+markers",
             line: { color: tr.color, width: 1.5 },
             marker: { size: 5, color: tr.color, line: { color: "white", width: 0.5 } },
             opacity: 0.55, yaxis: yk, xaxis: "x", connectgaps: false,
             hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
           });
-          traces.push({
-            x, y: movingAverage(tr.y, 3), name: `${tr.name} (3-pt avg)`, type: "scatter",
-            mode: "lines", line: { color: tr.color, width: 3 },
-            yaxis: yk, xaxis: "x", connectgaps: false, hoverinfo: "skip", showlegend: false,
-          });
+          if (cy.length >= 3) {
+            traces.push({
+              x: cx, y: movingAverage(cy, 3), name: `${tr.name} (3-pt avg)`, type: "scatter",
+              mode: "lines", line: { color: tr.color, width: 3 },
+              yaxis: yk, xaxis: "x", connectgaps: false, hoverinfo: "skip", showlegend: false,
+            });
+          }
           return;
         }
         // Drop point markers on dense series (lines-only is cleaner/faster); keep them when sparse.
@@ -152,22 +153,6 @@ function BiomarkerTimeline({ data, height }) {
           hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });
       });
-      // Pain-event rug at the bottom of NON-pain rows: vertical line shapes (translucent vermillion)
-      // anchored to this row's paper-y domain so they sit just inside the bottom of the row,
-      // regardless of the row's auto-scaled data range. yref="paper" + small fraction of the row
-      // height keeps them visible without dominating the trace.
-      if (painRugX.length && !row.isPain) {
-        const rowH = top - bottom;
-        const rugY0 = bottom;
-        const rugY1 = bottom + rowH * 0.10;   // 10% of row height — visible but unobtrusive
-        if (!layout.shapes) layout.shapes = [];
-        painRugX.forEach((tx) => {
-          layout.shapes.push({
-            type: "line", xref: "x", yref: "paper", x0: tx, x1: tx, y0: rugY0, y1: rugY1,
-            line: { color: C.pain, width: 1, dash: "solid" }, opacity: 0.30,
-          });
-        });
-      }
       layout.annotations.push({
         xref: "paper", yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
         xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,

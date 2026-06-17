@@ -205,8 +205,9 @@ function Biomarkers() {
             {`${label}: threshold=${fmt(s.best_threshold)}  sens=${fmt(s.sens)}  spec=${fmt(s.spec)}  n_windows=${s.n_windows ?? "—"}`}
           </Line>
           <Line>
-            {`balanced accuracy=${fmt(s.balanced_accuracy)} vs chance=${fmt(s.chance_accuracy)} (whole series)` +
-             `  (prevalence=${fmt(s.prevalence)})${aucTxt}${rhoTxt}`}
+            {`balanced accuracy=${fmt(s.balanced_accuracy)} vs chance=${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
+             `  (prevalence=${fmt(s.prevalence)}` +
+             `${s.majority_accuracy != null ? `, majority-class raw acc=${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
           </Line>
           {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
           {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
@@ -331,7 +332,7 @@ function Biomarkers() {
                   <Grid item xs={12}>
                     <MDBox px={2} pb={1.5}>
                       <Card sx={{ border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-                        <Grid container sx={{ minHeight: 340 }}>
+                        <Grid container sx={{ minHeight: 480 }}>
 
                           {/* LEFT: pain metric dropdown + binarization dropdown + sliders */}
                           <Grid item xs={12} md={5}
