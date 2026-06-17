@@ -20,7 +20,6 @@
 import { useMemo, useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
@@ -205,26 +204,24 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   }, [vals, cuts, stats, metricLabel]);
 
   return (
-    <Card sx={{ width: "100%", height: "100%" }}>
-      <MDBox p={1.25} display="flex" flexDirection="column" sx={{ height: "100%", minHeight: 320 }}>
-        <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
-          <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
-            {"Binarization preview"}
-          </MDTypography>
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 10, fontStyle: "italic" }}>
-            {vals.length ? `${vals.length} daily PRO observations` : (loading ? "loading…" : "no data yet")}
-          </MDTypography>
-        </MDBox>
-        <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 260 }} />
-        <MDTypography variant="caption" color="text" sx={{ fontSize: 10, mt: 0.25, textAlign: "center" }}>
-          {cuts.kind === "two-cut"
-            ? `Tertile cuts at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — middle ${stats.nMid} days excluded from training.`
-            : cuts.kind === "one-cut"
-              ? `${strategy === "median" ? "Median" : "KMeans"} cut at ${cuts.cut?.toFixed(1)} — every day is labeled.`
-              : "Adjust the strategy to preview the cut."}
+    <MDBox display="flex" flexDirection="column" sx={{ width: "100%", minHeight: 240 }}>
+      <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
+        <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
+          {"Binarization preview"}
+        </MDTypography>
+        <MDTypography variant="caption" color="text" sx={{ fontSize: 10, fontStyle: "italic" }}>
+          {vals.length ? `${vals.length} daily PRO observations` : (loading ? "loading…" : "no data yet")}
         </MDTypography>
       </MDBox>
-    </Card>
+      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 200 }} />
+      <MDTypography variant="caption" color="text" sx={{ fontSize: 10, textAlign: "center" }}>
+        {cuts.kind === "two-cut"
+          ? `Tertile cuts at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — middle ${stats.nMid} days excluded from training.`
+          : cuts.kind === "one-cut"
+            ? `${strategy === "median" ? "Median" : "KMeans"} cut at ${cuts.cut?.toFixed(1)} — every day is labeled.`
+            : "Adjust the strategy to preview the cut."}
+      </MDTypography>
+    </MDBox>
   );
 }
 

@@ -273,103 +273,108 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
+                  {/* Title + source toggle + pain-metric selector all on one row. Pain-metric was
+                      previously a wide centered block of its own; collapsing it inline here frees
+                      vertical space and puts every "what is being computed" control in one strip. */}
                   <Grid item xs={12}>
-                    <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+                    <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
                       <MDTypography variant="h5" fontSize={28} fontWeight="bold">
                         {"Pain Biomarkers"}
                       </MDTypography>
-                      <ToggleButtonGroup
-                        value={source}
-                        exclusive
-                        size="medium"
-                        onChange={(e, v) => { if (v) setSource(v); }}
-                      >
-                        <ToggleButton value="timedomain">Time-domain</ToggleButton>
-                        <ToggleButton value="powerdomain">Power-domain</ToggleButton>
-                        <ToggleButton value="both">Both</ToggleButton>
-                      </ToggleButtonGroup>
+                      <MDBox display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                        <MDBox display="flex" flexDirection="column" alignItems="flex-start">
+                          <MDTypography variant="caption" color="text" sx={{ fontSize: 11, lineHeight: 1 }}>
+                            {"Pain metric (biomarker target)"}
+                          </MDTypography>
+                          <FormControl size="small" sx={{ minWidth: 280, mt: 0.5 }}>
+                            <Select
+                              value={metric}
+                              onChange={(e) => setMetric(e.target.value)}
+                              sx={{ fontSize: 14, "& .MuiSelect-select": { py: 0.75 } }}
+                            >
+                              {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                                <MenuItem key={m.key} value={m.key} sx={{ fontSize: 14 }}>{m.label}</MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                        </MDBox>
+                        <ToggleButtonGroup
+                          value={source}
+                          exclusive
+                          size="medium"
+                          onChange={(e, v) => { if (v) setSource(v); }}
+                        >
+                          <ToggleButton value="timedomain">Time-domain</ToggleButton>
+                          <ToggleButton value="powerdomain">Power-domain</ToggleButton>
+                          <ToggleButton value="both">Both</ToggleButton>
+                        </ToggleButtonGroup>
+                      </MDBox>
                     </MDBox>
                   </Grid>
 
-                  {/* Pain-metric selector — larger box + text, centered (the biomarker target). */}
+                  {/* Binarization PREVIEW stacked DIRECTLY above the binarization SELECTOR — both
+                      inside one bordered Card so the visual link is unambiguous and there is no
+                      white space between them. Source-independent: this whole block lives in the
+                      top controls and renders identically on every tab. The preview recomputes
+                      client-side whenever metric / strategy / percentile sliders change.          */}
                   <Grid item xs={12}>
-                    <MDBox px={2} pb={2} display="flex" flexDirection="column" alignItems="center">
-                      <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 16 }} mb={0.5}>
-                        {"Pain metric (biomarker target)"}
-                      </MDTypography>
-                      <FormControl sx={{ minWidth: 380 }}>
-                        <Select
-                          value={metric}
-                          onChange={(e) => setMetric(e.target.value)}
-                          sx={{ fontSize: 20, "& .MuiSelect-select": { py: 1.5, textAlign: "center" } }}
-                        >
-                          {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                            <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </MDBox>
-                  </Grid>
-
-                  {/* Binarization controls + LIVE preview card. Two-column row: strategy/sliders
-                      on the left, histogram preview on the right. Preview updates instantly when
-                      the strategy or sliders change (pure client-side); it does NOT require a
-                      "Compute biomarker" run. Source-independent — shows on every tab.            */}
-                  <Grid item xs={12} md={6}>
-                    <MDBox px={2} pb={2} display="flex" flexDirection="column" alignItems="center">
-                      <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 16 }} mb={0.5}>
-                        {"Binarization (high vs low pain label)"}
-                      </MDTypography>
-                      <FormControl sx={{ minWidth: 320 }}>
-                        <Select
-                          value={strategy}
-                          onChange={(e) => setStrategy(e.target.value)}
-                          sx={{ fontSize: 18, "& .MuiSelect-select": { py: 1.25, textAlign: "center" } }}
-                        >
-                          {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
-                            <MenuItem key={s.key} value={s.key} sx={{ fontSize: 16 }}>{s.label}</MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      {strategy === "tertile" || strategy === "percentile" ? (
-                        <MDBox display="flex" flexDirection="row" alignItems="center" gap={2} mt={1.5} flexWrap="wrap" justifyContent="center">
-                          <MDTypography variant="caption" color="text" sx={{ minWidth: 90 }}>
-                            {"Low ≤ pct"}
-                          </MDTypography>
-                          <Slider
-                            value={percentileLow} min={5} max={50} step={1}
-                            valueLabelDisplay="auto" sx={{ width: 140 }}
-                            onChange={(e, v) => { const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo); }}
-                          />
-                          <MDTypography variant="caption" color="text" sx={{ minWidth: 90 }}>
-                            {"High ≥ pct"}
-                          </MDTypography>
-                          <Slider
-                            value={percentileHigh} min={50} max={95} step={1}
-                            valueLabelDisplay="auto" sx={{ width: 140 }}
-                            onChange={(e, v) => { const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi); }}
+                    <MDBox px={2} pb={1.5}>
+                      <Card variant="outlined" sx={{ border: "1px solid #E0E4E8", boxShadow: "none" }}>
+                        <MDBox p={1.25} pb={0.5}>
+                          <BinarizationPreview
+                            points={previewPoints}
+                            strategy={strategy}
+                            percentileLow={percentileLow}
+                            percentileHigh={percentileHigh}
+                            metricLabel={previewMetricLabel}
+                            loading={painLoading}
                           />
                         </MDBox>
-                      ) : null}
-                      <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 11, mt: 0.5, textAlign: "center", maxWidth: 460 }}>
-                        {strategy === "tertile" || strategy === "percentile"
-                          ? "Days between the cuts are excluded from training (the detector sees only clearly-high vs clearly-low days)."
-                          : strategy === "median"
-                            ? "Every day is labeled at the median split (~50/50)."
-                            : "Legacy 2-cluster KMeans labeler (data-driven but less transparent and density-sensitive)."}
-                      </MDTypography>
-                    </MDBox>
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <MDBox px={2} pb={2} sx={{ height: "100%" }}>
-                      <BinarizationPreview
-                        points={previewPoints}
-                        strategy={strategy}
-                        percentileLow={percentileLow}
-                        percentileHigh={percentileHigh}
-                        metricLabel={previewMetricLabel}
-                        loading={painLoading}
-                      />
+                        <Divider sx={{ my: 0 }} />
+                        <MDBox px={1.5} py={1} display="flex" flexDirection="column" alignItems="center">
+                          <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 14, lineHeight: 1.1 }} mb={0.5}>
+                            {"Binarization (high vs low pain label)"}
+                          </MDTypography>
+                          <FormControl size="small" sx={{ minWidth: 300 }}>
+                            <Select
+                              value={strategy}
+                              onChange={(e) => setStrategy(e.target.value)}
+                              sx={{ fontSize: 14, "& .MuiSelect-select": { py: 0.75, textAlign: "center" } }}
+                            >
+                              {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
+                                <MenuItem key={s.key} value={s.key} sx={{ fontSize: 14 }}>{s.label}</MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                          {strategy === "tertile" || strategy === "percentile" ? (
+                            <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5} mt={1} flexWrap="wrap" justifyContent="center">
+                              <MDTypography variant="caption" color="text" sx={{ minWidth: 70, fontSize: 11 }}>
+                                {"Low ≤ pct"}
+                              </MDTypography>
+                              <Slider
+                                value={percentileLow} min={5} max={50} step={1}
+                                valueLabelDisplay="auto" size="small" sx={{ width: 120 }}
+                                onChange={(e, v) => { const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo); }}
+                              />
+                              <MDTypography variant="caption" color="text" sx={{ minWidth: 70, fontSize: 11 }}>
+                                {"High ≥ pct"}
+                              </MDTypography>
+                              <Slider
+                                value={percentileHigh} min={50} max={95} step={1}
+                                valueLabelDisplay="auto" size="small" sx={{ width: 120 }}
+                                onChange={(e, v) => { const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi); }}
+                              />
+                            </MDBox>
+                          ) : null}
+                          <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25, textAlign: "center", maxWidth: 520 }}>
+                            {strategy === "tertile" || strategy === "percentile"
+                              ? "Days between the cuts are excluded from training (the detector sees only clearly-high vs clearly-low days)."
+                              : strategy === "median"
+                                ? "Every day is labeled at the median split (~50/50)."
+                                : "Legacy 2-cluster KMeans labeler (data-driven but less transparent and density-sensitive)."}
+                          </MDTypography>
+                        </MDBox>
+                      </Card>
                     </MDBox>
                   </Grid>
 
