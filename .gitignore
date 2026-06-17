@@ -324,3 +324,9 @@ secrets/
 
 # Transient async-job scripts generated at runtime
 BRAVO/modules/AsyncJobScheduler/*.sh
+
+# Patient PRO / LFP dumps produced by scripts/dump_chronic_pros.py — NEVER commit.
+BRAVO/_pro_dump/
+
+# Local Claude/Operon agent state (project memory, settings).
+.claude/
