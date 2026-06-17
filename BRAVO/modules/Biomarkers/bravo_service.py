@@ -151,14 +151,12 @@ def _derive_chan_order(td_recordings):
 def _recorded_powers(powerdomain_list, region_map=None):
     """Which band-power channels were actually recorded — the '<contact> Power' columns of the
     BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
-    device metadata when available. Lets the card state which powers were recorded for each channel.
-
-    TODO (next step): also surface the CENTER FREQUENCY (Hz) of each recorded power column. The
-    Power-Domain recordings carry a Frequency/SweepFrequency field per channel; pulling it here
-    and shipping it as e.g. {raw, label, region, center_hz: 22.5} lets the card display
-    'L 0⁻-3⁺ (GPi) @ 22.5 Hz' so the clinician sees which BAND was actually sensed, not just
-    which contact pair. Today the line just lists contacts and reads as ambiguous.
+    device metadata when available, plus the sensing-band CENTER FREQUENCY when the device stored
+    it. Each entry: {raw, label, region, center_hz}. The card displays 'L 0⁻-3⁺ (GPi) @ 22.5 Hz'
+    so the clinician sees which BAND was sensed, not just which contact pair. Frequency extraction
+    lives in analytics.power_center_freqs (Django-free, unit-tested).
     """
+    center_hz = analytics.power_center_freqs(powerdomain_list)
     seen = {}
     for r in powerdomain_list or []:
         for nm in r.get("ChannelNames", []) or []:
@@ -167,7 +165,8 @@ def _recorded_powers(powerdomain_list, region_map=None):
                 contact = s.rsplit(" ", 1)[0] if " " in s else s   # strip the trailing " Power"
                 if contact not in seen:
                     fmt = analytics.format_channel(contact, region=(region_map or {}).get(contact))
-                    seen[contact] = {"raw": contact, "label": fmt["short"], "region": fmt["region"]}
+                    seen[contact] = {"raw": contact, "label": fmt["short"], "region": fmt["region"],
+                                     "center_hz": center_hz.get(contact)}
     return list(seen.values())
 
 

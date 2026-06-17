@@ -92,6 +92,41 @@ def test_lfp_distribution_robust_range():
     assert max(d["counts"]) < sum(d["counts"])             # not all samples in one bar
 
 
+def test_power_center_freqs_standard_path():
+    """Sensing-band center frequency is read from Descriptor.Therapy.<hemi>.SensingSetup and
+    matched to each power contact by its hemisphere token."""
+    rec = {"ChannelNames": ["ZERO_THREE_LEFT POWER", "ZERO_THREE_LEFT Stimulation",
+                            "ONE_THREE_RIGHT POWER", "ONE_THREE_RIGHT Stimulation"],
+           "Descriptor": {"Therapy": {
+               "Left":  {"SensingSetup": {"FrequencyInHertz": 22.46}},
+               "Right": {"SensingSetup": {"FrequencyInHertz": 9.77}}}}}
+    freqs = analytics.power_center_freqs([rec])
+    assert freqs == {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}
+
+
+def test_power_center_freqs_nested_recordingconfig():
+    """Firmware variant: SensingSetup nested under RecordingConfiguration.Config still resolves."""
+    rec = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+           "Descriptor": {"Therapy": {"Left": {
+               "RecordingConfiguration": {"Config": {"SensingSetup": {"FrequencyInHertz": 13.18}}}}}}}
+    assert analytics.power_center_freqs([rec]) == {"ZERO_TWO_LEFT": 13.18}
+
+
+def test_power_center_freqs_missing_is_safe():
+    """No Therapy / no SensingSetup / no hemisphere token -> no entry, never raises."""
+    assert analytics.power_center_freqs([{"ChannelNames": ["ZERO_TWO_LEFT POWER"]}]) == {}
+    assert analytics.power_center_freqs(
+        [{"ChannelNames": ["ZERO_TWO_LEFT POWER"], "Descriptor": {"Therapy": {"Left": {}}}}]) == {}
+    # POWER channel with no LEFT/RIGHT token cannot be matched to a hemisphere.
+    rec = {"ChannelNames": ["X POWER"],
+           "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 7.81}}}}}
+    assert analytics.power_center_freqs([rec]) == {}
+    # Non-finite / non-positive frequencies are rejected.
+    rec2 = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+            "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 0}}}}}
+    assert analytics.power_center_freqs([rec2]) == {}
+
+
 if __name__ == "__main__":
     test_roc_downsampled_for_plot()
     test_cluster_scatter_one_feature()
@@ -99,4 +134,7 @@ if __name__ == "__main__":
     test_cluster_scatter_missing_features()
     test_pain_binarization()
     test_lfp_distribution_robust_range()
+    test_power_center_freqs_standard_path()
+    test_power_center_freqs_nested_recordingconfig()
+    test_power_center_freqs_missing_is_safe()
     print("All analytics tests passed.")

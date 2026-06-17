@@ -62,6 +62,68 @@ def format_channel(name, region=None):
             "contacts": contacts, "region": reg}
 
 
+def sensing_center_hz(therapy_hemi):
+    """Pull the BrainSense sensing-band CENTER FREQUENCY (Hz) from one hemisphere's Therapy
+    snapshot. Medtronic stores it at SensingSetup.FrequencyInHertz; firmware/processing drift puts
+    the SensingSetup at slightly different depths, so probe the known key paths and return the
+    first finite positive frequency found (rounded to 0.01 Hz), else None. Defensive — any
+    malformed/absent snapshot returns None rather than raising.
+    """
+    if not isinstance(therapy_hemi, dict):
+        return None
+    setups = []
+    ss = therapy_hemi.get("SensingSetup")
+    if isinstance(ss, dict):
+        setups.append(ss)
+    sensing = therapy_hemi.get("sensing")
+    if isinstance(sensing, dict) and isinstance(sensing.get("SensingSetup"), dict):
+        setups.append(sensing["SensingSetup"])
+    rc = therapy_hemi.get("RecordingConfiguration")
+    if isinstance(rc, dict):
+        cfg = rc.get("Config")
+        if isinstance(cfg, dict) and isinstance(cfg.get("SensingSetup"), dict):
+            setups.append(cfg["SensingSetup"])
+    for ss in setups:
+        for key in ("FrequencyInHertz", "Frequency", "CenterFrequency", "CenterFrequencyInHertz"):
+            v = ss.get(key)
+            try:
+                fv = float(v)
+                if np.isfinite(fv) and fv > 0:
+                    return round(fv, 2)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def power_center_freqs(powerdomain_list):
+    """Map each power CONTACT (e.g. 'ZERO_THREE_LEFT') to its sensing-band center frequency (Hz),
+    read from each recording's Descriptor.Therapy snapshot. A recording's Therapy carries 'Left'
+    and 'Right' hemisphere keys; each power channel's hemisphere token (LEFT/RIGHT in the contact
+    name) is matched to that hemisphere's SensingSetup.FrequencyInHertz. Last writer wins per
+    contact (snapshots within one session share the sensing config).
+    """
+    freqs = {}
+    for r in powerdomain_list or []:
+        if not isinstance(r, dict):
+            continue
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        if not isinstance(therapy, dict):
+            continue
+        hemi_hz = {"LEFT": sensing_center_hz(therapy.get("Left")),
+                   "RIGHT": sensing_center_hz(therapy.get("Right"))}
+        for nm in r.get("ChannelNames", []) or []:
+            s = str(nm)
+            if "POWER" not in s.upper():
+                continue
+            contact = s.rsplit(" ", 1)[0] if " " in s else s
+            cu = contact.upper()
+            hz = hemi_hz["LEFT"] if "LEFT" in cu else (hemi_hz["RIGHT"] if "RIGHT" in cu else None)
+            if hz is not None:
+                freqs[contact] = hz
+    return freqs
+
+
 def _f(x):
     """Float or None (JSON-safe, NaN -> None)."""
     try:

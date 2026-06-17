@@ -484,7 +484,15 @@ function Biomarkers() {
                         {data.recorded_powers && data.recorded_powers.length ? (
                           <MDTypography variant="button" fontWeight="regular" color="text" display="block">
                             {"Powers recorded per channel: "}
-                            {data.recorded_powers.map((p) => p.region ? `${p.label} (${p.region})` : p.label).join(",  ")}
+                            {data.recorded_powers.map((p) => {
+                              const base = p.region ? `${p.label} (${p.region})` : p.label;
+                              return p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
+                            }).join(",  ")}
+                            {data.recorded_powers.every((p) => p.center_hz == null) ? (
+                              <MDTypography variant="caption" color="text" fontStyle="italic" display="block" sx={{ fontSize: 10 }}>
+                                {"(Sensing-band center frequency not present in this device export.)"}
+                              </MDTypography>
+                            ) : null}
                           </MDTypography>
                         ) : null}
                       </MDBox>
