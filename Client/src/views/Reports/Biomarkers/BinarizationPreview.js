@@ -143,21 +143,25 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     }
     const shapes = [];
     const annotations = [];
-    const pushCutLine = (x, label, color) => {
+    // Cut-line labels sit above the plot. When the two cuts are close on the x-axis (e.g. the
+    // ceiling-skewed NRS tertile at 7.0 / 8.0) same-height labels overlap, so stagger them:
+    // the low-cut label on a lower line anchored to the LEFT of its line, the high-cut label on
+    // a higher line anchored to the RIGHT. yLevel/xanchor passed per call.
+    const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center") => {
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1,
                     line: { color, width: 2, dash: "dash" } });
-      annotations.push({ x, yref: "paper", y: 1.04, xanchor: "center", yanchor: "bottom",
+      annotations.push({ x, yref: "paper", y: yLevel, xanchor, yanchor: "bottom",
                          text: `${x.toFixed(1)} (${label})`, showarrow: false,
                          font: { size: 10, color } });
     };
     if (cuts.kind === "two-cut") {
-      pushCutLine(cuts.lowCut, cuts.lowLabel, LO);
-      pushCutLine(cuts.highCut, cuts.highLabel, HI);
+      pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right");
+      pushCutLine(cuts.highCut, cuts.highLabel, HI, 1.13, "left");
       // Shade the excluded middle.
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: cuts.lowCut, x1: cuts.highCut,
                     y0: 0, y1: 1, fillcolor: MID, opacity: 0.10, line: { width: 0 } });
     } else if (cuts.kind === "one-cut") {
-      pushCutLine(cuts.cut, cuts.label, "#344767");
+      pushCutLine(cuts.cut, cuts.label, "#344767", 1.04, "center");
     }
 
     // Class-count badges in the plot area — placed at the top-left (low) and top-right (high)
@@ -172,7 +176,9 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     });
     if (cuts.kind === "two-cut") {
       annotations.push(badge(0.10, LO, "Low", stats.nLow));
-      annotations.push(badge(0.50, MID, "Excluded", stats.nMid));
+      // Excluded badge sits lower (y in `badge` is 0.94 top-anchored) so it never rides up into
+      // the staggered cut-line labels above the plot when the two cuts are close together.
+      annotations.push({ ...badge(0.50, MID, "Excluded", stats.nMid), y: 0.78 });
       annotations.push(badge(0.90, HI, "High", stats.nHigh));
     } else if (cuts.kind === "one-cut") {
       annotations.push(badge(0.18, LO, "Low", stats.nLow));
@@ -187,7 +193,7 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     const layout = {
       paper_bgcolor: "white", plot_bgcolor: "white",
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 11, color: "#344767" },
-      margin: { l: 48, r: 16, t: 38, b: 40 },
+      margin: { l: 48, r: 16, t: 54, b: 40 },
       bargap: 0.02,
       xaxis: { automargin: true, title: { text: metricLabel || "Pain score", font: { size: 11 }, standoff: 8 },
                gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
