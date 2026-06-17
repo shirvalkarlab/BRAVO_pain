@@ -629,7 +629,7 @@ def td_sliding_corr_spectrum(td_detail, times, *, window_days=30, step_days=7, m
 
 
 def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=None, n_peaks=6,
-                  max_freq_hz=50.0):
+                  max_freq_hz=50.0, q_significant=0.05):
     """Pearson-R-vs-frequency correlation spectrum per channel
     (biomarker_analysis_streaming.ipynb cell 12). `td_detail` is the streaming_psd result dict.
 
@@ -664,14 +664,28 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     labels_arr = np.asarray(raw_labels, dtype=float) if raw_labels is not None else None
     times = td_detail.get("times")   # (E,) ISO strings or None
 
+    # Significance markers are FDR-corrected, not raw p<p_significant. The spectrum shows ~101
+    # frequencies x C channels, so an uncorrected p<0.001 marker over-states significance to a
+    # viewer reading the panel directly. Build a Benjamini-Hochberg q-grid over the DISPLAYED family
+    # (all non-ignored channel x freq cells) and mark a cell significant only when its FDR q is
+    # below q_significant. Ignored cells (>=cap / notch) are excluded from the family. (Band
+    # SELECTION still uses the autocorrelation-adjusted FDR in pipeline; the headline statement is
+    # the permutation perm_p — this only makes the on-panel green markers honest.)
+    from .stats_utils import bh_fdr
+    pflat = pval.astype(float).copy()
+    pflat[:, ignore] = np.nan                     # drop capped/notched cells from the FDR family
+    qgrid = bh_fdr(pflat.ravel()).reshape(pval.shape)
+
     channels = []
     for ci in range(corr.shape[0]):
         raw = chans[ci] if ci < len(chans) else f"ch{ci}"
         fmt = format_channel(raw, region=(region_map or {}).get(raw, ""))
         r_row = corr[ci].copy()
         p_row = pval[ci].copy()
+        q_row = qgrid[ci]
         r_row[ignore] = np.nan
-        sig = [(_f(r_row[k]) if (np.isfinite(p_row[k]) and p_row[k] < p_significant and not ignore[k]) else None)
+        # Significant = survives BH-FDR (q < q_significant) on the displayed family, not raw p.
+        sig = [(_f(r_row[k]) if (np.isfinite(q_row[k]) and q_row[k] < q_significant and not ignore[k]) else None)
                for k in range(len(f))]
 
         # Peaks: strongest |R| local maxima, for highlighting.
@@ -702,12 +716,15 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": [_f(x) for x in r_row],
             "p": [_f(x) for x in p_row],
+            "q": [_f(x) for x in q_row],          # BH-FDR q over the displayed family
             "significant": sig,
             "peaks": peaks,
             "peak_scatter": peak_scatter,
         })
     return {"freqs": [float(x) for x in f], "channels": channels,
-            "transform": td_detail.get("transform", "log"), "p_significant": p_significant}
+            "transform": td_detail.get("transform", "log"),
+            "p_significant": p_significant, "q_significant": q_significant,
+            "significance_method": "BH-FDR over displayed channel x freq family"}
 
 
 # --- Time-domain (streaming) analytics -------------------------------------------------------

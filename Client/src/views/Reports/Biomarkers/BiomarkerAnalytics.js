@@ -166,7 +166,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     const FCAP = 50;
     const fMax = (spectrum.freqs && spectrum.freqs.length) ? spectrum.freqs[spectrum.freqs.length - 1] : 100;
     tdPanels.push(
-      <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★`} lg={12}>
+      <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★ (significance FDR-corrected)`} lg={12}>
         <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
           yaxis: { title: `Correlation with ${pain} (R)`, range: [-1.05, 1.05], zeroline: true },
           legend: { orientation: "h", y: -0.2, groupclick: "togglegroup" },

@@ -86,7 +86,13 @@ def _autocorr_adjusted_pgrid(result):
     corr = np.asarray(result["corr"], dtype=float)
     C, F = corr.shape
     pgrid = np.full((C, F), np.nan)
-    yv = np.isfinite(labels)
+    # The r in result['corr'] was computed by pearson_corr_psd_label AFTER MAD>=3 outlier rejection
+    # (per channel/freq on the feature AND on the label). The effective-N / df here MUST be computed
+    # on the SAME surviving samples, otherwise df reflects more observations than r was estimated
+    # from and the t->p mapping is anti-conservative (partly undoing the effective-N adjustment this
+    # function exists to make). Mirror the MAD keep-mask on the label once; the feature side is per
+    # (c,f) inside the loop.
+    label_keep = adapter.mad_outlier_mask(labels, k=3.0)
     from scipy.stats import t as _t
     for c in range(C):
         for f in range(F):
@@ -94,7 +100,7 @@ def _autocorr_adjusted_pgrid(result):
             if not np.isfinite(r) or abs(r) >= 1:
                 continue
             x = feat[:, c, f]
-            v = np.isfinite(x) & yv
+            v = adapter.mad_outlier_mask(x, k=3.0) & label_keep
             n_eff = stats_utils.effective_n(x[v], labels[v])
             df = n_eff - 2.0
             if not np.isfinite(n_eff) or df < 1:

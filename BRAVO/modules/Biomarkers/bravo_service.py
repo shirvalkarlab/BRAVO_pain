@@ -15,6 +15,7 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 import os
 import json
 import math
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -27,6 +28,8 @@ from . import pipeline
 from . import adapter
 from .routines import redcap_client
 from .routines import analytics
+
+_log = logging.getLogger(__name__)
 
 # DB recording types. Time-domain = raw 250 Hz LFP. The "power domain" source merges TWO
 # band-power-over-time streams: the ~10-min Chronic (BrainSense Timeline) trend AND the per-session
@@ -127,6 +130,12 @@ def _load_recordings(participant_uid, types):
         try:
             return Database.loadSourceFile(rec.pointer, rec.hashed)
         except Exception:
+            # Per-file resilience: one corrupt/undecodable recording must not sink the whole
+            # threaded load. But log it (pointer only, never the payload) so a SYSTEMATIC decode
+            # failure is diagnosable instead of silently yielding an empty timeline that looks
+            # identical to "no recordings".
+            _log.warning("Biomarkers: failed to decode recording %r; skipping",
+                         getattr(rec, "pointer", "?"), exc_info=True)
             return None
 
     workers = max(1, min(len(Recordings), _loader_threads()))
