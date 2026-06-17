@@ -303,12 +303,31 @@ def bravo_powerdomain_to_chronic_like(recordings):
             valid = np.isfinite(pw)
             if not valid.any():
                 continue
-            label = hemi.title() if hemi else "PowerDomain"
+            # Build a real bipolar-contact label (e.g. "L 0⁻-3⁺") from the power column name
+            # instead of the uninformative "Left LFP" / "Right LFP". The Medtronic export names
+            # the column "<CONTACT> Power" (e.g. "ZERO_THREE_LEFT Power"); strip " Power" and let
+            # format_channel decode it. Fall back to the hemisphere when no contact is encoded.
+            from .routines.analytics import format_channel
+            contact_raw = names[pi]
+            for suffix in (" POWER", " Power", " power"):
+                if contact_raw.upper().endswith(suffix.upper()):
+                    contact_raw = contact_raw[: -len(suffix)]
+                    break
+            fmt = format_channel(contact_raw, region="")
+            short = fmt.get("short") or ""
+            # format_channel returns a decoded bipolar label like "L 0⁻-3⁺" when the column name
+            # encodes a contact (digits appear in the formatted short, e.g. "0⁻-3⁺"). If it could
+            # not decode one, fall back to a clean "<L/R> LFP" rather than a raw token.
+            if any(ch.isdigit() for ch in short):
+                label = short
+            else:
+                label = ("L" if hemi == "LEFT" else "R" if hemi == "RIGHT" else "") + " LFP"
+                label = label.strip() or "PowerDomain LFP"
             out.append({
                 "SamplingRate": -1,
                 "Time": time[valid],
                 "Data": np.column_stack([pw[valid], np.asarray(stim, dtype=float)[valid]]),
-                "ChannelNames": [f"{label} LFP", f"{label} Amplitude"],
+                "ChannelNames": [label, f"{label} Amplitude"],
                 # Sensing-modality tag so the merged-series batch/scale confound can be diagnosed
                 # downstream (per-session Power-Domain band power vs the ~10-min Chronic LFP power).
                 "Source": "powerdomain",

@@ -550,8 +550,12 @@ def test_bravo_powerdomain_to_chronic_like():
            "Data": data, "Missing": missing}
     out = adapter.bravo_powerdomain_to_chronic_like([rec])
     assert len(out) == 2, "one chronic-shaped series per Power channel"
-    left = next(o for o in out if o["ChannelNames"][0].startswith("Left"))
-    right = next(o for o in out if o["ChannelNames"][0].startswith("Right"))
+    # ChannelNames are now real bipolar-contact labels decoded from the power column name
+    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻-3⁺"), not the generic "Left LFP".
+    left = next(o for o in out if o["ChannelNames"][0].startswith("L"))
+    right = next(o for o in out if o["ChannelNames"][0].startswith("R"))
+    assert "0" in left["ChannelNames"][0] and "3" in left["ChannelNames"][0], \
+        f"expected a decoded bipolar contact label, got {left['ChannelNames'][0]!r}"
     # L: sentinel (idx1) + missing (idx3) dropped -> 10,12,14 at idx 0,2,4
     assert list(left["Data"][:, 0]) == [10.0, 12.0, 14.0]
     assert (left["Data"][:, 1] == 1.0).all()                 # paired with LEFT stim col

@@ -390,7 +390,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             td_tasks = {
                 "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
-                "spectrogram": lambda: analytics.psd_spectrogram(det, times, region_map=region_map),
+                # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
+                # panels); no longer computed to keep the response lean.
             }
             # The sliding R-vs-frequency-over-time HEATMAP is computed ONLY in sliding mode (a window
             # is selected). With no window (all data) the card shows the static R-vs-frequency

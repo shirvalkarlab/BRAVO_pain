@@ -27,6 +27,20 @@ function parseTime(t) {
   return new Date(t);
 }
 
+// Centered moving average over the non-null values (PainScores report uses a 3-point smooth as a
+// thick trend line over translucent raw markers). Skips nulls so gaps don't drag the average.
+function movingAverage(y, win = 3) {
+  const half = Math.floor(win / 2);
+  return y.map((_, i) => {
+    let s = 0, c = 0;
+    for (let j = i - half; j <= i + half; j++) {
+      const v = y[j];
+      if (j >= 0 && j < y.length && v != null && Number.isFinite(v)) { s += v; c += 1; }
+    }
+    return c ? s / c : null;
+  });
+}
+
 function BiomarkerTimeline({ data, height }) {
   const ref = useRef(null);
 
@@ -98,15 +112,31 @@ function BiomarkerTimeline({ data, height }) {
       layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } },
         zeroline: false, showgrid: true, gridcolor: "#F0F0F0", automargin: true };
       row.traces.forEach((tr) => {
+        // PAIN ROW (isPain): render in the standalone Pain Scores report style — translucent
+        // thin raw markers+line PLUS a thick 3-point moving-average trend line over the top, so
+        // the trajectory is legible without losing individual observations.
+        if (row.isPain) {
+          traces.push({
+            x, y: tr.y, name: tr.name, type: "scatter", mode: "lines+markers",
+            line: { color: tr.color, width: 1.5 },
+            marker: { size: 5, color: tr.color, line: { color: "white", width: 0.5 } },
+            opacity: 0.55, yaxis: yk, xaxis: "x", connectgaps: false,
+            hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
+          });
+          traces.push({
+            x, y: movingAverage(tr.y, 3), name: `${tr.name} (3-pt avg)`, type: "scatter",
+            mode: "lines", line: { color: tr.color, width: 3 },
+            yaxis: yk, xaxis: "x", connectgaps: false, hoverinfo: "skip", showlegend: false,
+          });
+          return;
+        }
         // Drop point markers on dense series (lines-only is cleaner/faster); keep them when sparse.
-        // forceMarkers=true (pain row) always renders dots — every marker is one observation.
         const nPts = (tr.y || []).filter((v) => v !== null && v !== undefined).length;
-        const mode = tr.mode || (tr.forceMarkers ? "markers" : (nPts > 200 ? "lines" : "lines+markers"));
+        const mode = tr.mode || (nPts > 200 ? "lines" : "lines+markers");
         traces.push({
           x, y: tr.y, name: tr.name, type: "scatter", mode,
           line: { color: tr.color, width: 2, dash: tr.dash || "solid" },
-          marker: { size: tr.forceMarkers ? 6 : 4, color: tr.color,
-                    line: tr.forceMarkers ? { color: "white", width: 0.5 } : undefined },
+          marker: { size: 4, color: tr.color },
           yaxis: yk, xaxis: "x", connectgaps: false,
           hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });

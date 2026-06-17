@@ -279,37 +279,64 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     });
   }
 
+  // Mean PSD by pain state, per contact — grouped into a LEFT-hemisphere column and a
+  // RIGHT-hemisphere column, each wrapped in a thick black border (so the three left contacts
+  // and three right contacts read as two anatomical blocks). yaxis autorange + a small headroom
+  // pad fixes the previous top-of-curve clipping.
   const spectra = td.psd_spectra || null;
   if (spectra && spectra.channels) {
-    spectra.channels.forEach((ch, i) => {
+    const oneSpectrum = (ch, i) => {
       const traces = [
         { x: spectra.freqs, y: ch.high, name: `High ${pain}`, type: "scatter", mode: "lines", line: { color: HI, width: 2 }, connectgaps: false },
         { x: spectra.freqs, y: ch.low, name: `Low ${pain}`, type: "scatter", mode: "lines", line: { color: LO, width: 2 }, connectgaps: false },
       ];
-      tdPanels.push(
-        <Panel key={"psd" + i} title={`Mean PSD by ${pain} — ${ch.short}`}>
-          <Fig traces={traces} layout={{ xaxis: { title: "Frequency (Hz)" },
-            yaxis: { title: `Power (${spectra.unit})` }, legend: { orientation: "h", y: -0.25 },
-            title: { text: ch.region || "", font: { size: 11 } } }} />
-        </Panel>
+      return (
+        <MDBox key={"psd" + i} mb={1.5}>
+          <MDTypography variant="h6" fontSize={15} mb={0.25}>
+            {`${ch.short}${ch.region ? ` · ${ch.region}` : ""}`}
+          </MDTypography>
+          <Fig height={260} traces={traces} layout={{
+            xaxis: { title: "Frequency (Hz)" },
+            yaxis: { title: `Power (${spectra.unit})`, autorange: true, rangemode: "normal", automargin: true },
+            margin: { l: 64, r: 20, t: 16, b: 44 },
+            legend: { orientation: "h", y: -0.28 } }} />
+        </MDBox>
       );
+    };
+    const leftCh = [], rightCh = [], otherCh = [];
+    spectra.channels.forEach((ch, i) => {
+      const s = ch.short || "";
+      (s.startsWith("L") ? leftCh : s.startsWith("R") ? rightCh : otherCh).push(oneSpectrum(ch, i));
     });
+    const hemiColumn = (figs, label, key) => figs.length ? (
+      <Grid item xs={12} lg={6} key={key}>
+        <Card sx={{ width: "100%", height: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
+          <MDBox p={2}>
+            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">
+              {`Mean PSD by ${pain} — ${label}`}
+            </MDTypography>
+            {figs}
+          </MDBox>
+        </Card>
+      </Grid>
+    ) : null;
+    const lcol = hemiColumn(leftCh, "Left hemisphere", "psd-left");
+    const rcol = hemiColumn(rightCh, "Right hemisphere", "psd-right");
+    if (lcol) tdPanels.push(lcol);
+    if (rcol) tdPanels.push(rcol);
+    if (otherCh.length) tdPanels.push(
+      <Grid item xs={12} key="psd-other">
+        <Card sx={{ width: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
+          <MDBox p={2}>
+            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">{`Mean PSD by ${pain}`}</MDTypography>
+            {otherCh}
+          </MDBox>
+        </Card>
+      </Grid>
+    );
   }
 
-  const sg = td.spectrogram || null;
-  if (sg && sg.channels) {
-    sg.channels.forEach((ch, i) => {
-      const traces = [{ type: "heatmap", z: ch.z, x: sg.times, y: sg.freqs, colorscale: "Viridis",
-        colorbar: { title: sg.unit, titleside: "right" },
-        hovertemplate: `%{x|%b %d %Y} · %{y:.1f} Hz · %{z:.1f} ${sg.unit}<extra></extra>` }];
-      tdPanels.push(
-        <Panel key={"sg" + i} title={`PSD over sessions — ${ch.short}`}>
-          <Fig traces={traces} layout={{ xaxis: { title: "Session", type: "date" }, yaxis: { title: "Frequency (Hz)" },
-            title: { text: ch.region || "", font: { size: 11 } } }} />
-        </Panel>
-      );
-    });
-  }
+  // (PSD spectrograms removed — they added little over the correlation spectrum + mean-PSD panels.)
 
   const scs = td.sliding_corr_spectrum || null;
   if (scs && scs.channels && scs.channels.length) {
@@ -420,14 +447,14 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
     chPanels.push(
-      <Panel key="dist" title={`LFP power distribution + Otsu threshold${chSuffix}`}>
+      <Panel key="dist" title={`Power-domain LFP band-power distribution + Otsu split${chSuffix}`}>
         <Fig height={340} traces={[{
           x: centers, y: dist.counts, type: "bar",
           marker: { color: PALETTE[0], line: { width: 0 } }, opacity: 0.85,
-          hovertemplate: "LFP=%{x:.1f}<br>%{y:,} samples<extra></extra>",
+          hovertemplate: "band power=%{x:.1f}<br>%{y:,} samples<extra></extra>",
         }]}
           layout={{
-            xaxis: { title: "LFP power (device units, 1st–99th pct display range)" },
+            xaxis: { title: "Power-domain LFP band power (device units, 1st–99th pct display range)" },
             yaxis: { title: "Sample count" }, bargap: 0.04,
             shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
               y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : [],
@@ -538,19 +565,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     <Grid item xs={12}>
       <MDBox mt={2} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
         <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
-          {"Power-domain channel:"}
+          {"Sensing contact (bipolar):"}
         </MDTypography>
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
           onChange={(_, v) => { if (v) setChSel(v); }}>
-          <ToggleButton value="pooled">Pooled</ToggleButton>
+          <ToggleButton value="pooled">All contacts</ToggleButton>
           {channelKeys.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
         </ToggleButtonGroup>
         <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
-            ? "All recorded LFP series merged into one threshold (legacy view)."
-            : `Showing only the ${safeChSel} series — independent threshold, AUC, and sliding-window curve.`}
+            ? "All bipolar sensing contacts merged into one threshold (legacy view)."
+            : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
         </MDTypography>
       </MDBox>
     </Grid>
@@ -559,7 +586,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   return (
     <>
       <Section title="Time-domain analysis (250 Hz streaming PSD)"
-               subtitle="Pearson-R spectrum, mean PSD by pain state, and PSD spectrogram per contact pair."
+               subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle="Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, LFP distribution, and pain clusters."

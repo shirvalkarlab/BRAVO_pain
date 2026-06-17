@@ -134,8 +134,43 @@ function Biomarkers() {
   }, [participant_uid]);
 
   // The points array for the currently-selected pain metric, fed straight into the preview card.
+  // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
+  // /queryPainScores; it is synthesized here exactly as the backend does — the per-day average of
+  // z(MPQ-sum) and z(left-leg-VAS) across all surveys, keeping a day when either part exists.
   const previewPoints = (() => {
     if (!painScores || !Array.isArray(painScores.metrics)) return [];
+    if (metric === "composite_mpq_leftleg") {
+      const get = (k) => {
+        const m = painScores.metrics.find((x) => x.key === k);
+        return m ? m.points : [];
+      };
+      const zStats = (pts) => {
+        const vs = pts.map((p) => p.v).filter((v) => v != null && Number.isFinite(v));
+        if (vs.length < 2) return null;
+        const mu = vs.reduce((s, v) => s + v, 0) / vs.length;
+        const sd = Math.sqrt(vs.reduce((s, v) => s + (v - mu) ** 2, 0) / vs.length) || 1;
+        return { mu, sd };
+      };
+      const mpq = get("mpq_sum"), leg = get("left_leg_vas");
+      const sM = zStats(mpq), sL = zStats(leg);
+      if (!sM && !sL) return [];
+      // Index each part's z-score by timestamp, then average the available parts per day.
+      const zByT = {};
+      const add = (pts, st, slot) => {
+        if (!st) return;
+        pts.forEach((p) => {
+          if (p.v == null || !Number.isFinite(p.v)) return;
+          const key = String(p.t);
+          (zByT[key] = zByT[key] || {})[slot] = (p.v - st.mu) / st.sd;
+        });
+      };
+      add(mpq, sM, "m"); add(leg, sL, "l");
+      return Object.keys(zByT).sort().map((t) => {
+        const z = zByT[t];
+        const parts = [z.m, z.l].filter((v) => v != null && Number.isFinite(v));
+        return parts.length ? { t, v: parts.reduce((s, v) => s + v, 0) / parts.length } : null;
+      }).filter(Boolean);
+    }
     const m = painScores.metrics.find((x) => x.key === metric);
     return m ? m.points : [];
   })();
