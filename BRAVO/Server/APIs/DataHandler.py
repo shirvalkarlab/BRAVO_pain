@@ -96,7 +96,7 @@ class DataUploadHandler(RestViews.APIView):
         # write+encrypt+delete cycle and serialized on the lock, which is the long hang on redundant
         # uploads. This pre-check matches an ALREADY-COMMITTED record, so there is no TOCTOU race;
         # the post-write locked check below still resolves two concurrent identical NEW uploads.
-        if models.SourceFile.objects.filter(unique_hashed=unique_hashed, metadata__Institute=institute.pk).exists():
+        if models.SourceFile.objects.filter(unique_hashed=unique_hashed, institute=str(institute.pk)).exists():
             print("Duplicate File Found (pre-write fast path)")
             _stage("pre-write duplicate check (HIT -> 301)")
             return Response(status=301)
@@ -104,15 +104,20 @@ class DataUploadHandler(RestViews.APIView):
 
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
         _stage("saveCacheFile (encrypt + write cache)")
-        lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
+        # Per-hash lock, NOT a single global lock. The post-write check below only needs to resolve a
+        # race between two concurrent uploads of the SAME new file (same content hash); a global lock
+        # forced EVERY upload to serialize against every other, so concurrent uploads of DIFFERENT
+        # files queued behind one another for no reason. Keying the lock on unique_hashed lets
+        # unrelated uploads proceed in parallel while still serializing identical-content uploads.
+        lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck_" + unique_hashed + ".lock")
         _t_lock = time.time()
         with lock.acquire(timeout=60):
             _waited = time.time() - _t_lock
             if _waited > 0.5:
-                print(f"[upload-timing] WARNING: waited {_waited:.1f}s for SourceFileDuplicateCheck.lock "
-                      f"(a prior upload held it, or a crashed upload left it stale)", flush=True)
-            _stage("acquire global dedup lock")
-            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(unique_hashed=metadata["UniqueHashed"], metadata__Institute=institute.pk).exists():
+                print(f"[upload-timing] WARNING: waited {_waited:.1f}s for the per-hash dedup lock "
+                      f"(a concurrent upload of the same file held it, or a crashed upload left it stale)", flush=True)
+            _stage("acquire per-hash dedup lock")
+            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(unique_hashed=metadata["UniqueHashed"], institute=str(institute.pk)).exists():
                 print("Duplicate File Found")
                 source_file.delete()
                 return Response(status=301)

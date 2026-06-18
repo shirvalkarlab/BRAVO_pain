@@ -44,6 +44,16 @@ class SourceFile(models.Model):
     # full-table JSON-extract scan on MySQL that grows with every stored file, so the dedup query got
     # slower the more uploads existed. A plain indexed CharField makes that lookup an index seek.
     unique_hashed = models.CharField(max_length=64, default="", db_index=True)
+    # Indexed mirror of metadata["Device"] (the DBSDevice uid). The Therapy / TherapyModification
+    # duplicate checks join on the device, which was filtered as source__metadata__Device -- a
+    # JSON_EXTRACT into this JSON column, i.e. a full-table scan. Mirroring it into an indexed
+    # column turns that join into an index seek. Empty string for non-device source files.
+    device = models.CharField(max_length=32, default="", db_index=True)
+    # Indexed mirror of metadata["Institute"] (the owning institute pk). The SourceFile duplicate
+    # check is (unique_hashed, institute); previously the institute half was metadata__Institute, a
+    # JSON_EXTRACT. The same file may legitimately be uploaded to two institutes, so the institute
+    # condition is kept (not dropped) -- just made an indexed column instead of a JSON scan.
+    institute = models.CharField(max_length=32, default="", db_index=True)
 
     owner = models.ForeignKey('Participant', models.CASCADE, null=True)
     

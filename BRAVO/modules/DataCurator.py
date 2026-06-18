@@ -63,6 +63,9 @@ def saveCacheFile(filename, metadata, raw_bytes):
     # Mirror the dedup hash into the indexed column so the duplicate check is an index seek
     # (see SourceFile.unique_hashed). Kept in lockstep with metadata["UniqueHashed"].
     source_file.unique_hashed = metadata.get("UniqueHashed", "")
+    # Mirror the institute into the indexed column so the (unique_hashed, institute) dedup check is an
+    # index seek rather than a JSON_EXTRACT on metadata["Institute"].
+    source_file.institute = str(metadata.get("Institute", ""))
     source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.uid + "_" + filename
     hashed = Database.saveSourceFile(secureEncoder.encrypt(raw_bytes), source_file.pointer, bytes=True)
     source_file.hashed = hashed
@@ -123,6 +126,7 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.owner = person
     source_file.save()
 
@@ -265,7 +269,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     AllEntries = []
     for log in DatabaseEntries["TherapyChangeHistory"]:
-        if models.TherapyModification.include(date=log["date"], type=log["type"], source__metadata__Device=device.uid, owner=person):
+        if models.TherapyModification.include(date=log["date"], type=log["type"], source__device=device.uid, owner=person):
             continue
         AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
     models.TherapyModification.objects.bulk_create(AllEntries)
@@ -360,6 +364,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".json"
     source_file.metadata["Timezone"] = DatabaseEntries["SessionOverview"]["SessionTimezone"]
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
@@ -384,6 +389,7 @@ def NeuroImageStorage(source_file, person):
     source_file.pointer = DATABASE_PATH + "imaging" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".image"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -517,6 +523,7 @@ def MATFileDecoder(source_file, person, startTime=None):
     source_file.metadata["Timezone"] = ""
     if not "Device" in source_file.metadata.keys():
         source_file.metadata["Device"] = ""
+        source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -579,6 +586,7 @@ def HPFCSVDecoder(source_file, person, startTime=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -638,6 +646,7 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -685,6 +694,7 @@ def UFMDATDecoder(source_file, person):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -749,6 +759,7 @@ def UFMDATv2Decoder(source_file, person):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -817,6 +828,7 @@ def BRAVORecordingBinaryDecoder(source_file, person):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -871,7 +883,7 @@ def ImportBRAVOExport(source_file):
 
             json_file = saveCacheFile(person.uid + "_" + uuid.uuid4().hex + ".json", metadata, PacketContent)
             #lockFile = json_file.pointer + ".lock"
-            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(unique_hashed=metadata["UniqueHashed"], metadata__Institute=metadata["Institute"]).exists():
+            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(unique_hashed=metadata["UniqueHashed"], institute=str(metadata["Institute"])).exists():
                 json_file.delete()
             else:
                 try:
