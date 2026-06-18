@@ -291,6 +291,18 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     text: `Source: ${powerProvenance}`, showarrow: false,
     font: { size: 11, color: "#344767" },
   }] : [];
+  // Panels that POOL every contact's samples (distribution, power-vs-pain scatter) list all recorded
+  // contacts — unlike the ROC, which shows per-contact curves and drops single-class contacts. Make
+  // that explicit so the two source lines don't read as a contradiction, and so the pooled scatter's
+  // r isn't mistaken for a single-contact correlation when it actually mixes targets/frequencies.
+  const pooledContactN = leftContacts.length + rightContacts.length;
+  const poolSuffix = safeChSel === "pooled" && pooledContactN > 1
+    ? ` · pooled across ${pooledContactN} contacts` : "";
+  const pooledProvAnn = powerProvenance ? [{
+    xref: "paper", yref: "paper", x: 0.0, y: 1.06, xanchor: "left", yanchor: "bottom",
+    text: `Source: ${powerProvenance}${poolSuffix}`, showarrow: false,
+    font: { size: 11, color: "#344767" },
+  }] : [];
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
@@ -874,7 +886,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           xaxis: { title: "Band power (device units, a.u.)" },
           yaxis: { title: `${pain}` },
           showlegend: false,
-          annotations: [...provenanceAnn, {
+          annotations: [...pooledProvAnn, {
             xref: "paper", yref: "paper", x: 0.98, y: 0.04, xanchor: "right", yanchor: "bottom",
             text: `Pearson r = ${rTxt} · p = ${pTxt} · n = ${pps.n}`,
             showarrow: false, font: { size: 12, color: "#344767" },
@@ -886,7 +898,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
            (pps.n_clipped ? `; ${pps.n_clipped} power outlier(s) excluded` : "") +
            `). Pain is kept CONTINUOUS here (the ROC/Otsu panels binarize it); p is the ordinary ` +
            `Pearson p, not corrected for the band search — the headline inference is the ` +
-           `permutation test on the AUC.`}
+           `permutation test on the AUC. ` +
+           (poolSuffix
+             ? `This pooled view mixes all ${pooledContactN} contacts (two stimulation targets at ` +
+               `different sensing frequencies), so the pooled r is a blend, not one electrode's ` +
+               `correlation; the large n makes even a near-zero r look "significant" (r is the effect ` +
+               `size — select a single contact to read a meaningful association). `
+             : "")}
         </MDTypography>
       </Panel>
     );
@@ -905,7 +923,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           hovertemplate: "band power=%{x:.1f}<br>%{y:,} samples<extra></extra>",
         }]}
           layout={{
-            xaxis: { title: "Power band power (device units, 1st–99th pct display range)" },
+            xaxis: { title: "Power band power (device units, outlier-free 1st–99th pct range)" },
             yaxis: { title: "Sample count" }, bargap: 0.04,
             shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
               y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : [],
@@ -913,13 +931,17 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
               ...(dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
                 text: `Otsu = ${dist.otsu.toFixed(1)}`, showarrow: false,
                 font: { color: PALETTE[1], size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
-              ...provenanceAnn,
+              ...pooledProvAnn,
             ] }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
           {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
-           `${(dist.n_total || 0).toLocaleString()} samples; histogram is plotted over the robust ` +
-           `1st–99th percentile so the bulk is visible. ` +
-           (dist.n_clipped ? `${dist.n_clipped.toLocaleString()} extreme outlier sample(s) sit off-range (Otsu still computed on all data).` : "")}
+           `${(dist.n_total || 0).toLocaleString()} samples total. ` +
+           (dist.n_clipped
+             ? `${dist.n_clipped.toLocaleString()} extreme outlier sample(s) (\u22653 MADs from the median) ` +
+               `are excluded from BOTH the histogram and the Otsu threshold, so the bars and the split ` +
+               `describe the same outlier-free distribution. `
+             : `No outliers were excluded (all samples within 3 MADs of the median). `) +
+           `Bars are trimmed to the inlier 1st\u201399th percentile for display.`}
         </MDTypography>
       </Panel>
     );

@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.6f376b10.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.495db98c.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,7 +13,7 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.6f376b10.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.495db98c.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -146,7 +146,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.6f376b10.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.495db98c.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
