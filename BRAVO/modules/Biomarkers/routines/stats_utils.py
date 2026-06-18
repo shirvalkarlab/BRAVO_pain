@@ -216,11 +216,13 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
       observed   — max(AUC, 1-AUC) on the real labels (None if degenerate)
       p_value    — (#{null >= observed} + 1)/(n_used + 1)  [add-one, never 0]
       null_q     — {"p50","p95","p99"} percentiles of the null AUC distribution (for a ceiling line)
+      null_sample— up to 200 representative null-AUC values (random subsample of the full null), so the
+                   UI can draw the null distribution as a swarm over the chance bar (None if degenerate)
       n_perm     — permutations that yielded a finite AUC
       block      — block length used
     Pure NumPy + a single sklearn AUC call per permutation via the rank identity; no Django.
     """
-    out = {"observed": None, "p_value": None, "null_q": None, "n_perm": 0, "block": None}
+    out = {"observed": None, "p_value": None, "null_q": None, "null_sample": None, "n_perm": 0, "block": None}
     score = np.asarray(score, dtype=float)
     labels = np.asarray(labels, dtype=float)
     m = np.isfinite(score) & np.isfinite(labels)
@@ -258,12 +260,19 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
         out["observed"] = float(observed); out["block"] = int(block)
         return out
     ge = int(np.sum(null_auc >= observed))
+    # Representative subsample of the null AUCs for a UI swarm over the chance bar. Cap at 200 so the
+    # payload stays small; a uniform random draw (fixed seed for reproducibility) preserves the shape.
+    n_keep = min(200, used)
+    sample_rng = np.random.default_rng(seed + 1)
+    sample_idx = sample_rng.choice(used, size=n_keep, replace=False) if n_keep < used else np.arange(used)
+    null_sample = [float(v) for v in null_auc[sample_idx]]
     out.update({
         "observed": float(observed),
         "p_value": float((ge + 1) / (used + 1)),
         "null_q": {"p50": float(np.percentile(null_auc, 50)),
                    "p95": float(np.percentile(null_auc, 95)),
                    "p99": float(np.percentile(null_auc, 99))},
+        "null_sample": null_sample,
         "n_perm": used,
         "block": int(block),
     })

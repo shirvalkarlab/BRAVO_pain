@@ -679,6 +679,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const swarmContacts = shownContacts; // contacts that actually contribute >=1 dot (caption/legend)
     // Permutation-null ceiling over the AUC bar (block-permuted daily labels).
     const ap = pdSumEff.auc_perm || null;
+    // Permuted-null swarm over the CHANCE bar (x=2): each dot is one block-permuted-label AUC, so the
+    // reader sees the actual null DISTRIBUTION the chance level summarizes, not just the 0.5 line.
+    // The bar height is the analytic chance (0.50 for balanced AUC); the dots scatter around it.
+    if (ap && Array.isArray(ap.null_sample) && ap.null_sample.length) {
+      const ns = ap.null_sample;
+      // Deterministic spread so dots don't redraw differently each render.
+      const jit = (i) => -0.22 + (0.44 * ((i * 2654435761) % ns.length)) / Math.max(ns.length - 1, 1);
+      barTraces.push({
+        x: ns.map((_, i) => 2 + jit(i)), y: ns, type: "scatter", mode: "markers",
+        name: `null AUC (${ns.length} of ${ap.n_perm} perms)`, legendgroup: "permnull", showlegend: true,
+        marker: { size: 5, color: "rgba(126,135,148,0.45)", line: { width: 0 }, symbol: "circle" },
+        hovertemplate: "permuted-null AUC=%{y:.3f}<extra></extra>" });
+    }
     const shapes = [{ type: "line", x0: -0.5, x1: 2.5, y0: chanceLvl, y1: chanceLvl,
       line: { color: "#7E8794", width: 1, dash: "dot" } }];
     const annotations = [];
@@ -694,7 +707,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         <Fig height={320} traces={barTraces}
           layout={{ yaxis: { title: "Score", range: [0, 1.08] },
             xaxis: { title: "", tickmode: "array", tickvals: xpos, ticktext, range: [-0.5, 2.5] },
-            legend: { orientation: "h", y: -0.18 }, showlegend: swarmContacts.length >= 2,
+            legend: { orientation: "h", y: -0.18 },
+            showlegend: swarmContacts.length >= 2 || !!(ap && ap.null_sample && ap.null_sample.length),
             shapes, annotations }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
           {`Chance for BALANCED accuracy is 0.50 regardless of class imbalance (sens & spec each ` +
@@ -704,6 +718,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
              : "") +
            (ap && ap.p_value != null
              ? `Dashed orange line = 95th-percentile AUC under ${ap.n_perm} circular-block label permutations (block=${ap.block} days, preserving pain autocorrelation); empirical p=${fmtP(ap.p_value)} for the observed AUC=${(ap.observed ?? 0).toFixed(2)}. `
+             : "") +
+           (ap && ap.null_sample && ap.null_sample.length
+             ? `Gray dots over the Chance bar are individual permuted-null AUCs (the null DISTRIBUTION the chance line summarizes). `
              : "") +
            (swarmContacts.length >= 2
              ? `Open dots show the per-contact value for each of the ${swarmContacts.length} bipolar contacts (one dot per contact that has that metric; single-class contacts have no value and are omitted). The bar is the POOLED detector, not the mean of the dots. `

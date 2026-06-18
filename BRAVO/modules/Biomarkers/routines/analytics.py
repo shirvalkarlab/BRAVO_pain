@@ -463,26 +463,30 @@ def lfp_distribution(cv_df, bins=40):
 
     The raw merged power-domain series (Chronic + per-session band power, un-normalized) can span an
     enormous device-unit range with a few extreme outliers, which collapses a naive histogram into a
-    single bar. Bin over a ROBUST display range (1st-99th percentile) so the bulk distribution is
-    visible. The Otsu split is computed on the MAD-filtered data (samples within 3 MADs of the
-    median) so a handful of artifact spikes can't drag the threshold; n_clipped reports how many
-    out-of-range samples were excluded from the plot only."""
+    single bar. Outliers are EXCLUDED (MAD rejection, >=3 MADs from the median) from BOTH the Otsu
+    threshold AND the displayed histogram, so the threshold and the bars describe the same
+    outlier-free distribution. n_clipped reports how many outlier samples were excluded; n_total is
+    the pre-exclusion count."""
     lfp = cv_df["LFP_smoothed"].dropna().astype(float).values
     if lfp.size == 0:
-        return {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0}
-    # MAD outlier rejection (>=3 MADs from the median) before Otsu, consistent with the rest of the
-    # analysis. Falls back to the full series when MAD is undefined (all-equal or < 3 samples).
+        return {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0, "n_total": 0}
+    # MAD outlier rejection (>=3 MADs from the median). Falls back to the full series when MAD is
+    # undefined (all-equal or < 3 samples). The SAME outlier-free set drives both Otsu and the bars.
     med = np.median(lfp)
     mad = np.median(np.abs(lfp - med))
-    lfp_robust = lfp[np.abs(lfp - med) <= 3.0 * mad] if (mad > 0 and lfp.size >= 3) else lfp
+    keep = np.abs(lfp - med) <= 3.0 * mad if (mad > 0 and lfp.size >= 3) else np.ones(lfp.size, dtype=bool)
+    lfp_robust = lfp[keep]
     if lfp_robust.size < 3:
         lfp_robust = lfp
+        keep = np.ones(lfp.size, dtype=bool)
     otsu = _otsu_threshold(lfp_robust)
-    lo, hi = np.percentile(lfp, [1, 99])
+    n_clipped = int(np.count_nonzero(~keep))     # outliers excluded from BOTH threshold and plot
+    # Bin over the outlier-free range. A residual 1st-99th-pct trim keeps a long inlier tail from
+    # squashing the bulk, but every outlier is already gone from lfp_robust.
+    lo, hi = np.percentile(lfp_robust, [1, 99])
     if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
-        lo, hi = float(np.min(lfp)), float(np.max(lfp))
-    counts, edges = np.histogram(lfp, bins=bins, range=(float(lo), float(hi)))
-    n_clipped = int(np.count_nonzero((lfp < lo) | (lfp > hi)))
+        lo, hi = float(np.min(lfp_robust)), float(np.max(lfp_robust))
+    counts, edges = np.histogram(lfp_robust, bins=bins, range=(float(lo), float(hi)))
     return {"bin_edges": [float(x) for x in edges], "counts": [int(x) for x in counts],
             "otsu": (None if otsu is None else float(otsu)), "n_clipped": n_clipped,
             "n_total": int(lfp.size)}
