@@ -1,9 +1,131 @@
 # BRAVO Pain Biomarkers — Session Handoff
 
-> Single source of truth for continuing this work. Live as of commit `f57e9c0` on branch
-> `PS_biomarker_module` (pushed to `github.com/shirvalkarlab/BRAVO_pain`).
-> This supersedes the original handoff (folded in below, with **corrected** facts where the repo
-> moved / the stack changed). Handing off to **Operon**.
+> Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
+> `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
+> `main.4bd0e67d.js`. Migrations through `0009_sourcefile_device_institute`.
+> **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
+> sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
+
+---
+
+## NOW — current state (most recent sessions)
+
+### Latest first: what to know before editing
+- **Branch/commit:** `PS_biomarker_module` @ `5b20c48`, working tree clean, all work committed (not yet
+  pushed — `git push origin PS_biomarker_module` when ready). Latest biomarker bundle
+  `Client/build/static/js/main.4bd0e67d.js`.
+- **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
+  `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) are all
+  applied on the user's MySQL (confirmed `[X]` for 0008/0009). Container auto-runs `migrate` on start.
+- **Commit identity:** every commit uses per-commit `GIT_AUTHOR_*`/`GIT_COMMITTER_*` =
+  `Prasad Shirvalkar <prasad.shirvalkar@ucsf.edu>` + trailer `Co-Authored-By: Claude (Operon)
+  <noreply@anthropic.com>`. NEVER write global git config (`~/.config/git/ignore` "Operation not
+  permitted" warnings on every git call are benign — ignore them).
+
+### The Django app harness (KEY TOOL — the sandbox cannot reach Docker)
+This sandbox **cannot reach the Docker socket** (orbstack socket → "permission denied"; container ops
+are user-run only). To exercise the real upload/decode/insert code path without the container, there is
+a **Django app harness** running the real models/migrations against throwaway SQLite:
+- Env: **`bravo_app`** (py3.11; django 5.1.3, DRF 3.15.2, blosc2 3.3.3, cryptography, pywavelets,
+  numpy/scipy/sklearn/pandas, + pytz/dateutil/pyjwt/whitenoise/boto3/specparam).
+- Harness dir: `/tmp/bravo_harness/` — `harness_settings.py` (imports real `BRAVO.settings`, forces
+  SQLite at `/tmp/bravo_harness/db.sqlite3`, sets `DATASERVER_PATH`), `repro.py` (decoder path),
+  `repro_handler.py` (full `DataUploadHandler.post` via RequestFactory + force-auth).
+- Run pattern:
+  ```bash
+  cd /Users/pshirvalkar/dev/BRAVO_pain/BRAVO
+  PY=/Users/pshirvalkar/.operon/conda/envs/bravo_app/bin/python3
+  export PYTHONPATH=/tmp/bravo_harness:$PWD DJANGO_SETTINGS_MODULE=harness_settings
+  export DATASERVER_ENCRYPTION=$($PY -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())")
+  export DATASERVER_HASHKEY=harnesshashkey FIBIT_CLIENT_ID="" FIBIT_CLIENT_SECRET=""
+  rm -f /tmp/bravo_harness/db.sqlite3; rm -rf /tmp/bravo_harness/dataserver
+  $PY manage.py migrate -v0
+  $PY /tmp/bravo_harness/repro_handler.py   # or repro.py
+  ```
+  Real RCS08 JSONs (granted, read-only): `~/Library/CloudStorage/OneDrive-UCSF/Desktop/PNL/RCS008 jsons/`
+  (11.5 MB `Report_JI Pacu_…20250716T222813.json`, 23 MB `…20250716T182401.json`, 66 MB
+  `RCS08 - …20250904T142449.json`). NOTE: the harness measures SQLite timings; it proves
+  correctness/dedup/query-shape but NOT absolute MySQL latency. **Biomarker unit tests run in the
+  `rcs_v14_analysis` env** (see §2 below for the container path).
+
+### Tests (run in `rcs_v14_analysis`, PYTHONPATH=…/BRAVO)
+`PY=/Users/pshirvalkar/.operon/conda/envs/rcs_v14_analysis/bin/python3;
+PYTHONPATH=/Users/pshirvalkar/dev/BRAVO_pain/BRAVO $PY modules/Biomarkers/tests/<NAME>.py`
+— suites: `test_adapter`, `test_analytics`, `test_pipeline_stats`, `test_stats_utils`,
+`test_process_redcap`. **All green** as of `5b20c48`.
+
+### What shipped since `f57e9c0`
+
+**Binarization redesign (DONE — §7-A is resolved):** default labeler is now **tertile** (33.3/66.7
+pct, ambiguous middle dropped), with a **median** toggle ("keep every day") and **KMeans retired as
+default** (still selectable for notebook parity). The cut is fit on the **daily PRO distribution** and
+broadcast to per-sample rows. A **z-scored composite** (`composite_mpq_leftleg` = mean of z(MPQ-sum),
+z(left-leg-VAS)) is offered. The user picks the metric/strategy in the UI; the backend does NOT
+auto-select. Live **binarization preview** card recomputes client-side.
+
+**Statistical-rigor batch (DONE):**
+- `MAX_BIOMARKER_FREQ_HZ = 50.0` cap — bands ≥50 Hz excluded from selection everywhere
+  (`select_biomarker_band`, `_band_inference` perm family, `corr_spectrum`). Rationale: the validated
+  theta/alpha/beta/low-gamma sensing range (NOT a power-line argument — that was retracted).
+- **MAD≥3 robust outlier rejection** applied at ALL correlation/threshold sources.
+- **FDR-corrected** spectrum significance markers (BH q<0.05 over the displayed <50 Hz family).
+- **Balanced-accuracy chance baseline = 0.50** always (not the majority fraction); `majority_accuracy`
+  reported separately as reference.
+- Parallel 4-track code review fixed: savgol even-window over-smoothing, PtConfig path-traversal
+  confinement, token-exfil, 5 frontend null/NaN crashes; +9 regression tests.
+
+**Upload pipeline (DONE — was the big arc):**
+- **CSRF bug was why uploads did nothing** (`c4409fa`): all 14 FilePond uploaders read
+  `document.querySelector('[name=csrfmiddlewaretoken]').value` UNguarded; the element doesn't exist in
+  the SPA → `TypeError` BEFORE `request.send()` → request never sent, spinner forever. Fixed with the
+  null-guard `session-control.js` already used. **This was the actual blocker.**
+- **Slow-upload (on a populated DB) fixes:** the duplicate checks were un-indexable JSON-field
+  full-table scans run once per recording. Now all index seeks: `SourceFile.unique_hashed` (0007),
+  `Recording.content_fingerprint` (0008, a **deterministic** HMAC over the UNCOMPRESSED payload —
+  note `saveSourceFile.hashed` hashes blosc2-COMPRESSED bytes and is **non-deterministic**, so it
+  could never dedup), `SourceFile.device` + `SourceFile.institute` (0009, killed the last
+  JSON_EXTRACTs). Harness-verified JSON_EXTRACT per upload 34–45 → **0**, dedup exact (re-upload adds 0).
+- Dedup lock is now **per-hash** (`SourceFileDuplicateCheck_<hash>.lock`), not a single global lock —
+  unrelated uploads no longer serialize.
+- **Decode ~3.5× faster:** shallow per-stream dict copy (the deepcopy of multi-M-element sample lists
+  was the cost) + `csv2floatarray` (np.fromstring) for the Sequences/PacketSizes/Ticks fields. Decode
+  output verified **byte-identical** old-vs-new on all 3 RCS08 files.
+- **Logging:** `django.db.backends` pinned to INFO (was emitting one DEBUG line per SQL query to a
+  synchronous file) + a console handler added so app logs reach `docker logs`.
+
+**This session's backlog clear (DONE):**
+- Therapy/TherapyModification + institute dedup → indexed columns (0009); per-hash lock.
+- Removed hardcoded demo password from `scripts/upload_percept_folder.sh` (now
+  `BRAVO_UPLOAD_EMAIL`/`BRAVO_UPLOAD_PASSWORD` or `--email`/`--password`, required).
+- `DataAnalysis.py` customized-analysis no longer leaks `str(e)` to the client (generic message +
+  server-side traceback). (Upload-decode `str(e)` in `DataHandler` kept — user-actionable messages.)
+- `stats_utils.block_length_for` uses **positive** lag-1 autocorr only (was `abs`) — anti-persistence
+  no longer inflates block length / over-shrinks effective N. +test.
+- **Chronic-trend sensing center frequency** wired end-to-end: `analytics.chronic_center_freqs(groups)`
+  → `Session.decodeMedtronicJSON` stamps each chronic recording's `metadata['CenterFrequencyHz']` from
+  the GROUP-level config → `_load_recordings` merges it onto the loaded dict → `_compute_analytics`
+  emits `powerdomain.chronic_center_hz` → `BiomarkerAnalytics.js` shows it in the Power-domain subtitle.
+  (Real RCS08: Left 10.74 Hz, Right 8.79 Hz.) +3 tests.
+- Per-stream insert parallelization (old TODO): **measured and decided AGAINST** — blob writes are
+  36 ms / 4% of decode, and ORM threads carry real risk. Removed the speculative import.
+- WebSocket `/socket/notification`: confirmed a **missing feature** (HTTP-only ASGI, no Channels
+  consumer), not a regression. Per decision, made it **fail quietly** (no console spam, no reconnect);
+  `onmessage` kept so a future Channels+Redis backend works with no frontend change.
+
+### Current TODO (what's actually left — START HERE)
+1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into
+   `redcap_client`/`bravo_service` so raw REDCap columns map to the tidy columns; field map in
+   `pt_config/<pt>_config.json`. Until then, POST `ProcessedPRO` tidy dicts in the request.
+2. **Deferred rigor** (§7-C, still open, touches verbatim science): per-target/per-source separation
+   (the detector pools Left GPi + Right thalamus and Chronic+PowerDomain into ONE raw-scale threshold);
+   **train-fold KMeans** (label leakage across folds — re-fit labeler inside each train fold);
+   block-bootstrap CIs; a pre-specified confirmatory band test; the data-quality question (~170/284
+   sessions zero/NaN PSD at the selected band).
+3. **Verify on the live container:** the harness proves correctness on SQLite, but a sanity upload +
+   biomarker run on the real MySQL/container after `docker compose restart bravo-server` is worth doing
+   (esp. the chronic-freq and decode-vectorization paths, which touch decode/storage).
+4. **Optional:** full Channels+Redis WebSocket implementation if live job-progress push is wanted
+   (Redis is already in the compose stack); CodeRabbit re-run (needs consent — external API).
 
 ---
 
