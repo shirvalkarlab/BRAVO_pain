@@ -183,24 +183,64 @@ def _session_stim_amplitude(recording):
 # ---------------------------------------------------------------------------
 # 4) Chronic (10-min trend) glue for the threshold biomarker
 # ---------------------------------------------------------------------------
-def _concat_chronic(chronic):
+def mad_outlier_mask(x, k=3.0):
+    """Boolean KEEP-mask: True for samples within k median-absolute-deviations of the median.
+    Excludes artifact spikes where |x - median| > k*MAD (NaN/non-finite are excluded). Returns the
+    finite mask when MAD==0 (all equal) or fewer than 3 finite points (MAD undefined/unstable).
+    Robust (median/MAD), so a few extreme values don't move the threshold like mean/SD would.
+    """
+    x = np.asarray(x, dtype=float)
+    finite = np.isfinite(x)
+    if finite.sum() < 3:
+        return finite
+    med = np.median(x[finite])
+    mad = np.median(np.abs(x[finite] - med))
+    if mad <= 0:
+        return finite
+    return finite & (np.abs(x - med) <= k * mad)
+
+
+def _concat_chronic(chronic, mad_k=3.0):
     """Accept one Chronic recording dict OR a list of them, returning a single dict with a
     time-sorted, concatenated Time/Data. The threshold detector needs many days of trend
     (train+gap+test, default ~10 days); a single Chronic recording spans only minutes, so
     multiple visits must be concatenated into one long trend before detection.
+
+    `mad_k`: per-recording MAD outlier rejection on the LFP-power column (Data[:,0]) BEFORE
+    concatenation. Applied PER RECORDING (each recording is one homogeneous-scale source —
+    Chronic ~10-min LFP vs per-session Power-Domain band power differ ~8x), so a global MAD
+    wouldn't wrongly flag an entire lower-scale source. Set mad_k=None to disable.
     """
     if isinstance(chronic, dict):
-        return chronic
+        chronic = [chronic]
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
-    times = np.concatenate([np.asarray(c["Time"], dtype=float) for c in chronic])
-    datas = np.concatenate([np.asarray(c["Data"], dtype=float) for c in chronic], axis=0)
+    times_list, datas_list, src_list = [], [], []
+    for c in chronic:
+        t = np.asarray(c["Time"], dtype=float)
+        d = np.asarray(c["Data"], dtype=float)
+        # Sensing-modality tag per recording, repeated per sample so it survives the merge+sort and
+        # downstream can diagnose the two-source batch/scale confound. Default "chronic".
+        src = str(c.get("Source", "chronic"))
+        if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
+            keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
+            t, d = t[keep], d[keep]
+        if t.size:
+            times_list.append(t)
+            datas_list.append(d)
+            src_list.append(np.full(t.shape[0], src, dtype=object))
+    if not times_list:
+        raise ValueError("no chronic samples survived outlier rejection.")
+    times = np.concatenate(times_list)
+    datas = np.concatenate(datas_list, axis=0)
+    sources = np.concatenate(src_list)
     order = np.argsort(times)
     return {
         "SamplingRate": -1,
         "Time": times[order],
         "Data": datas[order],
+        "Source": sources[order],
         "ChannelNames": chronic[0].get("ChannelNames"),
     }
 
@@ -263,18 +303,85 @@ def bravo_powerdomain_to_chronic_like(recordings):
             valid = np.isfinite(pw)
             if not valid.any():
                 continue
-            label = hemi.title() if hemi else "PowerDomain"
+            # Build a real bipolar-contact label (e.g. "L 0⁻-3⁺") from the power column name
+            # instead of the uninformative "Left LFP" / "Right LFP". The Medtronic export names
+            # the column "<CONTACT> Power" (e.g. "ZERO_THREE_LEFT Power"); strip " Power" and let
+            # format_channel decode it. Fall back to the hemisphere when no contact is encoded.
+            from .routines.analytics import format_channel
+            contact_raw = names[pi]
+            for suffix in (" POWER", " Power", " power"):
+                if contact_raw.upper().endswith(suffix.upper()):
+                    contact_raw = contact_raw[: -len(suffix)]
+                    break
+            fmt = format_channel(contact_raw, region="")
+            short = fmt.get("short") or ""
+            # format_channel returns a decoded bipolar label like "L 0⁻-3⁺" when the column name
+            # encodes a contact (digits appear in the formatted short, e.g. "0⁻-3⁺"). If it could
+            # not decode one, fall back to a clean "<L/R> LFP" rather than a raw token.
+            if any(ch.isdigit() for ch in short):
+                label = short
+            else:
+                label = ("L" if hemi == "LEFT" else "R" if hemi == "RIGHT" else "") + " LFP"
+                label = label.strip() or "PowerDomain LFP"
             out.append({
                 "SamplingRate": -1,
                 "Time": time[valid],
                 "Data": np.column_stack([pw[valid], np.asarray(stim, dtype=float)[valid]]),
-                "ChannelNames": [f"{label} LFP", f"{label} Amplitude"],
+                "ChannelNames": [label, f"{label} Amplitude"],
+                # Sensing-modality tag so the merged-series batch/scale confound can be diagnosed
+                # downstream (per-session Power-Domain band power vs the ~10-min Chronic LFP power).
+                "Source": "powerdomain",
             })
     return out
 
 
+def _threshold_pain_level(df, label_metric, *, strategy="median", pain_cutoff=None,
+                          low_pct=33.3333, high_pct=66.6667, daily_broadcast=True):
+    """Binary pain_level (0/1, with NaN for the excluded middle) from a single metric column.
+
+    The decision boundary is derived from the DAILY metric distribution (one value per calendar
+    day) when `daily_broadcast` is True, then applied to every per-sample row — this prevents
+    over-recorded days from dominating the cut (see bravo_chronic_to_lfp_df docstring). Strategies:
+      * "cutoff"            : pain_level = metric >= pain_cutoff (default = daily median).
+      * "median"            : pain_level = metric >= daily median.
+      * "tertile"/"percentile": metric <= low_pct-quantile -> 0, >= high_pct-quantile -> 1,
+                               middle -> NaN. "tertile" uses 33.33/66.67; "percentile" uses the args.
+    Returns an ndarray aligned to df rows.
+    """
+    metric_vals = df[label_metric].to_numpy(dtype=float)
+
+    # Build the distribution the thresholds are computed on.
+    if daily_broadcast and "timestamp" in df.columns:
+        day = pd.to_datetime(df["timestamp"], errors="coerce").dt.floor("D")
+        # one value per day: mean of that day's (already nearest-date-aligned) metric values
+        daily = pd.Series(metric_vals, index=day).groupby(level=0).mean()
+        ref = daily.to_numpy(dtype=float)
+    else:
+        ref = metric_vals
+    ref = ref[np.isfinite(ref)]
+    if ref.size == 0:
+        return np.full(len(df), np.nan)
+
+    if strategy in ("tertile", "percentile"):
+        lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
+        hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
+        lo = float(np.percentile(ref, lo_q))
+        hi = float(np.percentile(ref, hi_q))
+        pl = np.full(len(df), np.nan)
+        with np.errstate(invalid="ignore"):
+            pl[metric_vals <= lo] = 0.0
+            pl[metric_vals >= hi] = 1.0
+        return pl
+
+    # median / cutoff: single threshold
+    cutoff = float(np.median(ref)) if pain_cutoff is None else float(pain_cutoff)
+    with np.errstate(invalid="ignore"):
+        return np.where(np.isnan(metric_vals), np.nan, (metric_vals >= cutoff).astype(float))
+
+
 def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=None,
                             label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
+                            low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                             timestamp_col="date_time_s1_daily", smooth_window=7):
     """
     Build the tidy `cv_df` the chronic threshold detector consumes from a BRAVO Chronic
@@ -298,6 +405,17 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
       * "cutoff": transparent single-metric threshold `pain_level = label_metric >= pain_cutoff`
         (default `pain_cutoff` = the metric's median). Simpler; use when you don't have the
         two cluster features or want an explicit cutoff.
+      * "median": single-metric split at the metric's median (keeps every day; balanced ~50/50).
+      * "tertile" / "percentile": two-threshold split — days at/below `low_pct` -> 0 (low),
+        at/above `high_pct` -> 1 (high), the ambiguous middle -> NaN (excluded from training).
+        "tertile" defaults to 33.33/66.67; "percentile" uses the supplied `low_pct`/`high_pct`.
+        Dropping the middle gives the detector its cleanest target (best LFP separability in the
+        RCS08 study) at the cost of labeling fewer days. See docs/binarization_recommendation_RCS08.md.
+
+    For every threshold labeler (`median`/`tertile`/`percentile`/`cutoff`) the boundary is computed
+    on the DAILY metric distribution and broadcast to each sample (`daily_broadcast=True`), so the
+    cut reflects pain across days rather than recording density. Set `daily_broadcast=False` to fit
+    the cut on the raw per-sample array (legacy behavior).
     """
     import warnings
 
@@ -306,6 +424,11 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     # Carry the columns we need onto each chronic sample: the label metric, plus (for KMeans)
     # the two cluster features. align_pros adds a NaN column for any metric absent from pro_df.
     carry = [label_metric]
+    _THRESHOLD_STRATS = ("cutoff", "median", "tertile", "percentile")
+    if label_strategy not in ("kmeans",) + _THRESHOLD_STRATS:
+        warnings.warn(
+            f"unknown label_strategy={label_strategy!r}; falling back to 'kmeans'.", RuntimeWarning)
+        label_strategy = "kmeans"
     use_kmeans = label_strategy == "kmeans"
     if use_kmeans:
         missing = [f for f in kmeans_features if f not in pro_df.columns]
@@ -323,11 +446,22 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
                     metrics=tuple(carry), timestamp_col=timestamp_col)
     df = df.rename(columns={"time": "timestamp", "lfp": "LFP"})
     df["timestamp"] = _as_naive(df["timestamp"])
+    # align_pros emits one row per chronic sample in Time order, so the per-sample Source array maps
+    # 1:1 onto these rows — carry it through for the downstream two-source batch-confound diagnostic.
+    src = chronic.get("Source")
+    if src is not None and len(src) == len(df):
+        df["source"] = np.asarray(src, dtype=object)
 
     lfp = df["LFP"].to_numpy(dtype=float)
     n = len(lfp)
     if n >= 5:
-        wl = smooth_window if (n >= smooth_window and smooth_window % 2 == 1) else (n if n % 2 == 1 else n - 1)
+        # Savitzky-Golay needs an ODD window length. An EVEN smooth_window must be rounded down to
+        # the nearest odd value FIRST — the old expression fell through to the series-length branch
+        # for any even smooth_window, silently setting wl≈n (over-smoothing LFP into a flatline).
+        sw = int(smooth_window)
+        if sw % 2 == 0:
+            sw -= 1
+        wl = sw if (n >= sw and sw >= 3) else (n if n % 2 == 1 else n - 1)
         wl = max(wl, 3)
         poly = min(2, wl - 1)
         df["LFP_smoothed"] = savgol_filter(lfp, window_length=wl, polyorder=poly)
@@ -335,18 +469,30 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
         df["LFP_smoothed"] = lfp
 
     if use_kmeans:
-        # VERBATIM notebook labeler on [left_leg_vas, mpq_sum] joined onto each chronic sample.
+        # KMeans pain labeler on the cluster features. Z-SCORE each feature first so a larger-scale
+        # feature (e.g. left_leg_vas 0–100 vs mpq_sum 0–72) doesn't dominate the Euclidean cluster
+        # distance — otherwise the "pain_level" split is effectively driven by one metric. (Rigor
+        # fix; the verbatim kmeans_pain_level itself is unchanged.)
         from .routines.threshold_biomarker import kmeans_pain_level
         feats = df[list(kmeans_features)].to_numpy(dtype=float)
-        df["pain_level"] = kmeans_pain_level(feats)
+        mu = np.nanmean(feats, axis=0)
+        sd = np.nanstd(feats, axis=0)
+        sd[~np.isfinite(sd) | (sd == 0)] = 1.0
+        feats_z = (feats - mu) / sd
+        df["pain_level"] = kmeans_pain_level(feats_z)
     else:
-        metric_vals = df[label_metric].to_numpy(dtype=float)
-        cutoff = np.nanmedian(metric_vals) if pain_cutoff is None else float(pain_cutoff)
-        with np.errstate(invalid="ignore"):
-            pl = np.where(np.isnan(metric_vals), np.nan, (metric_vals >= cutoff).astype(float))
-        df["pain_level"] = pl
+        # Threshold labelers (median / tertile / percentile / cutoff). The decision boundary is
+        # derived from the DAILY metric distribution (one value per calendar day), NOT the
+        # per-sample array — chronic recording density varies wildly per day (6..70k samples),
+        # so a per-sample quantile lets a few over-recorded days set the cut. We compute the
+        # threshold(s) on the deduplicated daily series, then broadcast the label to every sample.
+        df["pain_level"] = _threshold_pain_level(
+            df, label_metric, strategy=label_strategy, pain_cutoff=pain_cutoff,
+            low_pct=low_pct, high_pct=high_pct, daily_broadcast=daily_broadcast)
 
     out_cols = ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", label_metric]
+    if "source" in df.columns:
+        out_cols.append("source")
     for f in kmeans_features:
         if f in df.columns and f not in out_cols:
             out_cols.append(f)

@@ -19,6 +19,7 @@ Data Curators
 """
 
 import os, pathlib
+import time
 import uuid
 import shutil
 import datetime
@@ -58,6 +59,12 @@ def loadCacheFile(source_file):
 def saveCacheFile(filename, metadata, raw_bytes):
     source_file = models.SourceFile.create(type=metadata["UploadType"], metadata=metadata)
     source_file.name = filename
+    # Mirror the dedup hash into the indexed column so the duplicate check is an index seek
+    # (see SourceFile.unique_hashed). Kept in lockstep with metadata["UniqueHashed"].
+    source_file.unique_hashed = metadata.get("UniqueHashed", "")
+    # Mirror the institute into the indexed column so the (unique_hashed, institute) dedup check is an
+    # index seek rather than a JSON_EXTRACT on metadata["Institute"].
+    source_file.institute = str(metadata.get("Institute", ""))
     source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.uid + "_" + filename
     hashed = Database.saveSourceFile(secureEncoder.encrypt(raw_bytes), source_file.pointer, bytes=True)
     source_file.hashed = hashed
@@ -95,7 +102,10 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     Recordings = parsePersystRecording(rawBytes, source_file.metadata["layout"])
     for stream in Recordings:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person, source__metadata__Uploader=source_file.metadata["Uploader"]):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob + source__metadata__Uploader (JSON_EXTRACT) scans.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -104,19 +114,18 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.owner = person
     source_file.save()
 
@@ -125,14 +134,23 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     return True
 
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
+    _t0 = time.time()
+    def _dstage(label, _last=[time.time()]):
+        now = time.time()
+        print(f"[decode-timing] {label}: {now - _last[0]:.3f}s (total {now - _t0:.3f}s)", flush=True)
+        _last[0] = now
+
     rawBytes = loadCacheFile(source_file)
+    _dstage("loadCacheFile (read + decrypt cache)")
     JSON = json.loads(rawBytes)
+    _dstage("json.loads")
     if source_file.metadata["automatic_concatenation"]:
         JSON["AutomaticStreamingFix"] = True
     else:
         JSON["AutomaticStreamingFix"] = False
     
     DatabaseEntries = decodeMedtronicJSON(JSON)
+    _dstage("decodeMedtronicJSON (CPU structural decode)")
     
     if source_file.metadata["automatic_deidentification"]:
         DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
@@ -142,7 +160,13 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Process Patient/Device/Electrode Information for Storage and Query
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
+    _t_lock = time.time()
     with lock.acquire(timeout=180):
+        _waited = time.time() - _t_lock
+        if _waited > 0.5:
+            print(f"[decode-timing] WARNING: waited {_waited:.1f}s for ParticipantInfoLookup.lock "
+                  f"(another upload held it, or a crashed upload left it stale)", flush=True)
+        _dstage("acquire ParticipantInfoLookup.lock")
         if not device:
             device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], 
                                                                      DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], 
@@ -193,6 +217,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         
         source_file.owner = person
         source_file.save()
+    _dstage("device/person/electrode find_or_create (under lock)")
 
     
     electrodes = device.electrodes.all()
@@ -243,14 +268,23 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     AllEntries = []
     for log in DatabaseEntries["TherapyChangeHistory"]:
-        if models.TherapyModification.include(date=log["date"], type=log["type"], source__metadata__Device=device.uid, owner=person):
+        if models.TherapyModification.include(date=log["date"], type=log["type"], source__device=device.uid, owner=person):
             continue
         AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
     models.TherapyModification.objects.bulk_create(AllEntries)
+    _dstage("therapy/stimulation/modification inserts")
     
     for survey in DatabaseEntries["SurveyRecordings"]:
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup: compute the content hash (cheap, in-memory) and check the INDEXED
+        # Recording.hashed column before writing. The previous pre-write check filtered on
+        # metadata=recording.metadata (full JSON-blob equality) + source__metadata__Uploader
+        # (JSON_EXTRACT) — both un-indexable JSON-field scans that become full-table scans on the
+        # populated production MySQL and ran once PER recording (the upload hang). The content hash
+        # distinguishes recordings at least as precisely as the metadata blob, so this is faster and
+        # no less correct.
+        fingerprint = Database.contentFingerprint(survey["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -259,17 +293,18 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     for stream in DatabaseEntries["StreamingRecordings"]:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -278,18 +313,20 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     for stream in DatabaseEntries["ChronicRecordings"]:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -300,17 +337,16 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
         full_recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=person)
         if full_recording:
             full_recording.delete()
 
+    _dstage("survey/streaming/chronic recording inserts (saveSourceFile + Recording.save)")
     for event in DatabaseEntries["EventRecordings"]:
         if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
@@ -327,6 +363,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".json"
     source_file.metadata["Timezone"] = DatabaseEntries["SessionOverview"]["SessionTimezone"]
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
@@ -351,6 +388,7 @@ def NeuroImageStorage(source_file, person):
     source_file.pointer = DATABASE_PATH + "imaging" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".image"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -397,7 +435,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "ChannelNames": ProcessedData["ChannelNames"]
                 }
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -407,13 +450,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
 
     elif DataType == "CustomizedTimelineData":
         for ProcessedData in MATFile:
@@ -422,7 +463,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "ChannelNames": ProcessedData["ChannelNames"]
                 }
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -432,13 +478,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
 
     elif DataType == "CustomizedStreamingData":
         for ProcessedData in MATFile:
@@ -448,7 +492,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "Duration": ProcessedData["Duration"]
                 }, **ProcessedData["Descriptor"]}
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -458,13 +507,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
             
     else:
         raise Exception("MAT File DataType Incorrect")
@@ -475,6 +522,7 @@ def MATFileDecoder(source_file, person, startTime=None):
     source_file.metadata["Timezone"] = ""
     if not "Device" in source_file.metadata.keys():
         source_file.metadata["Device"] = ""
+        source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -511,7 +559,12 @@ def HPFCSVDecoder(source_file, person, startTime=None):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -521,19 +574,18 @@ def HPFCSVDecoder(source_file, person, startTime=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -567,7 +619,12 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -577,19 +634,18 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -611,7 +667,12 @@ def UFMDATDecoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -621,19 +682,18 @@ def UFMDATDecoder(source_file, person):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -672,7 +732,12 @@ def UFMDATv2Decoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -682,19 +747,18 @@ def UFMDATv2Decoder(source_file, person):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -737,7 +801,12 @@ def BRAVORecordingBinaryDecoder(source_file, person):
                 "ChannelNames": ChannelNames
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -747,19 +816,18 @@ def BRAVORecordingBinaryDecoder(source_file, person):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -814,7 +882,7 @@ def ImportBRAVOExport(source_file):
 
             json_file = saveCacheFile(person.uid + "_" + uuid.uuid4().hex + ".json", metadata, PacketContent)
             #lockFile = json_file.pointer + ".lock"
-            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(metadata__Institute=metadata["Institute"], metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(unique_hashed=metadata["UniqueHashed"], institute=str(metadata["Institute"])).exists():
                 json_file.delete()
             else:
                 try:

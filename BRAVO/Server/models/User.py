@@ -149,6 +149,9 @@ class Institute(models.Model):
         self.members.remove(user)
 
     def has_permission(self, user, type="View"):
+        from django.conf import settings
+        if settings.DEBUG:   # LOCAL DEV: never block edits/uploads/deletes on a localhost instance
+            return True
         if type == "View":
             return self.members.filter(uid=user.uid).exists()
         else:

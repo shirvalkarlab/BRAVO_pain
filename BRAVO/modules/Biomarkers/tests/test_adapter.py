@@ -164,7 +164,9 @@ def _make_chronic_trend(days=14, step_hours=2):
 def test_bravo_chronic_to_lfp_df_shape():
     chronic, pro = _make_chronic_trend()
     cv = adapter.bravo_chronic_to_lfp_df(chronic, pro, label_metric="nrs")
-    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs"]
+    # `source` is carried (defaults to "chronic") for the two-source batch-confound diagnostic.
+    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs", "source"]
+    assert set(cv["source"].unique()) == {"chronic"}
     levels = set(cv["pain_level"].dropna().unique())
     assert levels <= {0.0, 1.0} and len(levels) == 2  # both classes present
     # High-pain (even) days should be labeled 1.
@@ -220,13 +222,182 @@ def test_run_chronic_threshold_no_sliding():
 
 
 def test_sliding_window_analytics_no_sliding():
-    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on."""
+    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on.
+
+    Return shape is now `{windows: [...], summary: {...}}` so the panel can caption coverage.
+    """
     cv = _make_cv_df()
     full = analytics.sliding_window_analytics(cv, sliding=True)
     one = analytics.sliding_window_analytics(cv, sliding=False)
-    assert len(one) == 1 and one[0].get("all_data") is True
-    assert one[0]["threshold"] is not None
-    assert len(full) > 1   # sliding produces many windows on the same data
+    assert set(one.keys()) >= {"windows", "summary"}
+    assert len(one["windows"]) == 1 and one["windows"][0].get("all_data") is True
+    assert one["windows"][0]["threshold"] is not None
+    assert one["summary"]["n_total"] == 1
+    assert len(full["windows"]) > 1   # sliding produces many windows on the same data
+    assert full["summary"]["n_total"] >= len(full["windows"])
+
+
+def test_sliding_window_skips_one_class_test_folds():
+    """When a tertile-labeled test fold has only one class, the window is expanded; if it still
+    has one class after expansion, it's SKIPPED (not a half-NaN row) and counted in summary."""
+    # 30 days, label_metric alternates blocks; tertile-style binarization (NaN middle on day 15)
+    rng = np.random.default_rng(0)
+    days = pd.date_range("2025-01-01", periods=30, freq="D")
+    rows = []
+    for i, d in enumerate(days):
+        label = 0.0 if i < 14 else (np.nan if i == 14 else 1.0)
+        for k in range(20):
+            rows.append({"timestamp": d + pd.Timedelta(minutes=10 * k),
+                         "LFP_smoothed": float(rng.normal(100 + 20 * (label if np.isfinite(label) else 0.5), 5)),
+                         "pain_level": label})
+    cv = pd.DataFrame(rows)
+    out = analytics.sliding_window_analytics(cv, train_days=7, gap_days=1, test_days=2,
+                                             step_days=1, sliding=True, max_test_days=4)
+    # No half-NaN rows leak out: every returned window has a defined AUC.
+    assert all(w["auc"] is not None for w in out["windows"])
+    # Summary counts what was skipped.
+    assert out["summary"]["n_total"] >= len(out["windows"])
+    assert out["summary"]["n_skipped_test_one_class"] >= 0
+    assert out["summary"]["max_test_days"] == 4
+
+
+def test_td_sliding_corr_spectrum_matches_scipy():
+    """The fully-vectorized sliding R-vs-frequency heatmap must equal scipy.stats.pearsonr computed
+    the naive way for each (window, channel, freq) — proving the W@X matmul math is correct."""
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(0)
+    E, C, F = 40, 2, 5
+    times = [pd.Timestamp(_dt.datetime.utcfromtimestamp(_MIDNIGHT_UTC + d * 86_400)) for d in range(E)]
+    psd = rng.standard_normal((E, C, F))
+    labels = rng.standard_normal(E)
+    detail = {"psd": psd, "labels": labels, "f_set": np.arange(F) * 1.0,
+              "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"]}
+    out = analytics.td_sliding_corr_spectrum(detail, times, window_days=10, step_days=10, min_sessions=3)
+    chans = out["channels"]
+    assert len(chans) == C
+    starts = chans[0]["window_starts"]
+    assert len(starts) >= 2
+    assert chans[0]["channel"] == "L 0⁻-2⁺"   # numeric contact label, not word form
+
+    tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
+    w_ns = 10 * 86_400 * 1e9
+    # The function applies session-level MAD outlier rejection on the label (>=3 MADs from the
+    # median dropped from every window), so the scipy reference must use the SAME surviving sessions.
+    lmed = np.median(labels)
+    lmad = np.median(np.abs(labels - lmed))
+    label_keep = (np.abs(labels - lmed) <= 3.0 * lmad) if lmad > 0 else np.ones(labels.shape, bool)
+    checked = 0
+    for (wi, ci, fi) in [(0, 0, 0), (1, 1, F - 1)]:
+        if wi >= len(starts):
+            continue
+        w0 = pd.Timestamp(starts[wi]).value
+        idx = np.where((tv >= w0) & (tv < w0 + w_ns) & label_keep)[0]
+        if len(idx) < 3:
+            continue
+        r_ref = pearsonr(psd[idx, ci, fi], labels[idx])[0]
+        r_got = chans[ci]["r"][fi][wi]   # r is [freq][window]
+        assert abs(r_got - r_ref) < 1e-9, (wi, ci, fi, r_got, r_ref)
+        checked += 1
+    assert checked >= 1
+    print("OK td_sliding_corr_spectrum matches scipy (checked %d cells)" % checked)
+
+
+def test_pearson_corr_psd_label_rejects_mad_outliers():
+    """MAD>=3 outlier rejection: a single artifact session must be excluded from the PSD<->pain
+    correlation so it cannot fabricate (or destroy) a correlation. The MAD-filtered R on data with
+    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R."""
+    pearson_corr_psd_label = streaming_psd.pearson_corr_psd_label
+    rng = np.random.default_rng(7)
+    E = 60
+    label = np.linspace(0, 10, E)
+    feat_clean = (label + rng.normal(0, 1.0, E))           # genuinely correlated feature
+    psd_clean = feat_clean.reshape(E, 1, 1)
+    r_clean, _ = pearson_corr_psd_label(psd_clean, label, mad_k=3.0)
+
+    # Plant one extreme artifact session (huge feature, mid-range label) that would distort a naive R.
+    feat_spk = feat_clean.copy(); feat_spk[E // 2] += 500.0
+    psd_spk = feat_spk.reshape(E, 1, 1)
+    r_filtered, _ = pearson_corr_psd_label(psd_spk, label, mad_k=3.0)     # MAD drops the spike
+    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=None)       # naive keeps it
+
+    rc, rf, rn = float(r_clean[0, 0]), float(r_filtered[0, 0]), float(r_naive[0, 0])
+    # Filtered R recovers the clean correlation; naive R is corrupted by the spike.
+    assert abs(rf - rc) < 0.05, (rc, rf)
+    assert abs(rn - rc) > 0.1, (rc, rn)
+    print("OK pearson_corr_psd_label MAD rejection: clean=%.3f filtered=%.3f naive=%.3f" % (rc, rf, rn))
+
+
+def test_mad_outlier_mask_behavior():
+    """mad_outlier_mask: KEEP-mask True within k MADs of the median. Drops |x-med|>k*MAD spikes,
+    excludes non-finite, and (deliberately) returns the plain finite mask when MAD is undefined
+    (all-equal) or there are < 3 finite points — those are the documented no-op fallbacks."""
+    m = adapter.mad_outlier_mask(np.array([1.0, 2.0, 3.0, 4.0, 100.0]), k=3.0)
+    assert m.tolist() == [True, True, True, True, False]          # 100 is the spike
+    # all-equal -> MAD==0 -> keep everything (no false positives on a constant series)
+    assert adapter.mad_outlier_mask(np.array([5.0, 5.0, 5.0, 5.0])).all()
+    # < 3 finite points -> MAD unstable -> return the finite mask unchanged (NaN excluded)
+    assert adapter.mad_outlier_mask(np.array([1.0, np.nan])).tolist() == [True, False]
+    # NaN excluded from the keep set AND the spike still dropped, simultaneously
+    assert adapter.mad_outlier_mask(np.array([1.0, 2.0, 3.0, np.nan, 100.0])).tolist() == \
+        [True, True, True, False, False]
+
+
+def test_concat_chronic_mad_is_per_recording_not_global():
+    """_concat_chronic applies MAD outlier rejection PER RECORDING, not globally. A small low-scale
+    source (~10) concatenated with a large high-scale source (~100): per-recording MAD keeps BOTH
+    sources intact, whereas a GLOBAL MAD (dominated by the high source) would erase the entire
+    low-scale source. A within-source spike is still dropped; mad_k=None disables rejection."""
+    tA = _MIDNIGHT_UTC + np.arange(8) * 3600.0
+    dA = np.column_stack([np.full(8, 10.0), np.full(8, 2.0)])      # tight low-scale source
+    tB = _MIDNIGHT_UTC + (50 + np.arange(60)) * 3600.0
+    dB = np.column_stack([np.full(60, 100.0), np.full(60, 2.0)])   # tight high-scale source
+    rec_a = {"Time": tA, "Data": dA, "ChannelNames": ["L LFP", "L Amplitude"]}
+    rec_b = {"Time": tB, "Data": dB, "ChannelNames": ["L LFP", "L Amplitude"]}
+    lfp = adapter._concat_chronic([rec_a, rec_b], mad_k=3.0)["Data"][:, 0]
+    assert (lfp == 10.0).sum() == 8 and (lfp == 100.0).sum() == 60   # both sources fully survive
+    # Control: a GLOBAL MAD would flag every low-scale sample as an outlier.
+    allv = np.concatenate([dA[:, 0], dB[:, 0]])
+    med = np.median(allv); mad = np.median(np.abs(allv - med))
+    assert (np.abs(allv[:8] - med) <= 3.0 * mad).sum() == 0
+    # A within-source spike IS dropped (give the source spread so MAD is defined).
+    rng = np.random.default_rng(3)
+    dS = np.column_stack([rng.normal(10, 1, 40), np.full(40, 2.0)]); dS[5, 0] = 9000.0
+    rec_s = {"Time": _MIDNIGHT_UTC + np.arange(40) * 3600.0, "Data": dS,
+             "ChannelNames": ["L LFP", "L Amplitude"]}
+    assert 9000.0 not in set(adapter._concat_chronic(rec_s, mad_k=3.0)["Data"][:, 0])
+    # mad_k=None disables rejection -> the spike survives.
+    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=None)["Data"][:, 0])
+
+
+def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():
+    """The test-fold expansion must actually FIRE (a window's test_days_used grows beyond the
+    requested test_days when the short window is single-class) and skips must be CATEGORIZED into
+    one-class vs no-data with the summary counts reconciling to n_total. Every returned window has a
+    defined AUC (no half-NaN rows leak out)."""
+    days = pd.date_range("2025-01-01", periods=40, freq="D")
+    rows = []
+    for i, d in enumerate(days):
+        if i < 20:
+            lab = float(i % 2)            # alternating classes -> usable training
+        elif i < 28:
+            lab = 0.0                     # homogeneous block -> short test fold is single-class
+        else:
+            lab = 1.0                     # class flips -> expansion reaches both classes
+        for k in range(15):
+            rows.append({"timestamp": d + pd.Timedelta(minutes=5 * k),
+                         "LFP_smoothed": 100 + 30 * lab + np.random.default_rng(i * 15 + k).normal(0, 2),
+                         "pain_level": lab})
+    cv = pd.DataFrame(rows)
+    out = analytics.sliding_window_analytics(cv, train_days=10, gap_days=1, test_days=2,
+                                             step_days=1, sliding=True, max_test_days=8)
+    used = [w["test_days_used"] for w in out["windows"]]
+    assert any(u > 2 for u in used), "expansion never fired (no test_days_used grew past test_days)"
+    assert all(u <= 8 for u in used)                              # never exceeds max_test_days
+    assert all(w["auc"] is not None for w in out["windows"])      # no half-NaN rows
+    s = out["summary"]
+    assert s["n_skipped_test_one_class"] >= 1                     # at least one genuine one-class skip
+    assert s["n_total"] == len(out["windows"]) + s["n_skipped_test_one_class"] + s["n_skipped_no_data"]
+    assert s["max_test_days"] == 8 and s["test_days"] == 2
 
 
 def test_decimate_for_plot_thins_only():
@@ -373,6 +544,96 @@ def test_kmeans_falls_back_to_cutoff_and_warns():
     assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
 
 
+def test_threshold_pain_level_tertile_drops_middle():
+    """tertile labeler: low tertile -> 0, high tertile -> 1, ambiguous middle -> NaN."""
+    # 90 samples, metric ramps 0..89 -> tertiles at 30th/60th value-ish
+    df = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=90, freq="D"),
+                       "nrs": np.arange(90, dtype=float)})
+    pl = adapter._threshold_pain_level(df, "nrs", strategy="tertile", daily_broadcast=True)
+    assert set(np.unique(pl[np.isfinite(pl)])) <= {0.0, 1.0}
+    assert np.isnan(pl).sum() > 0, "the middle band must be excluded (NaN)"
+    # lowest values labeled low, highest labeled high
+    assert pl[0] == 0.0 and pl[-1] == 1.0
+    # middle value excluded
+    assert np.isnan(pl[45])
+
+
+def test_threshold_pain_level_median_keeps_all():
+    """median labeler: every sample labeled (no NaN middle), ~50/50 on a symmetric metric."""
+    df = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=100, freq="D"),
+                       "nrs": np.arange(100, dtype=float)})
+    pl = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=True)
+    assert np.isnan(pl).sum() == 0
+    assert abs(pl.mean() - 0.5) < 0.02
+
+
+def test_daily_broadcast_fixes_density_confound():
+    """The cut is computed on DAILY values, not the density-inflated per-sample array.
+
+    Over-record the low-pain days: per-sample the median sits at the low value (everything would
+    label high), but daily-broadcast puts the cut at the true daily median.
+    """
+    rows = []
+    days = pd.date_range("2025-01-01", periods=60, freq="D")
+    for i, d in enumerate(days):
+        val = 3.0 if i < 20 else (6.0 if i < 40 else 9.0)
+        k = 50 if i < 20 else 2   # low days heavily over-recorded
+        rows += [(d + pd.Timedelta(minutes=10 * j), val) for j in range(k)]
+    df = pd.DataFrame(rows, columns=["timestamp", "nrs"])
+    pl_db = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=True)
+    pl_raw = adapter._threshold_pain_level(df, "nrs", strategy="median", daily_broadcast=False)
+    # legacy per-sample median collapses to all-high; daily-broadcast does not
+    assert pl_raw.mean() == 1.0
+    assert pl_db.mean() < 0.2
+    # the value-3 (low) days must be labeled low under daily-broadcast
+    assert (pl_db[df["nrs"].to_numpy() == 3.0] == 0.0).all()
+
+
+def test_bravo_chronic_tertile_strategy_end_to_end():
+    """tertile strategy flows through bravo_chronic_to_lfp_df and yields 0/1/NaN labels."""
+    chronic, pro = _make_chronic_trend_with_kmeans_features()
+    cv = adapter.bravo_chronic_to_lfp_df(chronic, pro, label_metric="nrs", label_strategy="tertile")
+    assert set(cv["pain_level"].dropna().unique()) <= {0.0, 1.0}
+    # high-pain days (nrs 8) end up high, low-pain days (nrs 2) end up low
+    assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
+    assert cv.loc[cv["nrs"] == 2, "pain_level"].eq(0.0).all()
+
+
+def test_run_powerdomain_branch_per_channel_split():
+    """Two-channel chronic input -> branch returns a per_channel dict keyed by ChannelNames[0]
+    with independent summaries; the pooled run continues to work alongside it."""
+    chronic_l, pro = _make_chronic_trend(days=14)
+    # Build a Right-hemisphere counterpart with the OPPOSITE pain-LFP coupling so the per-channel
+    # thresholds (and AUCs) genuinely differ from the pooled result.
+    times, lfp_r, amp_r = [], [], []
+    for d in range(14):
+        pain_day = (d % 2 == 0)
+        for h in range(0, 24, 2):
+            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
+            amp_r.append(2.0)
+    chronic_r = {
+        "SamplingRate": -1,
+        "Time": np.array(times, dtype=float),
+        "Data": np.column_stack([np.array(lfp_r), np.array(amp_r)]),
+        "ChannelNames": ["R LFP", "R Amplitude"],
+    }
+    run = pipeline.run_powerdomain_branch(pro, chronic=[chronic_l, chronic_r],
+                                          label_metric="nrs", label_strategy="cutoff",
+                                          train_days=4, gap_days=1, test_days=2)
+    assert "per_channel" in run and set(run["per_channel"].keys()) >= {"L LFP", "R LFP"}
+    l_thr = run["per_channel"]["L LFP"]["summary"]["best_threshold"]
+    r_thr = run["per_channel"]["R LFP"]["summary"]["best_threshold"]
+    # Independent thresholds for the two hemispheres (different LFP scales) — must NOT collapse to
+    # the pooled threshold.
+    assert l_thr != r_thr
+    # Each per-channel run carries its own cv_df with no rows from the other channel.
+    cv_l = run["per_channel"]["L LFP"]["cv_df"]; cv_r = run["per_channel"]["R LFP"]["cv_df"]
+    assert cv_l is not None and cv_r is not None
+    # The pooled summary still has its in-sample AUC alongside the per-channel breakdown.
+    assert "auc_in_sample" in run["summary"]
+
+
 def test_bravo_powerdomain_to_chronic_like():
     """Power-Domain packets (StartTime+fs, per-contact Power/Stim, sentinel + Missing) convert to
     chronic-shaped power dicts: one series per Power channel, sentinel/missing samples dropped,
@@ -392,8 +653,12 @@ def test_bravo_powerdomain_to_chronic_like():
            "Data": data, "Missing": missing}
     out = adapter.bravo_powerdomain_to_chronic_like([rec])
     assert len(out) == 2, "one chronic-shaped series per Power channel"
-    left = next(o for o in out if o["ChannelNames"][0].startswith("Left"))
-    right = next(o for o in out if o["ChannelNames"][0].startswith("Right"))
+    # ChannelNames are now real bipolar-contact labels decoded from the power column name
+    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻-3⁺"), not the generic "Left LFP".
+    left = next(o for o in out if o["ChannelNames"][0].startswith("L"))
+    right = next(o for o in out if o["ChannelNames"][0].startswith("R"))
+    assert "0" in left["ChannelNames"][0] and "3" in left["ChannelNames"][0], \
+        f"expected a decoded bipolar contact label, got {left['ChannelNames'][0]!r}"
     # L: sentinel (idx1) + missing (idx3) dropped -> 10,12,14 at idx 0,2,4
     assert list(left["Data"][:, 0]) == [10.0, 12.0, 14.0]
     assert (left["Data"][:, 1] == 1.0).all()                 # paired with LEFT stim col
@@ -422,8 +687,19 @@ if __name__ == "__main__":
     test_kmeans_pain_level_labels_high_pain_as_one()
     test_bravo_chronic_kmeans_strategy()
     test_kmeans_falls_back_to_cutoff_and_warns()
+    test_threshold_pain_level_tertile_drops_middle()
+    test_threshold_pain_level_median_keeps_all()
+    test_daily_broadcast_fixes_density_confound()
+    test_bravo_chronic_tertile_strategy_end_to_end()
+    test_run_powerdomain_branch_per_channel_split()
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
     test_sliding_window_analytics_no_sliding()
+    test_sliding_window_skips_one_class_test_folds()
+    test_td_sliding_corr_spectrum_matches_scipy()
+    test_pearson_corr_psd_label_rejects_mad_outliers()
+    test_mad_outlier_mask_behavior()
+    test_concat_chronic_mad_is_per_recording_not_global()
+    test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")

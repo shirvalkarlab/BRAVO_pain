@@ -56,7 +56,15 @@ function BRAVORecordingBinaryStructureUploader({institute, participant, version}
 
     const request = new XMLHttpRequest();
     request.open('POST', "/api/uploadData");
-    request.setRequestHeader("X-CSRFToken", document.querySelector('[name=csrfmiddlewaretoken]').value);
+    // The csrfmiddlewaretoken hidden input is NOT rendered in this SPA, so the querySelector
+    // returns null. Reading .value off null threw a TypeError BEFORE request.send(), so the
+    // upload was never sent (FilePond spun forever with no network request). Guard the lookup
+    // exactly as session-control.js does; DEBUG uses CSRF-exempt session auth so "" is accepted.
+    let csrftoken = "";
+    if (document.querySelector('[name=csrfmiddlewaretoken]')) {
+      csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+    request.setRequestHeader("X-CSRFToken", csrftoken);
 
     // Should call the progress method to update the progress to 100% before calling load
     // Setting computable to false switches the loading indicator to infinite mode

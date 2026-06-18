@@ -460,7 +460,7 @@ def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):
     return None
 
 def checkDuplicate(device, electrode, therapy):
-    AllTherapies = models.Therapy.find_all(source__metadata__Device=device.uid, type=therapy["type"], date=therapy["date"])
+    AllTherapies = models.Therapy.find_all(source__device=device.uid, type=therapy["type"], date=therapy["date"])
     if len(AllTherapies) == 0:
         return False
     

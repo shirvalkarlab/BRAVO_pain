@@ -39,6 +39,13 @@ class Recording(models.Model):
     
     pointer = models.CharField(max_length=1024, default="")
     hashed = models.CharField(max_length=64, default="")
+    # Indexed DETERMINISTIC content fingerprint (HMAC of the uncompressed payload pickle), used for
+    # duplicate detection. `hashed` cannot be used for this: it hashes the blosc2-COMPRESSED bytes,
+    # and blosc2 compression is non-deterministic, so `hashed` changes on every upload of the same
+    # data. The per-recording dedup check filters on this column + source__owner; indexing it turns
+    # the old (metadata=<full JSON blob>, source__metadata__Uploader=<JSON_EXTRACT>) full-table scan
+    # into an index seek.
+    content_fingerprint = models.CharField(max_length=64, default="", db_index=True)
     metadata = models.JSONField(default=dict)
     
     source = models.ForeignKey('SourceFile', models.CASCADE)

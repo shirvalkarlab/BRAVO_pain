@@ -207,11 +207,29 @@ LOGGING = {
             "filename": BASE_DIR / "bravo.log",
             "formatter": "verbose",
         },
+        # Console handler so application logs (and the upload/decode timing prints' siblings)
+        # surface in `docker compose logs`, not only in the in-container bravo.log file.
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
     },
     "loggers": {
         "": {
             "level": "DEBUG",
-            "handlers": ["file"],
+            "handlers": ["file", "console"],
+        },
+        # CRITICAL PERFORMANCE FIX: under DEBUG=True the django.db.backends logger emits ONE DEBUG
+        # record for EVERY SQL statement. With the root logger at DEBUG and a synchronous FileHandler,
+        # a Percept upload (hundreds-to-thousands of find/include/save/bulk_create queries, each also
+        # preceded by the monkeypatched `SELECT 1` connection health-check) wrote thousands of verbose
+        # log lines to bravo.log synchronously inside the request — turning a sub-second insert phase
+        # into a multi-minute hang. Pinning this logger at INFO stops per-query SQL logging while
+        # keeping warnings/errors. Application logging is unaffected.
+        "django.db.backends": {
+            "level": "INFO",
+            "handlers": ["file", "console"],
+            "propagate": False,
         },
     },
     "formatters": {

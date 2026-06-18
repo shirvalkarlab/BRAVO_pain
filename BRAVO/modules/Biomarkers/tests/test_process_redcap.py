@@ -53,10 +53,12 @@ def main():
     ts = list(out["date_time_s1_daily"])
     assert ts == sorted(ts), f"not sorted: {ts}"
     assert ts[0] == "2025-09-01 09:00"
-    # Scalar mapping.
-    assert list(out["nrs"]) == [2, 8, 0], list(out["nrs"])  # NaN -> 0 on the 3rd (latest) row
-    # List mapping summed row-wise (NaN component -> 0).
-    assert list(out["mpq_aff"]) == [2, 11, 2], list(out["mpq_aff"])  # 1+1, 5+6, 0+2
+    # Scalar mapping. A missing report stays NaN (NOT fabricated as 0) — rigor fix.
+    import math
+    nrs = list(out["nrs"])
+    assert nrs[0] == 2 and nrs[1] == 8 and math.isnan(nrs[2]), nrs   # 3rd report missing -> NaN
+    # List mapping summed row-wise with min_count=1 (>=1 present -> sum of present; all-missing -> NaN).
+    assert list(out["mpq_aff"]) == [2, 11, 2], list(out["mpq_aff"])  # 1+1, 5+6, (missing,2)->2
     # Only canonical keys + timestamp are emitted; unrelated raw columns dropped.
     assert "unused" not in out.columns
     assert set(out.columns) == {"nrs", "vas", "mpq_aff", "date_time_s1_daily"}, list(out.columns)

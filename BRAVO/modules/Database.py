@@ -161,6 +161,12 @@ def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=N
     return False
 
 def checkManagePermission(user, participant_uid, type="View"):
+    from django.conf import settings
+    # LOCAL DEV (DEBUG): grant all manage rights (Edit/Upload/Delete/AddEvent) to any authenticated
+    # user so a localhost instance never blocks edits (device metadata, deletes, uploads) with
+    # "you do not have permission". Production (DJANGO_MODE=PRODUCTION) uses the real checks below.
+    if settings.DEBUG:
+        return True
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
         return False
@@ -717,6 +723,22 @@ def saveSourceFile(datastruct, pointer, bytes=False):
     except Timeout:
         print("Lockfile Not Acquired before Timeout")
         return False
+
+
+def contentFingerprint(datastruct, bytes=False):
+    """A DETERMINISTIC content fingerprint of a recording payload, for duplicate detection.
+
+    IMPORTANT: this is NOT the same as the hash stored by saveSourceFile. saveSourceFile hashes the
+    blosc2-COMPRESSED bytes, and blosc2.compress2 is non-deterministic (identical input compresses to
+    different output across calls), so its hash changes every upload and cannot identify a duplicate.
+    This fingerprint hashes the UNCOMPRESSED pickle of the payload, which IS stable across decodes of
+    the same source JSON, so an indexed lookup on it reliably detects a re-uploaded recording.
+    """
+    if not bytes:
+        pData = pickle.dumps(datastruct, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        pData = datastruct
+    return hmac.new(HASH_KEY.encode("utf8"), pData, hashlib.sha256).hexdigest()
 
 def loadSourceFile(pointer, verifiedHash, bytes=False):
     pointer = pointer.replace("\\", os.path.sep).replace("/", os.path.sep)

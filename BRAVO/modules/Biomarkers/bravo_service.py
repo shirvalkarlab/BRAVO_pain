@@ -14,6 +14,8 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 
 import os
 import json
+import math
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -26,6 +28,8 @@ from . import pipeline
 from . import adapter
 from .routines import redcap_client
 from .routines import analytics
+
+_log = logging.getLogger(__name__)
 
 # DB recording types. Time-domain = raw 250 Hz LFP. The "power domain" source merges TWO
 # band-power-over-time streams: the ~10-min Chronic (BrainSense Timeline) trend AND the per-session
@@ -83,19 +87,24 @@ def _resolve_biomarker_metric(request_data, pro_df):
         parts = [p for p in COMPOSITE_PARTS if p in pro_df.columns]
         if parts:
             df = pro_df.copy()
-            # Min-max each part to 0..1 and average. Only parts that actually VARY contribute —
-            # a constant or all-NaN part carries no discriminative signal, and including it as
-            # zeros would silently halve the composite's scale (e.g. one flat part -> 0..50).
-            norms = []
+            # Z-SCORE each part across all surveys, then average the available parts per row.
+            # Standardizing by spread (not min-max range) means outliers don't set the scale and
+            # each PRO contributes equal variance to the blend. Averaging only the parts present on
+            # a row (skipna) also keeps a day whenever EITHER part exists, instead of dropping it
+            # when one is missing — on RCS08 this lifted composite coverage 253 -> 312 days and
+            # improved both LFP separability and balance over the old min-max blend
+            # (see docs/binarization_recommendation_RCS08.md). Only parts that actually VARY
+            # (finite, non-constant) contribute.
+            zcols = []
             for p in parts:
                 v = pd.to_numeric(df[p], errors="coerce")
                 arr = v.to_numpy(dtype=float)
                 if np.isfinite(arr).any():
-                    lo, hi = np.nanmin(arr), np.nanmax(arr)
-                    if hi > lo:
-                        norms.append((v - lo) / (hi - lo))
-            if norms:
-                df[COMPOSITE_METRIC] = 100.0 * sum(norms) / len(norms)
+                    mu, sd = np.nanmean(arr), np.nanstd(arr)
+                    if sd > 0:
+                        zcols.append((v - mu) / sd)
+            if zcols:
+                df[COMPOSITE_METRIC] = pd.concat(zcols, axis=1).mean(axis=1, skipna=True)
                 return df, COMPOSITE_METRIC, tuple(parts)
         metric = DEFAULT_BIOMARKER_METRIC  # no usable composite signal -> fall back
 
@@ -119,8 +128,27 @@ def _load_recordings(participant_uid, types):
     # a worker thread. Each task returns the decoded payload (or None on failure).
     def _decode(rec):
         try:
-            return Database.loadSourceFile(rec.pointer, rec.hashed)
+            data = Database.loadSourceFile(rec.pointer, rec.hashed)
+            # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
+            # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
+            # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
+            # chronic trend with its sensing frequency.
+            chz = None
+            md = getattr(rec, "metadata", None)
+            if isinstance(md, dict):
+                chz = md.get("CenterFrequencyHz")
+            if chz is not None:
+                for d in (data if isinstance(data, list) else [data]):
+                    if isinstance(d, dict):
+                        d.setdefault("CenterFrequencyHz", chz)
+            return data
         except Exception:
+            # Per-file resilience: one corrupt/undecodable recording must not sink the whole
+            # threaded load. But log it (pointer only, never the payload) so a SYSTEMATIC decode
+            # failure is diagnosable instead of silently yielding an empty timeline that looks
+            # identical to "no recordings".
+            _log.warning("Biomarkers: failed to decode recording %r; skipping",
+                         getattr(rec, "pointer", "?"), exc_info=True)
             return None
 
     workers = max(1, min(len(Recordings), _loader_threads()))
@@ -143,6 +171,62 @@ def _derive_chan_order(td_recordings):
     return order
 
 
+def _recorded_powers(powerdomain_list, region_map=None):
+    """Which band-power channels were actually recorded — the '<contact> Power' columns of the
+    BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
+    device metadata when available, plus the sensing-band CENTER FREQUENCY when the device stored
+    it. Each entry: {raw, label, region, center_hz}. The card displays 'L 0⁻-3⁺ (GPi) @ 22.5 Hz'
+    so the clinician sees which BAND was sensed, not just which contact pair. Frequency extraction
+    lives in analytics.power_center_freqs (Django-free, unit-tested).
+    """
+    center_hz = analytics.power_center_freqs(powerdomain_list)
+    seen = {}
+    for r in powerdomain_list or []:
+        for nm in r.get("ChannelNames", []) or []:
+            s = str(nm)
+            if "POWER" in s.upper():
+                contact = s.rsplit(" ", 1)[0] if " " in s else s   # strip the trailing " Power"
+                if contact not in seen:
+                    fmt = analytics.format_channel(contact, region=(region_map or {}).get(contact))
+                    chz = center_hz.get(contact)
+                    # Flag a sensing band at/above the biomarker frequency cap so the card can warn
+                    # that it falls outside the validated theta/alpha/beta/low-gamma range.
+                    above = bool(chz is not None and chz >= pipeline.MAX_BIOMARKER_FREQ_HZ)
+                    seen[contact] = {"raw": contact, "label": fmt["short"], "region": fmt["region"],
+                                     "center_hz": chz, "above_cap": above}
+    return list(seen.values())
+
+
+def _region_map(participant, chan_order):
+    """Map each raw sensing-channel name (e.g. 'ZERO_THREE_LEFT') to a brain region inferred from
+    the PARTICIPANT'S DEVICE METADATA (Electrode.custom_name / target), not a static map. The
+    hemisphere is taken from the channel name and matched to the electrode whose name/target names
+    that hemisphere. Returns {} when no electrode metadata is available (callers fall back)."""
+    if participant is None:
+        return {}
+    try:
+        from Server.models.Device import Electrode
+    except Exception:
+        return {}
+    hemi_region = {}
+    for e in Electrode.objects.filter(owner=participant):
+        reg = (getattr(e, "custom_name", "") or getattr(e, "target", "") or "").strip()
+        if not reg:
+            continue
+        ru = reg.upper()
+        hemi = "LEFT" if ("LEFT" in ru or ru.startswith("L ")) else (
+               "RIGHT" if ("RIGHT" in ru or ru.startswith("R ")) else "")
+        if hemi:
+            hemi_region.setdefault(hemi, reg)
+    out = {}
+    for raw in chan_order or []:
+        ru = str(raw).upper()
+        h = "LEFT" if "LEFT" in ru else ("RIGHT" if "RIGHT" in ru else "")
+        if h and h in hemi_region:
+            out[raw] = hemi_region[h]
+    return out
+
+
 def _pt_config_dir():
     """Directory holding per-patient `<name>_config.json` field maps. Defaults to the
     live-mounted `<BRAVO>/pt_config`; override with the BRAVO_PT_CONFIG_DIR env var."""
@@ -154,25 +238,55 @@ def _pt_config_dir():
     return os.path.join(base, "pt_config")
 
 
+def _safe_config_name(value):
+    """Reduce a request-supplied config selector to a bare filename component that cannot escape
+    the pt_config directory. `PtConfig`/`RedcapRecordId`/participant name are authenticated-user
+    input that gets interpolated into a filesystem path; without this, values like
+    `../../../etc/foo`, an absolute path, or one containing a path separator would let a caller
+    read arbitrary JSON files on the server (e.g. a REDCap config holding the API token). We keep
+    only the basename and reject anything that still contains a separator, is empty, or is a
+    dot-entry — so only files that live DIRECTLY inside the pt_config dir are reachable."""
+    if value is None:
+        return None
+    name = os.path.basename(str(value).strip())
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        return None
+    return name
+
+
 def _load_pt_config(participant, request_data):
     """Locate and parse a participant's pt_config (the same file the library-mode pipeline reads
     for channel order; it also carries the REDCap field map). Resolution order:
     explicit `PtConfig` in the request, then `<dir>/<RedcapRecordId>_config.json`, then
-    `<dir>/<participant name>_config.json`. Returns the dict, or None if no file is found."""
+    `<dir>/<participant name>_config.json`. Returns the dict, or None if no file is found.
+
+    All candidates are confined to `cfg_dir`: the request-supplied selectors are reduced to a bare
+    basename (see `_safe_config_name`) and every resolved path is verified to sit inside `cfg_dir`
+    before it is opened, so no `PtConfig`/`RedcapRecordId` value can traverse out of that dir."""
     cfg_dir = _pt_config_dir()
+    cfg_root = os.path.realpath(cfg_dir)
     candidates = []
-    explicit = request_data.get("PtConfig")
+    explicit = _safe_config_name(request_data.get("PtConfig"))
     if explicit:
-        candidates += [explicit, os.path.join(cfg_dir, explicit),
+        candidates += [os.path.join(cfg_dir, explicit),
                        os.path.join(cfg_dir, f"{explicit}_config.json")]
-    rid = request_data.get("RedcapRecordId")
+    rid = _safe_config_name(request_data.get("RedcapRecordId"))
     if rid:
         candidates.append(os.path.join(cfg_dir, f"{rid}_config.json"))
     if participant is not None and getattr(participant, "name", ""):
-        candidates.append(os.path.join(cfg_dir, f"{participant.name}_config.json"))
+        pname = _safe_config_name(participant.name)
+        if pname:
+            candidates.append(os.path.join(cfg_dir, f"{pname}_config.json"))
     for path in candidates:
-        if path and os.path.isfile(path):
-            with open(path, "r") as fp:
+        if not path:
+            continue
+        # Defence in depth: even after basename-sanitising, confirm the real path stays under
+        # cfg_root before touching the filesystem (guards against symlinks in the dir, too).
+        real = os.path.realpath(path)
+        if real != cfg_root and not real.startswith(cfg_root + os.sep):
+            continue
+        if os.path.isfile(real):
+            with open(real, "r") as fp:
                 return json.load(fp)
     return None
 
@@ -272,19 +386,23 @@ def _demo_run(source, request_data=None):
     td = recordings if source in ("timedomain", "both") else []
     ch = chronic if source in ("powerdomain", "both") else None
     pro, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro)
-    train_days, sliding, window_months = _window_params(request_data)
+    train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     demo_train_days = train_days if train_days is not None else 3   # demo spans ~14 days
+    demo_test_days = step_days if step_days is not None else 2
     run = pipeline.run_biomarker(td, pro, chan_order, source=source, chronic=ch,
-                                 train_days=demo_train_days, gap_days=1, test_days=2, sliding=sliding,
+                                 train_days=demo_train_days, gap_days=1, test_days=demo_test_days,
+                                 sliding=sliding,
                                  label_metric=label_metric, kmeans_features=kmeans_features)
     out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
-                                                 train_days=train_days, sliding=sliding))
+                                                 train_days=train_days, step_days=step_days,
+                                                 sliding=sliding))
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
     out["sliding_window"] = sliding
     out["window_months"] = window_months
+    out["window_step_months"] = window_step_months
     return out
 
 
@@ -308,7 +426,8 @@ def _run_parallel(tasks):
 
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
-                       train_days=None, sliding=True):
+                       label_strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                       train_days=None, step_days=None, sliding=True, region_map=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -321,11 +440,23 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             det = td["detail"]
             tl = td.get("timeline")
             times = [str(x) for x in tl["time"]] if (tl is not None and "time" in tl) else []
-            result["timedomain"] = _run_parallel({
-                "corr_spectrum": lambda: analytics.corr_spectrum(det),
-                "psd_spectra": lambda: analytics.psd_spectra(det),
-                "spectrogram": lambda: analytics.psd_spectrogram(det, times),
-            })
+            td_window_days = train_days if train_days is not None else 30
+            td_step_days = step_days if step_days is not None else 7
+            # Inject times into det so corr_spectrum can build per-session scatter data.
+            det["times"] = times
+            td_tasks = {
+                "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
+                "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
+                # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
+                # panels); no longer computed to keep the response lean.
+            }
+            # The sliding R-vs-frequency-over-time HEATMAP is computed ONLY in sliding mode (a window
+            # is selected). With no window (all data) the card shows the static R-vs-frequency
+            # spectrum (corr_spectrum) with peaks highlighted instead.
+            if sliding:
+                td_tasks["sliding_corr_spectrum"] = lambda: analytics.td_sliding_corr_spectrum(
+                    det, times, window_days=td_window_days, step_days=td_step_days, region_map=region_map)
+            result["timedomain"] = _run_parallel(td_tasks)
         except Exception as e:
             result["timedomain"] = {"error": str(e)}
 
@@ -337,16 +468,103 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             cv_df = pr.get("cv_df") if isinstance(pr, dict) and pr.get("cv_df") is not None else None
             if cv_df is None:
                 cv_df = adapter.bravo_chronic_to_lfp_df(chronic, pro_df, label_metric=label_metric,
-                                                        kmeans_features=kmeans_features)
+                                                        kmeans_features=kmeans_features,
+                                                        label_strategy=label_strategy,
+                                                        low_pct=low_pct, high_pct=high_pct)
             sw_kwargs = {"sliding": sliding}
             if train_days is not None:
                 sw_kwargs["train_days"] = train_days
+            if step_days is not None:
+                sw_kwargs["step_days"] = step_days
             result["powerdomain"] = _run_parallel({
                 "sliding_window": lambda: analytics.sliding_window_analytics(cv_df, **sw_kwargs),
                 "roc": lambda: analytics.roc_analysis(cv_df),
                 "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
-                "cluster_scatter": lambda: analytics.cluster_scatter(cv_df),
+                "power_pain_scatter": lambda: analytics.power_pain_scatter(cv_df, label_metric),
+                "cluster_scatter": lambda: analytics.cluster_scatter(cv_df, kmeans_features=kmeans_features),
+                "pain_binarization": lambda: analytics.pain_binarization(
+                    cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df,
+                    strategy=label_strategy, low_pct=low_pct, high_pct=high_pct),
             })
+            # Per-channel analytics (e.g. Left LFP vs Right LFP) — pipeline.run_powerdomain_branch
+            # already split the chronic input by ChannelNames[0]; here we run the same panel-driving
+            # analytics on each per-channel cv_df so the card can toggle between them.
+            per_ch = pr.get("per_channel") if isinstance(pr, dict) else None
+            if per_ch:
+                per_ch_analytics = {}
+                for ch_label, ch_data in per_ch.items():
+                    ch_cv = ch_data.get("cv_df")
+                    if ch_cv is None or len(ch_cv) == 0:
+                        continue
+                    ch_tasks = {
+                        "sliding_window": (lambda d=ch_cv: analytics.sliding_window_analytics(d, **sw_kwargs)),
+                        "roc": (lambda d=ch_cv: analytics.roc_analysis(d)),
+                        "lfp_distribution": (lambda d=ch_cv: analytics.lfp_distribution(d)),
+                        "power_pain_scatter": (lambda d=ch_cv: analytics.power_pain_scatter(d, label_metric)),
+                    }
+                    per_ch_analytics[ch_label] = _run_parallel(ch_tasks)
+                    # Carry the channel summary alongside so the panel can display per-channel AUC.
+                    per_ch_analytics[ch_label]["summary"] = ch_data.get("summary") or {}
+                result["powerdomain"]["per_channel"] = per_ch_analytics
+            # Surface the chronic-trend sensing CENTER FREQUENCY per hemisphere (stamped on each
+            # chronic recording at decode time from the GROUP-level config; merged onto the loaded
+            # dict in _load_recordings). The chronic trend is a band-power-at-a-fixed-frequency
+            # series, so the report should state which frequency -- a different value than the
+            # streaming power-domain center frequencies in recorded_powers. Guarded so it never
+            # breaks the response; empty when no chronic recording carried a frequency.
+            if isinstance(result.get("powerdomain"), dict):
+                chronic_hz = {}
+                # Per-recording (start_time, hz, channel) tuples, grouped by hemisphere, so we can
+                # both (a) keep the latest hz per hemisphere (legacy chronic_center_hz) and (b) emit
+                # a TIME-ORDERED change timeline marking where the sensing center frequency or the
+                # source channel switches during the record — the frontend draws a dashed marker at
+                # each change so a mid-record reconfiguration is unmistakable.
+                by_hemi = {}
+                for c in (chronic or []):
+                    if not isinstance(c, dict) or c.get("Source") != "chronic":
+                        continue
+                    hz = c.get("CenterFrequencyHz")
+                    chans = c.get("ChannelNames") or []
+                    chan = str(chans[0]) if chans else ""
+                    hemi = chan.split(" ")[0] if chan else ""
+                    if hz is not None and hemi:
+                        chronic_hz[hemi] = hz
+                    if hemi:
+                        ts = adapter._to_datetime(c.get("StartTime"))
+                        by_hemi.setdefault(hemi, []).append(
+                            {"t": ts, "hz": hz, "channel": chan})
+                if chronic_hz:
+                    result["powerdomain"]["chronic_center_hz"] = chronic_hz
+                # Build the change timeline: within each hemisphere, sort by start time and keep only
+                # the points where (hz, channel) differs from the previous one (the first record is
+                # always emitted as the initial config). Each entry: {hemi, t (ISO), center_hz,
+                # channel, changed: ["frequency"|"channel"...]}. Empty when nothing changes.
+                changes = []
+                for hemi, recs in by_hemi.items():
+                    recs = [r for r in recs if r["t"] is not None and pd.notna(r["t"])]
+                    recs.sort(key=lambda r: r["t"])
+                    prev = None
+                    for r in recs:
+                        if prev is None:
+                            changes.append({"hemi": hemi, "t": r["t"].isoformat(),
+                                            "center_hz": r["hz"], "channel": r["channel"],
+                                            "changed": ["initial"]})
+                        else:
+                            diff = []
+                            if r["hz"] != prev["hz"]:
+                                diff.append("frequency")
+                            if r["channel"] != prev["channel"]:
+                                diff.append("channel")
+                            if diff:
+                                changes.append({"hemi": hemi, "t": r["t"].isoformat(),
+                                                "center_hz": r["hz"], "channel": r["channel"],
+                                                "changed": diff})
+                        prev = r
+                # Only surface the timeline if there is at least one real (post-initial) change —
+                # otherwise the single static config is already conveyed by chronic_center_hz.
+                if any(ch["changed"] != ["initial"] for ch in changes):
+                    changes.sort(key=lambda ch: ch["t"])
+                    result["powerdomain"]["sensing_config_changes"] = changes
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}
 
@@ -356,13 +574,38 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
 _DAYS_PER_MONTH = 30.44
 
 
+# Clamp ceiling for request-supplied window sizes. 10 years is comfortably longer than any
+# Percept implant record, while bounding the windowing work an authenticated caller can schedule.
+_MAX_WINDOW_MONTHS = 120.0
+
+
+def _months_to_days(value):
+    """Parse a months value (float) -> whole days (>=1), or (None, None) if absent/invalid.
+
+    Request-supplied (`WindowMonths`/`WindowStep`), so guard the conversion: a non-finite value
+    (`inf`/`nan`) would otherwise raise OverflowError/ValueError out of `int()`, and an absurdly
+    large value would schedule a runaway amount of windowing work. Require months > 0 and finite,
+    and clamp to `_MAX_WINDOW_MONTHS`."""
+    if value is None or value == "":
+        return None, None
+    try:
+        months = float(value)
+    except (TypeError, ValueError):
+        return None, None
+    if not math.isfinite(months) or months <= 0:
+        return None, None
+    months = min(months, _MAX_WINDOW_MONTHS)
+    return max(1, int(round(months * _DAYS_PER_MONTH))), months
+
+
 def _window_params(request_data):
     """Resolve the sliding-window controls from the request.
 
-    Returns (train_days, sliding, window_months):
-      * window_months: `WindowMonths` request value (float) or None — the training-window
-        duration the user picked; converted to train_days = round(months * 30.44).
-      * train_days: None when WindowMonths absent (callers keep each function's own default).
+    Returns (train_days, step_days, sliding, window_months, window_step_months):
+      * window_months / train_days: `WindowMonths` -> the sliding-window TRAINING duration
+        (train_days = round(months * 30.44)). None -> callers keep their own default.
+      * window_step_months / step_days: `WindowStep` -> how far the window advances each step
+        (also the detector's per-window test-fold size). None -> defaults.
       * sliding: `SlidingWindow` bool (default True). False -> the power-domain detector and the
         sliding-window analytic run on ALL data at once (no temporal windows).
     """
@@ -370,18 +613,47 @@ def _window_params(request_data):
     if isinstance(sliding, str):
         sliding = sliding.strip().lower() not in ("false", "0", "no", "off", "")
     sliding = bool(sliding)
+    return _window_params_body(request_data, sliding)
 
-    months = request_data.get("WindowMonths")
-    train_days = None
-    window_months = None
-    if months is not None and months != "":
-        try:
-            window_months = float(months)
-            train_days = max(1, int(round(window_months * _DAYS_PER_MONTH)))
-        except (TypeError, ValueError):
-            window_months = None
-            train_days = None
-    return train_days, sliding, window_months
+
+# Pain-score binarization strategies exposed to the card. "tertile" (default) splits the metric
+# into low/high tertiles and EXCLUDES the ambiguous middle (best detector target on RCS08);
+# "median" keeps every day at a 50/50 split; "kmeans" is the legacy 2-cluster notebook labeler.
+# See docs/binarization_recommendation_RCS08.md.
+BINARIZATION_STRATEGIES = [
+    {"key": "tertile", "label": "Tertile (low/high, drop middle)"},
+    {"key": "median",  "label": "Median split"},
+    {"key": "kmeans",  "label": "KMeans (legacy)"},
+]
+DEFAULT_BINARIZATION = "tertile"
+
+
+def _label_strategy_params(request_data):
+    """Resolve the binarization strategy + percentile cuts from the request.
+
+    Returns (label_strategy, low_pct, high_pct). `LabelStrategy` selects the labeler (default
+    'tertile'); `PercentileLow`/`PercentileHigh` override the tertile cuts when the strategy is
+    'tertile'/'percentile'. Unknown strategies fall back to the default.
+    """
+    strat = (request_data.get("LabelStrategy") or DEFAULT_BINARIZATION)
+    valid = {s["key"] for s in BINARIZATION_STRATEGIES} | {"percentile", "cutoff"}
+    if strat not in valid:
+        strat = DEFAULT_BINARIZATION
+    try:
+        low = float(request_data.get("PercentileLow", 33.3333))
+        high = float(request_data.get("PercentileHigh", 66.6667))
+    except (TypeError, ValueError):
+        low, high = 33.3333, 66.6667
+    if not (0 <= low < high <= 100):
+        low, high = 33.3333, 66.6667
+    return strat, low, high
+
+
+def _window_params_body(request_data, sliding):
+
+    train_days, window_months = _months_to_days(request_data.get("WindowMonths"))
+    step_days, window_step_months = _months_to_days(request_data.get("WindowStep"))
+    return train_days, step_days, sliding, window_months, window_step_months
 
 
 def run_for_participant(request_data):
@@ -411,9 +683,15 @@ def run_for_participant(request_data):
     # Power domain = Chronic ~10-min LFP power + per-session Power-Domain band power, concatenated
     # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
     power_list = []
+    powerdomain_list = []
     if source in ("powerdomain", "both"):
         chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
         powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+        # Tag each Chronic recording with its sensing modality so the merged-series two-source
+        # batch/scale confound can be diagnosed downstream (the power-domain dicts self-tag).
+        for c in chronic_list:
+            if isinstance(c, dict):
+                c.setdefault("Source", "chronic")
         power_list = list(chronic_list) + adapter.bravo_powerdomain_to_chronic_like(powerdomain_list)
 
     pro_df = _load_pros(request_data, Participant)
@@ -433,21 +711,50 @@ def run_for_participant(request_data):
     chronic = power_list if power_list else None
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
-    train_days, sliding, window_months = _window_params(request_data)
-    rb_kwargs = {"sliding": sliding}
+    label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
+    train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
+    rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
+                 "low_pct": low_pct, "high_pct": high_pct}
     if train_days is not None:
         rb_kwargs["train_days"] = train_days
+    if step_days is not None:
+        rb_kwargs["test_days"] = step_days   # detector advances by (and tests on) one step
+
+    recorded_powers = _recorded_powers(powerdomain_list)
+    # Region map covers both TD sensing channels and the recorded power-domain contacts.
+    region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
+    for p in recorded_powers:   # backfill region now that the map is built
+        p["region"] = region_map.get(p["raw"], p["region"])
 
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
                                  label_metric=label_metric, kmeans_features=kmeans_features,
                                  **rb_kwargs)
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
-                                                 train_days=train_days, sliding=sliding))
+                                                 label_strategy=label_strategy,
+                                                 low_pct=low_pct, high_pct=high_pct,
+                                                 train_days=train_days, step_days=step_days,
+                                                 sliding=sliding, region_map=region_map))
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
+    out["label_strategy"] = label_strategy
+    out["available_strategies"] = BINARIZATION_STRATEGIES
+    out["percentile_low"] = low_pct
+    out["percentile_high"] = high_pct
     out["sliding_window"] = sliding
     out["window_months"] = window_months
+    out["window_step_months"] = window_step_months
+    out["recorded_powers"] = recorded_powers
+    # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
+    # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
+    # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
+    # a single pooled threshold mixes physiologically distinct signals — surface that to the user.
+    distinct_regions = sorted({(p.get("region") or "").strip() for p in recorded_powers if p.get("region")})
+    out["powerdomain_pooled_warning"] = (
+        f"Power-domain biomarker pools {len(distinct_regions)} targets/hemispheres "
+        f"({', '.join(distinct_regions)}) into one threshold at raw (un-normalized) scale; "
+        f"interpret per target rather than as a single combined biomarker."
+        if len(distinct_regions) > 1 else None)
     return out
 
 
