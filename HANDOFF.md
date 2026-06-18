@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.4bd0e67d.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.e46f41e6.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,8 +13,8 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.3eec6e4f.js`
-  (was `main.4bd0e67d.js`).
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.e46f41e6.js`
+  (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
   cleanly in the harness. The container auto-runs `migrate` on start, so they should be applied on the
@@ -145,6 +145,48 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   ROC test, test_pipeline_stats, test_stats_utils, test_adapter, test_process_redcap). NOTE: the
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
+
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.e46f41e6.js`):** acted on the user's
+second review of the same card. Same files + `routines/stats_utils.py`.
+- **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
+  was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
+  labels, n_perm=1000)` — circular-block label permutation (block = lag-1 decorrelation timescale, reuses
+  `block_length_for`/`circular_block_perm_matrix`), recomputes the direction-folded `max(AUC,1-AUC)` per
+  shuffle via the rank identity (one `rankdata`, then vectorized), returns `{observed, p_value (add-one),
+  null_q{p50,p95,p99}, n_perm, block}`. Wired into `pipeline.run_powerdomain_branch` as
+  `summary["auc_perm"]` AND per-channel `ch_summary["auc_perm"]`. Bar plot draws a red dashed ceiling at
+  the null 95th pct over the AUC bar + the empirical p in the caption. +regression test
+  `test_auc_block_perm_null` (null p>0.05, signal p<0.01, observed==sklearn AUC, autocorr→block≥2,
+  degenerate→None). This is the ONLY power-domain inferential test; balanced-accuracy chance stays the
+  analytic 0.5 (verified invariant to imbalance).
+- **ROC mean-of-contacts redesign:** Phase-3 had overwritten the per-window ROC with per-contact-only
+  curves. Now: pooled view (All contacts / hemisphere) draws a BOLD MEAN ROC (vertical/threshold average
+  onto a 101-pt FPR grid via `meanRoc()`) with the thin colored per-contact curves behind it; single
+  contact draws just that curve. Per-window faint orange ROCs are overlaid in BOTH layouts whenever a
+  sliding window is active (restored — the per-window curves were NOT removed from the backend, only the
+  frontend had stopped showing them alongside the mean).
+- **Bar-plot swarm:** in the pooled view with ≥2 split contacts, each bar carries jittered open dots
+  (one per bipolar contact: in-sample AUC over bar 0, CV balanced acc over bar 1) so the bar reads as a
+  mean over contacts. Bar plot moved to a numeric x-axis with `ticktext` to allow the jitter.
+- **Sliding-window panel visibility bug (user: "only shows when sliding is OFF"):** root cause was the
+  frontend gate `if (swWindows.length)` — with sliding ON + tertile labels, sparse one-class test folds
+  get skipped, the windows array comes back empty, and the whole panel vanished (sliding OFF always
+  yields one `_all_data_window`, so it showed). Backend was fine (41–93 windows on a 120-day synthetic
+  run). Now renders whenever `swWindows.length || swSummary`; empty windows shows an explanatory message
+  + the coverage caption instead of disappearing.
+- **Change-markers REVERTED (user: "way too many vertical dashed lines"):** the
+  `sensing_config_changes` overlay flagged nearly every recording (chronic center Hz wobbles per
+  recording). Removed the change-marker shapes/annotations and the `configChanges` memo from
+  `BiomarkerAnalytics.js`; the sliding-window-over-time panel is back to the clean dot-and-line, one dot
+  per computed window. NOTE: the backend `sensing_config_changes` emit in `bravo_service` is still there
+  (harmless, unused by the UI now) — a future change-detection that debounces the Hz wobble could reuse
+  it. The earlier "draws a dashed vertical line at each change" claim is superseded by this revert.
+- **Time-domain y-axis LFP→Power:** `BiomarkerTimeline.js` power-domain row was still labeled "LFP power"
+  / unit "LFP (a.u.)" / title "Power-domain LFP power" — it plots `powerdomain_biomarker_value` (on-board
+  band power). Now trace "Power", unit "Power (a.u.)", title "Power-domain band power".
+- **Tests:** all 5 Biomarkers suites green in `rcs_v14_analysis` incl. the new `test_auc_block_perm_null`.
+  Same Docker caveat — the `auc_perm` integration path and the panel changes were not run against the
+  live container; verify on a real RCS08 run after `docker compose restart bravo-server` + hard refresh.
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into

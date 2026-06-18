@@ -503,6 +503,17 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     else:
         summary["overfit_warning"] = None
 
+    # PERMUTATION NULL for the in-sample AUC (rigor review: the bar plot's 0.5 chance line is the
+    # ANALYTIC baseline; this adds an EMPIRICAL null that preserves daily pain autocorrelation, so
+    # the reader can tell whether the observed separability beats chance for THIS serially-correlated
+    # series). Block-permute the labels (block = lag-1 decorrelation timescale) and recompute the
+    # undirected max(AUC,1-AUC) each shuffle. Emitted as summary["auc_perm"]; None if degenerate.
+    try:
+        ap = stats_utils.auc_block_perm_null(lfp_s, pl, n_perm=1000, seed=0)
+        summary["auc_perm"] = ap if ap.get("observed") is not None else None
+    except Exception:
+        summary["auc_perm"] = None
+
     # TWO-SOURCE BATCH/SCALE CONFOUND DIAGNOSTIC (rigor review #8). The power-domain series merges two
     # sensing modalities in RAW units (Chronic ~10-min LFP power vs per-session Power-Domain band
     # power, ~8x scale gap). If the LFP scale separates the sources AND pain prevalence differs by
@@ -598,6 +609,11 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                         "n_samples": int(len(cv_ch)),
                     }
                     ch_summary.update(stats_utils.balanced_metrics(sens_ch, spec_ch, n_pos_ch, n_neg_ch))
+                    try:
+                        ap_ch = stats_utils.auc_block_perm_null(lfp_ch, pl_ch, n_perm=1000, seed=0)
+                        ch_summary["auc_perm"] = ap_ch if ap_ch.get("observed") is not None else None
+                    except Exception:
+                        ch_summary["auc_perm"] = None
                     per_channel[ch_label] = {"summary": ch_summary, "cv_df": cv_ch}
                 except Exception as exc:
                     per_channel[ch_label] = {"summary": {"channel": ch_label, "error": str(exc)},

@@ -1,6 +1,6 @@
 /**
  * BiomarkerTimeline -- clean stacked-subplot timeline for the unified biomarker frame.
- * Each measure (time-domain biomarker, power-domain LFP + threshold, pain, stim amplitude) gets
+ * Each measure (time-domain biomarker, power-domain band power + threshold, pain, stim amplitude) gets
  * its own row sharing one time axis, with human-readable names -- avoids a cluttered single plot
  * with a long horizontal legend. Self-contained via plotly.js-dist.
  */
@@ -15,7 +15,7 @@ import MDBox from "components/MDBox";
 // color identity for "pain" across panels.
 const C = {
   td: "#0072B2",        // time-domain biomarker (blue)
-  lfp: "#009E73",       // power-domain LFP power (green)
+  lfp: "#009E73",       // power-domain band power (green)
   threshold: "#7E8794", // learned threshold
   pain: "#D55E00",      // NRS / pain (vermillion = HI)
   stim: "#E69F00",      // stim amplitude (orange)
@@ -71,11 +71,11 @@ function BiomarkerTimeline({ data, height }) {
       });
     }
     if (has("powerdomain_biomarker_value")) {
-      const tr = [{ name: "LFP power", y: col("powerdomain_biomarker_value"), color: C.lfp }];
+      const tr = [{ name: "Power", y: col("powerdomain_biomarker_value"), color: C.lfp }];
       if (has("powerdomain_threshold")) {
         tr.push({ name: "Threshold", y: col("powerdomain_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
       }
-      rows.push({ title: "Power-domain LFP power", unit: "LFP (a.u.)", traces: tr });
+      rows.push({ title: "Power-domain band power", unit: "Power (a.u.)", traces: tr });
     }
     const m = data.label_metric || "nrs";
     const painCol = pick(`powerdomain_${m}`, `td_${m}_min`, `td_${m}_mean`, m, "powerdomain_nrs", "td_nrs_min", "nrs");

@@ -119,6 +119,38 @@ def test_block_length_for():
     assert su.block_length_for(alt) == 1
 
 
+def test_auc_block_perm_null():
+    rng = np.random.default_rng(0)
+    n = 300
+    labels = (rng.random(n) < 0.4).astype(float)
+    # Pure null: score independent of labels -> observed AUC near 0.5, p not significant.
+    null_score = rng.normal(size=n)
+    r_null = su.auc_block_perm_null(null_score, labels, n_perm=1000, seed=1)
+    assert r_null["observed"] is not None
+    assert 0.45 <= r_null["observed"] <= 0.65, r_null["observed"]
+    assert r_null["p_value"] > 0.05, r_null["p_value"]
+    # Real signal: score shifted by label -> high AUC, significant p.
+    sig_score = rng.normal(size=n) + 1.2 * labels
+    r_sig = su.auc_block_perm_null(sig_score, labels, n_perm=1000, seed=1)
+    assert r_sig["observed"] > 0.7, r_sig["observed"]
+    assert r_sig["p_value"] < 0.01, r_sig["p_value"]
+    # Observed AUC matches direction-folded sklearn AUC (within downsample-free exactness).
+    from sklearn.metrics import roc_auc_score
+    raw = roc_auc_score(labels.astype(int), sig_score)
+    assert abs(r_sig["observed"] - max(raw, 1 - raw)) < 1e-9
+    # Autocorrelated labels -> block length > 1 detected (preserves persistence).
+    ac_labels = np.repeat((rng.random(n // 10) < 0.4).astype(float), 10)[:n]
+    r_ac = su.auc_block_perm_null(rng.normal(size=n), ac_labels, n_perm=500, seed=2)
+    assert r_ac["block"] >= 2, r_ac["block"]
+    # add-one estimator: p strictly in (0, 1], never exactly 0.
+    assert 0 < r_sig["p_value"] <= 1
+    # Degenerate (single class) returns None observed, not a crash.
+    deg = su.auc_block_perm_null(null_score, np.ones(n), n_perm=50)
+    assert deg["observed"] is None and deg["p_value"] is None
+    print("OK auc_block_perm_null: null p=%.3f signal p=%.4f ac-block=%d"
+          % (r_null["p_value"], r_sig["p_value"], r_ac["block"]))
+
+
 if __name__ == "__main__":
     test_bh_fdr()
     test_partial_corr_removes_confound()
@@ -129,4 +161,5 @@ if __name__ == "__main__":
     test_fisher_z_ci()
     test_circular_block_perm_matrix_valid()
     test_block_length_for()
+    test_auc_block_perm_null()
     print("All stats_utils tests passed.")

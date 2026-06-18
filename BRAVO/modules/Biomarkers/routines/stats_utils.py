@@ -201,6 +201,75 @@ def circular_block_perm_matrix(n, block, n_perm, rng):
     return flat[flat < n].reshape(n_perm, n)
 
 
+def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
+    """Circular-block permutation null for the direction-folded ROC AUC of a continuous biomarker
+    against a binary pain label.
+
+    The observed statistic is the SAME quantity the card reports: max(AUC, 1-AUC) of `score` vs
+    `labels` (undirected separability — an AUC of 0.21 separates as well as 0.79). Under the null,
+    the pain labels carry no information about the biomarker; we break that association by
+    circular-block-permuting the labels (block length = the lag-1 decorrelation timescale of the
+    labels, via block_length_for) so the null PRESERVES the temporal autocorrelation of pain. A
+    plain i.i.d. shuffle would make p anti-conservative for serially-correlated daily pain.
+
+    Returns a dict:
+      observed   — max(AUC, 1-AUC) on the real labels (None if degenerate)
+      p_value    — (#{null >= observed} + 1)/(n_used + 1)  [add-one, never 0]
+      null_q     — {"p50","p95","p99"} percentiles of the null AUC distribution (for a ceiling line)
+      n_perm     — permutations that yielded a finite AUC
+      block      — block length used
+    Pure NumPy + a single sklearn AUC call per permutation via the rank identity; no Django.
+    """
+    out = {"observed": None, "p_value": None, "null_q": None, "n_perm": 0, "block": None}
+    score = np.asarray(score, dtype=float)
+    labels = np.asarray(labels, dtype=float)
+    m = np.isfinite(score) & np.isfinite(labels)
+    score, labels = score[m], labels[m]
+    n = labels.size
+    if n < 8 or len(set(labels.tolist())) != 2:
+        return out
+    # Mann-Whitney/AUC via average ranks: AUC = (R_pos - n_pos*(n_pos+1)/2) / (n_pos*n_neg), where
+    # R_pos is the sum of ranks of the positive class. Ranking ONCE lets every permutation reuse the
+    # same rank vector (permuting labels just re-selects which ranks count as "positive").
+    from scipy.stats import rankdata
+    ranks = rankdata(score)                       # average ranks, ties handled
+    pos = (labels == 1)
+    n_pos = int(pos.sum()); n_neg = n - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return out
+    def _auc_from_mask(mask):
+        r_pos = ranks[mask].sum()
+        a = (r_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+        return max(a, 1.0 - a)
+    observed = _auc_from_mask(pos)
+    if block is None:
+        block = block_length_for(labels, n)
+    rng = np.random.default_rng(seed)
+    P = int(n_perm)
+    perm_idx = circular_block_perm_matrix(n, block, P, rng)   # (P, n)
+    perm_labels = labels[perm_idx]                            # (P, n) permuted label rows
+    perm_pos = (perm_labels == 1)
+    r_pos_perm = (ranks[None, :] * perm_pos).sum(axis=1)      # (P,)
+    a_perm = (r_pos_perm - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+    null_auc = np.maximum(a_perm, 1.0 - a_perm)
+    null_auc = null_auc[np.isfinite(null_auc)]
+    used = int(null_auc.size)
+    if used == 0:
+        out["observed"] = float(observed); out["block"] = int(block)
+        return out
+    ge = int(np.sum(null_auc >= observed))
+    out.update({
+        "observed": float(observed),
+        "p_value": float((ge + 1) / (used + 1)),
+        "null_q": {"p50": float(np.percentile(null_auc, 50)),
+                   "p95": float(np.percentile(null_auc, 95)),
+                   "p99": float(np.percentile(null_auc, 99))},
+        "n_perm": used,
+        "block": int(block),
+    })
+    return out
+
+
 def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=1000,
                       block=None, seed=0):
     """Empirical p-value for a max-type statistic via circular-block label permutation.

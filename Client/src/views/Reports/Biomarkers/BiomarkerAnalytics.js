@@ -99,6 +99,30 @@ function Section({ title, subtitle, panels, header = null }) {
 const HI = "#D55E00", LO = "#0072B2";   // vermillion / blue
 const PALETTE = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00", "#F0E442", "#000000"];
 
+// Vertical (threshold) average of several ROC curves onto a common FPR grid. Each input is a
+// {fpr,tpr} object; curves are interpolated at a shared set of FPR points and averaged, the standard
+// way to summarize a family of ROCs (Fawcett 2006). Returns {fpr,tpr} on the grid, or null if no
+// usable curve. Used to draw the BOLD MEAN ROC over the per-contact curves in the pooled view.
+const meanRoc = (curves, nGrid = 101) => {
+  const valid = (curves || []).filter((c) => c && c.fpr && c.fpr.length >= 2 && c.tpr && c.tpr.length === c.fpr.length);
+  if (!valid.length) return null;
+  const grid = Array.from({ length: nGrid }, (_, i) => i / (nGrid - 1));
+  // Linear interpolation of one monotone ROC (fpr ascending) at target x.
+  const interp = (fpr, tpr, x) => {
+    if (x <= fpr[0]) return tpr[0];
+    if (x >= fpr[fpr.length - 1]) return tpr[tpr.length - 1];
+    let j = 1;
+    while (j < fpr.length && fpr[j] < x) j += 1;
+    const x0 = fpr[j - 1], x1 = fpr[j], y0 = tpr[j - 1], y1 = tpr[j];
+    return x1 === x0 ? y0 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+  };
+  const tpr = grid.map((x) => {
+    const ys = valid.map((c) => interp(c.fpr, c.tpr, x));
+    return ys.reduce((a, b) => a + b, 0) / ys.length;
+  });
+  return { fpr: grid, tpr };
+};
+
 // Compact p-value formatter (scientific for tiny p), matching the report card's style.
 const fmtP = (x) => {
   if (x === null || x === undefined || Number.isNaN(Number(x))) return "—";
@@ -165,12 +189,6 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     text: `Source: ${powerProvenance}`, showarrow: false,
     font: { size: 11, color: "#344767" },
   }] : [];
-
-  // Time-ordered sensing reconfiguration timeline (center frequency or channel changed mid-record).
-  // Emitted by the backend only when a real post-initial change occurred. Used to draw dashed
-  // vertical change-markers over the sliding-window-over-time plot.
-  const configChanges = (pdRoot.sensing_config_changes || [])
-    .filter((c) => Array.isArray(c.changed) && !(c.changed.length === 1 && c.changed[0] === "initial"));
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
@@ -419,61 +437,54 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const swRaw = chronic.sliding_window;
   const swWindows = Array.isArray(swRaw) ? swRaw : (swRaw && swRaw.windows) || [];
   const swSummary = (swRaw && !Array.isArray(swRaw) && swRaw.summary) || null;
-  if (swWindows.length) {
+  // Render the sliding-window-over-time panel whenever the backend returned a sliding_window object
+  // (windows OR a summary). Earlier this was gated on `swWindows.length`, so on sparse runs (sliding
+  // ON + tertile labels → many one-class test folds get skipped → empty windows array) the whole
+  // panel vanished and only the single all-data window (sliding OFF) ever showed. Now it always
+  // renders; an empty windows array shows the coverage caption explaining why instead of disappearing.
+  if (swWindows.length || swSummary) {
     const x = swWindows.map((w) => w.test_start);
-    // connectgaps=true keeps the trace continuous across skipped windows. The skips are honest
-    // (one-class test folds) and the backend caption below tells the reader the coverage.
+    // One dot per computed window, connected by a line (connectgaps spans honest one-class skips).
     const mk = (key, name, opts = {}) => ({ x, y: swWindows.map((w) => w[key]), name, type: "scatter",
       mode: "lines+markers", marker: { size: 6 }, connectgaps: true, ...opts });
-    const traces = [
+    const traces = swWindows.length ? [
       mk("auc", "AUC", { line: { width: 3, color: PALETTE[0] } }),
       mk("r", "Pearson R", { line: { width: 3, color: PALETTE[1] } }),
       mk("sens", "Sensitivity", { line: { width: 1.5, color: PALETTE[2], dash: "dot" } }),
       mk("spec", "Specificity", { line: { width: 1.5, color: PALETTE[5], dash: "dot" } }),
       mk("threshold", "Threshold", { yaxis: "y2", mode: "lines",
         line: { width: 1.5, color: "#7E8794", dash: "dash" }, hovertemplate: "thr=%{y:.1f}<extra></extra>" }),
-    ];
-    // Dashed vertical change-markers: a line + label at each timepoint where the sensing center
-    // frequency or source channel changed during the record. Each marker is annotated with what
-    // changed and the new config, so a mid-record reconfiguration is unmistakable on the time axis.
-    // When a single channel is selected, show only that hemisphere's changes.
-    const relChanges = configChanges.filter((c) =>
-      safeChSel === "pooled" || safeChSel.startsWith(c.hemi.replace("Hemisphere", "")));
-    const changeShapes = relChanges.map((c) => ({
-      type: "line", x0: c.t, x1: c.t, yref: "paper", y0: 0, y1: 1,
-      line: { color: "#111111", width: 1.5, dash: "dash" },
-    }));
-    const changeAnns = relChanges.map((c, i) => {
-      const what = c.changed.join(" + ");
-      const hzTxt = c.center_hz != null ? `${Number(c.center_hz).toFixed(1)} Hz` : "";
-      const detail = [c.channel, hzTxt].filter(Boolean).join(" · ");
-      return {
-        x: c.t, yref: "paper", y: i % 2 === 0 ? 1.02 : 0.92, xanchor: "left", yanchor: "bottom",
-        text: `▸ ${c.hemi.replace("Hemisphere", "")} ${what} change<br>${detail}`,
-        showarrow: false, align: "left", font: { size: 9, color: "#111111" },
-        bgcolor: "rgba(255,255,255,0.7)",
-      };
-    });
+    ] : [];
+    const xLo = x.length ? x[0] : 0;
+    const xHi = x.length ? x[x.length - 1] : 1;
     chPanels.push(
       <Panel key="sw" title={`Sliding-window performance over time — power vs ${pain}${chSuffix}`} lg={12}>
-        <Fig height={360} traces={traces} layout={{
-          xaxis: { type: "date", title: "Test window start" },
-          yaxis: { title: "AUC / R / Sensitivity / Specificity", range: [-1.05, 1.05],
-                   zeroline: true, zerolinewidth: 1 },
-          yaxis2: { title: "Power threshold (device units)", overlaying: "y", side: "right",
-                    showgrid: false },
-          hovermode: "x unified",
-          // 0.5 reference for the AUC ceiling-vs-chance read, plus any sensing-config change markers.
-          shapes: [{ type: "line", x0: x[0], x1: x[x.length - 1], y0: 0.5, y1: 0.5, yref: "y",
-                     line: { color: "#C8CED5", width: 1, dash: "dot" } }, ...changeShapes],
-          annotations: [...provenanceAnn, ...changeAnns],
-        }} />
+        {swWindows.length ? (
+          <Fig height={360} traces={traces} layout={{
+            xaxis: { type: "date", title: "Test window start" },
+            yaxis: { title: "AUC / R / Sensitivity / Specificity", range: [-1.05, 1.05],
+                     zeroline: true, zerolinewidth: 1 },
+            yaxis2: { title: "Power threshold (device units)", overlaying: "y", side: "right",
+                      showgrid: false },
+            hovermode: "x unified",
+            // 0.5 reference for the AUC ceiling-vs-chance read.
+            shapes: [{ type: "line", x0: xLo, x1: xHi, y0: 0.5, y1: 0.5, yref: "y",
+                       line: { color: "#C8CED5", width: 1, dash: "dot" } }],
+            annotations: provenanceAnn,
+          }} />
+        ) : (
+          <MDTypography variant="button" color="dark" display="block" mt={2} mb={2} sx={{ fontSize: 13 }}>
+            {"No sliding window produced a scorable test fold for this selection — every candidate " +
+             "window had only one pain class in its test period (common with tertile binarization on " +
+             "sparse data). Try a longer window, a coarser binarization (median/cutoff), or turn the " +
+             "sliding window off to score the detector on all data at once."}
+          </MDTypography>
+        )}
         {swSummary ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} fontStyle="italic" sx={{ fontSize: 11 }}>
             {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
              `Reporting ${swSummary.n_with_auc} of ${swSummary.n_total} candidate windows where both pain classes appeared in the test fold (within an expansion cap of ${swSummary.max_test_days} days). ` +
-             `Skipped: ${swSummary.n_skipped_test_one_class} for one-class test folds (common with tertile binarization — the excluded middle leaves stretches of all-low or all-high days) and ${swSummary.n_skipped_no_data} for empty/degenerate folds.` +
-             (relChanges.length ? ` Dashed vertical lines mark ${relChanges.length} sensing-config change(s) (center frequency or channel).` : "")}
+             `Skipped: ${swSummary.n_skipped_test_one_class} for one-class test folds (common with tertile binarization — the excluded middle leaves stretches of all-low or all-high days) and ${swSummary.n_skipped_no_data} for empty/degenerate folds.`}
           </MDTypography>
         ) : null}
       </Panel>
@@ -482,29 +493,78 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
 
   // Honest performance vs overfit: the threshold-free in-sample AUC looks strong, but the
   // cross-validated balanced accuracy (the generalization estimate) sits near the chance baseline.
-  // Plotting them side by side makes the generalization gap explicit. (new honest-stats panel)
+  // Plotting them side by side makes the generalization gap explicit. Two added overlays:
+  //   - SWARM: in the pooled view with >=2 contacts, each bar carries jittered dots, one per
+  //     bipolar contact, so the bar is visibly a mean over the contacts (matches the mean ROC).
+  //   - PERMUTATION NULL: a red dashed ceiling at the 95th-percentile AUC under block-permuted
+  //     daily pain labels, with the empirical p — so "above 0.5" is backed by an empirical test
+  //     that preserves pain autocorrelation, not just the analytic 0.5 line.
   if (pdSumEff.auc != null || pdSumEff.balanced_accuracy != null) {
     const chanceLvl = pdSumEff.chance_accuracy != null ? pdSumEff.chance_accuracy : 0.5;
-    const labels = ["In-sample AUC", "CV balanced accuracy", "Chance"];
+    // Numeric x (0,1,2) so the swarm dots can be jittered around each bar center.
+    const ticktext = ["In-sample AUC", "CV balanced accuracy", "Chance"];
+    const xpos = [0, 1, 2];
     const vals = [pdSumEff.auc, pdSumEff.balanced_accuracy, chanceLvl];
     const colors = [PALETTE[0], PALETTE[2], "#7E8794"];
+    const barTraces = [{ x: xpos, y: vals.map((v) => (v == null ? null : v)),
+      type: "bar", width: 0.55, marker: { color: colors, line: { color: "#344767", width: 0.5 } },
+      text: vals.map((v) => (v == null ? "" : v.toFixed(2))), textposition: "outside",
+      textfont: { size: 12, color: "#344767" }, showlegend: false,
+      hovertemplate: "%{text}<extra></extra>", customdata: ticktext }];
+    // Swarm: per-contact AUC + balanced-accuracy dots (pooled view, >=2 contacts split).
+    const swarmContacts = isPooled ? channelKeys
+      .map((k) => ({ k, s: perChannel[k] && perChannel[k].summary }))
+      .filter((c) => c.s) : [];
+    if (swarmContacts.length >= 2) {
+      const jitter = (i, n) => (n === 1 ? 0 : -0.16 + (0.32 * i) / (n - 1));
+      const aucDots = swarmContacts.map((c) => c.s.auc_in_sample).filter((v) => v != null);
+      const baDots = swarmContacts.map((c) => c.s.balanced_accuracy).filter((v) => v != null);
+      const names = swarmContacts.map((c) => c.k);
+      if (aucDots.length) {
+        barTraces.push({ x: swarmContacts.map((c, i) => 0 + jitter(i, swarmContacts.length)),
+          y: swarmContacts.map((c) => c.s.auc_in_sample), type: "scatter", mode: "markers",
+          name: "per-contact", legendgroup: "swarm", showlegend: true,
+          marker: { size: 9, color: "#FFFFFF", line: { color: "#344767", width: 1.6 }, symbol: "circle" },
+          text: names, hovertemplate: "%{text}<br>in-sample AUC=%{y:.3f}<extra></extra>" });
+      }
+      if (baDots.length) {
+        barTraces.push({ x: swarmContacts.map((c, i) => 1 + jitter(i, swarmContacts.length)),
+          y: swarmContacts.map((c) => c.s.balanced_accuracy), type: "scatter", mode: "markers",
+          name: "per-contact", legendgroup: "swarm", showlegend: false,
+          marker: { size: 9, color: "#FFFFFF", line: { color: "#344767", width: 1.6 }, symbol: "circle" },
+          text: names, hovertemplate: "%{text}<br>CV balanced acc=%{y:.3f}<extra></extra>" });
+      }
+    }
+    // Permutation-null ceiling over the AUC bar (block-permuted daily labels).
+    const ap = pdSumEff.auc_perm || null;
+    const shapes = [{ type: "line", x0: -0.5, x1: 2.5, y0: chanceLvl, y1: chanceLvl,
+      line: { color: "#7E8794", width: 1, dash: "dot" } }];
+    const annotations = [];
+    if (ap && ap.null_q && ap.null_q.p95 != null) {
+      shapes.push({ type: "line", x0: -0.32, x1: 0.32, y0: ap.null_q.p95, y1: ap.null_q.p95,
+        line: { color: "#D55E00", width: 2, dash: "dash" } });
+      annotations.push({ x: 0, y: ap.null_q.p95, yanchor: "bottom", xanchor: "center",
+        text: `null 95th pct = ${ap.null_q.p95.toFixed(2)} · p=${fmtP(ap.p_value)}`,
+        showarrow: false, font: { size: 10, color: "#D55E00" } });
+    }
     chPanels.push(
       <Panel key="honest" title={`Honest performance: in-sample vs cross-validated — power vs ${pain}${chSuffix}`}>
-        <Fig height={320} traces={[{ x: labels, y: vals.map((v) => (v == null ? null : v)),
-          type: "bar", marker: { color: colors, line: { color: "#344767", width: 0.5 } },
-          text: vals.map((v) => (v == null ? "" : v.toFixed(2))), textposition: "outside",
-          textfont: { size: 12, color: "#344767" },
-          hovertemplate: "%{x}: %{y:.3f}<extra></extra>" }]}
-          layout={{ yaxis: { title: "Score", range: [0, 1.05] }, xaxis: { title: "" },
-            showlegend: false,
-            shapes: [{ type: "line", x0: -0.5, x1: 2.5,
-              y0: chanceLvl, y1: chanceLvl,
-              line: { color: "#7E8794", width: 1, dash: "dot" } }] }} />
+        <Fig height={320} traces={barTraces}
+          layout={{ yaxis: { title: "Score", range: [0, 1.08] },
+            xaxis: { title: "", tickmode: "array", tickvals: xpos, ticktext, range: [-0.5, 2.5] },
+            legend: { orientation: "h", y: -0.18 }, showlegend: swarmContacts.length >= 2,
+            shapes, annotations }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
           {`Chance for BALANCED accuracy is 0.50 regardless of class imbalance (sens & spec each ` +
            `0.5 at chance). ` +
            (pdSumEff.majority_accuracy != null
              ? `The majority-class baseline (${pdSumEff.majority_accuracy.toFixed(2)}) is the chance level for RAW accuracy only and is NOT the comparator here. `
+             : "") +
+           (ap && ap.p_value != null
+             ? `Dashed orange line = 95th-percentile AUC under ${ap.n_perm} circular-block label permutations (block=${ap.block} days, preserving pain autocorrelation); empirical p=${fmtP(ap.p_value)} for the observed AUC=${(ap.observed ?? 0).toFixed(2)}. `
+             : "") +
+           (swarmContacts.length >= 2
+             ? `Open dots are the ${swarmContacts.length} individual bipolar contacts the bars average. `
              : "") +
            `In-sample AUC has no train/test split (optimistic); CV balanced accuracy is the held-out ` +
            `generalization estimate — near 0.5 means the in-sample AUC is not reproduced out-of-fold.` +
@@ -513,39 +573,55 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       </Panel>
     );
   }
-  // ROC panel. Build it whenever there is at least one curve to draw. Two overlays, each a labeled
-  // legend entry so the reader can tell the signals apart:
-  //   (1) PER-SIGNAL — when "All contacts" is selected and the backend split the stream per
-  //       channel, draw one ROC per channel (its own AUC in the legend) plus the pooled curve.
-  //       When a single channel is selected, draw just that channel's curve.
-  //   (2) PER-WINDOW — when a sliding window is active, overlay each window's ROC as a faint line,
-  //       so the spread of operating curves over time is visible (one representative window labeled
-  //       in the legend; the rest share a legend group to avoid a 30-entry legend).
+  // ROC panel. Two layouts depending on the contact toggle:
+  //   POOLED (All contacts / no single contact selected): draw a BOLD MEAN ROC (vertical average
+  //     over the per-contact curves) and, behind it, the individual per-contact ROCs as thin
+  //     colored lines — so the mean is the headline and the spread of the contacts it summarizes is
+  //     visible. (Mirrors the bar-plot swarm: mean bar + per-contact dots.)
+  //   SINGLE CONTACT: just that contact's ROC (filled).
+  //   In BOTH layouts, when a sliding window is active, overlay each window's ROC as a faint orange
+  //   line so the time-spread of operating curves is also visible.
   const roc = chronic.roc || null;
   const rocTraces = [];
-  // (1) Per-signal curves.
-  if (safeChSel === "pooled" && channelKeys.length >= 1) {
-    channelKeys.forEach((k, i) => {
-      const r = perChannel[k] && perChannel[k].roc;
-      if (r && r.fpr && r.fpr.length) {
-        rocTraces.push({ x: r.fpr, y: r.tpr, name: `${k} (AUC=${(r.auc ?? 0).toFixed(3)})`,
-          type: "scatter", mode: "lines", line: { width: 2.5, color: PALETTE[i % PALETTE.length] },
-          hovertemplate: `${k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
-      }
+  const isPooled = safeChSel === "pooled";
+  // Per-contact curves available in the pooled view.
+  const contactCurves = channelKeys
+    .map((k) => ({ k, r: perChannel[k] && perChannel[k].roc }))
+    .filter((c) => c.r && c.r.fpr && c.r.fpr.length >= 2);
+  if (isPooled && contactCurves.length >= 2) {
+    // (a) Individual contacts, thin + light, drawn FIRST so the mean sits on top.
+    contactCurves.forEach((c, i) => {
+      rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
+        type: "scatter", mode: "lines",
+        line: { width: 1.5, color: PALETTE[i % PALETTE.length], dash: "solid" }, opacity: 0.55,
+        legendgroup: "contacts",
+        hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
     });
-    if (roc && roc.fpr && roc.fpr.length) {
-      rocTraces.push({ x: roc.fpr, y: roc.tpr, name: `All contacts (AUC=${(roc.auc ?? 0).toFixed(3)})`,
-        type: "scatter", mode: "lines", line: { width: 3, color: "#000000", dash: "solid" },
-        hovertemplate: "All contacts<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>" });
+    // (b) Bold MEAN ROC over the contacts (vertical average). AUC = mean of contact AUCs.
+    const mean = meanRoc(contactCurves.map((c) => c.r));
+    const meanAuc = contactCurves.reduce((a, c) => a + (c.r.auc ?? 0), 0) / contactCurves.length;
+    if (mean) {
+      rocTraces.push({ x: mean.fpr, y: mean.tpr,
+        name: `Mean of ${contactCurves.length} contacts (AUC=${meanAuc.toFixed(3)})`,
+        type: "scatter", mode: "lines", line: { width: 4, color: "#000000" },
+        hovertemplate: "Mean ROC<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>" });
     }
+  } else if (isPooled && contactCurves.length === 1) {
+    // Only one contact split out — the "mean" would equal it, so just draw it bold.
+    const c = contactCurves[0];
+    rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
+      type: "scatter", mode: "lines", line: { width: 3, color: PALETTE[0] },
+      fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
+      hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
   } else if (roc && roc.fpr && roc.fpr.length) {
+    // Either a single contact is selected, or the backend never split per channel — one curve.
     rocTraces.push({ x: roc.fpr, y: roc.tpr,
-      name: `${safeChSel === "pooled" ? "All contacts" : safeChSel} (AUC=${(roc.auc ?? 0).toFixed(3)})`,
+      name: `${isPooled ? "All contacts" : safeChSel} (AUC=${(roc.auc ?? 0).toFixed(3)})`,
       type: "scatter", mode: "lines", line: { width: 3, color: PALETTE[0] },
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
   }
-  // (2) Per-window curves (sliding window active). Drawn faint; first one labeled, rest grouped.
+  // Per-window curves (sliding window active). Drawn faint; first one labeled, rest legend-grouped.
   const swForRoc = Array.isArray(chronic.sliding_window)
     ? chronic.sliding_window : (chronic.sliding_window && chronic.sliding_window.windows) || [];
   const windowRocs = swForRoc.filter((w) => w.roc && w.roc.fpr && w.roc.fpr.length);
@@ -563,10 +639,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   if (rocTraces.length) {
     rocTraces.push({ x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
       line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
-    const perWinNote = windowRocs.length
-      ? ` · ${windowRocs.length} per-window curves` : "";
+    const isMeanView = isPooled && contactCurves.length >= 2;
+    const titleNote = isMeanView ? ` · mean of ${contactCurves.length} contacts` : "";
+    const perWinNote = windowRocs.length ? ` · ${windowRocs.length} per-window curves` : "";
     chPanels.push(
-      <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${perWinNote}`}>
+      <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${titleNote}${perWinNote}`}>
         <Fig height={360} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
@@ -575,8 +652,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
         {powerProvenance ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
             {`Power signal from ${powerProvenance}.` +
-             (channelKeys.length >= 1 && safeChSel === "pooled"
-               ? " Each colored curve is one bipolar sensing contact; the black curve pools all contacts."
+             (isMeanView
+               ? " Bold black = mean ROC (vertical average); thin colored lines are the individual bipolar contacts it averages."
                : "") +
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
           </MDTypography>
