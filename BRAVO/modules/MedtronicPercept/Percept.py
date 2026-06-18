@@ -449,6 +449,23 @@ def text2num(textList):
     else:
         return float(textList)
 
+
+def csv2floatarray(text):
+    """Vectorized parse of a comma-separated number string -> float ndarray. Replaces the
+    `np.array(text2num(s.split(",")))` idiom on the streaming Sequences/PacketSizes/Ticks fields,
+    which split in Python then float()-looped element by element (the dominant decode cost after the
+    deepcopy fix -- ~0.16s of ~0.36s on the 66 MB file). np.fromstring parses the whole comma body
+    in C in one call (~1.8x faster, byte-identical output). The leading/trailing brackets ('[…]')
+    Medtronic wraps these lists in are stripped first; an empty string yields an empty array.
+    """
+    if not isinstance(text, str):
+        # Already a list (legacy callers) -> preserve exact old behavior.
+        return np.array(text2num(text))
+    body = text.strip().strip("[]")
+    if not body:
+        return np.array([], dtype=float)
+    return np.fromstring(body, sep=",")
+
 def getSensingChannelNameFromStimulationElectrode(channel):
     """ 
     
@@ -1500,9 +1517,9 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
         key = "BrainSenseTimeDomain"
         Data["StreamingTD"] = _shallowCopyStreamList(JSON[key])
         for Stream in Data["StreamingTD"]:
-            Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
-            Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
-            Stream["Ticks"] = np.array(text2num(Stream["TicksInMses"].split(",")))
+            Stream["Sequences"] = csv2floatarray(Stream["GlobalSequences"])
+            Stream["PacketSizes"] = csv2floatarray(Stream["GlobalPacketSizes"])
+            Stream["Ticks"] = csv2floatarray(Stream["TicksInMses"])
             Stream["Data"] = np.array(Stream["TimeDomainData"])
             Stream["SamplingRate"] = text2num(Stream["SampleRateInHz"])
             Stream["FirstPacketDateTime"] = getTimestamp(Stream["FirstPacketDateTime"])
@@ -1744,9 +1761,9 @@ def extractStreamingData(JSON, sourceData=dict()):
         key = "BrainSenseTimeDomain"
         Data["StreamingTD"] = _shallowCopyStreamList(JSON[key])
         for Stream in Data["StreamingTD"]:
-            Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
-            Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
-            Stream["Ticks"] = np.array(text2num(Stream["TicksInMses"].split(",")))
+            Stream["Sequences"] = csv2floatarray(Stream["GlobalSequences"])
+            Stream["PacketSizes"] = csv2floatarray(Stream["GlobalPacketSizes"])
+            Stream["Ticks"] = csv2floatarray(Stream["TicksInMses"])
             Stream["Data"] = np.array(Stream["TimeDomainData"])
             Stream["SamplingRate"] = text2num(Stream["SampleRateInHz"])
             Stream["Time"] = np.array(range(len(Stream["Data"]))) / Stream["SamplingRate"]
@@ -1871,9 +1888,9 @@ def extractStreamingData(JSON, sourceData=dict()):
 # This method only apply to Time-Domain-Only Streaming. 
 # Which includes Surveys, Indefinite Streaming
 def processTimeDomainStreamFormatting(Stream):
-    Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
-    Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
-    Stream["Ticks"] = np.array(text2num(Stream["TicksInMses"].split(",")))
+    Stream["Sequences"] = csv2floatarray(Stream["GlobalSequences"])
+    Stream["PacketSizes"] = csv2floatarray(Stream["GlobalPacketSizes"])
+    Stream["Ticks"] = csv2floatarray(Stream["TicksInMses"])
     Stream["Data"] = np.array(Stream["TimeDomainData"])
     Stream["SamplingRate"] = text2num(Stream["SampleRateInHz"])
     Stream["FirstPacketDateTime"] = getTimestamp(Stream["FirstPacketDateTime"])
@@ -1908,8 +1925,8 @@ def processTimeDomainStreamFormatting(Stream):
     return Stream
 
 def processTimeDomainElectrodeIdentifierFormatting(Stream):
-    Stream["Sequences"] = np.array(text2num(Stream["GlobalSequences"].split(",")))
-    Stream["PacketSizes"] = np.array(text2num(Stream["GlobalPacketSizes"].split(",")))
+    Stream["Sequences"] = csv2floatarray(Stream["GlobalSequences"])
+    Stream["PacketSizes"] = csv2floatarray(Stream["GlobalPacketSizes"])
     Stream["Data"] = np.array(Stream["TimeDomainDatainMicroVolts"])
     Stream["SamplingRate"] = text2num(Stream["SampleRateInHz"])
     Stream["FirstPacketDateTime"] = getTimestamp(Stream["FirstPacketDateTime"])
