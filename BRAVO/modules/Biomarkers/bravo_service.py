@@ -128,7 +128,20 @@ def _load_recordings(participant_uid, types):
     # a worker thread. Each task returns the decoded payload (or None on failure).
     def _decode(rec):
         try:
-            return Database.loadSourceFile(rec.pointer, rec.hashed)
+            data = Database.loadSourceFile(rec.pointer, rec.hashed)
+            # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
+            # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
+            # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
+            # chronic trend with its sensing frequency.
+            chz = None
+            md = getattr(rec, "metadata", None)
+            if isinstance(md, dict):
+                chz = md.get("CenterFrequencyHz")
+            if chz is not None:
+                for d in (data if isinstance(data, list) else [data]):
+                    if isinstance(d, dict):
+                        d.setdefault("CenterFrequencyHz", chz)
+            return data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
             # threaded load. But log it (pointer only, never the payload) so a SYSTEMATIC decode
@@ -491,6 +504,24 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                     # Carry the channel summary alongside so the panel can display per-channel AUC.
                     per_ch_analytics[ch_label]["summary"] = ch_data.get("summary") or {}
                 result["powerdomain"]["per_channel"] = per_ch_analytics
+            # Surface the chronic-trend sensing CENTER FREQUENCY per hemisphere (stamped on each
+            # chronic recording at decode time from the GROUP-level config; merged onto the loaded
+            # dict in _load_recordings). The chronic trend is a band-power-at-a-fixed-frequency
+            # series, so the report should state which frequency -- a different value than the
+            # streaming power-domain center frequencies in recorded_powers. Guarded so it never
+            # breaks the response; empty when no chronic recording carried a frequency.
+            if isinstance(result.get("powerdomain"), dict):
+                chronic_hz = {}
+                for c in (chronic or []):
+                    if not isinstance(c, dict) or c.get("Source") != "chronic":
+                        continue
+                    hz = c.get("CenterFrequencyHz")
+                    chans = c.get("ChannelNames") or []
+                    hemi = str(chans[0]).split(" ")[0] if chans else ""
+                    if hz is not None and hemi:
+                        chronic_hz[hemi] = hz
+                if chronic_hz:
+                    result["powerdomain"]["chronic_center_hz"] = chronic_hz
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}
 

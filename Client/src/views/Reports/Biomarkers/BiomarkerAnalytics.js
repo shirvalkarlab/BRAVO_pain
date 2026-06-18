@@ -138,6 +138,15 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const pdSumEff = safeChSel === "pooled" ? pdSum : { ...pdSum, ...(chronic.summary || {}) };
   const chSuffix = safeChSel === "pooled" ? "" : ` · ${safeChSel}`;
 
+  // Chronic-trend sensing CENTER FREQUENCY per hemisphere (from the device's group-level sensing
+  // config). The chronic 10-min trend is band power at a FIXED frequency, so state it. Different
+  // from the streaming power-domain center frequencies shown per recorded-power channel.
+  const chronicHz = pdRoot.chronic_center_hz || {};
+  const chronicHzText = Object.keys(chronicHz).length
+    ? " Chronic sensing band: " + Object.keys(chronicHz)
+        .map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
+    : "";
+
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
   const spectrum = td.corr_spectrum || null;
@@ -622,7 +631,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
                subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
-               subtitle="Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, LFP distribution, and pain clusters."
+               subtitle={"Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, LFP distribution, and pain clusters." + chronicHzText}
                panels={chPanels}
                header={channelToggle} />
     </>

@@ -27,6 +27,57 @@ from modules.HelperFunctions import current_time, get_or_none
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
 
+
+def _chronic_center_freqs(groups):
+    """Per-hemisphere chronic-trend sensing-band center frequency (Hz) from the GROUP-level config:
+    Groups.Final[].ProgramSettings.SensingChannel[].SensingSetup.FrequencyInHertz, keyed by
+    HemisphereLocation. Returns {'LeftHemisphere': hz, 'RightHemisphere': hz} (keys matching the
+    chronic recording's ChannelNames tokens); active group wins, else last finite. Fully defensive:
+    any malformed/absent structure yields {} so decode never fails. (Mirrors
+    Biomarkers.routines.analytics.chronic_center_freqs; kept local so the decoder does not depend on
+    the Biomarkers package.)
+    """
+    if isinstance(groups, dict):
+        group_list = groups.get("Final") or groups.get("Initial") or []
+    elif isinstance(groups, list):
+        group_list = groups
+    else:
+        return {}
+    freqs = {}
+    for grp in group_list:
+        if not isinstance(grp, dict):
+            continue
+        active = bool(grp.get("ActiveGroup"))
+        ps = grp.get("ProgramSettings")
+        if not isinstance(ps, dict):
+            continue
+        for ch in ps.get("SensingChannel", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            hemi_raw = str(ch.get("HemisphereLocation") or ch.get("Hemisphere") or "")
+            if "Left" in hemi_raw:
+                hemi = "LeftHemisphere"
+            elif "Right" in hemi_raw:
+                hemi = "RightHemisphere"
+            else:
+                continue
+            ss = ch.get("SensingSetup") if isinstance(ch.get("SensingSetup"), dict) else ch
+            hz = None
+            for k in ("FrequencyInHertz", "Frequency", "CenterFrequency", "CenterFrequencyInHertz"):
+                try:
+                    fv = float(ss.get(k))
+                    if fv == fv and fv > 0:  # finite & positive
+                        hz = round(fv, 2)
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if hz is None:
+                continue
+            if freqs.get(hemi) is None or active:
+                freqs[hemi] = hz
+    return freqs
+
+
 def extractPatientInformation(JSON):
     PatientOverview = {}
     PatientOverview["SessionTimestamp"] = Percept.estimateSessionDateTime(JSON)
@@ -265,15 +316,28 @@ def decodeMedtronicJSON(JSON):
     # Stiore Chronic BrainSenses
     ChronicRecordings = []
     if "LFPTrends" in Data.keys():
-        ChronicRecordings += [{
-            "name": "",
-            "type": "MedtronicChronicBrainSense",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-            }
-        } for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"])]
+        # The chronic-trend (BrainSense Timeline / LFPTrendLogs) sensing-band CENTER FREQUENCY lives
+        # at the GROUP level (Groups.Final[].ProgramSettings.SensingChannel[].SensingSetup.
+        # FrequencyInHertz), NOT on the per-trend recording -- a different path than the streaming
+        # power-domain frequency. Extract the per-hemisphere map once here (raw JSON is in scope) and
+        # stamp each chronic recording's metadata so the frequency persists to the DB and is readable
+        # at report time. _chronic_center_freqs is local & defensive (returns {} on any malformed
+        # structure), so decode never fails on a missing/odd Groups block.
+        _chronic_hz = _chronic_center_freqs(JSON.get("Groups"))
+        for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"]):
+            chans = Recording["ChannelNames"]
+            # ChannelNames[0] is like "RightHemisphere LFP" -> token "RightHemisphere".
+            hemi_token = str(chans[0]).split(" ")[0] if chans else ""
+            md = {"ChannelNames": chans}
+            if hemi_token in _chronic_hz:
+                md["CenterFrequencyHz"] = _chronic_hz[hemi_token]
+            ChronicRecordings.append({
+                "name": "",
+                "type": "MedtronicChronicBrainSense",
+                "date": Recording["StartTime"],
+                "recording": Recording,
+                "metadata": md,
+            })
     
     EventRecordings = []
     if "PatientEventLogs" in Data.keys():

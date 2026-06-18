@@ -207,6 +207,42 @@ def test_power_center_freqs_missing_is_safe():
     assert analytics.power_center_freqs([rec2]) == {}
 
 
+def _group(active, left_hz=None, right_hz=None):
+    ch = []
+    if left_hz is not None:
+        ch.append({"HemisphereLocation": "HemisphereLocationDef.Left",
+                   "SensingSetup": {"FrequencyInHertz": left_hz}})
+    if right_hz is not None:
+        ch.append({"HemisphereLocation": "HemisphereLocationDef.Right",
+                   "SensingSetup": {"FrequencyInHertz": right_hz}})
+    return {"ActiveGroup": active, "ProgramSettings": {"SensingChannel": ch}}
+
+
+def test_chronic_center_freqs_group_level():
+    """Chronic-trend sensing frequency comes from Groups.Final[].ProgramSettings.SensingChannel[]
+    keyed by HemisphereLocation, mapped to Left/RightHemisphere (the chronic ChannelNames tokens)."""
+    groups = {"Final": [_group(active=True, left_hz=10.74, right_hz=8.79)]}
+    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74, "RightHemisphere": 8.79}
+    # A bare list of groups is also accepted.
+    assert analytics.chronic_center_freqs([_group(True, left_hz=7.81)]) == {"LeftHemisphere": 7.81}
+
+
+def test_chronic_center_freqs_active_group_wins():
+    """When several groups carry a frequency for the same hemisphere, the ACTIVE group wins."""
+    groups = {"Final": [_group(active=False, left_hz=5.0),
+                        _group(active=True, left_hz=10.74)]}
+    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74}
+
+
+def test_chronic_center_freqs_missing_is_safe():
+    """Malformed / absent structures return {} and never raise."""
+    assert analytics.chronic_center_freqs(None) == {}
+    assert analytics.chronic_center_freqs({}) == {}
+    assert analytics.chronic_center_freqs([1, 2, "x", {}]) == {}
+    # hemisphere present but no finite frequency -> omitted
+    assert analytics.chronic_center_freqs({"Final": [_group(True, left_hz=0)]}) == {}
+
+
 if __name__ == "__main__":
     test_roc_downsampled_for_plot()
     test_cluster_scatter_one_feature()
@@ -221,4 +257,7 @@ if __name__ == "__main__":
     test_power_center_freqs_direct_hemisphere_key()
     test_power_center_freqs_nested_recordingconfig()
     test_power_center_freqs_missing_is_safe()
+    test_chronic_center_freqs_group_level()
+    test_chronic_center_freqs_active_group_wins()
+    test_chronic_center_freqs_missing_is_safe()
     print("All analytics tests passed.")

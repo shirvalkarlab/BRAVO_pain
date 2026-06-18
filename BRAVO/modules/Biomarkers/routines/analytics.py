@@ -128,6 +128,56 @@ def power_center_freqs(powerdomain_list):
     return freqs
 
 
+def chronic_center_freqs(groups):
+    """Map each hemisphere to its chronic-trend (BrainSense Timeline / LFPTrendLogs) sensing-band
+    center frequency (Hz). Unlike the streaming Power-Domain frequency (on the per-recording Therapy
+    snapshot, read by power_center_freqs), the chronic trend's sensing frequency lives at the GROUP
+    level: Groups.Final[].ProgramSettings.SensingChannel[].SensingSetup.FrequencyInHertz, tagged by
+    HemisphereLocation (e.g. 'HemisphereLocationDef.Left'). Returns {'LeftHemisphere': hz,
+    'RightHemisphere': hz} (keys matching the chronic recording's ChannelNames tokens), omitting a
+    hemisphere whose frequency is absent. The ACTIVE group wins; otherwise the last group with a
+    finite frequency for that hemisphere. Defensive: any malformed structure yields {}.
+
+    `groups` is the raw JSON's "Groups" dict (has "Final"/"Initial"), or directly a list of group
+    dicts. The decoder does not currently attach this to the stored chronic recording, so this is
+    called with the raw session JSON when available.
+    """
+    if isinstance(groups, dict):
+        group_list = groups.get("Final") or groups.get("Initial") or []
+    elif isinstance(groups, list):
+        group_list = groups
+    else:
+        return {}
+    freqs = {}
+    # Prefer the active group: collect (is_active, hz) per hemisphere and let active, then later,
+    # writers win.
+    for grp in group_list:
+        if not isinstance(grp, dict):
+            continue
+        active = bool(grp.get("ActiveGroup"))
+        ps = grp.get("ProgramSettings")
+        if not isinstance(ps, dict):
+            continue
+        for ch in ps.get("SensingChannel", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            hemi_raw = str(ch.get("HemisphereLocation") or ch.get("Hemisphere") or "")
+            if "Left" in hemi_raw:
+                hemi = "LeftHemisphere"
+            elif "Right" in hemi_raw:
+                hemi = "RightHemisphere"
+            else:
+                continue
+            hz = sensing_center_hz(ch)
+            if hz is None:
+                continue
+            prev = freqs.get(hemi)
+            # active group always wins; otherwise take it if none yet or prior was non-active
+            if prev is None or active:
+                freqs[hemi] = hz
+    return freqs
+
+
 def _f(x):
     """Float or None (JSON-safe, NaN -> None)."""
     try:
