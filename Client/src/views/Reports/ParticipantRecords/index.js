@@ -24,6 +24,9 @@ import {
   Grid,
 } from "@mui/material";
 
+import { FilePond } from 'react-filepond';
+import 'filepond/dist/filepond.min.css';
+
 import moment from "moment";
 import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -59,20 +62,15 @@ function ParticipantSurveyRecords() {
   const [availableForms, setAvailableForms] = useState({active: {}, options: [], forms: []});
   const [newLinkDialog, setNewLinkDialog] = useState({show: false, form: "", options: []});
   const [newRecordDialog, setNewRecordDialog] = useState({show: false, date: moment(new Date()), time: moment(new Date())});
+  const [csvImportDialog, setCsvImportDialog] = useState({show: false, files: [], instrumentName: ""});
   
   const [data, setData] = useState(false);
 
   const [alert, setAlert] = useState(null);
 
-  useEffect(() => {
-    if (!participant_uid) {
-      navigate("/database", {replace: false});
-      return;
-    }
-    setContextState(dispatch, "report", "SurveyReports");
-
+  const loadForms = (preferFormId) => {
     setAlert(<LoadingProgress/>);
-    SessionController.query("/api/queryParticipantSurveyRecords", {
+    return SessionController.query("/api/queryParticipantSurveyRecords", {
       RequestType: "RequestAll",
       ParticipantId: participant_uid
     }).then((response) => {
@@ -100,13 +98,67 @@ function ParticipantSurveyRecords() {
           }
         }
 
-        return {active: options.length > 0 ? options[0] : {}, options, forms: response.data.Forms}
+        const preferred = preferFormId ? options.find((a) => a.Id == preferFormId) : null;
+        return {active: preferred ? preferred : (options.length > 0 ? options[0] : {}), options, forms: response.data.Forms}
       })
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
+  };
+
+  useEffect(() => {
+    if (!participant_uid) {
+      navigate("/database", {replace: false});
+      return;
+    }
+    setContextState(dispatch, "report", "SurveyReports");
+    loadForms();
   }, [participant_uid]);
+
+  // Multipart CSV upload for the offline REDCap import, scoped to THIS participant (XHR mirrors
+  // ExternalCSVUploader's CSRF null-guard — the SPA doesn't render the csrfmiddlewaretoken input).
+  const handleCsvUpload = (fieldName, file, upload_metadata, load, error, progress, abort) => {
+    const formData = new FormData();
+    formData.append("File", file, file.name);
+    formData.append("ParticipantId", participant_uid);
+    formData.append("InstrumentName", csvImportDialog.instrumentName || "");
+
+    const request = new XMLHttpRequest();
+    request.open('POST', "/api/importRedcapCSV");
+    let csrftoken = "";
+    if (document.querySelector('[name=csrfmiddlewaretoken]')) {
+      csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+    request.setRequestHeader("X-CSRFToken", csrftoken);
+    request.upload.onprogress = (e) => { progress(e.lengthComputable, e.loaded, e.total); };
+    request.onload = function () {
+      if (request.status >= 200 && request.status < 300) {
+        load(request.responseText);
+        let importedFormId = null;
+        try {
+          const resp = JSON.parse(request.responseText);
+          if (resp.Instruments && resp.Instruments.length > 0) importedFormId = resp.Instruments[0].FormId;
+          setAlert(
+            <MuiAlertDialog title={"Import Complete"}
+              message={`Imported ${resp.TotalRecords} record(s) across ${resp.Instruments.length} instrument(s) for this participant.`}
+              handleClose={() => setAlert(null)} handleConfirm={() => setAlert(null)}/>);
+        } catch (e) { /* ignore parse */ }
+        setCsvImportDialog({show: false, files: [], instrumentName: ""});
+        loadForms(importedFormId);
+      } else {
+        let msg = "Unknown Error Code: " + request.status.toFixed(0);
+        if (request.status == 403) {
+          msg = "Permission Denied";
+        } else if (request.status == 400) {
+          try { msg = JSON.parse(request.response).message; } catch (e) { msg = "Bad Request"; }
+        }
+        error(msg);
+      }
+    };
+    request.send(formData);
+    return { abort: () => { request.abort(); abort(); } };
+  };
 
   const addNewFormLink = () => {
     if (!newLinkDialog.form) return;
@@ -196,11 +248,16 @@ function ParticipantSurveyRecords() {
             fullWidth
             disableClearable
           />
-          <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
-            return {active: {}, options: availableForms.forms, show: true}
-          })}>
-            {"Link New Form"} 
-          </MDButton>
+          <MDBox display="flex" flexDirection="row">
+            <MDButton variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => setCsvImportDialog({show: true, files: [], instrumentName: ""})}>
+              {"Import REDCap CSV"}
+            </MDButton>
+            <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
+              return {active: {}, options: availableForms.forms, show: true}
+            })}>
+              {"Link New Form"} 
+            </MDButton>
+          </MDBox>
         </MDBox>
 
         <Dialog open={newLinkDialog.show} onClose={() => setNewLinkDialog({...newLinkDialog, show: false})}>
@@ -363,7 +420,45 @@ function ParticipantSurveyRecords() {
             }}>Create</MDButton>
           </DialogActions>
         </Dialog>
-        
+
+        <Dialog open={csvImportDialog.show} onClose={() => setCsvImportDialog({...csvImportDialog, show: false})}>
+          <MDBox px={2} pt={2} style={{minWidth: 520}}>
+            <MDTypography variant="h5">
+              {"Import REDCap CSV"}
+            </MDTypography>
+            <MDTypography variant="body2" color="text" fontSize={14} mt={1}>
+              {"Upload a tidy REDCap export (the pipeline's chronic_pro_df, or a tidy-long export) for this participant. "}
+              {"Each instrument is stored as a form; each report becomes a record shown in the timeline below. Re-importing the same instrument replaces its prior records."}
+            </MDTypography>
+          </MDBox>
+          <DialogContent>
+            <MDBox px={1} pt={1}>
+              <TextField
+                variant="standard" margin="dense"
+                value={csvImportDialog.instrumentName || ""}
+                onChange={(event) => setCsvImportDialog({...csvImportDialog, instrumentName: event.target.value})}
+                label={"Instrument / Form Name (optional)"} type="text" fullWidth
+                helperText={"Used for a wide export (one instrument). Long exports are auto-split per instrument."}
+              />
+            </MDBox>
+            <MDBox px={1} pt={2}>
+              <FilePond
+                files={csvImportDialog.files}
+                onupdatefiles={(fileItems) => setCsvImportDialog({...csvImportDialog, files: fileItems.map((f) => f.file)})}
+                allowMultiple={false}
+                maxFiles={1}
+                acceptedFileTypes={["text/csv", "application/vnd.ms-excel", ".csv"]}
+                server={{ process: handleCsvUpload }}
+                name="File"
+                labelIdle={'Drag & drop a REDCap CSV or <span class="filepond--label-action">Browse</span>'}
+              />
+            </MDBox>
+          </DialogContent>
+          <DialogActions>
+            <MDButton color="secondary" onClick={() => setCsvImportDialog({...csvImportDialog, show: false})}>Close</MDButton>
+          </DialogActions>
+        </Dialog>
+
       </MDBox>
     </DatabaseLayout>
   );
