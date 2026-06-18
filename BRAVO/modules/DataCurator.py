@@ -33,7 +33,6 @@ import pandas as pd
 from io import BytesIO
 import blosc2
 from filelock import Timeout, FileLock
-from concurrent.futures import ThreadPoolExecutor
 
 from Server import models
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
