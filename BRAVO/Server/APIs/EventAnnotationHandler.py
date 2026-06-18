@@ -38,6 +38,7 @@ from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none
 from modules import Database, Event
 from modules.SurveyForms import RedcapForm
+from modules.SurveyForms import RedcapImport, RedcapImportService
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -113,6 +114,62 @@ class QuerySurveyForms(RestViews.APIView):
                 return Response(status=400, data={"message": str(e)})
 
             return Response(status=200)
+
+        elif request.data["RequestType"] == "RequestAvailabilityMatrix":
+            # Per-patient score-availability summary: for every participant in the requesting
+            # user's institute(s), list which forms/instruments have records, each with its field
+            # list and record count. Powers the summary table in the Survey & Questionnaire module.
+            if not request.user or not request.user.is_authenticated:
+                return Response(status=403)
+            try:
+                Institutes = models.Institute.find_all(members=request.user)
+                AllForms = list(models.ScaleForms.find_all(institute__in=Institutes))
+
+                def _field_list(form):
+                    rec = form.record
+                    pages = rec if isinstance(rec, list) else (rec.get("FieldMapping", []) if isinstance(rec, dict) else [])
+                    fields = []
+                    for page in pages:
+                        for q in page.get("questions", []):
+                            if q.get("text") == "Time":
+                                continue
+                            if q.get("type") in ("score", "redcapForm", "cumulativeScore"):
+                                fields.append(q.get("text", ""))
+                    return fields
+
+                # Pre-compute field lists per form once.
+                form_fields = {form.uid: _field_list(form) for form in AllForms}
+
+                Participants = []
+                for institute in Institutes:
+                    Participants.extend(list(models.Participant.from_institute(institute)))
+
+                Matrix = []
+                InstrumentSet = []  # ordered union of instrument names seen with records
+                for participant in Participants:
+                    row = {"ParticipantId": participant.uid, "ParticipantName": participant.name, "Instruments": []}
+                    for form in AllForms:
+                        count = models.ScaleRecord.objects.filter(source=form, participant=participant).count()
+                        if count == 0:
+                            continue
+                        row["Instruments"].append({
+                            "FormId": form.uid,
+                            "Instrument": form.name,
+                            "RecordType": form.record_type,
+                            "Count": count,
+                            "Fields": form_fields.get(form.uid, []),
+                            "Version": form.record_version,
+                        })
+                        if form.name not in InstrumentSet:
+                            InstrumentSet.append(form.name)
+                    if row["Instruments"]:
+                        Matrix.append(row)
+
+            except Exception as e:
+                print(traceback.format_exc())
+                return Response(status=400, data={"message": str(e)})
+
+            return Response(status=200, data={"Instruments": InstrumentSet, "Participants": Matrix})
 
         return Response(status=400, data={"message": "Malformed Input"})
 
@@ -310,7 +367,97 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
             return Response(status=200, data=AllRecords)
 
         return Response(status=404)
-        
+
+
+class ImportRedcapCSV(RestViews.APIView):
+    """Offline ingest of a tidy REDCap export into native ScaleForms/ScaleRecord rows.
+
+    Accepts EITHER a multipart CSV upload, OR a JSON body with inline rows / a server-side path:
+
+      multipart:  File=<csv>, ParticipantId, [InstrumentName], [Layout], [Replace]
+      json:       ParticipantId, [InstrumentName], [Layout], [Replace], and ONE of
+                    Rows      : list[dict]  -- already-tidy per-report rows (wide), OR
+                    ServerPath: str         -- a CSV path under the server's _pro_dump dir.
+
+    The participant's institute owns the created form; the caller must have Upload (or Edit)
+    permission on the participant. Returns the per-instrument import summary list.
+    """
+
+    parser_classes = [RestParsers.MultiPartParser, RestParsers.FormParser, RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    # Imports may only read CSVs from this confined directory (the pipeline's PRO dump), never an
+    # arbitrary server path supplied by the client.
+    ALLOWED_SERVER_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "_pro_dump"
+    )
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        import pandas as pd
+
+        participant_id = request.data.get("ParticipantId")
+        if not participant_id:
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        # Permission: Upload right on the participant (Edit is a superset for non-batch use).
+        if not Database.checkManagePermission(request.user, participant_id, "Upload"):
+            if not Database.checkManagePermission(request.user, participant_id, "Edit"):
+                return Response(status=403)
+
+        Participant = models.Participant.find(uid=participant_id)
+        if not Participant:
+            return Response(status=403)
+        institute = Participant.institute
+        if institute is None:
+            return Response(status=400, data={"message": "Participant has no institute to own the form."})
+        if not institute.has_permission(request.user, "Edit"):
+            return Response(status=403)
+
+        instrument_name = request.data.get("InstrumentName") or None
+        layout = request.data.get("Layout") or "auto"
+        replace = str(request.data.get("Replace", "true")).lower() not in ("false", "0", "no")
+
+        # ---- resolve the data source -------------------------------------------------------
+        try:
+            if "File" in request.data and hasattr(request.data["File"], "read"):
+                fname = getattr(request.data["File"], "name", "")
+                if ".." in fname or os.path.sep in fname:
+                    return Response(status=400, data={"message": "Invalid file name"})
+                source = pd.read_csv(request.data["File"], low_memory=False)
+            elif request.data.get("Rows"):
+                source = pd.DataFrame(request.data["Rows"])
+            elif request.data.get("ServerPath"):
+                # Confine to ALLOWED_SERVER_DIR (no traversal, must resolve inside the dump dir).
+                name = os.path.basename(str(request.data["ServerPath"]))
+                path = os.path.realpath(os.path.join(self.ALLOWED_SERVER_DIR, name))
+                root = os.path.realpath(self.ALLOWED_SERVER_DIR)
+                if not (path == root or path.startswith(root + os.sep)) or not os.path.isfile(path):
+                    return Response(status=400, data={"message": "ServerPath not allowed"})
+                source = pd.read_csv(path, low_memory=False)
+            else:
+                return Response(status=400, data={"message": "No CSV File, Rows, or ServerPath provided."})
+        except Exception as e:
+            print(traceback.format_exc())
+            return Response(status=400, data={"message": "Could not read the provided data: %s" % str(e)})
+
+        # ---- parse + persist ---------------------------------------------------------------
+        try:
+            results = RedcapImportService.import_export(
+                Participant, institute, source,
+                instrument_name=instrument_name, layout=layout, replace=replace,
+            )
+        except Exception as e:
+            print(traceback.format_exc())
+            return Response(status=400, data={"message": str(e)})
+
+        if not results:
+            return Response(status=400, data={"message": "No importable records found in the data."})
+
+        total = sum(r["RecordsImported"] for r in results)
+        return Response(status=200, data={"Instruments": results, "TotalRecords": total})
+
+
 class QueryEventHandler(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]

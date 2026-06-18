@@ -190,7 +190,7 @@ function PainScores() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center">
-                  <MDTypography variant="h6" fontSize={22}>Pain Score Reports</MDTypography>
+                  <MDTypography variant="h6" fontSize={22}>Pain Score Visualization</MDTypography>
                   {data ? (
                     <MDTypography variant="button" color="text">
                       {`${data.n_reports || 0} reports · ${metrics.length} metrics`}

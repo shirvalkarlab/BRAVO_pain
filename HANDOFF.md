@@ -26,6 +26,53 @@
   <noreply@anthropic.com>`. NEVER write global git config (`~/.config/git/ignore` "Operation not
   permitted" warnings on every git call are benign — ignore them).
 
+### REDCap CSV / DataFrame ingest into SurveyForms (NEW — offline Form Records)
+The Surveys & Questionnaires / Form Records module can now ingest the **current pipeline's REDCap
+export** offline (no live REDCap token needed) and store it in the platform's native tables, so the
+PROs render in Form Records and are available to customized analysis. This implements the offline
+half of §7-B (live field-map wiring is still open; see TODO).
+
+- **Source of truth:** the pipeline's tidy daily-PRO export
+  `BRAVO/_pro_dump/<pt>_chronic_pro_df.csv` (produced by
+  `redcap_client.process_redcap(pull_redcap(), field_map)`) — **not** the Stage-0 `*_tidy_long_v*`
+  files. RCS08 = 678 daily reports × 10 metrics, 2025-07-20 → 2026-06-16.
+- **New code:**
+  - `modules/SurveyForms/RedcapImport.py` — pure pandas, no Django. `parse_export(source, layout=
+    "auto"|"wide"|"long")` → list of instruments, each `{FieldMapping, records, metrics, skipped}`.
+    Wide = chronic_pro_df (one instrument, one score question per metric + a hidden "Time" marker,
+    canonical labels/ranges, NaN→None, date-sorted). Long = tidy-long (one instrument per group).
+  - `modules/SurveyForms/RedcapImportService.py` — Django persistence: `import_export(participant,
+    institute, source, …)` writes `ScaleForms` (record_type **`"Redcap CSV Import"`**) +
+    `ParticipantLinkRel` + one `ScaleRecord` per report. **Idempotent** re-import (replaces that
+    participant's prior records for the form). **No DB migration** — reuses existing tables.
+  - `Server/APIs/EventAnnotationHandler.py`:
+    - `ImportRedcapCSV` (route **`/api/importRedcapCSV`**, `IsAuthenticated`, Upload/Edit perm).
+      Accepts multipart `File`, inline JSON `Rows`, or a confined `ServerPath` (basename-only,
+      restricted to `_pro_dump/`; traversal → 400).
+    - `QuerySurveyForms` new RequestType **`RequestAvailabilityMatrix`** → `{Instruments,
+      Participants:[{ParticipantId, ParticipantName, Instruments:[{Instrument, RecordType, Count,
+      Fields, Version}]}]}` — powers the per-patient score-availability table.
+  - `modules/DataAnalysis.py` `getChronicTimeline`: the previously-stubbed non-Redcap-linked `else`
+    branch now populates a `CustomizedSurveyData` Activity (Time + one channel per score question,
+    `[REDCap CSV] ` / `[Survey] ` prefixed) — imported PROs become outcome channels.
+  - `Client/src/views/Survey/FormList/index.js`: "Import REDCap CSV" button + dialog (participant
+    picker + FilePond uploader, CSRF null-guard) and a "Score Availability by Patient" summary table
+    (patient × instrument; chips show count + field count; tooltip lists fields; patient name links to
+    `/form-records/:uid`). **No change** needed to `RecordScoreTimeline` / the Form Records tab — the
+    imported FieldMapping + Result shape matches what the existing renderer expects.
+- **Tests:** `modules/SurveyForms/tests/test_redcap_import.py` (9 pure-pandas pytest cases — run in
+  `bravo_app`: `PYTHONPATH=$PWD python -m pytest modules/SurveyForms/tests/test_redcap_import.py -q`)
+  and `modules/SurveyForms/tests/harness_redcap_ingest.py` (Django-harness integration through the
+  real DRF views — import paths, traversal rejection, idempotency, RequestAll Count, RequestRecords,
+  availability matrix, customized-analysis channels; run via the harness env block below). React SPA
+  `npm run build` succeeds with the new UI.
+- **Scope note:** this pass is **ingest + Form Records views + availability summary** only. The
+  Survey module gets the import controls and the **score-availability summary table only** — no
+  timeline plots there (per-metric score time-series live in the existing **Pain Score
+  Visualization** report, renamed this pass from "Pain Scores"; route `/pain-scores/:uid` and key
+  `PainScores` are unchanged). Wiring PROs into Predict-Therapy contact selection (that module is
+  LFP-montage based today, not PRO-based) was explicitly deferred by the user.
+
 ### The Django app harness (KEY TOOL — the sandbox cannot reach Docker)
 This sandbox **cannot reach the Docker socket** (orbstack socket → "permission denied"; container ops
 are user-run only). To exercise the real upload/decode/insert code path without the container, there is

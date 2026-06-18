@@ -291,7 +291,7 @@ const routes = {
       },
       {
         key: "PainScores",
-        name: "Pain Scores",
+        name: "Pain Score Visualization",
         icon: <TimelineIcon />,
         route: "/pain-scores/:participant_uid",
         component: <PainScores />,

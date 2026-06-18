@@ -2667,10 +2667,38 @@ def queryChronicTimeline(participant_uid, config):
                             Responses.append(record["Result"][pageId][questionId])
                         Activity["Data"].append(Responses)
         else:
+            # Locally-stored records (Normal Survey OR offline "Redcap CSV Import"). Here
+            # `form.record` IS the FieldMapping page-list, each ScaleRecord.get_info() carries the
+            # report epoch in "Date" and the pages x questions matrix in "Result". Emit one
+            # CustomizedSurveyData channel per score-type question (skipping the "Time" marker) so
+            # imported PROs become outcome channels for customized analysis -- the same shape the
+            # Redcap-linked branch above produces.
             AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
             AllRecords = [i.get_info() for i in AllRecords]
             AllRecords.sort(key=lambda x: x["Date"])
-        
+
+            FieldMapping = form.record if isinstance(form.record, list) else form.record.get("FieldMapping", [])
+            prefix = "[REDCap CSV] " if form.record_type == "Redcap CSV Import" else "[Survey] "
+
+            Activity["Time"] = [record["Date"] for record in AllRecords]
+            for pageId in range(len(FieldMapping)):
+                questions = FieldMapping[pageId].get("questions", [])
+                for questionId in range(len(questions)):
+                    question = questions[questionId]
+                    if question.get("text") == "Time":
+                        continue
+                    if question.get("type") not in ("score", "redcapForm", "cumulativeScore"):
+                        continue
+                    Activity["ChannelNames"].append(prefix + form.name + " - " + question.get("text", ""))
+                    Activity["ChannelUnits"].append("")
+                    Responses = []
+                    for record in AllRecords:
+                        try:
+                            Responses.append(record["Result"][pageId][questionId])
+                        except (IndexError, KeyError, TypeError):
+                            Responses.append(None)
+                    Activity["Data"].append(Responses)
+
         ChronicTimeline.append(Activity)
         
     return ChronicTimeline, TimelineAnnotation

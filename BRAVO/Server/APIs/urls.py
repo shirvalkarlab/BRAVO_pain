@@ -50,6 +50,7 @@ urlpatterns = [
     path('deleteSurveyForms', EventAnnotationHandler.DeleteSurveyForms.as_view()),
     path('setSurveyForms', EventAnnotationHandler.SetSurveyForms.as_view()),
     path('queryParticipantSurveyRecords', EventAnnotationHandler.QueryParticipantSurveyRecords.as_view()),
+    path('importRedcapCSV', EventAnnotationHandler.ImportRedcapCSV.as_view()),
     
     path('downloadParticipantExport', Participants.ExportParticipant.as_view()),
     path('queryParticipantEvents', EventAnnotationHandler.QueryEventHandler.as_view()),
