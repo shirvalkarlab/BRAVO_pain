@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.e46f41e6.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.22d9baee.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,7 +13,7 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.e46f41e6.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.22d9baee.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -146,7 +146,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.e46f41e6.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.22d9baee.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
@@ -187,6 +187,44 @@ second review of the same card. Same files + `routines/stats_utils.py`.
 - **Tests:** all 5 Biomarkers suites green in `rcs_v14_analysis` incl. the new `test_auc_block_perm_null`.
   Same Docker caveat — the `auc_perm` integration path and the panel changes were not run against the
   live container; verify on a real RCS08 run after `docker compose restart bravo-server` + hard refresh.
+
+**Per-hemisphere ROC/swarm grouping + white-screen fix (DONE — see latest bundle below):**
+- **White-screen-on-compute fix:** the previous pass crashed render with a temporal-dead-zone
+  `ReferenceError` — the honest-perf bar block referenced `isPooled` before its `const` declaration
+  (which sat further down in the ROC block). Hoisted `isPooled` (now superseded by the view-mode
+  flags) to the derived-values area. Babel parse-check can't catch this (runtime, not syntax); only
+  a render exercises it.
+- **Live verification (saved RCS08 `queryBiomarkerAnalysis` JSON, read off disk):** confirmed
+  per-window `roc:{fpr,tpr}` (60 vertices, endpoints 0→1) and per-channel ROCs are present and
+  correct; `sliding_window.summary` showed `n_total=20, n_with_auc=4, n_skipped_test_one_class=11`
+  (the sparse case the visibility fix covers). **`auc_perm` was ABSENT** — the running container still
+  serves the pre-`d466cd0` backend (frontend bundle is live-mounted, Python is not auto-reloaded);
+  `docker compose restart bravo-server` will surface it. The binarization-preview daily-aggregation
+  fix and dual day/sample badges render correctly live.
+- **per_channel is 8 mixed keys**, NOT just "Left/Right LFP": 2 chronic hemisphere AGGREGATES
+  (`LeftHemisphere LFP`, `RightHemisphere LFP`) + 6 individual bipolar CONTACTS (`L 0⁻-2⁺`, … ,
+  `R 1⁻-3⁺`), spanning two stimulation targets (Left GPi, Right VIM). Three contacts show AUC≈1.0 —
+  the backend's own `powerdomain_pooled_warning` flags this as a batch/scale artifact, not real
+  discrimination.
+- **Per-hemisphere mean (user decision):** never draw a single grand mean (that would pool Left GPi
+  with Right VIM). Backend `pipeline.py` now TAGS each per_channel entry with `summary.hemisphere`
+  (Left/Right) and `summary.kind` (contact/aggregate). Frontend `BiomarkerAnalytics.js` groups by
+  those tags (with a name-parse fallback for the un-restarted backend), and for each hemisphere in
+  view draws a BOLD MEAN ROC (vertical average over that hemisphere's CONTACTS only, aggregates
+  excluded) with the individual contact curves behind it. Toggle is now: All contacts · Left
+  hemisphere · L-contacts · Right hemisphere · R-contacts.
+- **Legend/draw order grouped by hemisphere, Left-then-Right** (never interleaved), per the user's
+  standing principle. Left = blue family (`#56B4E9/#0072B2/…`), Right = orange family
+  (`#E69F00/#D55E00/…`), each mean in the darkest shade; Plotly `legendgroup`+`legendgrouptitle`.
+  Bar-plot swarm dots likewise: contacts only, ordered L-then-R, colored by hemisphere. **This
+  grouping principle was committed to the `ps-scientific-visualization` skill (§"Legend Ordering —
+  Group by Category, Never Interleave").**
+- **Tests:** all 5 Biomarkers suites green (`rcs_v14_analysis`). Same Docker caveat — restart the
+  container to load the tagged backend + `auc_perm`, then hard-refresh for the new bundle.
+- **NEXT (queued, not yet done):** the TIME-DOMAIN "PSD correlation with composite" panel needs the
+  same Left-then-Right legend grouping, AND its peak detection currently takes the max SIGNED peak,
+  not the max-MAGNITUDE peak — so a large negative correlation loses to a small positive one. Fix to
+  use `abs()` magnitude for the dominant-peak pick.
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into

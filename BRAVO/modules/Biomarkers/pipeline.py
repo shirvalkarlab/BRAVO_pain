@@ -599,8 +599,24 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                     n_pos_ch = int(np.nansum(pl_ch == 1)); n_neg_ch = int(np.nansum(pl_ch == 0))
                     sens_ch = ch_detail.get("mean_test_sens_sens", np.nan)
                     spec_ch = ch_detail.get("mean_test_spec_sens", np.nan)
+                    # Tag hemisphere + kind so the frontend can group per hemisphere without
+                    # fragile name-parsing. "<Side>Hemisphere LFP" keys are the pooled chronic-trend
+                    # aggregates (kind="aggregate"); "L …"/"R …" keys are individual bipolar sensing
+                    # contacts (kind="contact"). Hemisphere is the leading L/R, or the word in the
+                    # aggregate label. The frontend averages ONLY contacts within a hemisphere.
+                    lbl = str(ch_label)
+                    if "Hemisphere" in lbl:
+                        ch_kind = "aggregate"
+                        ch_hemi = "Left" if lbl.lower().startswith("left") else (
+                            "Right" if lbl.lower().startswith("right") else None)
+                    else:
+                        ch_kind = "contact"
+                        first = lbl.strip()[:1].upper()
+                        ch_hemi = "Left" if first == "L" else ("Right" if first == "R" else None)
                     ch_summary = {
                         "channel": ch_label,
+                        "hemisphere": ch_hemi,
+                        "kind": ch_kind,
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),

@@ -144,11 +144,51 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
   const perChannel = pdRoot.per_channel || {};
   const channelKeys = Object.keys(perChannel);
+  // Hemisphere + kind of each per_channel entry. Prefer the backend tags (summary.hemisphere /
+  // summary.kind); fall back to a name parse so this still works against the older backend that
+  // doesn't tag yet ("…Hemisphere LFP" = pooled chronic aggregate; leading L/R = bipolar contact).
+  const hemiOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    if (s && s.hemisphere) return s.hemisphere;
+    if (/hemisphere/i.test(k)) return /^left/i.test(k) ? "Left" : (/^right/i.test(k) ? "Right" : null);
+    const f = (k || "").trim()[0];
+    return f === "L" ? "Left" : (f === "R" ? "Right" : null);
+  };
+  const kindOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    if (s && s.kind) return s.kind;
+    return /hemisphere/i.test(k) ? "aggregate" : "contact";
+  };
+  // Bipolar sensing contacts only (exclude the pooled "Hemisphere LFP" aggregates), grouped by
+  // hemisphere and ordered LEFT first, then RIGHT — so every plot's legend reads Left group then
+  // Right group rather than interleaved (anatomical grouping aids interpretation; do not mix the
+  // two stimulation targets — Left GPi vs Right VIM — into one mean).
+  const leftContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Left").sort();
+  const rightContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Right").sort();
+  const orderedContacts = [...leftContacts, ...rightContacts];
+  const hasLeft = leftContacts.length > 0;
+  const hasRight = rightContacts.length > 0;
+  // Aggregate (pooled chronic-trend) key for a hemisphere, if the backend emitted one — used to
+  // bind the histogram / sliding-window / honest-perf panels when a hemisphere is selected.
+  const aggKeyFor = (h) => channelKeys.find((k) => kindOf(k) === "aggregate" && hemiOf(k) === h) || null;
+
   const [chSel, setChSel] = useState("pooled");
-  const safeChSel = (chSel === "pooled" || perChannel[chSel]) ? chSel : "pooled";
+  const isHemiSel = typeof chSel === "string" && chSel.startsWith("hemi:");
+  const selHemi = isHemiSel ? chSel.slice(5) : null;
+  const isContactSel = !!perChannel[chSel] && kindOf(chSel) === "contact";
+  const validSel = chSel === "pooled" || isContactSel ||
+    (isHemiSel && ((selHemi === "Left" && hasLeft) || (selHemi === "Right" && hasRight)));
+  const safeChSel = validSel ? chSel : "pooled";
+  // Which underlying per_channel entry drives the single-summary panels: the contact itself for a
+  // contact selection, the hemisphere aggregate for a hemisphere selection, else pooled (null).
+  const boundKey = useMemo(() => {
+    if (safeChSel === "pooled") return null;
+    if (isHemiSel) return aggKeyFor(selHemi);
+    return safeChSel;
+  }, [safeChSel, isHemiSel, selHemi, perChannel]); // eslint-disable-line react-hooks/exhaustive-deps
   const chronic = useMemo(() => (
-    safeChSel === "pooled" ? pdRoot : { ...pdRoot, ...perChannel[safeChSel] }
-  ), [safeChSel, pdRoot, perChannel]);
+    boundKey && perChannel[boundKey] ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot
+  ), [boundKey, pdRoot, perChannel]);
 
   if (!analytics) return null;
 
@@ -159,8 +199,26 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const pdSum = (summary && summary.powerdomain) || {};
   // When a per-channel view is active, overlay its summary on the pooled one so the honest-perf
   // bar reflects the selected channel's AUC.
-  const pdSumEff = safeChSel === "pooled" ? pdSum : { ...pdSum, ...(chronic.summary || {}) };
-  const chSuffix = safeChSel === "pooled" ? "" : ` · ${safeChSel}`;
+  const pdSumEff = boundKey ? { ...pdSum, ...(chronic.summary || {}) } : pdSum;
+  const chSuffix = safeChSel === "pooled" ? ""
+    : (isHemiSel ? ` · ${selHemi} hemisphere` : ` · ${safeChSel}`);
+  // View mode (declared HERE, not in the ROC block, because the honest-perf bar plot above the ROC
+  // panel also reads these — a later `const` would be in the temporal dead zone there and crash render):
+  //   - contact view: a single bipolar contact is selected → one curve, no mean/swarm.
+  //   - group view (pooled OR a hemisphere): draw per-hemisphere MEAN ROCs + per-contact curves and
+  //     the swarm. Pooled shows both hemispheres (Left group then Right group); a hemisphere shows one.
+  const isContactView = isContactSel;
+  const groupHemis = isContactView ? []
+    : (isHemiSel ? [selHemi] : [...(hasLeft ? ["Left"] : []), ...(hasRight ? ["Right"] : [])]);
+  // Hemisphere color families: Left = blues, Right = vermillion/orange (Okabe-Ito-derived, colorblind
+  // safe). Shades distinguish contacts within a hemisphere; the bold mean uses the darkest shade.
+  const LEFT_SHADES = ["#56B4E9", "#0072B2", "#3A93C9", "#005C8A"];
+  const RIGHT_SHADES = ["#E69F00", "#D55E00", "#F0A830", "#A84A00"];
+  const LEFT_MEAN = "#003A5C";
+  const RIGHT_MEAN = "#7A3300";
+  const shadesFor = (h) => (h === "Left" ? LEFT_SHADES : RIGHT_SHADES);
+  const meanColorFor = (h) => (h === "Left" ? LEFT_MEAN : RIGHT_MEAN);
+  const contactsFor = (h) => (h === "Left" ? leftContacts : rightContacts);
 
   // Chronic-trend sensing CENTER FREQUENCY per hemisphere (from the device's group-level sensing
   // config). The chronic 10-min trend is band power at a FIXED frequency, so state it. Different
@@ -174,10 +232,18 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   // Short on-plot provenance string: which sensing band (center frequency) and which contact/
   // channel the power-domain signal comes from, so a reader never has to ask "power from WHERE?".
   // When a single channel is selected, name it; pooled view lists each hemisphere's chronic Hz.
+  const hzForHemi = (h) => {
+    const k = Object.keys(chronicHz).find((kk) => kk.replace("Hemisphere", "").trim().toLowerCase() === (h || "").toLowerCase());
+    return k ? chronicHz[k] : null;
+  };
   const powerProvenance = (() => {
+    if (isHemiSel) {
+      const hz = hzForHemi(selHemi);
+      const n = contactsFor(selHemi).length;
+      return `${selHemi} hemisphere (${n} contact${n === 1 ? "" : "s"})${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`;
+    }
     if (safeChSel !== "pooled") {
-      const hzKey = Object.keys(chronicHz).find((h) => safeChSel.startsWith(h.replace("Hemisphere", "")));
-      const hz = hzKey ? chronicHz[hzKey] : null;
+      const hz = hzForHemi(hemiOf(safeChSel));
       return `${safeChSel}${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`;
     }
     const parts = Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} @ ${Number(chronicHz[h]).toFixed(1)} Hz`);
@@ -511,30 +577,32 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       text: vals.map((v) => (v == null ? "" : v.toFixed(2))), textposition: "outside",
       textfont: { size: 12, color: "#344767" }, showlegend: false,
       hovertemplate: "%{text}<extra></extra>", customdata: ticktext }];
-    // Swarm: per-contact AUC + balanced-accuracy dots (pooled view, >=2 contacts split).
-    const swarmContacts = isPooled ? channelKeys
-      .map((k) => ({ k, s: perChannel[k] && perChannel[k].summary }))
-      .filter((c) => c.s) : [];
-    if (swarmContacts.length >= 2) {
+    // Swarm: per-contact AUC + balanced-accuracy dots, in group view (pooled or hemisphere). Only
+    // bipolar CONTACTS (never the chronic aggregates), ordered Left-then-Right and colored by
+    // hemisphere (blue = Left, orange = Right) so each dot is attributable to a side. One legend
+    // entry per hemisphere, Left first.
+    const swarmKeys = isContactView ? []
+      : orderedContacts.filter((k) => (isHemiSel ? hemiOf(k) === selHemi : true) && perChannel[k] && perChannel[k].summary);
+    if (swarmKeys.length >= 2) {
       const jitter = (i, n) => (n === 1 ? 0 : -0.16 + (0.32 * i) / (n - 1));
-      const aucDots = swarmContacts.map((c) => c.s.auc_in_sample).filter((v) => v != null);
-      const baDots = swarmContacts.map((c) => c.s.balanced_accuracy).filter((v) => v != null);
-      const names = swarmContacts.map((c) => c.k);
-      if (aucDots.length) {
-        barTraces.push({ x: swarmContacts.map((c, i) => 0 + jitter(i, swarmContacts.length)),
-          y: swarmContacts.map((c) => c.s.auc_in_sample), type: "scatter", mode: "markers",
-          name: "per-contact", legendgroup: "swarm", showlegend: true,
-          marker: { size: 9, color: "#FFFFFF", line: { color: "#344767", width: 1.6 }, symbol: "circle" },
-          text: names, hovertemplate: "%{text}<br>in-sample AUC=%{y:.3f}<extra></extra>" });
-      }
-      if (baDots.length) {
-        barTraces.push({ x: swarmContacts.map((c, i) => 1 + jitter(i, swarmContacts.length)),
-          y: swarmContacts.map((c) => c.s.balanced_accuracy), type: "scatter", mode: "markers",
-          name: "per-contact", legendgroup: "swarm", showlegend: false,
-          marker: { size: 9, color: "#FFFFFF", line: { color: "#344767", width: 1.6 }, symbol: "circle" },
-          text: names, hovertemplate: "%{text}<br>CV balanced acc=%{y:.3f}<extra></extra>" });
-      }
+      const drawSide = (h) => {
+        const keys = swarmKeys.filter((k) => hemiOf(k) === h);
+        if (!keys.length) return;
+        const mean = meanColorFor(h);
+        const sumOf = (k) => perChannel[k].summary;
+        const mk = (xc, field, showLegend) => barTraces.push({
+          x: keys.map((k, i) => xc + jitter(i, keys.length)),
+          y: keys.map((k) => sumOf(k)[field]), type: "scatter", mode: "markers",
+          name: `${h} contacts`, legendgroup: `swarm-${h}`, showlegend: showLegend,
+          marker: { size: 9, color: "#FFFFFF", line: { color: mean, width: 1.8 }, symbol: "circle" },
+          text: keys, hovertemplate: `%{text}<br>${field === "auc_in_sample" ? "in-sample AUC" : "CV balanced acc"}=%{y:.3f}<extra></extra>` });
+        mk(0, "auc_in_sample", true);
+        mk(1, "balanced_accuracy", false);
+      };
+      // Left first, then Right — keeps the legend anatomically grouped.
+      ["Left", "Right"].forEach(drawSide);
     }
+    const swarmContacts = swarmKeys; // alias used by caption/showlegend below
     // Permutation-null ceiling over the AUC bar (block-permuted daily labels).
     const ap = pdSumEff.auc_perm || null;
     const shapes = [{ type: "line", x0: -0.5, x1: 2.5, y0: chanceLvl, y1: chanceLvl,
@@ -573,51 +641,54 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       </Panel>
     );
   }
-  // ROC panel. Two layouts depending on the contact toggle:
-  //   POOLED (All contacts / no single contact selected): draw a BOLD MEAN ROC (vertical average
-  //     over the per-contact curves) and, behind it, the individual per-contact ROCs as thin
-  //     colored lines — so the mean is the headline and the spread of the contacts it summarizes is
-  //     visible. (Mirrors the bar-plot swarm: mean bar + per-contact dots.)
-  //   SINGLE CONTACT: just that contact's ROC (filled).
-  //   In BOTH layouts, when a sliding window is active, overlay each window's ROC as a faint orange
-  //   line so the time-spread of operating curves is also visible.
+  // ROC panel. Layout depends on the toggle:
+  //   GROUP view (All contacts, or a single hemisphere): for EACH hemisphere in view (Left first,
+  //     then Right), draw a BOLD MEAN ROC (vertical average over that hemisphere's bipolar contacts)
+  //     with the individual contact curves as thin lines behind it. Left contacts use the blue
+  //     family, Right the orange family, and the legend is emitted Left-group-then-Right-group so it
+  //     reads anatomically. The two hemispheres are NEVER averaged together (different targets:
+  //     Left GPi vs Right VIM).
+  //   CONTACT view: just the selected contact's ROC (filled).
+  //   In BOTH, when a sliding window is active, overlay each window's ROC as a faint orange line.
   const roc = chronic.roc || null;
   const rocTraces = [];
-  const isPooled = safeChSel === "pooled";
-  // Per-contact curves available in the pooled view.
-  const contactCurves = channelKeys
-    .map((k) => ({ k, r: perChannel[k] && perChannel[k].roc }))
-    .filter((c) => c.r && c.r.fpr && c.r.fpr.length >= 2);
-  if (isPooled && contactCurves.length >= 2) {
-    // (a) Individual contacts, thin + light, drawn FIRST so the mean sits on top.
-    contactCurves.forEach((c, i) => {
-      rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
-        type: "scatter", mode: "lines",
-        line: { width: 1.5, color: PALETTE[i % PALETTE.length], dash: "solid" }, opacity: 0.55,
-        legendgroup: "contacts",
-        hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+  const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
+  const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
+  if (!isContactView && groupHemis.length) {
+    groupHemis.forEach((h) => {
+      const shades = shadesFor(h);
+      const curves = contactsFor(h)
+        .map((k) => ({ k, r: rocFor(k) }))
+        .filter((c) => c.r && c.r.fpr && c.r.fpr.length >= 2);
+      if (!curves.length) return;
+      // (a) Individual contacts, thin, drawn FIRST so the mean sits on top. Grouped per hemisphere.
+      curves.forEach((c, i) => {
+        rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
+          type: "scatter", mode: "lines",
+          line: { width: 1.5, color: shades[i % shades.length], dash: "solid" }, opacity: 0.6,
+          legendgroup: h, legendgrouptitle: i === 0 ? { text: `${h} hemisphere` } : undefined,
+          hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+      });
+      // (b) Bold MEAN ROC over this hemisphere's contacts (vertical average; AUC = mean of contact AUCs).
+      if (curves.length >= 2) {
+        const mean = meanRoc(curves.map((c) => c.r));
+        const meanAuc = curves.reduce((a, c) => a + (c.r.auc ?? 0), 0) / curves.length;
+        if (mean) {
+          rocTraces.push({ x: mean.fpr, y: mean.tpr,
+            name: `${h} mean of ${curves.length} contacts (AUC=${meanAuc.toFixed(3)})`,
+            type: "scatter", mode: "lines", line: { width: 4, color: meanColorFor(h) },
+            legendgroup: h,
+            hovertemplate: `${h} mean ROC<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+          meanAucLabels.push(`${h} ${meanAuc.toFixed(3)}`);
+        }
+      }
     });
-    // (b) Bold MEAN ROC over the contacts (vertical average). AUC = mean of contact AUCs.
-    const mean = meanRoc(contactCurves.map((c) => c.r));
-    const meanAuc = contactCurves.reduce((a, c) => a + (c.r.auc ?? 0), 0) / contactCurves.length;
-    if (mean) {
-      rocTraces.push({ x: mean.fpr, y: mean.tpr,
-        name: `Mean of ${contactCurves.length} contacts (AUC=${meanAuc.toFixed(3)})`,
-        type: "scatter", mode: "lines", line: { width: 4, color: "#000000" },
-        hovertemplate: "Mean ROC<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>" });
-    }
-  } else if (isPooled && contactCurves.length === 1) {
-    // Only one contact split out — the "mean" would equal it, so just draw it bold.
-    const c = contactCurves[0];
-    rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
-      type: "scatter", mode: "lines", line: { width: 3, color: PALETTE[0] },
-      fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
-      hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
   } else if (roc && roc.fpr && roc.fpr.length) {
-    // Either a single contact is selected, or the backend never split per channel — one curve.
+    // Single contact selected (or backend never split) — one curve.
     rocTraces.push({ x: roc.fpr, y: roc.tpr,
-      name: `${isPooled ? "All contacts" : safeChSel} (AUC=${(roc.auc ?? 0).toFixed(3)})`,
-      type: "scatter", mode: "lines", line: { width: 3, color: PALETTE[0] },
+      name: `${isContactView ? safeChSel : "All contacts"} (AUC=${(roc.auc ?? 0).toFixed(3)})`,
+      type: "scatter", mode: "lines",
+      line: { width: 3, color: meanColorFor(hemiOf(safeChSel) || "Left") },
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
   }
@@ -639,21 +710,21 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   if (rocTraces.length) {
     rocTraces.push({ x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
       line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
-    const isMeanView = isPooled && contactCurves.length >= 2;
-    const titleNote = isMeanView ? ` · mean of ${contactCurves.length} contacts` : "";
+    const isMeanView = meanAucLabels.length > 0;
+    const titleNote = isMeanView ? ` · mean ${meanAucLabels.join(", ")}` : "";
     const perWinNote = windowRocs.length ? ` · ${windowRocs.length} per-window curves` : "";
     chPanels.push(
       <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${titleNote}${perWinNote}`}>
-        <Fig height={360} traces={rocTraces} layout={{
+        <Fig height={380} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
-          legend: { orientation: "h", y: -0.2 },
+          legend: { orientation: "h", y: -0.22, groupclick: "toggleitem" },
           annotations: provenanceAnn }} />
         {powerProvenance ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
             {`Power signal from ${powerProvenance}.` +
              (isMeanView
-               ? " Bold black = mean ROC (vertical average); thin colored lines are the individual bipolar contacts it averages."
+               ? " Bold line = per-hemisphere mean ROC (vertical average of that hemisphere's bipolar contacts); thin lines behind it are the individual contacts (blue = Left, orange = Right). The two hemispheres are never averaged together (separate stimulation targets)."
                : "") +
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
           </MDTypography>
@@ -796,14 +867,21 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
           onChange={(_, v) => { if (v) setChSel(v); }}>
           <ToggleButton value="pooled">All contacts</ToggleButton>
-          {channelKeys.map((k) => (
+          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere</ToggleButton> : null}
+          {leftContacts.map((k) => (
+            <ToggleButton key={k} value={k}>{k}</ToggleButton>
+          ))}
+          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere</ToggleButton> : null}
+          {rightContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
         </ToggleButtonGroup>
         <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
-            ? "All bipolar sensing contacts merged into one threshold (legacy view)."
-            : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
+            ? "All bipolar contacts, grouped by hemisphere — per-hemisphere mean ROC over each side's contacts (Left and Right shown separately, never averaged together)."
+            : isHemiSel
+              ? `${selHemi} hemisphere — mean over its bipolar contacts, with the individual contacts behind it.`
+              : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
         </MDTypography>
       </MDBox>
     </Grid>
