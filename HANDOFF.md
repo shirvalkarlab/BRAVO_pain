@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.2febe4da.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.f6ff590f.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,7 +13,7 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.2febe4da.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.f6ff590f.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -146,7 +146,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.2febe4da.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.f6ff590f.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
@@ -253,6 +253,33 @@ second review of the same card. Same files + `routines/stats_utils.py`.
   with a constant `BIN_W = 0.2` anchored to a clean 0.2 grid (edges on …6.8/7.0/7.2…), 500-bin cap
   guard; removed the now-unused `chooseBins` helper.
 - Tests: all Biomarkers suites green. Same Docker caveat (restart for tagged backend + `auc_perm`).
+
+**Frequency-provenance fixes + power-domain timeline labeling (DONE — see latest bundle below):**
+- **ROC/distribution/sliding provenance bug (user-reported):** the ROC annotation read "Right
+  hemisphere (3 contacts) @ 28.3 Hz", but NO right contact recorded at 28.3 Hz — the right contacts
+  recorded at 23.4 / 26.4 / 8.8 Hz. Root cause: the frontend `powerProvenance` fell back to
+  `chronic_center_hz` (RightHemisphere=28.32, LeftHemisphere=26.37), which is the **chronic 10-min
+  TREND's** fixed sensing frequency — a separate series from the per-contact streaming band power the
+  ROC/distribution/sliding panels are actually computed on. Fix: pass `recorded_powers` into
+  `BiomarkerAnalytics` (new `recordedPowers` prop from `index.js`) and build provenance from each
+  plotted contact's OWN recorded `center_hz`. Now: single contact → that contact's Hz; hemisphere →
+  the distinct recorded Hz across its contacts ("Right hemisphere (3 contacts) @ 8.8 / 23.4 / 26.4
+  Hz"); pooled → per-side recorded Hz. Falls back to chronic Hz only if no recorded frequencies exist.
+- **chronicHzText relabeled** to "Chronic 10-min trend sensing frequency (distinct from the
+  per-contact recorded bands below)" so the chronic-trend value is never mistaken for the ROC bands.
+- **Time-domain peak-scatter / spectrum verified CORRECT** — those titles use the streaming-PSD
+  correlation peak frequency (`peak_scatter.peak_freq`), computed directly from the data, which is
+  the right frequency for those panels (and legitimately differs from the chronic frequency).
+- **Power-domain timeline plot now labeled (task 1):** the green "Power-domain band power" row plots
+  the on-board band-power feature (`powerdomain_biomarker_value`) POOLED across all recorded contacts
+  (the `powerdomain_pooled_warning` confirms it pools Left GPi + Right VIM into one raw-scale
+  threshold; the series carries NO per-row channel/freq). Title now states what + frequency + range:
+  "Power-domain band power @ <recorded Hz set> — N contacts pooled · range <min>–<max> a.u.", unit
+  "Band power (device units, a.u.)", with a second annotation line naming the pooled contacts and
+  recorded center frequencies.
+- Both frequency lists now sort NUMERICALLY (were string-sorted).
+- Frontend-only change except the (already-committed) per_channel hemisphere/kind tags. Tests still
+  green. Same Docker caveat (restart for tagged backend + auc_perm; recorded_powers is already served).
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into

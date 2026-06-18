@@ -603,6 +603,7 @@ function Biomarkers() {
 
             {data && data.analytics ? (
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
+                recordedPowers={data.recorded_powers}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}

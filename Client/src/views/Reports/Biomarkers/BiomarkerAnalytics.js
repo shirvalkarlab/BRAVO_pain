@@ -138,7 +138,7 @@ const FEATURE_LABELS = {
 };
 const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) {
+export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -225,27 +225,55 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   // from the streaming power-domain center frequencies shown per recorded-power channel.
   const chronicHz = pdRoot.chronic_center_hz || {};
   const chronicHzText = Object.keys(chronicHz).length
-    ? " Chronic sensing band: " + Object.keys(chronicHz)
-        .map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
+    ? " Chronic 10-min trend sensing frequency (distinct from the per-contact recorded bands below): "
+        + Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
     : "";
 
-  // Short on-plot provenance string: which sensing band (center frequency) and which contact/
-  // channel the power-domain signal comes from, so a reader never has to ask "power from WHERE?".
-  // When a single channel is selected, name it; pooled view lists each hemisphere's chronic Hz.
+  // Short on-plot provenance string: which sensing band (center frequency) and which contact the
+  // power-domain signal comes from, so a reader never has to ask "power from WHERE?".
+  //
+  // CRITICAL: the ROC/distribution/sliding panels are computed from each CONTACT's recorded
+  // streaming band power, so the provenance MUST report that contact's OWN recorded center
+  // frequency (from `recorded_powers`) — NOT `chronic_center_hz`, which is the chronic 10-min
+  // TREND's fixed sensing frequency (a separate series, often a different value, and not what the
+  // ROC was computed on). Earlier this fell back to chronic_center_hz and so claimed e.g. "Right
+  // hemisphere @ 28.3 Hz" when the plotted Right contacts actually recorded at 23.4 / 26.4 Hz.
+  const recHzByContact = {};   // contact label -> recorded center_hz
+  (recordedPowers || []).forEach((p) => {
+    if (p && p.label != null && p.center_hz != null) recHzByContact[String(p.label).trim()] = p.center_hz;
+  });
+  const recHzFor = (k) => {
+    if (k == null) return null;
+    const key = String(k).trim();
+    return recHzByContact[key] != null ? recHzByContact[key] : null;
+  };
+  // Distinct recorded frequencies across a set of contacts, formatted "23.4 / 26.4 Hz" (or a single
+  // value). Returns null if none of the contacts carried a recorded frequency.
+  const recHzSummary = (keys) => {
+    const hzs = (keys || []).map(recHzFor).filter((v) => v != null).map((v) => Number(v));
+    const uniq = Array.from(new Set(hzs)).sort((a, b) => a - b).map((v) => v.toFixed(1));
+    return uniq.length ? `${uniq.join(" / ")} Hz` : null;
+  };
   const hzForHemi = (h) => {
     const k = Object.keys(chronicHz).find((kk) => kk.replace("Hemisphere", "").trim().toLowerCase() === (h || "").toLowerCase());
     return k ? chronicHz[k] : null;
   };
   const powerProvenance = (() => {
     if (isHemiSel) {
-      const hz = hzForHemi(selHemi);
-      const n = contactsFor(selHemi).length;
-      return `${selHemi} hemisphere (${n} contact${n === 1 ? "" : "s"})${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`;
+      const ks = contactsFor(selHemi);
+      const hzText = recHzSummary(ks);
+      return `${selHemi} hemisphere (${ks.length} contact${ks.length === 1 ? "" : "s"})${hzText ? ` @ ${hzText}` : ""}`;
     }
     if (safeChSel !== "pooled") {
-      const hz = hzForHemi(hemiOf(safeChSel));
+      const hz = recHzFor(safeChSel);
       return `${safeChSel}${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`;
     }
+    // Pooled: report each hemisphere's recorded contact frequencies (fall back to chronic Hz only
+    // if no recorded frequencies are present at all).
+    const sides = [["Left", leftContacts], ["Right", rightContacts]]
+      .filter(([, ks]) => ks.length)
+      .map(([h, ks]) => { const t = recHzSummary(ks); return `${h} @ ${t || (hzForHemi(h) != null ? `${Number(hzForHemi(h)).toFixed(1)} Hz` : "?")}`; });
+    if (sides.length) return sides.join(" · ");
     const parts = Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} @ ${Number(chronicHz[h]).toFixed(1)} Hz`);
     return parts.length ? parts.join(" · ") : null;
   })();

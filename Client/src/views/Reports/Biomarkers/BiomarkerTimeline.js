@@ -75,7 +75,34 @@ function BiomarkerTimeline({ data, height }) {
       if (has("powerdomain_threshold")) {
         tr.push({ name: "Threshold", y: col("powerdomain_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
       }
-      rows.push({ title: "Power-domain band power", unit: "Power (a.u.)", traces: tr });
+      // Provenance label: WHAT power, at WHAT frequency, over WHAT range. The series is the on-board
+      // band-power feature (the Percept's power in a fixed sensing band), pooled across the recorded
+      // sensing contacts — so name the contacts and their RECORDED center frequencies (from
+      // recorded_powers), NOT the chronic-trend frequency. Frequencies are de-duplicated; the value
+      // range is read from the plotted series so the y-axis scale is stated explicitly.
+      const rp = (data.recorded_powers || []).filter((p) => p && p.center_hz != null);
+      const hzList = Array.from(new Set(rp.map((p) => Number(p.center_hz))))
+        .sort((a, b) => a - b).map((v) => v.toFixed(1));
+      const contactList = Array.from(new Set(rp.map((p) => String(p.label).trim())));
+      const freqText = hzList.length === 1 ? `${hzList[0]} Hz`
+        : hzList.length > 1 ? `${hzList.join(" / ")} Hz` : "sensing band";
+      const vals = col("powerdomain_biomarker_value").filter((v) => v !== null);
+      const vmin = vals.length ? Math.min(...vals) : null;
+      const vmax = vals.length ? Math.max(...vals) : null;
+      const rangeText = vmin != null ? ` · range ${vmin.toFixed(0)}–${vmax.toFixed(0)} a.u.` : "";
+      const nContacts = contactList.length;
+      const title = nContacts
+        ? `Power-domain band power @ ${freqText} — ${nContacts} contact${nContacts === 1 ? "" : "s"} pooled${rangeText}`
+        : `Power-domain band power${rangeText}`;
+      rows.push({
+        title,
+        short: "Power-domain band power",
+        unit: "Band power (device units, a.u.)",
+        traces: tr,
+        subtitle: nContacts
+          ? `Pooled across ${contactList.join(", ")} · recorded center ${freqText}`
+          : null,
+      });
     }
     const m = data.label_metric || "nrs";
     const painCol = pick(`powerdomain_${m}`, `td_${m}_min`, `td_${m}_mean`, m, "powerdomain_nrs", "td_nrs_min", "nrs");
@@ -160,7 +187,7 @@ function BiomarkerTimeline({ data, height }) {
           line: { color: tr.color, width: isDashRef ? 2 : 1.4, dash: tr.dash || "solid" },
           marker: { size: 3.5, color: tr.color },
           yaxis: yk, xaxis: "x", connectgaps: false,
-          hovertemplate: `${row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
+          hovertemplate: `${row.short || row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });
       });
       layout.annotations.push({
@@ -169,6 +196,15 @@ function BiomarkerTimeline({ data, height }) {
         showarrow: false, font: { size: 12, color: "#344767" },
         bgcolor: "rgba(255,255,255,0.7)",   // halo so the title reads over traces
       });
+      // Optional second line under the title (provenance detail) — smaller, same halo.
+      if (row.subtitle) {
+        layout.annotations.push({
+          xref: "paper", yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
+          xanchor: "left", yanchor: "top", text: row.subtitle,
+          showarrow: false, font: { size: 10, color: "#7E8794" },
+          bgcolor: "rgba(255,255,255,0.7)",
+        });
+      }
     });
 
     layout.xaxis = { domain: [0, 1], type: "date", anchor: "y", title: { text: "Time", font: { size: 12 } },
