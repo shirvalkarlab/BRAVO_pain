@@ -198,8 +198,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const tdSum = (summary && summary.timedomain) || {};
   const pdSum = (summary && summary.powerdomain) || {};
   // When a per-channel view is active, overlay its summary on the pooled one so the honest-perf
-  // bar reflects the selected channel's AUC.
-  const pdSumEff = boundKey ? { ...pdSum, ...(chronic.summary || {}) } : pdSum;
+  // bar reflects the selected channel's AUC. IMPORTANT: per-channel/aggregate summaries carry
+  // `auc_in_sample` but NOT the top-level `auc` key that the pooled summary has — so a naive spread
+  // leaves `pdSumEff.auc` pinned to the POOLED value and the in-sample-AUC bar never moves with the
+  // toggle. Derive `auc` from the bound summary's `auc_in_sample` (falling back to its own `auc`).
+  const pdSumEff = (() => {
+    if (!boundKey) return pdSum;
+    const cs = chronic.summary || {};
+    const merged = { ...pdSum, ...cs };
+    const csAuc = cs.auc != null ? cs.auc : cs.auc_in_sample;
+    if (csAuc != null) merged.auc = csAuc;
+    else delete merged.auc;   // bound channel has no AUC (e.g. single-class) -> don't show pooled AUC
+    return merged;
+  })();
   const chSuffix = safeChSel === "pooled" ? ""
     : (isHemiSel ? ` · ${selHemi} hemisphere` : ` · ${safeChSel}`);
   // View mode (declared HERE, not in the ROC block, because the honest-perf bar plot above the ROC
