@@ -34,6 +34,30 @@ def test_roc_downsampled_for_plot():
     assert roc["fpr"][0] <= 1e-9 and abs(roc["fpr"][-1] - 1.0) < 1e-9
 
 
+def test_sliding_window_emits_per_window_roc():
+    """Each sliding window carries a downsampled per-window ROC (fpr/tpr) alongside its AUC, so
+    the frontend can overlay one ROC curve per window. Endpoints anchored at 0 and 1; length capped."""
+    rng = np.random.default_rng(1)
+    n = 60 * 24 * 40                                                  # 40 days at 1-min resolution
+    lfp = rng.normal(size=n)
+    pain = (lfp + 0.5 * rng.normal(size=n) > 0).astype(float)
+    df = pd.DataFrame({
+        "timestamp": pd.date_range("2025-01-01", periods=n, freq="min"),
+        "LFP": lfp, "LFP_smoothed": lfp, "stim_amplitude": 0.0,
+        "pain_level": pain, "nrs": (pain * 6 + 2).astype(int),
+    })
+    out = analytics.sliding_window_analytics(df, train_days=4, test_days=4, sliding=True)
+    wins = [w for w in out["windows"] if w.get("auc") is not None]
+    assert wins, "expected at least one usable sliding window"
+    roc_wins = [w for w in wins if w.get("roc")]
+    assert roc_wins, "no window carried a per-window ROC curve"
+    for w in roc_wins:
+        roc = w["roc"]
+        assert 0 < len(roc["fpr"]) <= 60 and len(roc["fpr"]) == len(roc["tpr"])
+        assert roc["fpr"][0] <= 1e-9 and abs(roc["fpr"][-1] - 1.0) < 1e-9
+        assert all(0.0 <= x <= 1.0 for x in roc["fpr"]) and all(0.0 <= y <= 1.0 for y in roc["tpr"])
+
+
 def test_cluster_scatter_one_feature():
     df = _cv_df(n=3000)                                              # only 'nrs' present
     cs = analytics.cluster_scatter(df, kmeans_features=("nrs",))
@@ -245,6 +269,7 @@ def test_chronic_center_freqs_missing_is_safe():
 
 if __name__ == "__main__":
     test_roc_downsampled_for_plot()
+    test_sliding_window_emits_per_window_roc()
     test_cluster_scatter_one_feature()
     test_cluster_scatter_two_features()
     test_cluster_scatter_missing_features()

@@ -182,13 +182,13 @@ function Biomarkers() {
   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
   const summaryLine = (label, s) => {
     if (!s) return null;
-    const Line = ({ children, color = "text", bold = false }) => (
+    const Line = ({ children, color = "dark", bold = false }) => (
       <MDTypography variant="button" fontWeight={bold ? "medium" : "regular"} color={color} display="block">
         {children}
       </MDTypography>
     );
     // Small italic caption for honesty caveats (provenance, CI conditions, label source).
-    const Note = ({ children, color = "text" }) => (
+    const Note = ({ children, color = "dark" }) => (
       <MDTypography variant="caption" fontStyle="italic" color={color} display="block">
         {children}
       </MDTypography>
@@ -291,7 +291,7 @@ function Biomarkers() {
                         </MDTypography>
                       ) : null}
                       {data && data.timeline_points_full ? (
-                        <MDTypography variant="caption" color="text">
+                        <MDTypography variant="caption" color="dark">
                           {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
                         </MDTypography>
                       ) : null}
@@ -301,7 +301,7 @@ function Biomarkers() {
                   {computing ? (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
-                        <MDTypography variant="button" fontWeight="medium" color="text" display="block" mb={0.5}>
+                        <MDTypography variant="button" fontWeight="medium" color="dark" display="block" mb={0.5}>
                           {`Computing ${source === "both" ? "time-domain + power-domain" : source === "timedomain" ? "time-domain" : "power-domain"} biomarker on full-resolution data — this can take ~10–40 s…`}
                         </MDTypography>
                         <LinearProgress color="error" />
@@ -339,34 +339,34 @@ function Biomarkers() {
                             sx={{ borderRight: { md: "1.5px solid #1A1A1A" }, borderBottom: { xs: "1.5px solid #1A1A1A", md: "none" } }}>
                             <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
                               <MDBox>
-                                <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 12 }}>
+                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
                                   {"Pain metric (biomarker target)"}
                                 </MDTypography>
-                                <FormControl fullWidth size="small" sx={{ mt: 0.5 }}>
+                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
                                   <Select
                                     value={metric}
                                     onChange={(e) => setMetric(e.target.value)}
-                                    sx={{ fontSize: 14 }}
+                                    sx={{ fontSize: 16, fontWeight: 500 }}
                                   >
                                     {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                                      <MenuItem key={m.key} value={m.key} sx={{ fontSize: 14 }}>{m.label}</MenuItem>
+                                      <MenuItem key={m.key} value={m.key} sx={{ fontSize: 16 }}>{m.label}</MenuItem>
                                     ))}
                                   </Select>
                                 </FormControl>
                               </MDBox>
                               <Divider />
                               <MDBox>
-                                <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 12 }}>
+                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
                                   {"Binarization (high vs low pain label)"}
                                 </MDTypography>
-                                <FormControl fullWidth size="small" sx={{ mt: 0.5 }}>
+                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
                                   <Select
                                     value={strategy}
                                     onChange={(e) => setStrategy(e.target.value)}
-                                    sx={{ fontSize: 14 }}
+                                    sx={{ fontSize: 16, fontWeight: 500 }}
                                   >
                                     {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
-                                      <MenuItem key={s.key} value={s.key} sx={{ fontSize: 14 }}>{s.label}</MenuItem>
+                                      <MenuItem key={s.key} value={s.key} sx={{ fontSize: 16 }}>{s.label}</MenuItem>
                                     ))}
                                   </Select>
                                 </FormControl>
@@ -374,7 +374,7 @@ function Biomarkers() {
                               {strategy === "tertile" || strategy === "percentile" ? (
                                 <MDBox display="flex" flexDirection="column" gap={1}>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" color="text" sx={{ minWidth: 72, fontSize: 11 }}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
                                       {"Low ≤ pct"}
                                     </MDTypography>
                                     <Slider
@@ -384,7 +384,7 @@ function Biomarkers() {
                                     />
                                   </MDBox>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" color="text" sx={{ minWidth: 72, fontSize: 11 }}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
                                       {"High ≥ pct"}
                                     </MDTypography>
                                     <Slider
@@ -395,7 +395,7 @@ function Biomarkers() {
                                   </MDBox>
                                 </MDBox>
                               ) : null}
-                              <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 10 }}>
+                              <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
                                 {strategy === "tertile" || strategy === "percentile"
                                   ? "Days between the cuts are excluded from training."
                                   : strategy === "median"
@@ -445,7 +445,7 @@ function Biomarkers() {
                                 marks: [{ value: 0.25, label: "0.25" }, { value: 1, label: "1" }, { value: 3, label: "3" }, { value: 6, label: "6" }] },
                             ].map((c) => (
                               <MDBox key={c.lbl} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                                <MDTypography variant="button" color="text" sx={{ whiteSpace: "nowrap", minWidth: 150 }}>
+                                <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ whiteSpace: "nowrap", minWidth: 150, fontSize: 15 }}>
                                   {c.lbl}
                                 </MDTypography>
                                 <Slider
@@ -472,7 +472,7 @@ function Biomarkers() {
                           </MDBox>
                         ) : null}
                         {(showSlidingSwitch && !slidingWindow) ? (
-                          <MDTypography variant="button" color="text">
+                          <MDTypography variant="button" fontWeight="medium" color="dark">
                             {"Power-domain: using all data (one threshold, no sliding window)."}
                           </MDTypography>
                         ) : null}
@@ -483,7 +483,7 @@ function Biomarkers() {
                   {!data && !alert ? (
                     <Grid item xs={12}>
                       <MDBox p={2}>
-                        <MDTypography variant="button" color="text">
+                        <MDTypography variant="button" color="dark">
                           {"Choose a source, pain metric, and (for Power-domain) the window above, then click "}
                           <strong>Compute biomarker now</strong>{" to run the analysis."}
                         </MDTypography>
@@ -497,7 +497,7 @@ function Biomarkers() {
                         <MDTypography variant="h6" color="error" fontSize={18}>
                           {data.message}
                         </MDTypography>
-                        <MDTypography variant="button" color="text">
+                        <MDTypography variant="button" color="dark">
                           {"Upload a Percept session for this participant and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
                         </MDTypography>
                       </MDBox>
@@ -508,14 +508,14 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
                         {data.label_metric ? (
-                          <MDTypography variant="button" fontWeight="medium" color="text" display="block">
+                          <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
                             {"Biomarker computed against: "}
                             {(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                               .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
                           </MDTypography>
                         ) : null}
                         {data.label_strategy ? (
-                          <MDTypography variant="caption" color="text" display="block">
+                          <MDTypography variant="caption" color="dark" display="block">
                             {"Binarized by: "}
                             {(((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS)
                               .find((s) => s.key === data.label_strategy) || {}).label || data.label_strategy}
@@ -553,13 +553,13 @@ function Biomarkers() {
                           );
                           return (
                             <MDBox display="flex" flexDirection="column" alignItems="center" mt={0.5}>
-                              <MDTypography variant="button" fontWeight="medium" color="text" mb={0.25}>
+                              <MDTypography variant="button" fontWeight="medium" color="dark" mb={0.25}>
                                 {"Recorded power channels"}
                               </MDTypography>
                               <MDBox display="flex" flexDirection="row" gap={4} justifyContent="center" flexWrap="wrap">
                                 {left.length > 0 && (
                                   <MDBox display="flex" flexDirection="column" alignItems="center">
-                                    <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 11, textDecoration: "underline" }}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11, textDecoration: "underline" }}>
                                       {"Left"}
                                     </MDTypography>
                                     {left.map(rowLine)}
@@ -567,7 +567,7 @@ function Biomarkers() {
                                 )}
                                 {right.length > 0 && (
                                   <MDBox display="flex" flexDirection="column" alignItems="center">
-                                    <MDTypography variant="caption" fontWeight="medium" color="text" sx={{ fontSize: 11, textDecoration: "underline" }}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11, textDecoration: "underline" }}>
                                       {"Right"}
                                     </MDTypography>
                                     {right.map(rowLine)}
@@ -581,7 +581,7 @@ function Biomarkers() {
                                 </MDTypography>
                               )}
                               {noFreq && (
-                                <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
                                   {"Sensing-band center frequency not present in this device export."}
                                 </MDTypography>
                               )}

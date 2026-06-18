@@ -83,7 +83,7 @@ function Section({ title, subtitle, panels, header = null }) {
       <MDBox mt={4} mb={2}>
         {/* Section header at ~2x the prior size for clear hierarchy between TD / power-domain. */}
         <MDTypography variant="h3" fontSize={40} fontWeight="bold">{title}</MDTypography>
-        {subtitle ? <MDTypography variant="body2" color="text">{subtitle}</MDTypography> : null}
+        {subtitle ? <MDTypography variant="body2" color="dark">{subtitle}</MDTypography> : null}
       </MDBox>
       <Grid container spacing={3}>
         {header}
@@ -146,6 +146,31 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     ? " Chronic sensing band: " + Object.keys(chronicHz)
         .map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
     : "";
+
+  // Short on-plot provenance string: which sensing band (center frequency) and which contact/
+  // channel the power-domain signal comes from, so a reader never has to ask "power from WHERE?".
+  // When a single channel is selected, name it; pooled view lists each hemisphere's chronic Hz.
+  const powerProvenance = (() => {
+    if (safeChSel !== "pooled") {
+      const hzKey = Object.keys(chronicHz).find((h) => safeChSel.startsWith(h.replace("Hemisphere", "")));
+      const hz = hzKey ? chronicHz[hzKey] : null;
+      return `${safeChSel}${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`;
+    }
+    const parts = Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} @ ${Number(chronicHz[h]).toFixed(1)} Hz`);
+    return parts.length ? parts.join(" · ") : null;
+  })();
+  // A short plotly annotation object pinning the provenance text to the top-left of a panel.
+  const provenanceAnn = powerProvenance ? [{
+    xref: "paper", yref: "paper", x: 0.0, y: 1.06, xanchor: "left", yanchor: "bottom",
+    text: `Source: ${powerProvenance}`, showarrow: false,
+    font: { size: 11, color: "#344767" },
+  }] : [];
+
+  // Time-ordered sensing reconfiguration timeline (center frequency or channel changed mid-record).
+  // Emitted by the backend only when a real post-initial change occurred. Used to draw dashed
+  // vertical change-markers over the sliding-window-over-time plot.
+  const configChanges = (pdRoot.sensing_config_changes || [])
+    .filter((c) => Array.isArray(c.changed) && !(c.changed.length === 1 && c.changed[0] === "initial"));
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
@@ -248,7 +273,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
               text: `|R|=${obsR.toFixed(2)}${freqLabel}`,
               showarrow: false, font: { color: permColor, size: 10 } }] : [],
           }} />
-          <MDTypography variant="caption" color="text" display="block" mt={0.5}>
+          <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
             {obsR != null
               ? `${chLabel}${freqLabel}: |R|=${obsR.toFixed(2)}, perm p=${pStr} ` +
                 `(${tdSum.perm_n || tdSum.perm_null.length} block-shuffles, ~${nCells}-cell search).`
@@ -299,7 +324,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
               yaxis: { title: pain },
               legend: { orientation: "h", y: -0.2 },
             }} />
-            <MDTypography variant="caption" color="text" display="block" mt={0.5}>
+            <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
               {`Each dot = one recording session. R=${(peakR || 0).toFixed(2)} at the peak frequency.`}
             </MDTypography>
           </Panel>
@@ -408,23 +433,47 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       mk("threshold", "Threshold", { yaxis: "y2", mode: "lines",
         line: { width: 1.5, color: "#7E8794", dash: "dash" }, hovertemplate: "thr=%{y:.1f}<extra></extra>" }),
     ];
+    // Dashed vertical change-markers: a line + label at each timepoint where the sensing center
+    // frequency or source channel changed during the record. Each marker is annotated with what
+    // changed and the new config, so a mid-record reconfiguration is unmistakable on the time axis.
+    // When a single channel is selected, show only that hemisphere's changes.
+    const relChanges = configChanges.filter((c) =>
+      safeChSel === "pooled" || safeChSel.startsWith(c.hemi.replace("Hemisphere", "")));
+    const changeShapes = relChanges.map((c) => ({
+      type: "line", x0: c.t, x1: c.t, yref: "paper", y0: 0, y1: 1,
+      line: { color: "#111111", width: 1.5, dash: "dash" },
+    }));
+    const changeAnns = relChanges.map((c, i) => {
+      const what = c.changed.join(" + ");
+      const hzTxt = c.center_hz != null ? `${Number(c.center_hz).toFixed(1)} Hz` : "";
+      const detail = [c.channel, hzTxt].filter(Boolean).join(" · ");
+      return {
+        x: c.t, yref: "paper", y: i % 2 === 0 ? 1.02 : 0.92, xanchor: "left", yanchor: "bottom",
+        text: `▸ ${c.hemi.replace("Hemisphere", "")} ${what} change<br>${detail}`,
+        showarrow: false, align: "left", font: { size: 9, color: "#111111" },
+        bgcolor: "rgba(255,255,255,0.7)",
+      };
+    });
     chPanels.push(
-      <Panel key="sw" title={`Sliding-window performance over time — LFP vs ${pain}${chSuffix}`} lg={12}>
+      <Panel key="sw" title={`Sliding-window performance over time — power vs ${pain}${chSuffix}`} lg={12}>
         <Fig height={360} traces={traces} layout={{
           xaxis: { type: "date", title: "Test window start" },
           yaxis: { title: "AUC / R / Sensitivity / Specificity", range: [-1.05, 1.05],
                    zeroline: true, zerolinewidth: 1 },
-          yaxis2: { title: "LFP threshold (device units)", overlaying: "y", side: "right",
+          yaxis2: { title: "Power threshold (device units)", overlaying: "y", side: "right",
                     showgrid: false },
           hovermode: "x unified",
-          // 0.5 reference for the AUC ceiling-vs-chance read
+          // 0.5 reference for the AUC ceiling-vs-chance read, plus any sensing-config change markers.
           shapes: [{ type: "line", x0: x[0], x1: x[x.length - 1], y0: 0.5, y1: 0.5, yref: "y",
-                     line: { color: "#C8CED5", width: 1, dash: "dot" } }],
+                     line: { color: "#C8CED5", width: 1, dash: "dot" } }, ...changeShapes],
+          annotations: [...provenanceAnn, ...changeAnns],
         }} />
         {swSummary ? (
-          <MDTypography variant="caption" color="text" display="block" mt={1} fontStyle="italic" sx={{ fontSize: 11 }}>
-            {`Reporting ${swSummary.n_with_auc} of ${swSummary.n_total} candidate windows where both pain classes appeared in the test fold (within an expansion cap of ${swSummary.max_test_days} days). ` +
-             `Skipped: ${swSummary.n_skipped_test_one_class} for one-class test folds (common with tertile binarization — the excluded middle leaves stretches of all-low or all-high days) and ${swSummary.n_skipped_no_data} for empty/degenerate folds.`}
+          <MDTypography variant="caption" color="dark" display="block" mt={1} fontStyle="italic" sx={{ fontSize: 11 }}>
+            {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
+             `Reporting ${swSummary.n_with_auc} of ${swSummary.n_total} candidate windows where both pain classes appeared in the test fold (within an expansion cap of ${swSummary.max_test_days} days). ` +
+             `Skipped: ${swSummary.n_skipped_test_one_class} for one-class test folds (common with tertile binarization — the excluded middle leaves stretches of all-low or all-high days) and ${swSummary.n_skipped_no_data} for empty/degenerate folds.` +
+             (relChanges.length ? ` Dashed vertical lines mark ${relChanges.length} sensing-config change(s) (center frequency or channel).` : "")}
           </MDTypography>
         ) : null}
       </Panel>
@@ -440,7 +489,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     const vals = [pdSumEff.auc, pdSumEff.balanced_accuracy, chanceLvl];
     const colors = [PALETTE[0], PALETTE[2], "#7E8794"];
     chPanels.push(
-      <Panel key="honest" title={`Honest performance: in-sample vs cross-validated — LFP vs ${pain}${chSuffix}`}>
+      <Panel key="honest" title={`Honest performance: in-sample vs cross-validated — power vs ${pain}${chSuffix}`}>
         <Fig height={320} traces={[{ x: labels, y: vals.map((v) => (v == null ? null : v)),
           type: "bar", marker: { color: colors, line: { color: "#344767", width: 0.5 } },
           text: vals.map((v) => (v == null ? "" : v.toFixed(2))), textposition: "outside",
@@ -451,7 +500,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
             shapes: [{ type: "line", x0: -0.5, x1: 2.5,
               y0: chanceLvl, y1: chanceLvl,
               line: { color: "#7E8794", width: 1, dash: "dot" } }] }} />
-        <MDTypography variant="caption" color="text" display="block" mt={1} sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
           {`Chance for BALANCED accuracy is 0.50 regardless of class imbalance (sens & spec each ` +
            `0.5 at chance). ` +
            (pdSumEff.majority_accuracy != null
@@ -464,20 +513,74 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       </Panel>
     );
   }
+  // ROC panel. Build it whenever there is at least one curve to draw. Two overlays, each a labeled
+  // legend entry so the reader can tell the signals apart:
+  //   (1) PER-SIGNAL — when "All contacts" is selected and the backend split the stream per
+  //       channel, draw one ROC per channel (its own AUC in the legend) plus the pooled curve.
+  //       When a single channel is selected, draw just that channel's curve.
+  //   (2) PER-WINDOW — when a sliding window is active, overlay each window's ROC as a faint line,
+  //       so the spread of operating curves over time is visible (one representative window labeled
+  //       in the legend; the rest share a legend group to avoid a 30-entry legend).
   const roc = chronic.roc || null;
-  if (roc && roc.fpr && roc.fpr.length) {
-    const traces = [
-      { x: roc.fpr, y: roc.tpr, name: `ROC (AUC=${(roc.auc ?? 0).toFixed(3)})`, type: "scatter", mode: "lines",
-        line: { width: 3, color: PALETTE[0] }, fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
-        hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" },
-      { x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
-        line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" },
-    ];
+  const rocTraces = [];
+  // (1) Per-signal curves.
+  if (safeChSel === "pooled" && channelKeys.length >= 1) {
+    channelKeys.forEach((k, i) => {
+      const r = perChannel[k] && perChannel[k].roc;
+      if (r && r.fpr && r.fpr.length) {
+        rocTraces.push({ x: r.fpr, y: r.tpr, name: `${k} (AUC=${(r.auc ?? 0).toFixed(3)})`,
+          type: "scatter", mode: "lines", line: { width: 2.5, color: PALETTE[i % PALETTE.length] },
+          hovertemplate: `${k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+      }
+    });
+    if (roc && roc.fpr && roc.fpr.length) {
+      rocTraces.push({ x: roc.fpr, y: roc.tpr, name: `All contacts (AUC=${(roc.auc ?? 0).toFixed(3)})`,
+        type: "scatter", mode: "lines", line: { width: 3, color: "#000000", dash: "solid" },
+        hovertemplate: "All contacts<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>" });
+    }
+  } else if (roc && roc.fpr && roc.fpr.length) {
+    rocTraces.push({ x: roc.fpr, y: roc.tpr,
+      name: `${safeChSel === "pooled" ? "All contacts" : safeChSel} (AUC=${(roc.auc ?? 0).toFixed(3)})`,
+      type: "scatter", mode: "lines", line: { width: 3, color: PALETTE[0] },
+      fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
+      hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
+  }
+  // (2) Per-window curves (sliding window active). Drawn faint; first one labeled, rest grouped.
+  const swForRoc = Array.isArray(chronic.sliding_window)
+    ? chronic.sliding_window : (chronic.sliding_window && chronic.sliding_window.windows) || [];
+  const windowRocs = swForRoc.filter((w) => w.roc && w.roc.fpr && w.roc.fpr.length);
+  if (windowRocs.length) {
+    windowRocs.forEach((w, i) => {
+      const dateLbl = (w.test_start || "").slice(0, 10);
+      rocTraces.push({ x: w.roc.fpr, y: w.roc.tpr,
+        name: i === 0 ? `Per-window ROC (${windowRocs.length} windows)` : "per-window",
+        legendgroup: "perwindow", showlegend: i === 0,
+        type: "scatter", mode: "lines",
+        line: { width: 1, color: "rgba(213,94,0,0.45)" },
+        hovertemplate: `window ${dateLbl}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+    });
+  }
+  if (rocTraces.length) {
+    rocTraces.push({ x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
+      line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
+    const perWinNote = windowRocs.length
+      ? ` · ${windowRocs.length} per-window curves` : "";
     chPanels.push(
-      <Panel key="roc" title={`ROC curve — power-domain LFP vs ${pain}${chSuffix} (in-sample)`}>
-        <Fig height={340} traces={traces} layout={{
+      <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${perWinNote}`}>
+        <Fig height={360} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
-          yaxis: { title: "True positive rate", range: [-0.02, 1.02] } }} />
+          yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
+          legend: { orientation: "h", y: -0.2 },
+          annotations: provenanceAnn }} />
+        {powerProvenance ? (
+          <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
+            {`Power signal from ${powerProvenance}.` +
+             (channelKeys.length >= 1 && safeChSel === "pooled"
+               ? " Each colored curve is one bipolar sensing contact; the black curve pools all contacts."
+               : "") +
+             (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
+          </MDTypography>
+        ) : null}
       </Panel>
     );
   }
@@ -488,22 +591,26 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
     chPanels.push(
-      <Panel key="dist" title={`Power-domain LFP band-power distribution + Otsu split${chSuffix}`}>
+      <Panel key="dist" title={`Power band-power distribution + Otsu split${chSuffix}`}>
         <Fig height={340} traces={[{
           x: centers, y: dist.counts, type: "bar",
           marker: { color: PALETTE[0], line: { width: 0 } }, opacity: 0.85,
           hovertemplate: "band power=%{x:.1f}<br>%{y:,} samples<extra></extra>",
         }]}
           layout={{
-            xaxis: { title: "Power-domain LFP band power (device units, 1st–99th pct display range)" },
+            xaxis: { title: "Power band power (device units, 1st–99th pct display range)" },
             yaxis: { title: "Sample count" }, bargap: 0.04,
             shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
               y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : [],
-            annotations: dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
-              text: `Otsu = ${dist.otsu.toFixed(1)}`, showarrow: false,
-              font: { color: PALETTE[1], size: 11 }, xanchor: "left", yanchor: "bottom" }] : [] }} />
-        <MDTypography variant="caption" color="text" display="block" mt={1} sx={{ fontSize: 11 }}>
-          {`${(dist.n_total || 0).toLocaleString()} samples; histogram is plotted over the robust ` +
+            annotations: [
+              ...(dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
+                text: `Otsu = ${dist.otsu.toFixed(1)}`, showarrow: false,
+                font: { color: PALETTE[1], size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
+              ...provenanceAnn,
+            ] }} />
+        <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
+          {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
+           `${(dist.n_total || 0).toLocaleString()} samples; histogram is plotted over the robust ` +
            `1st–99th percentile so the bulk is visible. ` +
            (dist.n_clipped ? `${dist.n_clipped.toLocaleString()} extreme outlier sample(s) sit off-range (Otsu still computed on all data).` : "")}
         </MDTypography>
@@ -579,7 +686,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
             layout={{ barmode: "overlay", xaxis: { title: name },
             yaxis: { title: "PRO observations (days)" }, legend: { orientation: "h", y: -0.25 },
             shapes, annotations: anns }} />
-          <MDTypography variant="caption" color="text" display="block" mt={1}>
+          <MDTypography variant="caption" color="dark" display="block" mt={1}>
             {`Daily ${name} split into high vs low pain by the ${STRAT_LABEL[binStrategy] || binStrategy}, ` +
              `with the cut computed on the daily distribution (not the density-weighted samples). ` +
              (isTertile
@@ -606,7 +713,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const channelToggle = channelKeys.length >= 1 ? (
     <Grid item xs={12}>
       <MDBox mt={2} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-        <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
+        <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
           {"Sensing contact (bipolar):"}
         </MDTypography>
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
@@ -616,7 +723,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
         </ToggleButtonGroup>
-        <MDTypography variant="caption" color="text" fontStyle="italic" sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
             ? "All bipolar sensing contacts merged into one threshold (legacy view)."
             : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
@@ -631,7 +738,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
                subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
-               subtitle={"Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, LFP distribution, and pain clusters." + chronicHzText}
+               subtitle={"Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, power distribution, and pain clusters." + chronicHzText}
                panels={chPanels}
                header={channelToggle} />
     </>

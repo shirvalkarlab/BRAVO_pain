@@ -11,9 +11,10 @@
 ## NOW — current state (most recent sessions)
 
 ### Latest first: what to know before editing
-- **Branch/commit:** `PS_biomarker_module` @ `5b20c48`, working tree clean, all work committed (not yet
-  pushed — `git push origin PS_biomarker_module` when ready). Latest biomarker bundle
-  `Client/build/static/js/main.4bd0e67d.js`.
+- **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
+  clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.3eec6e4f.js`
+  (was `main.4bd0e67d.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
   cleanly in the harness. The container auto-runs `migrate` on start, so they should be applied on the
@@ -114,6 +115,36 @@ auto-select. Live **binarization preview** card recomputes client-side.
 - WebSocket `/socket/notification`: confirmed a **missing feature** (HTTP-only ASGI, no Channels
   consumer), not a regression. Per decision, made it **fail quietly** (no console spam, no reconnect);
   `onmessage` kept so a future Channels+Redis backend works with no frontend change.
+
+**Biomarker UI enhancement pass (DONE — bundle `main.3eec6e4f.js`):** acted on the user's review of the
+Pain Biomarkers card. Frontend = `Client/src/views/Reports/Biomarkers/{index,BinarizationPreview,
+BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + `bravo_service.py`.
+- **Typography & contrast:** left-panel "Pain metric" / "Binarization" labels enlarged (17px bold) and
+  the Select/MenuItem option text to 16px; every light-gray caption (`color="text"`=#7b809a) across all
+  three components switched to `color="dark"` (#344767) per the user "too light" note.
+- **Binarization preview correctness (the important fix):** the card was labeling the RAW PRO report
+  count "N daily PRO observations" (e.g. 679 reports ≠ days) AND computing its cut on the raw report
+  list — disagreeing with the backend, which fits the cut on the **daily-mean** distribution
+  (`adapter._threshold_pain_level`, `daily_broadcast=True`). `BinarizationPreview.js` now aggregates the
+  report points to one value per calendar day (daily mean) before the cut, so the preview equals the
+  detector. Header reads "N PRO reports across M days"; the Low/High/Excluded badges and the summary
+  caption report BOTH day counts and raw-sample counts.
+- **Per-signal + per-window ROC overlay:** ROC panel overlays one curve per bipolar contact (each AUC in
+  the legend) plus a pooled black curve in "All contacts" view, and faint per-window ROC curves when a
+  sliding window is active. Required a backend add: `sliding_window_analytics` now emits a downsampled
+  per-window `roc:{fpr,tpr}` (test-fold, oriented AUC≥0.5, ≤60 vertices) on each window. +regression test.
+- **Power-domain relabel + provenance:** power-domain panel titles/axes "LFP" → "Power" (the chronic
+  trend is on-board band POWER, not streaming LFP); time-domain streaming-LFP labels left intact. Each
+  power panel (ROC, distribution, sliding-window) now annotates the source channel + sensing center
+  frequency (`powerProvenance` from `chronic_center_hz`/per-channel selection).
+- **Sensing-config change markers:** `bravo_service._compute_analytics` now emits
+  `powerdomain.sensing_config_changes` — a per-hemisphere, time-ordered list of `{hemi,t,center_hz,
+  channel,changed[]}`, only when a real post-initial change occurs. The sliding-window-over-time panel
+  draws a dashed vertical line + label at each change so a mid-record frequency/channel switch is clear.
+- **Tests:** all Biomarkers suites green in `rcs_v14_analysis` (test_analytics incl. the new per-window
+  ROC test, test_pipeline_stats, test_stats_utils, test_adapter, test_process_redcap). NOTE: the
+  `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
+  on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into

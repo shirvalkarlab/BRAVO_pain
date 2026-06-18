@@ -1,8 +1,11 @@
 /**
  * BinarizationPreview — live histogram of the selected pain score with the strategy's high/low
- * cuts and class counts overlaid. Pure client-side: takes the raw daily PRO values, the strategy
- * key, and the percentile sliders, and recomputes every render so the figure updates the moment
- * the user drags a slider or changes the strategy (no backend roundtrip).
+ * cuts and class counts overlaid. Pure client-side: takes the raw PRO report points, aggregates
+ * them to ONE value per calendar day (the daily mean — matching the backend's daily_broadcast
+ * labeler so the preview's cut equals the detector's cut), then recomputes every render so the
+ * figure updates the moment the user drags a slider or changes the strategy (no backend roundtrip).
+ * Class counts are reported in BOTH calendar days (the unit the detector trains on) and the raw
+ * PRO samples those days carry.
  *
  * Sits in the top controls card alongside the strategy selector so the user can SEE exactly which
  * days will be labeled high vs low BEFORE clicking "Compute biomarker". Renders identically on
@@ -92,30 +95,58 @@ function chooseBins(vals) {
 function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, metricLabel, loading }) {
   const ref = useRef(null);
 
-  // Strip nulls/NaNs once; cuts and bins are computed on the cleaned values.
-  const vals = useMemo(() => (points || []).map((p) => p.v)
-    .filter((v) => typeof v === "number" && Number.isFinite(v)), [points]);
+  // Aggregate the raw PRO reports to ONE value per calendar day (the mean of that day's reports),
+  // EXACTLY as the backend labeler does (adapter._threshold_pain_level with daily_broadcast=True:
+  // it groups samples by day, takes the daily mean, and fits the cut on that daily distribution —
+  // then broadcasts each day's label back to its samples). Computing the preview cut on the raw
+  // report list instead would let heavily-reported days bias the split and would disagree with the
+  // detector. Each point's `t` is an ISO-ish timestamp ("2025-01-15 12:30:00"); the day key is its
+  // first 10 chars. We keep, per day, the daily mean AND how many raw reports fell on that day, so
+  // the card can report both "days" and "raw samples" for every class.
+  const dayAgg = useMemo(() => {
+    const byDay = {};
+    for (const p of points || []) {
+      const v = p && p.v;
+      if (typeof v !== "number" || !Number.isFinite(v)) continue;
+      const day = p.t ? String(p.t).slice(0, 10) : null;
+      if (!day) continue;
+      (byDay[day] = byDay[day] || { sum: 0, n: 0 });
+      byDay[day].sum += v; byDay[day].n += 1;
+    }
+    return Object.keys(byDay).sort().map((day) => ({
+      day, mean: byDay[day].sum / byDay[day].n, nSamples: byDay[day].n,
+    }));
+  }, [points]);
+
+  // The daily-mean values are what the cut and the histogram are computed over (the x-axis is a
+  // distribution of DAYS, not reports).
+  const vals = useMemo(() => dayAgg.map((d) => d.mean), [dayAgg]);
+  // Total raw PRO reports (samples) behind those days — for the honest "N reports across M days".
+  const nReports = useMemo(() => dayAgg.reduce((s, d) => s + d.nSamples, 0), [dayAgg]);
 
   const cuts = useMemo(() => computeCuts(vals, strategy, percentileLow, percentileHigh),
                        [vals, strategy, percentileLow, percentileHigh]);
 
-  // Class counts and bin assignments for the trace coloring.
+  // Class counts: DAYS (one per calendar day) AND the raw SAMPLES (reports) those days carry.
+  // The detector trains on days (each day one label, broadcast to its samples), so days is the
+  // primary count; samples is shown alongside so the clinician knows the underlying report volume.
   const stats = useMemo(() => {
-    if (!vals.length || cuts.kind === "none") return { nLow: 0, nHigh: 0, nMid: 0 };
-    if (cuts.kind === "two-cut") {
-      let nLow = 0, nHigh = 0, nMid = 0;
-      for (const v of vals) {
-        if (v <= cuts.lowCut) nLow++;
-        else if (v >= cuts.highCut) nHigh++;
-        else nMid++;
+    const zero = { nLowDays: 0, nHighDays: 0, nMidDays: 0, nLowSamp: 0, nHighSamp: 0, nMidSamp: 0 };
+    if (!dayAgg.length || cuts.kind === "none") return zero;
+    const acc = { ...zero };
+    for (const d of dayAgg) {
+      let cls;
+      if (cuts.kind === "two-cut") {
+        cls = d.mean <= cuts.lowCut ? "low" : (d.mean >= cuts.highCut ? "high" : "mid");
+      } else {
+        cls = d.mean <= cuts.cut ? "low" : "high";
       }
-      return { nLow, nHigh, nMid };
+      if (cls === "low") { acc.nLowDays++; acc.nLowSamp += d.nSamples; }
+      else if (cls === "high") { acc.nHighDays++; acc.nHighSamp += d.nSamples; }
+      else { acc.nMidDays++; acc.nMidSamp += d.nSamples; }
     }
-    const cut = cuts.cut;
-    let nLow = 0, nHigh = 0;
-    for (const v of vals) (v <= cut ? nLow++ : nHigh++);
-    return { nLow, nHigh, nMid: 0 };
-  }, [vals, cuts]);
+    return acc;
+  }, [dayAgg, cuts]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -167,25 +198,25 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     // Class-count badges in the plot area — placed at the top-left (low) and top-right (high)
     // corners; the excluded middle (if any) sits centered. Sample annotations adapted from the
     // ps-scientific-visualization guidelines (sentence case, sans-serif, no chart junk).
-    const badge = (xRel, color, label, count) => ({
+    const badge = (xRel, color, label, nDays, nSamp) => ({
       xref: "paper", yref: "paper", x: xRel, y: 0.94, xanchor: "center", yanchor: "top",
-      text: `<b>${label}</b><br>${count.toLocaleString()} days`,
+      text: `<b>${label}</b><br>${nDays.toLocaleString()} days<br>${nSamp.toLocaleString()} samples`,
       showarrow: false, align: "center",
       font: { size: 11, color: "#FFFFFF" },
       bgcolor: color, bordercolor: color, borderpad: 4, opacity: 0.92,
     });
     if (cuts.kind === "two-cut") {
-      annotations.push(badge(0.10, LO, "Low", stats.nLow));
+      annotations.push(badge(0.10, LO, "Low", stats.nLowDays, stats.nLowSamp));
       // Excluded badge sits at the very BOTTOM-CENTER of the plot (bottom-anchored just above the
       // x-axis), clear of the staggered cut-line labels above the plot. Alpha is also lowered so it
       // reads as a translucent overlay — any bar behind it still shows through (combined fix:
       // bottom placement keeps it off the cut labels, lower alpha keeps it from occluding a bar).
-      annotations.push({ ...badge(0.50, MID, "Excluded", stats.nMid),
+      annotations.push({ ...badge(0.50, MID, "Excluded", stats.nMidDays, stats.nMidSamp),
                          y: 0.02, yanchor: "bottom", opacity: 0.78 });
-      annotations.push(badge(0.90, HI, "High", stats.nHigh));
+      annotations.push(badge(0.90, HI, "High", stats.nHighDays, stats.nHighSamp));
     } else if (cuts.kind === "one-cut") {
-      annotations.push(badge(0.18, LO, "Low", stats.nLow));
-      annotations.push(badge(0.82, HI, "High", stats.nHigh));
+      annotations.push(badge(0.18, LO, "Low", stats.nLowDays, stats.nLowSamp));
+      annotations.push(badge(0.82, HI, "High", stats.nHighDays, stats.nHighSamp));
     }
 
     const traces = [{
@@ -215,19 +246,23 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   return (
     <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>
       <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline" mb={0.25}>
-        <MDTypography variant="button" fontWeight="medium" color="text" sx={{ fontSize: 13 }}>
+        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
           {"Binarization preview"}
         </MDTypography>
-        <MDTypography variant="caption" color="text" sx={{ fontSize: 10, fontStyle: "italic" }}>
-          {vals.length ? `${vals.length} daily PRO observations` : (loading ? "loading…" : "no data yet")}
+        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, fontStyle: "italic" }}>
+          {vals.length
+            ? `${nReports.toLocaleString()} PRO reports across ${vals.length.toLocaleString()} days`
+            : (loading ? "loading…" : "no data yet")}
         </MDTypography>
       </MDBox>
       <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 380 }} />
-      <MDTypography variant="caption" color="text" sx={{ fontSize: 10, textAlign: "center" }}>
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, textAlign: "center" }}>
         {cuts.kind === "two-cut"
-          ? `Tertile cuts at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — middle ${stats.nMid} days excluded from training.`
+          ? `Cuts on the daily distribution at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — ` +
+            `${stats.nMidDays.toLocaleString()} days (${stats.nMidSamp.toLocaleString()} raw samples) ` +
+            `in the middle band excluded from training.`
           : cuts.kind === "one-cut"
-            ? `${strategy === "median" ? "Median" : "KMeans"} cut at ${cuts.cut?.toFixed(1)} — every day is labeled.`
+            ? `${strategy === "median" ? "Median" : "KMeans"} cut on the daily distribution at ${cuts.cut?.toFixed(1)} — every day is labeled (none excluded).`
             : "Adjust the strategy to preview the cut."}
       </MDTypography>
     </MDBox>

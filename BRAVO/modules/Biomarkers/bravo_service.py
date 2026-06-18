@@ -512,16 +512,57 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             # breaks the response; empty when no chronic recording carried a frequency.
             if isinstance(result.get("powerdomain"), dict):
                 chronic_hz = {}
+                # Per-recording (start_time, hz, channel) tuples, grouped by hemisphere, so we can
+                # both (a) keep the latest hz per hemisphere (legacy chronic_center_hz) and (b) emit
+                # a TIME-ORDERED change timeline marking where the sensing center frequency or the
+                # source channel switches during the record — the frontend draws a dashed marker at
+                # each change so a mid-record reconfiguration is unmistakable.
+                by_hemi = {}
                 for c in (chronic or []):
                     if not isinstance(c, dict) or c.get("Source") != "chronic":
                         continue
                     hz = c.get("CenterFrequencyHz")
                     chans = c.get("ChannelNames") or []
-                    hemi = str(chans[0]).split(" ")[0] if chans else ""
+                    chan = str(chans[0]) if chans else ""
+                    hemi = chan.split(" ")[0] if chan else ""
                     if hz is not None and hemi:
                         chronic_hz[hemi] = hz
+                    if hemi:
+                        ts = adapter._to_datetime(c.get("StartTime"))
+                        by_hemi.setdefault(hemi, []).append(
+                            {"t": ts, "hz": hz, "channel": chan})
                 if chronic_hz:
                     result["powerdomain"]["chronic_center_hz"] = chronic_hz
+                # Build the change timeline: within each hemisphere, sort by start time and keep only
+                # the points where (hz, channel) differs from the previous one (the first record is
+                # always emitted as the initial config). Each entry: {hemi, t (ISO), center_hz,
+                # channel, changed: ["frequency"|"channel"...]}. Empty when nothing changes.
+                changes = []
+                for hemi, recs in by_hemi.items():
+                    recs = [r for r in recs if r["t"] is not None and pd.notna(r["t"])]
+                    recs.sort(key=lambda r: r["t"])
+                    prev = None
+                    for r in recs:
+                        if prev is None:
+                            changes.append({"hemi": hemi, "t": r["t"].isoformat(),
+                                            "center_hz": r["hz"], "channel": r["channel"],
+                                            "changed": ["initial"]})
+                        else:
+                            diff = []
+                            if r["hz"] != prev["hz"]:
+                                diff.append("frequency")
+                            if r["channel"] != prev["channel"]:
+                                diff.append("channel")
+                            if diff:
+                                changes.append({"hemi": hemi, "t": r["t"].isoformat(),
+                                                "center_hz": r["hz"], "channel": r["channel"],
+                                                "changed": diff})
+                        prev = r
+                # Only surface the timeline if there is at least one real (post-initial) change —
+                # otherwise the single static config is already conveyed by chronic_center_hz.
+                if any(ch["changed"] != ["initial"] for ch in changes):
+                    changes.sort(key=lambda ch: ch["t"])
+                    result["powerdomain"]["sensing_config_changes"] = changes
         except Exception as e:
             result["powerdomain"] = {"error": str(e)}
 

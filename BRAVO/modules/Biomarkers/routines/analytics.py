@@ -396,11 +396,30 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
         except Exception:
             r = np.nan
 
+        # Per-window ROC curve (FPR/TPR on the held-out TEST fold) so the frontend can overlay one
+        # ROC per window when a sliding window is active. Orient the score so the LFP-high =
+        # pain-high direction gives AUC >= 0.5 (matches roc_analysis and the notebook's
+        # max(auc, 1-auc)); downsample to <= ROC_MAX_PTS monotone vertices (endpoints kept) so the
+        # payload stays small. Guarded: a degenerate test fold leaves roc absent (auc still set).
+        roc = None
+        try:
+            raw_auc = metrics.roc_auc_score(true, score)
+            use_score = score if raw_auc >= 0.5 else -score
+            fpr, tpr, _ = metrics.roc_curve(true, use_score)
+            ROC_MAX_PTS = 60
+            if len(fpr) > ROC_MAX_PTS:
+                idx = np.unique(np.linspace(0, len(fpr) - 1, ROC_MAX_PTS).astype(int))
+                fpr, tpr = fpr[idx], tpr[idx]
+            roc = {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr]}
+        except Exception:
+            roc = None
+
         windows.append({
             "test_start": test_start.isoformat(),
             "test_days_used": int(eff_test_days),
             "threshold": _f(best_thr), "sens": _f(sens), "spec": _f(spec),
             "acc": _f(acc), "auc": _f(auc), "r": _f(r),
+            "roc": roc,
         })
     n_with_auc = sum(1 for w in windows if w.get("auc") is not None)
     summary = {"n_total": len(windows) + n_skipped_one_class + n_skipped_no_data,
