@@ -147,7 +147,13 @@ def block_length_for(labels, n=None):
     both the scalar and the vectorized permutation paths so they always agree."""
     labels = np.asarray(labels, dtype=float)
     n = int(labels.size if n is None else n)
-    r1 = abs(lag1_autocorr(labels))
+    # Use the POSITIVE lag-1 autocorrelation only. Circular-block permutation exists to preserve
+    # PERSISTENCE (positive autocorrelation) by keeping nearby samples together; the block length is
+    # the persistence timescale -1/ln(r1). Negative lag-1 autocorrelation is anti-persistence (rapid
+    # alternation), which does NOT call for longer blocks -- taking abs() of it would inflate the
+    # block length, needlessly shrink the effective sample size, and make the permutation test
+    # over-conservative. So r1 <= 0 -> block length 1 (i.i.d. shuffle).
+    r1 = lag1_autocorr(labels)
     if r1 <= 0:
         return 1
     return int(np.clip(round(1.0 / max(1e-6, -np.log(max(r1, 1e-6)))), 1, max(1, n // 4)))

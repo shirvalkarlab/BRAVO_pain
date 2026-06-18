@@ -113,6 +113,10 @@ def test_block_length_for():
     for t in range(1, 400):
         ar[t] = 0.9 * ar[t - 1] + e[t]
     assert su.block_length_for(ar) > 1                          # strong autocorrelation -> longer block
+    # Anti-persistence (negative lag-1 autocorrelation) must NOT extend the block length: a strongly
+    # alternating series needs no long blocks, and taking abs() of r1 used to wrongly inflate it.
+    alt = np.tile([1.0, -1.0], 200)                             # lag-1 autocorr ~ -1
+    assert su.block_length_for(alt) == 1
 
 
 if __name__ == "__main__":
