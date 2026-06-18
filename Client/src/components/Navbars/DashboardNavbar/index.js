@@ -83,15 +83,27 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       return;
     };
 
-    let client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
+    // Live processing-queue notifications. The server-side WebSocket endpoint (/socket/notification)
+    // is NOT implemented (the ASGI app is HTTP-only, no Channels consumer), so this connection is
+    // expected to fail; the queue still updates on navigation/poll. Fail QUIETLY -- don't spam the
+    // console with "Connection Error"/"Connection Closed" on every page load, and don't reconnect.
+    // The onmessage handler is kept intact so that if a Channels backend is ever added, live updates
+    // work with no frontend change.
+    let client = null;
+    try {
+      client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
+    } catch (e) {
+      client = null;
+    }
+    if (client) {
     client.onerror = function() {
-      console.log('Connection Error');
+      // endpoint not implemented; ignore quietly
     };
     client.onopen = () => {
       
     };
     client.onclose = () => {
-      console.log('Connection Closed');
+      // expected when the endpoint is absent; ignore quietly
     };
 
     client.onmessage = (event) => {
@@ -125,9 +137,10 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
         }
       }
     };
+    }
 
     return () => {
-      client.close();
+      if (client) { try { client.close(); } catch (e) { /* already closed */ } }
     }
   }, []);
 

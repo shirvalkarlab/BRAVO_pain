@@ -77,15 +77,25 @@ function CustomizedAnalysis() {
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
-    let client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
+    // Live analysis-progress notifications. The /socket/notification WebSocket endpoint is NOT
+    // implemented server-side (HTTP-only ASGI, no Channels consumer), so this is expected to fail;
+    // analysis state still updates on navigation/refresh. Fail QUIETLY (no console spam, no
+    // reconnect). onmessage is kept so a future Channels backend works with no frontend change.
+    let client = null;
+    try {
+      client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
+    } catch (e) {
+      client = null;
+    }
+    if (client) {
     client.onerror = function() {
-      console.log('Connection Error');
+      // endpoint not implemented; ignore quietly
     };
     client.onopen = () => {
       
     };
     client.onclose = () => {
-      console.log('Connection Closed');
+      // expected when the endpoint is absent; ignore quietly
     };
 
     client.onmessage = (event) => {
@@ -109,9 +119,10 @@ function CustomizedAnalysis() {
         }
       }
     };
+    }
 
     return () => {
-      client.close();
+      if (client) { try { client.close(); } catch (e) { /* already closed */ } }
     }
   }, []);
 
