@@ -15,8 +15,8 @@
 #                       (default: all *.json). Use to filter a MIXED-patient folder, e.g.
 #                       --match 'rcs08' to skip other subjects.
 #   --host URL          BRAVO base URL (default: http://localhost)
-#   --email ADDR        login email   (default: demo@bravo.local)
-#   --password PW       login password (default: biomarker123)
+#   --email ADDR        login email    (or set BRAVO_UPLOAD_EMAIL)
+#   --password PW       login password (or set BRAVO_UPLOAD_PASSWORD; no default -- required)
 #   --institute NAME    institute (default: "" = the logged-in user's institute)
 #   --datatype TYPE     upload DataType (default: DefaultType — the working path for .json;
 #                       MedtronicJSON errors on missing automatic_concatenation)
@@ -29,7 +29,10 @@
 set -euo pipefail
 
 FOLDER="" PARTICIPANT="" MATCH="" HOST="http://localhost"
-EMAIL="demo@bravo.local" PASSWORD="biomarker123" INSTITUTE="" DATATYPE="DefaultType"
+# Credentials come from the environment (BRAVO_UPLOAD_EMAIL / BRAVO_UPLOAD_PASSWORD) or --email/
+# --password. No hardcoded default password -- a committed credential is a security risk and would
+# also stop working the moment the demo account changed.
+EMAIL="${BRAVO_UPLOAD_EMAIL:-}" PASSWORD="${BRAVO_UPLOAD_PASSWORD:-}" INSTITUTE="" DATATYPE="DefaultType"
 RECURSIVE=1
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +50,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$FOLDER" ] && [ -n "$PARTICIPANT" ] || { echo "ERROR: --folder and --participant are required" >&2; exit 2; }
 [ -d "$FOLDER" ] || { echo "ERROR: folder not found: $FOLDER" >&2; exit 2; }
+[ -n "$EMAIL" ] && [ -n "$PASSWORD" ] || { echo "ERROR: login credentials required -- pass --email/--password or set BRAVO_UPLOAD_EMAIL/BRAVO_UPLOAD_PASSWORD" >&2; exit 2; }
 
 JAR="$(mktemp)"; trap 'rm -f "$JAR"' EXIT
 echo "Logging in to $HOST as $EMAIL ..."

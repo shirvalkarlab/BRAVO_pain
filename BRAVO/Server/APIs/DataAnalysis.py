@@ -1125,8 +1125,11 @@ class QueryCustomizedAnalysis(RestViews.APIView):
                     analysis.metadata["results"] = False
 
             except Exception as e:
+                # Log the full traceback server-side; return a GENERIC message to the client. The raw
+                # str(e) can leak internal detail (paths, SQL fragments, library internals) to an API
+                # caller. The traceback above is in docker logs for diagnosis.
                 print(traceback.format_exc())
-                return Response(status=400, data={"message": str(e)})
+                return Response(status=400, data={"message": "Analysis execution failed. See server logs for details."})
             
             analysis.save()
             Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
