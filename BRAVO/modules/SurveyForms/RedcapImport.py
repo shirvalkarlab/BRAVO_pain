@@ -180,6 +180,12 @@ def build_instrument(df, instrument_name, metric_cols, timestamp_col, display_la
     questions = []
     for col in metric_cols:
         rng = _metric_range(col, df[col] if col in df.columns else None)
+        # The range is only a display/axis hint; never let a canonical hint understate the actual
+        # data (e.g. MPQ-SF sums can exceed the nominal 45). Values are stored verbatim regardless.
+        if col in df.columns:
+            obs = pd.to_numeric(df[col], errors="coerce").dropna()
+            if len(obs):
+                rng = [min(rng[0], float(np.floor(obs.min()))), max(rng[1], float(np.ceil(obs.max())))]
         questions.append({
             "variableName": str(col),
             "text": display_labels.get(col, _metric_label(col)),

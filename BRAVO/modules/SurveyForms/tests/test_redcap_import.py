@@ -129,3 +129,17 @@ def test_real_rcs08_export():
                                "mpq_sum", "mpq_sen", "mpq_aff", "electrocuting", "tingly"]
     # every Result row is 10 metrics + Time
     assert all(len(r["Result"][0]) == 11 for r in inst["records"])
+
+
+def test_range_never_understates_data():
+    # Canonical mpq_sum hint is [0,45] but MPQ-SF sums can exceed it; the saved range must cover
+    # the observed max so the axis hint never contradicts the stored value.
+    df = pd.DataFrame({
+        "mpq_sum": [10, 48, 30],
+        "date_time_s1_daily": ["2025-07-20", "2025-07-21", "2025-07-22"],
+    })
+    parsed = R.parse_export(df, instrument_name="X")[0]
+    q = parsed["FieldMapping"][0]["questions"][0]
+    assert q["max"] >= 48
+    # value preserved verbatim
+    assert any(r["Result"][0][0] == 48.0 for r in parsed["records"])
