@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.22d9baee.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.2febe4da.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,7 +13,7 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.22d9baee.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.2febe4da.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -146,7 +146,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.22d9baee.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.2febe4da.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
@@ -225,6 +225,34 @@ second review of the same card. Same files + `routines/stats_utils.py`.
   same Left-then-Right legend grouping, AND its peak detection currently takes the max SIGNED peak,
   not the max-MAGNITUDE peak — so a large negative correlation loses to a small positive one. Fix to
   use `abs()` magnitude for the dominant-peak pick.
+
+**Time-domain legend grouping, sliding default OFF, preview bins (DONE — see latest bundle below):**
+- **Time-domain PSD-correlation spectrum legend** now grouped by hemisphere, Left-then-Right, with
+  hemisphere color families (blue = Left, orange = Right; "Other" = green/pink last), Plotly
+  `legendgroup`+`legendgrouptitle` per side — same principle as the power-domain ROC and the skill.
+- **Max-MAGNITUDE peak: verified ALREADY CORRECT, no code change.** Audited every peak/argmax path:
+  band selection (`pipeline.py:146`, `argmax(|corr|)`, since commit `0f735bd`), the ★ spectrum
+  markers (`analytics.py` `find_peaks` on `absr`), and the peak-scatter (`argmax(absr)`) are all
+  magnitude-based. Proof from the saved RCS08 payload: the time-domain headline selected
+  `L 0⁻-2⁺ @ 26.7 Hz, r = −0.4526` — a NEGATIVE correlation that beat the strongest positive peak
+  (+0.355); a signed-max bug would have picked the +0.355. Composite flows through the identical
+  path (it only changes the label vector), so it's covered too. Added a code comment on the ★ trace
+  noting peaks are strongest-|R| (positive or negative).
+- **Sliding window now defaults OFF** (`index.js`: `useState(false)`).
+- **Power-domain sliding-window-over-time panel hidden when sliding is OFF.** The backend returns a
+  single `all_data:true` window when sliding=False; rendering a one-point "over time" line is
+  meaningless, so the panel is suppressed unless there's a genuine sliding run
+  (`slidingActive = !isAllDataOnly && (windows>0 || summary.n_total>1)`). The contact/hemisphere
+  TOGGLE is unaffected — it's the power-domain Section `header`, gated only on `channelKeys>=1`, so it
+  still shows with the SW panel gone. Section subtitle is now conditional on `slidingActive`.
+- **"Window 2026-05-18" ROC mislabel explained + fixed:** it was NOT a contact — it was the last
+  sliding window's per-window ROC overlay (pooled window starts were 2025-10-20 / 11-19 / 2026-04-03 /
+  05-18). The per-window ROC overlay now also excludes `all_data` windows, so the date-labeled curve
+  won't appear when sliding is off.
+- **Binarization preview bins → fixed 0.2 width** (per user). Replaced Freedman–Diaconis auto-count
+  with a constant `BIN_W = 0.2` anchored to a clean 0.2 grid (edges on …6.8/7.0/7.2…), 500-bin cap
+  guard; removed the now-unused `chooseBins` helper.
+- Tests: all Biomarkers suites green. Same Docker caveat (restart for tagged backend + `auc_perm`).
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into

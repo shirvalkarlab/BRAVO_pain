@@ -60,7 +60,7 @@ function Biomarkers() {
   const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
-  const [slidingWindow, setSlidingWindow] = useState(true);
+  const [slidingWindow, setSlidingWindow] = useState(false);
   const [windowMonths, setWindowMonths] = useState(1);   // committed window (training) length
   const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
   const [windowStep, setWindowStep] = useState(0.5);     // committed window step (months)

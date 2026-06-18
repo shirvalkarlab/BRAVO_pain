@@ -262,17 +262,38 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   if (spectrum && spectrum.channels && spectrum.channels.length) {
     const f = spectrum.freqs;
     const traces = [];
-    spectrum.channels.forEach((ch, ci) => {
-      const color = PALETTE[ci % PALETTE.length];
-      // Hover (not fixed labels) gives the value on demand, matching the other panels. The curve and
-      // its peaks share a color + legendgroup, so toggling the curve in the legend also hides its stars.
+    // Order the spectrum channels by hemisphere — LEFT group first, then RIGHT — and color each
+    // by its hemisphere family (blue = Left, orange = Right), so the legend reads anatomically
+    // grouped rather than interleaved (same principle as the power-domain ROC panel). Hemisphere
+    // from the channel's short label (leading L/R); anything else falls to an "Other" group last.
+    const specHemi = (ch) => {
+      const s = (ch.short || ch.name || "").trim();
+      return s[0] === "L" ? "Left" : (s[0] === "R" ? "Right" : "Other");
+    };
+    const OTHER_SHADES = ["#009E73", "#CC79A7", "#7E8794"];
+    const specShades = (h) => (h === "Left" ? LEFT_SHADES : h === "Right" ? RIGHT_SHADES : OTHER_SHADES);
+    const ordered = [];
+    ["Left", "Right", "Other"].forEach((h) => {
+      spectrum.channels.forEach((ch) => { if (specHemi(ch) === h) ordered.push({ ch, h }); });
+    });
+    const idxInHemi = {};
+    ordered.forEach(({ ch, h }, oi) => {
+      idxInHemi[h] = (idxInHemi[h] ?? -1) + 1;
+      const shades = specShades(h);
+      const color = shades[idxInHemi[h] % shades.length];
+      const isFirstInHemi = ordered.findIndex((o) => o.h === h) === oi;
+      // Hover (not fixed labels) gives the value on demand. The curve and its peaks share a color +
+      // legendgroup, so toggling the curve in the legend also hides its stars. Legend grouped by
+      // hemisphere (Left group, then Right) with a per-group title on the first member.
       traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines",
-        line: { width: 2, color }, connectgaps: false, legendgroup: ch.name,
+        line: { width: 2, color }, connectgaps: false, legendgroup: h,
+        legendgrouptitle: isFirstInHemi ? { text: `${h} hemisphere` } : undefined,
         hovertemplate: "%{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
       if (ch.peaks && ch.peaks.length) {
-        // Stars only MARK the peaks (no permanent text); the value is read by hovering.
+        // Stars MARK the peaks (the strongest |R| local maxima — positive OR negative — so a strong
+        // negative correlation is starred too); the value is read by hovering.
         traces.push({ x: ch.peaks.map((p) => p.freq), y: ch.peaks.map((p) => p.r),
-          type: "scatter", mode: "markers", legendgroup: ch.name, showlegend: false,
+          type: "scatter", mode: "markers", legendgroup: h, showlegend: false,
           marker: { symbol: "star", size: 12, color, line: { width: 1, color: "#fff" } },
           name: `${ch.name} peak`,
           hovertemplate: "peak · %{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
@@ -287,7 +308,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★ (significance FDR-corrected)`} lg={12}>
         <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
           yaxis: { title: `Correlation with ${pain} (R)`, range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.2, groupclick: "togglegroup" },
+          legend: { orientation: "h", y: -0.22, groupclick: "togglegroup" },
           shapes: fMax > FCAP ? [{ type: "rect", xref: "x", yref: "paper", x0: FCAP, x1: fMax,
             y0: 0, y1: 1, fillcolor: "#9E9E9E", opacity: 0.12, line: { width: 0 } },
             { type: "line", xref: "x", yref: "paper", x0: FCAP, x1: FCAP, y0: 0, y1: 1,
@@ -503,12 +524,14 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
   const swRaw = chronic.sliding_window;
   const swWindows = Array.isArray(swRaw) ? swRaw : (swRaw && swRaw.windows) || [];
   const swSummary = (swRaw && !Array.isArray(swRaw) && swRaw.summary) || null;
-  // Render the sliding-window-over-time panel whenever the backend returned a sliding_window object
-  // (windows OR a summary). Earlier this was gated on `swWindows.length`, so on sparse runs (sliding
-  // ON + tertile labels → many one-class test folds get skipped → empty windows array) the whole
-  // panel vanished and only the single all-data window (sliding OFF) ever showed. Now it always
-  // renders; an empty windows array shows the coverage caption explaining why instead of disappearing.
-  if (swWindows.length || swSummary) {
+  // When the sliding window is OFF the backend returns a single all-data window (`all_data:true`) —
+  // a "performance over time" line of one point conveys nothing, so suppress the whole panel in that
+  // case (per user: no sliding-window-over-time plot when sliding is off). The panel is meaningful
+  // only for a genuine sliding run (>=1 real time window). A sliding run that produced no scorable
+  // window (sparse one-class test folds) still renders, with the coverage caption explaining why.
+  const isAllDataOnly = swWindows.length > 0 && swWindows.every((w) => w && w.all_data);
+  const slidingActive = !isAllDataOnly && (swWindows.length > 0 || (swSummary && swSummary.n_total > 1));
+  if (slidingActive) {
     const x = swWindows.map((w) => w.test_start);
     // One dot per computed window, connected by a line (connectgaps spans honest one-class skips).
     const mk = (key, name, opts = {}) => ({ x, y: swWindows.map((w) => w[key]), name, type: "scatter",
@@ -692,10 +715,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
   }
-  // Per-window curves (sliding window active). Drawn faint; first one labeled, rest legend-grouped.
+  // Per-window curves (only for a genuine sliding run). Drawn faint; first one labeled, rest grouped.
+  // Exclude the all-data window (sliding OFF) — its single ROC is already the main curve, and
+  // overlaying it as a date-labeled "window" curve is what produced the confusing "Window <date>"
+  // legend entry.
   const swForRoc = Array.isArray(chronic.sliding_window)
     ? chronic.sliding_window : (chronic.sliding_window && chronic.sliding_window.windows) || [];
-  const windowRocs = swForRoc.filter((w) => w.roc && w.roc.fpr && w.roc.fpr.length);
+  const windowRocs = swForRoc.filter((w) => w.roc && w.roc.fpr && w.roc.fpr.length && !w.all_data);
   if (windowRocs.length) {
     windowRocs.forEach((w, i) => {
       const dateLbl = (w.test_start || "").slice(0, 10);
@@ -893,7 +919,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel }) 
                subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
-               subtitle={"Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, power distribution, and pain clusters." + chronicHzText}
+               subtitle={(slidingActive
+                 ? "Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, power distribution, and pain clusters."
+                 : "ROC, power distribution, and pain clusters (turn on the sliding window for performance-over-time).") + chronicHzText}
                panels={chPanels}
                header={channelToggle} />
     </>

@@ -76,21 +76,6 @@ function computeCuts(vals, strategy, lowPct, highPct) {
   return { kind: "one-cut", cut: (c0 + c1) / 2, label: "KMeans midpoint (1-D preview)" };
 }
 
-// Auto-bin count by Freedman–Diaconis (capped) — adapts to spread/skew without forcing the user
-// to think about it. Falls back to Sturges for small n.
-function chooseBins(vals) {
-  const n = vals.length;
-  if (n < 2) return 1;
-  if (n < 30) return Math.max(1, Math.ceil(Math.log2(n) + 1));   // Sturges
-  const sorted = [...vals].sort((a, b) => a - b);
-  const q1 = sorted[Math.floor(0.25 * (n - 1))];
-  const q3 = sorted[Math.floor(0.75 * (n - 1))];
-  const iqr = q3 - q1;
-  const range = sorted[n - 1] - sorted[0];
-  if (iqr <= 0 || range <= 0) return Math.max(1, Math.ceil(Math.log2(n) + 1));
-  const w = 2 * iqr / Math.cbrt(n);
-  return Math.min(60, Math.max(8, Math.round(range / w)));
-}
 
 function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, metricLabel, loading }) {
   const ref = useRef(null);
@@ -151,9 +136,15 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   useEffect(() => {
     if (!ref.current) return;
     if (!vals.length) { Plotly.purge(ref.current); return; }
-    const nBins = chooseBins(vals);
-    const vmin = Math.min(...vals), vmax = Math.max(...vals);
-    const binW = (vmax - vmin) / nBins || 1;
+    // Fixed bin width of 0.2 score units (per user request) — a constant, interpretable bin on the
+    // 0–10 pain scale, rather than an auto-chosen count. Anchor the left edge to a clean 0.2 grid so
+    // bin boundaries fall on …, 6.8, 7.0, 7.2, … (cut lines at e.g. 7.3/8.0 land predictably). A hard
+    // cap guards against a pathological range producing thousands of bins.
+    const BIN_W = 0.2;
+    const rawMin = Math.min(...vals), vmax = Math.max(...vals);
+    const vmin = Math.floor(rawMin / BIN_W) * BIN_W;          // align down to a 0.2 multiple
+    const binW = BIN_W;
+    const nBins = Math.max(1, Math.min(500, Math.ceil((vmax - vmin) / binW) || 1));
     // Build manual bins so each bin gets a per-class color (low/excluded/high) — Plotly's stacked
     // histogram can't color by cut value of the bin itself, so we precompute.
     const edges = Array.from({ length: nBins + 1 }, (_, i) => vmin + i * binW);
