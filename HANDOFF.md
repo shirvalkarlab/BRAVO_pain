@@ -15,8 +15,11 @@
   pushed — `git push origin PS_biomarker_module` when ready). Latest biomarker bundle
   `Client/build/static/js/main.4bd0e67d.js`.
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
-  `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) are all
-  applied on the user's MySQL (confirmed `[X]` for 0008/0009). Container auto-runs `migrate` on start.
+  `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
+  cleanly in the harness. The container auto-runs `migrate` on start, so they should be applied on the
+  user's MySQL — but this sandbox cannot reach Docker, so that has NOT been directly observed here.
+  Verify with `docker compose exec bravo-server python3 manage.py showmigrations Server | grep -E "0008|0009"`
+  (expect `[X]` on both).
 - **Commit identity:** every commit uses per-commit `GIT_AUTHOR_*`/`GIT_COMMITTER_*` =
   `Prasad Shirvalkar <prasad.shirvalkar@ucsf.edu>` + trailer `Co-Authored-By: Claude (Operon)
   <noreply@anthropic.com>`. NEVER write global git config (`~/.config/git/ignore` "Operation not
