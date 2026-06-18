@@ -162,6 +162,29 @@ def test_lfp_distribution_otsu_on_mad_filtered_data():
     assert d["n_total"] == 4003
 
 
+def test_power_pain_scatter_corr_and_outlier_exclusion():
+    """power_pain_scatter returns paired points + Pearson r/p over the MAD-inlier set; power outliers
+    are excluded and r recovers the planted correlation rather than being dragged by spikes."""
+    rng = np.random.default_rng(5)
+    n = 400
+    power = rng.normal(100, 15, n)
+    pain = 0.5 * power + rng.normal(0, 5, n)          # strong positive association
+    # Inject a few extreme power spikes with mismatched pain to test outlier handling.
+    power = np.concatenate([power, np.array([5e4, 6e4, -3e4])])
+    pain = np.concatenate([pain, np.array([0.0, 0.0, 100.0])])
+    df = pd.DataFrame({"LFP_smoothed": power, "nrs": pain})
+    d = analytics.power_pain_scatter(df, "nrs")
+    assert d["n_clipped"] >= 3, d["n_clipped"]                 # the spikes are excluded
+    assert d["r"] is not None and d["r"] > 0.5, d["r"]         # planted positive corr recovered
+    assert 0.0 <= d["p"] <= 1.0
+    assert len(d["x"]) == len(d["y"]) and len(d["x"]) >= 3
+    assert d["y_label"] == "nrs"
+    # Missing metric column -> safe empty result, no crash.
+    d2 = analytics.power_pain_scatter(df.rename(columns={"nrs": "vas"}), "nrs")
+    assert d2["r"] is None and d2["x"] == []
+    print("OK power_pain_scatter: r=%.3f p=%.2g n=%d clipped=%d" % (d["r"], d["p"], d["n"], d["n_clipped"]))
+
+
 def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
     """Sliding-corr time-span fix: with a SKEWED session distribution (dense early block + sparse
     recent tail, the RCS08 shape) plus one corrupt ~1677 StartTime, the window grid must (a) NOT be
@@ -277,6 +300,7 @@ if __name__ == "__main__":
     test_lfp_distribution_robust_range()
     test_corr_spectrum_enforces_50hz_cap()
     test_lfp_distribution_otsu_on_mad_filtered_data()
+    test_power_pain_scatter_corr_and_outlier_exclusion()
     test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates()
     test_power_center_freqs_standard_path()
     test_power_center_freqs_direct_hemisphere_key()

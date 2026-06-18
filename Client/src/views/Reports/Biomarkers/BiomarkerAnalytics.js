@@ -7,7 +7,7 @@
  * Self-contained via plotly.js-dist.
  */
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card, Grid, ToggleButton, ToggleButtonGroup } from "@mui/material";
@@ -181,14 +181,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const safeChSel = validSel ? chSel : "pooled";
   // Which underlying per_channel entry drives the single-summary panels: the contact itself for a
   // contact selection, the hemisphere aggregate for a hemisphere selection, else pooled (null).
-  const boundKey = useMemo(() => {
-    if (safeChSel === "pooled") return null;
-    if (isHemiSel) return aggKeyFor(selHemi);
-    return safeChSel;
-  }, [safeChSel, isHemiSel, selHemi, perChannel]); // eslint-disable-line react-hooks/exhaustive-deps
-  const chronic = useMemo(() => (
-    boundKey && perChannel[boundKey] ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot
-  ), [boundKey, pdRoot, perChannel]);
+  // Plain derivations (cheap, recomputed each render) — kept as plain consts so they sit cleanly
+  // before the early return without tripping rules-of-hooks; nothing downstream needs a stable ref.
+  const boundKey = safeChSel === "pooled" ? null : (isHemiSel ? aggKeyFor(selHemi) : safeChSel);
+  const chronic = boundKey && perChannel[boundKey]
+    ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot;
 
   if (!analytics) return null;
 
@@ -843,6 +840,54 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
           </MDTypography>
         ) : null}
+      </Panel>
+    );
+  }
+  // Dynamic power-vs-pain correlation scatter — the selected power biomarker against ONLY the
+  // selected pain score, with Pearson r and p, in its own panel. Binds to `chronic.power_pain_scatter`
+  // so it follows the contact/hemisphere toggle (pooled / hemisphere aggregate / single contact).
+  const pps = chronic.power_pain_scatter || null;
+  if (pps && Array.isArray(pps.x) && pps.x.length >= 3) {
+    const sx = pps.x, sy = pps.y;
+    // Least-squares fit for an overlaid trend line (purely visual; r/p come from the backend).
+    const n = sx.length;
+    const mx = sx.reduce((a, b) => a + b, 0) / n;
+    const my = sy.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0, sxx = 0;
+    for (let i = 0; i < n; i += 1) { sxy += (sx[i] - mx) * (sy[i] - my); sxx += (sx[i] - mx) ** 2; }
+    const slope = sxx > 0 ? sxy / sxx : 0;
+    const intercept = my - slope * mx;
+    const xMin = Math.min(...sx), xMax = Math.max(...sx);
+    const hemiColor = isContactView || isHemiSel ? meanColorFor(hemiOf(safeChSel) || selHemi || "Left") : PALETTE[0];
+    const rTxt = pps.r != null ? pps.r.toFixed(3) : "—";
+    const pTxt = pps.p != null ? fmtP(pps.p) : "—";
+    chPanels.push(
+      <Panel key="ppscatter" title={`Power vs ${pain} correlation${chSuffix} — r=${rTxt}, p=${pTxt}`}>
+        <Fig height={340} traces={[
+          { x: sx, y: sy, type: "scatter", mode: "markers", name: "sessions",
+            marker: { size: 5, color: hemiColor, opacity: 0.45, line: { width: 0 } },
+            hovertemplate: `band power=%{x:.1f}<br>${pain}=%{y:.2f}<extra></extra>` },
+          ...(sxx > 0 ? [{ x: [xMin, xMax], y: [intercept + slope * xMin, intercept + slope * xMax],
+            type: "scatter", mode: "lines", name: "linear fit",
+            line: { color: "#111111", width: 2, dash: "solid" }, hoverinfo: "skip" }] : []),
+        ]} layout={{
+          xaxis: { title: "Band power (device units, a.u.)" },
+          yaxis: { title: `${pain}` },
+          showlegend: false,
+          annotations: [...provenanceAnn, {
+            xref: "paper", yref: "paper", x: 0.98, y: 0.04, xanchor: "right", yanchor: "bottom",
+            text: `Pearson r = ${rTxt} · p = ${pTxt} · n = ${pps.n}`,
+            showarrow: false, font: { size: 12, color: "#344767" },
+            bgcolor: "rgba(255,255,255,0.7)" }] }} />
+        <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
+          {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
+           `Each dot is one chronic sample: smoothed band power vs the selected pain score (${pain}). ` +
+           `Pearson r = ${rTxt} (p = ${pTxt}, n = ${pps.n}` +
+           (pps.n_clipped ? `; ${pps.n_clipped} power outlier(s) excluded` : "") +
+           `). Pain is kept CONTINUOUS here (the ROC/Otsu panels binarize it); p is the ordinary ` +
+           `Pearson p, not corrected for the band search — the headline inference is the ` +
+           `permutation test on the AUC.`}
+        </MDTypography>
       </Panel>
     );
   }

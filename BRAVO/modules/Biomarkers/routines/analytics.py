@@ -492,6 +492,60 @@ def lfp_distribution(cv_df, bins=40):
             "n_total": int(lfp.size)}
 
 
+def power_pain_scatter(cv_df, label_metric, *, max_points=2000):
+    """Continuous power-biomarker vs continuous pain score, with Pearson r and p.
+
+    The ROC/Otsu panels treat pain as a BINARY label; this panel keeps pain CONTINUOUS and shows the
+    raw association — one point per chronic sample, x = smoothed band power (LFP_smoothed), y = the
+    selected pain score (the `label_metric` column carried onto cv_df). Returns the paired points plus
+    Pearson r and its two-sided p so the card can show the correlation of THIS contact's power against
+    ONLY the selected pain metric, updating with the toggle.
+
+    Outliers in power are excluded by the same MAD rule used for the Otsu histogram, so the scatter
+    and the distribution describe the same inlier set. p is the ordinary Pearson p (not corrected for
+    the band search — this is a descriptive per-contact panel, and the headline inference stays the
+    block-permutation perm_p elsewhere)."""
+    out = {"x": [], "y": [], "r": None, "p": None, "n": 0, "x_label": "band power",
+           "y_label": str(label_metric), "n_clipped": 0}
+    if cv_df is None or len(cv_df) == 0 or "LFP_smoothed" not in cv_df.columns:
+        return out
+    if label_metric not in cv_df.columns:
+        return out
+    sub = cv_df[["LFP_smoothed", label_metric]].dropna()
+    if len(sub) < 3:
+        return out
+    power = sub["LFP_smoothed"].astype(float).values
+    pain = sub[label_metric].astype(float).values
+    # MAD outlier rejection on power (consistent with lfp_distribution).
+    med = np.median(power)
+    mad = np.median(np.abs(power - med))
+    keep = np.abs(power - med) <= 3.0 * mad if (mad > 0 and power.size >= 3) else np.ones(power.size, dtype=bool)
+    n_clipped = int(np.count_nonzero(~keep))
+    if keep.sum() >= 3:
+        power, pain = power[keep], pain[keep]
+    else:
+        n_clipped = 0
+    r = p = None
+    if power.size >= 3 and np.std(power) > 0 and np.std(pain) > 0:
+        try:
+            from scipy.stats import pearsonr
+            rr, pp = pearsonr(power, pain)
+            r, p = float(rr), float(pp)
+        except Exception:
+            r = p = None
+    # Downsample points for the payload while keeping r/p over the full set.
+    n = int(power.size)
+    if n > max_points:
+        rng = np.random.default_rng(0)
+        idx = np.sort(rng.choice(n, size=max_points, replace=False))
+        px, py = power[idx], pain[idx]
+    else:
+        px, py = power, pain
+    out.update({"x": [float(v) for v in px], "y": [float(v) for v in py],
+                "r": r, "p": p, "n": n, "n_clipped": n_clipped})
+    return out
+
+
 def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):
     """KMeans pain-level clusters over the ACTUAL clustering feature(s) (cell 10), colored by the
     derived pain_level. Generic in the number of features so it renders for ANY selected metric:

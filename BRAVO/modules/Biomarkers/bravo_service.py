@@ -480,6 +480,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "sliding_window": lambda: analytics.sliding_window_analytics(cv_df, **sw_kwargs),
                 "roc": lambda: analytics.roc_analysis(cv_df),
                 "lfp_distribution": lambda: analytics.lfp_distribution(cv_df),
+                "power_pain_scatter": lambda: analytics.power_pain_scatter(cv_df, label_metric),
                 "cluster_scatter": lambda: analytics.cluster_scatter(cv_df, kmeans_features=kmeans_features),
                 "pain_binarization": lambda: analytics.pain_binarization(
                     cv_df, label_metric, kmeans_features=kmeans_features, pro_df=pro_df,
@@ -499,6 +500,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                         "sliding_window": (lambda d=ch_cv: analytics.sliding_window_analytics(d, **sw_kwargs)),
                         "roc": (lambda d=ch_cv: analytics.roc_analysis(d)),
                         "lfp_distribution": (lambda d=ch_cv: analytics.lfp_distribution(d)),
+                        "power_pain_scatter": (lambda d=ch_cv: analytics.power_pain_scatter(d, label_metric)),
                     }
                     per_ch_analytics[ch_label] = _run_parallel(ch_tasks)
                     # Carry the channel summary alongside so the panel can display per-channel AUC.
