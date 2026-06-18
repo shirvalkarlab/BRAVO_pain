@@ -634,26 +634,38 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     // entry per hemisphere, Left first.
     const swarmKeys = isContactView ? []
       : orderedContacts.filter((k) => (isHemiSel ? hemiOf(k) === selHemi : true) && perChannel[k] && perChannel[k].summary);
+    // A dot is plotted per bar ONLY where that contact has a finite value for that metric — a
+    // single-class contact (auc_in_sample/balanced_accuracy = null) must not be silently dropped by
+    // Plotly while still being counted in the caption. Track the distinct contacts that contribute
+    // AT LEAST ONE dot, so the caption count matches what's actually shown.
+    const finiteFor = (k, field) => { const v = perChannel[k].summary[field]; return typeof v === "number" && isFinite(v); };
+    const aucDotKeys = swarmKeys.filter((k) => finiteFor(k, "auc_in_sample"));
+    const baDotKeys = swarmKeys.filter((k) => finiteFor(k, "balanced_accuracy"));
+    const shownContacts = Array.from(new Set([...aucDotKeys, ...baDotKeys]));
     if (swarmKeys.length >= 2) {
       const jitter = (i, n) => (n === 1 ? 0 : -0.16 + (0.32 * i) / (n - 1));
       const drawSide = (h) => {
-        const keys = swarmKeys.filter((k) => hemiOf(k) === h);
-        if (!keys.length) return;
         const mean = meanColorFor(h);
         const sumOf = (k) => perChannel[k].summary;
-        const mk = (xc, field, showLegend) => barTraces.push({
-          x: keys.map((k, i) => xc + jitter(i, keys.length)),
-          y: keys.map((k) => sumOf(k)[field]), type: "scatter", mode: "markers",
-          name: `${h} contacts`, legendgroup: `swarm-${h}`, showlegend: showLegend,
-          marker: { size: 9, color: "#FFFFFF", line: { color: mean, width: 1.8 }, symbol: "circle" },
-          text: keys, hovertemplate: `%{text}<br>${field === "auc_in_sample" ? "in-sample AUC" : "CV balanced acc"}=%{y:.3f}<extra></extra>` });
-        mk(0, "auc_in_sample", true);
-        mk(1, "balanced_accuracy", false);
+        const mk = (xc, field, keysAll, showLegend) => {
+          const keys = keysAll.filter((k) => hemiOf(k) === h);
+          if (!keys.length) return;
+          barTraces.push({
+            x: keys.map((k, i) => xc + jitter(i, keys.length)),
+            y: keys.map((k) => sumOf(k)[field]), type: "scatter", mode: "markers",
+            name: `${h} contacts`, legendgroup: `swarm-${h}`, showlegend: showLegend,
+            marker: { size: 9, color: "#FFFFFF", line: { color: mean, width: 1.8 }, symbol: "circle" },
+            text: keys, hovertemplate: `%{text}<br>${field === "auc_in_sample" ? "in-sample AUC" : "CV balanced acc"}=%{y:.3f}<extra></extra>` });
+        };
+        // Legend entry shows once per side, on the first (AUC) trace that has any dot for that side.
+        const sideHasAuc = aucDotKeys.some((k) => hemiOf(k) === h);
+        mk(0, "auc_in_sample", aucDotKeys, sideHasAuc);
+        mk(1, "balanced_accuracy", baDotKeys, !sideHasAuc && baDotKeys.some((k) => hemiOf(k) === h));
       };
       // Left first, then Right — keeps the legend anatomically grouped.
       ["Left", "Right"].forEach(drawSide);
     }
-    const swarmContacts = swarmKeys; // alias used by caption/showlegend below
+    const swarmContacts = shownContacts; // contacts that actually contribute >=1 dot (caption/legend)
     // Permutation-null ceiling over the AUC bar (block-permuted daily labels).
     const ap = pdSumEff.auc_perm || null;
     const shapes = [{ type: "line", x0: -0.5, x1: 2.5, y0: chanceLvl, y1: chanceLvl,
@@ -683,7 +695,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
              ? `Dashed orange line = 95th-percentile AUC under ${ap.n_perm} circular-block label permutations (block=${ap.block} days, preserving pain autocorrelation); empirical p=${fmtP(ap.p_value)} for the observed AUC=${(ap.observed ?? 0).toFixed(2)}. `
              : "") +
            (swarmContacts.length >= 2
-             ? `Open dots are the ${swarmContacts.length} individual bipolar contacts the bars average. `
+             ? `Open dots show the per-contact value for each of the ${swarmContacts.length} bipolar contacts (one dot per contact that has that metric; single-class contacts have no value and are omitted). The bar is the POOLED detector, not the mean of the dots. `
              : "") +
            `In-sample AUC has no train/test split (optimistic); CV balanced accuracy is the held-out ` +
            `generalization estimate — near 0.5 means the in-sample AUC is not reproduced out-of-fold.` +
@@ -705,6 +717,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const rocTraces = [];
   const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
   const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
+  const drawnByHemi = {};   // hemisphere -> [contact keys actually plotted] (for honest provenance)
   if (!isContactView && groupHemis.length) {
     groupHemis.forEach((h) => {
       const shades = shadesFor(h);
@@ -712,6 +725,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         .map((k) => ({ k, r: rocFor(k) }))
         .filter((c) => c.r && c.r.fpr && c.r.fpr.length >= 2);
       if (!curves.length) return;
+      drawnByHemi[h] = curves.map((c) => c.k);
       // (a) Individual contacts, thin, drawn FIRST so the mean sits on top. Grouped per hemisphere.
       curves.forEach((c, i) => {
         rocTraces.push({ x: c.r.fpr, y: c.r.tpr, name: `${c.k} (AUC=${(c.r.auc ?? 0).toFixed(3)})`,
@@ -767,18 +781,36 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const isMeanView = meanAucLabels.length > 0;
     const titleNote = isMeanView ? ` · mean ${meanAucLabels.join(", ")}` : "";
     const perWinNote = windowRocs.length ? ` · ${windowRocs.length} per-window curves` : "";
+    // Provenance for THIS panel must describe only the contacts actually DRAWN — a hemisphere
+    // contact that is single-class (no ROC) is dropped from the curves and the mean, so it must not
+    // appear in the frequency list either (else "@ 3 Hz values" disagrees with "mean of 2 contacts").
+    // Built from drawnByHemi (group view) or the single selected contact.
+    const rocProvenance = (() => {
+      const hemis = Object.keys(drawnByHemi);
+      if (hemis.length) {
+        return ["Left", "Right"].filter((h) => drawnByHemi[h] && drawnByHemi[h].length)
+          .map((h) => { const t = recHzSummary(drawnByHemi[h]); const n = drawnByHemi[h].length;
+            return `${h} (${n} contact${n === 1 ? "" : "s"})${t ? ` @ ${t}` : ""}`; })
+          .join(" · ");
+      }
+      if (isContactView) { const hz = recHzFor(safeChSel); return `${safeChSel}${hz != null ? ` @ ${Number(hz).toFixed(1)} Hz` : ""}`; }
+      return powerProvenance;
+    })();
+    const rocProvAnn = rocProvenance ? [{ xref: "paper", yref: "paper", x: 0.0, y: 1.06,
+      xanchor: "left", yanchor: "bottom", text: `Source: ${rocProvenance}`, showarrow: false,
+      font: { size: 11, color: "#344767" } }] : [];
     chPanels.push(
       <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${titleNote}${perWinNote}`}>
         <Fig height={380} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
           legend: { orientation: "h", y: -0.22, groupclick: "toggleitem" },
-          annotations: provenanceAnn }} />
-        {powerProvenance ? (
+          annotations: rocProvAnn }} />
+        {rocProvenance ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
-            {`Power signal from ${powerProvenance}.` +
+            {`Power signal from ${rocProvenance}.` +
              (isMeanView
-               ? " Bold line = per-hemisphere mean ROC (vertical average of that hemisphere's bipolar contacts); thin lines behind it are the individual contacts (blue = Left, orange = Right). The two hemispheres are never averaged together (separate stimulation targets)."
+               ? " Bold line = per-hemisphere mean ROC (vertical average of that hemisphere's plotted bipolar contacts); thin lines behind it are the individual contacts (blue = Left, orange = Right). Contacts with only one pain class (no ROC) are omitted. The two hemispheres are never averaged together (separate stimulation targets)."
                : "") +
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
           </MDTypography>

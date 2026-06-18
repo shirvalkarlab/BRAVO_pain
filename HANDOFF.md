@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.f6ff590f.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.bf6ab33c.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -13,7 +13,7 @@
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.f6ff590f.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.bf6ab33c.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -146,7 +146,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.f6ff590f.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.bf6ab33c.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
@@ -280,6 +280,31 @@ second review of the same card. Same files + `routines/stats_utils.py`.
 - Both frequency lists now sort NUMERICALLY (were string-sorted).
 - Frontend-only change except the (already-committed) per_channel hemisphere/kind tags. Tests still
   green. Same Docker caveat (restart for tagged backend + auc_perm; recorded_powers is already served).
+
+**ROC drawn-vs-recorded count fix, swarm count fix, + a reusable provenance AUDIT tool (DONE — see latest bundle):**
+- **ROC "3 frequencies / mean of 2 contacts" mismatch (user-reported):** the ROC panel reused the
+  page-wide `powerProvenance`, which listed the recorded Hz for ALL contacts in a hemisphere — but a
+  single-class contact (here `R 1⁻-3⁺` @ 8.8 Hz) has no ROC and is dropped from the curves and the
+  mean. So "Right @ 8.8/23.4/26.4 Hz" disagreed with "Right mean of 2 contacts". Fixed: the ROC panel
+  now builds its OWN provenance from `drawnByHemi` (only contacts with an ROC actually plotted), so
+  the frequency list and contact count match the drawn curves. Caption notes single-class contacts
+  are omitted.
+- **Honest-performance swarm count:** the caption said "N contacts the bars average" with N = all
+  contacts that have a summary, but Plotly drops the null-valued dots (single-class → no
+  auc_in_sample; only 1 contact had a balanced_accuracy). Fixed: dots are plotted per metric only
+  where the value is finite; `swarmContacts` is now the union of contacts that contribute ≥1 dot, so
+  the count is honest. Also corrected the wording — the bar is the POOLED detector, NOT the mean of
+  the dots.
+- **NEW reusable reviewer:** `BRAVO/modules/Biomarkers/tools/audit_biomarker_payload.py` — runs
+  against a saved `queryBiomarkerAnalysis` response JSON and reports label-vs-data inconsistencies
+  (ROC drawn-vs-recorded frequencies/counts, chronic-vs-recorded provenance, swarm dot counts,
+  per_channel hemisphere partition, AUC≈1.0 batch artifacts, sliding-window visibility, pooled-target
+  warning). `python audit_biomarker_payload.py payload.json [--json]`; exit 1 on any ERROR so it can
+  gate CI. This is the practical "visualization reviewer" — it checks the JSON that drives every
+  panel (the sandbox can't see rendered pixels, but every issue surfaced so far has been a
+  label-vs-data mismatch this catches). To use: in the browser Network tab, copy the
+  queryBiomarkerAnalysis response to a file and run the script (or save it to
+  ~/tempClaudeBullshit/ and point me at it).
 
 ### Current TODO (what's actually left — START HERE)
 1. **REDCap field-map wiring** (§7-B, still open): wire `redcap_pull.py` processing into
