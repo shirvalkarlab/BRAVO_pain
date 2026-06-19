@@ -247,29 +247,42 @@ function BiomarkerTimeline({ data, height }) {
       traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
     const n = Math.max(rows.length, 1);
-    const gap = 0.09;   // tighter inter-row gap fills vertical whitespace; titles still clear (halo)
-    const h = (1 - gap * (n - 1)) / n;
+    // Pixel-based row heights with a VARIABLE inter-row gap: each row is a fixed pixel band, and the
+    // first row of a hemisphere block gets a larger gap above it to seat its big "LEFT/RIGHT
+    // HEMISPHERE" signpost without overlapping the row above. Domains are computed cumulatively.
+    const ROW_PX = 104, BASE_GAP = 0.007, BANNER_GAP = 0.052;
+    const isStart = rows.map((row, i) => {
+      let prev = null;
+      for (let j = 0; j < i; j++) if (rows[j].hemi) prev = rows[j].hemi;
+      return !!(row.hemi && row.hemi !== prev);
+    });
+    const nStarts = isStart.filter(Boolean).length;
+    const totalGap = BASE_GAP * (n - 1) + BANNER_GAP * nStarts;
+    const h = (1 - totalGap) / n;
 
     const traces = [];
     const layout = {
-      height: height || 168 * n + 80,
-      margin: { l: 66, r: 86, t: 30, b: 52 },   // right margin holds the edge ref-line labels
+      height: height || ROW_PX * n + 70,
+      margin: { l: 78, r: 104, t: 20, b: 42 },   // right margin holds edge ref-line labels + REAL/empty tag
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
-      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 12, color: "#344767" },
+      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 13, color: "#344767" },
       annotations: [],
       shapes: [],
     };
 
     let prevHemi = null;
+    let cursor = 1.0;
     rows.forEach((row, di) => {
       const axisNum = n - di; // bottom row = y1
       const yk = axisNum === 1 ? "y" : "y" + axisNum;
       const xk = axisNum === 1 ? "x" : "x" + axisNum;
       const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
       const xaxisKey = axisNum === 1 ? "xaxis" : "xaxis" + axisNum;
-      const top = 1 - di * (h + gap);
+      if (di > 0) cursor -= (isStart[di] ? BANNER_GAP : BASE_GAP);
+      const top = cursor;
       const bottom = Math.max(0, top - h);
+      cursor = bottom;
       const hemi = row.hemi || null;
       const accent = hemi && HEMI[hemi] ? HEMI[hemi].accent : "#344767";
 
@@ -289,10 +302,17 @@ function BiomarkerTimeline({ data, height }) {
         nOver = sig.filter((v) => v > yrange[1]).length;
       }
 
-      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 } },
-        zeroline: false, showgrid: false, automargin: true,
+      // Faint tint band for an unanalyzable placeholder row (cv_df=None) — marks it as "recorded but
+      // not analyzable" so the empty band reads as intentional, not a rendering gap. Real data rows
+      // are never tinted.
+      if (row.emptyReason) {
+        layout.shapes.push({ type: "rect", xref: `${xk} domain`, yref: `${yk} domain`,
+          x0: 0, x1: 1, y0: 0, y1: 1, fillcolor: "#FBFBF4", line: { width: 0 }, layer: "below" });
+      }
+      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 }, standoff: 4 },
+        zeroline: false, showgrid: false, automargin: true, nticks: 3, tickfont: { size: 10 },
         // colored y-axis spine = hemisphere accent (the accent IS the axis edge — no separate bar)
-        showline: true, linewidth: hemi ? 3.2 : 1, linecolor: accent, mirror: false,
+        showline: true, linewidth: hemi ? 4 : 1, linecolor: accent, mirror: false,
         ...(yrange ? { range: yrange } : { autorange: true }) };
       // Per-row x-axis. The bottom row owns the master x (`x`); all others `matches` it when LINKED so
       // pan/box-zoom moves every row together (and the vertical gridlines re-tick in lockstep). When
@@ -301,7 +321,7 @@ function BiomarkerTimeline({ data, height }) {
         domain: [0, 1], type: "date", anchor: yk,
         showgrid: true, gridcolor: "#C9CCD6", gridwidth: 1,
         showticklabels: di === n - 1,  // dates only on the bottom row; grid carries the time reference
-        ticks: "", showline: false,
+        ticks: "", showline: false, tickfont: { size: 10.5 },
         ...(di === n - 1 ? { title: { text: "Time", font: { size: 12 } } } : {}),
         ...(axisNum !== 1 && linked ? { matches: "x" } : {}),
       };
@@ -335,8 +355,8 @@ function BiomarkerTimeline({ data, height }) {
         const mode = isChronic ? "lines" : "lines+markers";
         traces.push({
           x: tr.x || x, y: tr.y, name: tr.name, type: "scatter", mode,
-          line: { color: tr.color, width: isChronic ? 0.8 : 1.4 },
-          marker: { size: 3.2, color: tr.color },
+          line: { color: tr.color, width: isChronic ? 0.9 : 1.5 },
+          marker: { size: 3.4, color: tr.color },
           opacity: isChronic ? 0.9 : 1,
           yaxis: yk, xaxis: xk, connectgaps: false, showlegend: false,
           hovertemplate: `${row.short || row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
@@ -356,23 +376,24 @@ function BiomarkerTimeline({ data, height }) {
           opacity: rl.opacity != null ? rl.opacity : 1, layer: "above",
         });
         let labelY = rl.y;
-        if (lastLabelY != null && yrange && (labelY - lastLabelY) < 0.12 * ySpan) {
-          labelY = lastLabelY + 0.12 * ySpan;
+        if (lastLabelY != null && yrange && (labelY - lastLabelY) < 0.18 * ySpan) {
+          labelY = lastLabelY + 0.18 * ySpan;
         }
         layout.annotations.push({
-          xref: "paper", x: 1.004, yref: yk, y: labelY, xanchor: "left", yanchor: "middle",
-          text: rl.label, showarrow: false, font: { size: 9, color: rl.color },
+          xref: "paper", x: 1.007, yref: yk, y: labelY, xanchor: "left", yanchor: "middle",
+          text: rl.label, showarrow: false, font: { size: 9.5, color: rl.color },
         });
         lastLabelY = labelY;
       });
 
-      // OFF-SCALE caret: only when the peak meaningfully exceeds the visible window.
+      // OFF-SCALE caret: only when the peak meaningfully exceeds the visible window. Anchored TOP-LEFT
+      // inside the row so it never collides with the right-edge ref-line labels or the REAL/empty tag.
       if (yrange && peak != null && peak > yrange[1] * 1.2) {
         layout.annotations.push({
-          xref: `${xk} domain`, x: 0.995, yref: `${yk} domain`, y: 0.95,
-          xanchor: "right", yanchor: "top",
+          xref: `${xk} domain`, x: 0.013, yref: `${yk} domain`, y: 0.92,
+          xanchor: "left", yanchor: "top",
           text: `▲ peak ${fmtVal(peak)} (off scale)`, showarrow: false,
-          font: { size: 9, color: "#B06A00" },
+          font: { size: 9.5, color: "#B06A00" },
         });
       }
 
@@ -387,28 +408,22 @@ function BiomarkerTimeline({ data, height }) {
         });
       }
 
-      // Row title (colored to hemisphere accent), with a halo so it reads over traces.
+      // Row title — bigger, bold, colored to the hemisphere accent, anchored INSIDE the row (top-left)
+      // with a halo so it reads over traces. The redundant provenance subtitle line was removed; the
+      // title already carries hemisphere / center frequency / range.
       layout.annotations.push({
-        xref: `${xk} domain`, yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
-        xanchor: "left", yanchor: "bottom", text: `<b>${row.title}</b>`,
-        showarrow: false, font: { size: 12, color: accent },
-        bgcolor: "rgba(255,255,255,0.7)",
+        xref: `${xk} domain`, yref: `${yk} domain`, x: 0.004, y: 0.97,
+        xanchor: "left", yanchor: "top", text: `<b>${row.title}</b>`,
+        showarrow: false, font: { size: 13.5, color: accent },
+        bgcolor: "rgba(255,255,255,0.78)",
       });
-      if (row.subtitle) {
+      // BIG hemisphere signpost above the FIRST row of each hemisphere block.
+      if (isStart[di] && hemi && HEMI[hemi]) {
         layout.annotations.push({
-          xref: `${xk} domain`, yref: "paper", x: 0.004, y: Math.min(top + 0.02, 1),
-          xanchor: "left", yanchor: "top", text: row.subtitle,
-          showarrow: false, font: { size: 10, color: "#7E8794" },
-          bgcolor: "rgba(255,255,255,0.7)",
-        });
-      }
-      // HEMISPHERE BANNER before the first row of each hemisphere block.
-      if (hemi && hemi !== prevHemi) {
-        layout.annotations.push({
-          xref: `${xk} domain`, yref: "paper", x: 0, y: Math.min(top + 0.055, 1.0),
+          xref: `${xk} domain`, yref: "paper", x: 0, y: top + 0.012,
           xanchor: "left", yanchor: "bottom",
-          text: `█ ${hemi.toUpperCase()} HEMISPHERE · ${HEMI[hemi].region}`,
-          showarrow: false, font: { size: 13, color: accent },
+          text: `<b>${hemi.toUpperCase()} HEMISPHERE</b>  ·  ${HEMI[hemi].region}`,
+          showarrow: false, font: { size: 21, color: accent },
         });
       }
       if (hemi) prevHemi = hemi;
@@ -425,12 +440,16 @@ function BiomarkerTimeline({ data, height }) {
   return (
     <MDBox p={1}>
       <div ref={ref} style={{ width: "100%" }} />
-      <MDBox display="flex" alignItems="center" justifyContent="center" mt={0.5} gap={1}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
-                        fontSize: 12.5, color: "#344767", userSelect: "none" }}>
-          <input type="checkbox" checked={linked} onChange={(e) => setLinked(e.target.checked)} />
-          <b>LINK AXES</b>
-          <span style={{ color: "#7E8794" }}>
+      <MDBox display="flex" alignItems="center" justifyContent="center" mt={1} mb={0.5}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                        fontSize: 13, color: linked ? "#117733" : "#344767", userSelect: "none",
+                        border: `1.5px solid ${linked ? "#117733" : "#C9CCD6"}`, borderRadius: 6,
+                        padding: "5px 12px", background: linked ? "#F1F8F2" : "#FAFAFB",
+                        transition: "all 0.15s" }}>
+          <input type="checkbox" checked={linked} onChange={(e) => setLinked(e.target.checked)}
+                 style={{ width: 15, height: 15, accentColor: "#117733", cursor: "pointer" }} />
+          <b>🔗 LINK AXES</b>
+          <span style={{ color: "#7E8794", fontWeight: 400 }}>
             {linked ? "— pan / zoom moves all rows together" : "— each row zooms independently"}
           </span>
         </label>
