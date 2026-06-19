@@ -396,7 +396,7 @@ def _demo_run(source, request_data=None):
     out = _serialize_run(run, _compute_analytics(run, ch, pro, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
                                                  train_days=train_days, step_days=step_days,
-                                                 sliding=sliding))
+                                                 sliding=sliding), label_metric=label_metric)
     out["message"] = "DEMO DATA — synthetic timeline (no real Percept/REDCap loaded)."
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
@@ -734,7 +734,8 @@ def run_for_participant(request_data):
                                                  label_strategy=label_strategy,
                                                  low_pct=low_pct, high_pct=high_pct,
                                                  train_days=train_days, step_days=step_days,
-                                                 sliding=sliding, region_map=region_map))
+                                                 sliding=sliding, region_map=region_map),
+                         label_metric=label_metric)
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
     out["label_strategy"] = label_strategy
@@ -765,7 +766,64 @@ def run_for_participant(request_data):
 _TIMELINE_MAX_POINTS = 6000
 
 
-def _serialize_run(run, analytics_data=None):
+def _serialize_power_channels(run, label_metric="nrs"):
+    """Per-channel power-domain timeseries for the stacked timeline — ONE entry per sensing channel,
+    so the card can plot each contact on its OWN row instead of pooling them into a single trend.
+
+    pipeline.run_powerdomain_branch already split the chronic-shaped power input by ChannelNames[0]
+    into run['powerdomain']['per_channel'], each carrying its OWN full-resolution cv_df (timestamps,
+    Savitzky-Golay-smoothed band power, that channel's own fitted threshold) and a summary tagging
+    hemisphere / kind / threshold. We reuse those frames verbatim (no recompute) — only the display
+    series is stride-thinned via adapter.decimate_for_plot.
+
+    Pooling has no implementation meaning (you program ONE contact at a time on the Percept RC), so
+    when individual bipolar contacts (kind=='contact') are present we return ONLY those — the
+    per-hemisphere 'aggregate' entries are themselves a cross-contact pool and are dropped. If the
+    data has no contact-level split (only hemisphere aggregates), we fall back to those so the row
+    still renders.
+    """
+    pr = run.get("powerdomain") if isinstance(run, dict) else None
+    per_ch = pr.get("per_channel") if isinstance(pr, dict) else None
+    if not per_ch:
+        return []
+    items = []
+    for ch_label, ch_data in per_ch.items():
+        summ = ch_data.get("summary") or {}
+        cv = ch_data.get("cv_df")
+        if cv is None or not hasattr(cv, "__len__") or len(cv) == 0:
+            continue
+        items.append((ch_label, summ, cv))
+    # Prefer individual contacts; drop hemisphere aggregates (a pool) unless that's all there is.
+    contacts = [it for it in items if (it[1].get("kind") == "contact")]
+    chosen = contacts if contacts else items
+    out = []
+    for ch_label, summ, cv in chosen:
+        cv_plot = adapter.decimate_for_plot(cv, _TIMELINE_MAX_POINTS)
+        t = pd.to_datetime(cv_plot["timestamp"]).astype(str).tolist()
+        bp = [None if not np.isfinite(v) else float(v)
+              for v in cv_plot["LFP_smoothed"].to_numpy(dtype=float)]
+        pain = ([None if not np.isfinite(v) else float(v)
+                 for v in cv_plot[label_metric].to_numpy(dtype=float)]
+                if label_metric in cv_plot.columns else None)
+        thr = summ.get("best_threshold")
+        thr = float(thr) if thr is not None and np.isfinite(thr) else None
+        out.append({
+            "channel": str(ch_label),
+            "hemisphere": summ.get("hemisphere"),
+            "kind": summ.get("kind"),
+            "threshold": thr,
+            "auc": summ.get("auc_in_sample"),
+            "n_samples": summ.get("n_samples"),
+            "time": t,
+            "band_power": bp,
+            "pain": pain,
+        })
+    # Stable order: Left before Right, then by channel label, so rows read top-to-bottom by hemisphere.
+    out.sort(key=lambda d: ((d.get("hemisphere") or "Z"), str(d.get("channel"))))
+    return out
+
+
+def _serialize_run(run, analytics_data=None, label_metric="nrs"):
     """Convert a run_biomarker result into the JSON-able dict the card consumes.
 
     INVARIANT: `analytics_data` (from _compute_analytics) and `run[...]['summary']` are computed
@@ -796,6 +854,10 @@ def _serialize_run(run, analytics_data=None):
         "timeline": records,
         "timeline_points": len(records),
         "timeline_points_full": n_full,   # full-resolution row count (pre-decimation)
+        # Per-channel power series — one entry per sensing contact so the card plots each on its OWN
+        # row (no cross-channel pooling, which has no implementation meaning). Empty for timedomain-only
+        # runs or when no per-channel split exists.
+        "power_channels": _serialize_power_channels(run, label_metric=label_metric),
         "summary": {
             "timedomain": run["timedomain"]["summary"] if run.get("timedomain") else None,
             "powerdomain": run["powerdomain"]["summary"] if run.get("powerdomain") else None,

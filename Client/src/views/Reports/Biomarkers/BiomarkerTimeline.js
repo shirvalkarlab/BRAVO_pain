@@ -70,17 +70,55 @@ function BiomarkerTimeline({ data, height }) {
         traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
     }
-    if (has("powerdomain_biomarker_value")) {
+    // POWER-DOMAIN ROWS. Each sensing contact gets its OWN row (no cross-channel pooling — you
+    // program one contact at a time on the Percept RC, so a pooled trend has no implementation
+    // meaning). The backend serializes data.power_channels (one entry per contact, each with its own
+    // timestamps, band power, fitted threshold, hemisphere). Fall back to the legacy single pooled
+    // series only if the per-channel split is absent (e.g. a stale cached run).
+    const powerChannels = Array.isArray(data.power_channels) ? data.power_channels : [];
+    // Map each channel to its recorded center frequency (from recorded_powers) by matching the
+    // contact label, so each row's title states the frequency the clinician actually senses on it.
+    const rpAll = (data.recorded_powers || []).filter((p) => p && p.center_hz != null);
+    const hzForChannel = (chName) => {
+      const key = String(chName).trim();
+      const hit = rpAll.find((p) => String(p.label).trim() === key);
+      return hit ? Number(hit.center_hz) : null;
+    };
+    if (powerChannels.length) {
+      powerChannels.forEach((pc) => {
+        const cx = (pc.time || []).map((t) => parseTime(t));
+        const cy = (pc.band_power || []).map((v) => (typeof v === "number" ? v : null));
+        const tr = [{ name: "Power", x: cx, y: cy, color: C.lfp }];
+        if (pc.threshold != null && Number.isFinite(pc.threshold)) {
+          // Flat per-channel threshold line spanning this channel's own time extent.
+          tr.push({ name: "Threshold", x: cx, y: cx.map(() => pc.threshold),
+                    color: C.threshold, dash: "dash", mode: "lines" });
+        }
+        const hz = hzForChannel(pc.channel);
+        const freqText = hz != null ? `${hz.toFixed(1)} Hz` : "sensing band";
+        const fin = cy.filter((v) => v != null && Number.isFinite(v));
+        const vmin = fin.length ? Math.min(...fin) : null;
+        const vmax = fin.length ? Math.max(...fin) : null;
+        const rangeText = vmin != null ? ` · range ${vmin.toFixed(0)}–${vmax.toFixed(0)} a.u.` : "";
+        const hemiText = pc.hemisphere ? `${pc.hemisphere} · ` : "";
+        const thrText = (pc.threshold != null && Number.isFinite(pc.threshold))
+          ? ` · threshold ${pc.threshold.toFixed(1)}` : "";
+        rows.push({
+          title: `Power — ${pc.channel} @ ${freqText}${rangeText}`,
+          short: `Power ${pc.channel}`,
+          unit: "Band power (a.u.)",
+          ownX: true,                  // each channel carries its own x (timestamps differ per contact)
+          traces: tr,
+          subtitle: `${hemiText}recorded center ${freqText}${thrText}`,
+        });
+      });
+    } else if (has("powerdomain_biomarker_value")) {
+      // Legacy fallback: single pooled series (only when no per-channel split is available).
       const tr = [{ name: "Power", y: col("powerdomain_biomarker_value"), color: C.lfp }];
       if (has("powerdomain_threshold")) {
         tr.push({ name: "Threshold", y: col("powerdomain_threshold"), color: C.threshold, dash: "dash", mode: "lines" });
       }
-      // Provenance label: WHAT power, at WHAT frequency, over WHAT range. The series is the on-board
-      // band-power feature (the Percept's power in a fixed sensing band), pooled across the recorded
-      // sensing contacts — so name the contacts and their RECORDED center frequencies (from
-      // recorded_powers), NOT the chronic-trend frequency. Frequencies are de-duplicated; the value
-      // range is read from the plotted series so the y-axis scale is stated explicitly.
-      const rp = (data.recorded_powers || []).filter((p) => p && p.center_hz != null);
+      const rp = rpAll;
       const hzList = Array.from(new Set(rp.map((p) => Number(p.center_hz))))
         .sort((a, b) => a - b).map((v) => v.toFixed(1));
       const contactList = Array.from(new Set(rp.map((p) => String(p.label).trim())));
@@ -90,18 +128,12 @@ function BiomarkerTimeline({ data, height }) {
       const vmin = vals.length ? Math.min(...vals) : null;
       const vmax = vals.length ? Math.max(...vals) : null;
       const rangeText = vmin != null ? ` · range ${vmin.toFixed(0)}–${vmax.toFixed(0)} a.u.` : "";
-      const nContacts = contactList.length;
-      const title = nContacts
-        ? `Power-domain band power @ ${freqText} — ${nContacts} contact${nContacts === 1 ? "" : "s"} pooled${rangeText}`
-        : `Power-domain band power${rangeText}`;
       rows.push({
-        title,
+        title: `Power-domain band power @ ${freqText}${rangeText}`,
         short: "Power-domain band power",
         unit: "Band power (device units, a.u.)",
         traces: tr,
-        subtitle: nContacts
-          ? `Pooled across ${contactList.join(", ")} · recorded center ${freqText}`
-          : null,
+        subtitle: contactList.length ? `recorded center ${freqText}` : null,
       });
     }
     const m = data.label_metric || "nrs";
@@ -183,7 +215,7 @@ function BiomarkerTimeline({ data, height }) {
         const isDashRef = tr.dash === "dash";
         const mode = tr.mode || (isDashRef ? "lines" : "lines+markers");
         traces.push({
-          x, y: tr.y, name: tr.name, type: "scatter", mode,
+          x: tr.x || x, y: tr.y, name: tr.name, type: "scatter", mode,
           line: { color: tr.color, width: isDashRef ? 2 : 1.4, dash: tr.dash || "solid" },
           marker: { size: 3.5, color: tr.color },
           yaxis: yk, xaxis: "x", connectgaps: false,
