@@ -34,9 +34,38 @@ FieldMapping (bumping record_version) if it changed.
 """
 
 import json
+import hashlib
 
 from Server import models
 from . import RedcapImport
+
+
+def _records_fingerprint(records):
+    """Stable content hash of a list of {Date, Result} records (order-independent).
+
+    Used to decide whether a re-import would actually change anything: if the parsed export
+    fingerprints identically to what is already stored for this (participant, form), the import is
+    skipped (no redundant deletes / version churn). When the upstream REDCap export changes (new
+    daily reports fetched), the fingerprint differs and the records are rewritten.
+    """
+    items = []
+    for r in records:
+        # round the epoch to whole seconds so float repr jitter doesn't spuriously differ
+        try:
+            date_key = round(float(r.get("Date")), 0)
+        except (TypeError, ValueError):
+            date_key = r.get("Date")
+        items.append((date_key, json.dumps(r.get("Result"), sort_keys=True, default=str)))
+    items.sort(key=lambda x: (x[0] is None, x[0], x[1]))
+    blob = json.dumps(items, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _stored_fingerprint(form, participant):
+    """Fingerprint of the records CURRENTLY stored for (participant, form), in the same shape."""
+    stored = models.ScaleRecord.objects.filter(source=form, participant=participant)
+    records = [{"Date": s.date, "Result": s.record} for s in stored]
+    return _records_fingerprint(records)
 
 
 def _get_or_create_form(institute, name, field_mapping):
@@ -66,7 +95,8 @@ def _ensure_link(participant, form):
     return link
 
 
-def persist_instrument(participant, institute, parsed, form_name=None, replace=True):
+def persist_instrument(participant, institute, parsed, form_name=None, replace=True,
+                       skip_if_unchanged=False):
     """Persist ONE parsed instrument (output of RedcapImport.build_instrument) for a participant.
 
     Parameters
@@ -86,6 +116,31 @@ def persist_instrument(participant, institute, parsed, form_name=None, replace=T
     field_mapping = parsed["FieldMapping"]
     name = form_name or field_mapping[0].get("header") or "Imported REDCap Survey"
 
+    fields = [q["text"] for q in field_mapping[0]["questions"] if q.get("type") in ("score", "redcapForm", "cumulativeScore") and q.get("text") != "Time"]
+
+    # Content-aware short-circuit (used by silent auto-import): if a form with this name already
+    # holds records that fingerprint identically to the parsed export, do nothing. This makes
+    # auto-import-on-load free to call on every page visit, and a re-import happens ONLY when the
+    # upstream export actually changed (new REDCap reports).
+    if skip_if_unchanged:
+        existing = models.ScaleForms.find(institute=institute, name=name,
+                                          record_type=RedcapImport.RECORD_TYPE)
+        if existing is not None:
+            new_fp = _records_fingerprint(parsed["records"])
+            if _stored_fingerprint(existing, participant) == new_fp:
+                _ensure_link(participant, existing)  # ensure the link exists even on a no-op
+                return {
+                    "FormId": existing.uid,
+                    "FormName": existing.name,
+                    "Version": existing.record_version,
+                    "RecordType": existing.record_type,
+                    "RecordsImported": models.ScaleRecord.objects.filter(source=existing, participant=participant).count(),
+                    "Metrics": parsed.get("metrics", []),
+                    "Fields": fields,
+                    "Skipped": parsed.get("skipped", 0),
+                    "Unchanged": True,
+                }
+
     form = _get_or_create_form(institute, name, field_mapping)
     _ensure_link(participant, form)
 
@@ -97,8 +152,6 @@ def persist_instrument(participant, institute, parsed, form_name=None, replace=T
         models.ScaleRecord.create(participant, form, rec["Result"], date=rec["Date"])
         imported += 1
 
-    fields = [q["text"] for q in field_mapping[0]["questions"] if q.get("type") in ("score", "redcapForm", "cumulativeScore") and q.get("text") != "Time"]
-
     return {
         "FormId": form.uid,
         "FormName": form.name,
@@ -108,14 +161,16 @@ def persist_instrument(participant, institute, parsed, form_name=None, replace=T
         "Metrics": parsed.get("metrics", []),
         "Fields": fields,
         "Skipped": parsed.get("skipped", 0),
+        "Unchanged": False,
     }
 
 
 def import_export(participant, institute, source, instrument_name=None, layout="auto",
-                  replace=True, **kwargs):
+                  replace=True, skip_if_unchanged=False, **kwargs):
     """Parse a CSV path / DataFrame and persist every instrument it contains for a participant.
 
-    Returns a list of per-instrument result dicts (see `persist_instrument`).
+    `skip_if_unchanged=True` makes each instrument a no-op when its parsed records already match
+    what is stored (used by silent auto-import). Returns a list of per-instrument result dicts.
     """
     parsed_list = RedcapImport.parse_export(source, instrument_name=instrument_name,
                                             layout=layout, **kwargs)
@@ -125,5 +180,5 @@ def import_export(participant, institute, source, instrument_name=None, layout="
             continue
         results.append(persist_instrument(participant, institute, parsed,
                                           form_name=instrument_name if len(parsed_list) == 1 else None,
-                                          replace=replace))
+                                          replace=replace, skip_if_unchanged=skip_if_unchanged))
     return results

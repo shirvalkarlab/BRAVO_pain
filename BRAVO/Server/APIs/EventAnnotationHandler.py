@@ -392,6 +392,39 @@ class ImportRedcapCSV(RestViews.APIView):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "_pro_dump"
     )
 
+    def _scan_exports(self, participant):
+        """List importable PRO exports in the dump dir, flag the ones matching this participant.
+
+        Returns (exports, matching_paths). An export "matches" when its filename begins with the
+        participant name (e.g. "RCS08" -> "RCS08_chronic_pro_df.csv"). The large per-window feature
+        tables (cv_df_*) and the manifest sidecar are excluded.
+        """
+        exports = []
+        matching = []
+        pname = (participant.name or "").strip().lower()
+        try:
+            root = os.path.realpath(self.ALLOWED_SERVER_DIR)
+            names = sorted(os.listdir(root)) if os.path.isdir(root) else []
+        except OSError:
+            names = []
+        for fn in names:
+            low = fn.lower()
+            if not low.endswith(".csv"):
+                continue
+            if "cv_df" in low or low.endswith("_manifest.json"):
+                continue
+            if "pro_df" not in low and "pro" not in low and "redcap" not in low:
+                continue
+            try:
+                size = os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                size = None
+            matches = bool(pname) and low.startswith(pname)
+            exports.append({"ServerPath": fn, "SizeBytes": size, "MatchesParticipant": matches})
+            if matches:
+                matching.append(fn)
+        return exports, matching
+
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
         import pandas as pd
@@ -417,34 +450,42 @@ class ImportRedcapCSV(RestViews.APIView):
         # ---- discovery: list server-side PRO exports, flag the one matching this participant ----
         # Lets the UI auto-populate an already-present export instead of forcing a manual upload.
         if request.data.get("RequestType") == "ListServerExports":
-            exports = []
-            pname = (Participant.name or "").strip().lower()
-            try:
-                root = os.path.realpath(self.ALLOWED_SERVER_DIR)
-                names = sorted(os.listdir(root)) if os.path.isdir(root) else []
-            except OSError:
-                names = []
-            for fn in names:
-                low = fn.lower()
-                # Importable PRO exports = the tidy per-report tables. Exclude the large per-window
-                # feature tables (cv_df_*) and the manifest sidecar.
-                if not low.endswith(".csv"):
-                    continue
-                if "cv_df" in low or low.endswith("_manifest.json"):
-                    continue
-                if "pro_df" not in low and "pro" not in low and "redcap" not in low:
-                    continue
-                fpath = os.path.join(root, fn)
-                try:
-                    size = os.path.getsize(fpath)
-                except OSError:
-                    size = None
-                # Match a participant by name prefix (e.g. "RCS08" -> "RCS08_chronic_pro_df.csv").
-                matches = bool(pname) and low.startswith(pname)
-                exports.append({"ServerPath": fn, "SizeBytes": size, "MatchesParticipant": matches})
-            suggested = next((e["ServerPath"] for e in exports if e["MatchesParticipant"]), None)
+            exports, matching = self._scan_exports(Participant)
+            suggested = matching[0] if matching else None
             return Response(status=200, data={"Exports": exports, "Suggested": suggested,
                                               "ParticipantName": Participant.name})
+
+        # ---- silent auto-import: import EVERY matching server export for this participant -------
+        # Called on Form Records page load. Content-aware (skip_if_unchanged) so it is a no-op when
+        # nothing changed, and re-imports automatically when the upstream REDCap export was refreshed
+        # with new reports. Never raises to the client on a per-file failure (best effort).
+        if request.data.get("RequestType") == "AutoImport":
+            _, matching = self._scan_exports(Participant)
+            results = []
+            for fn in matching:
+                path = os.path.realpath(os.path.join(self.ALLOWED_SERVER_DIR, fn))
+                root = os.path.realpath(self.ALLOWED_SERVER_DIR)
+                if not (path == root or path.startswith(root + os.sep)) or not os.path.isfile(path):
+                    continue
+                try:
+                    df = pd.read_csv(path, low_memory=False)
+                    res = RedcapImportService.import_export(
+                        Participant, institute, df, layout="auto", replace=True,
+                        skip_if_unchanged=True,
+                    )
+                    for r in res:
+                        r["SourceFile"] = fn
+                    results.extend(res)
+                except Exception:
+                    print(traceback.format_exc())
+                    continue
+            changed = sum(0 if r.get("Unchanged") else 1 for r in results)
+            return Response(status=200, data={
+                "Instruments": results,
+                "TotalRecords": sum(r["RecordsImported"] for r in results),
+                "Changed": changed,
+                "FilesImported": len(matching),
+            })
 
         instrument_name = request.data.get("InstrumentName") or None
         layout = request.data.get("Layout") or "auto"

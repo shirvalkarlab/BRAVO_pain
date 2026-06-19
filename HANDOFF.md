@@ -52,8 +52,15 @@ half of §7-B (live field-map wiring is still open; see TODO).
       `{Exports:[{ServerPath, SizeBytes, MatchesParticipant}], Suggested, ParticipantName}` — lists
       the PRO exports already on the server (the tidy `*_pro_df.csv`; excludes the big `cv_df_*`
       feature tables + the manifest) and flags the one whose filename prefix matches the
-      participant name, so the import dialog can auto-populate a one-click "Found on server" import
-      instead of forcing a manual upload.
+      participant name. `RequestType:"AutoImport"` imports **every** matching server export for the
+      participant in one call, **content-aware** (`skip_if_unchanged`): a no-op when the stored
+      records already fingerprint-match the export, and a full re-import when the upstream REDCap
+      export was refreshed with new reports. The **Form Records view calls AutoImport silently on
+      mount** (before loading the form list), so a clinician opening a patient sees up-to-date PROs
+      with **zero clicks**; the "Import REDCap CSV" button remains only for loading other/extra
+      files. Fingerprinting is order-independent SHA-256 over (rounded-epoch, sorted-Result) — see
+      `RedcapImportService._records_fingerprint` / `_stored_fingerprint`; unchanged imports do not
+      bump `record_version` or duplicate `ScaleRecord` rows.
     - `QuerySurveyForms` new RequestType **`RequestAvailabilityMatrix`** → `{Instruments,
       Participants:[{ParticipantId, ParticipantName, Instruments:[{Instrument, RecordType, Count,
       Fields, Version}]}]}` — powers the per-patient score-availability table.

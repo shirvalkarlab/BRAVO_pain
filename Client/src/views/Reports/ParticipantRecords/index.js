@@ -113,7 +113,18 @@ function ParticipantSurveyRecords() {
       return;
     }
     setContextState(dispatch, "report", "SurveyReports");
-    loadForms();
+    // Silently auto-import every server-side REDCap export that matches this participant, THEN load
+    // the form list. The import is content-aware server-side: a no-op when nothing changed, and a
+    // re-import when the upstream export was refreshed with new reports -- so the user never has to
+    // click anything to see up-to-date PROs. Failures are non-fatal; we still load whatever exists.
+    SessionController.query("/api/importRedcapCSV", {
+      RequestType: "AutoImport",
+      ParticipantId: participant_uid
+    }).then(() => {
+      loadForms();
+    }).catch(() => {
+      loadForms();
+    });
   }, [participant_uid]);
 
   // Multipart CSV upload for the offline REDCap import, scoped to THIS participant (XHR mirrors
