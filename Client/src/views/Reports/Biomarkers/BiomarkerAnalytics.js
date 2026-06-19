@@ -159,18 +159,40 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     if (s && s.kind) return s.kind;
     return /hemisphere/i.test(k) ? "aggregate" : "contact";
   };
-  // Bipolar sensing contacts only (exclude the pooled "Hemisphere LFP" aggregates), grouped by
-  // hemisphere and ordered LEFT first, then RIGHT — so every plot's legend reads Left group then
-  // Right group rather than interleaved (anatomical grouping aids interpretation; do not mix the
-  // two stimulation targets — Left GPi vs Right VIM — into one mean).
-  const leftContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Left").sort();
-  const rightContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Right").sort();
+  // Source modality of each per_channel entry — the RELIABLE discriminator between the two
+  // physically distinct recordings (more robust than the kind/name parse):
+  //   "chronic"     = BrainSense Timeline ~10-min around-the-clock LFP power (one stream per
+  //                   hemisphere — the most critical biomarker series, sampled 24/7).
+  //   "powerdomain" = per-session BrainSense streaming band power (bipolar sensing contacts).
+  const srcModOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    return (s && s.source_modality) || null;
+  };
+  const isChronicKey = (k) => srcModOf(k) === "chronic";
+  // A STREAMING bipolar contact: powerdomain source + contact kind (or, for legacy runs with no
+  // source tag, just contact kind). These are the curves the per-hemisphere mean ROC averages over.
+  const isStreamContactKey = (k) =>
+    (srcModOf(k) === "powerdomain" && kindOf(k) === "contact") ||
+    (srcModOf(k) == null && kindOf(k) === "contact");
+  // Both modalities are individually implementable and BOTH must be analyzable (ROC, threshold,
+  // distribution, sliding window). Grouped LEFT first then RIGHT; never mix the two stimulation
+  // targets (Left GPi vs Right VIM) into one mean.
+  const leftContacts = channelKeys.filter((k) => isStreamContactKey(k) && hemiOf(k) === "Left").sort();
+  const rightContacts = channelKeys.filter((k) => isStreamContactKey(k) && hemiOf(k) === "Right").sort();
+  const leftChronic = channelKeys.filter((k) => isChronicKey(k) && hemiOf(k) === "Left").sort();
+  const rightChronic = channelKeys.filter((k) => isChronicKey(k) && hemiOf(k) === "Right").sort();
   const orderedContacts = [...leftContacts, ...rightContacts];
+  // Every individually-selectable channel: chronic streams AND streaming contacts (chronic listed
+  // first per hemisphere since it is the around-the-clock biomarker). A true powerdomain pool
+  // (source=powerdomain, kind=aggregate) is intentionally NOT selectable.
+  const selectableKeys = [...leftChronic, ...leftContacts, ...rightChronic, ...rightContacts];
+  const isSelectableKey = (k) => selectableKeys.indexOf(k) !== -1;
   const hasLeft = leftContacts.length > 0;
   const hasRight = rightContacts.length > 0;
-  // Aggregate (pooled chronic-trend) key for a hemisphere, if the backend emitted one — used to
-  // bind the histogram / sliding-window / honest-perf panels when a hemisphere is selected.
-  const aggKeyFor = (h) => channelKeys.find((k) => kindOf(k) === "aggregate" && hemiOf(k) === h) || null;
+  // Aggregate (pooled powerdomain) key for a hemisphere, if any — used to bind the histogram /
+  // sliding-window panels when a hemisphere MEAN is selected. Chronic streams are NOT aggregates.
+  const aggKeyFor = (h) => channelKeys.find(
+    (k) => kindOf(k) === "aggregate" && !isChronicKey(k) && hemiOf(k) === h) || null;
 
   // Default to a single IMPLEMENTABLE contact — the one with the highest in-sample AUC (best
   // discrimination), since you program one bipolar contact at a time on the Percept RC. We never
@@ -181,8 +203,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const a = s && (s.auc_in_sample != null ? s.auc_in_sample : s.auc);
     return typeof a === "number" && Number.isFinite(a) ? a : -Infinity;
   };
-  const bestContact = orderedContacts.length
-    ? orderedContacts.reduce((best, k) => (aucOf(k) > aucOf(best) ? k : best), orderedContacts[0])
+  // Default to the single most DISCRIMINATIVE implementable channel — highest in-sample AUC across
+  // BOTH chronic streams and streaming contacts (we never default to a cross-channel pool). This
+  // lets the around-the-clock chronic biomarker be the default when it separates pain best.
+  const bestContact = selectableKeys.length
+    ? selectableKeys.reduce((best, k) => (aucOf(k) > aucOf(best) ? k : best), selectableKeys[0])
     : null;
   const defaultSel = bestContact || (hasLeft ? "hemi:Left" : (hasRight ? "hemi:Right" : "pooled"));
 
@@ -200,10 +225,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const [logCostRatio, setLogCostRatio] = useState(0);
   const isHemiSel = typeof chSel === "string" && chSel.startsWith("hemi:");
   const selHemi = isHemiSel ? chSel.slice(5) : null;
-  const isContactSel = !!perChannel[chSel] && kindOf(chSel) === "contact";
+  // A single-channel selection: any individually-selectable channel (a streaming contact OR a
+  // chronic around-the-clock stream). Both drive the single-curve ROC / single-channel panels.
+  const isContactSel = !!perChannel[chSel] && isSelectableKey(chSel);
   const validSel = chSel === "pooled" || isContactSel ||
     (isHemiSel && ((selHemi === "Left" && hasLeft) || (selHemi === "Right" && hasRight)));
-  // Fall back to the default single contact (never the cross-hemisphere pool) on an invalid selection.
+  // Fall back to the default single channel (never the cross-hemisphere pool) on an invalid selection.
   const safeChSel = validSel ? chSel : defaultSel;
   // Which underlying per_channel entry drives the single-summary panels: the contact itself for a
   // contact selection, the hemisphere aggregate for a hemisphere selection, else pooled (null).
@@ -279,7 +306,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const recHzFor = (k) => {
     if (k == null) return null;
     const key = String(k).trim();
-    return recHzByContact[key] != null ? recHzByContact[key] : null;
+    if (recHzByContact[key] != null) return recHzByContact[key];
+    // Fall back to the channel's own recorded center frequency from the per_channel summary — this
+    // is how the chronic 24/7 stream (absent from recordedPowers) reports its sensing frequency.
+    const s = perChannel[k] && perChannel[k].summary;
+    return s && s.center_hz != null ? s.center_hz : null;
   };
   // Distinct recorded frequencies across a set of contacts, formatted "23.4 / 26.4 Hz" (or a single
   // value). Returns null if none of the contacts carried a recorded frequency.
@@ -1227,11 +1258,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
               (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
               per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
               single "pooled" button appears only when there is no per-contact split at all. */}
-          {orderedContacts.length === 0
+          {selectableKeys.length === 0
             ? <ToggleButton value="pooled">All data</ToggleButton> : null}
+          {/* Chronic around-the-clock streams first per hemisphere (the 24/7 biomarker), then the
+              per-hemisphere streaming mean, then each streaming contact. */}
+          {leftChronic.map((k) => (
+            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
+          ))}
           {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere (mean)</ToggleButton> : null}
           {leftContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
+          ))}
+          {rightChronic.map((k) => (
+            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
           ))}
           {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere (mean)</ToggleButton> : null}
           {rightContacts.map((k) => (
@@ -1240,10 +1279,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         </ToggleButtonGroup>
         <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
-            ? "Single combined series (no per-contact split available for this run)."
+            ? "Single combined series (no per-channel split available for this run)."
             : isHemiSel
-              ? `${selHemi} hemisphere — mean over its bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together).`
-              : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC contact, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
+              ? `${selHemi} hemisphere — mean over its streaming bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together). The chronic 24/7 stream is analyzed separately on its own.`
+              : isChronicKey(safeChSel)
+                ? `Showing only ${safeChSel} — the BrainSense Timeline ~10-min around-the-clock LFP-power stream${bestContact === safeChSel ? " (most discriminative channel, shown by default)" : ""}. ROC, optimal threshold, distribution, and sliding-window are all computed on this 24/7 series. Program its threshold on the Percept RC.`
+                : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC channel, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
         </MDTypography>
       </MDBox>
     </Grid>
