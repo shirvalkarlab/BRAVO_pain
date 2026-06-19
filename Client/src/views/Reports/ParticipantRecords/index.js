@@ -62,7 +62,7 @@ function ParticipantSurveyRecords() {
   const [availableForms, setAvailableForms] = useState({active: {}, options: [], forms: []});
   const [newLinkDialog, setNewLinkDialog] = useState({show: false, form: "", options: []});
   const [newRecordDialog, setNewRecordDialog] = useState({show: false, date: moment(new Date()), time: moment(new Date())});
-  const [csvImportDialog, setCsvImportDialog] = useState({show: false, files: [], instrumentName: ""});
+  const [csvImportDialog, setCsvImportDialog] = useState({show: false, files: [], instrumentName: "", serverExports: [], suggested: null});
   
   const [data, setData] = useState(false);
 
@@ -160,6 +160,39 @@ function ParticipantSurveyRecords() {
     return { abort: () => { request.abort(); abort(); } };
   };
 
+  // Ask the server which PRO exports already exist for this participant, so the dialog can offer a
+  // one-click import instead of forcing a manual file pick.
+  const openImportDialog = () => {
+    setCsvImportDialog({show: true, files: [], instrumentName: "", serverExports: [], suggested: null});
+    SessionController.query("/api/importRedcapCSV", {
+      RequestType: "ListServerExports",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setCsvImportDialog((d) => ({...d, serverExports: response.data.Exports || [], suggested: response.data.Suggested || null}));
+    }).catch(() => {
+      // non-fatal: the manual uploader is always available
+    });
+  };
+
+  const importFromServer = (serverPath) => {
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/importRedcapCSV", {
+      ParticipantId: participant_uid,
+      ServerPath: serverPath,
+      InstrumentName: csvImportDialog.instrumentName || ""
+    }).then((response) => {
+      const importedFormId = (response.data.Instruments && response.data.Instruments.length > 0) ? response.data.Instruments[0].FormId : null;
+      setCsvImportDialog({show: false, files: [], instrumentName: "", serverExports: [], suggested: null});
+      setAlert(
+        <MuiAlertDialog title={"Import Complete"}
+          message={`Imported ${response.data.TotalRecords} record(s) from ${serverPath}.`}
+          handleClose={() => setAlert(null)} handleConfirm={() => setAlert(null)}/>);
+      loadForms(importedFormId);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
+
   const addNewFormLink = () => {
     if (!newLinkDialog.form) return;
 
@@ -249,7 +282,7 @@ function ParticipantSurveyRecords() {
             disableClearable
           />
           <MDBox display="flex" flexDirection="row">
-            <MDButton variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => setCsvImportDialog({show: true, files: [], instrumentName: ""})}>
+            <MDButton variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => openImportDialog()}>
               {"Import REDCap CSV"}
             </MDButton>
             <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
@@ -441,6 +474,36 @@ function ParticipantSurveyRecords() {
                 helperText={"Used for a wide export (one instrument). Long exports are auto-split per instrument."}
               />
             </MDBox>
+            {csvImportDialog.serverExports && csvImportDialog.serverExports.length > 0 ? (
+              <MDBox px={1} pt={2}>
+                <MDTypography variant="button" fontWeight="medium" color="text">
+                  {"Found on server"}
+                </MDTypography>
+                {csvImportDialog.serverExports.map((exp) => (
+                  <MDBox key={exp.ServerPath} mt={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center"
+                    sx={{border: "1px solid #e0e0e0", borderRadius: 1, p: 1}}>
+                    <MDBox>
+                      <MDTypography variant="button" fontWeight={exp.MatchesParticipant ? "bold" : "regular"}>
+                        {exp.ServerPath}
+                      </MDTypography>
+                      {exp.MatchesParticipant ? (
+                        <MDBadge badgeContent={"matches this patient"} color="success" variant="gradient" size="xs" container sx={{ml: 1}}/>
+                      ) : null}
+                      <MDTypography variant="caption" color="text" display="block">
+                        {exp.SizeBytes ? (exp.SizeBytes/1024).toFixed(0) + " KB" : ""}
+                      </MDTypography>
+                    </MDBox>
+                    <MDButton variant={exp.MatchesParticipant ? "contained" : "outlined"} color="success" size="small"
+                      onClick={() => importFromServer(exp.ServerPath)}>
+                      {"Import"}
+                    </MDButton>
+                  </MDBox>
+                ))}
+                <MDTypography variant="caption" color="text" display="block" mt={2}>
+                  {"\u2014 or upload a file manually \u2014"}
+                </MDTypography>
+              </MDBox>
+            ) : null}
             <MDBox px={1} pt={2}>
               <FilePond
                 files={csvImportDialog.files}

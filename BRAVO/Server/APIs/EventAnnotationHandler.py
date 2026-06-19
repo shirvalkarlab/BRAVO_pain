@@ -414,6 +414,38 @@ class ImportRedcapCSV(RestViews.APIView):
         if not institute.has_permission(request.user, "Edit"):
             return Response(status=403)
 
+        # ---- discovery: list server-side PRO exports, flag the one matching this participant ----
+        # Lets the UI auto-populate an already-present export instead of forcing a manual upload.
+        if request.data.get("RequestType") == "ListServerExports":
+            exports = []
+            pname = (Participant.name or "").strip().lower()
+            try:
+                root = os.path.realpath(self.ALLOWED_SERVER_DIR)
+                names = sorted(os.listdir(root)) if os.path.isdir(root) else []
+            except OSError:
+                names = []
+            for fn in names:
+                low = fn.lower()
+                # Importable PRO exports = the tidy per-report tables. Exclude the large per-window
+                # feature tables (cv_df_*) and the manifest sidecar.
+                if not low.endswith(".csv"):
+                    continue
+                if "cv_df" in low or low.endswith("_manifest.json"):
+                    continue
+                if "pro_df" not in low and "pro" not in low and "redcap" not in low:
+                    continue
+                fpath = os.path.join(root, fn)
+                try:
+                    size = os.path.getsize(fpath)
+                except OSError:
+                    size = None
+                # Match a participant by name prefix (e.g. "RCS08" -> "RCS08_chronic_pro_df.csv").
+                matches = bool(pname) and low.startswith(pname)
+                exports.append({"ServerPath": fn, "SizeBytes": size, "MatchesParticipant": matches})
+            suggested = next((e["ServerPath"] for e in exports if e["MatchesParticipant"]), None)
+            return Response(status=200, data={"Exports": exports, "Suggested": suggested,
+                                              "ParticipantName": Participant.name})
+
         instrument_name = request.data.get("InstrumentName") or None
         layout = request.data.get("Layout") or "auto"
         replace = str(request.data.get("Replace", "true")).lower() not in ("false", "0", "no")

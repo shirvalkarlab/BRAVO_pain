@@ -48,7 +48,12 @@ half of §7-B (live field-map wiring is still open; see TODO).
   - `Server/APIs/EventAnnotationHandler.py`:
     - `ImportRedcapCSV` (route **`/api/importRedcapCSV`**, `IsAuthenticated`, Upload/Edit perm).
       Accepts multipart `File`, inline JSON `Rows`, or a confined `ServerPath` (basename-only,
-      restricted to `_pro_dump/`; traversal → 400).
+      restricted to `_pro_dump/`; traversal → 400). `RequestType:"ListServerExports"` returns
+      `{Exports:[{ServerPath, SizeBytes, MatchesParticipant}], Suggested, ParticipantName}` — lists
+      the PRO exports already on the server (the tidy `*_pro_df.csv`; excludes the big `cv_df_*`
+      feature tables + the manifest) and flags the one whose filename prefix matches the
+      participant name, so the import dialog can auto-populate a one-click "Found on server" import
+      instead of forcing a manual upload.
     - `QuerySurveyForms` new RequestType **`RequestAvailabilityMatrix`** → `{Instruments,
       Participants:[{ParticipantId, ParticipantName, Instruments:[{Instrument, RecordType, Count,
       Fields, Version}]}]}` — powers the per-patient score-availability table.
