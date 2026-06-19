@@ -171,6 +171,114 @@ def _derive_chan_order(td_recordings):
     return order
 
 
+def _adaptive_is_active(status):
+    """True only when the device's adaptive (closed-loop) therapy is actually CONFIGURED & running.
+
+    Medtronic stores the state as an ADBSStatusDef enum string. "NOT_CONFIGURED" (and a falsy/empty
+    value) means closed loop is OFF — the programmed LFP threshold is then meaningless and must NOT be
+    drawn. Anything else (e.g. ADBS_RUNNING / SUSPENDED but configured) means a threshold is in force.
+    """
+    if not status:
+        return False
+    s = str(status).split(".")[-1].upper()   # tolerate "ADBSStatusDef.ADBS_RUNNING" or bare token
+    return s not in ("NOT_CONFIGURED", "OFF", "DISABLED", "NONE", "")
+
+
+def _programmed_adaptive_thresholds(participant):
+    """Latest PROGRAMMED adaptive-DBS detection threshold per hemisphere — ONLY when closed loop is
+    active on that hemisphere. Returns {hemi: {lower, upper, measured_lower, measured_upper, status,
+    date}} for hemispheres whose most-recent therapy group has adaptive therapy configured & running.
+
+    Source: the Percept therapy history (Server.models.Therapy.ElectricalTherapy), where each group's
+    AdaptiveTherapy carries sensing["Thresholds"]["LFPThresholds"]=[lower, upper] (device LFP-power
+    units, the SAME units as the chronic biomarker) and adaptive["Status"] (the ADBS on/off state).
+    Hemisphere is taken from the group's stimulation electrode target. Returns {} when no therapy
+    metadata exists or nothing is active — the frontend then draws no programmed-threshold line.
+
+    Defensive throughout: any failure returns {} so the biomarker report never breaks on therapy data.
+    """
+    if participant is None:
+        return {}
+    try:
+        from Server.models.Therapy import ElectricalTherapy
+        from Server.models import SourceFile
+    except Exception:
+        return {}
+    try:
+        source_files = list(SourceFile.find_all(owner=participant))
+        if not source_files:
+            return {}
+        groups = list(ElectricalTherapy.find_all(therapy__source__in=source_files))
+    except Exception:
+        return {}
+
+    def _hemi_of_group(g):
+        # Hemisphere from the group's stimulation electrode target / channel names (LEFT/RIGHT token).
+        try:
+            for st in g.stimulation_settings.all():
+                info = st.get_info()
+                el = info.get("Electrode") or {}
+                blob = " ".join(str(x) for x in (
+                    el.get("Hemisphere", ""), el.get("Target", ""), el.get("CustomName", ""),
+                    el.get("Name", ""), info.get("Contact", ""))).upper()
+                if "LEFT" in blob:
+                    return "Left"
+                if "RIGHT" in blob:
+                    return "Right"
+        except Exception:
+            pass
+        return None
+
+    def _date_of(g):
+        try:
+            return g.therapy.date
+        except Exception:
+            return None
+
+    best = {}   # hemi -> (date, payload)
+    for g in groups:
+        try:
+            adaptives = list(g.adaptive_settings.all())
+        except Exception:
+            adaptives = []
+        if not adaptives:
+            continue
+        hemi = _hemi_of_group(g)
+        gdate = _date_of(g)
+        for a in adaptives:
+            if a is None:
+                continue
+            adaptive = getattr(a, "adaptive", {}) or {}
+            sensing = getattr(a, "sensing", {}) or {}
+            status = adaptive.get("Status")
+            if not _adaptive_is_active(status):
+                continue
+            thr = (sensing.get("Thresholds") or {})
+            lfp = thr.get("LFPThresholds") or []
+            meas = thr.get("MeasuredLFP") or []
+            if not lfp or len(lfp) < 2:
+                continue
+            try:
+                lower = float(lfp[0]); upper = float(lfp[1])
+            except Exception:
+                continue
+            if not (lower or upper):    # [0, 0] sentinel = not really programmed
+                continue
+            h = hemi or "Unknown"
+            payload = {
+                "lower": lower, "upper": upper,
+                "measured_lower": (float(meas[0]) if len(meas) > 0 and meas[0] is not None else None),
+                "measured_upper": (float(meas[1]) if len(meas) > 1 and meas[1] is not None else None),
+                "status": str(status).split(".")[-1],
+                "date": (gdate.isoformat() if hasattr(gdate, "isoformat") else gdate),
+            }
+            prev = best.get(h)
+            # Keep the most recent active program per hemisphere.
+            if prev is None or (gdate is not None and prev[0] is not None and gdate >= prev[0]) or prev[0] is None:
+                best[h] = (gdate, payload)
+    return {h: p for h, (d, p) in best.items()}
+
+
 def _recorded_powers(powerdomain_list, region_map=None):
     """Which band-power channels were actually recorded — the '<contact> Power' columns of the
     BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
@@ -403,6 +511,12 @@ def _demo_run(source, request_data=None):
     out["sliding_window"] = sliding
     out["window_months"] = window_months
     out["window_step_months"] = window_step_months
+    # Demo: a synthetic ACTIVE closed-loop program on the Left hemisphere, so the programmed-threshold
+    # overlay is visible in demo mode. The Right hemisphere has no active program (line not drawn).
+    out["programmed_thresholds"] = {
+        "Left": {"lower": 1900.0, "upper": 2600.0, "measured_lower": 1850.0,
+                 "measured_upper": 2650.0, "status": "ADBS_RUNNING", "date": None},
+    }
     return out
 
 
@@ -746,6 +860,11 @@ def run_for_participant(request_data):
     out["window_months"] = window_months
     out["window_step_months"] = window_step_months
     out["recorded_powers"] = recorded_powers
+    # Device's CURRENTLY-PROGRAMMED adaptive-DBS detection threshold per hemisphere — present ONLY
+    # when closed-loop stimulation is active on that hemisphere (else {}). Lets the card overlay
+    # "what's set on the device now" against the data-derived recommendation, in the same LFP-power
+    # units. Empty dict => no closed-loop program => the frontend draws no programmed line.
+    out["programmed_thresholds"] = _programmed_adaptive_thresholds(Participant)
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,

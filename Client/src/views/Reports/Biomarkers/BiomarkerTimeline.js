@@ -19,6 +19,8 @@ const C = {
   threshold: "#7E8794", // learned threshold
   pain: "#D55E00",      // NRS / pain (vermillion = HI)
   stim: "#E69F00",      // stim amplitude (orange)
+  programmed: "#6E0F8A",// device's currently-programmed adaptive trigger (muted purple, distinct
+                        // from the grey learned threshold and the green/blue signals)
 };
 
 function parseTime(t) {
@@ -76,6 +78,11 @@ function BiomarkerTimeline({ data, height }) {
     // timestamps, band power, fitted threshold, hemisphere). Fall back to the legacy single pooled
     // series only if the per-channel split is absent (e.g. a stale cached run).
     const powerChannels = Array.isArray(data.power_channels) ? data.power_channels : [];
+    // Device's currently-programmed adaptive thresholds, keyed by hemisphere — present ONLY for
+    // hemispheres where closed-loop stim is active (backend gates this), so a row only shows the
+    // programmed trigger when it is real and in force.
+    const progByHemi = (data.programmed_thresholds && typeof data.programmed_thresholds === "object")
+      ? data.programmed_thresholds : {};
     // Map each channel to its recorded center frequency (from recorded_powers) by matching the
     // contact label, so each row's title states the frequency the clinician actually senses on it.
     const rpAll = (data.recorded_powers || []).filter((p) => p && p.center_hz != null);
@@ -98,6 +105,14 @@ function BiomarkerTimeline({ data, height }) {
           tr.push({ name: "Threshold", x: cx, y: cx.map(() => pc.threshold),
                     color: C.threshold, dash: "dash", mode: "lines" });
         }
+        // Device's CURRENTLY-PROGRAMMED adaptive trigger for this hemisphere — drawn ONLY when
+        // closed-loop stimulation is active (backend sends programmed_thresholds[hemi] only then).
+        // A light, thin solid line in the units of band power: "this is what the device switches on now."
+        const prog = pc.hemisphere ? progByHemi[pc.hemisphere] : null;
+        if (prog && prog.lower != null && Number.isFinite(prog.lower)) {
+          tr.push({ name: "Programmed trigger", x: cx, y: cx.map(() => prog.lower),
+                    color: C.programmed, dash: "solid", mode: "lines", width: 1, opacity: 0.55 });
+        }
         // Prefer the channel's own recorded center frequency (from the backend summary); fall back to
         // matching the recorded_powers card entry by label.
         const hz = (pc.center_hz != null && Number.isFinite(pc.center_hz))
@@ -110,6 +125,8 @@ function BiomarkerTimeline({ data, height }) {
         const hemiText = pc.hemisphere ? `${pc.hemisphere} · ` : "";
         const thrText = (pc.threshold != null && Number.isFinite(pc.threshold))
           ? ` · threshold ${pc.threshold.toFixed(1)}` : "";
+        const progText = (prog && prog.lower != null && Number.isFinite(prog.lower))
+          ? ` · programmed trigger ${prog.lower.toFixed(1)} (closed-loop active)` : "";
         // Chronic = BrainSense Timeline sampled ~every 10 min around the clock; streaming = per-session
         // BrainSense Power-Domain. Name the modality so the clinician knows which log a row is.
         const kindLbl = isChronic ? "Chronic ~10-min (around-the-clock)" : "Streaming band power";
@@ -120,7 +137,7 @@ function BiomarkerTimeline({ data, height }) {
           unit: "Band power (a.u.)",
           ownX: true,                  // each channel carries its own x (timestamps differ per contact)
           traces: tr,
-          subtitle: `${hemiText}${kindLbl} · recorded center ${freqText}${thrText}`,
+          subtitle: `${hemiText}${kindLbl} · recorded center ${freqText}${thrText}${progText}`,
         });
       });
     } else if (has("powerdomain_biomarker_value")) {
@@ -227,8 +244,10 @@ function BiomarkerTimeline({ data, height }) {
         const mode = tr.mode || (isDashRef ? "lines" : "lines+markers");
         traces.push({
           x: tr.x || x, y: tr.y, name: tr.name, type: "scatter", mode,
-          line: { color: tr.color, width: isDashRef ? 2 : 1.4, dash: tr.dash || "solid" },
+          line: { color: tr.color, width: tr.width != null ? tr.width : (isDashRef ? 2 : 1.4),
+                  dash: tr.dash || "solid" },
           marker: { size: 3.5, color: tr.color },
+          opacity: tr.opacity != null ? tr.opacity : 1,
           yaxis: yk, xaxis: "x", connectgaps: false,
           hovertemplate: `${row.short || row.title} — ${tr.name}: %{y:.3g}<extra></extra>`,
         });

@@ -138,7 +138,7 @@ const FEATURE_LABELS = {
 };
 const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers }) {
+export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -239,6 +239,17 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const boundKey = safeChSel === "pooled" ? null : (isHemiSel ? aggKeyFor(selHemi) : safeChSel);
   const chronic = boundKey && perChannel[boundKey]
     ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot;
+  // Device's CURRENTLY-PROGRAMMED adaptive trigger for the selected channel's hemisphere — present
+  // ONLY when closed-loop stim is active there (backend gates this; {} otherwise). Used to overlay
+  // "what's set on the device now" on the ROC operating point and the band-power distribution, in
+  // the same LFP-power units as the recommendation. null when no active program or no hemisphere.
+  const progAll = (programmedThresholds && typeof programmedThresholds === "object") ? programmedThresholds : {};
+  const selHemiForProg = isHemiSel ? selHemi : hemiOf(safeChSel);
+  const progThr = (selHemiForProg && progAll[selHemiForProg]
+                   && progAll[selHemiForProg].lower != null
+                   && isFinite(progAll[selHemiForProg].lower))
+    ? progAll[selHemiForProg] : null;
+  const PROG_COLOR = "#6E0F8A";   // muted purple — the device's programmed trigger (matches timeline)
 
   if (!analytics) return null;
 
@@ -880,6 +891,45 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         `(sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`);
     }
   };
+  // Device's CURRENTLY-PROGRAMMED operating point — where the threshold ALREADY set on the device
+  // lands on this ROC curve. Drawn as a HOLLOW marker (vs the filled recommendation dot) in the
+  // programmed-trigger purple, so the clinician reads current-vs-recommended at a glance. Only when
+  // closed loop is active on this hemisphere (progThr non-null) and the curve carries aligned thr.
+  let progMarkerAdded = false;
+  const pushProgrammed = (rocLike, label) => {
+    if (!progThr || !rocLike || !Array.isArray(rocLike.thr) || !rocLike.fpr) return;
+    const thrA = rocLike.thr, fprA = rocLike.fpr, tprA = rocLike.tpr;
+    // Find the curve vertex whose threshold is closest to the programmed lower trigger.
+    let bestK = -1, bestD = Infinity;
+    for (let i = 0; i < thrA.length; i += 1) {
+      if (thrA[i] == null || !Number.isFinite(thrA[i])) continue;
+      const d = Math.abs(thrA[i] - progThr.lower);
+      if (d < bestD) { bestD = d; bestK = i; }
+    }
+    if (bestK < 0) return;
+    const fpr = fprA[bestK], tpr = tprA[bestK];
+    opMarkers.push({
+      x: [fpr], y: [tpr], type: "scatter", mode: "markers",
+      name: `${label}: <b>currently programmed</b> power \u2265 ${progThr.lower.toFixed(1)} (sens ${tpr.toFixed(2)}, spec ${(1 - fpr).toFixed(2)})`,
+      legendgroup: "progpoint",
+      legendgrouptitle: !progMarkerAdded ? { text: "Currently programmed on device (closed-loop active)" } : undefined,
+      showlegend: true,
+      marker: { color: "rgba(0,0,0,0)", size: 13, symbol: "circle-open",
+                line: { color: PROG_COLOR, width: 2.5 } },
+      hovertemplate: `${label} \u2014 CURRENTLY PROGRAMMED on the device<br>power \u2265 ${progThr.lower.toFixed(1)} device units` +
+                     `<br>achieves sensitivity=${tpr.toFixed(2)} \u00b7 specificity=${(1 - fpr).toFixed(2)}<extra></extra>`,
+    });
+    opAnnotations.push({
+      x: fpr, y: tpr, xref: "x", yref: "y",
+      text: `currently set: \u2265 ${progThr.lower.toFixed(1)}`,
+      showarrow: true, arrowhead: 0, arrowwidth: 1.2, arrowcolor: PROG_COLOR,
+      ax: -28, ay: -26,                 // offset up-left so it sits opposite the recommendation pill
+      font: { size: 10.5, color: PROG_COLOR },
+      bgcolor: "rgba(255,255,255,0.92)", bordercolor: PROG_COLOR, borderwidth: 1.2,
+      borderpad: 2.5, opacity: 0.97, xanchor: "right", yanchor: "bottom",
+    });
+    progMarkerAdded = true;
+  };
   if (!isContactView && groupHemis.length) {
     groupHemis.forEach((h) => {
       const shades = shadesFor(h);
@@ -910,6 +960,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
             legendgroup: h,
             hovertemplate: `${h} mean ROC<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
           meanAucLabels.push(`${h} ${meanAuc.toFixed(3)}`);
+          // If closed loop is active on THIS hemisphere, show where the programmed trigger lands on
+          // its mean curve (progThr is already scoped to the selected hemisphere when isHemiSel).
+          if (progThr && selHemiForProg === h) pushProgrammed(mean, `${h} mean`);
         }
       }
     });
@@ -925,6 +978,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     // at the cost slider's slope (defaults to the cost-symmetric Youden point at the slider midpoint).
     pushOp(roc, meanColorFor(hemiOf(safeChSel) || "Left"),
            isContactView ? safeChSel : "All contacts", true);
+    // Where the device's CURRENT programmed trigger lands on this curve (only if closed loop active).
+    pushProgrammed(roc, isContactView ? safeChSel : "All contacts");
   }
   // Per-window curves (only for a genuine sliding run). Drawn faint; first one labeled, rest grouped.
   // Exclude the all-data window (sliding OFF) — its single ROC is already the main curve, and
@@ -1039,6 +1094,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
              `. Classify pain-high when band power \u2265 this value on the Percept RC.`}
           </MDTypography>
         ) : null}
+        {progThr ? (
+          <MDTypography variant="caption" display="block" mt={0.5} sx={{ fontSize: 11.5, color: PROG_COLOR }}>
+            {`Hollow purple marker = the threshold CURRENTLY programmed on the device (closed-loop active on ${selHemiForProg}): power \u2265 ${progThr.lower.toFixed(1)} device units. Compare its sensitivity/specificity against the filled recommendation dot to decide whether to re-program.`}
+          </MDTypography>
+        ) : null}
       </Panel>
     );
   }
@@ -1111,6 +1171,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const distOpThr = distOp && Number.isFinite(distOp.threshold) ? distOp.threshold : null;
     // Only show it if it lands within the displayed (inlier) range, else the line floats off-axis.
     const distOpInRange = distOpThr != null && distOpThr >= edges[0] && distOpThr <= edges[edges.length - 1];
+    // Device's currently-programmed adaptive trigger (only when closed loop is active on this
+    // hemisphere) — a third, lighter reference so the clinician sees where the CURRENT device
+    // setting sits relative to the recommended optimum and the unsupervised Otsu valley.
+    const progThrVal = progThr ? progThr.lower : null;
+    const progInRange = progThrVal != null && progThrVal >= edges[0] && progThrVal <= edges[edges.length - 1];
     chPanels.push(
       <Panel key="dist" title={`Power band-power distribution + Otsu split${chSuffix}`}>
         <Fig height={340} traces={[{
@@ -1126,6 +1191,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                 y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : []),
               ...(distOpInRange ? [{ type: "line", x0: distOpThr, x1: distOpThr, yref: "paper",
                 y0: 0, y1: 1, line: { color: "#117733", width: 2.5, dash: "dot" } }] : []),
+              ...(progInRange ? [{ type: "line", x0: progThrVal, x1: progThrVal, yref: "paper",
+                y0: 0, y1: 1, line: { color: PROG_COLOR, width: 1.5, dash: "solid" }, opacity: 0.6 }] : []),
             ],
             annotations: [
               ...(dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
@@ -1134,6 +1201,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
               ...(distOpInRange ? [{ x: distOpThr, yref: "paper", y: 1.10,
                 text: `ROC optimum = ${distOpThr.toFixed(1)}`, showarrow: false,
                 font: { color: "#117733", size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
+              ...(progInRange ? [{ x: progThrVal, yref: "paper", y: 1.18,
+                text: `Programmed = ${progThrVal.toFixed(1)} (active)`, showarrow: false,
+                font: { color: PROG_COLOR, size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
               ...pooledProvAnn,
             ] }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
