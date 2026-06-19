@@ -906,10 +906,17 @@ def _serialize_power_channels(run, label_metric="nrs"):
     if not per_ch:
         return []
     items = []
+    empties = []   # channels with no analyzable cv_df — surfaced as labeled placeholder rows (not dropped)
     for ch_label, ch_data in per_ch.items():
         summ = ch_data.get("summary") or {}
         cv = ch_data.get("cv_df")
         if cv is None or not hasattr(cv, "__len__") or len(cv) == 0:
+            # A per-channel analytics failure (run_chronic_threshold raising on too-few pain-aligned
+            # samples, single-class labels, etc.) leaves cv_df=None. Silently dropping the channel
+            # makes a recorded contact VANISH from the timeline (it still appears in the Recorded
+            # power channels table), which hides that the contact exists but couldn't be analyzed.
+            # Emit a placeholder so the row renders with the reason instead of disappearing.
+            empties.append((ch_label, summ))
             continue
         items.append((ch_label, summ, cv))
 
@@ -954,6 +961,34 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "time": t,
             "band_power": bp,
             "pain": pain,
+        })
+    # Placeholder rows for channels whose per-channel analytics produced no usable frame. These carry
+    # empty_reason so the frontend renders a labeled empty row ("no analyzable pain-aligned data:
+    # <reason>") instead of the contact silently vanishing from the timeline. Only emit a placeholder
+    # for a channel that is NOT already present as a real row (avoid duplicate labels), and skip
+    # cross-contact 'aggregate' pools (those are intentionally dropped, not a missing implementable
+    # channel).
+    present = {d["channel"] for d in out}
+    for ch_label, summ in empties:
+        if str(ch_label) in present:
+            continue
+        if summ.get("kind") == "aggregate":
+            continue
+        sm = summ.get("source_modality")
+        out.append({
+            "channel": str(ch_label),
+            "hemisphere": summ.get("hemisphere"),
+            "kind": summ.get("kind"),
+            "source_modality": sm,
+            "around_the_clock": (sm == "chronic"),
+            "center_hz": summ.get("center_hz"),
+            "threshold": None,
+            "auc": None,
+            "n_samples": summ.get("n_samples"),
+            "time": [],
+            "band_power": [],
+            "pain": None,
+            "empty_reason": str(summ.get("error") or "no pain-aligned samples to fit a detector"),
         })
     # Stable order: hemisphere (Left, then Right), chronic-before-streaming within a hemisphere, then
     # channel label — so rows read top-to-bottom by target, around-the-clock log first.
