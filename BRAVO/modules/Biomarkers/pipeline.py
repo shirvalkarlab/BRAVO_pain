@@ -613,10 +613,26 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                         ch_kind = "contact"
                         first = lbl.strip()[:1].upper()
                         ch_hemi = "Left" if first == "L" else ("Right" if first == "R" else None)
+                    # Source modality of this channel group: "chronic" = the BrainSense Timeline
+                    # ~10-min around-the-clock LFP power log; "powerdomain" = per-session BrainSense
+                    # streaming band power. Read from the recordings' per-dict Source tag (set in
+                    # bravo_service / bravo_powerdomain_to_chronic_like). Lets the frontend plot the
+                    # around-the-clock chronic stream on its own row alongside the streaming contacts.
+                    srcs = {str(c.get("Source", "chronic")) for c in ch_list if isinstance(c, dict)}
+                    ch_source = "chronic" if srcs == {"chronic"} else (
+                        "powerdomain" if srcs == {"powerdomain"} else "mixed")
+                    # Sensing center frequency for this group (latest non-null), so the frontend can
+                    # label the row. Chronic dicts carry CenterFrequencyHz; powerdomain dicts may too.
+                    ch_hz = None
+                    for c in ch_list:
+                        if isinstance(c, dict) and c.get("CenterFrequencyHz") is not None:
+                            ch_hz = float(c["CenterFrequencyHz"])
                     ch_summary = {
                         "channel": ch_label,
                         "hemisphere": ch_hemi,
                         "kind": ch_kind,
+                        "source_modality": ch_source,
+                        "center_hz": ch_hz,
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),

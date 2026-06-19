@@ -88,13 +88,20 @@ function BiomarkerTimeline({ data, height }) {
       powerChannels.forEach((pc) => {
         const cx = (pc.time || []).map((t) => parseTime(t));
         const cy = (pc.band_power || []).map((v) => (typeof v === "number" ? v : null));
-        const tr = [{ name: "Power", x: cx, y: cy, color: C.lfp }];
+        const isChronic = pc.around_the_clock === true || pc.source_modality === "chronic";
+        // Chronic (around-the-clock) and streaming series are physically different recordings; give
+        // the chronic LFP-power log a distinct color so the two are not read as one trace.
+        const lineColor = isChronic ? "#117733" : C.lfp;   // chronic green vs Okabe-Ito streaming green
+        const tr = [{ name: isChronic ? "Chronic LFP power" : "Power", x: cx, y: cy, color: lineColor }];
         if (pc.threshold != null && Number.isFinite(pc.threshold)) {
           // Flat per-channel threshold line spanning this channel's own time extent.
           tr.push({ name: "Threshold", x: cx, y: cx.map(() => pc.threshold),
                     color: C.threshold, dash: "dash", mode: "lines" });
         }
-        const hz = hzForChannel(pc.channel);
+        // Prefer the channel's own recorded center frequency (from the backend summary); fall back to
+        // matching the recorded_powers card entry by label.
+        const hz = (pc.center_hz != null && Number.isFinite(pc.center_hz))
+          ? Number(pc.center_hz) : hzForChannel(pc.channel);
         const freqText = hz != null ? `${hz.toFixed(1)} Hz` : "sensing band";
         const fin = cy.filter((v) => v != null && Number.isFinite(v));
         const vmin = fin.length ? Math.min(...fin) : null;
@@ -103,13 +110,17 @@ function BiomarkerTimeline({ data, height }) {
         const hemiText = pc.hemisphere ? `${pc.hemisphere} · ` : "";
         const thrText = (pc.threshold != null && Number.isFinite(pc.threshold))
           ? ` · threshold ${pc.threshold.toFixed(1)}` : "";
+        // Chronic = BrainSense Timeline sampled ~every 10 min around the clock; streaming = per-session
+        // BrainSense Power-Domain. Name the modality so the clinician knows which log a row is.
+        const kindLbl = isChronic ? "Chronic ~10-min (around-the-clock)" : "Streaming band power";
+        const srcTag = isChronic ? "Chronic" : "Streaming";
         rows.push({
-          title: `Power — ${pc.channel} @ ${freqText}${rangeText}`,
+          title: `Power [${srcTag}] — ${pc.channel} @ ${freqText}${rangeText}`,
           short: `Power ${pc.channel}`,
           unit: "Band power (a.u.)",
           ownX: true,                  // each channel carries its own x (timestamps differ per contact)
           traces: tr,
-          subtitle: `${hemiText}recorded center ${freqText}${thrText}`,
+          subtitle: `${hemiText}${kindLbl} · recorded center ${freqText}${thrText}`,
         });
       });
     } else if (has("powerdomain_biomarker_value")) {

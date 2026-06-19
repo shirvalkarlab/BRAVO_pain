@@ -793,9 +793,22 @@ def _serialize_power_channels(run, label_metric="nrs"):
         if cv is None or not hasattr(cv, "__len__") or len(cv) == 0:
             continue
         items.append((ch_label, summ, cv))
-    # Prefer individual contacts; drop hemisphere aggregates (a pool) unless that's all there is.
-    contacts = [it for it in items if (it[1].get("kind") == "contact")]
-    chosen = contacts if contacts else items
+
+    # Select by SOURCE MODALITY, not just name, so we keep two physically distinct, implementable
+    # series and drop only a true cross-contact pool:
+    #   * powerdomain streaming CONTACTS — per-session BrainSense band power per bipolar contact.
+    #   * chronic AROUND-THE-CLOCK streams — the BrainSense Timeline ~10-min LFP power log, one
+    #     channel per hemisphere (a single physical sensing config sampled 24/7, NOT a pool).
+    # Dropped: powerdomain hemisphere AGGREGATES (kind=='aggregate') — those ARE a cross-contact pool.
+    def _is_chronic(s):
+        return s.get("source_modality") == "chronic"
+    def _is_stream_contact(s):
+        return s.get("source_modality") == "powerdomain" and s.get("kind") == "contact"
+    chosen = [it for it in items if _is_chronic(it[1]) or _is_stream_contact(it[1])]
+    # Fallback for older runs without source tags: keep contacts, else everything (so a row renders).
+    if not chosen:
+        chosen = [it for it in items if it[1].get("kind") == "contact"] or items
+
     out = []
     for ch_label, summ, cv in chosen:
         cv_plot = adapter.decimate_for_plot(cv, _TIMELINE_MAX_POINTS)
@@ -807,10 +820,15 @@ def _serialize_power_channels(run, label_metric="nrs"):
                 if label_metric in cv_plot.columns else None)
         thr = summ.get("best_threshold")
         thr = float(thr) if thr is not None and np.isfinite(thr) else None
+        sm = summ.get("source_modality")
         out.append({
             "channel": str(ch_label),
             "hemisphere": summ.get("hemisphere"),
             "kind": summ.get("kind"),
+            "source_modality": sm,
+            # "chronic" = ~10-min around-the-clock BrainSense Timeline; "powerdomain" = streaming.
+            "around_the_clock": (sm == "chronic"),
+            "center_hz": summ.get("center_hz"),
             "threshold": thr,
             "auc": summ.get("auc_in_sample"),
             "n_samples": summ.get("n_samples"),
@@ -818,8 +836,11 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "band_power": bp,
             "pain": pain,
         })
-    # Stable order: Left before Right, then by channel label, so rows read top-to-bottom by hemisphere.
-    out.sort(key=lambda d: ((d.get("hemisphere") or "Z"), str(d.get("channel"))))
+    # Stable order: hemisphere (Left, then Right), chronic-before-streaming within a hemisphere, then
+    # channel label — so rows read top-to-bottom by target, around-the-clock log first.
+    out.sort(key=lambda d: ((d.get("hemisphere") or "Z"),
+                            0 if d.get("source_modality") == "chronic" else 1,
+                            str(d.get("channel"))))
     return out
 
 
