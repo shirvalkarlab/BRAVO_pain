@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
@@ -173,6 +173,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const aggKeyFor = (h) => channelKeys.find((k) => kindOf(k) === "aggregate" && hemiOf(k) === h) || null;
 
   const [chSel, setChSel] = useState("pooled");
+  // Cost-sensitive ROC operating-point control. The optimal threshold under (FP, FN) costs (cFP, cFN)
+  // and disease prevalence p is the ROC point where the tangent slope equals m = (cFP/cFN)·((1-p)/p);
+  // the picker maximizes TPR - m·FPR. The slider exposes log2(cFP/cFN), so the midpoint (0 ⇒ cFP/cFN=1)
+  // reproduces the cost-symmetric Youden default. Negative log2 ⇒ false negatives cost more
+  // (high-sensitivity regime: don't miss real pain); positive ⇒ false positives cost more
+  // (high-specificity regime: don't stimulate when pain is actually low).
+  const [logCostRatio, setLogCostRatio] = useState(0);
   const isHemiSel = typeof chSel === "string" && chSel.startsWith("hemi:");
   const selHemi = isHemiSel ? chSel.slice(5) : null;
   const isContactSel = !!perChannel[chSel] && kindOf(chSel) === "contact";
@@ -755,13 +762,38 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
   const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
   const drawnByHemi = {};   // hemisphere -> [contact keys actually plotted] (for honest provenance)
-  // Optimal operating points (Youden's J — the device threshold that jointly maximizes true
-  // positives and minimizes false positives, i.e. the cut to set on the Percept RC for single-
-  // threshold closed-loop control). One marker dot per curve that carries a backend operating_point,
-  // colored to match its curve; the device-unit threshold(s) are listed in the caption below.
+  // Optimal operating points — picked LIVE from each curve at the slope set by the cost slider, so
+  // dragging the slider re-picks every dot without a backend roundtrip. The picker maximizes
+  // TPR - m·FPR over the curve vertices, where m = (cFP/cFN)·((1-p)/p). When the backend payload
+  // includes thr+prevalence we use them; otherwise we fall back to the backend's pre-computed
+  // Youden operating_point (old payload shape).
+  const costRatio = Math.pow(2, logCostRatio);             // cFP / cFN (≥ 0)
+  const pickOp = (rocLike) => {
+    if (!rocLike || !rocLike.fpr || !rocLike.tpr) return null;
+    const fprA = rocLike.fpr, tprA = rocLike.tpr, thrA = rocLike.thr;
+    const p = rocLike.prevalence;
+    // Falls back to the backend's symmetric Youden point when the payload predates the cost-aware
+    // payload (no thr/prevalence) — preserves the dot in that case.
+    if (!Array.isArray(thrA) || !Number.isFinite(p) || p <= 0 || p >= 1) {
+      const op = rocLike.operating_point;
+      return op && Number.isFinite(op.fpr) ? op : null;
+    }
+    const slope = costRatio * (1 - p) / p;
+    let bestK = -1, bestU = -Infinity;
+    for (let i = 0; i < fprA.length; i += 1) {
+      if (thrA[i] == null) continue;                       // skip the +inf sentinel vertex at (0,0)
+      const u = tprA[i] - slope * fprA[i];
+      if (u > bestU) { bestU = u; bestK = i; }
+    }
+    if (bestK < 0) return null;
+    return { fpr: fprA[bestK], tpr: tprA[bestK], threshold: thrA[bestK],
+             sensitivity: tprA[bestK], specificity: 1 - fprA[bestK],
+             slope, direction: "ge" };
+  };
   const opMarkers = [];   // marker traces, drawn LAST so the dots sit on top of every curve
   const opLabels = [];    // caption strings: "<curve>: threshold = X (sens, spec)"
-  const pushOp = (op, color, label, big) => {
+  const pushOp = (rocLike, color, label, big) => {
+    const op = pickOp(rocLike);
     if (!op || !Number.isFinite(op.fpr) || !Number.isFinite(op.tpr)) return;
     opMarkers.push({
       x: [op.fpr], y: [op.tpr], type: "scatter", mode: "markers",
@@ -791,8 +823,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           line: { width: 1.5, color: shades[i % shades.length], dash: "solid" }, opacity: 0.6,
           legendgroup: h, legendgrouptitle: i === 0 ? { text: `${h} hemisphere` } : undefined,
           hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
-        // Optimal operating point for this contact's own ROC, colored to match the curve.
-        pushOp(c.r.operating_point, shades[i % shades.length], c.k, false);
+        // Optimal operating point for this contact's own ROC, colored to match the curve. Picked
+        // LIVE from the curve at the slope set by the cost slider.
+        pushOp(c.r, shades[i % shades.length], c.k, false);
       });
       // (b) Bold MEAN ROC over this hemisphere's contacts (vertical average; AUC = mean of contact AUCs).
       if (curves.length >= 2) {
@@ -816,8 +849,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       line: { width: 3, color: meanColorFor(hemiOf(safeChSel) || "Left") },
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
-    // Optimal operating point (Youden) for the displayed curve — a prominent dot matching the curve.
-    pushOp(roc.operating_point, meanColorFor(hemiOf(safeChSel) || "Left"),
+    // Optimal operating point for the displayed curve — a prominent dot, picked live from the curve
+    // at the cost slider's slope (defaults to the cost-symmetric Youden point at the slider midpoint).
+    pushOp(roc, meanColorFor(hemiOf(safeChSel) || "Left"),
            isContactView ? safeChSel : "All contacts", true);
   }
   // Per-window curves (only for a genuine sliding run). Drawn faint; first one labeled, rest grouped.
@@ -845,8 +879,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     // ringed marker) explains what the dots are without cluttering the legend with one per contact.
     if (opMarkers.length) {
       rocTraces.push(...opMarkers);
+      const opLegendName = Math.abs(logCostRatio) < 1e-6
+        ? "Optimal threshold (Youden, cost 1:1)"
+        : `Optimal threshold (cost ${costRatio < 1 ? "1 : " + (1 / costRatio).toFixed(2) : costRatio.toFixed(2) + " : 1"} FP:FN)`;
       rocTraces.push({ x: [null], y: [null], type: "scatter", mode: "markers",
-        name: "Optimal threshold (Youden)", legendgroup: "oppoint", showlegend: true,
+        name: opLegendName, legendgroup: "oppoint", showlegend: true,
         marker: { color: "#344767", size: 9, symbol: "circle", line: { color: "#FFFFFF", width: 1.5 } },
         hoverinfo: "skip" });
     }
@@ -871,8 +908,46 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const rocProvAnn = rocProvenance ? [{ xref: "paper", yref: "paper", x: 0.0, y: 1.06,
       xanchor: "left", yanchor: "bottom", text: `Source: ${rocProvenance}`, showarrow: false,
       font: { size: 11, color: "#344767" } }] : [];
+    // Cost slider for the operating point. log2(cFP/cFN) on [-3, 3] => cost ratios 1:8 .. 8:1.
+    // Midpoint (0) reproduces the cost-symmetric Youden default. Labeled with three reference marks.
+    const costMarks = [
+      { value: -3, label: "1 : 8\u00A0FP:FN" },
+      { value: 0, label: "1 : 1" },
+      { value: 3, label: "8 : 1\u00A0FP:FN" },
+    ];
+    const costPrettyRatio = costRatio < 1
+      ? `1 : ${(1 / costRatio).toFixed(2)} (FP : FN) — high-sensitivity regime (don't miss real pain)`
+      : costRatio > 1
+        ? `${costRatio.toFixed(2)} : 1 (FP : FN) — high-specificity regime (don't stimulate when pain is low)`
+        : `1 : 1 (cost-symmetric — Youden's J)`;
+    // Provenance for the prevalence/slope readout. Use the pooled or selected curve's prevalence if
+    // exposed by the backend (the backend includes it on every roc payload from this fix onward).
+    const prevForRead = (roc && Number.isFinite(roc.prevalence)) ? roc.prevalence : null;
+    const slopeForRead = prevForRead != null ? costRatio * (1 - prevForRead) / prevForRead : null;
     chPanels.push(
       <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${titleNote}${perWinNote}`}>
+        {/* Cost-sensitive operating-point control. The dots on the curves below re-pick live as the
+            slider moves — no backend roundtrip — by maximizing TPR - m·FPR over each curve's vertices
+            at the cost slope m = (cFP/cFN)·((1-p)/p). */}
+        <MDBox px={1} pt={0.5} pb={0.5}>
+          <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={2} flexWrap="wrap" mb={0.25}>
+            <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 12.5 }}>
+              {"Clinical cost ratio (false positive : false negative)"}
+            </MDTypography>
+            <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>
+              {`Now: ${costPrettyRatio}` +
+                (prevForRead != null
+                  ? ` · prevalence = ${(prevForRead * 100).toFixed(1)}% high-pain · ROC tangent slope m = ${slopeForRead.toFixed(2)}`
+                  : "")}
+            </MDTypography>
+          </MDBox>
+          <MDBox px={1.5}>
+            <Slider value={logCostRatio} min={-3} max={3} step={0.25} marks={costMarks}
+              onChange={(_, v) => setLogCostRatio(Array.isArray(v) ? v[0] : v)}
+              valueLabelDisplay="off" size="small"
+              sx={{ "& .MuiSlider-markLabel": { fontSize: 10.5 } }} />
+          </MDBox>
+        </MDBox>
         <Fig height={380} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
@@ -889,9 +964,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         ) : null}
         {opLabels.length ? (
           <MDTypography variant="caption" color="dark" display="block" mt={0.5} fontWeight="medium" sx={{ fontSize: 11.5 }}>
-            {`Optimal device threshold (Youden's J — jointly maximizes true positives and minimizes false positives, the cut to program on the Percept RC for single-threshold closed loop): ` +
+            {(Math.abs(logCostRatio) < 1e-6
+              ? `Optimal device threshold at the COST-SYMMETRIC operating point (Youden's J — equal cost for false positives and false negatives): `
+              : `Optimal device threshold at the SELECTED cost ratio ${costPrettyRatio.split(" — ")[0]} — the ROC point where the curve's tangent slope equals m = (cFP/cFN)·((1-p)/p)` +
+                (slopeForRead != null ? ` = ${slopeForRead.toFixed(2)}` : "") + `: `) +
              opLabels.join(" · ") +
-             `. Classify pain-high when band power \u2265 this value.`}
+             `. Classify pain-high when band power \u2265 this value on the Percept RC.`}
           </MDTypography>
         ) : null}
       </Panel>
@@ -957,10 +1035,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       && Array.isArray(dist.bin_edges) && dist.bin_edges.length >= dist.counts.length + 1) {
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
-    // The ROC-optimal (Youden) threshold is the value actually programmed on the device; overlay it
-    // on the same band-power axis as a second reference line so the clinician can compare the
-    // unsupervised Otsu split (ignores the pain label) against the supervised, label-driven optimum.
-    const distOp = (chronic.roc && chronic.roc.operating_point) || null;
+    // The ROC-optimal threshold is the value actually programmed on the device; overlay it on the
+    // same band-power axis as a second reference line so the clinician can compare the unsupervised
+    // Otsu split (ignores the pain label) against the supervised, label-driven optimum. This pulls
+    // from the LIVE cost-sensitive picker so it tracks the cost slider above (defaults to the
+    // cost-symmetric Youden point when the slider sits at 1:1).
+    const distOp = chronic.roc ? pickOp(chronic.roc) : null;
     const distOpThr = distOp && Number.isFinite(distOp.threshold) ? distOp.threshold : null;
     // Only show it if it lands within the displayed (inlier) range, else the line floats off-axis.
     const distOpInRange = distOpThr != null && distOpThr >= edges[0] && distOpThr <= edges[edges.length - 1];

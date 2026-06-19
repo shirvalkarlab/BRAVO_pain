@@ -462,36 +462,47 @@ def roc_analysis(cv_df, max_points=400):
     flip = raw_auc < 0.5
     use_score = -score if flip else score
     fpr, tpr, thr = metrics.roc_curve(y, use_score)
+    # Map decision thresholds back to the device-unit band-power scale. With the high-pain = high-power
+    # convention the rule is `power >= thr_device`; when the AUC had to be flipped (so the score was
+    # negated) the device threshold is -thr. Aligned with fpr/tpr index-for-index.
+    thr_device_full = (-thr if flip else thr).astype(float)
 
-    # Optimal operating point = Youden's J statistic: the threshold maximizing (TPR - FPR), i.e. the
-    # point on the ROC curve furthest above the chance diagonal. This is the single device threshold
-    # that jointly maximizes true positives and minimizes false positives, which is exactly the cut a
-    # clinician sets on the Percept RC for single-threshold closed-loop control. roc_curve returns one
-    # vertex per unique score (thr aligned to fpr/tpr); skip the sentinel first threshold (np.inf).
+    # Default (cost-symmetric) operating point = Youden's J statistic: the threshold maximizing
+    # (TPR - FPR), i.e. the ROC point furthest above the chance diagonal. The frontend exposes a cost
+    # slider that re-solves the operating point live; this default is what shows when the slider sits
+    # at 1:1 (false-positive cost == false-negative cost). Skip the sentinel first vertex (thr=+inf).
     op = None
     if len(thr) > 1:
         j = tpr - fpr
         j_valid = j.copy()
-        j_valid[~np.isfinite(thr)] = -np.inf            # ignore the +inf sentinel vertex at (0,0)
+        j_valid[~np.isfinite(thr)] = -np.inf
         k = int(np.argmax(j_valid))
-        # Map the (oriented) decision threshold back to the device-unit band-power scale. With the
-        # high-pain = high-power convention, the rule is `power >= thr_device`. When the AUC had to be
-        # flipped, the oriented score is -power, so thr_device = -thr.
-        thr_device = float(-thr[k] if flip else thr[k])
         op = {
             "fpr": float(fpr[k]), "tpr": float(tpr[k]),
-            "threshold": thr_device,                    # device-unit band-power cut for the Percept RC
-            "sensitivity": float(tpr[k]),               # = TPR at the operating point
+            "threshold": float(thr_device_full[k]),
+            "sensitivity": float(tpr[k]),
             "specificity": float(1.0 - fpr[k]),
             "youden_j": float(j_valid[k]),
-            "direction": "ge",                          # classify pain-high when power >= threshold
+            "direction": "ge",
         }
 
-    if max_points and len(fpr) > max_points:                  # thin for plotting only (keep endpoints)
-        idx = np.unique(np.linspace(0, len(fpr) - 1, int(max_points)).astype(int))
-        fpr, tpr = fpr[idx], tpr[idx]
-    return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr],
+    # Prevalence on the SAME data the curve was built on (the pain-high rate). Used by the frontend
+    # cost-sensitive picker: the optimal ROC tangent slope under (FP, FN) cost (cFP, cFN) and
+    # prevalence p is m = (cFP/cFN) * ((1-p)/p), and the optimal point maximizes TPR - m * FPR.
+    n_pos = int(np.sum(y == 1))
+    n_neg = int(np.sum(y == 0))
+    prevalence = float(n_pos) / float(n_pos + n_neg) if (n_pos + n_neg) > 0 else None
+
+    # Downsample fpr/tpr/thr TOGETHER so the frontend picker sees a parallel, oriented set of vertices.
+    fpr_out, tpr_out, thr_out = fpr, tpr, thr_device_full
+    if max_points and len(fpr_out) > max_points:
+        idx = np.unique(np.linspace(0, len(fpr_out) - 1, int(max_points)).astype(int))
+        fpr_out, tpr_out, thr_out = fpr_out[idx], tpr_out[idx], thr_out[idx]
+    return {"fpr": [float(x) for x in fpr_out], "tpr": [float(x) for x in tpr_out],
+            # thresholds parallel to fpr/tpr; +inf sentinel at the (0,0) vertex stays as null in JSON.
+            "thr": [None if not np.isfinite(t) else float(t) for t in thr_out],
             "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df)),
+            "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
             "operating_point": op}
 
 

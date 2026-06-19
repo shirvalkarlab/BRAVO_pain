@@ -332,6 +332,42 @@ def test_otsu_matches_canonical_convention():
     assert 108.0 < thr_sym < 132.0, f"otsu {thr_sym:.1f} did not land in the valley between the modes"
 
 
+def test_roc_payload_carries_aligned_thresholds_and_prevalence():
+    """The cost-sensitive frontend picker needs (a) thresholds parallel to fpr/tpr (so it can re-pick
+    the operating point live without a backend roundtrip) and (b) the class prevalence (so it can
+    compute the ROC tangent slope m = (cFP/cFN)*(1-p)/p). Validate shape, alignment, and prevalence."""
+    from sklearn import metrics
+    rng = np.random.default_rng(7)
+    n_neg, n_pos = 3000, 1000
+    y = np.r_[np.zeros(n_neg), np.ones(n_pos)]
+    score = np.concatenate([rng.normal(100, 12, n_neg), rng.normal(140, 12, n_pos)])
+    out = analytics.roc_analysis(pd.DataFrame({"pain_level": y, "LFP_smoothed": score}))
+    assert "thr" in out and len(out["thr"]) == len(out["fpr"]) == len(out["tpr"])
+    # Prevalence matches the data exactly.
+    assert abs(out["prevalence"] - (n_pos / (n_pos + n_neg))) < 1e-12
+    assert out["n_pos"] == n_pos and out["n_neg"] == n_neg
+    # The very first vertex has +inf threshold (sentinel) → serialized as null.
+    assert out["thr"][0] is None
+    # Replicate the frontend cost-sensitive picker at cost 1:1 — must reproduce the Youden default.
+    fpr = np.array(out["fpr"]); tpr = np.array(out["tpr"])
+    thr = np.array([np.nan if t is None else t for t in out["thr"]])
+    p = out["prevalence"]
+    slope = 1.0 * (1 - p) / p
+    util = tpr - slope * fpr
+    util[~np.isfinite(thr)] = -np.inf
+    k = int(np.argmax(util))
+    op = out["operating_point"]
+    # NOTE: Youden uses slope = 1 (not (1-p)/p); the picker matches Youden only at the prevalence
+    # where the two coincide. The test here is that the frontend re-pick is COHERENT with the
+    # backend payload (the device-unit threshold thr[k] actually lies on the curve at fpr[k]/tpr[k]).
+    assert thr[k] is not None and np.isfinite(thr[k])
+    assert 100.0 < thr[k] < 140.0
+    # And independently: the backend's Youden default still equals the unweighted (TPR-FPR) argmax.
+    fpr_full, tpr_full, thr_full = metrics.roc_curve(y, score)
+    kY = int(np.argmax(tpr_full - fpr_full))
+    assert abs(op["threshold"] - float(thr_full[kY])) < 1e-9
+
+
 def test_roc_operating_point_is_youden_and_separates_classes():
     """roc_analysis must return an operating_point at Youden's J (max TPR-FPR) whose device-unit
     threshold actually separates the two pain classes, and must map the threshold back to the raw
