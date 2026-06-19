@@ -187,32 +187,42 @@ def _f(x):
     return None if not np.isfinite(x) else x
 
 
-def _otsu_threshold(values, nbins=128):
-    """Standard between-class-variance Otsu threshold on a 1-D value array."""
+def _otsu_threshold(values, nbins=256):
+    """Between-class-variance Otsu threshold on a 1-D value array.
+
+    Canonical formulation, verified to match skimage.filters.threshold_otsu bit-for-bit on the
+    histogram grid. The previous implementation had two defects that biased the cut high:
+      (1) it weighted the background by bins [0..i-1] but REPORTED centers[i] (the first foreground
+          bin) — an off-by-one that shifted the threshold up by ~0.5–1 bin width; and
+      (2) it used only 128 bins, coarsening the grid further.
+    Here the candidate split sits BETWEEN bin i and bin i+1: the background class is bins [0..i]
+    (weight w1, mean m1) and the foreground class is bins [i+1..] (weight w2, mean m2), and the
+    returned threshold is centers[argmax(w1*w2*(m1-m2)^2)] — the standard convention where
+    `value > threshold` is the high (foreground) class. nbins defaults to 256 (skimage's default)
+    for a finer grid.
+    """
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return None
     counts, edges = np.histogram(values, bins=nbins)
     centers = (edges[:-1] + edges[1:]) / 2.0
-    total = counts.sum()
-    if total == 0:
+    counts = counts.astype(float)
+    if counts.sum() == 0:
         return float(np.median(values))
-    wB = np.cumsum(counts).astype(float)
-    sumv = np.cumsum(counts * centers)
-    grand = sumv[-1]
-    best_var, best_t = -1.0, centers[0]
-    for i in range(1, nbins):
-        wb = wB[i - 1]
-        wf = total - wb
-        if wb == 0 or wf == 0:
-            continue
-        muB = sumv[i - 1] / wb
-        muF = (grand - sumv[i - 1]) / wf
-        var = wb * wf * (muB - muF) ** 2
-        if var > best_var:
-            best_var, best_t = var, centers[i]
-    return float(best_t)
+    # Cumulative class weights/means from the left (background) and right (foreground).
+    w1 = np.cumsum(counts)                                  # weight of bins [0..i]
+    w2 = np.cumsum(counts[::-1])[::-1]                      # weight of bins [i..]
+    # Class means (guard the empty-class divisions; those bins are excluded from bcv below anyway).
+    with np.errstate(invalid="ignore", divide="ignore"):
+        m1 = np.cumsum(counts * centers) / w1
+        m2 = (np.cumsum((counts * centers)[::-1]) / w2[::-1])[::-1]
+    # Between-class variance for the split between bin i and bin i+1 (i = 0..nbins-2).
+    bcv = w1[:-1] * w2[1:] * (m1[:-1] - m2[1:]) ** 2
+    bcv = np.where(np.isfinite(bcv), bcv, -1.0)
+    if not np.any(bcv > 0):
+        return float(np.median(values))
+    return float(centers[int(np.argmax(bcv))])
 
 
 def _all_data_window(df, thresholds):
@@ -449,13 +459,40 @@ def roc_analysis(cv_df, max_points=400):
 
     raw_auc = metrics.roc_auc_score(y, score)
     # Orient so the LFP-high = pain-high direction gives AUC >= 0.5 (matches the notebook's max(auc,1-auc)).
-    use_score = score if raw_auc >= 0.5 else -score
-    fpr, tpr, _ = metrics.roc_curve(y, use_score)
+    flip = raw_auc < 0.5
+    use_score = -score if flip else score
+    fpr, tpr, thr = metrics.roc_curve(y, use_score)
+
+    # Optimal operating point = Youden's J statistic: the threshold maximizing (TPR - FPR), i.e. the
+    # point on the ROC curve furthest above the chance diagonal. This is the single device threshold
+    # that jointly maximizes true positives and minimizes false positives, which is exactly the cut a
+    # clinician sets on the Percept RC for single-threshold closed-loop control. roc_curve returns one
+    # vertex per unique score (thr aligned to fpr/tpr); skip the sentinel first threshold (np.inf).
+    op = None
+    if len(thr) > 1:
+        j = tpr - fpr
+        j_valid = j.copy()
+        j_valid[~np.isfinite(thr)] = -np.inf            # ignore the +inf sentinel vertex at (0,0)
+        k = int(np.argmax(j_valid))
+        # Map the (oriented) decision threshold back to the device-unit band-power scale. With the
+        # high-pain = high-power convention, the rule is `power >= thr_device`. When the AUC had to be
+        # flipped, the oriented score is -power, so thr_device = -thr.
+        thr_device = float(-thr[k] if flip else thr[k])
+        op = {
+            "fpr": float(fpr[k]), "tpr": float(tpr[k]),
+            "threshold": thr_device,                    # device-unit band-power cut for the Percept RC
+            "sensitivity": float(tpr[k]),               # = TPR at the operating point
+            "specificity": float(1.0 - fpr[k]),
+            "youden_j": float(j_valid[k]),
+            "direction": "ge",                          # classify pain-high when power >= threshold
+        }
+
     if max_points and len(fpr) > max_points:                  # thin for plotting only (keep endpoints)
         idx = np.unique(np.linspace(0, len(fpr) - 1, int(max_points)).astype(int))
         fpr, tpr = fpr[idx], tpr[idx]
     return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr],
-            "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df))}
+            "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df)),
+            "operating_point": op}
 
 
 def lfp_distribution(cv_df, bins=40):

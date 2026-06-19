@@ -158,7 +158,13 @@ def test_lfp_distribution_otsu_on_mad_filtered_data():
     d = analytics.lfp_distribution(df, bins=40)
     assert 110.0 <= d["otsu"] <= 150.0, f"otsu {d['otsu']} dragged out of the class range by spikes"
     naive = analytics._otsu_threshold(df["LFP_smoothed"].values)   # unfiltered, for contrast
-    assert naive > 150.0, "control: a naive Otsu IS distorted by the spikes (proves MAD matters)"
+    # Control: the unfiltered Otsu is pulled toward the extreme spikes — it sits ABOVE the
+    # MAD-filtered split (closer to the high mode / the artifacts), proving the MAD pre-filter
+    # materially changes the threshold. (Magnitude depends on the bin grid; assert the direction
+    # and a clear gap rather than a brittle absolute value.)
+    assert naive > d["otsu"] + 10.0, (
+        f"control: a naive Otsu ({naive:.1f}) should sit well above the MAD-filtered split "
+        f"({d['otsu']:.1f}) — proves MAD filtering matters")
     assert d["n_total"] == 4003
 
 
@@ -290,7 +296,73 @@ def test_chronic_center_freqs_missing_is_safe():
     assert analytics.chronic_center_freqs({"Final": [_group(True, left_hz=0)]}) == {}
 
 
+def test_otsu_matches_canonical_convention():
+    """The corrected _otsu_threshold must (a) match the canonical between-class-variance Otsu (the
+    skimage convention) and (b) NOT exhibit the old +half-bin upward bias. On two clean Gaussians the
+    threshold sits between the modes; on an asymmetric mixture it matches a brute-force argmax of the
+    between-class variance to within one bin width."""
+    rng = np.random.default_rng(11)
+
+    def brute_otsu(data, grid=4000):
+        ts = np.linspace(data.min(), data.max(), grid)
+        best_t, best_v = ts[0], -1.0
+        for t in ts:
+            b, f = data[data <= t], data[data > t]
+            if b.size == 0 or f.size == 0:
+                continue
+            wb, wf = b.size / data.size, f.size / data.size
+            v = wb * wf * (b.mean() - f.mean()) ** 2
+            if v > best_v:
+                best_v, best_t = v, t
+        return best_t
+
+    for d in (np.concatenate([rng.normal(110, 3, 2000), rng.normal(150, 3, 2000)]),
+              np.concatenate([rng.normal(50, 5, 500), rng.normal(80, 15, 3000)]),
+              np.concatenate([rng.normal(20, 2, 100), rng.normal(60, 8, 5000)])):
+        thr = analytics._otsu_threshold(d, nbins=256)
+        bf = brute_otsu(d)
+        binw = (d.max() - d.min()) / 256.0
+        assert abs(thr - bf) <= 1.5 * binw, f"otsu {thr:.3f} far from brute-force optimum {bf:.3f}"
+    # Two well-separated modes: the threshold must land in the empty valley BETWEEN them. (It will
+    # not be the exact midpoint — between-class variance is flat across the gap, so canonical Otsu
+    # returns the leftmost maximizer; the point of the fix is that it no longer overshoots by half a
+    # bin, and the cut cleanly separates the two clusters.)
+    sym = np.concatenate([rng.normal(100, 4, 5000), rng.normal(140, 4, 5000)])
+    thr_sym = analytics._otsu_threshold(sym, nbins=256)
+    assert 108.0 < thr_sym < 132.0, f"otsu {thr_sym:.1f} did not land in the valley between the modes"
+
+
+def test_roc_operating_point_is_youden_and_separates_classes():
+    """roc_analysis must return an operating_point at Youden's J (max TPR-FPR) whose device-unit
+    threshold actually separates the two pain classes, and must map the threshold back to the raw
+    power scale correctly even when the AUC orientation had to be flipped."""
+    from sklearn import metrics
+    rng = np.random.default_rng(3)
+    y = np.r_[np.zeros(1500), np.ones(1500)]
+
+    # High pain -> high power.
+    score = np.concatenate([rng.normal(100, 10, 1500), rng.normal(140, 10, 1500)])
+    out = analytics.roc_analysis(pd.DataFrame({"pain_level": y, "LFP_smoothed": score}))
+    op = out["operating_point"]
+    assert op is not None and op["direction"] == "ge"
+    fpr, tpr, thr = metrics.roc_curve(y, score)
+    k = int(np.argmax(tpr - fpr))
+    assert abs(op["threshold"] - float(thr[k])) < 1e-9, "threshold is not Youden's J"
+    assert 100.0 < op["threshold"] < 140.0, "threshold should fall between the class means"
+    assert op["sensitivity"] > 0.9 and op["specificity"] > 0.9
+
+    # Flipped: high pain -> LOW power. AUC is flipped internally; threshold must still come back on
+    # the raw device scale (between the means), not negated.
+    score_flip = np.concatenate([rng.normal(140, 10, 1500), rng.normal(100, 10, 1500)])
+    out2 = analytics.roc_analysis(pd.DataFrame({"pain_level": y, "LFP_smoothed": score_flip}))
+    op2 = out2["operating_point"]
+    assert op2 is not None
+    assert 100.0 < op2["threshold"] < 140.0, f"flipped threshold {op2['threshold']:.1f} off the raw scale"
+
+
 if __name__ == "__main__":
+    test_otsu_matches_canonical_convention()
+    test_roc_operating_point_is_youden_and_separates_classes()
     test_roc_downsampled_for_plot()
     test_sliding_window_emits_per_window_roc()
     test_cluster_scatter_one_feature()

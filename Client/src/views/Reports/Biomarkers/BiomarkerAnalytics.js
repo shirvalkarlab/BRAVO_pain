@@ -755,6 +755,27 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
   const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
   const drawnByHemi = {};   // hemisphere -> [contact keys actually plotted] (for honest provenance)
+  // Optimal operating points (Youden's J — the device threshold that jointly maximizes true
+  // positives and minimizes false positives, i.e. the cut to set on the Percept RC for single-
+  // threshold closed-loop control). One marker dot per curve that carries a backend operating_point,
+  // colored to match its curve; the device-unit threshold(s) are listed in the caption below.
+  const opMarkers = [];   // marker traces, drawn LAST so the dots sit on top of every curve
+  const opLabels = [];    // caption strings: "<curve>: threshold = X (sens, spec)"
+  const pushOp = (op, color, label, big) => {
+    if (!op || !Number.isFinite(op.fpr) || !Number.isFinite(op.tpr)) return;
+    opMarkers.push({
+      x: [op.fpr], y: [op.tpr], type: "scatter", mode: "markers",
+      name: `${label} operating point`, legendgroup: "oppoint", showlegend: false,
+      marker: { color, size: big ? 12 : 8, symbol: "circle",
+                line: { color: "#FFFFFF", width: big ? 2 : 1.5 } },
+      hovertemplate: `${label} optimal threshold<br>threshold=${op.threshold != null ? op.threshold.toFixed(1) : "—"} device units` +
+                     `<br>sensitivity=${(op.sensitivity ?? op.tpr).toFixed(2)} · specificity=${(op.specificity ?? (1 - op.fpr)).toFixed(2)}<extra></extra>`,
+    });
+    if (op.threshold != null) {
+      opLabels.push(`${label}: ${op.threshold.toFixed(1)} device units ` +
+        `(sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`);
+    }
+  };
   if (!isContactView && groupHemis.length) {
     groupHemis.forEach((h) => {
       const shades = shadesFor(h);
@@ -770,6 +791,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           line: { width: 1.5, color: shades[i % shades.length], dash: "solid" }, opacity: 0.6,
           legendgroup: h, legendgrouptitle: i === 0 ? { text: `${h} hemisphere` } : undefined,
           hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+        // Optimal operating point for this contact's own ROC, colored to match the curve.
+        pushOp(c.r.operating_point, shades[i % shades.length], c.k, false);
       });
       // (b) Bold MEAN ROC over this hemisphere's contacts (vertical average; AUC = mean of contact AUCs).
       if (curves.length >= 2) {
@@ -793,6 +816,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       line: { width: 3, color: meanColorFor(hemiOf(safeChSel) || "Left") },
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
+    // Optimal operating point (Youden) for the displayed curve — a prominent dot matching the curve.
+    pushOp(roc.operating_point, meanColorFor(hemiOf(safeChSel) || "Left"),
+           isContactView ? safeChSel : "All contacts", true);
   }
   // Per-window curves (only for a genuine sliding run). Drawn faint; first one labeled, rest grouped.
   // Exclude the all-data window (sliding OFF) — its single ROC is already the main curve, and
@@ -815,6 +841,15 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   if (rocTraces.length) {
     rocTraces.push({ x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
       line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
+    // Operating-point dots LAST so they sit on top of every curve. One shared legend entry (a black
+    // ringed marker) explains what the dots are without cluttering the legend with one per contact.
+    if (opMarkers.length) {
+      rocTraces.push(...opMarkers);
+      rocTraces.push({ x: [null], y: [null], type: "scatter", mode: "markers",
+        name: "Optimal threshold (Youden)", legendgroup: "oppoint", showlegend: true,
+        marker: { color: "#344767", size: 9, symbol: "circle", line: { color: "#FFFFFF", width: 1.5 } },
+        hoverinfo: "skip" });
+    }
     const isMeanView = meanAucLabels.length > 0;
     const titleNote = isMeanView ? ` · mean ${meanAucLabels.join(", ")}` : "";
     const perWinNote = windowRocs.length ? ` · ${windowRocs.length} per-window curves` : "";
@@ -850,6 +885,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                ? " Bold line = per-hemisphere mean ROC (vertical average of that hemisphere's plotted bipolar contacts); thin lines behind it are the individual contacts (blue = Left, orange = Right). Contacts with only one pain class (no ROC) are omitted. The two hemispheres are never averaged together (separate stimulation targets)."
                : "") +
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
+          </MDTypography>
+        ) : null}
+        {opLabels.length ? (
+          <MDTypography variant="caption" color="dark" display="block" mt={0.5} fontWeight="medium" sx={{ fontSize: 11.5 }}>
+            {`Optimal device threshold (Youden's J — jointly maximizes true positives and minimizes false positives, the cut to program on the Percept RC for single-threshold closed loop): ` +
+             opLabels.join(" · ") +
+             `. Classify pain-high when band power \u2265 this value.`}
           </MDTypography>
         ) : null}
       </Panel>
@@ -915,6 +957,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       && Array.isArray(dist.bin_edges) && dist.bin_edges.length >= dist.counts.length + 1) {
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
+    // The ROC-optimal (Youden) threshold is the value actually programmed on the device; overlay it
+    // on the same band-power axis as a second reference line so the clinician can compare the
+    // unsupervised Otsu split (ignores the pain label) against the supervised, label-driven optimum.
+    const distOp = (chronic.roc && chronic.roc.operating_point) || null;
+    const distOpThr = distOp && Number.isFinite(distOp.threshold) ? distOp.threshold : null;
+    // Only show it if it lands within the displayed (inlier) range, else the line floats off-axis.
+    const distOpInRange = distOpThr != null && distOpThr >= edges[0] && distOpThr <= edges[edges.length - 1];
     chPanels.push(
       <Panel key="dist" title={`Power band-power distribution + Otsu split${chSuffix}`}>
         <Fig height={340} traces={[{
@@ -925,12 +974,19 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           layout={{
             xaxis: { title: "Power band power (device units, outlier-free 1st–99th pct range)" },
             yaxis: { title: "Sample count" }, bargap: 0.04,
-            shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
-              y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : [],
+            shapes: [
+              ...(dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
+                y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : []),
+              ...(distOpInRange ? [{ type: "line", x0: distOpThr, x1: distOpThr, yref: "paper",
+                y0: 0, y1: 1, line: { color: "#117733", width: 2.5, dash: "dot" } }] : []),
+            ],
             annotations: [
               ...(dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
                 text: `Otsu = ${dist.otsu.toFixed(1)}`, showarrow: false,
                 font: { color: PALETTE[1], size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
+              ...(distOpInRange ? [{ x: distOpThr, yref: "paper", y: 1.10,
+                text: `ROC optimum = ${distOpThr.toFixed(1)}`, showarrow: false,
+                font: { color: "#117733", size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
               ...pooledProvAnn,
             ] }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
@@ -941,7 +997,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                `are excluded from BOTH the histogram and the Otsu threshold, so the bars and the split ` +
                `describe the same outlier-free distribution. `
              : `No outliers were excluded (all samples within 3 MADs of the median). `) +
-           `Bars are trimmed to the inlier 1st\u201399th percentile for display.`}
+           `Bars are trimmed to the inlier 1st\u201399th percentile for display. ` +
+           `Orange dashed line = Otsu split (unsupervised, label-free — minimizes within-class variance of the power distribution). ` +
+           (distOpInRange
+             ? `Green dotted line = ROC-optimal (Youden) threshold = ${distOpThr.toFixed(1)} device units, the supervised cut that jointly maximizes true positives and minimizes false positives against the pain label — this is the value to program for closed loop.`
+             : `The ROC-optimal (Youden) threshold for closed-loop programming is shown on the ROC panel above.`)}
         </MDTypography>
       </Panel>
     );
