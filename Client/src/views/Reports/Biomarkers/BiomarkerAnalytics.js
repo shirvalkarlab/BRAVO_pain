@@ -172,7 +172,25 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // bind the histogram / sliding-window / honest-perf panels when a hemisphere is selected.
   const aggKeyFor = (h) => channelKeys.find((k) => kindOf(k) === "aggregate" && hemiOf(k) === h) || null;
 
-  const [chSel, setChSel] = useState("pooled");
+  // Default to a single IMPLEMENTABLE contact — the one with the highest in-sample AUC (best
+  // discrimination), since you program one bipolar contact at a time on the Percept RC. We never
+  // default to a cross-channel pool. If no per-contact split exists (legacy single-detector run),
+  // fall back to "pooled" — which in that case IS the only channel, not a cross-channel average.
+  const aucOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    const a = s && (s.auc_in_sample != null ? s.auc_in_sample : s.auc);
+    return typeof a === "number" && Number.isFinite(a) ? a : -Infinity;
+  };
+  const bestContact = orderedContacts.length
+    ? orderedContacts.reduce((best, k) => (aucOf(k) > aucOf(best) ? k : best), orderedContacts[0])
+    : null;
+  const defaultSel = bestContact || (hasLeft ? "hemi:Left" : (hasRight ? "hemi:Right" : "pooled"));
+
+  // null = "user hasn't picked yet" → fall through to defaultSel. Using a sentinel (rather than
+  // seeding useState with defaultSel) means the default tracks the data once `analytics` loads after
+  // mount, instead of locking in the empty-data fallback captured on the first render.
+  const [chSelRaw, setChSel] = useState(null);
+  const chSel = chSelRaw == null ? defaultSel : chSelRaw;
   // Cost-sensitive ROC operating-point control. The optimal threshold under (FP, FN) costs (cFP, cFN)
   // and disease prevalence p is the ROC point where the tangent slope equals m = (cFP/cFN)·((1-p)/p);
   // the picker maximizes TPR - m·FPR. The slider exposes log2(cFP/cFN), so the midpoint (0 ⇒ cFP/cFN=1)
@@ -185,7 +203,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const isContactSel = !!perChannel[chSel] && kindOf(chSel) === "contact";
   const validSel = chSel === "pooled" || isContactSel ||
     (isHemiSel && ((selHemi === "Left" && hasLeft) || (selHemi === "Right" && hasRight)));
-  const safeChSel = validSel ? chSel : "pooled";
+  // Fall back to the default single contact (never the cross-hemisphere pool) on an invalid selection.
+  const safeChSel = validSel ? chSel : defaultSel;
   // Which underlying per_channel entry drives the single-summary panels: the contact itself for a
   // contact selection, the hemisphere aggregate for a hemisphere selection, else pooled (null).
   // Plain derivations (cheap, recomputed each render) — kept as plain consts so they sit cleanly
@@ -1204,22 +1223,27 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
         </MDTypography>
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
           onChange={(_, v) => { if (v) setChSel(v); }}>
-          <ToggleButton value="pooled">All contacts</ToggleButton>
-          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere</ToggleButton> : null}
+          {/* No cross-hemisphere "All contacts" pool — you program one contact at a time, and Left
+              (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
+              per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
+              single "pooled" button appears only when there is no per-contact split at all. */}
+          {orderedContacts.length === 0
+            ? <ToggleButton value="pooled">All data</ToggleButton> : null}
+          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere (mean)</ToggleButton> : null}
           {leftContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
-          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere</ToggleButton> : null}
+          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere (mean)</ToggleButton> : null}
           {rightContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
         </ToggleButtonGroup>
         <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
-            ? "All bipolar contacts, grouped by hemisphere — per-hemisphere mean ROC over each side's contacts (Left and Right shown separately, never averaged together)."
+            ? "Single combined series (no per-contact split available for this run)."
             : isHemiSel
-              ? `${selHemi} hemisphere — mean over its bipolar contacts, with the individual contacts behind it.`
-              : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
+              ? `${selHemi} hemisphere — mean over its bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together).`
+              : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC contact, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
         </MDTypography>
       </MDBox>
     </Grid>
