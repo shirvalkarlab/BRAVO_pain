@@ -45,6 +45,7 @@ import LoadingProgress from "components/LoadingProgress";
 
 // core components
 import RecordScoreTimeline from "./RecordScoreTimeline";
+import RecordCountBars from "./RecordCountBars";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -401,9 +402,14 @@ function ParticipantSurveyRecords() {
                     </MDBox>
                   </Grid>
                   {data.length > 0 ? (
+                    <>
+                    <Grid item xs={12}>
+                      <RecordCountBars dataToRender={data} form={availableForms.active.Record}/>
+                    </Grid>
                     <Grid item xs={12}>
                       <RecordScoreTimeline dataToRender={data} form={availableForms.active.Record} figureTitle={"RecordScoreTimeline"}/>
                     </Grid>
+                    </>
                   ) : (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={2}>
