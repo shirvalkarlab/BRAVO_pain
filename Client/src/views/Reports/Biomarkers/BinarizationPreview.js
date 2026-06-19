@@ -77,7 +77,24 @@ function computeCuts(vals, strategy, lowPct, highPct) {
 }
 
 
-function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, metricLabel, loading }) {
+// Adaptive histogram bin width for the binarization preview. Different pain metrics live on very
+// different scales, so a single fixed bin width either over- or under-resolves them:
+//   * NRS (0–10) and the z-scored Composite are narrow → 0.2 score-unit bins.
+//   * VAS metrics (0–100) and the MPQ/NPQ sum span tens of points → 2 score-unit bins.
+// Primary decision is by metric key (explicit, matches the clinician's mental model); a range-based
+// fallback (span > 15 → wide bins) covers any future metric not in the map.
+const WIDE_BIN_METRICS = new Set(["vas", "left_leg_vas", "back_vas", "mpq_sum", "npq_sum"]);
+const NARROW_BIN_METRICS = new Set(["nrs", "composite_mpq_leftleg"]);
+function binWidthForMetric(metricKey, vmin, vmax) {
+  if (metricKey && NARROW_BIN_METRICS.has(metricKey)) return 0.2;
+  if (metricKey && WIDE_BIN_METRICS.has(metricKey)) return 2;
+  // Fallback for an unmapped metric: decide from the observed span.
+  const span = (Number.isFinite(vmax) && Number.isFinite(vmin)) ? vmax - vmin : 0;
+  return span > 15 ? 2 : 0.2;
+}
+
+
+function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, metricLabel, metricKey, loading }) {
   const ref = useRef(null);
 
   // Aggregate the raw PRO reports to ONE value per calendar day (the mean of that day's reports),
@@ -136,13 +153,14 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   useEffect(() => {
     if (!ref.current) return;
     if (!vals.length) { Plotly.purge(ref.current); return; }
-    // Fixed bin width of 0.2 score units (per user request) — a constant, interpretable bin on the
-    // 0–10 pain scale, rather than an auto-chosen count. Anchor the left edge to a clean 0.2 grid so
-    // bin boundaries fall on …, 6.8, 7.0, 7.2, … (cut lines at e.g. 7.3/8.0 land predictably). A hard
-    // cap guards against a pathological range producing thousands of bins.
-    const BIN_W = 0.2;
+    // Adaptive bin width by metric (see binWidthForMetric): 0.2 for narrow 0–10 / z-scored scales
+    // (NRS, Composite), 2 for wide 0–100 / summed scales (VAS, MPQ/NPQ sum). Anchor the left edge to
+    // a clean multiple of the bin width so boundaries fall on predictable grid lines (…, 6.8, 7.0,
+    // 7.2, … for 0.2; …, 40, 42, 44, … for 2) and cut lines land cleanly between bars. A hard cap
+    // guards against a pathological range producing thousands of bins.
     const rawMin = Math.min(...vals), vmax = Math.max(...vals);
-    const vmin = Math.floor(rawMin / BIN_W) * BIN_W;          // align down to a 0.2 multiple
+    const BIN_W = binWidthForMetric(metricKey, rawMin, vmax);
+    const vmin = Math.floor(rawMin / BIN_W) * BIN_W;          // align down to a BIN_W multiple
     const binW = BIN_W;
     const nBins = Math.max(1, Math.min(500, Math.ceil((vmax - vmin) / binW) || 1));
     // Build manual bins so each bin gets a per-class color (low/excluded/high) — Plotly's stacked
@@ -232,7 +250,7 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
       responsive: true, displaylogo: false, displayModeBar: false,
     });
     return () => { if (ref.current) Plotly.purge(ref.current); };
-  }, [vals, cuts, stats, metricLabel]);
+  }, [vals, cuts, stats, metricLabel, metricKey]);
 
   return (
     <MDBox display="flex" flexDirection="column" sx={{ width: "100%", height: "100%", minHeight: 440 }}>

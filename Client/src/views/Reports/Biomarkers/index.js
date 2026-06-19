@@ -414,6 +414,7 @@ function Biomarkers() {
                                 percentileLow={percentileLow}
                                 percentileHigh={percentileHigh}
                                 metricLabel={previewMetricLabel}
+                                metricKey={metric}
                                 loading={painLoading}
                               />
                             </MDBox>
