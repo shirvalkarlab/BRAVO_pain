@@ -790,21 +790,43 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
              sensitivity: tprA[bestK], specificity: 1 - fprA[bestK],
              slope, direction: "ge" };
   };
-  const opMarkers = [];   // marker traces, drawn LAST so the dots sit on top of every curve
-  const opLabels = [];    // caption strings: "<curve>: threshold = X (sens, spec)"
+  const opMarkers = [];      // marker traces, drawn LAST so the dots sit on top of every curve
+  const opLabels = [];       // caption strings: "<curve>: threshold = X (sens, spec)"
+  const opAnnotations = [];  // on-dot callout pills showing the device threshold to PROGRAM
   const pushOp = (rocLike, color, label, big) => {
     const op = pickOp(rocLike);
     if (!op || !Number.isFinite(op.fpr) || !Number.isFinite(op.tpr)) return;
+    // Each operating point is its OWN legend entry, colored to its curve, with the device-unit
+    // threshold to PROGRAM shown bold + underlined right in the legend label (Plotly rich text).
+    const thrLabel = op.threshold != null
+      ? `${label}: <b><u>power \u2265 ${op.threshold.toFixed(1)}</u></b> (sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`
+      : `${label}: optimal threshold`;
     opMarkers.push({
       x: [op.fpr], y: [op.tpr], type: "scatter", mode: "markers",
-      name: `${label} operating point`, legendgroup: "oppoint", showlegend: false,
+      name: thrLabel, legendgroup: "oppoint",
+      legendgrouptitle: opMarkers.length === 0 ? { text: "Optimal thresholds to program (device units)" } : undefined,
+      showlegend: true,
       marker: { color, size: big ? 12 : 8, symbol: "circle",
                 line: { color: "#FFFFFF", width: big ? 2 : 1.5 } },
-      hovertemplate: `${label} optimal threshold<br>threshold=${op.threshold != null ? op.threshold.toFixed(1) : "—"} device units` +
+      hovertemplate: `${label} — PROGRAM THIS THRESHOLD<br>power \u2265 ${op.threshold != null ? op.threshold.toFixed(1) : "\u2014"} device units` +
                      `<br>sensitivity=${(op.sensitivity ?? op.tpr).toFixed(2)} · specificity=${(op.specificity ?? (1 - op.fpr)).toFixed(2)}<extra></extra>`,
     });
+    // Callout pill anchored to the dot: the device-unit threshold is the number the clinician types
+    // into the Percept RC, so it is annotated DIRECTLY on the operating point (not just in the
+    // caption/hover). The primary curve (big) gets a filled, prominent pill; per-contact dots get a
+    // smaller matching-color pill so a multi-contact plot stays legible.
     if (op.threshold != null) {
-      opLabels.push(`${label}: ${op.threshold.toFixed(1)} device units ` +
+      opAnnotations.push({
+        x: op.fpr, y: op.tpr, xref: "x", yref: "y",
+        text: big ? `<b>Set power \u2265 ${op.threshold.toFixed(1)}</b>` : `<b>\u2265 ${op.threshold.toFixed(1)}</b>`,
+        showarrow: true, arrowhead: 0, arrowwidth: 1.2, arrowcolor: color,
+        ax: 26, ay: big ? 30 : 22,                 // offset down-right of the dot so it clears the curve
+        font: { size: big ? 12.5 : 10.5, color: big ? "#FFFFFF" : color },
+        bgcolor: big ? color : "rgba(255,255,255,0.92)",
+        bordercolor: color, borderwidth: 1.2, borderpad: big ? 4 : 2.5, opacity: 0.97,
+        xanchor: "left", yanchor: "top",
+      });
+      opLabels.push(`${label}: power \u2265 ${op.threshold.toFixed(1)} device units ` +
         `(sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`);
     }
   };
@@ -877,15 +899,10 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
     // Operating-point dots LAST so they sit on top of every curve. One shared legend entry (a black
     // ringed marker) explains what the dots are without cluttering the legend with one per contact.
+    // Each operating-point dot carries its OWN legend entry (curve label + bold/underlined device
+    // threshold), grouped under one "Optimal thresholds to program" title. No separate shared entry.
     if (opMarkers.length) {
       rocTraces.push(...opMarkers);
-      const opLegendName = Math.abs(logCostRatio) < 1e-6
-        ? "Optimal threshold (Youden, cost 1:1)"
-        : `Optimal threshold (cost ${costRatio < 1 ? "1 : " + (1 / costRatio).toFixed(2) : costRatio.toFixed(2) + " : 1"} FP:FN)`;
-      rocTraces.push({ x: [null], y: [null], type: "scatter", mode: "markers",
-        name: opLegendName, legendgroup: "oppoint", showlegend: true,
-        marker: { color: "#344767", size: 9, symbol: "circle", line: { color: "#FFFFFF", width: 1.5 } },
-        hoverinfo: "skip" });
     }
     const isMeanView = meanAucLabels.length > 0;
     const titleNote = isMeanView ? ` · mean ${meanAucLabels.join(", ")}` : "";
@@ -952,7 +969,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
           legend: { orientation: "h", y: -0.22, groupclick: "toggleitem" },
-          annotations: rocProvAnn }} />
+          annotations: [...rocProvAnn, ...opAnnotations] }} />
         {rocProvenance ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
             {`Power signal from ${rocProvenance}.` +
