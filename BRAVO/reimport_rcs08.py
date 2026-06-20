@@ -36,7 +36,9 @@ Notes:
 import argparse
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the platform client from this repo (script lives in BRAVO/ next to it).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -88,8 +90,13 @@ def main():
                     help="Base URL of the running BRAVO server.")
     ap.add_argument("--api-key", default=os.environ.get("BRAVO_API_KEY"),
                     help="Secure API key (or set BRAVO_API_KEY).")
-    ap.add_argument("--delay", type=float, default=0.3,
-                    help="Seconds to pause between uploads (default 0.3).")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="Parallel upload connections (default 8). The server decodes each file with "
+                         "its own thread pool and serializes identical-content uploads on a per-hash "
+                         "lock, so very high values give diminishing returns; 6-12 is a good range.")
+    ap.add_argument("--delay", type=float, default=0.0,
+                    help="Seconds to pause between submitting uploads (default 0; parallelism "
+                         "replaces inter-request spacing).")
     ap.add_argument("--dry-run", action="store_true", help="List files; upload nothing.")
     args = ap.parse_args()
 
@@ -134,23 +141,60 @@ def main():
         "automatic_deidentification": False,
     }
 
-    n_ok = n_dup = n_err = 0
-    for i, path in enumerate(files, 1):
+    total = len(files)
+    workers = max(1, args.workers)
+
+    # requests.Session (held inside BRAVOPlatformRequest) is not guaranteed thread-safe, so give
+    # each worker thread its OWN authenticated client via thread-local storage rather than sharing
+    # `api` across threads. Each thread-local client authenticates once on first use.
+    _tl = threading.local()
+
+    def _client():
+        c = getattr(_tl, "client", None)
+        if c is None:
+            c = BRAVOPlatformRequest(args.api_key, server=args.server)
+            c.GetUserInfo()  # sets c.User (needed for the Institute field on upload)
+            _tl.client = c
+        return c
+
+    counts = {"ok": 0, "err": 0, "done": 0}
+    lock = threading.Lock()
+
+    def _upload(path):
         rel = os.path.relpath(path, args.folder)
         try:
             with open(path, "rb") as fh:
-                # UploadMedtronicJSON returns True for both 200 (ingested) and 301 (duplicate).
-                ok = api.UploadMedtronicJSON(uid, fh, metadata=upload_meta)
-            # The client collapses 200/301 to True; treat True as success. (A 301 duplicate is a
-            # no-op success — already in the DB.)
-            n_ok += 1
-            print(f"  [{i}/{len(files)}] OK  {rel}")
+                # Returns True for both 200 (ingested) and 301 (duplicate) — both are success.
+                _client().UploadMedtronicJSON(uid, fh, metadata=upload_meta)
+            ok, msg = True, None
         except Exception as exc:
-            n_err += 1
-            print(f"  [{i}/{len(files)}] ERR {rel}: {exc}", file=sys.stderr)
-        time.sleep(args.delay)
+            ok, msg = False, str(exc)
+        with lock:
+            counts["done"] += 1
+            i = counts["done"]
+            if ok:
+                counts["ok"] += 1
+                print(f"  [{i}/{total}] OK  {rel}")
+            else:
+                counts["err"] += 1
+                print(f"  [{i}/{total}] ERR {rel}: {msg}", file=sys.stderr)
+        return ok
 
-    print(f"\nDone. uploaded/accepted={n_ok}  errors={n_err}  total={len(files)}")
+    t0 = time.time()
+    print(f"Uploading {total} file(s) with {workers} parallel connection(s)...\n")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = []
+        for path in files:
+            futures.append(pool.submit(_upload, path))
+            if args.delay:
+                time.sleep(args.delay)  # optional throttle on SUBMISSION rate
+        for _ in as_completed(futures):
+            pass
+    dt = time.time() - t0
+
+    rate = total / dt if dt > 0 else 0.0
+    print(f"\nDone in {dt:.1f}s ({rate:.1f} files/s).  "
+          f"uploaded/accepted={counts['ok']}  errors={counts['err']}  total={total}")
     print("Note: files already stored are accepted as duplicates (HTTP 301) and not re-decoded.")
     print("Reload the Biomarkers report and hard-refresh (Cmd+Shift+R) to see the repopulated data.")
 
