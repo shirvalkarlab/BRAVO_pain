@@ -122,15 +122,25 @@ def main():
         sys.exit(2)
     print(f"Target participant: {name!r} (uid={uid})\n")
 
+    # The MedtronicJSON decode path (DataCurator.MedtronicPerceptJSONDecoder) reads these metadata
+    # keys directly: metadata["automatic_concatenation"] and metadata["automatic_deidentification"].
+    # The web UI's DefaultType route injects them server-side, but the MedtronicJSON route does NOT,
+    # so we MUST supply them here or the decode raises KeyError('automatic_concatenation'). Pass the
+    # full set the decoder expects.
+    upload_meta = {
+        "device_location": "",
+        "infer_from_device": True,
+        "automatic_concatenation": False,
+        "automatic_deidentification": False,
+    }
+
     n_ok = n_dup = n_err = 0
     for i, path in enumerate(files, 1):
         rel = os.path.relpath(path, args.folder)
         try:
             with open(path, "rb") as fh:
-                # UploadMedtronicJSON returns True for both 200 (ingested) and 301 (duplicate); we
-                # distinguish them by re-checking the response status via a thin inline upload so the
-                # operator sees ingested-vs-already-present counts.
-                ok = api.UploadMedtronicJSON(uid, fh)
+                # UploadMedtronicJSON returns True for both 200 (ingested) and 301 (duplicate).
+                ok = api.UploadMedtronicJSON(uid, fh, metadata=upload_meta)
             # The client collapses 200/301 to True; treat True as success. (A 301 duplicate is a
             # no-op success — already in the DB.)
             n_ok += 1
