@@ -52,17 +52,31 @@ def find_jsons(folder):
     return sorted(out)
 
 
+def _pinfo(p):
+    """Pull (uid, name) from a participant dict, tolerating the API's capitalized keys
+    (get_info returns 'Id'/'Name') as well as lowercase variants."""
+    uid = p.get("Id") or p.get("uid") or p.get("id") or ""
+    name = p.get("Name") or p.get("name") or ""
+    return str(uid), str(name)
+
+
 def resolve_participant(api, wanted):
-    """Return the participant uid matching `wanted` (a name or uid), or None."""
+    """Return the participant (uid, name) matching `wanted` (a name or uid), or (None, None).
+
+    The /api/queryParticipants response is a LIST of get_info() dicts keyed 'Id'/'Name'. Under an
+    active study with deidentification, 'Name' is replaced by the uid, so we match on uid too.
+    """
     parts = api.QueryParticipants() or []
     w = str(wanted).strip().lower()
-    # Exact uid match first, then name match.
+    # Exact uid match first (works even when names are deidentified), then name match.
     for p in parts:
-        if str(p.get("uid", "")).lower() == w:
-            return p.get("uid"), p.get("name")
+        uid, name = _pinfo(p)
+        if uid.lower() == w:
+            return uid, name
     for p in parts:
-        if str(p.get("name", "")).strip().lower() == w:
-            return p.get("uid"), p.get("name")
+        uid, name = _pinfo(p)
+        if name.strip().lower() == w:
+            return uid, name
     return None, None
 
 
