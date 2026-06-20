@@ -78,6 +78,48 @@ def _chronic_center_freqs(groups):
     return freqs
 
 
+def _chronic_freq_schedule(JSON):
+    """Per-hemisphere DATED sensing-frequency schedule from GroupHistory.
+
+    A single session stamps ONE current sensing frequency, but the programmed band changes over
+    time. GroupHistory is a list of dated snapshots ({SessionDate, Groups}) of the full group config,
+    so it records WHEN the sensing frequency changed. We turn it into a step-function schedule per
+    hemisphere: {hemi_token: [[epoch_seconds, hz], ...]} sorted by time with consecutive same-Hz
+    points collapsed to change-points. The union of these schedules across every ingested session
+    reconstructs the full frequency-over-time history, which the report segments against each trend's
+    own time span to draw an accurate frequency ribbon. Fully defensive: returns {} on any malformed
+    structure so decode never fails.
+    """
+    from datetime import datetime
+    out = {}
+    gh = JSON.get("GroupHistory")
+    if not isinstance(gh, list):
+        return out
+    for entry in gh:
+        if not isinstance(entry, dict):
+            continue
+        sd = entry.get("SessionDate")
+        if not sd:
+            continue
+        try:
+            t = datetime.fromisoformat(str(sd).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        # Reuse the active-group frequency extractor on this snapshot's Groups list.
+        hz_map = _chronic_center_freqs(entry.get("Groups"))
+        for hemi_token, hz in hz_map.items():
+            out.setdefault(hemi_token, []).append([t, hz])
+    # Sort by time and collapse to change-points (drop a snapshot whose Hz equals the previous one).
+    for hemi_token, pts in out.items():
+        pts.sort(key=lambda p: p[0])
+        cps = []
+        for tp, hz in pts:
+            if not cps or cps[-1][1] != hz:
+                cps.append([tp, hz])
+        out[hemi_token] = cps
+    return out
+
+
 def extractPatientInformation(JSON):
     PatientOverview = {}
     PatientOverview["SessionTimestamp"] = Percept.estimateSessionDateTime(JSON)
@@ -324,6 +366,10 @@ def decodeMedtronicJSON(JSON):
         # at report time. _chronic_center_freqs is local & defensive (returns {} on any malformed
         # structure), so decode never fails on a missing/odd Groups block.
         _chronic_hz = _chronic_center_freqs(JSON.get("Groups"))
+        # DATED frequency schedule from GroupHistory (records WHEN the band changed, which a single
+        # current value cannot). Stamped per recording so the report can segment each trend's span
+        # against the real change-points instead of collapsing it to one frequency.
+        _freq_sched = _chronic_freq_schedule(JSON)
         for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"]):
             chans = Recording["ChannelNames"]
             # ChannelNames[0] is like "RightHemisphere LFP" -> token "RightHemisphere".
@@ -331,6 +377,9 @@ def decodeMedtronicJSON(JSON):
             md = {"ChannelNames": chans}
             if hemi_token in _chronic_hz:
                 md["CenterFrequencyHz"] = _chronic_hz[hemi_token]
+            if hemi_token in _freq_sched and _freq_sched[hemi_token]:
+                # [[epoch_seconds, hz], ...] change-points for this hemisphere.
+                md["FreqScheduleHz"] = _freq_sched[hemi_token]
             ChronicRecordings.append({
                 "name": "",
                 "type": "MedtronicChronicBrainSense",

@@ -66,15 +66,128 @@ def _snap_freq(hz):
     return round(round(hz / _PERCEPT_FREQ_BIN_HZ) * _PERCEPT_FREQ_BIN_HZ, 1)
 
 
+def _parse_time_ms(t):
+    """Parse a recording's Time array to a UTC DatetimeIndex, handling BOTH encodings.
+
+    Chronic Time is epoch SECONDS as float (ChronicBrainSense stamps t.timestamp()); power-domain
+    synthesizes float seconds too. But pd.to_datetime on a float Series defaults to NANOSECONDS,
+    which maps ~1.7e9 -> 1970. Detect the numeric case and pass unit='s'; otherwise parse as ISO/strings.
+    """
+    try:
+        s = pd.Series(t)
+    except Exception:
+        return None
+    if len(s) == 0:
+        return None
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_datetime(s, unit="s", utc=True, errors="coerce").dropna()
+    return pd.to_datetime(s, utc=True, errors="coerce").dropna()
+
+
+def _channel_time_extent_ms(ch_list):
+    """[min_ms, max_ms] over every recording's Time array in ch_list, or None if no parseable time."""
+    lo = hi = None
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        tarr = _parse_time_ms(c.get("Time"))
+        if tarr is None or len(tarr) == 0:
+            continue
+        t0 = int(tarr.min().value // 1_000_000)
+        t1 = int(tarr.max().value // 1_000_000)
+        lo = t0 if lo is None else min(lo, t0)
+        hi = t1 if hi is None else max(hi, t1)
+    if lo is None:
+        return None
+    return [lo, hi]
+
+
+def _collect_freq_schedule_ms(ch_list):
+    """Union of every recording's stamped FreqScheduleHz into one sorted change-point list.
+
+    FreqScheduleHz is [[epoch_SECONDS, hz], ...] derived from GroupHistory at decode time. Across the
+    recordings of one channel we merge all change-points (different sessions stamp different windows
+    of the same underlying history), dedup, snap Hz to the Percept bin, and collapse consecutive
+    same-Hz points. Returns [[epoch_MS, snapped_hz], ...] sorted by time, or [] if none stamped.
+    """
+    pts = []
+    seen = set()
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        sched = c.get("FreqScheduleHz")
+        if not isinstance(sched, (list, tuple)):
+            continue
+        for item in sched:
+            try:
+                ts, hz = float(item[0]), _snap_freq(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if hz is None:
+                continue
+            ms = int(ts * 1000)
+            key = (ms, hz)
+            if key in seen:
+                continue
+            seen.add(key)
+            pts.append([ms, hz])
+    if not pts:
+        return []
+    pts.sort(key=lambda p: p[0])
+    collapsed = []
+    for ms, hz in pts:
+        if not collapsed or collapsed[-1][1] != hz:
+            collapsed.append([ms, hz])
+    return collapsed
+
+
 def _build_freq_epochs(ch_list):
     """Time-segmented center-frequency epochs for one sensing channel.
 
-    The programmed sensing band can change between sessions, so a single 'latest' value hides the
-    history. Each recording dict carries its own Time array (epoch-seconds or ISO) and a
-    CenterFrequencyHz; we take [span_start, span_end, snapped_hz] per recording, sort by time, and
-    merge consecutive spans that share the same snapped frequency into one epoch. Returns a list of
-    {"t0": ms, "t1": ms, "hz": float} (epoch-ms, JSON-friendly) or [] when no frequency is recorded.
+    The programmed sensing band changes over time, and a single 24/7 trend recording can span MANY
+    such changes — so stamping one CenterFrequencyHz per recording collapses that history to a single
+    value. The accurate source is the dated GroupHistory schedule (FreqScheduleHz: when the band
+    changed), which we intersect against the channel's actual data extent:
+
+      1. If a frequency SCHEDULE is present, segment the channel's [first, last] sample span at each
+         change-point that falls inside it, so one long recording yields multiple epochs reflecting
+         the real switches. The frequency in force at the span start is carried from the last
+         change-point at or before it.
+      2. Otherwise fall back to the legacy per-recording behavior (one snapped CenterFrequencyHz per
+         recording's own span, merging consecutive same-frequency spans).
+
+    Returns [{"t0": ms, "t1": ms, "hz": float}, ...] (epoch-ms, JSON-friendly) or [].
     """
+    extent = _channel_time_extent_ms(ch_list)
+    schedule = _collect_freq_schedule_ms(ch_list)
+
+    if extent is not None and schedule:
+        lo, hi = extent
+        # Boundaries inside the data extent = change-points strictly within (lo, hi].
+        bounds = sorted({lo, hi} | {ms for ms, _hz in schedule if lo < ms < hi})
+        # Frequency in force at a given time = the last change-point at or before it.
+        def hz_at(ms):
+            cur = None
+            for cms, chz in schedule:
+                if cms <= ms:
+                    cur = chz
+                else:
+                    break
+            # If the data starts before the first change-point, use the first known freq.
+            return cur if cur is not None else schedule[0][1]
+        epochs = []
+        for a, b in zip(bounds[:-1], bounds[1:]):
+            hz = hz_at(a)
+            if hz is None:
+                continue
+            if epochs and epochs[-1]["hz"] == hz and a <= epochs[-1]["t1"] + 1:
+                epochs[-1]["t1"] = max(epochs[-1]["t1"], b)
+            else:
+                epochs.append({"t0": a, "t1": b, "hz": hz})
+        if epochs:
+            return epochs
+
+    # Legacy fallback: one frequency per recording span (no dated schedule available).
     spans = []
     for c in ch_list:
         if not isinstance(c, dict):
@@ -82,11 +195,7 @@ def _build_freq_epochs(ch_list):
         hz = _snap_freq(c.get("CenterFrequencyHz"))
         if hz is None:
             continue
-        t = c.get("Time")
-        try:
-            tarr = pd.to_datetime(pd.Series(t), utc=True, errors="coerce").dropna()
-        except Exception:
-            tarr = None
+        tarr = _parse_time_ms(c.get("Time"))
         if tarr is None or len(tarr) == 0:
             continue
         t0 = int(tarr.min().value // 1_000_000)  # ns -> ms

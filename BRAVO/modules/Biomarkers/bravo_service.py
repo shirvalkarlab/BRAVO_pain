@@ -134,13 +134,18 @@ def _load_recordings(participant_uid, types):
             # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
             # chronic trend with its sensing frequency.
             chz = None
+            fsched = None
             md = getattr(rec, "metadata", None)
             if isinstance(md, dict):
                 chz = md.get("CenterFrequencyHz")
-            if chz is not None:
+                fsched = md.get("FreqScheduleHz")
+            if chz is not None or fsched is not None:
                 for d in (data if isinstance(data, list) else [data]):
                     if isinstance(d, dict):
-                        d.setdefault("CenterFrequencyHz", chz)
+                        if chz is not None:
+                            d.setdefault("CenterFrequencyHz", chz)
+                        if fsched is not None:
+                            d.setdefault("FreqScheduleHz", fsched)
             return data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
