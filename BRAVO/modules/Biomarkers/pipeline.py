@@ -46,6 +46,64 @@ from . import adapter
 STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
 
+
+# Percept sensing-frequency bin width (FFT bin spacing ~250/256 Hz). The programmed center frequency
+# is reported at slightly different sub-bin values across files (e.g. 8.78 vs 8.79), so we snap to a
+# clean bin so the same physical band gets ONE color/label in the frequency ribbon.
+_PERCEPT_FREQ_BIN_HZ = 250.0 / 256.0
+
+
+def _snap_freq(hz):
+    """Snap a reported center frequency to the nearest Percept FFT bin (1 decimal)."""
+    if hz is None:
+        return None
+    try:
+        hz = float(hz)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(hz):
+        return None
+    return round(round(hz / _PERCEPT_FREQ_BIN_HZ) * _PERCEPT_FREQ_BIN_HZ, 1)
+
+
+def _build_freq_epochs(ch_list):
+    """Time-segmented center-frequency epochs for one sensing channel.
+
+    The programmed sensing band can change between sessions, so a single 'latest' value hides the
+    history. Each recording dict carries its own Time array (epoch-seconds or ISO) and a
+    CenterFrequencyHz; we take [span_start, span_end, snapped_hz] per recording, sort by time, and
+    merge consecutive spans that share the same snapped frequency into one epoch. Returns a list of
+    {"t0": ms, "t1": ms, "hz": float} (epoch-ms, JSON-friendly) or [] when no frequency is recorded.
+    """
+    spans = []
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        hz = _snap_freq(c.get("CenterFrequencyHz"))
+        if hz is None:
+            continue
+        t = c.get("Time")
+        try:
+            tarr = pd.to_datetime(pd.Series(t), utc=True, errors="coerce").dropna()
+        except Exception:
+            tarr = None
+        if tarr is None or len(tarr) == 0:
+            continue
+        t0 = int(tarr.min().value // 1_000_000)  # ns -> ms
+        t1 = int(tarr.max().value // 1_000_000)
+        spans.append((t0, t1, hz))
+    if not spans:
+        return []
+    spans.sort(key=lambda s: s[0])
+    merged = [list(spans[0])]
+    for t0, t1, hz in spans[1:]:
+        last = merged[-1]
+        if hz == last[2] and t0 <= last[1] + 1:  # same freq, contiguous/overlapping -> extend
+            last[1] = max(last[1], t1)
+        else:
+            merged.append([t0, t1, hz])
+    return [{"t0": m[0], "t1": m[1], "hz": m[2]} for m in merged]
+
 # Upper frequency bound for biomarker band SELECTION and the permutation family. The Percept RC
 # senses physiologically-relevant LFP rhythms (theta ~4–8, alpha ~8–12, beta ~13–30, low-gamma
 # ~30–50 Hz); the at-home chronic biomarker is a 5 Hz band picked from those. Bands at/above this
@@ -627,12 +685,19 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                     for c in ch_list:
                         if isinstance(c, dict) and c.get("CenterFrequencyHz") is not None:
                             ch_hz = float(c["CenterFrequencyHz"])
+                    # Center-frequency EPOCHS over time: the programmed sensing band can change between
+                    # sessions, so the most-recent value alone hides that history. Build time-segmented
+                    # epochs [{t0, t1, hz}] by taking each recording's own time span + its
+                    # CenterFrequencyHz and merging consecutive same-frequency spans. The frontend
+                    # paints these as a colored frequency ribbon under the power row.
+                    ch_freq_epochs = _build_freq_epochs(ch_list)
                     ch_summary = {
                         "channel": ch_label,
                         "hemisphere": ch_hemi,
                         "kind": ch_kind,
                         "source_modality": ch_source,
                         "center_hz": ch_hz,
+                        "freq_epochs": ch_freq_epochs,
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),

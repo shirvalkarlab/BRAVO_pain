@@ -37,6 +37,46 @@ function hemiColor(hemi, isChronic) {
   return isChronic ? h.chronic : h.stream;
 }
 
+// CATEGORICAL center-frequency palette. The Percept programs a handful of discrete sensing bands; a
+// gradient (viridis) makes neighbours like 23.4 vs 26.4 Hz nearly indistinguishable, so each band
+// gets its OWN distinct, colorblind-aware hue. FIXED map (stable color per frequency across patients
+// and sessions) so the same band always reads the same color. Frequencies are snapped to a Percept
+// FFT bin (~0.977 Hz) by the backend; any value not in the map falls back through the ordered list.
+const FREQ_BIN_HZ = 250 / 256;
+const FREQ_PALETTE = {
+  3.9: "#882255", 4.9: "#AA4499", 5.9: "#CC6677", 6.8: "#993377",
+  7.8: "#332288", 8.8: "#0072B2", 9.8: "#56B4E9", 10.7: "#009E73",
+  11.7: "#94C973", 12.7: "#E69F00", 13.7: "#F0A860", 14.6: "#B8860B",
+  15.6: "#7E6E1F", 16.6: "#A6761D", 17.6: "#666633",
+  18.6: "#44AA99", 19.5: "#117733", 20.5: "#88CCEE", 21.5: "#6699CC",
+  22.5: "#4477AA", 23.4: "#D55E00", 24.4: "#BB5566", 25.4: "#AA3377", 26.4: "#CC79A7",
+};
+const FREQ_FALLBACK = ["#332288", "#0072B2", "#56B4E9", "#009E73", "#94C973",
+                       "#E69F00", "#D55E00", "#CC79A7", "#44AA99", "#882255"];
+function snapFreq(hz) {
+  if (hz == null || !Number.isFinite(hz)) return null;
+  return Math.round((Math.round(hz / FREQ_BIN_HZ) * FREQ_BIN_HZ) * 10) / 10;
+}
+function freqColor(hz) {
+  const b = snapFreq(hz);
+  if (b == null) return "#BDBDBD";
+  if (FREQ_PALETTE[b] != null) return FREQ_PALETTE[b];
+  // deterministic fallback for an unmapped band: index by rounded Hz into the fallback list
+  return FREQ_FALLBACK[Math.abs(Math.round(b)) % FREQ_FALLBACK.length];
+}
+// Luminance-aware text color so the inline "X Hz" label is readable on its swatch.
+function textOn(hexcol) {
+  const h = hexcol.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#111111" : "#FFFFFF";
+}
+// Hz formatter for ribbon / legend labels (drop trailing zero: 9.8, 26.4, 10).
+function fmtHz(hz) {
+  const b = snapFreq(hz);
+  if (b == null) return "";
+  return Number.isInteger(b) ? String(b) : b.toFixed(1).replace(/\.0$/, "");
+}
+
 // Break a line across recording gaps: insert an explicit null where two consecutive samples are more
 // than `maxGapMs` apart, so the trace does NOT draw a straight interpolation across days with no data
 // (Tufte: don't draw data you don't have). Returns [xOut, yOut].
@@ -190,9 +230,17 @@ function BiomarkerTimeline({ data, height }) {
           refLines.push({ y: prog.lower, color: C.programmed, dash: "solid",
                           label: `prog ${fmtVal(prog.lower)}`, opacity: 0.6 });
         }
-        const hz = (pc.center_hz != null && Number.isFinite(pc.center_hz))
-          ? Number(pc.center_hz) : hzForChannel(pc.channel);
-        const freqText = hz != null ? `${hz.toFixed(1)} Hz` : "sensing band";
+        // Center-frequency epochs for the ribbon (parse t0/t1 ms -> Date once). The MOST RECENT
+        // epoch's frequency drives the title; fall back to center_hz / name parse when no epochs.
+        const freqEpochs = Array.isArray(pc.freq_epochs)
+          ? pc.freq_epochs
+              .filter((e) => e && e.hz != null && Number.isFinite(e.hz))
+              .map((e) => ({ t0: new Date(e.t0), t1: new Date(e.t1), hz: Number(e.hz) }))
+          : [];
+        const currentHz = freqEpochs.length ? freqEpochs[freqEpochs.length - 1].hz
+          : ((pc.center_hz != null && Number.isFinite(pc.center_hz)) ? Number(pc.center_hz) : hzForChannel(pc.channel));
+        const hz = currentHz;
+        const freqText = hz != null ? `${snapFreq(hz)} Hz` : "sensing band";
         const fin = cyRaw.filter((v) => v != null && Number.isFinite(v));
         const vmin = fin.length ? Math.min(...fin) : null;
         const vmax = fin.length ? Math.max(...fin) : null;
@@ -209,7 +257,8 @@ function BiomarkerTimeline({ data, height }) {
           hemi,
           traces: tr,
           refLines,
-          subtitle: `${hemiText}${kindLbl} · recorded center ${freqText}${progText}`,
+          freqEpochs,                  // drives the categorical frequency ribbon under this row
+          currentHz,
         });
       });
     } else if (has("powerdomain_biomarker_value")) {
@@ -249,21 +298,46 @@ function BiomarkerTimeline({ data, height }) {
     const n = Math.max(rows.length, 1);
     // Pixel-based row heights with a VARIABLE inter-row gap: each row is a fixed pixel band, and the
     // first row of a hemisphere block gets a larger gap above it to seat its big "LEFT/RIGHT
-    // HEMISPHERE" signpost without overlapping the row above. Domains are computed cumulatively.
-    const ROW_PX = 104, BASE_GAP = 0.007, BANNER_GAP = 0.052;
+    // HEMISPHERE" signpost without overlapping the row above. A power row WITH a center-frequency
+    // ribbon is taller (signal band + thin ribbon below it). Domains are computed cumulatively,
+    // proportional to each row's pixel footprint.
+    const ROW_PX = 104, RIBBON_PX = 22, BASE_GAP = 0.007, BANNER_GAP = 0.052;
+    const hasRibbon = rows.map((row) => Array.isArray(row.freqEpochs) && row.freqEpochs.length > 0);
     const isStart = rows.map((row, i) => {
       let prev = null;
       for (let j = 0; j < i; j++) if (rows[j].hemi) prev = rows[j].hemi;
       return !!(row.hemi && row.hemi !== prev);
     });
     const nStarts = isStart.filter(Boolean).length;
+    const foot = rows.map((row, i) => ROW_PX + (hasRibbon[i] ? RIBBON_PX : 0));
+    const totalFoot = foot.reduce((a, b) => a + b, 0);
     const totalGap = BASE_GAP * (n - 1) + BANNER_GAP * nStarts;
-    const h = (1 - totalGap) / n;
+    const unit = (1 - totalGap) / totalFoot;   // paper-fraction per footprint pixel
+
+    // Global x-extent across all rows so a freq ribbon can span the full axis (continuous freq track
+    // even where signal is sparse).
+    let gMin = Infinity, gMax = -Infinity;
+    rows.forEach((row) => {
+      (row.traces || []).forEach((tr) => (tr.x || x || []).forEach((t) => {
+        if (t != null) { const v = +t; if (v < gMin) gMin = v; if (v > gMax) gMax = v; }
+      }));
+      (row.freqEpochs || []).forEach((e) => {
+        const a = +e.t0, b = +e.t1;
+        if (a < gMin) gMin = a; if (b > gMax) gMax = b;
+      });
+    });
+    const haveGlobalX = Number.isFinite(gMin) && Number.isFinite(gMax) && gMax > gMin;
+
+    // Frequencies actually present across all rows -> the discrete legend (built from data, not
+    // hardcoded), low->high so the legend reads in frequency order.
+    const usedFreqs = Array.from(new Set(
+      rows.flatMap((row) => (row.freqEpochs || []).map((e) => snapFreq(e.hz))).filter((v) => v != null)
+    )).sort((a, b) => a - b);
 
     const traces = [];
     const layout = {
-      height: height || ROW_PX * n + 70,
-      margin: { l: 78, r: 104, t: 20, b: 42 },   // right margin holds edge ref-line labels + REAL/empty tag
+      height: height || totalFoot * unit * 0 + ROW_PX * n + (nStarts * 34) + 70,
+      margin: { l: 82, r: usedFreqs.length ? 172 : 104, t: 20, b: 42 },
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
       font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 13, color: "#344767" },
@@ -273,6 +347,7 @@ function BiomarkerTimeline({ data, height }) {
 
     let prevHemi = null;
     let cursor = 1.0;
+    const rowMeta = [];   // per-row {xaxisKey, yaxisKey, points:[{t,v}], refYs} for dynamic y-rescale on zoom
     rows.forEach((row, di) => {
       const axisNum = n - di; // bottom row = y1
       const yk = axisNum === 1 ? "y" : "y" + axisNum;
@@ -280,9 +355,13 @@ function BiomarkerTimeline({ data, height }) {
       const yaxisKey = axisNum === 1 ? "yaxis" : "yaxis" + axisNum;
       const xaxisKey = axisNum === 1 ? "xaxis" : "xaxis" + axisNum;
       if (di > 0) cursor -= (isStart[di] ? BANNER_GAP : BASE_GAP);
+      const block = foot[di] * unit;
+      const ribH = hasRibbon[di] ? RIBBON_PX * unit : 0;
       const top = cursor;
-      const bottom = Math.max(0, top - h);
+      const bottom = Math.max(0, top - block);
       cursor = bottom;
+      const sigTop = top;             // signal y-axis occupies the band ABOVE the ribbon
+      const sigBot = bottom + ribH;
       const hemi = row.hemi || null;
       const accent = hemi && HEMI[hemi] ? HEMI[hemi].accent : "#344767";
 
@@ -302,6 +381,19 @@ function BiomarkerTimeline({ data, height }) {
         nOver = sig.filter((v) => v > yrange[1]).length;
       }
 
+      // Capture (time, value) points + ref levels so a zoom handler can recompute this row's robust
+      // y-window from only the VISIBLE points. Pain rows are skipped (sparse, fixed scale).
+      if (!row.isPain && !row.emptyReason) {
+        const pts = [];
+        (row.traces || []).forEach((tr) => {
+          const tx = tr.x || x || [];
+          (tr.y || []).forEach((v, i) => {
+            if (v != null && Number.isFinite(v) && tx[i] != null) pts.push({ t: +tx[i], v });
+          });
+        });
+        rowMeta.push({ xaxisKey, yaxisKey, points: pts, refYs });
+      }
+
       // Faint tint band for an unanalyzable placeholder row (cv_df=None) — marks it as "recorded but
       // not analyzable" so the empty band reads as intentional, not a rendering gap. Real data rows
       // are never tinted.
@@ -309,7 +401,7 @@ function BiomarkerTimeline({ data, height }) {
         layout.shapes.push({ type: "rect", xref: `${xk} domain`, yref: `${yk} domain`,
           x0: 0, x1: 1, y0: 0, y1: 1, fillcolor: "#FBFBF4", line: { width: 0 }, layer: "below" });
       }
-      layout[yaxisKey] = { domain: [bottom, top], title: { text: row.unit, font: { size: 11 }, standoff: 4 },
+      layout[yaxisKey] = { domain: [sigBot, sigTop], title: { text: row.unit, font: { size: 11 }, standoff: 4 },
         zeroline: false, showgrid: false, automargin: true, nticks: 3, tickfont: { size: 10 },
         // colored y-axis spine = hemisphere accent (the accent IS the axis edge — no separate bar)
         showline: true, linewidth: hemi ? 4 : 1, linecolor: accent, mirror: false,
@@ -317,14 +409,37 @@ function BiomarkerTimeline({ data, height }) {
       // Per-row x-axis. The bottom row owns the master x (`x`); all others `matches` it when LINKED so
       // pan/box-zoom moves every row together (and the vertical gridlines re-tick in lockstep). When
       // UNLINKED each row keeps its own independent zoom. Vertical gridlines are darker for visibility.
+      // Pin the range to the global x-extent so freq ribbons span the full axis.
       layout[xaxisKey] = {
         domain: [0, 1], type: "date", anchor: yk,
         showgrid: true, gridcolor: "#C9CCD6", gridwidth: 1,
         showticklabels: di === n - 1,  // dates only on the bottom row; grid carries the time reference
         ticks: "", showline: false, tickfont: { size: 10.5 },
+        ...(haveGlobalX ? { range: [gMin, gMax] } : {}),
         ...(di === n - 1 ? { title: { text: "Time", font: { size: 12 } } } : {}),
         ...(axisNum !== 1 && linked ? { matches: "x" } : {}),
       };
+
+      // ---- CENTER-FREQUENCY RIBBON: a thin band below the signal, one colored segment per epoch
+      // (categorical color = sensing frequency), with a big inline "X Hz" label. Spans the full
+      // x-extent; neutral grey where no recording. Drawn as paper-y shapes pinned to the ribbon band.
+      if (hasRibbon[di] && haveGlobalX) {
+        const ribTop = bottom + ribH, ribBot = bottom;
+        layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
+          x0: gMin, x1: gMax, y0: ribBot, y1: ribTop, fillcolor: "#ECECEC", line: { width: 0 }, layer: "above" });
+        (row.freqEpochs || []).forEach((e) => {
+          const col = freqColor(e.hz);
+          layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
+            x0: +e.t0, x1: +e.t1, y0: ribBot, y1: ribTop, fillcolor: col,
+            line: { color: "white", width: 0.8 }, layer: "above" });
+          layout.annotations.push({ xref: xk, yref: "paper", x: new Date((+e.t0 + +e.t1) / 2),
+            y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
+            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 12.5, color: textOn(col) } });
+        });
+        layout.annotations.push({ xref: `${xk} domain`, yref: "paper", x: -0.006, y: (ribBot + ribTop) / 2,
+          xanchor: "right", yanchor: "middle", text: "<b>freq</b>", showarrow: false,
+          font: { size: 10.5, color: "#555" } });
+      }
 
       row.traces.forEach((tr) => {
         if (row.isPain) {
@@ -429,12 +544,79 @@ function BiomarkerTimeline({ data, height }) {
       if (hemi) prevHemi = hemi;
     });
 
+    // ---- DISCRETE FREQUENCY LEGEND (one labeled swatch per sensing band actually present) ----
+    // Built from the data's usedFreqs, not hardcoded. Generous swatch-to-text gap so nothing collides.
+    if (usedFreqs.length) {
+      const lx0 = 1.015, sw = 0.02, txtX = lx0 + 0.052, ly0 = 0.84, dh = 0.085;
+      layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ly0 + dh * 0.8,
+        xanchor: "left", yanchor: "bottom", text: "<b>Sensing center freq</b>", showarrow: false,
+        font: { size: 13, color: "#344767" } });
+      usedFreqs.forEach((f, i) => {
+        const yy = ly0 - i * dh;
+        layout.shapes.push({ type: "rect", xref: "paper", yref: "paper",
+          x0: lx0, x1: lx0 + 2 * sw, y0: yy - sw, y1: yy + sw, fillcolor: freqColor(f),
+          line: { color: "white", width: 1 } });
+        layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: yy,
+          xanchor: "left", yanchor: "middle", text: `<b>${fmtHz(f)}</b> Hz`, showarrow: false,
+          font: { size: 14, color: "#344767" } });
+      });
+    }
+
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false,
       modeBarButtonsToRemove: ["select2d", "lasso2d", "toggleSpikelines"],
       toImageButtonOptions: { format: "png", scale: 2 },
     });
-    return () => { if (ref.current) Plotly.purge(ref.current); };
+
+    // ---- DYNAMIC Y-RESCALE ON ZOOM ----
+    // When the user box-zooms or pans the x-axis, rescale each row's y-window to the SAME robust rule
+    // (0.5–99.5 percentile, widened to include ref levels) computed over only the points now VISIBLE,
+    // so a zoomed-in window fills the row instead of staying at the full-extent scale. With LINK AXES
+    // on every row shares the x-window so all rescale together; off, only the zoomed row's x changes
+    // (its own range keys appear in the event) and just that row rescales. Double-click autoranges x,
+    // which we map back to the full-extent y-window.
+    const gd = ref.current;
+    const robustWindow = (pts, refYs, lo, hi) => {
+      const vis = (lo == null || hi == null) ? pts : pts.filter((p) => p.t >= lo && p.t <= hi);
+      const vals = vis.map((p) => p.v);
+      if (vals.length < 2) return null;
+      let plo = percentile(vals, 0.5), phi = percentile(vals, 99.5);
+      if (phi <= plo) phi = plo + (Math.abs(plo) || 1);
+      if (refYs && refYs.length) { plo = Math.min(plo, ...refYs); phi = Math.max(phi, ...refYs); }
+      const span = phi - plo || Math.abs(phi) || 1;
+      return [plo - span * 0.06, phi + span * 0.10];
+    };
+    const onRelayout = (ev) => {
+      if (!ev || gd.__rescaling) return;
+      // Find the new visible x-window from whichever x-axis key changed (e.g. "xaxis.range[0]").
+      let lo = null, hi = null, sawX = false, autoX = false;
+      Object.keys(ev).forEach((k) => {
+        const mlo = k.match(/^xaxis\d*\.range\[0\]$/);
+        const mhi = k.match(/^xaxis\d*\.range\[1\]$/);
+        if (mlo) { lo = +new Date(ev[k]); sawX = true; }
+        if (mhi) { hi = +new Date(ev[k]); sawX = true; }
+        if (/^xaxis\d*\.autorange$/.test(k) && ev[k] === true) autoX = true;
+      });
+      if (!sawX && !autoX) return;   // ignore non-x relayouts (e.g. our own y writes)
+      const update = {};
+      rowMeta.forEach((rm) => {
+        const win = autoX ? robustWindow(rm.points, rm.refYs, null, null)
+                          : robustWindow(rm.points, rm.refYs, lo, hi);
+        if (win) { update[`${rm.yaxisKey}.range[0]`] = win[0]; update[`${rm.yaxisKey}.range[1]`] = win[1]; }
+      });
+      if (Object.keys(update).length) {
+        gd.__rescaling = true;
+        Plotly.relayout(gd, update).then(() => { gd.__rescaling = false; });
+      }
+    };
+    gd.on("plotly_relayout", onRelayout);
+
+    return () => {
+      if (ref.current) {
+        try { ref.current.removeAllListeners && ref.current.removeAllListeners("plotly_relayout"); } catch (e) { /* noop */ }
+        Plotly.purge(ref.current);
+      }
+    };
   }, [data, height, linked]);
 
   return (

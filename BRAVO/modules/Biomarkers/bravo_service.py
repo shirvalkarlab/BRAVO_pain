@@ -955,6 +955,9 @@ def _serialize_power_channels(run, label_metric="nrs"):
             # "chronic" = ~10-min around-the-clock BrainSense Timeline; "powerdomain" = streaming.
             "around_the_clock": (sm == "chronic"),
             "center_hz": summ.get("center_hz"),
+            # Time-segmented center-frequency epochs [{t0, t1, hz}] for the frequency ribbon under the
+            # power row (the programmed sensing band changes between sessions).
+            "freq_epochs": summ.get("freq_epochs") or [],
             "threshold": thr,
             "auc": summ.get("auc_in_sample"),
             "n_samples": summ.get("n_samples"),
@@ -982,6 +985,7 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "source_modality": sm,
             "around_the_clock": (sm == "chronic"),
             "center_hz": summ.get("center_hz"),
+            "freq_epochs": summ.get("freq_epochs") or [],
             "threshold": None,
             "auc": None,
             "n_samples": summ.get("n_samples"),
