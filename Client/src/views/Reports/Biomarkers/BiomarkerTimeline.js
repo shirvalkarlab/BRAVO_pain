@@ -237,8 +237,22 @@ function BiomarkerTimeline({ data, height }) {
               .filter((e) => e && e.hz != null && Number.isFinite(e.hz))
               .map((e) => ({ t0: new Date(e.t0), t1: new Date(e.t1), hz: Number(e.hz) }))
           : [];
-        const currentHz = freqEpochs.length ? freqEpochs[freqEpochs.length - 1].hz
-          : ((pc.center_hz != null && Number.isFinite(pc.center_hz)) ? Number(pc.center_hz) : hzForChannel(pc.channel));
+        // Frequency we know for this channel even without an explicit epoch history: the backend
+        // center_hz, else parsed from the channel name.
+        const knownHz = (pc.center_hz != null && Number.isFinite(pc.center_hz))
+          ? Number(pc.center_hz) : hzForChannel(pc.channel);
+        // ALWAYS-ON ribbon: if the export shipped no epoch history (older runs without a per-recording
+        // CenterFrequencyHz change-log) but we still know the channel's sensing frequency, synthesize a
+        // SINGLE epoch spanning the channel's whole data extent so the frequency ribbon always renders.
+        // The instant the backend ships real epochs, those take over and show the actual switches.
+        if (freqEpochs.length === 0 && knownHz != null) {
+          const finiteT = cxRaw.filter((t) => t != null && Number.isFinite(+t)).map((t) => +t);
+          if (finiteT.length) {
+            freqEpochs.push({ t0: new Date(Math.min(...finiteT)), t1: new Date(Math.max(...finiteT)),
+                              hz: knownHz, synthesized: true });
+          }
+        }
+        const currentHz = freqEpochs.length ? freqEpochs[freqEpochs.length - 1].hz : knownHz;
         const hz = currentHz;
         const freqText = hz != null ? `${snapFreq(hz)} Hz` : "sensing band";
         const fin = cyRaw.filter((v) => v != null && Number.isFinite(v));
