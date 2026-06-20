@@ -70,7 +70,13 @@ def _to_datetime(value):
     if value is None:
         return pd.NaT
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        # Heuristic: values > 1e6 are unix seconds; smaller are unusable.
+        # Heuristic: a real Percept Unix timestamp is ~1.6e9 (year 2020+). A missing/zero/relative
+        # StartTime (e.g. 0, or a few seconds of session offset) is NOT an absolute time — mapping it
+        # through utcfromtimestamp yields 1969/1970, which then stretches the timeline back five
+        # decades. Treat anything below this floor as unusable rather than fabricating a 1969 date.
+        # 1e9 s = 2001-09-09; no Percept device predates that, so it is a safe lower bound.
+        if float(value) < 1e9:
+            return pd.NaT
         try:
             return pd.Timestamp(datetime.datetime.utcfromtimestamp(float(value)))
         except (OverflowError, OSError, ValueError):
@@ -278,7 +284,12 @@ def bravo_powerdomain_to_chronic_like(recordings):
             continue
         n = data.shape[0]
         fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        # StartTime must be a real absolute Unix time (~1.6e9). A missing/zero StartTime would make
+        # `time` start at epoch 0 (1970) and the whole series would plot back in 1969/1970 — skip the
+        # recording instead of fabricating a 1969 timeline (1e9 s = 2001; no Percept predates that).
         start = float(r.get("StartTime") or 0.0)
+        if start < 1e9:
+            continue
         time = start + np.arange(n) / fs
         missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
         if missing.shape != data.shape:
