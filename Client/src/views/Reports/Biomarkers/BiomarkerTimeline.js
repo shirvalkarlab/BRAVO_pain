@@ -289,26 +289,6 @@ function BiomarkerTimeline({ data, height }) {
         // is NOT in the title because it changes over time and is shown in the per-row ribbon below.
         // A lighter source line states modality (chronic / + streaming) and the value range.
         const srcText = `${isChronic ? "chronic 24/7" : "streaming"}${hasStream ? " + streaming on-demand" : ""}${rangeText}`;
-        // COVERAGE WINDOWS: the contiguous time spans where THIS contact actually has data (chronic
-        // samples, plus any streaming samples), each run broken at >6h gaps. Only one contact senses
-        // at a time, so a contact's frequency ribbon must be clipped to where that contact recorded —
-        // otherwise a programmed-but-idle period (e.g. left-hemi contacts that hand off for weeks)
-        // paints color + a Hz label over a stretch with no signal. The signal LINE already breaks at
-        // these gaps; this makes the ribbon honor the same gaps.
-        const covT = cxRaw.filter((t) => t != null && Number.isFinite(+t)).map((t) => +t);
-        if (hasStream) {
-          (st.time || []).forEach((t) => { const v = +parseTime(t); if (Number.isFinite(v)) covT.push(v); });
-        }
-        covT.sort((a, b) => a - b);
-        const coverage = [];
-        const COV_GAP_MS = SIX_HOURS_MS;
-        for (let i = 0; i < covT.length; i++) {
-          if (!coverage.length || covT[i] - coverage[coverage.length - 1][1] > COV_GAP_MS) {
-            coverage.push([covT[i], covT[i]]);
-          } else {
-            coverage[coverage.length - 1][1] = covT[i];
-          }
-        }
         rows.push({
           title: `${fmtContact(pc.channel)}`,
           srcText,
@@ -319,7 +299,6 @@ function BiomarkerTimeline({ data, height }) {
           traces: tr,
           refLines,
           freqEpochs,                  // drives the categorical frequency ribbon under this row
-          coverage,                    // [ [t0ms,t1ms], ... ] data-present windows; clips the ribbon
           currentHz,
           hasStream,
         });
@@ -488,36 +467,16 @@ function BiomarkerTimeline({ data, height }) {
       // x-extent; neutral grey where no recording. Drawn as paper-y shapes pinned to the ribbon band.
       if (hasRibbon[di] && haveGlobalX) {
         const ribTop = bottom + ribH, ribBot = bottom;
-        // No background fill: where this contact has no data the ribbon is simply BLANK (not a
-        // neutral-grey "no recording" band) — only one contact senses at a time, so blank reads as
-        // "another contact was active here", which the sibling rows show.
-        // Clip each epoch to this contact's data-coverage windows so the ribbon (color AND Hz label)
-        // only appears where the contact actually recorded — one contact senses at a time, so an idle
-        // period shows neutral grey, not a stale band. When a row has no coverage info (legacy/other
-        // row types), fall back to the full epoch span.
-        const cov = Array.isArray(row.coverage) && row.coverage.length ? row.coverage : null;
-        const LABEL_MIN_MS = 4 * 24 * 3600 * 1000;   // only label a segment at least ~4 days wide
-        const MIN_SEG_MS = 6 * 3600 * 1000;          // give a near-zero-width segment a visible sliver
+        layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
+          x0: gMin, x1: gMax, y0: ribBot, y1: ribTop, fillcolor: "#ECECEC", line: { width: 0 }, layer: "above" });
         (row.freqEpochs || []).forEach((e) => {
           const col = freqColor(e.hz);
-          let e0 = +e.t0, e1 = +e.t1;
-          if (e1 < e0) { const t = e0; e0 = e1; e1 = t; }
-          // Intersect [e0,e1] with the coverage windows -> the visible sub-segments of this epoch.
-          const segs = [];
-          (cov || [[e0, e1]]).forEach(([c0, c1]) => {
-            const s0 = Math.max(e0, c0), s1 = Math.min(e1, c1);
-            if (s1 >= s0) segs.push([s0, s1 > s0 ? s1 : s0 + MIN_SEG_MS]);
-          });
-          segs.forEach(([s0, s1]) => {
-            layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
-              x0: s0, x1: s1, y0: ribBot, y1: ribTop, fillcolor: col,
-              line: { color: "white", width: 0.8 }, layer: "above" });
-            if (s1 - s0 >= LABEL_MIN_MS) {
-              layout.annotations.push({ xref: xk, yref: "paper", x: new Date((s0 + s1) / 2),
-                y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
-                text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 13.5, color: textOn(col) } });
-            }
-          });
+          layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
+            x0: +e.t0, x1: +e.t1, y0: ribBot, y1: ribTop, fillcolor: col,
+            line: { color: "white", width: 0.8 }, layer: "above" });
+          layout.annotations.push({ xref: xk, yref: "paper", x: new Date((+e.t0 + +e.t1) / 2),
+            y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
+            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 13.5, color: textOn(col) } });
         });
         layout.annotations.push({ xref: `${xk} domain`, yref: "paper", x: -0.006, y: (ribBot + ribTop) / 2,
           xanchor: "right", yanchor: "middle", text: "<b>freq</b>", showarrow: false,

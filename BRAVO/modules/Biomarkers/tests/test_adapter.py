@@ -277,7 +277,7 @@ def test_td_sliding_corr_spectrum_matches_scipy():
     assert len(chans) == C
     starts = chans[0]["window_starts"]
     assert len(starts) >= 2
-    assert chans[0]["channel"] == "L 0⁻2⁺"   # numeric contact label w/ polarity, no separator dash
+    assert chans[0]["channel"] == "L 0⁻2⁺"   # numeric contact label, not word form
 
     tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
     w_ns = 10 * 86_400 * 1e9
