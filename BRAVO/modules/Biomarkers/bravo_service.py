@@ -1114,37 +1114,12 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "pain": None,
             "empty_reason": str(summ.get("error") or "no pain-aligned samples to fit a detector"),
         })
-    # FOLD streaming on-demand into the matching chronic contact row. Each (hemisphere, contact) now
-    # has a chronic display row (continuous around-the-clock line) AND may have a powerdomain/streaming
-    # row (on-demand band power for the same contact). The design intent is ONE row per contact with
-    # the chronic line and the streaming points overlaid (distinguished by mark), not two stacked
-    # rows. We move the streaming row's (time, band_power) onto the chronic row as a `streaming`
-    # sub-series and drop the now-redundant standalone streaming row. A streaming contact with NO
-    # chronic counterpart stays as its own row (so nothing recorded is hidden).
-    def _key(d):
-        return (d.get("hemisphere"), d.get("contact"))
-    chronic_by_key = {_key(d): d for d in out
-                      if d.get("source_modality") == "chronic" and d.get("contact")}
-    folded_idx = set()
-    for i, d in enumerate(out):
-        if d.get("source_modality") == "chronic":
-            continue
-        if d.get("kind") != "contact" or not d.get("contact"):
-            continue
-        host = chronic_by_key.get(_key(d))
-        if host is None:
-            continue
-        # Attach streaming points as a sub-series the frontend draws as diamonds + range marks.
-        host["streaming"] = {
-            "time": d.get("time") or [],
-            "band_power": d.get("band_power") or [],
-            "threshold": d.get("threshold"),
-            "auc": d.get("auc"),
-            "n_samples": d.get("n_samples"),
-        }
-        host["has_streaming"] = True
-        folded_idx.add(i)
-    out = [d for i, d in enumerate(out) if i not in folded_idx]
+    # DISPLAY: chronic and streaming are kept as SEPARATE rows per contact (one chronic 24/7 row and,
+    # if present, one on-demand streaming row for the same bipolar contact). They are NOT merged into a
+    # single row: streaming for a contact is typically programmed at a single sensing band while the
+    # chronic 24/7 log for that contact cycles through several bands over time, so overlaying them in
+    # one row would hide that structure. COMBINING chronic + streaming happens only for DECODING —
+    # per (channel, frequency) in the analytics path — not in this display serializer.
 
     # Stable order: hemisphere (Left, then Right), chronic-before-streaming within a hemisphere, then
     # channel label — so rows read top-to-bottom by target, around-the-clock log first.

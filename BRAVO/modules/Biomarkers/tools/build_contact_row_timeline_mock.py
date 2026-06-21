@@ -182,15 +182,26 @@ def load_dataset(jsons_dir):
             ts = r.get("TherapySnapshot") or {}
             ld = r.get("LfpData") or []
             for hemi in ("Left", "Right"):
-                c = contact_from_stream_sc((ts.get(hemi) or {}).get("SensingChannel"), hemi)
+                sc = (ts.get(hemi) or {}).get("SensingChannel")
+                c = contact_from_stream_sc(sc, hemi)
                 if c is None:
                     continue
+                # Streaming sensing band for this recording (TherapySnapshot carries it per hemisphere).
+                shz = None
+                snap_src = (ts.get(hemi) or {})
+                for k in ("FrequencyInHertz", "Frequency"):
+                    if isinstance(snap_src.get(k), (int, float)):
+                        shz = snap(snap_src[k]); break
+                if shz is None and isinstance(sc, dict):
+                    for k in ("FrequencyInHertz", "Frequency"):
+                        if isinstance(sc.get(k), (int, float)):
+                            shz = snap(sc[k]); break
                 vals = [d[hemi]["LFP"] for d in ld
                         if isinstance(d, dict) and isinstance(d.get(hemi), dict) and "LFP" in d[hemi]]
                 vals = [v for v in vals if 0 <= v < SENTINEL]
                 if vals:
                     stream[hemi].append((t, c, float(np.median(vals)),
-                                         float(np.percentile(vals, 10)), float(np.percentile(vals, 90))))
+                                         float(np.percentile(vals, 10)), float(np.percentile(vals, 90)), shz))
     for h in sched:
         sched[h] = sorted(set(sched[h]), key=lambda x: x[0])
         chronic[h] = sorted(set(chronic[h]), key=lambda x: x[0])
@@ -282,19 +293,46 @@ def freq_ribbon_shapes(epochs, y0, y1):
 
 
 # ---------------------------------------------------------------- figure
+def stream_epochs(sv):
+    """Frequency epochs for a streaming contact's recordings (sorted): merge consecutive same-Hz."""
+    pts = sorted([(x[0], x[5]) for x in sv if len(x) > 5 and x[5] is not None])
+    ep = []
+    for t, hz in pts:
+        if not ep or ep[-1][2] != hz:
+            ep.append([t, t, hz])
+        else:
+            ep[-1][1] = t
+    return ep
+
+
 def render(sched, chronic, stream, out_base):
+    # Chronic and streaming are SEPARATE rows per contact (matching the live component): chronic 24/7
+    # rows first, then on-demand streaming rows, within each hemisphere. Streaming for a contact is
+    # usually a single sensing band while the chronic log cycles through several, so a merged row would
+    # hide that. Each row tuple: (hemi, contact, modality, data_dict).
     rows = []
     for hemi in ("Left", "Right"):
         by = build_contacts(sched, chronic, hemi)
         for c in contacts_sorted(by):
-            rows.append((hemi, c, by[c]))
+            rows.append((hemi, c, "chronic", by[c]))
+        # streaming rows: group this hemisphere's streaming recordings by contact
+        scontacts = {}
+        for x in stream[hemi]:
+            scontacts.setdefault(x[1], []).append(x)
+        for c in sorted(scontacts, key=lambda k: CORD.index(k) if k in CORD else 99):
+            sv = sorted(scontacts[c], key=lambda x: x[0])
+            rows.append((hemi, c, "streaming", {
+                "t": np.array([x[0] for x in sv]),
+                "med": [x[2] for x in sv], "lo": [x[3] for x in sv], "hi": [x[4] for x in sv],
+                "epochs": stream_epochs(sv),
+            }))
 
-    allt = np.concatenate([d["t"] for _, _, d in rows])
+    allt = np.concatenate([d["t"] for _, _, _, d in rows if len(d["t"])])
     gmin, gmax = datetime.utcfromtimestamp(allt.min()), datetime.utcfromtimestamp(allt.max())
 
     ROW_PX, RIB_PX, GAP_PX, BANNER_PX, TOPPAD, BOTPAD = 120, 24, 22, 50, 44, 56
     yb, prev, total = [], None, TOPPAD
-    for hemi, c, d in rows:
+    for hemi, c, modality, d in rows:
         if hemi != prev:
             total += BANNER_PX
             prev = hemi
@@ -302,7 +340,7 @@ def render(sched, chronic, stream, out_base):
         sb = st + ROW_PX
         rt = sb + 2
         rb = rt + RIB_PX
-        yb.append((hemi, c, d, st, sb, rt, rb))
+        yb.append((hemi, c, modality, d, st, sb, rt, rb))
         total = rb + GAP_PX
     total += BOTPAD
     H = total
@@ -310,7 +348,7 @@ def render(sched, chronic, stream, out_base):
 
     fig = go.Figure()
     shapes, anns, prev = [], [], None
-    for idx, (hemi, c, d, st, sb, rt, rb) in enumerate(yb, 1):
+    for idx, (hemi, c, modality, d, st, sb, rt, rb) in enumerate(yb, 1):
         Hc = HEMI[hemi]
         col = CONTACT_SHADE[hemi][c]
         scol = darken(col)
@@ -320,43 +358,46 @@ def render(sched, chronic, stream, out_base):
                              text=f"<b>{hemi.upper()} HEMISPHERE</b> · {Hc['region']}", showarrow=False,
                              font=dict(size=21, color=Hc["base"]), xanchor="left", yanchor="bottom"))
             prev = hemi
-        sv = [x for x in stream[hemi] if x[1] == c]
-        yvals = list(d["lfp"]) + [x[2] for x in sv] + [x[4] for x in sv]
-        yr = robust(yvals)
-        # active-window tint
+        is_chronic = (modality == "chronic")
         t = d["t"]
-        if len(t):
-            spans, s0, pv = [], t[0], t[0]
-            for tt in t[1:]:
-                if tt - pv > 2 * 86400:
-                    spans.append((s0, pv))
-                    s0 = tt
-                pv = tt
-            spans.append((s0, pv))
-            for a, b in spans:
-                shapes.append(dict(type="rect", xref="x", yref="paper",
-                                   x0=datetime.utcfromtimestamp(a), x1=datetime.utcfromtimestamp(b),
-                                   y0=yd(sb), y1=yd(st), fillcolor=col, opacity=0.06,
-                                   line=dict(width=0), layer="below"))
-        xs, ys = break_gaps(d["t"], d["lfp"])
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=col, width=0.9),
-                                 yaxis=yref, showlegend=False, connectgaps=False,
-                                 hovertemplate="chronic %{x|%Y-%m-%d %H:%M}<br>LFP %{y:.0f}<extra></extra>"))
-        if sv:
-            sx = [datetime.utcfromtimestamp(x[0]) for x in sv]
-            smed = [x[2] for x in sv]
-            slo = [x[2] - x[3] for x in sv]
-            shi = [x[4] - x[2] for x in sv]
-            fig.add_trace(go.Scatter(x=sx, y=smed, mode="markers", yaxis=yref, showlegend=False,
-                                     marker=dict(color=scol, size=5, symbol="diamond",
+        if is_chronic:
+            yvals = list(d["lfp"])
+            yr = robust(yvals)
+            # active-window tint
+            if len(t):
+                spans, s0, pv = [], t[0], t[0]
+                for tt in t[1:]:
+                    if tt - pv > 2 * 86400:
+                        spans.append((s0, pv)); s0 = tt
+                    pv = tt
+                spans.append((s0, pv))
+                for a, b in spans:
+                    shapes.append(dict(type="rect", xref="x", yref="paper",
+                                       x0=datetime.utcfromtimestamp(a), x1=datetime.utcfromtimestamp(b),
+                                       y0=yd(sb), y1=yd(st), fillcolor=col, opacity=0.06,
+                                       line=dict(width=0), layer="below"))
+            xs, ys = break_gaps(d["t"], d["lfp"])
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=col, width=0.9),
+                                     yaxis=yref, showlegend=False, connectgaps=False,
+                                     hovertemplate="chronic %{x|%Y-%m-%d %H:%M}<br>LFP %{y:.0f}<extra></extra>"))
+        else:
+            yvals = list(d["med"]) + list(d["hi"])
+            yr = robust(yvals)
+            sx = [datetime.utcfromtimestamp(tt) for tt in t]
+            slo = [m - lo for m, lo in zip(d["med"], d["lo"])]
+            shi = [hi - m for m, hi in zip(d["med"], d["hi"])]
+            fig.add_trace(go.Scatter(x=sx, y=d["med"], mode="markers", yaxis=yref, showlegend=False,
+                                     marker=dict(color=scol, size=6, symbol="diamond",
                                                  line=dict(width=0.5, color="white")),
                                      error_y=dict(type="data", symmetric=False, array=shi, arrayminus=slo,
                                                   color=scol, thickness=1.4, width=0),
                                      hovertemplate="streaming %{x|%Y-%m-%d %H:%M}<br>median LFP %{y:.0f}<extra></extra>"))
         fig.layout[yax] = dict(domain=[max(0, yd(sb)), yd(st)], range=yr, showgrid=False, zeroline=False,
                                ticks="outside", tickfont=dict(size=11), linecolor=col, linewidth=3, nticks=3)
+        tag = "chronic 24/7" if is_chronic else "streaming"
         anns.append(dict(xref="paper", yref="paper", x=0.004, y=yd(st) - 0.006,
-                         text=f"<b>{hemi[0]} {fmt_contact(c)}</b>", showarrow=False, font=dict(size=18, color=col),
+                         text=f"<b>{hemi[0]} {fmt_contact(c)}</b>  <span style='font-size:11px;color:#888'>{tag}</span>",
+                         showarrow=False, font=dict(size=18, color=col),
                          xanchor="left", yanchor="bottom", bgcolor="rgba(255,255,255,0.78)"))
         s, a = freq_ribbon_shapes(d["epochs"], yd(rb), yd(rt))
         shapes += s
@@ -364,7 +405,7 @@ def render(sched, chronic, stream, out_base):
         anns.append(dict(xref="paper", yref="paper", x=0.004, y=(yd(rt) + yd(rb)) / 2, text="freq",
                          showarrow=False, font=dict(size=11, color="#888"), xanchor="left", yanchor="middle"))
 
-    used = sorted({e[2] for _, _, d in rows for e in d["epochs"] if e[2]})
+    used = sorted({e[2] for _, _, _, d in rows for e in d["epochs"] if e[2]})
     ly = 0.82
     anns.append(dict(xref="paper", yref="paper", x=1.012, y=ly + 0.05, text="<b>Sensing freq (Hz)</b>",
                      showarrow=False, font=dict(size=14), xanchor="left"))

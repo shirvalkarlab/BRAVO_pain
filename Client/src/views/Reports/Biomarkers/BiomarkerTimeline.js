@@ -272,23 +272,11 @@ function BiomarkerTimeline({ data, height }) {
         const vmax = fin.length ? Math.max(...fin) : null;
         const rangeText = vmin != null ? ` · range ${vmin.toFixed(0)}–${vmax.toFixed(0)} a.u.` : "";
         const progText = progActive ? ` · programmed trigger ${prog.lower.toFixed(1)} (closed-loop active)` : "";
-        // STREAMING OVERLAY. The backend folds the matching on-demand streaming contact onto this
-        // chronic contact row as pc.streaming {time, band_power}. Draw it as diamond markers (each a
-        // brief patient-/clinic-initiated recording) over the continuous chronic line, so one contact
-        // row shows BOTH modalities, distinguished by mark (line = chronic 24/7, ◆ = streaming).
-        const st = pc.streaming;
-        const hasStream = !!(st && Array.isArray(st.time) && st.time.length
-                             && Array.isArray(st.band_power) && st.band_power.length);
-        if (hasStream) {
-          const sx = st.time.map((t) => parseTime(t));
-          const sy = st.band_power.map((v) => (typeof v === "number" ? v : null));
-          tr.push({ name: "Streaming (on-demand)", x: sx, y: sy,
-                    color: hemiColor(pc.hemisphere, false), streaming: true });
-        }
-        // Title leads with the CONTACT PAIR (the thing the clinician programs) — the center frequency
-        // is NOT in the title because it changes over time and is shown in the per-row ribbon below.
-        // A lighter source line states modality (chronic / + streaming) and the value range.
-        const srcText = `${isChronic ? "chronic 24/7" : "streaming"}${hasStream ? " + streaming on-demand" : ""}${rangeText}`;
+        // Chronic and streaming are SEPARATE rows per contact (the serializer no longer folds them):
+        // each (hemisphere, contact) chronic 24/7 row and each on-demand streaming contact row gets its
+        // own row, because streaming is usually one sensing band while the chronic log for that contact
+        // cycles through several. Title is the contact pair; a lighter source line states modality.
+        const srcText = `${isChronic ? "chronic 24/7" : "streaming on-demand"}${rangeText}`;
         rows.push({
           title: `${fmtContact(pc.channel)}`,
           srcText,
@@ -300,7 +288,6 @@ function BiomarkerTimeline({ data, height }) {
           refLines,
           freqEpochs,                  // drives the categorical frequency ribbon under this row
           currentHz,
-          hasStream,
         });
       });
     } else if (has("powerdomain_biomarker_value")) {
@@ -503,18 +490,6 @@ function BiomarkerTimeline({ data, height }) {
               yaxis: yk, xaxis: xk, connectgaps: false, hoverinfo: "skip", showlegend: false,
             });
           }
-          return;
-        }
-        // STREAMING sub-series: on-demand recordings drawn as DIAMOND markers (no connecting line)
-        // over the chronic envelope, so the two modalities read apart at a glance (line = chronic
-        // 24/7, ◆ = streaming). Lighter hemisphere shade + white edge keeps them legible on the line.
-        if (tr.streaming === true) {
-          traces.push({
-            x: tr.x, y: tr.y, name: tr.name, type: "scatter", mode: "markers",
-            marker: { symbol: "diamond", size: 6, color: tr.color, line: { color: "white", width: 0.6 } },
-            yaxis: yk, xaxis: xk, connectgaps: false, showlegend: false,
-            hovertemplate: `${row.short || row.title} — streaming: %{y:.3g}<extra></extra>`,
-          });
           return;
         }
         // Chronic 24/7 logs are dense (~10-min sampling) — a thin line reads as an envelope and
