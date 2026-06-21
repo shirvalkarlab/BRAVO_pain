@@ -624,6 +624,11 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                         "roc": (lambda d=ch_cv: analytics.roc_analysis(d)),
                         "lfp_distribution": (lambda d=ch_cv: analytics.lfp_distribution(d)),
                         "power_pain_scatter": (lambda d=ch_cv: analytics.power_pain_scatter(d, label_metric)),
+                        # Per-(channel, frequency) decoding: ROC + Otsu + binarization split for EACH
+                        # sensing band present in this contact's frame (chronic + streaming pooled at
+                        # the same band, never across bands). Drives the frequency sub-selector and the
+                        # power-domain binarization preview.
+                        "frequency_decode": (lambda d=ch_cv: pipeline._decode_by_frequency(d, label_metric)),
                     }
                     per_ch_analytics[ch_label] = _run_parallel(ch_tasks)
                     # Carry the channel summary alongside so the panel can display per-channel AUC.

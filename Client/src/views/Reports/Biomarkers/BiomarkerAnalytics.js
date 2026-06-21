@@ -13,6 +13,7 @@ import Plotly from "plotly.js-dist";
 import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import BinarizationPreview from "./BinarizationPreview";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -138,7 +139,9 @@ const FEATURE_LABELS = {
 };
 const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds }) {
+export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
+  binStrategy: previewStrategy, binMetricKey: previewMetricKey,
+  binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -223,6 +226,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // (high-sensitivity regime: don't miss real pain); positive ⇒ false positives cost more
   // (high-specificity regime: don't stimulate when pain is actually low).
   const [logCostRatio, setLogCostRatio] = useState(0);
+  // Frequency sub-selection within the chosen channel. The analysis unit is (channel, frequency):
+  // a contact sensed at 7.8 Hz and the SAME contact at 22.5 Hz are different biomarkers and are
+  // decoded separately (chronic + streaming pooled only WITHIN a band). null = "all bands of this
+  // channel" (the legacy whole-channel ROC/threshold over every sample regardless of band).
+  const [freqSelRaw, setFreqSel] = useState(null);
   const isHemiSel = typeof chSel === "string" && chSel.startsWith("hemi:");
   const selHemi = isHemiSel ? chSel.slice(5) : null;
   // A single-channel selection: any individually-selectable channel (a streaming contact OR a
@@ -239,6 +247,26 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const boundKey = safeChSel === "pooled" ? null : (isHemiSel ? aggKeyFor(selHemi) : safeChSel);
   const chronic = boundKey && perChannel[boundKey]
     ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot;
+
+  // Per-(channel, frequency) decoding. The frequency sub-selector is meaningful ONLY for a single
+  // implementable channel (a streaming contact or a chronic 24/7 stream) — not the hemisphere mean
+  // or the legacy pool, which span multiple contacts/bands. `availFreqs` lists the bands present in
+  // this channel (chronic + streaming pooled) with their sample/day counts; `freqDecode` is the
+  // backend's per-band ROC/Otsu/binarization map keyed by the snapped Hz string.
+  const boundEntry = boundKey ? perChannel[boundKey] : null;
+  const freqSelectable = isContactSel && !isHemiSel && safeChSel !== "pooled";
+  const availFreqs = (freqSelectable && boundEntry && boundEntry.summary
+                      && Array.isArray(boundEntry.summary.available_frequencies))
+    ? boundEntry.summary.available_frequencies : [];
+  const freqDecode = (freqSelectable && boundEntry && boundEntry.frequency_decode
+                      && typeof boundEntry.frequency_decode === "object")
+    ? boundEntry.frequency_decode : {};
+  // Key helper: the backend keys freqDecode by `${hz:g}` (e.g. "7.8", "10"). Match a selected numeric
+  // Hz to that string form so 10.0 -> "10" and 7.8 -> "7.8".
+  const freqKey = (hz) => (hz == null ? null : (Number.isInteger(hz) ? String(hz) : String(Number(hz))));
+  // Valid frequency selection only when it exists in this channel's decode map; else null = all bands.
+  const freqSel = (freqSelRaw != null && freqDecode[freqKey(freqSelRaw)]) ? freqSelRaw : null;
+  const selFreqDecode = freqSel != null ? freqDecode[freqKey(freqSel)] : null;
   // Device's CURRENTLY-PROGRAMMED adaptive trigger for the selected channel's hemisphere — present
   // ONLY when closed-loop stim is active there (backend gates this; {} otherwise). Used to overlay
   // "what's set on the device now" on the ROC operating point and the band-power distribution, in
@@ -818,7 +846,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   //     Left GPi vs Right VIM).
   //   CONTACT view: just the selected contact's ROC (filled).
   //   In BOTH, when a sliding window is active, overlay each window's ROC as a faint orange line.
-  const roc = chronic.roc || null;
+  // When a single sensing band is selected, the ROC is the per-(channel,frequency) decode (chronic +
+  // streaming pooled AT THAT BAND); otherwise the whole-channel ROC over all bands.
+  const roc = (selFreqDecode && selFreqDecode.roc) ? selFreqDecode.roc : (chronic.roc || null);
   const rocTraces = [];
   const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
   const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
@@ -1156,7 +1186,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       </Panel>
     );
   }
-  const dist = chronic.lfp_distribution || null;
+  // Band-scoped distribution when a sensing band is selected, else the whole-channel histogram.
+  const dist = (selFreqDecode && selFreqDecode.distribution)
+    ? selFreqDecode.distribution : (chronic.lfp_distribution || null);
   // Need one more edge than counts to form bin centers; without it every center is NaN.
   if (dist && dist.counts && dist.counts.length
       && Array.isArray(dist.bin_edges) && dist.bin_edges.length >= dist.counts.length + 1) {
@@ -1167,7 +1199,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     // Otsu split (ignores the pain label) against the supervised, label-driven optimum. This pulls
     // from the LIVE cost-sensitive picker so it tracks the cost slider above (defaults to the
     // cost-symmetric Youden point when the slider sits at 1:1).
-    const distOp = chronic.roc ? pickOp(chronic.roc) : null;
+    const distOp = roc ? pickOp(roc) : null;
     const distOpThr = distOp && Number.isFinite(distOp.threshold) ? distOp.threshold : null;
     // Only show it if it lands within the displayed (inlier) range, else the line floats off-axis.
     const distOpInRange = distOpThr != null && distOpThr >= edges[0] && distOpThr <= edges[edges.length - 1];
@@ -1219,6 +1251,39 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
            (distOpInRange
              ? `Green dotted line = ROC-optimal (Youden) threshold = ${distOpThr.toFixed(1)} device units, the supervised cut that jointly maximizes true positives and minimizes false positives against the pain label — this is the value to program for closed loop.`
              : `The ROC-optimal (Youden) threshold for closed-loop programming is shown on the ROC panel above.`)}
+        </MDTypography>
+      </Panel>
+    );
+  }
+
+  // PER-(CHANNEL, FREQUENCY) BINARIZATION PREVIEW. When a single sensing band is selected, show what
+  // pain-score data is present for THAT (channel, frequency) and how the high/low split falls — the
+  // same histogram + cut markers + day/sample class counts as the report-level BinarizationPreview,
+  // but scoped to the band's decoding set (chronic + streaming pooled at this band only). The daily
+  // means come pre-aggregated from the backend decode so heavy chronic bands stay light on the wire.
+  if (selFreqDecode && selFreqDecode.binarization
+      && Array.isArray(selFreqDecode.binarization.daily) && selFreqDecode.binarization.daily.length) {
+    const bz = selFreqDecode.binarization;
+    chPanels.push(
+      <Panel key="freq-binarization"
+             title={`Pain binarization @ ${Number(freqSel).toFixed(1)} Hz${chSuffix}`}>
+        <BinarizationPreview
+          dailyAgg={bz.daily}
+          strategy={previewStrategy || "median"}
+          percentileLow={previewPctLow}
+          percentileHigh={previewPctHigh}
+          metricLabel={metricLabel}
+          metricKey={previewMetricKey}
+          loading={false}
+        />
+        <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
+          {`Pain-score days available for ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz: ` +
+           `${bz.n_days_labeled.toLocaleString()} labeled day(s) across ` +
+           `${selFreqDecode.n_labeled.toLocaleString()} band-power samples (chronic + streaming combined at this band). ` +
+           `Decode-time split: ${bz.n_pos_days.toLocaleString()} high-pain / ${bz.n_neg_days.toLocaleString()} low-pain days ` +
+           `(${bz.n_pos_samples.toLocaleString()} / ${bz.n_neg_samples.toLocaleString()} samples). ` +
+           `The histogram and cut lines above recompute live from the binarization controls at the top of the report; ` +
+           `the high/low day and sample counts are the data this (channel, frequency) detector is trained on.`}
         </MDTypography>
       </Panel>
     );
@@ -1323,7 +1388,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           {"Sensing contact (bipolar):"}
         </MDTypography>
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
-          onChange={(_, v) => { if (v) setChSel(v); }}>
+          onChange={(_, v) => { if (v) { setChSel(v); setFreqSel(null); } }}>
           {/* No cross-hemisphere "All contacts" pool — you program one contact at a time, and Left
               (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
               per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
@@ -1357,6 +1422,39 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                 : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC channel, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
         </MDTypography>
       </MDBox>
+      {/* FREQUENCY sub-selector — only for a single implementable channel with >1 sensing band. The
+          analysis unit is (channel, frequency): selecting a band restricts ROC / threshold /
+          distribution / binarization to chronic + streaming samples recorded AT THAT BAND, never
+          pooling 7.8 Hz with 22.5 Hz. "All bands" = the legacy whole-channel decode. */}
+      {freqSelectable && availFreqs.length > 0 ? (
+        <MDBox mt={1} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+          <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+            {"Sensing frequency:"}
+          </MDTypography>
+          <ToggleButtonGroup value={freqSel == null ? "all" : freqKey(freqSel)} exclusive size="small"
+            onChange={(_, v) => { if (v) setFreqSel(v === "all" ? null : Number(v)); }}>
+            <ToggleButton value="all">All bands</ToggleButton>
+            {availFreqs.map((a) => {
+              const k = freqKey(a.frequency_hz);
+              return (
+                <ToggleButton key={k} value={k}>
+                  {`${Number(a.frequency_hz).toFixed(1)} Hz`}
+                  <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>
+                    {`(${a.n_labeled}/${a.n_samples} samp · ${a.n_days_labeled}/${a.n_days} d)`}
+                  </span>
+                </ToggleButton>
+              );
+            })}
+          </ToggleButtonGroup>
+          <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+            {freqSel == null
+              ? `All sensing bands of ${safeChSel} pooled — counts above show labeled/total samples and labeled/total days per band. Pick a band to decode it alone.`
+              : (selFreqDecode
+                  ? `Decoding ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz only — ${selFreqDecode.n_labeled} labeled samples across ${selFreqDecode.binarization.n_days_labeled} days (chronic + streaming combined at this band). ROC, threshold, distribution, and the binarization split below are computed on this band alone.`
+                  : `No decode available for ${Number(freqSel).toFixed(1)} Hz.`)}
+          </MDTypography>
+        </MDBox>
+      ) : null}
     </Grid>
   ) : null;
 

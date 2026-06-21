@@ -180,6 +180,130 @@ def _collect_contact_schedule_ms(ch_list):
     return collapsed
 
 
+def _available_frequencies(cv_ch):
+    """Per-frequency data availability for one channel's decoding frame (cv_ch).
+
+    For each unique sensing frequency present in the channel's samples (the `frequency_hz` column),
+    report how much decodable data exists AT THAT BAND: total samples, distinct calendar days, and
+    how many samples / days carry a usable pain label (pain_level in {0,1}) split by class. This is
+    what the frequency sub-selector lists and what the per-(channel,frequency) binarization preview
+    needs to state data sufficiency. Combines chronic + streaming implicitly — cv_ch already merges
+    both sources, so a frequency's counts pool every sample at that band regardless of modality.
+
+    Returns a list of dicts sorted by frequency (ascending), e.g.
+        [{"frequency_hz": 7.8, "n_samples": 412, "n_days": 23, "n_labeled": 388,
+          "n_pos": 190, "n_neg": 198, "n_days_labeled": 21}, ...]
+    Empty list when the frame has no frequency_hz column (legacy data with no center frequency).
+    """
+    if cv_ch is None or "frequency_hz" not in getattr(cv_ch, "columns", []):
+        return []
+    df = cv_ch
+    fhz = df["frequency_hz"].to_numpy(dtype=float)
+    finite = np.isfinite(fhz)
+    if not finite.any():
+        return []
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    day = ts.dt.floor("D")
+    pl = df["pain_level"].to_numpy(dtype=float) if "pain_level" in df.columns else np.full(len(df), np.nan)
+    out = []
+    for hz in sorted(set(np.round(fhz[finite], 1))):
+        m = finite & (np.round(fhz, 1) == hz)
+        if not m.any():
+            continue
+        labeled = m & np.isin(pl, (0.0, 1.0))
+        days_all = day[m].dropna()
+        days_lab = day[labeled].dropna()
+        out.append({
+            "frequency_hz": float(hz),
+            "n_samples": int(m.sum()),
+            "n_days": int(days_all.nunique()),
+            "n_labeled": int(labeled.sum()),
+            "n_pos": int(np.nansum(pl[labeled] == 1.0)),
+            "n_neg": int(np.nansum(pl[labeled] == 0.0)),
+            "n_days_labeled": int(days_lab.nunique()),
+        })
+    return out
+
+
+def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
+    """Per-(channel, frequency) decoding payload for one channel's frame.
+
+    The analysis unit is (channel, frequency): a contact sensed at 7.8 Hz and the SAME contact sensed
+    at 22.5 Hz are physiologically different biomarkers and must never be pooled. For each sensing
+    band present in `cv_ch` (the `frequency_hz` column, which already merges chronic + streaming for
+    this contact), we slice the frame to that band and compute, on that slice ALONE:
+      * decoding  : ROC (FPR/TPR/AUC) + LFP Otsu histogram on LFP_smoothed vs pain_level
+      * binarization: a COMPACT daily pain aggregation [{day, mean, n_samples}] for the band's
+        samples, plus the high/low day/sample split — the inputs the top BinarizationPreview shows,
+        scoped to this band. Daily (not per-sample) so a chronic band with 10k+ samples stays small.
+      * counts    : n_samples / n_days / n_labeled for the band.
+
+    Returns {"<hz>": {...}} keyed by the snapped frequency as a string (e.g. "7.8"). A band with
+    fewer than `min_labeled` labeled samples still reports counts + binarization but sets
+    decoding.auc = None (too little to fit a stable detector) so the UI can flag insufficiency.
+    """
+    from .routines import analytics
+    if cv_ch is None or "frequency_hz" not in getattr(cv_ch, "columns", []):
+        return {}
+    fhz = cv_ch["frequency_hz"].to_numpy(dtype=float)
+    finite = np.isfinite(fhz)
+    if not finite.any():
+        return {}
+    out = {}
+    for hz in sorted(set(np.round(fhz[finite], 1))):
+        sub = cv_ch[np.round(fhz, 1) == hz]
+        if len(sub) == 0:
+            continue
+        # Daily pain aggregation for the binarization preview (one row per calendar day at this band).
+        ts = pd.to_datetime(sub["timestamp"], errors="coerce")
+        day = ts.dt.floor("D")
+        pain = sub[label_metric].to_numpy(dtype=float) if label_metric in sub.columns else np.full(len(sub), np.nan)
+        pl = sub["pain_level"].to_numpy(dtype=float) if "pain_level" in sub.columns else np.full(len(sub), np.nan)
+        daily = []
+        dser = pd.Series(pain, index=day)
+        for d, grp in dser.groupby(level=0):
+            if d is None or (isinstance(d, float) and not np.isfinite(d)):
+                continue
+            vals = grp.to_numpy(dtype=float)
+            vals = vals[np.isfinite(vals)]
+            if vals.size == 0:
+                continue
+            daily.append({"day": pd.Timestamp(d).strftime("%Y-%m-%d"),
+                          "mean": float(np.mean(vals)), "n_samples": int(len(grp))})
+        labeled_mask = np.isin(pl, (0.0, 1.0))
+        n_labeled = int(labeled_mask.sum())
+        # Class split on the broadcast per-sample label (pain_level already reflects the active
+        # strategy's daily cut). Day counts use the labeled days; sample counts the labeled samples.
+        lab_days = day[labeled_mask].dropna()
+        pos_days = day[labeled_mask & (pl == 1.0)].dropna()
+        neg_days = day[labeled_mask & (pl == 0.0)].dropna()
+        binar = {
+            "daily": daily,
+            "n_pos_samples": int(np.nansum(pl[labeled_mask] == 1.0)),
+            "n_neg_samples": int(np.nansum(pl[labeled_mask] == 0.0)),
+            "n_pos_days": int(pos_days.nunique()),
+            "n_neg_days": int(neg_days.nunique()),
+            "n_days_labeled": int(lab_days.nunique()),
+        }
+        # LFP decoding on this band alone. roc/lfp_distribution are pure functions of the slice.
+        if n_labeled >= min_labeled and len(np.unique(pl[labeled_mask])) >= 2:
+            roc = analytics.roc_analysis(sub)
+            dist = analytics.lfp_distribution(sub)
+        else:
+            roc = {"fpr": [], "tpr": [], "auc": None}
+            dist = {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0, "n_total": int(len(sub))}
+        out[f"{hz:g}"] = {
+            "frequency_hz": float(hz),
+            "n_samples": int(len(sub)),
+            "n_days": int(day.dropna().nunique()),
+            "n_labeled": n_labeled,
+            "roc": roc,
+            "distribution": dist,
+            "binarization": binar,
+        }
+    return out
+
+
 def _build_contact_epochs(ch_list):
     """Time-segmented recording-CONTACT epochs for one hemisphere channel.
 
@@ -890,6 +1014,9 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                         "center_hz": ch_hz,
                         "freq_epochs": ch_freq_epochs,
                         "contact_epochs": ch_contact_epochs,
+                        # Per-frequency availability (chronic + streaming pooled at each band): drives
+                        # the frequency sub-selector and the per-(channel,frequency) binarization view.
+                        "available_frequencies": _available_frequencies(cv_ch),
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),

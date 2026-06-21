@@ -222,13 +222,19 @@ def _concat_chronic(chronic, mad_k=3.0):
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
-    times_list, datas_list, src_list = [], [], []
+    times_list, datas_list, src_list, freq_list = [], [], [], []
     for c in chronic:
         t = np.asarray(c["Time"], dtype=float)
         d = np.asarray(c["Data"], dtype=float)
         # Sensing-modality tag per recording, repeated per sample so it survives the merge+sort and
         # downstream can diagnose the two-source batch/scale confound. Default "chronic".
         src = str(c.get("Source", "chronic"))
+        # Sensing CENTER FREQUENCY (Hz) of THIS recording, repeated per sample (parallel to Source).
+        # The programmed band can change between recordings of the same contact, so the frequency is
+        # a per-recording property — carrying it per sample lets the decoding path filter to one
+        # (channel, frequency) combo without a separate timestamp-to-schedule join. Snapped to the
+        # Percept FFT bin (~250/256 Hz); NaN when the recording carries no CenterFrequencyHz.
+        fhz = _snap_freq_local(c.get("CenterFrequencyHz"))
         if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
             keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
@@ -236,19 +242,38 @@ def _concat_chronic(chronic, mad_k=3.0):
             times_list.append(t)
             datas_list.append(d)
             src_list.append(np.full(t.shape[0], src, dtype=object))
+            freq_list.append(np.full(t.shape[0], fhz, dtype=float))
     if not times_list:
         raise ValueError("no chronic samples survived outlier rejection.")
     times = np.concatenate(times_list)
     datas = np.concatenate(datas_list, axis=0)
     sources = np.concatenate(src_list)
+    freqs = np.concatenate(freq_list)
     order = np.argsort(times)
     return {
         "SamplingRate": -1,
         "Time": times[order],
         "Data": datas[order],
         "Source": sources[order],
+        "FrequencyHz": freqs[order],
         "ChannelNames": chronic[0].get("ChannelNames"),
     }
+
+
+# Percept sensing-frequency bin width (FFT bin spacing ~250/256 Hz). Defined locally in adapter to
+# avoid a circular import with pipeline (which imports adapter); mirrors pipeline._snap_freq.
+_PERCEPT_FREQ_BIN_HZ = 250.0 / 256.0
+
+
+def _snap_freq_local(hz):
+    """Snap a programmed center frequency to the nearest Percept FFT bin; NaN when missing/invalid."""
+    try:
+        v = float(hz)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(v) or v <= 0:
+        return float("nan")
+    return round(round(v / _PERCEPT_FREQ_BIN_HZ) * _PERCEPT_FREQ_BIN_HZ, 1)
 
 
 # Medtronic power-domain packets flag a missing sample with a ~2^32 sentinel (uint32 max).
@@ -342,6 +367,9 @@ def bravo_powerdomain_to_chronic_like(recordings):
                 # Sensing-modality tag so the merged-series batch/scale confound can be diagnosed
                 # downstream (per-session Power-Domain band power vs the ~10-min Chronic LFP power).
                 "Source": "powerdomain",
+                # Sensing center frequency of this streaming session (carried per sample by
+                # _concat_chronic), so the decoding path can filter to one (channel, frequency).
+                "CenterFrequencyHz": r.get("CenterFrequencyHz"),
             })
     return out
 
@@ -462,6 +490,12 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     src = chronic.get("Source")
     if src is not None and len(src) == len(df):
         df["source"] = np.asarray(src, dtype=object)
+    # Per-sample sensing frequency (Hz), parallel to source: lets the decoding path filter the cv_df
+    # to a single (channel, frequency) combo so chronic + streaming at the SAME band are pooled but
+    # different bands are never mixed. NaN where the recording carried no CenterFrequencyHz.
+    fhz = chronic.get("FrequencyHz")
+    if fhz is not None and len(fhz) == len(df):
+        df["frequency_hz"] = np.asarray(fhz, dtype=float)
 
     lfp = df["LFP"].to_numpy(dtype=float)
     n = len(lfp)
@@ -504,6 +538,8 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     out_cols = ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", label_metric]
     if "source" in df.columns:
         out_cols.append("source")
+    if "frequency_hz" in df.columns:
+        out_cols.append("frequency_hz")
     for f in kmeans_features:
         if f in df.columns and f not in out_cols:
             out_cols.append(f)

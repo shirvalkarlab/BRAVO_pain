@@ -606,6 +606,8 @@ function Biomarkers() {
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
                 recordedPowers={data.recorded_powers}
                 programmedThresholds={data.programmed_thresholds}
+                binStrategy={strategy} binMetricKey={metric}
+                binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}

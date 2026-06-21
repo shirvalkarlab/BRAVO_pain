@@ -94,7 +94,7 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 }
 
 
-function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, metricLabel, metricKey, loading }) {
+function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh, metricLabel, metricKey, loading }) {
   const ref = useRef(null);
 
   // Aggregate the raw PRO reports to ONE value per calendar day (the mean of that day's reports),
@@ -106,6 +106,17 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
   // first 10 chars. We keep, per day, the daily mean AND how many raw reports fell on that day, so
   // the card can report both "days" and "raw samples" for every class.
   const dayAgg = useMemo(() => {
+    // Pre-aggregated daily means take precedence (the per-(channel,frequency) decode supplies
+    // `dailyAgg = [{day, mean, n_samples}]` already collapsed to one row per day at the selected
+    // band). Otherwise aggregate the raw PRO reports here, exactly as the backend labeler does.
+    if (Array.isArray(dailyAgg)) {
+      return dailyAgg
+        .filter((d) => d && typeof d.mean === "number" && Number.isFinite(d.mean))
+        .map((d) => ({ day: String(d.day).slice(0, 10),
+                       mean: d.mean,
+                       nSamples: Number.isFinite(d.n_samples) ? d.n_samples : (d.nSamples || 1) }))
+        .sort((a, b) => (a.day < b.day ? -1 : 1));
+    }
     const byDay = {};
     for (const p of points || []) {
       const v = p && p.v;
@@ -118,7 +129,7 @@ function BinarizationPreview({ points, strategy, percentileLow, percentileHigh, 
     return Object.keys(byDay).sort().map((day) => ({
       day, mean: byDay[day].sum / byDay[day].n, nSamples: byDay[day].n,
     }));
-  }, [points]);
+  }, [points, dailyAgg]);
 
   // The daily-mean values are what the cut and the histogram are computed over (the x-axis is a
   // distribution of DAYS, not reports).
