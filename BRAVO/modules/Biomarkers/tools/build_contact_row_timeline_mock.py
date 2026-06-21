@@ -81,6 +81,13 @@ def fcol(hz):
     return FREQ_PAL[k] if abs(k - s) < 0.6 else "#9E9E9E"
 
 
+def fmt_contact(c):
+    """'0-3' -> '0⁻3⁺' (lower contact cathode, higher anode, no separator dash)."""
+    import re
+    m = re.match(r"\s*(\d+)\s*-\s*(\d+)\s*$", str(c))
+    return f"{m.group(1)}\u207B{m.group(2)}\u207A" if m else str(c)
+
+
 def darken(hexc, f=0.62):
     h = hexc.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -258,19 +265,39 @@ def robust(y, lo=0.5, hi=99.5, pad=0.08):
     return [a - s * pad, b + s * 0.10]
 
 
-def freq_ribbon_shapes(epochs, y0, y1):
+def coverage_windows(t, max_gap=2 * 86400):
+    """Contiguous data-present spans for one contact's chronic timestamps (broken at >max_gap)."""
+    cov = []
+    for tt in t:
+        if not cov or tt - cov[-1][1] > max_gap:
+            cov.append([tt, tt])
+        else:
+            cov[-1][1] = tt
+    return cov
+
+
+def freq_ribbon_shapes(epochs, y0, y1, coverage=None):
+    """Draw the frequency ribbon, CLIPPED to the contact's data-coverage windows so color + the Hz
+    label only appear where the contact actually recorded (one contact senses at a time)."""
     shapes, anns = [], []
     for t0, t1, hz in epochs:
-        if t1 <= t0:
-            t1 = t0 + 3600
-        shapes.append(dict(type="rect", xref="x", yref="paper",
-                           x0=datetime.utcfromtimestamp(t0), x1=datetime.utcfromtimestamp(t1),
-                           y0=y0, y1=y1, fillcolor=fcol(hz), line=dict(width=0.4, color="white"),
-                           layer="above"))
-        if (t1 - t0) > 4 * 86400 and hz:
-            anns.append(dict(xref="x", yref="paper", x=datetime.utcfromtimestamp((t0 + t1) / 2),
-                             y=(y0 + y1) / 2, text=f"<b>{hz:g}</b>", showarrow=False,
-                             font=dict(size=12, color="#111"), xanchor="center", yanchor="middle"))
+        if t1 < t0:
+            t0, t1 = t1, t0
+        # Intersect [t0,t1] with coverage -> visible sub-segments (full span when no coverage given).
+        for c0, c1 in (coverage if coverage else [[t0, t1]]):
+            s0, s1 = max(t0, c0), min(t1, c1)
+            if s1 < s0:
+                continue
+            if s1 <= s0:
+                s1 = s0 + 6 * 3600   # near-zero-width epoch gets a visible sliver
+            shapes.append(dict(type="rect", xref="x", yref="paper",
+                               x0=datetime.utcfromtimestamp(s0), x1=datetime.utcfromtimestamp(s1),
+                               y0=y0, y1=y1, fillcolor=fcol(hz), line=dict(width=0.4, color="white"),
+                               layer="above"))
+            if (s1 - s0) > 4 * 86400 and hz:
+                anns.append(dict(xref="x", yref="paper", x=datetime.utcfromtimestamp((s0 + s1) / 2),
+                                 y=(y0 + y1) / 2, text=f"<b>{hz:g}</b>", showarrow=False,
+                                 font=dict(size=12, color="#111"), xanchor="center", yanchor="middle"))
     return shapes, anns
 
 
@@ -349,9 +376,9 @@ def render(sched, chronic, stream, out_base):
         fig.layout[yax] = dict(domain=[max(0, yd(sb)), yd(st)], range=yr, showgrid=False, zeroline=False,
                                ticks="outside", tickfont=dict(size=11), linecolor=col, linewidth=3, nticks=3)
         anns.append(dict(xref="paper", yref="paper", x=0.004, y=yd(st) - 0.006,
-                         text=f"<b>{hemi[0]} {c}</b>", showarrow=False, font=dict(size=18, color=col),
+                         text=f"<b>{hemi[0]} {fmt_contact(c)}</b>", showarrow=False, font=dict(size=18, color=col),
                          xanchor="left", yanchor="bottom", bgcolor="rgba(255,255,255,0.78)"))
-        s, a = freq_ribbon_shapes(d["epochs"], yd(rb), yd(rt))
+        s, a = freq_ribbon_shapes(d["epochs"], yd(rb), yd(rt), coverage=coverage_windows(d["t"]))
         shapes += s
         anns += a
         anns.append(dict(xref="paper", yref="paper", x=0.004, y=(yd(rt) + yd(rb)) / 2, text="freq",

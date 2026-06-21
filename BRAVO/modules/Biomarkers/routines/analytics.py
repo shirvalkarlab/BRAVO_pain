@@ -43,7 +43,7 @@ def format_channel(name, region=None):
     toks = [t for t in up.replace("-", "_").split("_") if t in _WORD2DIGIT or t.isdigit()]
     digits = [(_WORD2DIGIT[t] if t in _WORD2DIGIT else t) for t in toks]
     if len(digits) >= 2:
-        contacts = f"{digits[0]}⁻-{digits[1]}⁺"   # e.g. 0⁻-2⁺  (cathode/anode)
+        contacts = f"{digits[0]}⁻{digits[1]}⁺"   # e.g. 0⁻2⁺  (cathode/anode, no separator)
     elif len(digits) == 1:
         contacts = digits[0]
     else:

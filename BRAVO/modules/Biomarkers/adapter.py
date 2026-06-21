@@ -314,7 +314,7 @@ def bravo_powerdomain_to_chronic_like(recordings):
             valid = np.isfinite(pw)
             if not valid.any():
                 continue
-            # Build a real bipolar-contact label (e.g. "L 0⁻-3⁺") from the power column name
+            # Build a real bipolar-contact label (e.g. "L 0⁻3⁺") from the power column name
             # instead of the uninformative "Left LFP" / "Right LFP". The Medtronic export names
             # the column "<CONTACT> Power" (e.g. "ZERO_THREE_LEFT Power"); strip " Power" and let
             # format_channel decode it. Fall back to the hemisphere when no contact is encoded.
@@ -326,8 +326,8 @@ def bravo_powerdomain_to_chronic_like(recordings):
                     break
             fmt = format_channel(contact_raw, region="")
             short = fmt.get("short") or ""
-            # format_channel returns a decoded bipolar label like "L 0⁻-3⁺" when the column name
-            # encodes a contact (digits appear in the formatted short, e.g. "0⁻-3⁺"). If it could
+            # format_channel returns a decoded bipolar label like "L 0⁻3⁺" when the column name
+            # encodes a contact (digits appear in the formatted short, e.g. "0⁻3⁺"). If it could
             # not decode one, fall back to a clean "<L/R> LFP" rather than a raw token.
             if any(ch.isdigit() for ch in short):
                 label = short

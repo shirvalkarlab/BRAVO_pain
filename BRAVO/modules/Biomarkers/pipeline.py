@@ -433,7 +433,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     if band is not None:
         c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig = band
         timeline["td_biomarker_value"] = result["psd"][:, c_idx, f_idx]
-        # Numeric contact-pair label (e.g. "R 0⁻-2⁺"), never the raw word form ("ZERO_TWO_RIGHT").
+        # Numeric contact-pair label (e.g. "R 0⁻2⁺"), never the raw word form ("ZERO_TWO_RIGHT").
         timeline["td_biomarker_channel"] = format_channel(result["chan_order"][c_idx])["short"]
         timeline["td_biomarker_freq_hz"] = f_hz
         timeline["td_biomarker_r"] = r

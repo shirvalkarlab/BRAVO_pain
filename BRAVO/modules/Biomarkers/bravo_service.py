@@ -290,9 +290,9 @@ def _programmed_adaptive_thresholds(participant):
 
 def _recorded_powers(powerdomain_list, region_map=None):
     """Which band-power channels were actually recorded — the '<contact> Power' columns of the
-    BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻-3⁺') with region from
+    BrainSense Power-Domain recordings, formatted numerically (e.g. 'L 0⁻3⁺') with region from
     device metadata when available, plus the sensing-band CENTER FREQUENCY when the device stored
-    it. Each entry: {raw, label, region, center_hz}. The card displays 'L 0⁻-3⁺ (GPi) @ 22.5 Hz'
+    it. Each entry: {raw, label, region, center_hz}. The card displays 'L 0⁻3⁺ (GPi) @ 22.5 Hz'
     so the clinician sees which BAND was sensed, not just which contact pair. Frequency extraction
     lives in analytics.power_center_freqs (Django-free, unit-tested).
     """

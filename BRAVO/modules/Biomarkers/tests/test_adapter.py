@@ -277,7 +277,7 @@ def test_td_sliding_corr_spectrum_matches_scipy():
     assert len(chans) == C
     starts = chans[0]["window_starts"]
     assert len(starts) >= 2
-    assert chans[0]["channel"] == "L 0⁻-2⁺"   # numeric contact label, not word form
+    assert chans[0]["channel"] == "L 0⁻2⁺"   # numeric contact label w/ polarity, no separator dash
 
     tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
     w_ns = 10 * 86_400 * 1e9
@@ -654,7 +654,7 @@ def test_bravo_powerdomain_to_chronic_like():
     out = adapter.bravo_powerdomain_to_chronic_like([rec])
     assert len(out) == 2, "one chronic-shaped series per Power channel"
     # ChannelNames are now real bipolar-contact labels decoded from the power column name
-    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻-3⁺"), not the generic "Left LFP".
+    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻3⁺"), not the generic "Left LFP".
     left = next(o for o in out if o["ChannelNames"][0].startswith("L"))
     right = next(o for o in out if o["ChannelNames"][0].startswith("R"))
     assert "0" in left["ChannelNames"][0] and "3" in left["ChannelNames"][0], \
