@@ -141,6 +141,82 @@ def _collect_freq_schedule_ms(ch_list):
     return collapsed
 
 
+def _collect_contact_schedule_ms(ch_list):
+    """Union of every recording's stamped ContactSchedule into one sorted change-point list.
+
+    ContactSchedule is [[epoch_SECONDS, "0-3"], ...] derived from GroupHistory at decode time —
+    parallel to FreqScheduleHz but for the bipolar recording contact, which is reprogrammed over time
+    just like the frequency. Merge change-points across the channel's recordings, dedup, collapse
+    consecutive same-contact points. Returns [[epoch_MS, contact], ...] sorted by time, or [].
+    """
+    pts = []
+    seen = set()
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        sched = c.get("ContactSchedule")
+        if not isinstance(sched, (list, tuple)):
+            continue
+        for item in sched:
+            try:
+                ts, contact = float(item[0]), str(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not contact:
+                continue
+            ms = int(ts * 1000)
+            key = (ms, contact)
+            if key in seen:
+                continue
+            seen.add(key)
+            pts.append([ms, contact])
+    if not pts:
+        return []
+    pts.sort(key=lambda p: p[0])
+    collapsed = []
+    for ms, contact in pts:
+        if not collapsed or collapsed[-1][1] != contact:
+            collapsed.append([ms, contact])
+    return collapsed
+
+
+def _build_contact_epochs(ch_list):
+    """Time-segmented recording-CONTACT epochs for one hemisphere channel.
+
+    Parallel to _build_freq_epochs but for the bipolar contact. Segments the channel's actual data
+    extent at each contact change-point from the dated GroupHistory schedule, so a long chronic trend
+    yields one epoch per contact the signal was actually recorded from. The contact in force at the
+    span start is carried from the last change-point at or before it. Returns
+    [{"t0": ms, "t1": ms, "contact": str}, ...] (epoch-ms) or [] when no schedule is available.
+    """
+    extent = _channel_time_extent_ms(ch_list)
+    schedule = _collect_contact_schedule_ms(ch_list)
+    if extent is None or not schedule:
+        return []
+    lo, hi = extent
+    bounds = sorted({lo, hi} | {ms for ms, _c in schedule if lo < ms < hi})
+
+    def contact_at(ms):
+        cur = None
+        for cms, cc in schedule:
+            if cms <= ms:
+                cur = cc
+            else:
+                break
+        return cur if cur is not None else schedule[0][1]
+
+    epochs = []
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        contact = contact_at(a)
+        if not contact:
+            continue
+        if epochs and epochs[-1]["contact"] == contact and a <= epochs[-1]["t1"] + 1:
+            epochs[-1]["t1"] = max(epochs[-1]["t1"], b)
+        else:
+            epochs.append({"t0": a, "t1": b, "contact": contact})
+    return epochs
+
+
 def _build_freq_epochs(ch_list):
     """Time-segmented center-frequency epochs for one sensing channel.
 
@@ -800,6 +876,12 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                     # CenterFrequencyHz and merging consecutive same-frequency spans. The frontend
                     # paints these as a colored frequency ribbon under the power row.
                     ch_freq_epochs = _build_freq_epochs(ch_list)
+                    # Recording-CONTACT epochs over time (parallel to freq_epochs): the programmed
+                    # bipolar contact is reprogrammed between sessions, so this hemisphere channel is
+                    # actually a sequence of contacts. The serializer uses these to split the chronic
+                    # series into per-contact display rows (the signal belongs in the row of the
+                    # contact it was recorded from).
+                    ch_contact_epochs = _build_contact_epochs(ch_list)
                     ch_summary = {
                         "channel": ch_label,
                         "hemisphere": ch_hemi,
@@ -807,6 +889,7 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                         "source_modality": ch_source,
                         "center_hz": ch_hz,
                         "freq_epochs": ch_freq_epochs,
+                        "contact_epochs": ch_contact_epochs,
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),

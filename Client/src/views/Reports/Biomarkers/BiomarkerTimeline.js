@@ -259,13 +259,28 @@ function BiomarkerTimeline({ data, height }) {
         const vmin = fin.length ? Math.min(...fin) : null;
         const vmax = fin.length ? Math.max(...fin) : null;
         const rangeText = vmin != null ? ` · range ${vmin.toFixed(0)}–${vmax.toFixed(0)} a.u.` : "";
-        const hemiText = pc.hemisphere ? `${pc.hemisphere} · ` : "";
         const progText = progActive ? ` · programmed trigger ${prog.lower.toFixed(1)} (closed-loop active)` : "";
-        const kindLbl = isChronic ? "Chronic ~10-min (around-the-clock)" : "Streaming band power";
-        const srcTag = isChronic ? "Chronic 24/7" : "Streaming";
+        // STREAMING OVERLAY. The backend folds the matching on-demand streaming contact onto this
+        // chronic contact row as pc.streaming {time, band_power}. Draw it as diamond markers (each a
+        // brief patient-/clinic-initiated recording) over the continuous chronic line, so one contact
+        // row shows BOTH modalities, distinguished by mark (line = chronic 24/7, ◆ = streaming).
+        const st = pc.streaming;
+        const hasStream = !!(st && Array.isArray(st.time) && st.time.length
+                             && Array.isArray(st.band_power) && st.band_power.length);
+        if (hasStream) {
+          const sx = st.time.map((t) => parseTime(t));
+          const sy = st.band_power.map((v) => (typeof v === "number" ? v : null));
+          tr.push({ name: "Streaming (on-demand)", x: sx, y: sy,
+                    color: hemiColor(pc.hemisphere, false), streaming: true });
+        }
+        // Title leads with the CONTACT PAIR (the thing the clinician programs) — the center frequency
+        // is NOT in the title because it changes over time and is shown in the per-row ribbon below.
+        // A lighter source line states modality (chronic / + streaming) and the value range.
+        const srcText = `${isChronic ? "chronic 24/7" : "streaming"}${hasStream ? " + streaming on-demand" : ""}${rangeText}`;
         rows.push({
-          title: `${pc.channel} — ${srcTag} @ ${freqText}${rangeText}`,
-          short: `Power ${pc.channel}`,
+          title: `${pc.channel}`,
+          srcText,
+          short: `${pc.channel}`,
           unit: "Band power (a.u.)",
           ownX: true,                  // each channel carries its own x (timestamps differ per contact)
           hemi,
@@ -273,6 +288,7 @@ function BiomarkerTimeline({ data, height }) {
           refLines,
           freqEpochs,                  // drives the categorical frequency ribbon under this row
           currentHz,
+          hasStream,
         });
       });
     } else if (has("powerdomain_biomarker_value")) {
@@ -315,7 +331,7 @@ function BiomarkerTimeline({ data, height }) {
     // HEMISPHERE" signpost without overlapping the row above. A power row WITH a center-frequency
     // ribbon is taller (signal band + thin ribbon below it). Domains are computed cumulatively,
     // proportional to each row's pixel footprint.
-    const ROW_PX = 104, RIBBON_PX = 22, BASE_GAP = 0.007, BANNER_GAP = 0.052;
+    const ROW_PX = 116, RIBBON_PX = 26, BASE_GAP = 0.007, BANNER_GAP = 0.052;
     const hasRibbon = rows.map((row) => Array.isArray(row.freqEpochs) && row.freqEpochs.length > 0);
     const isStart = rows.map((row, i) => {
       let prev = null;
@@ -415,8 +431,8 @@ function BiomarkerTimeline({ data, height }) {
         layout.shapes.push({ type: "rect", xref: `${xk} domain`, yref: `${yk} domain`,
           x0: 0, x1: 1, y0: 0, y1: 1, fillcolor: "#FBFBF4", line: { width: 0 }, layer: "below" });
       }
-      layout[yaxisKey] = { domain: [sigBot, sigTop], title: { text: row.unit, font: { size: 11 }, standoff: 4 },
-        zeroline: false, showgrid: false, automargin: true, nticks: 3, tickfont: { size: 10 },
+      layout[yaxisKey] = { domain: [sigBot, sigTop], title: { text: row.unit, font: { size: 12 }, standoff: 4 },
+        zeroline: false, showgrid: false, automargin: true, nticks: 3, tickfont: { size: 12 },
         // colored y-axis spine = hemisphere accent (the accent IS the axis edge — no separate bar)
         showline: true, linewidth: hemi ? 4 : 1, linecolor: accent, mirror: false,
         ...(yrange ? { range: yrange } : { autorange: true }) };
@@ -428,9 +444,9 @@ function BiomarkerTimeline({ data, height }) {
         domain: [0, 1], type: "date", anchor: yk,
         showgrid: true, gridcolor: "#C9CCD6", gridwidth: 1,
         showticklabels: di === n - 1,  // dates only on the bottom row; grid carries the time reference
-        ticks: "", showline: false, tickfont: { size: 10.5 },
+        ticks: "", showline: false, tickfont: { size: 13 },
         ...(haveGlobalX ? { range: [gMin, gMax] } : {}),
-        ...(di === n - 1 ? { title: { text: "Time", font: { size: 12 } } } : {}),
+        ...(di === n - 1 ? { title: { text: "Time", font: { size: 13 } } } : {}),
         ...(axisNum !== 1 && linked ? { matches: "x" } : {}),
       };
 
@@ -448,11 +464,11 @@ function BiomarkerTimeline({ data, height }) {
             line: { color: "white", width: 0.8 }, layer: "above" });
           layout.annotations.push({ xref: xk, yref: "paper", x: new Date((+e.t0 + +e.t1) / 2),
             y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
-            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 12.5, color: textOn(col) } });
+            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 13.5, color: textOn(col) } });
         });
         layout.annotations.push({ xref: `${xk} domain`, yref: "paper", x: -0.006, y: (ribBot + ribTop) / 2,
           xanchor: "right", yanchor: "middle", text: "<b>freq</b>", showarrow: false,
-          font: { size: 10.5, color: "#555" } });
+          font: { size: 12, color: "#555" } });
       }
 
       row.traces.forEach((tr) => {
@@ -475,6 +491,18 @@ function BiomarkerTimeline({ data, height }) {
               yaxis: yk, xaxis: xk, connectgaps: false, hoverinfo: "skip", showlegend: false,
             });
           }
+          return;
+        }
+        // STREAMING sub-series: on-demand recordings drawn as DIAMOND markers (no connecting line)
+        // over the chronic envelope, so the two modalities read apart at a glance (line = chronic
+        // 24/7, ◆ = streaming). Lighter hemisphere shade + white edge keeps them legible on the line.
+        if (tr.streaming === true) {
+          traces.push({
+            x: tr.x, y: tr.y, name: tr.name, type: "scatter", mode: "markers",
+            marker: { symbol: "diamond", size: 6, color: tr.color, line: { color: "white", width: 0.6 } },
+            yaxis: yk, xaxis: xk, connectgaps: false, showlegend: false,
+            hovertemplate: `${row.short || row.title} — streaming: %{y:.3g}<extra></extra>`,
+          });
           return;
         }
         // Chronic 24/7 logs are dense (~10-min sampling) — a thin line reads as an envelope and
@@ -537,15 +565,24 @@ function BiomarkerTimeline({ data, height }) {
         });
       }
 
-      // Row title — bigger, bold, colored to the hemisphere accent, anchored INSIDE the row (top-left)
-      // with a halo so it reads over traces. The redundant provenance subtitle line was removed; the
-      // title already carries hemisphere / center frequency / range.
+      // Row title — the CONTACT PAIR, large and bold (this is the thing the clinician selects on the
+      // Percept RC), colored to the hemisphere accent, anchored INSIDE the row (top-left) with a halo
+      // so it reads over traces. Center frequency is intentionally NOT here (it changes over time and
+      // lives in the ribbon below). A smaller source line states modality + value range beneath it.
       layout.annotations.push({
         xref: `${xk} domain`, yref: `${yk} domain`, x: 0.004, y: 0.97,
         xanchor: "left", yanchor: "top", text: `<b>${row.title}</b>`,
-        showarrow: false, font: { size: 13.5, color: accent },
-        bgcolor: "rgba(255,255,255,0.78)",
+        showarrow: false, font: { size: 19, color: accent },
+        bgcolor: "rgba(255,255,255,0.80)",
       });
+      if (row.srcText) {
+        layout.annotations.push({
+          xref: `${xk} domain`, yref: `${yk} domain`, x: 0.006, y: 0.97,
+          xanchor: "left", yanchor: "top", yshift: -22, text: row.srcText,
+          showarrow: false, font: { size: 11, color: "#6B7280" },
+          bgcolor: "rgba(255,255,255,0.70)",
+        });
+      }
       // BIG hemisphere signpost above the FIRST row of each hemisphere block.
       if (isStart[di] && hemi && HEMI[hemi]) {
         layout.annotations.push({
@@ -574,6 +611,23 @@ function BiomarkerTimeline({ data, height }) {
           xanchor: "left", yanchor: "middle", text: `<b>${fmtHz(f)}</b> Hz`, showarrow: false,
           font: { size: 14, color: "#344767" } });
       });
+      // SOURCE KEY beneath the frequency legend: how to read a contact row's two modalities — the
+      // continuous chronic 24/7 line vs the on-demand streaming diamonds.
+      const ky = ly0 - usedFreqs.length * dh - 0.04;
+      layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ky + dh * 0.8,
+        xanchor: "left", yanchor: "bottom", text: "<b>Source</b>", showarrow: false,
+        font: { size: 13, color: "#344767" } });
+      layout.shapes.push({ type: "line", xref: "paper", yref: "paper",
+        x0: lx0, x1: lx0 + 2 * sw, y0: ky, y1: ky, line: { color: "#555", width: 2 } });
+      layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky,
+        xanchor: "left", yanchor: "middle", text: "chronic 24/7", showarrow: false,
+        font: { size: 13, color: "#344767" } });
+      layout.annotations.push({ xref: "paper", yref: "paper", x: lx0 + sw, y: ky - dh,
+        xanchor: "center", yanchor: "middle", text: "◆", showarrow: false,
+        font: { size: 14, color: "#555" } });
+      layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky - dh,
+        xanchor: "left", yanchor: "middle", text: "streaming", showarrow: false,
+        font: { size: 13, color: "#344767" } });
     }
 
     Plotly.react(ref.current, traces, layout, {

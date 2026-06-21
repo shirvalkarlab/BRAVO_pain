@@ -135,17 +135,21 @@ def _load_recordings(participant_uid, types):
             # chronic trend with its sensing frequency.
             chz = None
             fsched = None
+            csched = None
             md = getattr(rec, "metadata", None)
             if isinstance(md, dict):
                 chz = md.get("CenterFrequencyHz")
                 fsched = md.get("FreqScheduleHz")
-            if chz is not None or fsched is not None:
+                csched = md.get("ContactSchedule")
+            if chz is not None or fsched is not None or csched is not None:
                 for d in (data if isinstance(data, list) else [data]):
                     if isinstance(d, dict):
                         if chz is not None:
                             d.setdefault("CenterFrequencyHz", chz)
                         if fsched is not None:
                             d.setdefault("FreqScheduleHz", fsched)
+                        if csched is not None:
+                            d.setdefault("ContactSchedule", csched)
             return data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
@@ -890,6 +894,69 @@ def run_for_participant(request_data):
 _TIMELINE_MAX_POINTS = 6000
 
 
+def _split_cv_by_contact(cv, contact_epochs):
+    """Split a chronic channel's cv_df into one segment per recording contact (DISPLAY only).
+
+    contact_epochs is [{"t0": ms, "t1": ms, "contact": str}, ...] from the dated GroupHistory
+    schedule. Each cv row's timestamp is assigned to whichever epoch contains it; consecutive epochs
+    of the SAME contact are merged into one display row (so a contact used in two separate windows
+    still reads as one labeled row spanning both, with a gap the frontend breaks on). Returns
+    [(contact, cv_segment, seg_t0_ms, seg_t1_ms), ...] in contact-first-seen order, or [] if the
+    split is degenerate (no epochs, or everything lands in one contact — caller then keeps the
+    single undivided row).
+    """
+    if cv is None or not hasattr(cv, "__len__") or len(cv) == 0 or not contact_epochs:
+        return []
+    try:
+        # Force millisecond resolution explicitly: pandas 2.x carries variable datetime resolution
+        # (s/ms/us/ns), so a bare .astype("int64") can yield seconds and silently mis-scale the epoch
+        # comparison against the ms-based contact schedule. Go through numpy datetime64[ms].
+        ts_ms = (pd.to_datetime(cv["timestamp"], utc=True).dt.tz_convert(None)
+                 .to_numpy().astype("datetime64[ms]").astype("int64"))
+    except Exception:
+        return []
+    eps = sorted(contact_epochs, key=lambda e: e.get("t0", 0))
+
+    def contact_at(ms):
+        cur = None
+        for e in eps:
+            if e.get("t0", 0) <= ms:
+                cur = e.get("contact")
+            else:
+                break
+        return cur if cur is not None else eps[0].get("contact")
+
+    contacts = np.array([contact_at(int(m)) for m in ts_ms], dtype=object)
+    uniq = [c for c in dict.fromkeys(contacts.tolist()) if c]
+    if len(uniq) <= 1:
+        return []   # nothing to split — caller keeps the single row
+    rows = []
+    for contact in uniq:
+        mask = (contacts == contact)
+        cv_seg = cv[mask]
+        if len(cv_seg) == 0:
+            continue
+        seg_ms = ts_ms[mask]
+        rows.append((contact, cv_seg, int(seg_ms.min()), int(seg_ms.max())))
+    return rows
+
+
+def _freq_epochs_in_window(freq_epochs, t0_ms, t1_ms):
+    """Clip frequency epochs to [t0_ms, t1_ms] so a contact row's ribbon only shows the bands that
+    were programmed while that contact was active. Returns a new clipped list (epoch-ms)."""
+    if not freq_epochs:
+        return []
+    out = []
+    for e in freq_epochs:
+        a, b = e.get("t0"), e.get("t1")
+        if a is None or b is None:
+            continue
+        lo, hi = max(a, t0_ms), min(b, t1_ms)
+        if hi >= lo:
+            out.append({"t0": lo, "t1": hi, "hz": e.get("hz")})
+    return out
+
+
 def _serialize_power_channels(run, label_metric="nrs"):
     """Per-channel power-domain timeseries for the stacked timeline — ONE entry per sensing channel,
     so the card can plot each contact on its OWN row instead of pooling them into a single trend.
@@ -942,6 +1009,50 @@ def _serialize_power_channels(run, label_metric="nrs"):
 
     out = []
     for ch_label, summ, cv in chosen:
+        thr = summ.get("best_threshold")
+        thr = float(thr) if thr is not None and np.isfinite(thr) else None
+        sm = summ.get("source_modality")
+        contact_epochs = summ.get("contact_epochs") or []
+        freq_epochs = summ.get("freq_epochs") or []
+
+        # CONTACT SPLIT (display only). A chronic hemisphere channel is actually a sequence of
+        # bipolar contacts over time (the programmed sensing contact is reprogrammed between
+        # sessions). When a dated contact schedule is available, split the hemisphere's cv series
+        # into one DISPLAY row per contact — each carrying only the samples recorded while that
+        # contact was programmed, plus the freq epochs that fall in its windows. The analytics
+        # summary (threshold/AUC) is per-hemisphere and is attached unchanged to every split row;
+        # this is a presentation split, not an analytics split. Streaming/powerdomain channels and
+        # chronic channels with no contact schedule fall through to a single undivided row.
+        contact_rows = _split_cv_by_contact(cv, contact_epochs) if (sm == "chronic" and contact_epochs) else None
+
+        if contact_rows:
+            for contact, cv_seg, seg_t0, seg_t1 in contact_rows:
+                cv_plot = adapter.decimate_for_plot(cv_seg, _TIMELINE_MAX_POINTS)
+                t = pd.to_datetime(cv_plot["timestamp"]).astype(str).tolist()
+                bp = [None if not np.isfinite(v) else float(v)
+                      for v in cv_plot["LFP_smoothed"].to_numpy(dtype=float)]
+                pain = ([None if not np.isfinite(v) else float(v)
+                         for v in cv_plot[label_metric].to_numpy(dtype=float)]
+                        if label_metric in cv_plot.columns else None)
+                seg_fe = _freq_epochs_in_window(freq_epochs, seg_t0, seg_t1)
+                out.append({
+                    "channel": f"{(summ.get('hemisphere') or '?')[:1]} {contact}",
+                    "hemisphere": summ.get("hemisphere"),
+                    "contact": contact,
+                    "kind": "contact",
+                    "source_modality": sm,
+                    "around_the_clock": (sm == "chronic"),
+                    "center_hz": (seg_fe[-1]["hz"] if seg_fe else summ.get("center_hz")),
+                    "freq_epochs": seg_fe,
+                    "threshold": thr,
+                    "auc": summ.get("auc_in_sample"),
+                    "n_samples": int(len(cv_seg)),
+                    "time": t,
+                    "band_power": bp,
+                    "pain": pain,
+                })
+            continue
+
         cv_plot = adapter.decimate_for_plot(cv, _TIMELINE_MAX_POINTS)
         t = pd.to_datetime(cv_plot["timestamp"]).astype(str).tolist()
         bp = [None if not np.isfinite(v) else float(v)
@@ -949,12 +1060,16 @@ def _serialize_power_channels(run, label_metric="nrs"):
         pain = ([None if not np.isfinite(v) else float(v)
                  for v in cv_plot[label_metric].to_numpy(dtype=float)]
                 if label_metric in cv_plot.columns else None)
-        thr = summ.get("best_threshold")
-        thr = float(thr) if thr is not None and np.isfinite(thr) else None
-        sm = summ.get("source_modality")
+        # Contact label for a streaming/powerdomain contact row is the trailing token of its channel
+        # label ("L 0-3" -> "0-3"), so it can be folded into the matching chronic contact row below.
+        row_contact = summ.get("contact")
+        if row_contact is None and summ.get("kind") == "contact":
+            parts = str(ch_label).split()
+            row_contact = parts[-1] if parts else None
         out.append({
             "channel": str(ch_label),
             "hemisphere": summ.get("hemisphere"),
+            "contact": row_contact,
             "kind": summ.get("kind"),
             "source_modality": sm,
             # "chronic" = ~10-min around-the-clock BrainSense Timeline; "powerdomain" = streaming.
@@ -962,7 +1077,7 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "center_hz": summ.get("center_hz"),
             # Time-segmented center-frequency epochs [{t0, t1, hz}] for the frequency ribbon under the
             # power row (the programmed sensing band changes between sessions).
-            "freq_epochs": summ.get("freq_epochs") or [],
+            "freq_epochs": freq_epochs,
             "threshold": thr,
             "auc": summ.get("auc_in_sample"),
             "n_samples": summ.get("n_samples"),
@@ -999,6 +1114,38 @@ def _serialize_power_channels(run, label_metric="nrs"):
             "pain": None,
             "empty_reason": str(summ.get("error") or "no pain-aligned samples to fit a detector"),
         })
+    # FOLD streaming on-demand into the matching chronic contact row. Each (hemisphere, contact) now
+    # has a chronic display row (continuous around-the-clock line) AND may have a powerdomain/streaming
+    # row (on-demand band power for the same contact). The design intent is ONE row per contact with
+    # the chronic line and the streaming points overlaid (distinguished by mark), not two stacked
+    # rows. We move the streaming row's (time, band_power) onto the chronic row as a `streaming`
+    # sub-series and drop the now-redundant standalone streaming row. A streaming contact with NO
+    # chronic counterpart stays as its own row (so nothing recorded is hidden).
+    def _key(d):
+        return (d.get("hemisphere"), d.get("contact"))
+    chronic_by_key = {_key(d): d for d in out
+                      if d.get("source_modality") == "chronic" and d.get("contact")}
+    folded_idx = set()
+    for i, d in enumerate(out):
+        if d.get("source_modality") == "chronic":
+            continue
+        if d.get("kind") != "contact" or not d.get("contact"):
+            continue
+        host = chronic_by_key.get(_key(d))
+        if host is None:
+            continue
+        # Attach streaming points as a sub-series the frontend draws as diamonds + range marks.
+        host["streaming"] = {
+            "time": d.get("time") or [],
+            "band_power": d.get("band_power") or [],
+            "threshold": d.get("threshold"),
+            "auc": d.get("auc"),
+            "n_samples": d.get("n_samples"),
+        }
+        host["has_streaming"] = True
+        folded_idx.add(i)
+    out = [d for i, d in enumerate(out) if i not in folded_idx]
+
     # Stable order: hemisphere (Left, then Right), chronic-before-streaming within a hemisphere, then
     # channel label — so rows read top-to-bottom by target, around-the-clock log first.
     out.sort(key=lambda d: ((d.get("hemisphere") or "Z"),
