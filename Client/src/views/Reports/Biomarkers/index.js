@@ -453,7 +453,14 @@ function Biomarkers() {
                                     <Slider
                                       value={percentileLow} min={5} max={50} step={1}
                                       valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => { const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo); }}
+                                      onChange={(e, v) => {
+                                        // Tertile is the FIXED 33.3/66.7 preset (ignores these cuts, by
+                                        // design — matches the backend). Dragging a slider means the user
+                                        // wants an adjustable cut, so promote to "percentile" (which both
+                                        // the live preview AND the backend honor) so the cut actually moves.
+                                        if (strategy === "tertile") setStrategy("percentile");
+                                        const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo);
+                                      }}
                                     />
                                   </MDBox>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
@@ -463,17 +470,22 @@ function Biomarkers() {
                                     <Slider
                                       value={percentileHigh} min={50} max={95} step={1}
                                       valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => { const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi); }}
+                                      onChange={(e, v) => {
+                                        if (strategy === "tertile") setStrategy("percentile");
+                                        const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi);
+                                      }}
                                     />
                                   </MDBox>
                                 </MDBox>
                               ) : null}
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
-                                {strategy === "tertile" || strategy === "percentile"
-                                  ? "Days between the cuts are excluded from training."
-                                  : strategy === "median"
-                                    ? "Every day is labeled at the median split (~50/50)."
-                                    : "Legacy 2-cluster KMeans labeler."}
+                                {strategy === "tertile"
+                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a slider to switch to adjustable percentile cuts."
+                                  : strategy === "percentile"
+                                    ? "Samples between the cuts are excluded from training."
+                                    : strategy === "median"
+                                      ? "Every sample is labeled at the median split (~50/50)."
+                                      : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
                             </MDBox>
                           </Grid>
