@@ -66,8 +66,10 @@ allowlist access to that domain and hit `/api/queryDataAvailability` directly. U
 pulling, `docker compose restart bravo-server` + hard refresh (Cmd+Shift+R) and confirm the timeline
 renders the compact LSB (grey chronic line + colored session bars) and stays smooth on zoom.
 
-Latest preview render (real-style values; only 3 raw JSONs reachable in-sandbox, full 500 live on the
-server): `timeline_v11_preview.png` (artifact).
+Latest preview render: `timeline_v11_preview.png` (artifact). It used real-style stand-in LSB values
+because that render only loaded the 3 top-level raw JSONs — but the **full ~500-file dataset is
+available in the `Stage 1/` subfolder** (see §1 data paths), so a future render/verification can use
+real values across the whole record by globbing `Stage 1/*.json`.
 
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
@@ -165,8 +167,13 @@ a **Django app harness** running the real models/migrations against throwaway SQ
   $PY /tmp/bravo_harness/repro_handler.py   # or repro.py
   ```
   Real RCS08 JSONs (granted, read-only): `~/Library/CloudStorage/OneDrive-UCSF/Desktop/PNL/RCS008 jsons/`
-  (11.5 MB `Report_JI Pacu_…20250716T222813.json`, 23 MB `…20250716T182401.json`, 66 MB
-  `RCS08 - …20250904T142449.json`). NOTE: the harness measures SQLite timings; it proves
+  — only **3 files sit at the top level** (11.5 MB `Report_JI Pacu_…20250716T222813.json`, 23 MB
+  `…20250716T182401.json`, 66 MB `RCS08 - …20250904T142449.json`). **The other ~497 Percept
+  session-report JSONs live in the `Stage 1/` SUBFOLDER** (`…/RCS008 jsons/Stage 1/`, ~500 total,
+  same `Report_Json_Session_Report_*.json` format, sizes 60 KB–130 MB, prefixes `RCS08 - `, `JI - `,
+  `JILLIAN IMRIE - `). To exercise the timeline/LSB code against the full dataset, glob
+  `Stage 1/*.json`, not just the top level — earlier in-sandbox runs that "only saw 3 JSONs" were
+  missing the subfolder. NOTE: the harness measures SQLite timings; it proves
   correctness/dedup/query-shape but NOT absolute MySQL latency. **Biomarker unit tests run in the
   `rcs_v14_analysis` env** (see §2 below for the container path).
 
