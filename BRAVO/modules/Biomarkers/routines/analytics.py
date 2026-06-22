@@ -1096,7 +1096,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
         chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
         n_channel = int(chan_fin.sum())
-        r_curve, auc_curve, n_curve = [], [], []
+        r_curve, auc_curve, n_curve, n_r_curve = [], [], [], []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
@@ -1117,14 +1117,17 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                     bp = np.nanmean(sub, axis=1)            # (E,) mean linear power in band
                     bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
             band_power_by_center.append(bp_log)
-            # Pearson r vs CONTINUOUS label
+            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization)
             m = np.isfinite(bp_log) & np.isfinite(labels)
+            n_r_curve.append(int(m.sum()))
             if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
                 r = float(np.corrcoef(bp_log[m], labels[m])[0, 1])
             else:
                 r = None
             r_curve.append(_f(r) if r is not None else None)
-            # AUC vs BINARIZED label (CV logistic)
+            # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
+            # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
+            # n_used here is generally < the Pearson n above.
             auc, n_used = _cv_logistic_auc(bp_log, y_bin)
             auc_curve.append(_f(auc) if np.isfinite(auc) else None)
             n_curve.append(int(n_used))
@@ -1141,7 +1144,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": r_curve,            # Pearson r vs continuous PRO, per band center
             "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
-            "n": n_curve,            # matched samples used per band (this channel)
+            "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
+            "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
             "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
@@ -1182,11 +1186,27 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         "n_pooled": n_pooled,        # matched PSDs pooled across ALL channels (the preview total)
-        "note": ("Exploratory only. r is Pearson vs the continuous PRO; AUC is cross-validated "
-                 "single-feature logistic vs the binarized PRO. Neither is a validated biomarker. "
-                 "Each curve/scatter uses only the PSDs recorded on THAT channel, so its n is a "
-                 "fraction of the pooled matched-sample count shown in the binarization preview "
-                 "(every recording captures one bipolar montage)."),
+        # Finalized binarization actually used by the logistic AUC (high vs low; the excluded
+        # middle is dropped). Lets the UI show how many of the matched samples the AUC ran on.
+        "binarization": {
+            "strategy": strategy,
+            "n_low": int(np.nansum(y_bin == 0)),
+            "n_high": int(np.nansum(y_bin == 1)),
+            "n_excluded_middle": int(np.isfinite(labels).sum() - np.isfinite(y_bin).sum()),
+        },
+        # PRO-independence (double-dipping) audit, carried through from the pooled matcher so the
+        # UI can report how many neural samples share one pain score (effective n < matched n).
+        "pro_independence": (td_detail.get("pool_meta", {}) or {}).get("pro_independence"),
+        "pro_independence_per_channel": (td_detail.get("pool_meta", {}) or {}).get(
+            "pro_independence_per_channel"),
+        "note": ("Exploratory only. r is Pearson vs the continuous PRO (ALL matched samples); AUC "
+                 "is cross-validated single-feature logistic on the FINALIZED high-vs-low split "
+                 "(excluded-middle tertile dropped), so the AUC n (legend 'n') is generally < the "
+                 "Pearson n ('n_r'). Neither is a validated biomarker. Each curve/scatter uses only "
+                 "the PSDs recorded on THAT channel, so its n is a fraction of the pooled "
+                 "matched-sample count in the binarization preview (one montage per recording). "
+                 "PRO-independence is audited below: several neural samples can share one pain "
+                 "score, so the effective n is smaller than the matched n."),
     }
 
 

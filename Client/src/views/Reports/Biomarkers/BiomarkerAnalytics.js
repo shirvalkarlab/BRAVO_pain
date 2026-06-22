@@ -155,7 +155,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
     const center = centers[sel.bi];
     const r = ch.r && ch.r[sel.bi];
     const auc = ch.auc && ch.auc[sel.bi];
-    const n = ch.n && ch.n[sel.bi];
+    const n = ch.n && ch.n[sel.bi];           // AUC n (binarized high+low)
+    const nR = ch.n_r && ch.n_r[sel.bi];      // Pearson n (all matched continuous = dot count)
     if (sc && sc.x && sc.x.length) {
       const color = hemiOf(ch) === "Right" ? HI : LO;
       const traces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
@@ -164,7 +165,9 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
       scatterNode = (
         <MDBox mt={1}>
           <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 14 }}>
-            {`${ch.short} @ ${center.toFixed(1)} Hz (5 Hz band) vs ${pain} — r=${r != null ? r.toFixed(2) : "—"}, AUC=${auc != null ? auc.toFixed(2) : "—"}, n=${n || 0}`}
+            {`${ch.short} @ ${center.toFixed(1)} Hz (5 Hz band) vs ${pain} — `
+             + `r=${r != null ? r.toFixed(2) : "—"} (n=${nR || 0} matched), `
+             + `AUC=${auc != null ? auc.toFixed(2) : "—"} (n=${n || 0} high+low)`}
           </MDTypography>
           <Fig height={300} traces={traces} layout={{
             xaxis: { title: `Standardized log band power @ ${center.toFixed(1)} Hz` },
@@ -196,6 +199,27 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
               {`${scan.n_pooled} PSDs matched a pain rating across all channels (the binarization-preview total). `
                + `Each channel's curve uses only the PSDs recorded on that montage — the per-channel n in `
                + `the legend — so any single correlation/AUC draws on a fraction of that pooled count.`}
+            </MDTypography>
+          )}
+          {scan && scan.binarization && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + `
+               + `${scan.binarization.n_low} low`
+               + (scan.binarization.n_excluded_middle > 0
+                  ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
+                  : ` (no middle excluded — discrete PRO values collapse the ${scan.binarization.strategy} cut). `)
+               + `Pearson r uses all matched samples.`}
+            </MDTypography>
+          )}
+          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
+            <MDTypography variant="caption" display="block" mb={0.5}
+              sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
+                    fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
+              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
+               + `map to only ${scan.pro_independence.n_unique_pro} unique pain scores `
+               + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
+               + `${scan.pro_independence.max_reuse}×). Effective sample size is well below the matched n — `
+               + `treat r/AUC as exploratory, not as independent observations.`}
             </MDTypography>
           )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />

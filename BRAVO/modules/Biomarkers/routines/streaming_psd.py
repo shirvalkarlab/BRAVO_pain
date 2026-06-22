@@ -328,19 +328,22 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min):
     """Nearest-PRO-within-window match for a vector of PSD timestamps.
 
     `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the (sorted-by-time) PRO
-    report timestamps + the chosen continuous metric value. Returns (labels (N,), dt_min (N,)):
-    the matched continuous PRO value (NaN if no report within +/- tolerance) and the signed minutes
-    PRO-minus-PSD. Vectorized via searchsorted on the sorted PRO times."""
+    report timestamps + the chosen continuous metric value. Returns (labels (N,), dt_min (N,),
+    pro_idx (N,)): the matched continuous PRO value (NaN if no report within +/- tolerance), the
+    signed minutes PRO-minus-PSD, and the index of the matched PRO report in the caller's ORIGINAL
+    pro ordering (-1 if unmatched) so callers can audit how many neural samples share one PRO
+    (double-dipping). Vectorized via searchsorted on the sorted PRO times."""
     import numpy as _np
     n = len(times_s)
     lab = _np.full(n, _np.nan)
     dt = _np.full(n, _np.nan)
+    pro_idx = _np.full(n, -1, dtype=int)
     pt = _np.asarray(pro_times_s, dtype=float)
     pv = _np.asarray(pro_values, dtype=float)
-    order = _np.argsort(pt)
+    order = _np.argsort(pt)             # order[k] = original index of the k-th sorted PRO
     pt, pv = pt[order], pv[order]
     if pt.size == 0 or tolerance_min is None or tolerance_min <= 0:
-        return lab, dt
+        return lab, dt, pro_idx
     tol_s = float(tolerance_min) * 60.0
     for i, t in enumerate(times_s):
         if not _np.isfinite(t):
@@ -355,7 +358,8 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min):
         if best >= 0:
             lab[i] = pv[best]
             dt[i] = (pt[best] - t) / 60.0
-    return lab, dt
+            pro_idx[i] = int(order[best])   # map back to caller's original PRO ordering
+    return lab, dt, pro_idx
 
 
 def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=15.0,
@@ -455,7 +459,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
-    labels, dt_min = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min)
+    labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min)
 
     chan_order = list(np.unique(ch_arr))
     C = len(chan_order)
@@ -470,6 +474,37 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         return {str(k): int(v) for k, v in zip(u, c)}
 
     matched_mask = np.isfinite(labels)
+
+    # --- Double-dipping audit (PRO independence) ---------------------------------------------
+    # Ideally each neural sample is matched to its OWN pain rating. With a finite match window and
+    # many PSDs near one report, several neural samples can collapse onto the SAME PRO, so their
+    # contributions to a correlation/AUC are not independent. Report this so it is never silent.
+    # Global: across all matched samples (any channel). Per-channel: the unit each correlation
+    # actually runs on, so within-channel reuse is what inflates that channel's effective n.
+    def _dipstats(mask):
+        idx = pro_idx[mask & matched_mask]
+        idx = idx[idx >= 0]
+        n = int(idx.size)
+        if n == 0:
+            return {"n_matched": 0, "n_unique_pro": 0, "n_pro_reused": 0,
+                    "n_excess_matches": 0, "max_reuse": 0, "pct_nonindependent": 0.0}
+        u, c = np.unique(idx, return_counts=True)
+        n_unique = int(u.size)
+        n_reused = int((c > 1).sum())                 # PRO scores hit by >1 neural sample
+        n_excess = n - n_unique                       # duplicate matches (non-independent samples)
+        return {
+            "n_matched": n,
+            "n_unique_pro": n_unique,
+            "n_pro_reused": n_reused,                  # how many distinct PROs are double-dipped
+            "n_excess_matches": int(n_excess),         # neural samples beyond 1-per-PRO
+            "max_reuse": int(c.max()),                 # worst single PRO's reuse count
+            "pct_nonindependent": round(100.0 * n_excess / n, 1),
+        }
+
+    all_mask = np.ones(N, bool)
+    dip_global = _dipstats(all_mask)
+    dip_per_channel = {ch: _dipstats(ch_arr == ch) for ch in chan_order}
+
     return {
         "f_set": f_set,
         "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
@@ -488,6 +523,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             "per_channel": {ch: int((ch_arr == ch).sum()) for ch in chan_order},
             "median_abs_offset_min": (float(np.nanmedian(np.abs(dt_min)))
                                       if np.isfinite(dt_min).any() else None),
+            # PRO-independence audit (double-dipping): global + per-channel.
+            "pro_independence": dip_global,
+            "pro_independence_per_channel": dip_per_channel,
         },
     }
 
