@@ -276,6 +276,43 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const annotations = [];
     const X = "x", Y = "y";
 
+    // ---- LEFT-LABEL COLUMN GEOMETRY (robust, self-sizing) ------------------------------------
+    // The left gutter holds THREE right-to-left columns that must never overlap each other or run
+    // off the figure: [LSB tick numbers] · [contact names L 0⁻3⁺ …] · [rotated hemisphere/region].
+    // Earlier these used hand-tuned paper-fraction / fixed xshift values and collided when the
+    // contact font was large or the plot was wide. Here we lay the columns deterministically from
+    // ESTIMATED text widths (Arial ≈ 0.58·fontSize·nChars; bold ≈ 0.62) with a uniform gap, then
+    // shrink the contact/region fonts together ONLY if the stack would exceed LEFT_CAP px. The
+    // resulting per-column right-edge xshifts (negative = left of the plot edge) and the exact
+    // left margin are computed once and reused by every left annotation — so nothing can run into
+    // anything, the gutter is as tight as the labels allow, and it adapts to any width/label set.
+    const LBL_GAP = 12;                          // uniform px gap between columns
+    const LEFT_CAP = 230;                        // max gutter before we shrink fonts
+    const textW = (s, fs, bold) => (bold ? 0.62 : 0.58) * fs * String(s).length;
+    const prettyChans = channels.map((ch) => prettyContact(labelFor(ch)));
+    // tick numbers: widest LSB magnitude shown (committed lanes carry a 4-digit count, ~"1727")
+    const F_TICK = 14;
+    const W_tick = 4.2 * 0.58 * F_TICK;          // budget for a 4-char number
+    let F_CONTACT = 26, F_REGION = 18;           // start sizes (contact was 30 -> 26 baseline)
+    const layoutLeft = () => {
+      const W_contact = Math.max(40, ...prettyChans.map((s) => textW(s, F_CONTACT, true)));
+      const W_region = 2 * 1.25 * F_REGION;      // rotated 2-line block (name / region) height
+      const xTick = -LBL_GAP;
+      const xContact = -(LBL_GAP + W_tick + LBL_GAP);
+      const xRegionCenter = -(LBL_GAP + W_tick + LBL_GAP + W_contact + LBL_GAP + W_region / 2);
+      const marginL = LBL_GAP + W_tick + LBL_GAP + W_contact + LBL_GAP + W_region + LBL_GAP;
+      return { xTick, xContact, xRegionCenter, marginL, W_contact };
+    };
+    let L = layoutLeft();
+    // Auto-shrink (down to a readable floor) until the gutter fits LEFT_CAP.
+    while (L.marginL > LEFT_CAP && F_CONTACT > 16) {
+      F_CONTACT -= 1; F_REGION = Math.max(13, F_REGION - 0.6); L = layoutLeft();
+    }
+    const X_TICK = Math.round(L.xTick);
+    const X_CONTACT = Math.round(L.xContact);
+    const X_REGION = Math.round(L.xRegionCenter);
+    const MARGIN_L = Math.ceil(L.marginL);
+
     // (0) vertical time gridlines are drawn by the x-axis itself (showgrid below), NOT as fixed
     // shapes — so they auto-densify on zoom (month -> week -> day -> hour) and span the whole
     // single y-axis (all neural lanes + pain + stim). See the xaxis config in `layout`.
@@ -291,9 +328,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // right-anchored per-contact names (now larger, anchored at x ≈ -0.05) and the row labels.
       // Pinned to the left border with a FIXED-PIXEL xshift (not a paper fraction) so it hugs the
       // lanes at any width — paper-fraction x scaled with plot width and drifted off-figure when wide.
-      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -150, y: (top + bot) / 2,
+      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_REGION, y: (top + bot) / 2,
         text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
-        font: { size: 20, color: HEMI2[hemi].col }, align: "center" });
+        font: { size: F_REGION, color: HEMI2[hemi].col }, align: "center" });
     });
     // faint lane separators
     channels.forEach((ch) => shapes.push({ type: "line", xref: "paper", yref: Y,
@@ -424,11 +461,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         }
         // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
         if (committed.has(ch)) {
-          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: BP_HI, text: `${Math.round(hi)}`,
-            showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
-          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: BP_LO, text: `${Math.round(lo)}`,
-            showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
-          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: (BP_LO + BP_HI) / 2,
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_HI, text: `${Math.round(hi)}`,
+            showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_LO, text: `${Math.round(lo)}`,
+            showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: (BP_LO + BP_HI) / 2,
             text: "<span style='font-size:13px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
         }
       } else {
@@ -463,10 +500,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       }
 
       // (d) lane label — bold for committed, lighter for exploratory
-      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: yb + 0.5 * lh,
+      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: yb + 0.5 * lh,
         text: committed.has(ch) ? `<b>${prettyContact(labelFor(ch))}</b>` : prettyContact(labelFor(ch)),
         showarrow: false, xanchor: "right",
-        font: { size: 30, color: committed.has(ch) ? PAL.ink : "#888" } });
+        font: { size: F_CONTACT, color: committed.has(ch) ? PAL.ink : "#888" } });
     });
 
     // ---- EVENT row: PATIENT-ANNOTATED events (labeled button presses) ------------------------
@@ -502,7 +539,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
         text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: eventY,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} presses</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
@@ -559,10 +596,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
         text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: (painBase + painTop) / 2,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (painBase + painTop) / 2,
       text: `<b>PAIN</b><br><span style="font-size:14px;color:#999">${pain.metric || ""}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
-    pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6,
+    pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: "#888" } }));
 
@@ -582,13 +619,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
         text: "no stim data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: (stimBase + stimTop) / 2,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
       font: { size: 26, color: PAL.stim } });
-    [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6,
+    [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: "#888" } }));
-    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: stimBase - 0.30,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: stimBase - 0.30,
       text: "<span style='font-size:14px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
 
     // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
@@ -648,10 +685,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
 
     const layout = {
       height: height || Math.max(560, 150 * channels.length + 320),
-      // Left margin holds only the pinned label stack: region tab (xshift -150) + its rotated
-      // glyph + contact names (xshift -58). ~175px is snug; was 330 when labels lived in
-      // width-scaled paper fractions and needed slack for the drift.
-      margin: { l: 175, r: 120, t: 170, b: 46 },
+      // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
+      // as the [tick · contact · region] stack needs and no wider — tight, collision-free, and
+      // self-adjusting to the label set / font auto-shrink. Was a hardcoded 175/330.
+      margin: { l: MARGIN_L, r: 120, t: 170, b: 46 },
       hovermode: "closest",
       // Constant uirevision: preserve the clinician's zoom/pan/legend state across re-renders driven
       // by the match-window slider, strategy, or the color-mode toggle (Plotly resets the view on
@@ -664,7 +701,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       showlegend: true,
       // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes,
       // up by the title) so it never overlaps the PSD ticks or any lane content.
-      legend: { orientation: "v", x: 0.02, xanchor: "left", y: 1.13, yanchor: "top",
+      // Glyph key on the RIGHT, anchored to the plot's right edge — clears the LEFT-aligned title
+      // (x≈0.012) entirely so the two can never overlap regardless of width.
+      legend: { orientation: "v", x: 1.0, xanchor: "right", y: 1.155, yanchor: "top",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
