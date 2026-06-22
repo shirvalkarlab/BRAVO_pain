@@ -108,6 +108,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   const empty = {
     samples: [], binByKey: new Map(), matchedValues: [], cuts: { kind: "none" },
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
+              n_matched_td: 0, n_matched_montage: 0,
+              by_source: { low: { td: 0, montage: 0, lsb: 0 },
+                           high: { td: 0, montage: 0, lsb: 0 },
+                           excluded: { td: 0, montage: 0, lsb: 0 } },
               tolerance_min: toleranceMin, median_abs_offset_min: null },
   };
   if (!Array.isArray(scanIndex) || !scanIndex.length || !painSeries
@@ -138,13 +142,22 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   const samples = [];
   const binByKey = new Map();
   let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0;
+  // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. LSB (band power)
+  // is NOT pooled into psd_scan_index — sources are only "TD streaming" / "Montage/survey" — so the
+  // lsb slot stays 0 here (the renderer shows it as "n/a", and a future backend that pools LSB into
+  // the scan index needs no further model change).
+  const bySrc = { low: { td: 0, montage: 0, lsb: 0 },
+                  high: { td: 0, montage: 0, lsb: 0 },
+                  excluded: { td: 0, montage: 0, lsb: 0 } };
   for (const s of matched) {
     let bin;
     if (s.v == null || !Number.isFinite(s.v)) bin = "unmatched";
     else {
       bin = classify(s.v, cuts);
       if (bin === "high") nHigh++; else if (bin === "low") nLow++; else nMid++;
-      if (String(s.source || "").toLowerCase().indexOf("td") >= 0) nMatchedTd++; else nMatchedMontage++;
+      const srcKey = String(s.source || "").toLowerCase().indexOf("td") >= 0 ? "td" : "montage";
+      if (srcKey === "td") nMatchedTd++; else nMatchedMontage++;
+      if (bySrc[bin]) bySrc[bin][srcKey] += 1;   // bin is high|low|excluded (matched-only branch)
     }
     samples.push({ ...s, bin });
     binByKey.set(`${String(s.channel).toUpperCase()}|${Math.round(s.t)}`, bin);
@@ -163,6 +176,7 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       n_high: nHigh, n_low: nLow,
       n_excluded_middle: (strategy === "tertile" || strategy === "percentile") ? nMid : 0,
       n_matched_td: nMatchedTd, n_matched_montage: nMatchedMontage,
+      by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,
     },

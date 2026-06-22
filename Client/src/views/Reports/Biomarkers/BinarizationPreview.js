@@ -228,32 +228,54 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       pushCutLine(cuts.cut, cuts.label, "#344767", 1.04, "center");
     }
 
-    // Class-count badges. In matched mode the unit is matched PSD SAMPLES (the neural data that
+    // Class-count badges. In matched mode the unit is matched NEURAL SAMPLES (the neural data that
     // feeds binarization); in daily mode it is calendar days + the raw reports they carry.
-    const badge = (xRel, color, label, primary, secondary) => ({
-      xref: "paper", yref: "paper", x: xRel, y: 0.94, xanchor: "center", yanchor: "top",
+    //
+    // In matched mode each badge also shows the per-group MODALITY breakdown (TD streaming / montage
+    // PSD / band-power LSB). LSB is not pooled into the binarization scan (the scan index only carries
+    // "TD streaming" / "Montage/survey" sources), so it is shown as "n/a" rather than a misleading 0.
+    // The badges are floated into y-axis HEADROOM (the matched-mode yaxis range is extended below) so
+    // they sit ABOVE the tallest bar and never overlap the histogram. The Excluded badge in particular
+    // is placed above a dotted "max" reference line drawn at the tallest-bar height.
+    const yMax = cnt.length ? Math.max(1, ...cnt) : 1;
+    const bySrc = (matchedMode && counts && counts.by_source) ? counts.by_source : null;
+    const srcLine = (g) => g
+      ? `${(g.td || 0).toLocaleString()} TD · ${(g.montage || 0).toLocaleString()} PSD · LSB n/a`
+      : null;
+    const badge = (xRel, yRel, color, label, primary, secondary) => ({
+      xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
       text: `<b>${label}</b><br>${primary}${secondary ? `<br>${secondary}` : ""}`,
       showarrow: false, align: "center",
-      font: { size: 11, color: "#FFFFFF" },
-      bgcolor: color, bordercolor: color, borderpad: 4, opacity: 0.92,
+      font: { size: 10.5, color: "#FFFFFF" },
+      bgcolor: color, bordercolor: color, borderwidth: 1.5, borderpad: 4, opacity: 0.94,
     });
-    const lowTxt = matchedMode ? [`${(counts.n_low || 0).toLocaleString()} samples`, null]
+    const lowTxt = matchedMode ? [`${(counts.n_low || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.low)]
                                : [`${dailyStats.nLowDays.toLocaleString()} days`, `${dailyStats.nLowSamp.toLocaleString()} samples`];
-    const highTxt = matchedMode ? [`${(counts.n_high || 0).toLocaleString()} samples`, null]
+    const highTxt = matchedMode ? [`${(counts.n_high || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.high)]
                                 : [`${dailyStats.nHighDays.toLocaleString()} days`, `${dailyStats.nHighSamp.toLocaleString()} samples`];
-    const midTxt = matchedMode ? [`${(counts.n_excluded_middle || 0).toLocaleString()} samples`, null]
+    const midTxt = matchedMode ? [`${(counts.n_excluded_middle || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.excluded)]
                                : [`${dailyStats.nMidDays.toLocaleString()} days`, `${dailyStats.nMidSamp.toLocaleString()} samples`];
     if (cuts.kind === "two-cut") {
-      annotations.push(badge(0.10, LO, "Low", lowTxt[0], lowTxt[1]));
-      annotations.push({ ...badge(0.50, MID, "Excluded", midTxt[0], midTxt[1]),
-                         y: 0.02, yanchor: "bottom", opacity: 0.78 });
-      annotations.push(badge(0.90, HI, "High", highTxt[0], highTxt[1]));
+      if (matchedMode) {
+        // Float Low/High in the headroom band; Excluded sits higher still, above the max line.
+        annotations.push(badge(0.12, 0.80, LO, "Low", lowTxt[0], lowTxt[1]));
+        annotations.push(badge(0.88, 0.80, HI, "High", highTxt[0], highTxt[1]));
+        annotations.push({ ...badge(0.50, 0.97, MID, "Excluded", midTxt[0], midTxt[1]), opacity: 0.88 });
+        // Dotted reference rule at the tallest-bar height — the Excluded badge's border sits above it.
+        shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: yMax, y1: yMax,
+                      line: { color: MID, width: 1, dash: "dot" } });
+      } else {
+        annotations.push(badge(0.10, 0.94, LO, "Low", lowTxt[0], lowTxt[1]));
+        annotations.push({ ...badge(0.50, 0.02, MID, "Excluded", midTxt[0], midTxt[1]),
+                           yanchor: "bottom", opacity: 0.78 });
+        annotations.push(badge(0.90, 0.94, HI, "High", highTxt[0], highTxt[1]));
+      }
     } else if (cuts.kind === "one-cut") {
-      annotations.push(badge(0.18, LO, "Low", lowTxt[0], lowTxt[1]));
-      annotations.push(badge(0.82, HI, "High", highTxt[0], highTxt[1]));
+      annotations.push(badge(0.18, matchedMode ? 0.84 : 0.94, LO, "Low", lowTxt[0], lowTxt[1]));
+      annotations.push(badge(0.82, matchedMode ? 0.84 : 0.94, HI, "High", highTxt[0], highTxt[1]));
     }
 
-    const yTitle = matchedMode ? "Matched PSD samples" : "Days";
+    const yTitle = matchedMode ? "Matched neural samples" : "Days";
     const hoverUnit = matchedMode ? "samples" : "days";
     const traces = [{
       x: centers, y: cnt, type: "bar",
@@ -273,7 +295,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                tickfont: { size: 10 }, showline: true },
       yaxis: { automargin: true, title: { text: yTitle, font: { size: 11 }, standoff: 8 },
                gridcolor: "#EEF1F4", linecolor: "#B0B7BF", ticks: "outside", ticklen: 4,
-               tickfont: { size: 10 }, showline: true },
+               tickfont: { size: 10 }, showline: true,
+               // Matched mode: extend the range to ~1.6x the tallest bar so the floated per-group
+               // detail badges (Low/High at ~0.80 paper, Excluded at ~0.97) clear the bars cleanly.
+               ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
       shapes, annotations, showlegend: false,
     };
     Plotly.react(ref.current, traces, layout, {

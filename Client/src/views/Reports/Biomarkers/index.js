@@ -383,7 +383,18 @@ function Biomarkers() {
                         </MDTypography>
                         <FormControl size="small" sx={{ minWidth: 420 }}>
                           <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{ fontSize: 30, fontWeight: 500 }}>
+                                  sx={{
+                                    // Enlarge ONLY the closed / displayed selected value. A plain
+                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
+                                    // resize the rendered value — that text is the inner
+                                    // .MuiSelect-select slot, so target it directly. !important beats
+                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
+                                    "& .MuiSelect-select": {
+                                      fontSize: "30px !important",  // matches the open-menu items
+                                      fontWeight: 700,
+                                      lineHeight: 1.2,
+                                    },
+                                  }}>
                             {((timelineData && timelineData.available_metrics)
                                || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
                               <MenuItem key={m.key} value={m.key} sx={{ fontSize: 30 }}>{m.label}</MenuItem>
