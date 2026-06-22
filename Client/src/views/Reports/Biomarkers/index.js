@@ -9,8 +9,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl,
-  Switch, Slider, TextField, FormControlLabel, Divider, LinearProgress, CircularProgress } from "@mui/material";
+import { Card, Grid, Select, MenuItem, FormControl,
+  Slider, TextField, Divider, LinearProgress, CircularProgress } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -56,12 +56,14 @@ function Biomarkers() {
   const { participant_uid } = useParams();
 
   const [data, setData] = useState(false);
-  const [source, setSource] = useState("both");
+  // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
+  // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
+  const source = "both";
   const [metric, setMetric] = useState("nrs");
   const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
-  const [slidingWindow, setSlidingWindow] = useState(false);
+  const slidingWindow = false;   // sliding-window toggle removed — always all-data, one threshold
   const [windowMonths, setWindowMonths] = useState(1);   // committed window (training) length
   const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
   const [windowStep, setWindowStep] = useState(0.5);     // committed window step (months)
@@ -84,7 +86,6 @@ function Biomarkers() {
   // detector/performance, so show them for every source. The sliding ON/OFF switch is
   // power-domain-specific (all-data vs sliding), so it's hidden on the time-domain-only tab.
   const showWindowControls = true;
-  const showSlidingSwitch = source !== "timedomain";
 
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
@@ -177,6 +178,19 @@ function Biomarkers() {
   })();
   const previewMetricLabel = (((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
     .find((m) => m.key === metric) || {}).label || metric;
+
+  // Live pain series for the timeline's pain row, in the {metric, t:[epoch_s], y:[]} shape the
+  // BiomarkerDataTimeline expects. Built from the lightweight previewPoints (fetched once per
+  // participant) so changing the metric updates the pain plot INSTANTLY — no recompute. previewPoints
+  // carry `t` as a timestamp string and `v` as the value; convert to epoch seconds.
+  const painSeriesLive = (() => {
+    if (!previewPoints || !previewPoints.length) return null;
+    const pairs = previewPoints
+      .map((p) => [Date.parse(p.t) / 1000, p.v])
+      .filter(([t, v]) => Number.isFinite(t) && v != null && Number.isFinite(v))
+      .sort((a, b) => a[0] - b[0]);
+    return { metric, t: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
+  })();
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -310,22 +324,52 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {/* Title + source toggle row */}
+                  {/* Title row (source tabs removed — analysis is always unified time + power) */}
                   <Grid item xs={12}>
                     <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
                       <MDTypography variant="h5" fontSize={28} fontWeight="bold">
                         {"Pain Biomarkers"}
                       </MDTypography>
-                      <ToggleButtonGroup
-                        value={source} exclusive size="medium"
-                        onChange={(e, v) => { if (v) setSource(v); }}
-                      >
-                        <ToggleButton value="timedomain">Time-domain</ToggleButton>
-                        <ToggleButton value="powerdomain">Power-domain</ToggleButton>
-                        <ToggleButton value="both">Both</ToggleButton>
-                      </ToggleButtonGroup>
                     </MDBox>
                   </Grid>
+
+                  {/* ── DATA-AVAILABILITY TIMELINE up front ───────────────────────────────────
+                      Replaces BiomarkerTimeline. Shown as soon as a compute returns the
+                      availability payload; the pain row is driven LIVE by the selected metric
+                      (painSeriesLive) so it updates instantly when the metric picker below
+                      changes — no recompute needed. Falls back to the legacy timeline only if
+                      the backend returns no availability payload. */}
+                  {data && data.availability && data.availability.records
+                        && data.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerDataTimeline data={data} painOverride={painSeriesLive} />
+                    </Grid>
+                  ) : (data && data.timeline && data.timeline.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
+                    </Grid>
+                  ) : null)}
+
+                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
+                  {data && data.availability && data.availability.records
+                        && data.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
+                             gap={2} flexWrap="wrap" justifyContent="center">
+                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
+                          {"Pain metric (drives the pain plot above):"}
+                        </MDTypography>
+                        <FormControl size="small" sx={{ minWidth: 260 }}>
+                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                                  sx={{ fontSize: 15, fontWeight: 500 }}>
+                            {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 15 }}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </MDBox>
+                    </Grid>
+                  ) : null}
 
                   {/* Controls row: LEFT box = pain metric + binarization selector + sliders
                                    RIGHT box = live binarization preview histogram
@@ -339,23 +383,6 @@ function Biomarkers() {
                           <Grid item xs={12} md={5}
                             sx={{ borderRight: { md: "1.5px solid #1A1A1A" }, borderBottom: { xs: "1.5px solid #1A1A1A", md: "none" } }}>
                             <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
-                              <MDBox>
-                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
-                                  {"Pain metric (biomarker target)"}
-                                </MDTypography>
-                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
-                                  <Select
-                                    value={metric}
-                                    onChange={(e) => setMetric(e.target.value)}
-                                    sx={{ fontSize: 16, fontWeight: 500 }}
-                                  >
-                                    {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                                      <MenuItem key={m.key} value={m.key} sx={{ fontSize: 16 }}>{m.label}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </MDBox>
-                              <Divider />
                               <MDBox>
                                 <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
                                   {"Binarization (high vs low pain label)"}
@@ -430,13 +457,7 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <Divider sx={{ my: 0 }} />
                       <MDBox px={2} py={1.5} display="flex" flexDirection="column" gap={1.5}>
-                        {showSlidingSwitch ? (
-                          <FormControlLabel
-                            control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
-                            label={<MDTypography variant="button" fontWeight="medium">{"Sliding window (power-domain detector & performance)"}</MDTypography>}
-                          />
-                        ) : null}
-                        {(source !== "powerdomain" || slidingWindow) ? (
+                        {true ? (
                           <MDBox display="flex" flexDirection="column" gap={1.5}>
                             {[
                               { lbl: "Window (months)", draft: monthsDraft, setDraft: setMonthsDraft, setVal: setWindowMonths,
@@ -472,11 +493,6 @@ function Biomarkers() {
                               </MDBox>
                             ))}
                           </MDBox>
-                        ) : null}
-                        {(showSlidingSwitch && !slidingWindow) ? (
-                          <MDTypography variant="button" fontWeight="medium" color="dark">
-                            {"Power-domain: using all data (one threshold, no sliding window)."}
-                          </MDTypography>
                         ) : null}
                       </MDBox>
                     </Grid>
@@ -594,19 +610,6 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {/* New data-availability timeline (replaces BiomarkerTimeline). Prefer the
-                      availability payload; fall back to the legacy timeline only if availability
-                      is absent (e.g. an older backend response), so the swap is non-breaking. */}
-                  {data && data.availability && data.availability.records
-                        && data.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerDataTimeline data={data} />
-                    </Grid>
-                  ) : (data && data.timeline && data.timeline.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
-                    </Grid>
-                  ) : null)}
                 </Grid>
               </Card>
             </Grid>

@@ -185,7 +185,7 @@ function buildInspector(traces, layout, OV_R, av, selected, centerHzOf, recordsF
   });
 }
 
-export default function BiomarkerDataTimeline({ data, height }) {
+export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   const ref = useRef(null);
   const av = data && data.availability ? data.availability : null;
   const [expert, setExpert] = useState(false);   // show ring/segment + montage contacts too
@@ -368,7 +368,10 @@ export default function BiomarkerDataTimeline({ data, height }) {
           font: { size: 11, color: hc.lane, family: sel ? "Arial Black, Arial" : "Arial" },
         });
       } else if (u.kind === "pain") {
-        const p = av.pain || { t: [], y: [] };
+        // painOverride (the live, metric-driven series from the picker) wins over the baked-in
+        // av.pain, so changing the metric updates this row instantly without a recompute.
+        const p = (painOverride && painOverride.t && painOverride.t.length)
+          ? painOverride : (av.pain || { t: [], y: [] });
         layout[yaxisKey].title = { text: `Pain (${p.metric || "PRO"})`, font: { size: 10 } };
         layout[yaxisKey].showticklabels = true;
         layout[yaxisKey].tickfont = { size: 9 };
@@ -422,7 +425,7 @@ export default function BiomarkerDataTimeline({ data, height }) {
       try { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); } catch (e) { /* noop */ }
       Plotly.purge(gd);
     };
-  }, [av, channels, selected, height]);
+  }, [av, channels, selected, height, painOverride]);
 
   if (!av || !channels.length) {
     return (
