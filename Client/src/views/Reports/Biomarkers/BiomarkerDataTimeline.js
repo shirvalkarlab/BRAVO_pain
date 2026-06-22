@@ -18,7 +18,7 @@
  * Self-contained via plotly.js-dist. Categorical FREQ_PALETTE ported from BiomarkerTimeline.js.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
@@ -66,10 +66,15 @@ const toDate = (epoch_s) => new Date(epoch_s * 1000);
 const _WORDNUM = { ZERO: 0, ONE: 1, TWO: 2, THREE: 3 };
 function normalizeChannel(ch) {
   const up = String(ch).toUpperCase();
-  if (up.indexOf("RING") >= 0 || up.indexOf("SEGMENT") >= 0) return up;
+  // SEGMENT montages (e.g. ONE_A_AND_TWO_A) are a distinct sensing geometry — keep their full
+  // identity. RING pairs are NOT distinct: a full-ring 0-3 sensing config IS the standard 0-3
+  // bipolar, so collapse it onto the canonical contact-pair lane instead of drawing a duplicate.
+  if (up.indexOf("SEGMENT") >= 0) return up;
   const hemi = up.indexOf("LEFT") >= 0 ? "LEFT" : (up.indexOf("RIGHT") >= 0 ? "RIGHT" : "");
   const nums = (up.match(/ZERO|ONE|TWO|THREE/g) || []).map((w) => _WORDNUM[w]);
-  if (nums.length >= 2 && hemi) {
+  // Only collapse a genuine two-DISTINCT-contact pair (0≠3); a same-number pair is degenerate and
+  // is dropped upstream, never normalized to a real lane.
+  if (nums.length >= 2 && hemi && nums[0] !== nums[1]) {
     const a = Math.min(nums[0], nums[1]), b = Math.max(nums[0], nums[1]);
     const PAIR = ["ZERO", "ONE", "TWO", "THREE"];
     return `${PAIR[a]}_${PAIR[b]}_${hemi}`;
@@ -86,10 +91,10 @@ function channelSortKey(ch) {
   if (pair < 0) pair = PAIR_ORDER.length;
   return hemi * 100 + pair;
 }
-// DEFAULT VIEW = the main bipolar SENSING pairs (0-3, 1-3, 0-2 per hemisphere). The Percept also
-// exposes many ring/segment montage contacts (…_RING, …_SEGMENT) and adjacent montage pairs; per
-// the design these belong in an "expert" toggle, not the default lanes — otherwise 40+ lanes crowd
-// the view. A channel is a main sensing pair if it names a 2-contact pair and is NOT a ring/segment.
+// The ONLY lanes shown are the main bipolar SENSING pairs (0-3, 1-3, 0-2 per hemisphere). The
+// Percept also exposes many ring/segment montage contacts (…_RING, …_SEGMENT) and adjacent montage
+// pairs; these are not used for biomarker discovery and are dropped entirely. A channel is a main
+// sensing pair if it names a 2-contact pair and is NOT a ring/segment.
 function isMainSensingChannel(ch) {
   const up = String(ch).toUpperCase();
   if (up.indexOf("RING") >= 0 || up.indexOf("SEGMENT") >= 0) return false;
@@ -111,6 +116,22 @@ const HEMI2 = {
   RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)", region: "VIM" },
 };
 const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
+
+// Categorical colors for PATIENT-EVENT labels (Higher Pain / Tingly-Burning / Feeling Good / …).
+// Pain-type labels lean red/orange; relief/medication lean blue/green; others fall through to a
+// colorblind-aware cycle. Keyed by a normalized (lowercased) label so minor spelling variants pool.
+const EVENT_COLORS = {
+  "higher pain": "#D62728", "high pain": "#B2182B", "lower pain": "#F4A582",
+  "tingly/burning": "#CC79A7", "dyskinesia": "#882255", "feeling off": "#E69F00",
+  "feeling good": "#1B7837", "medication": "#2166AC", "took medication": "#4393C3",
+  "percocet": "#56B4E9",
+};
+const EVENT_FALLBACK = ["#332288", "#0072B2", "#009E73", "#94C973", "#44AA99", "#999933"];
+function eventColor(label, idx) {
+  const k = String(label || "").trim().toLowerCase();
+  if (EVENT_COLORS[k]) return EVENT_COLORS[k];
+  return EVENT_FALLBACK[idx % EVENT_FALLBACK.length];
+}
 // Pain y-axis range BY METRIC: NRS 0-10, MPQ ~0-50, VAS family 0-100, composite by its own range.
 // Returns [lo, hi, ticks[]] so the pain row's scale adapts to whichever PRO the picker shows.
 function painAxis(metric, yvals) {
@@ -129,20 +150,19 @@ function painAxis(metric, yvals) {
 export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   const ref = useRef(null);
   const av = data && data.availability ? data.availability : null;
-  const [expert, setExpert] = useState(false);   // show ring/segment + montage contacts too
-
-  // unique channels present, ordered L-then-R by contact pair. Default view shows only the main
-  // bipolar sensing pairs; expert mode adds the ring/segment montage contacts.
-  const { channels, nHidden } = useMemo(() => {
-    if (!av || !av.records) return { channels: [], nHidden: 0 };
+  // Unique channels present, ordered L-then-R by contact pair. Only the main bipolar SENSING pairs
+  // (0-3, 1-3, 0-2 per hemisphere) are shown: ring/segment montage contacts are not used for
+  // biomarker discovery and are dropped entirely (no expert view). RING variants of a standard pair
+  // collapse onto that pair's lane via normalizeChannel; true segment/ring montages are filtered.
+  const { channels } = useMemo(() => {
+    if (!av || !av.records) return { channels: [] };
     const seen = new Set();
     av.records.forEach((r) => seen.add(normalizeChannel(r.channel)));
-    const all = [...seen];
-    const main = all.filter(isMainSensingChannel);
-    const shown = (expert ? all : (main.length ? main : all))
+    const main = [...seen]
+      .filter(isMainSensingChannel)
       .sort((a, b) => channelSortKey(a) - channelSortKey(b));
-    return { channels: shown, nHidden: all.length - shown.length };
-  }, [av, expert]);
+    return { channels: main };
+  }, [av]);
 
   useEffect(() => {
     if (!ref.current || !av || !channels.length) return;
@@ -159,28 +179,35 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     // normalized pair and merge any raw keys that map to it. The overview is render-cheap geometry
     // (a decimated chronic LINE + one BLOCK per streaming session) so the page stays responsive
     // while zooming — vs tens of thousands of 2 Hz points. Returns:
-    //   { chronic:{t:[],y:[]}|null, sessions:[{t0,t1,med,lo,hi,center_hz,n}], y_lo, y_hi } | null
+    //   { chronic:{t:[],y:[],center_hz:[]}|null, sessions:[{t0,t1,med,lo,hi,center_hz,n}],
+    //     y_lo, y_hi } | null
     const lsbFor = (ch) => {
       const ov = av.lsb_overview || {};
       const keys = Object.keys(ov).filter((k) => normalizeChannel(k) === ch);
       if (!keys.length) return null;
-      const chronicT = [], chronicY = [], sessions = [];
+      const chronicT = [], chronicY = [], chronicHz = [], sessions = [];
       let yLo = Infinity, yHi = -Infinity;
       keys.forEach((k) => {
         const d = ov[k] || {};
         if (d.chronic && d.chronic.t && d.chronic.t.length) {
-          (d.chronic.t).forEach((tt, i) => { chronicT.push(tt); chronicY.push(d.chronic.y[i]); });
+          const ch_hz = d.chronic.center_hz || [];
+          (d.chronic.t).forEach((tt, i) => {
+            chronicT.push(tt); chronicY.push(d.chronic.y[i]);
+            chronicHz.push(ch_hz[i] == null ? null : ch_hz[i]);
+          });
         }
         (d.sessions || []).forEach((s) => sessions.push(s));
         if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
         if (Number.isFinite(d.y_hi)) yHi = Math.max(yHi, d.y_hi);
       });
       if (!chronicT.length && !sessions.length) return null;
-      // time-sort chronic samples (merged keys may interleave)
+      // time-sort chronic samples (merged keys may interleave); carry center_hz with the reorder
+      // so the chronic line can be colored by its (time-varying) sensing center frequency.
       let chronic = null;
       if (chronicT.length) {
         const ord = chronicT.map((_, i) => i).sort((a, b) => chronicT[a] - chronicT[b]);
-        chronic = { t: ord.map((i) => chronicT[i]), y: ord.map((i) => chronicY[i]) };
+        chronic = { t: ord.map((i) => chronicT[i]), y: ord.map((i) => chronicY[i]),
+                    center_hz: ord.map((i) => chronicHz[i]) };
       }
       sessions.sort((a, b) => a.t0 - b.t0);
       return { chronic, sessions,
@@ -211,7 +238,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       laneTop[ch] = y; laneBase[ch] = y - LH(ch); y = laneBase[ch] - GAPL; prev = h;
     });
     const neuralBottom = y + GAPL;
-    const painTop = neuralBottom - ROWGAP, painBase = painTop - PAIN_H;
+    // EVENT strip: a thin row between the neural lanes and the pain row where patient-triggered
+    // snapshot events (button-press 30 s PSDs) are demarcated as diamonds, with a faint drop-line
+    // up through the neural lanes so each press is locatable against every channel.
+    const EVENT_H = 0.5;
+    const eventTop = neuralBottom - ROWGAP * 0.5, eventBase = eventTop - EVENT_H;
+    const eventY = (eventTop + eventBase) / 2;
+    const painTop = eventBase - ROWGAP * 0.55, painBase = painTop - PAIN_H;
     const stimTop = painBase - ROWGAP * 0.55, stimBase = stimTop - STIM_H;
     const FULL_TOP = 0.40;
     const yScale = (v, lo, hi, yb, yt) => yb + (yt - yb) * (v - lo) / (hi - lo + 1e-9);
@@ -232,7 +265,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       const top = laneTop[hl[0]] + 0.04, bot = laneBase[hl[hl.length - 1]] - 0.04;
       shapes.push({ type: "rect", xref: "paper", yref: Y, x0: 0, x1: 1, y0: bot, y1: top,
         fillcolor: HEMI2[hemi].band, line: { width: 0 }, layer: "below" });
-      annotations.push({ xref: "paper", yref: Y, x: -0.085, y: (top + bot) / 2,
+      // Hemisphere/region label pinned to the far LEFT BORDER (rotated 90°), clear of the
+      // right-anchored per-contact names (at x ≈ -0.018) which it used to overlap.
+      annotations.push({ xref: "paper", yref: Y, x: -0.135, y: (top + bot) / 2,
         text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
         font: { size: 14, color: HEMI2[hemi].col }, align: "center" });
     });
@@ -268,14 +303,34 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       if (ov) {
         const lo = ov.y_lo, hi = ov.y_hi;
         const sc = (v) => BP_LO + (BP_HI - BP_LO) * Math.min(Math.max((v - lo) / (hi - lo + 1e-9), 0), 1);
-        // chronic real line (grey) — one decimated polyline
+        // chronic real line — colored by sensing CENTER FREQUENCY (which changes over the implant
+        // as the chronic 24/7 sensing band is reprogrammed). Split the decimated polyline into
+        // contiguous same-frequency runs and draw each run in its band color (categorical
+        // FREQ_PALETTE, same as streaming), so the chronic trend visibly recolors at each
+        // re-config and the hover reports the band. Falls back to grey for samples with no freq.
         if (ov.chronic && ov.chronic.t.length) {
-          traces.push({ type: "scattergl", mode: "lines",
-            x: ov.chronic.t.map(D), y: ov.chronic.y.map(sc),
-            line: { color: "rgba(90,90,90,0.55)", width: 1.2 },
-            customdata: ov.chronic.y.map((v) => Math.round(v)),
-            hovertemplate: `${prettyContact(labelFor(ch))} · chronic<br>%{customdata} LSB<br>%{x}<extra></extra>`,
-            showlegend: false });
+          const ct = ov.chronic.t, cy = ov.chronic.y;
+          const cc = ov.chronic.center_hz || [];
+          const snapAt = (i) => (cc[i] == null ? null : snapFreq(cc[i]));
+          let seg = 0;
+          for (let k = 1; k <= ct.length; k += 1) {
+            const brk = (k === ct.length) || (snapAt(k) !== snapAt(seg));
+            if (!brk) continue;
+            // run [seg, k); include the boundary point so adjacent runs join visually
+            const end = Math.min(k + 1, ct.length);
+            const c = snapAt(seg);
+            if (c != null) present.add(c);
+            const fc = c == null ? "rgba(90,90,90,0.55)" : freqColor(c);
+            const xs = ct.slice(seg, end), ys = cy.slice(seg, end);
+            traces.push({ type: "scattergl", mode: "lines",
+              x: xs.map(D), y: ys.map(sc),
+              line: { color: fc, width: 1.4 },
+              customdata: ys.map((v) => [Math.round(v), c == null ? "?" : fmtHz(c)]),
+              hovertemplate: `${prettyContact(labelFor(ch))} · chronic 24/7 · %{customdata[1]} Hz<br>`
+                + `%{customdata[0]} LSB<br>%{x}<extra></extra>`,
+              showlegend: false });
+            seg = k;
+          }
         }
         // streaming sessions: one BLOCK (median bar + 10-90 whisker) per recording, batched by freq
         if (ov.sessions.length) {
@@ -361,6 +416,45 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
         font: { size: 15, color: committed.has(ch) ? PAL.ink : "#888" } });
     });
 
+    // ---- EVENT row: PATIENT-ANNOTATED events (labeled button presses) ------------------------
+    // One diamond per event at its time, COLORED BY LABEL (Higher Pain / Tingly-Burning / Feeling
+    // Good / Medication / …), plus a faint drop-line up through the neural lanes so the flagged
+    // moment is locatable against every channel. Hover LEADS with the patient's label, then time,
+    // peak Hz, and channel count. These corroborate only (DESIGN §2/§6) — never decode.
+    const evWrap = av.events || { events: [] };
+    const evList = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    if (evList.length) {
+      // stable label order (by first appearance) so colors + legend are deterministic
+      const labelOrder = [];
+      evList.forEach((e) => { const l = e.label || "event"; if (!labelOrder.includes(l)) labelOrder.push(l); });
+      const colorOf = (label) => eventColor(label, labelOrder.indexOf(label));
+      // faint drop-lines spanning the neural region, tinted by the event's label color
+      evList.forEach((e) => shapes.push({ type: "line", xref: X, yref: Y,
+        x0: D(e.t), x1: D(e.t), y0: eventY, y1: neuralBottom + 0.02,
+        line: { color: colorOf(e.label || "event"), width: 0.8 }, opacity: 0.22, layer: "below" }));
+      // one marker trace per label (so each is a legend entry and shares a color)
+      labelOrder.forEach((label) => {
+        const grp = evList.filter((e) => (e.label || "event") === label);
+        traces.push({ type: "scattergl", mode: "markers",
+          x: grp.map((e) => D(e.t)), y: grp.map(() => eventY),
+          marker: { symbol: "diamond", size: 8, color: colorOf(label),
+                    line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
+          customdata: grp.map((e) => [
+            label,
+            e.peak_hz == null ? "n/a" : fmtHz(e.peak_hz),
+            e.n_chan == null ? "?" : e.n_chan]),
+          hovertemplate: "<b>%{customdata[0]}</b><br>%{x}<br>"
+            + "peak %{customdata[1]} Hz · %{customdata[2]} ch<extra></extra>",
+          name: label, showlegend: false });
+      });
+    } else {
+      annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
+        text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
+    }
+    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: eventY,
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:8px;color:#999">${evList.length} presses</span>` : ""}`,
+      showarrow: false, xanchor: "right", font: { size: 12, color: "#555" } });
+
     // ---- pain row: dots + medium-alpha overlay line, with y-axis ticks -----------------------
     const pain = (painOverride && painOverride.t && painOverride.t.length)
       ? painOverride : (av.pain || { t: [], y: [], metric: "PRO" });
@@ -416,14 +510,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       marker: { symbol: "square", size: 12, color: "#C9BBDF" },
       name: "raw TD coverage  (zoom → waveform)" });
     traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-      line: { color: "rgba(90,90,90,0.55)", width: 2 },
-      name: "chronic LSB · 24/7 trend (grey line)" });
+      line: { color: "#009E73", width: 2 },
+      name: "chronic LSB · 24/7 trend · color = sensing Hz" });
     traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
       line: { color: "#009E73", width: 6 },
       name: "streaming LSB session · color = sensing Hz (hover → detail)" });
     traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
       marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
       name: "PSD snapshot  (hover → spectrum)" });
+    // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
+    // so no generic event glyph is needed here.
 
     // ---- right-side frequency legend: only realized centers ----------------------------------
     const pcs = [...present].filter((c) => c != null).sort((a, b) => a - b);
@@ -446,7 +542,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
 
     const layout = {
       height: height || Math.max(560, 150 * channels.length + 320),
-      margin: { l: 140, r: 120, t: 170, b: 46 },
+      margin: { l: 170, r: 120, t: 170, b: 46 },
       hovermode: "closest",
       plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
@@ -472,11 +568,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       yaxis: { visible: false, range: [stimBase - 0.5, FULL_TOP], fixedrange: true },
     };
 
+    // Plotly.react updates the EXISTING graph in place (diff), so a dependency change (e.g. the
+    // pain row recoloring when the metric changes) redraws without tearing the div down. We do NOT
+    // purge on every re-run: purging collapses the div to zero height, which yanks the page scroll
+    // back to the top on each metric/binarization change. Purge happens once on unmount (below).
     Plotly.react(gd, traces, layout, { responsive: true, displayModeBar: true,
       modeBarButtonsToRemove: ["lasso2d", "select2d"] });
-
-    return () => { Plotly.purge(gd); };
   }, [av, channels, height, painOverride, data]);
+
+  // Free the WebGL context only when the component actually unmounts (NOT between redraws).
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
 
   if (!av || !channels.length) {
     return (
@@ -488,22 +589,6 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   return (
     <MDBox p={1}>
       <div ref={ref} style={{ width: "100%" }} />
-      <MDBox display="flex" alignItems="center" justifyContent="center" mt={1} mb={0.5} sx={{ gap: 2 }}>
-        {nHidden > 0 || expert ? (
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
-                          fontSize: 13, color: expert ? "#117733" : "#344767", userSelect: "none",
-                          border: `1.5px solid ${expert ? "#117733" : "#C9CCD6"}`, borderRadius: 6,
-                          padding: "5px 12px", background: expert ? "#F1F8F2" : "#FAFAFB" }}>
-            <input type="checkbox" checked={expert} onChange={(e) => setExpert(e.target.checked)}
-                   style={{ width: 15, height: 15, accentColor: "#117733", cursor: "pointer" }} />
-            <b>Expert: all contacts</b>
-            <span style={{ color: "#7E8794", fontWeight: 400 }}>
-              {expert ? "— showing ring/segment + montage contacts"
-                      : `— ${nHidden} ring/segment/montage contact${nHidden === 1 ? "" : "s"} hidden`}
-            </span>
-          </label>
-        ) : null}
-      </MDBox>
     </MDBox>
   );
 }

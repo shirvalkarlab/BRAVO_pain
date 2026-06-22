@@ -223,6 +223,84 @@ def stim_series(chronic_recordings):
     return {"t": [ts[i] for i in order], "y": [ys[i] for i in order]}
 
 
+def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
+    """Patient-triggered LFP snapshot events -> labeled timeline marker series.
+
+    Each event is a PATIENT button press the patient annotated with a clinical LABEL ("Higher Pain",
+    "Tingly/Burning", "Feeling Good", "Medication", "Dyskinesia", ...). The Percept stores the press
+    as a `LfpFrequencySnapshotEvents` record carrying, per sensing hemisphere, the event time and a
+    full-band PSD (`Frequency` + `FFTBinData`, ~0-100 Hz). These NEVER feed the decoder — they only
+    corroborate (DESIGN §2/§6) — but the clinician needs to SEE when the patient flagged a moment
+    AND what they called it, so we demarcate each on the timeline with its label.
+
+    Parameters
+    ----------
+    events_raw : list[dict]
+        Normalized events from the DB-coupled loader, each:
+            {"name": str, "t": epoch_s, "psds": [(freq_array, power_array), ...]}
+        (`psds` is one entry per hemisphere that carried a spectrum.)
+
+    For each event we return its time, LABEL, and a compact spectral summary across hemispheres:
+      * label: the patient-assigned event name (what the marker hover shows).
+      * peak_hz: frequency of the largest spectral peak in [fmin, fmax] (averaged across hemispheres,
+        snapped to the Percept FFT bin) — kept for the hover/overview, not the color.
+      * peak_power: band power at that peak (raw FFT-bin units), for the hover.
+      * a decimated averaged PSD ({freq, mag}) so the frontend hover-overview can draw the spectrum.
+
+    Returns {"events": [{"t", "label", "peak_hz", "peak_power", "n_chan",
+                         "psd": {"freq", "mag"} | None}, ...],
+             "labels": [distinct labels, sorted], "n": int}  sorted by time.
+    """
+    events = []
+    for e in events_raw or []:
+        if not isinstance(e, dict):
+            continue
+        t0 = _to_epoch(e.get("t"))
+        if t0 is None:
+            continue
+        label = str(e.get("name") or "event")
+        # average the per-hemisphere PSDs onto a common frequency grid
+        freq = None
+        mags = []
+        for item in (e.get("psds") or []):
+            try:
+                f = np.asarray(item[0], dtype=float)
+                m = np.asarray(item[1], dtype=float)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if f.size == 0 or f.size != m.size:
+                continue
+            if freq is None:
+                freq = f
+            if f.size == freq.size:
+                mags.append(m)
+        peak_hz = peak_power = None
+        psd = None
+        if freq is not None and mags:
+            avg = np.nanmean(np.vstack(mags), axis=0)
+            band = (freq >= fmin) & (freq <= fmax) & np.isfinite(avg)
+            if band.any():
+                fb, ab = freq[band], avg[band]
+                j = int(np.argmax(ab))
+                peak_hz = snap_freq(float(fb[j]))
+                peak_power = float(ab[j])
+            keep = (np.arange(freq.size) if freq.size <= 120
+                    else np.arange(0, freq.size, max(1, freq.size // 120)))
+            psd = {"freq": [float(freq[k]) for k in keep],
+                   "mag": [float(avg[k]) if np.isfinite(avg[k]) else None for k in keep]}
+        events.append({
+            "t": float(t0),
+            "label": label,
+            "peak_hz": peak_hz,
+            "peak_power": peak_power,
+            "n_chan": len(mags),
+            "psd": psd,
+        })
+    events.sort(key=lambda e: e["t"])
+    labels = sorted({e["label"] for e in events})
+    return {"events": events, "labels": labels, "n": len(events)}
+
+
 def _decimate(arr, n=2000):
     arr = np.asarray(arr, dtype=float)
     if len(arr) > n:
@@ -377,12 +455,45 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None):
         chan = names[0] if names else "LFP"
         cu = str(chan).upper()
         hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
-        hz = hemi_hz.get(hemi) if hemi else None
         key = hemi_contact.get(hemi, chan)   # prefer the configured sensing contact for this side
+
+        # Per-sample sensing center frequency for the chronic 24/7 trend. The band is reprogrammed
+        # over the implant, so the accurate source is the dated GroupHistory schedule stamped onto
+        # the recording at decode time (`FreqScheduleHz` = [[epoch_SECONDS, hz], ...]). Resolve the
+        # frequency in force at each sample (last change-point at or before it). Fall back, in order,
+        # to the recording's single stamped `CenterFrequencyHz`, then the Therapy snapshot — so a
+        # recording with no schedule still gets a flat (but non-null) frequency rather than "?".
+        sched_raw = r.get("FreqScheduleHz")
+        sched = []
+        if isinstance(sched_raw, (list, tuple)):
+            for item in sched_raw:
+                try:
+                    ts, shz = float(item[0]), snap_freq(item[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if shz is not None:
+                    sched.append((ts, shz))
+            sched.sort(key=lambda p: p[0])
+        scalar_hz = snap_freq(r.get("CenterFrequencyHz"))
+        fallback_hz = scalar_hz if scalar_hz is not None else (hemi_hz.get(hemi) if hemi else None)
+
+        def _hz_at(ts):
+            cur = None
+            for cms, chz in sched:
+                if cms <= ts:
+                    cur = chz
+                else:
+                    break
+            if cur is not None:
+                return cur
+            if sched:
+                return sched[0][1]   # data begins before first change-point: use earliest known
+            return fallback_hz
+
         col = data[:, 0]
         bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
         for i in np.where(~bad)[0]:
-            _push(key, float(tarr[i]), col[i], hz, "chronic")
+            _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
     # time-sort each channel's pooled samples
     for ch, d in out.items():
@@ -403,7 +514,8 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
     information:
 
       * chronic  -> a single decimated LINE of the real ~10-min trend (continuous around-the-clock
-                    band power; chronic carries no per-sample sensing freq, so it renders grey).
+                    band power), tagged per-sample with its sensing center frequency so the frontend
+                    can colour the trend by frequency (chronic sensing freq DOES change over time).
       * streaming-> one BLOCK per session (contiguous run of samples with <= session_gap_s spacing),
                     summarizing that on-demand recording: start/end time, median LSB, 10-90 pct band,
                     sample count, and the session's sensing center frequency (for the categorical
@@ -428,13 +540,22 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
         y_hi = float(np.percentile(finite, 98)) if finite.size else 1.0
 
         chronic_mask = np.array([s == "chronic" for s in src], dtype=bool)
-        # --- chronic: decimated real line ---
+        # --- chronic: decimated real line, carrying its per-sample sensing center frequency ---
+        # Chronic 24/7 sensing DOES change center frequency over the implant (each chronic
+        # recording's Therapy snapshot sets it), so the trend is tagged per-sample with center_hz
+        # and decimated on the SAME stride as t/y (index-based) so colour stays aligned to the line.
         chronic = None
         if chronic_mask.any():
-            ct, cy = t[chronic_mask], y[chronic_mask]
-            ct_d = _decimate(ct, chronic_max_points)
-            cy_d = _decimate(cy, chronic_max_points)
-            chronic = {"t": [float(v) for v in ct_d], "y": [float(v) for v in cy_d]}
+            ci = np.where(chronic_mask)[0]
+            ct, cy = t[ci], y[ci]
+            ccen = np.array([snap_freq(cen[i]) if cen[i] is not None else np.nan
+                             for i in ci], dtype=float)
+            # decimate by index so t / y / center_hz stay positionally aligned (mirrors _decimate)
+            keep = (np.arange(len(ci)) if len(ci) <= chronic_max_points
+                    else np.arange(0, len(ci), max(1, len(ci) // chronic_max_points)))
+            chronic = {"t": [float(ct[k]) for k in keep],
+                       "y": [float(cy[k]) for k in keep],
+                       "center_hz": [None if np.isnan(ccen[k]) else float(ccen[k]) for k in keep]}
 
         # --- streaming: one block per session (split on time gaps) ---
         sessions = []

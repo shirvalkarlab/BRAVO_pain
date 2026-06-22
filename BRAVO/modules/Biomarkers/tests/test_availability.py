@@ -195,3 +195,56 @@ def test_lsb_overview_splits_session_on_frequency_change():
     sessions = ov["ZERO_THREE_RIGHT"]["sessions"]
     assert len(sessions) == 2
     assert [s["center_hz"] for s in sessions] == [8.8, 26.4]   # snapped to FFT bins
+
+
+def test_lsb_overview_chronic_line_carries_center_hz():
+    """The chronic 24/7 trend now carries a per-sample sensing center frequency (the band IS
+    reprogrammed over time), aligned with t/y through decimation so the frontend can colour it."""
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0 + i for i in range(8)],
+        "y": [800.0 + i for i in range(8)],
+        "center_hz": [9.8, 9.8, 9.8, 9.8, 12.7, 12.7, 12.7, 12.7],   # band switches mid-record
+        "source": ["chronic"] * 8}}
+    chronic = av.lsb_overview(lsb)["ZERO_THREE_LEFT"]["chronic"]
+    assert chronic is not None
+    assert "center_hz" in chronic
+    # same length as t/y, and both programmed bands are represented in order
+    assert len(chronic["center_hz"]) == len(chronic["t"]) == len(chronic["y"])
+    assert set(chronic["center_hz"]) == {9.8, 12.7}
+    assert chronic["center_hz"][0] == 9.8 and chronic["center_hz"][-1] == 12.7
+
+
+def test_event_markers_labels_patient_events():
+    """Patient-annotated events -> one labeled marker per press with the patient's label, the peak
+    frequency, hemisphere count, and a decimated PSD for the hover-overview."""
+    freq = np.arange(0, 100.5, 0.5)
+    # two hemispheres: a clear beta peak at 13.5 Hz above the 1/f floor (snaps to the 13.7 Hz bin)
+    floor = 1.0 / (freq + 1.0)
+    p1 = floor.copy(); p1[freq == 13.5] = 50.0
+    p2 = floor.copy(); p2[freq == 13.5] = 40.0
+    ev = [{"name": "Higher Pain", "t": T0 + 3600, "psds": [(freq, p1)]},
+          {"name": "Feeling Good", "t": T0, "psds": [(freq, p1), (freq, p2)]}]
+    out = av.event_markers(ev)
+    assert out["n"] == 2
+    assert out["labels"] == ["Feeling Good", "Higher Pain"]   # distinct labels, sorted
+    e0 = out["events"][0]                                      # sorted by time -> Feeling Good first
+    assert e0["t"] == T0 and e0["label"] == "Feeling Good" and e0["n_chan"] == 2
+    assert e0["peak_hz"] == 13.7                               # snapped beta peak, averaged
+    assert e0["peak_power"] is not None and e0["peak_power"] > 1.0
+    assert e0["psd"] is not None and len(e0["psd"]["freq"]) == len(e0["psd"]["mag"])
+    assert [e["t"] for e in out["events"]] == [T0, T0 + 3600]
+
+
+def test_event_markers_label_without_psd_is_kept():
+    """An event with a label but no usable spectrum still appears (peak_hz/psd null), so the press
+    is demarcated even when the snapshot PSD is absent."""
+    out = av.event_markers([{"name": "Medication", "t": T0, "psds": []}])
+    assert out["n"] == 1
+    e = out["events"][0]
+    assert e["label"] == "Medication" and e["peak_hz"] is None and e["psd"] is None
+
+
+def test_event_markers_handles_empty_and_malformed():
+    assert av.event_markers([])["n"] == 0
+    assert av.event_markers(None)["n"] == 0
+    assert av.event_markers([{"t": None}, {"no_time": 1}, 42])["n"] == 0

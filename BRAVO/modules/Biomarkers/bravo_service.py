@@ -40,6 +40,13 @@ CHRONIC_TYPES = ["MedtronicChronicBrainSense"]
 POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # PSD-bearing products (montage surveys) for the data-availability timeline — loaded ONLY for the
 # availability payload (they don't feed the decoder). See routines/availability.AVAILABILITY_TYPES.
+# Patient-triggered LABELED events: button presses the patient annotated ("Higher Pain",
+# "Tingly/Burning", "Feeling Good", "Medication", ...). Stored as PatientControllerEvent rows whose
+# `metadata` carries, per hemisphere, the event DateTime + a full-band PSD (Frequency/FFTBinData).
+# Auto-generated "Streaming" markers are excluded. These only corroborate (DESIGN §2/§6), never feed
+# the decoder, but are demarcated (with their label) on the timeline.
+PATIENT_EVENT_TYPE = "PatientControllerEvent"
+_EVENT_NAME_EXCLUDE = {"streaming"}   # auto-markers, not patient annotations
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
                           "MedtronicStimulationMontages"]
 
@@ -174,6 +181,59 @@ def _load_recordings(participant_uid, types):
             elif isinstance(data, dict):
                 loaded.append(data)
     return loaded
+
+
+def _load_patient_events(participant_uid):
+    """Load patient-annotated LFP snapshot events for the availability timeline.
+
+    These are PatientControllerEvent rows — button presses the patient labeled ("Higher Pain",
+    "Tingly/Burning", "Feeling Good", "Medication", ...). Unlike the .bdat recordings, the event's
+    time and per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with
+    `DateTime`, `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
+
+    The auto-generated "Streaming" markers are excluded (not patient annotations). The authoritative
+    timestamp is the per-hemisphere `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
+
+    Returns [{"name": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
+    """
+    import datetime as _dt
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return []
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    if not SourceFiles:
+        return []
+    rows = list(models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE))
+    out = []
+    for r in rows:
+        name = getattr(r, "name", "") or ""
+        if not name or name.strip().lower() in _EVENT_NAME_EXCLUDE:
+            continue
+        md = getattr(r, "metadata", None)
+        if not isinstance(md, dict):
+            continue
+        t = None
+        psds = []
+        for hemi_block in md.values():
+            if not isinstance(hemi_block, dict):
+                continue
+            if t is None and hemi_block.get("DateTime"):
+                try:
+                    t = _dt.datetime.fromisoformat(
+                        str(hemi_block["DateTime"]).replace("Z", "+00:00")).timestamp()
+                except (ValueError, TypeError):
+                    t = None
+            freq = hemi_block.get("Frequency")
+            power = hemi_block.get("FFTBinData")
+            if isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple)) \
+                    and len(freq) == len(power) and len(freq) > 0:
+                psds.append((list(freq), list(power)))
+        if t is None:
+            t = getattr(r, "date", None)
+        if t is None:
+            continue
+        out.append({"name": name, "t": float(t), "psds": psds})
+    return out
 
 
 def _derive_chan_order(td_recordings):
@@ -829,7 +889,11 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
         bands = availability.present_freq_bands(records)
-        ts = [r["t_start"] for r in records] + pain["t"] + stim["t"]
+        # Patient-annotated events (labeled button presses) — demarcated on the timeline.
+        event_list = _load_patient_events(participant_uid)
+        events = availability.event_markers(event_list)
+        ts = [r["t_start"] for r in records] + pain["t"] + stim["t"] \
+            + [e["t"] for e in events.get("events", [])]
         span = [min(ts), max(ts)] if ts else []
         # Inspector samples: decimated real PSD/TD/LSB per channel for the right-hand detail panels.
         # Only for channels that actually have data (cap to keep the payload bounded); the frontend
@@ -843,11 +907,13 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 ch, td_recs=td_all, psd_recs=psd_all,
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
-                "span": span, "samples": samples, "lsb_overview": lsb_overview}
+                "span": span, "samples": samples, "lsb_overview": lsb_overview,
+                "events": events}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
-                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {}}
+                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
+                "events": {"events": [], "n": 0}}
 
 
 def availability_for_participant(request_data):
