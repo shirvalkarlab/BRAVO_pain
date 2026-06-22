@@ -28,6 +28,7 @@ from . import pipeline
 from . import adapter
 from .routines import redcap_client
 from .routines import analytics
+from .routines import availability
 
 _log = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ _log = logging.getLogger(__name__)
 TIMEDOMAIN_TYPES = ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]
 CHRONIC_TYPES = ["MedtronicChronicBrainSense"]
 POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
+# PSD-bearing products (montage surveys) for the data-availability timeline — loaded ONLY for the
+# availability payload (they don't feed the decoder). See routines/availability.AVAILABILITY_TYPES.
+AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
+                          "MedtronicStimulationMontages"]
 
 # How many worker threads the recording loader uses. Decoding each .bdat is independent and
 # largely GIL-friendly (file I/O + numpy), so threads give near-linear speedup. Defaults to all
@@ -784,6 +789,60 @@ def _window_params_body(request_data, sliding):
     return train_days, step_days, sliding, window_months, window_step_months
 
 
+def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
+                        pro_df, label_metric, region_map):
+    """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
+
+    Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
+    the PSD-bearing montage/survey products (which the decoder doesn't use). Returns:
+        {records, pain, stim, freq_bands, span}
+    where `records` are per-channel availability records, `pain`/`stim` are the shared-axis series,
+    `freq_bands` are the categorical legend bands actually present, and `span` is [min_t, max_t].
+    Guarded so any failure yields an empty payload rather than breaking the main timeline response.
+    """
+    try:
+        # td_list is a flat decoded list mixing BrainSenseTimeDomain + IndefiniteStream; the loader
+        # discards the source type, so re-split by self-tag when present (else treat all as TD —
+        # both are the same density-gated lane anyway). Montage/survey PSD types are loaded once and
+        # passed under a single representative type key (all map to the "psd" lane).
+        bs, ind = [], []
+        for r in td_list or []:
+            if not isinstance(r, dict):
+                continue
+            (ind if (r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
+        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        recs_by_type = {
+            "MedtronicBrainSenseTimeDomain": bs,
+            "MedtronicIndefiniteStream": ind,
+            "MedtronicChronicBrainSense": list(chronic_list or []),
+            "MedtronicBrainSensePowerDomain": list(powerdomain_list or []),
+            "MedtronicBaselineMontages": [r for r in (psd_list or []) if isinstance(r, dict)],
+        }
+        records = availability.extract_availability(recs_by_type, region_map=region_map)
+        pain = availability.pain_series(pro_df, label_metric)
+        stim = availability.stim_series(chronic_list)
+        bands = availability.present_freq_bands(records)
+        ts = [r["t_start"] for r in records] + pain["t"] + stim["t"]
+        span = [min(ts), max(ts)] if ts else []
+        # Inspector samples: decimated real PSD/TD/LSB per channel for the right-hand detail panels.
+        # Only for channels that actually have data (cap to keep the payload bounded); the frontend
+        # selects one channel at a time client-side.
+        td_all = recs_by_type["MedtronicBrainSenseTimeDomain"] + recs_by_type["MedtronicIndefiniteStream"]
+        psd_all = recs_by_type["MedtronicBaselineMontages"]
+        samples = {}
+        chans = sorted({r["channel"] for r in records})
+        for ch in chans[:12]:
+            samples[ch] = availability.inspector_samples(
+                ch, td_recs=td_all, psd_recs=psd_all,
+                chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
+        return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
+                "span": span, "samples": samples}
+    except Exception as e:
+        _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
+        return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
+                "stim": {"t": [], "y": []}, "freq_bands": [], "span": []}
+
+
 def run_for_participant(request_data):
     """Assemble inputs from the DB + REDCap and run the biomarker pipeline for one participant.
 
@@ -812,6 +871,7 @@ def run_for_participant(request_data):
     # (raw units) into one chronic-shaped list so they're compared apples-to-apples.
     power_list = []
     powerdomain_list = []
+    chronic_list = []
     if source in ("powerdomain", "both"):
         chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
         powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
@@ -879,6 +939,13 @@ def run_for_participant(request_data):
     # "what's set on the device now" against the data-derived recommendation, in the same LFP-power
     # units. Empty dict => no closed-loop program => the frontend draws no programmed line.
     out["programmed_thresholds"] = _programmed_adaptive_thresholds(Participant)
+    # Data-availability timeline payload (new BiomarkerDataTimeline component). Reuses the recordings
+    # already loaded for the decoder + montage/survey PSD products; real pain (REDCap) + stim
+    # (chronic per-sample mA) on the shared time axis. Guarded inside _build_availability.
+    out["availability"] = _build_availability(
+        participant_uid, chronic_list=chronic_list if source in ("powerdomain", "both") else [],
+        powerdomain_list=powerdomain_list, td_list=td, pro_df=pro_df,
+        label_metric=label_metric, region_map=region_map)
     # Honesty flag (rigor fix #5): the power-domain detector currently pools all recorded power
     # channels into ONE threshold. If they span >1 anatomical target/hemisphere (e.g. Left GPi +
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,

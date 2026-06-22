@@ -17,6 +17,7 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
+import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 
@@ -593,11 +594,19 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {data && data.timeline && data.timeline.length > 0 ? (
+                  {/* New data-availability timeline (replaces BiomarkerTimeline). Prefer the
+                      availability payload; fall back to the legacy timeline only if availability
+                      is absent (e.g. an older backend response), so the swap is non-breaking. */}
+                  {data && data.availability && data.availability.records
+                        && data.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerDataTimeline data={data} />
+                    </Grid>
+                  ) : (data && data.timeline && data.timeline.length > 0 ? (
                     <Grid item xs={12}>
                       <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
                     </Grid>
-                  ) : null}
+                  ) : null)}
                 </Grid>
               </Card>
             </Grid>

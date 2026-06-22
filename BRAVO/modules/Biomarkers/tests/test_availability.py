@@ -1,0 +1,123 @@
+"""Tests for the data-availability timeline extractor (routines/availability.py).
+
+Django-free, runs on synthetic recording dicts shaped like the decoded Percept recordings the
+production loader yields. Validates lane (dtype) mapping, timestamp/duration extraction, sensing
+center-frequency attribution+snapping, the categorical legend bands, and the pain/stim series.
+"""
+import sys
+import pathlib
+import datetime
+
+import numpy as np
+import pandas as pd
+
+_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+if str(_BRAVO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BRAVO_ROOT))
+
+from modules.Biomarkers.routines import availability as av
+
+T0 = datetime.datetime(2025, 8, 29, 12, 0, 0).timestamp()
+
+
+def _recs():
+    """One recording per Percept product, in decoded-dict shapes (adapter contract)."""
+    return {
+        "MedtronicBrainSenseTimeDomain": [
+            {"ChannelNames": ["ZERO_THREE_LEFT"], "Data": np.zeros((16750, 1)),
+             "SamplingRate": 250, "StartTime": T0, "Duration": 67.0}],
+        "MedtronicIndefiniteStream": [
+            {"ChannelNames": ["ZERO_THREE_LEFT", "ONE_THREE_LEFT"], "Data": np.zeros((69413, 2)),
+             "SamplingRate": 250, "StartTime": T0}],
+        "MedtronicChronicBrainSense": [
+            {"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+             "Time": np.array([T0 + i * 600 for i in range(20)]),
+             "Data": np.column_stack([np.linspace(700, 900, 20), [1.5] * 20]),
+             "SamplingRate": -1,
+             "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+        "MedtronicBrainSensePowerDomain": [
+            {"ChannelNames": ["ZERO_THREE_RIGHT Power", "ZERO_THREE_RIGHT Stimulation"],
+             "Data": np.zeros((208, 2)), "SamplingRate": 2, "StartTime": T0 + 7200,
+             "Descriptor": {"Therapy": {"Right": {"SensingSetup": {"FrequencyInHertz": 13.66}}}}}],
+        "MedtronicBaselineMontages": [
+            {"ChannelNames": ["ZERO_THREE_LEFT"], "Data": np.zeros((250, 1)),
+             "SamplingRate": 250, "StartTime": T0 + 3600, "PeakFrequencyInHertz": 10.74}],
+    }
+
+
+def test_lane_mapping_and_products():
+    recs = av.extract_availability(_recs())
+    by_dtype = {}
+    for r in recs:
+        by_dtype.setdefault(r["dtype"], set()).add(r["product"])
+    # Indefinite + BrainSense TD both land in the timedomain lane; montage in psd; chronic+pd in bandpower.
+    assert by_dtype["timedomain"] == {"streaming_td", "indefinite"}
+    assert by_dtype["bandpower"] == {"timeline_lsb", "streaming_lsb"}
+    assert by_dtype["psd"] == {"montage_psd"}
+
+
+def test_timestamp_and_duration():
+    recs = av.extract_availability(_recs())
+    td = [r for r in recs if r["product"] == "streaming_td"][0]
+    assert abs(td["t_start"] - T0) < 1.0
+    assert abs(td["dur_s"] - 67.0) < 0.01
+    # chronic duration derived from its Time array span (19 * 600 s)
+    chronic = [r for r in recs if r["product"] == "timeline_lsb"][0]
+    assert abs(chronic["dur_s"] - 19 * 600) < 1.0
+
+
+def test_center_freq_attribution_and_snap():
+    recs = av.extract_availability(_recs())
+    chronic = [r for r in recs if r["product"] == "timeline_lsb"][0]
+    streaming = [r for r in recs if r["product"] == "streaming_lsb"][0]
+    # chronic freq comes from the GROUP-level Therapy hemisphere fallback (12.7 exact bin)
+    assert chronic["meta"]["center_hz"] == 12.7
+    # power-domain 13.66 snaps to the 13.7 Percept FFT bin
+    assert streaming["meta"]["center_hz"] == 13.7
+    # montage peak snaps to 10.7
+    montage = [r for r in recs if r["product"] == "montage_psd"][0]
+    assert montage["meta"]["peak_hz"] == 10.7
+
+
+def test_present_freq_bands_matches_rendered_channels():
+    recs = av.extract_availability(_recs())
+    # Only the two bandpower channels carry a configured center freq -> legend has exactly those.
+    assert av.present_freq_bands(recs) == [12.7, 13.7]
+
+
+def test_snap_freq_edges():
+    assert av.snap_freq(None) is None
+    assert av.snap_freq(13.66) == 13.7
+    assert av.snap_freq(7.81) == 7.8
+    assert av.snap_freq(float("nan")) is None
+
+
+def test_pain_series_drops_nulls_and_sorts():
+    pro = pd.DataFrame({"date_time_s1_daily": ["2025-08-30 10:00", "2025-08-29 09:00", None],
+                        "nrs": [4, 7, 9]})
+    ps = av.pain_series(pro, "nrs")
+    assert ps["metric"] == "nrs"
+    assert len(ps["t"]) == 2                 # null-timestamp row dropped
+    assert ps["y"] == [7.0, 4.0]             # sorted by time (29th before 30th)
+    assert ps["t"][0] < ps["t"][1]
+
+
+def test_pain_series_missing_metric_column():
+    pro = pd.DataFrame({"date_time_s1_daily": ["2025-08-29 09:00"], "nrs": [7]})
+    assert av.pain_series(pro, "vas")["t"] == []   # metric absent -> empty, not error
+
+
+def test_stim_series_concatenates_and_filters():
+    chronic = [{"Time": np.array([T0 + i * 600 for i in range(5)]),
+                "Data": np.column_stack([np.zeros(5), [0, 1.5, 1.5, 2.0, np.nan]])}]
+    ss = av.stim_series(chronic)
+    assert ss["y"] == [0.0, 1.5, 1.5, 2.0]   # NaN amplitude dropped
+    assert len(ss["t"]) == 4
+
+
+def test_empty_inputs_are_safe():
+    assert av.extract_availability({}) == []
+    assert av.extract_availability(None) == []
+    assert av.pain_series(None, "nrs")["t"] == []
+    assert av.stim_series([])["t"] == []
+    assert av.present_freq_bands([]) == []
