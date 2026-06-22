@@ -432,19 +432,17 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       evList.forEach((e) => shapes.push({ type: "line", xref: X, yref: Y,
         x0: D(e.t), x1: D(e.t), y0: eventY, y1: neuralBottom + 0.02,
         line: { color: colorOf(e.label || "event"), width: 0.8 }, opacity: 0.22, layer: "below" }));
-      // one marker trace per label (so each is a legend entry and shares a color)
+      // one marker trace per label. Kept OUT of the legend (showlegend:false) but the per-event
+      // hover stays: label + time + hemisphere count. Peak Hz is intentionally omitted — the raw
+      // event PSD is 1/f-dominated so the peak always sits near DC and carries no information.
       labelOrder.forEach((label) => {
         const grp = evList.filter((e) => (e.label || "event") === label);
         traces.push({ type: "scattergl", mode: "markers",
           x: grp.map((e) => D(e.t)), y: grp.map(() => eventY),
           marker: { symbol: "diamond", size: 8, color: colorOf(label),
                     line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
-          customdata: grp.map((e) => [
-            label,
-            e.peak_hz == null ? "n/a" : fmtHz(e.peak_hz),
-            e.n_chan == null ? "?" : e.n_chan]),
-          hovertemplate: "<b>%{customdata[0]}</b><br>%{x}<br>"
-            + "peak %{customdata[1]} Hz · %{customdata[2]} ch<extra></extra>",
+          customdata: grp.map((e) => [label, e.n_chan == null ? "?" : e.n_chan]),
+          hovertemplate: "<b>%{customdata[0]}</b><br>%{x}<br>%{customdata[1]} ch<extra></extra>",
           name: label, showlegend: false });
       });
     } else {
