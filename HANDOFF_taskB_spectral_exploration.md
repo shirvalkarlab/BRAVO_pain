@@ -122,6 +122,43 @@ Dockerfile yet** — a container rebuild loses them (see Open).
 
 ---
 
+## Requested UI changes — IMPLEMENT NEXT SESSION (from PI, 06-22)
+
+These four were requested after Task B landed; none are built yet.
+
+1. **Binarization preview should show match-window-gated data AVAILABILITY, not
+   the raw PRO distribution.** Today `BinarizationPreview.js` histograms the daily
+   PROs. Instead it should show *what neural data is available to binarize at the
+   current match window* — i.e. the distribution of the **matched PSD subset**,
+   and it must **update live as the match-window slider moves** (today the matched
+   readout only refreshes on recompute, with a "stale" flag). Options: (a) a cheap
+   client-side recount if the matched timestamps/labels are already in the payload,
+   or (b) a lightweight endpoint that returns matched counts for a given tolerance
+   without rerunning the full scan. The histogram bars should be the matched-PSD
+   pain values, so moving the slider visibly changes how much data feeds binarization.
+
+2. **Metric dropdown label** — `index.js:358`: change
+   `"Pain metric (drives the pain plot above):"` →
+   `"Pain metric (drives exploratory analysis):"`.
+
+3. **Timeline plot — gray out non-binarized data, color the binarized data**
+   (`BiomarkerDataTimeline.js`). Points/segments that are NOT matched-and-binarized
+   render gray; the matched data that feeds binarization renders in color (e.g.
+   high = vermillion `#D55E00`, low = blue `#0072B2`, excluded-middle = gray), so
+   the user sees exactly which neural samples drive the analysis at the current
+   match window. The timeline already has the gray idiom (`rgba(90,90,90,0.55)` at
+   L323; `colorOf`/`eventColor` at L430) — extend it: the timeline needs the matched
+   PSD timestamps + high/low/excluded labels for the current tolerance (same data
+   item 1 needs), then color each marker by its bin and gray the unmatched ones.
+
+4. **Titles** — two places:
+   - In-card header `index.js:319`: `"Pain Biomarkers"` → `"Pain Biomarker
+     Exploration"`.
+   - Nav/breadcrumb name `routes.js:402` (`name: "Pain Biomarkers"`, the top-level
+     "Biomarkers" the PI sees): → `"Biomarker Exploration"`.
+
+---
+
 ## Open threads / next steps
 
 1. **Wire `band_mixedmodel_inference` to the click-to-scatter.** The glmer is
