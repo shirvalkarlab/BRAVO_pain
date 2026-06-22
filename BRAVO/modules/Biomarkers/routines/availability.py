@@ -289,6 +289,111 @@ def inspector_samples(channel, *, td_recs=None, psd_recs=None, chronic_recs=None
     return out
 
 
+_POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power columns
+
+
+def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None):
+    """REAL band-power (LSB) time series per channel, for inline display on the timeline.
+
+    Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
+    ACTUAL per-sample LFP-power values vs absolute time, so the frontend draws the true trace — not
+    a placeholder. Two products feed each channel and are pooled in RAW device units (no scaling,
+    same convention as the decoder):
+
+      * Power-Domain (~2 Hz streaming): each '<contact> Power' column -> that contact's series, with
+        the contact's sensing CENTER FREQUENCY (from Descriptor.Therapy) tagged on every sample.
+      * Chronic Timeline (~10-min around-the-clock): Data[:,0] is the per-hemisphere LFP power,
+        Time[:] is absolute epoch; the sensing center frequency comes from the recording's
+        Therapy snapshot (per hemisphere).
+
+    Returns dict keyed by RAW channel name:
+        { channel: { "t":[epoch_s], "y":[lsb], "center_hz":[hz|None], "source":["streaming"|"chronic"] } }
+    Sentinel/negative/non-finite samples are dropped. Samples are time-sorted; each carries its own
+    center_hz so the frontend can color the trace by frequency AND honestly show when sensing moved.
+    """
+    region_map = region_map or {}
+    out = {}
+
+    def _push(ch, t, y, hz, src):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": []})
+        d["t"].append(float(t)); d["y"].append(float(y))
+        d["center_hz"].append(snap_freq(hz)); d["source"].append(src)
+
+    # --- Power-Domain (~2 Hz): per-contact Power columns ---
+    pd_center = analytics.power_center_freqs(powerdomain_recordings)
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        n, ncols = data.shape
+        fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        start = _to_epoch(r.get("StartTime"))
+        if start is None:
+            continue
+        times = start + np.arange(n) / fs
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(names):
+            if pi >= ncols or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            hz = pd_center.get(contact)
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            for i in np.where(~bad)[0]:
+                _push(contact, times[i], col[i], hz, "streaming")
+
+    # --- Chronic Timeline (~10-min): per-hemisphere LFP power ---
+    # Chronic recordings name their channel by HEMISPHERE ('LeftHemisphere LFP'), but the timeline
+    # lanes are keyed by CONTACT PAIR (e.g. 'ZERO_THREE_LEFT'). Resolve each hemisphere's chronic
+    # log onto the configured sensing CONTACT for that hemisphere (the contact the power-domain
+    # streaming used) so streaming + chronic for the same physical channel pool into ONE lane. Fall
+    # back to the hemisphere-token channel name when no streaming contact is known for that side.
+    hemi_contact = {}
+    for contact in pd_center.keys():
+        cu = str(contact).upper()
+        side = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        if side and side not in hemi_contact:
+            hemi_contact[side] = contact
+    for r in chronic_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        tarr = np.asarray(r.get("Time", []), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0 or len(tarr) != data.shape[0]:
+            continue
+        # chronic channel name is '<hemi>Hemisphere LFP'; derive its sensing center from Therapy
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        hemi_hz = {}
+        if isinstance(therapy, dict):
+            hemi_hz = {"LEFT": analytics.sensing_center_hz(therapy.get("Left")),
+                       "RIGHT": analytics.sensing_center_hz(therapy.get("Right"))}
+        chan = names[0] if names else "LFP"
+        cu = str(chan).upper()
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        hz = hemi_hz.get(hemi) if hemi else None
+        key = hemi_contact.get(hemi, chan)   # prefer the configured sensing contact for this side
+        col = data[:, 0]
+        bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+        for i in np.where(~bad)[0]:
+            _push(key, float(tarr[i]), col[i], hz, "chronic")
+
+    # time-sort each channel's pooled samples
+    for ch, d in out.items():
+        order = np.argsort(d["t"])
+        d["t"] = [d["t"][i] for i in order]
+        d["y"] = [d["y"][i] for i in order]
+        d["center_hz"] = [d["center_hz"][i] for i in order]
+        d["source"] = [d["source"][i] for i in order]
+    return out
+
+
 def present_freq_bands(records):
     """Distinct snapped sensing center frequencies that actually appear on bandpower channels.
     Drives the categorical legend so it matches the lanes that render a trend (not all channels)."""

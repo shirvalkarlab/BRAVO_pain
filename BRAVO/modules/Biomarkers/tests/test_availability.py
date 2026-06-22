@@ -121,3 +121,42 @@ def test_empty_inputs_are_safe():
     assert av.pain_series(None, "nrs")["t"] == []
     assert av.stim_series([])["t"] == []
     assert av.present_freq_bands([]) == []
+    assert av.lsb_series(None, None) == {}
+    assert av.lsb_series([], []) == {}
+
+
+def test_lsb_series_streaming_real_values_and_sentinel_filter():
+    """Power-domain LSB: real per-sample values, sentinel/negative dropped, center freq tagged."""
+    sentinel = 2.0 ** 31 - 1
+    pd_rec = {
+        "ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+        "Data": np.array([[535.0, 0.0], [596.0, 0.0], [sentinel, 0.0], [-3.0, 0.0], [610.0, 1.5]]),
+        "SamplingRate": 2, "StartTime": T0,
+        "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}
+    out = av.lsb_series([], [pd_rec])
+    assert "ZERO_THREE_LEFT" in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["y"] == [535.0, 596.0, 610.0]            # sentinel and negative removed
+    assert set(s["center_hz"]) == {12.7}              # snapped sensing center
+    assert set(s["source"]) == {"streaming"}
+    assert s["t"][0] == T0 and s["t"][1] == T0 + 0.5  # 2 Hz spacing, absolute time
+
+
+def test_lsb_series_chronic_remaps_to_sensing_contact_and_pools():
+    """Chronic LFP (named by hemisphere) is remapped onto the configured sensing CONTACT for that
+    hemisphere, so streaming + chronic for the same physical channel pool into one lane."""
+    pd_rec = {
+        "ChannelNames": ["ZERO_THREE_LEFT Power"],
+        "Data": np.array([[500.0], [520.0]]), "SamplingRate": 2, "StartTime": T0,
+        "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}
+    chronic = [{"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+                "Time": np.array([T0 + 600, T0 + 1200]),
+                "Data": np.column_stack([[810.0, 830.0], [1.5, 1.5]]), "SamplingRate": -1,
+                "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}]
+    out = av.lsb_series(chronic, [pd_rec])
+    # chronic folded onto the streaming contact, not a separate 'LeftHemisphere LFP' lane
+    assert "ZERO_THREE_LEFT" in out
+    assert "LeftHemisphere LFP" not in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["streaming", "streaming", "chronic", "chronic"]   # time-sorted
+    assert s["y"] == [500.0, 520.0, 810.0, 830.0]

@@ -821,6 +821,10 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         records = availability.extract_availability(recs_by_type, region_map=region_map)
         pain = availability.pain_series(pro_df, label_metric)
         stim = availability.stim_series(chronic_list)
+        # REAL inline LSB: the actual per-sample band-power series (streaming ~2 Hz + chronic
+        # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
+        # draws the true trace (not a placeholder). Keyed by raw channel; frontend normalizes.
+        lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map)
         bands = availability.present_freq_bands(records)
         ts = [r["t_start"] for r in records] + pain["t"] + stim["t"]
         span = [min(ts), max(ts)] if ts else []
@@ -836,11 +840,11 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 ch, td_recs=td_all, psd_recs=psd_all,
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
-                "span": span, "samples": samples}
+                "span": span, "samples": samples, "lsb": lsb}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
-                "stim": {"t": [], "y": []}, "freq_bands": [], "span": []}
+                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb": {}}
 
 
 def availability_for_participant(request_data):

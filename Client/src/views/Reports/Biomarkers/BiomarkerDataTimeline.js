@@ -104,18 +104,6 @@ function tEpoch(v) {
   const p = Date.parse(String(v));
   return Number.isFinite(p) ? p / 1000 : null;
 }
-// run-length groups of equal snapped center over a time-sorted record list -> [{cen,recs}]
-function freqRuns(recs) {
-  const out = [];
-  recs.forEach((r) => {
-    const cen = snapFreq(r.meta && r.meta.center_hz);
-    const last = out[out.length - 1];
-    if (last && last.cen === cen) last.recs.push(r);
-    else out.push({ cen, recs: [r] });
-  });
-  return out;
-}
-
 // hemisphere identity: saturated accent for headers, DESATURATED tint for TD coverage (so the
 // saturated frequency color on the band-power trend is the only loud mark in a lane), faint band.
 const HEMI2 = {
@@ -123,17 +111,20 @@ const HEMI2 = {
   RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)", region: "VIM" },
 };
 const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
-const linspace = (a, b, n) => (n <= 1 ? [a] : Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1)));
-const monthStarts = (t0, t1) => {
-  const out = [];
-  const d = new Date(t0 * 1000);
-  d.setUTCDate(1); d.setUTCHours(0, 0, 0, 0);
-  while (d.getTime() / 1000 < t1) {
-    if (d.getTime() / 1000 >= t0) out.push(d.getTime() / 1000);
-    d.setUTCMonth(d.getUTCMonth() + 1);
-  }
-  return out;
-};
+// Pain y-axis range BY METRIC: NRS 0-10, MPQ ~0-50, VAS family 0-100, composite by its own range.
+// Returns [lo, hi, ticks[]] so the pain row's scale adapts to whichever PRO the picker shows.
+function painAxis(metric, yvals) {
+  const m = String(metric || "").toLowerCase();
+  if (m === "nrs") return [0, 10, [0, 5, 10]];
+  if (m.indexOf("mpq") >= 0 && m.indexOf("composite") < 0) return [0, 50, [0, 25, 50]];
+  if (m.indexOf("vas") >= 0) return [0, 100, [0, 50, 100]];
+  // composite / unknown -> span the data (rounded), guard empty
+  const ys = (yvals || []).filter((v) => Number.isFinite(v));
+  if (!ys.length) return [0, 10, [0, 5, 10]];
+  const hi = Math.ceil(Math.max(...ys, 1));
+  const lo = Math.min(0, Math.floor(Math.min(...ys)));
+  return [lo, hi, [lo, Math.round((lo + hi) / 2), hi]];
+}
 
 export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   const ref = useRef(null);
@@ -164,6 +155,26 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       return r ? (r.label || ch) : ch;
     };
     const hemiOf = (ch) => (ch.toUpperCase().indexOf("LEFT") >= 0 ? "LEFT" : "RIGHT");
+    // REAL LSB series for a lane: av.lsb is keyed by RAW channel; collapse to this normalized pair
+    // and merge any raw keys that map to it (e.g. streaming "ZERO_THREE_LEFT" + chronic mapped to
+    // the same contact). Returns {t:[epoch_s], y:[lsb], cen:[hz], source:[]} time-sorted, or null.
+    const lsbFor = (ch) => {
+      const lsb = av.lsb || {};
+      const keys = Object.keys(lsb).filter((k) => normalizeChannel(k) === ch);
+      if (!keys.length) return null;
+      const m = { t: [], y: [], cen: [], source: [] };
+      keys.forEach((k) => {
+        const s = lsb[k] || {};
+        (s.t || []).forEach((tt, i) => {
+          m.t.push(tt); m.y.push((s.y || [])[i]);
+          m.cen.push((s.center_hz || [])[i]); m.source.push((s.source || [])[i]);
+        });
+      });
+      if (!m.t.length) return null;
+      const order = m.t.map((tt, i) => i).sort((a, b) => m.t[a] - m.t[b]);
+      return { t: order.map((i) => m.t[i]), y: order.map((i) => m.y[i]),
+               cen: order.map((i) => m.cen[i]), source: order.map((i) => m.source[i]) };
+    };
     // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
     // exploratory lanes (early channel-switching) get a thinner lane and lighter label.
     const nBand = (ch) => recordsFor(ch, "bandpower")
@@ -199,11 +210,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     const annotations = [];
     const X = "x", Y = "y";
 
-    // (0) full-height month reference lines (carry through pain/stim so you can drop a plumb line)
-    monthStarts(t0, t1).forEach((ms) => shapes.push({
-      type: "line", xref: X, yref: Y, x0: D(ms), x1: D(ms), y0: stimBase - 0.3, y1: FULL_TOP,
-      line: { color: "rgba(0,0,0,0.07)", width: 1 }, layer: "below",
-    }));
+    // (0) vertical time gridlines are drawn by the x-axis itself (showgrid below), NOT as fixed
+    // shapes — so they auto-densify on zoom (month -> week -> day -> hour) and span the whole
+    // single y-axis (all neural lanes + pain + stim). See the xaxis config in `layout`.
 
     // (1) hemisphere tint bands + rotated region headers
     ["LEFT", "RIGHT"].forEach((hemi) => {
@@ -236,56 +245,56 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
           line: { width: 0 }, layer: "above" });
       });
 
-      // (b) band-power: ONE time-ordered trend, color changes with sensing center freq.
-      const bp = recordsFor(ch, "bandpower")
-        .filter((r) => r.meta && r.meta.center_hz != null)
-        .slice().sort((a, b) => tEpoch(a.t_start) - tEpoch(b.t_start));
-      const BP_LO = yb + 0.36 * lh, BP_HI = yb + 0.74 * lh;
-      if (bp.length) {
-        const n = bp.length;
-        const runs = freqRuns(bp);
-        runs.forEach((r) => present.add(r.cen));
-        if (n === 1) {
-          const cen = snapFreq(bp[0].meta.center_hz);
-          traces.push({ type: "scattergl", mode: "markers", x: [D(tEpoch(bp[0].t_start))],
-            y: [(BP_LO + BP_HI) / 2], line: { width: 0 },
-            marker: { size: 8, color: freqColor(cen) }, hoverinfo: "skip", showlegend: false });
-          annotations.push({ xref: X, yref: Y, x: D(tEpoch(bp[0].t_start)), y: BP_HI,
-            text: fmtHz(cen), showarrow: false, yshift: 6,
-            font: { size: 8.5, color: freqColor(cen) } });
-        } else {
-          // deterministic gentle wave so the trend reads as a line; magnitude shown on zoom/hover
-          const wave = linspace(0, 9, n).map((v) => 0.5 + 0.42 * Math.sin(v));
-          const yy = wave.map((v) => BP_LO + (BP_HI - BP_LO) * Math.min(Math.max(v, 0), 1));
-          let idx = 0, lastLbl = -1e18;
-          runs.forEach((run) => {
-            const a = idx, b = idx + run.recs.length - 1;
-            const fc = freqColor(run.cen);
-            traces.push({ type: "scattergl", mode: "lines+markers",
-              x: run.recs.map((r) => D(tEpoch(r.t_start))), y: yy.slice(a, b + 1),
-              line: { color: fc, width: 3.0 }, marker: { size: 4, color: fc },
-              hovertemplate: `${prettyContact(labelFor(ch))} · ${fmtHz(run.cen)} Hz<br>%{x}<extra></extra>`,
-              showlegend: false });
-            if (committed.has(ch)) {
-              const ts = tEpoch(run.recs[0].t_start);
+      // (b) band-power: the REAL LSB values vs time (av.lsb[channel] = the actual per-sample band
+      // power from streaming ~2 Hz + chronic ~10-min, each sample tagged with its sensing center
+      // frequency). The samples are drawn at their TRUE magnitude, scaled into the lane band by a
+      // robust 2-98 pct window, colored by center frequency (so a sensing-frequency switch shows as
+      // a color change), with the real LSB range printed on a mini y-axis. Zoom reveals the values.
+      const series = lsbFor(ch);
+      const BP_LO = yb + 0.34 * lh, BP_HI = yb + 0.76 * lh;
+      if (series && series.t && series.t.length) {
+        series.cen.forEach((c) => { const s = snapFreq(c); if (s != null) present.add(s); });
+        const yvals = series.y;
+        // robust scale window (ignore extreme spikes so the trend fills the lane)
+        const sorted = yvals.slice().sort((a, b) => a - b);
+        const q = (p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
+        const lo = q(0.02), hi = q(0.98);
+        const sy = yvals.map((v) => BP_LO + (BP_HI - BP_LO)
+          * Math.min(Math.max((v - lo) / (hi - lo + 1e-9), 0), 1));
+        const xs = series.t.map(D);
+        const cols = series.cen.map((c) => freqColor(c));
+        // continuous line in a neutral ink (so the trend is readable) UNDER the freq-colored points
+        traces.push({ type: "scattergl", mode: "lines", x: xs, y: sy,
+          line: { color: "rgba(60,60,60,0.35)", width: 1 }, hoverinfo: "skip", showlegend: false });
+        // the REAL samples, colored by sensing center frequency, carrying the true LSB in hover
+        traces.push({ type: "scattergl", mode: "markers", x: xs, y: sy,
+          marker: { size: committed.has(ch) ? 3.5 : 5, color: cols },
+          customdata: yvals.map((v, i) => [Math.round(v), fmtHz(series.cen[i]), series.source[i]]),
+          hovertemplate: `${prettyContact(labelFor(ch))}<br>%{customdata[0]} LSB · %{customdata[1]} Hz · %{customdata[2]}<br>%{x}<extra></extra>`,
+          showlegend: false });
+        // Hz labels at each sensing-frequency transition (committed lanes), spaced to avoid overlap
+        if (committed.has(ch)) {
+          let lastLbl = -1e18, lastCen = null;
+          for (let i = 0; i < series.cen.length; i += 1) {
+            const c = snapFreq(series.cen[i]);
+            if (c !== lastCen) {
+              const ts = series.t[i];
               if (ts - lastLbl >= MIN_LBL_GAP) {
-                annotations.push({ xref: X, yref: Y, x: D(ts), y: yy[a], text: fmtHz(run.cen),
-                  showarrow: false, yshift: 10, font: { size: 9, color: fc } });
+                annotations.push({ xref: X, yref: Y, x: xs[i], y: BP_HI, text: fmtHz(c),
+                  showarrow: false, yshift: 8, font: { size: 9, color: freqColor(c) } });
                 lastLbl = ts;
               }
+              lastCen = c;
             }
-            if (b + 1 < n) {  // connect runs so the trend stays continuous (next color)
-              traces.push({ type: "scattergl", mode: "lines",
-                x: [D(tEpoch(bp[b].t_start)), D(tEpoch(bp[b + 1].t_start))], y: [yy[b], yy[b + 1]],
-                line: { color: freqColor(snapFreq(bp[b + 1].meta.center_hz)), width: 3.0 },
-                hoverinfo: "skip", showlegend: false });
-            }
-            idx += run.recs.length;
-          });
+          }
+          // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
+          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_HI, text: `${Math.round(hi)}`,
+            showarrow: false, xanchor: "right", font: { size: 8, color: "#aaa" } });
+          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_LO, text: `${Math.round(lo)}`,
+            showarrow: false, xanchor: "right", font: { size: 8, color: "#aaa" } });
+          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: (BP_LO + BP_HI) / 2,
+            text: "<span style='font-size:7.5px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
         }
-        if (committed.has(ch)) annotations.push({ xref: "paper", yref: Y, x: -0.004,
-          y: (BP_LO + BP_HI) / 2, text: "<span style='font-size:8px;color:#aaa'>LSB</span>",
-          showarrow: false, xanchor: "right" });
       } else {
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
@@ -310,10 +319,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     // ---- pain row: dots + medium-alpha overlay line, with y-axis ticks -----------------------
     const pain = (painOverride && painOverride.t && painOverride.t.length)
       ? painOverride : (av.pain || { t: [], y: [], metric: "PRO" });
+    const [pLo, pHi, pTicks] = painAxis(pain.metric, pain.y);
     shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
       y0: painTop + 0.16, y1: painTop + 0.16, line: { color: "#e0e0e0", width: 1 } });
     if (pain.t && pain.t.length) {
-      const py = pain.y.map((v) => yScale(v, 0, 10, painBase, painTop));
+      const py = pain.y.map((v) => yScale(v, pLo, pHi, painBase, painTop));
       traces.push({ type: "scattergl", mode: "lines", x: pain.t.map(D), y: py,
         line: { color: PAL.pain, width: 2.4 }, opacity: 0.45, hoverinfo: "skip", showlegend: false });
       traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
@@ -325,10 +335,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
         text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
     annotations.push({ xref: "paper", yref: Y, x: -0.018, y: (painBase + painTop) / 2,
-      text: "<b>PAIN</b>", showarrow: false, xanchor: "right",
-      font: { size: 13, color: PAL.pain } });
-    [0, 5, 10].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
-      y: yScale(val, 0, 10, painBase, painTop), text: String(val), showarrow: false,
+      text: `<b>PAIN</b><br><span style="font-size:8px;color:#999">${pain.metric || ""}</span>`,
+      showarrow: false, xanchor: "right", font: { size: 13, color: PAL.pain } });
+    pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
+      y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 9.5, color: "#888" } }));
 
     // ---- thin separator between pain and stim, then stim step with y-axis --------------------
@@ -388,18 +398,29 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
 
     const layout = {
       height: height || Math.max(560, 150 * channels.length + 320),
-      margin: { l: 140, r: 120, t: 128, b: 46 },
+      margin: { l: 140, r: 120, t: 170, b: 46 },
       hovermode: "closest",
       plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
-      legend: { orientation: "h", x: 0.31, xanchor: "left", y: 1.075, yanchor: "top",
-                font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0)" },
+      // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes,
+      // up by the title) so it never overlaps the PSD ticks or any lane content.
+      legend: { orientation: "v", x: 0.30, xanchor: "left", y: 1.13, yanchor: "top",
+                font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
+                bordercolor: "#1a1a1a", borderwidth: 1.5,
+                itemsizing: "constant", tracegroupgap: 2 },
       title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:#777">${sub}</span>`,
                x: 0.012, xanchor: "left", y: 0.965, font: { size: 26, color: "#1a1a1a" } },
-      xaxis: { range: [D(t0), D(t1)], type: "date", showgrid: false, dtick: "M1",
-               tickfont: { size: 11.5 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc" },
+      // DYNAMIC time gridlines: no fixed dtick, so Plotly auto-picks the tick interval for the
+      // current zoom (year/month -> week -> day -> 6 h -> hour) and REDRAWS on every zoom/pan. The
+      // gridlines span the whole single y-axis, so they carry through every neural lane + pain +
+      // stim. Darker than the old faint shapes per the request.
+      xaxis: { range: [D(t0), D(t1)], type: "date", autorange: false,
+               showgrid: true, gridcolor: "rgba(0,0,0,0.18)", gridwidth: 1,
+               tickfont: { size: 11.5 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc",
+               showspikes: true, spikemode: "across", spikethickness: 1,
+               spikecolor: "rgba(0,0,0,0.35)", spikedash: "solid" },
       yaxis: { visible: false, range: [stimBase - 0.5, FULL_TOP], fixedrange: true },
     };
 
