@@ -110,7 +110,7 @@ The new `BiomarkerDataTimeline.js` (44 KB) renders in front of the old `Biomarke
 | R4 | **Non-poolable PSD ticks HIDDEN in binarization mode** (~1194 ticks) | prior: all ticks shown | They can never be colored by pain (not in scan). Hiding declutters but REMOVES data marks. | **Confirm** — PI flagged wanting all data shown. |
 | R5 | **Right-side frequency legend SUPPRESSED in binarization mode** | prior: always shown | Mode-exclusive legend. | Confirm acceptable. |
 | R6 | **Stim-amplitude row height** STIM_H=0.9 vs PAIN_H=1.6 | design §8e: stim 0.34, pain 0.60 | Ratio ~0.56 matches spirit; absolute values differ from design's numbers. | Cosmetic; align if PI cares. |
-| R7 | **Old `BiomarkerTimeline.js` + `BiomarkerAnalytics.js` (94 KB) still mounted** | design §8b/§8d: clean/replace | New timeline replaces old visually (priority), but BOTH old files still imported; `BiomarkerAnalytics` still renders the full decode panel set below. Not yet refactored per §8c/§8d. | **Decide**: keep parallel during transition, or remove old timeline import once new one is trusted. |
+| R7 | **Old `BiomarkerTimeline.js` + `BiomarkerAnalytics.js` (86 KB) still mounted** | design §8b/§8d: clean/replace | New timeline replaces old visually (priority), but BOTH old files still imported; `BiomarkerAnalytics` still renders the full decode panel set below. Not yet refactored per §8c/§8d. | **Decide**: keep parallel during transition, or remove old timeline import once new one is trusted. |
 
 **No data/statistical regressions** — backend numerics unchanged (95/95; pearson 0.965, power_pain_scatter r=0.777 p=1.9e-78, auc signal p=0.0030 stable). OOM fix is bit-identical. All flagged items are VISUAL choices from the design/eng review loop.
 
@@ -156,6 +156,6 @@ The new `BiomarkerDataTimeline.js` (44 KB) renders in front of the old `Biomarke
 - `index.js` (40 KB) — page shell; mounts BiomarkerDataTimeline (priority) → BiomarkerTimeline (fallback), BinarizationPreview, BiomarkerAnalytics. Slider/strategy/metric state; scanModel memo.
 - `BiomarkerDataTimeline.js` (44 KB) — **NEW** §8e availability timeline (overview lanes only; inspector NOT built).
 - `BiomarkerTimeline.js` (38 KB) — **OLD** linked stack; still mounted as fallback (R7).
-- `BiomarkerAnalytics.js` (94 KB) — decode panels (ROC/dist/PSD-corr/scatter); NOT yet refactored (§8c/§8d).
+- `BiomarkerAnalytics.js` (86 KB) — decode panels (ROC/dist/PSD-corr/scatter); NOT yet refactored (§8c/§8d).
 - `BinarizationPreview.js` (24 KB) — live matched-sample histogram + per-group source boxes; "Matched neural samples" axis.
 - `binarizationModel.js` (9 KB) — **NEW** client replica of backend match+binarize; `BIN_HI/LO/MID`, `computeMatchedScanModel`, per-source `by_source` counts.
