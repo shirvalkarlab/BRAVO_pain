@@ -378,7 +378,8 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
                              gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 30 }}>
+                        <MDTypography variant="button" fontWeight="bold"
+                                      sx={{ fontSize: 18, color: "#D32F2F !important" }}>
                           {"Pain metric (drives exploratory analysis):"}
                         </MDTypography>
                         <FormControl size="small" sx={{ minWidth: 420 }}>
@@ -390,14 +391,15 @@ function Biomarkers() {
                                     // .MuiSelect-select slot, so target it directly. !important beats
                                     // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
                                     "& .MuiSelect-select": {
-                                      fontSize: "30px !important",  // matches the open-menu items
+                                      fontSize: "18px !important",  // matches the open-menu items
                                       fontWeight: 700,
                                       lineHeight: 1.2,
+                                      color: "#D32F2F !important",  // red, to stand out
                                     },
                                   }}>
                             {((timelineData && timelineData.available_metrics)
                                || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 30 }}>{m.label}</MenuItem>
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18, color: "#D32F2F" }}>{m.label}</MenuItem>
                             ))}
                           </Select>
                         </FormControl>

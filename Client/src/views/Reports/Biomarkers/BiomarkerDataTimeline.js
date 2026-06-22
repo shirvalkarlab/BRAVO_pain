@@ -289,7 +289,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         fillcolor: HEMI2[hemi].band, line: { width: 0 }, layer: "below" });
       // Hemisphere/region label pinned to the far LEFT BORDER (rotated 90°), clear of the
       // right-anchored per-contact names (now larger, anchored at x ≈ -0.05) and the row labels.
-      annotations.push({ xref: "paper", yref: Y, x: -0.37, y: (top + bot) / 2,
+      // Pinned to the left border with a FIXED-PIXEL xshift (not a paper fraction) so it hugs the
+      // lanes at any width — paper-fraction x scaled with plot width and drifted off-figure when wide.
+      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -150, y: (top + bot) / 2,
         text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
         font: { size: 20, color: HEMI2[hemi].col }, align: "center" });
     });
@@ -422,11 +424,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         }
         // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
         if (committed.has(ch)) {
-          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_HI, text: `${Math.round(hi)}`,
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: BP_HI, text: `${Math.round(hi)}`,
             showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
-          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_LO, text: `${Math.round(lo)}`,
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: BP_LO, text: `${Math.round(lo)}`,
             showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
-          annotations.push({ xref: "paper", yref: Y, x: -0.004, y: (BP_LO + BP_HI) / 2,
+          annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6, y: (BP_LO + BP_HI) / 2,
             text: "<span style='font-size:13px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
         }
       } else {
@@ -461,7 +463,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       }
 
       // (d) lane label — bold for committed, lighter for exploratory
-      annotations.push({ xref: "paper", yref: Y, x: -0.05, y: yb + 0.5 * lh,
+      annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: yb + 0.5 * lh,
         text: committed.has(ch) ? `<b>${prettyContact(labelFor(ch))}</b>` : prettyContact(labelFor(ch)),
         showarrow: false, xanchor: "right",
         font: { size: 30, color: committed.has(ch) ? PAL.ink : "#888" } });
@@ -500,7 +502,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
         text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: eventY,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: eventY,
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} presses</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
@@ -557,10 +559,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
         text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: (painBase + painTop) / 2,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: (painBase + painTop) / 2,
       text: `<b>PAIN</b><br><span style="font-size:14px;color:#999">${pain.metric || ""}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
-    pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
+    pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6,
       y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: "#888" } }));
 
@@ -580,13 +582,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
         text: "no stim data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: (stimBase + stimTop) / 2,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
       font: { size: 26, color: PAL.stim } });
-    [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
+    [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -6,
       y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: "#888" } }));
-    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: stimBase - 0.30,
+    annotations.push({ xref: "paper", yref: Y, x: 0, xshift: -58, y: stimBase - 0.30,
       text: "<span style='font-size:14px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
 
     // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
@@ -646,7 +648,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
 
     const layout = {
       height: height || Math.max(560, 150 * channels.length + 320),
-      margin: { l: 330, r: 120, t: 170, b: 46 },
+      // Left margin holds only the pinned label stack: region tab (xshift -150) + its rotated
+      // glyph + contact names (xshift -58). ~175px is snug; was 330 when labels lived in
+      // width-scaled paper fractions and needed slack for the drift.
+      margin: { l: 175, r: 120, t: 170, b: 46 },
       hovermode: "closest",
       // Constant uirevision: preserve the clinician's zoom/pan/legend state across re-renders driven
       // by the match-window slider, strategy, or the color-mode toggle (Plotly resets the view on
@@ -659,7 +664,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       showlegend: true,
       // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes,
       // up by the title) so it never overlaps the PSD ticks or any lane content.
-      legend: { orientation: "v", x: 0.30, xanchor: "left", y: 1.13, yanchor: "top",
+      legend: { orientation: "v", x: 0.02, xanchor: "left", y: 1.13, yanchor: "top",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
