@@ -399,7 +399,7 @@ const routes = {
       },
       {
         key: "biomarkers",
-        name: "Pain Biomarkers",
+        name: "Biomarker Exploration",
         icon: <TimelineIcon />,
         route: "/reports/biomarkers/:participant_uid",
         component: <Biomarkers />,

@@ -342,6 +342,40 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     return rows
 
 
+def _psd_sample_index(td_list, psd_list):
+    """Lightweight index of the scan's pooled-PSD samples: one entry per (recording, channel) the
+    full-spectrum scan would include, WITHOUT the expensive Welch transform.
+
+    Uses the IDENTICAL channel filter as `_assemble_psd_rows` (membership in `_MAIN_BIPOLAR`, same
+    source labels), so the set of (t, channel, source) entries here equals the rows that feed the
+    pooled PSD matrix — modulo the rare degenerate spectrum Welch drops (<4 finite bins), which
+    effectively never occurs on real recordings. This lets the frontend replicate the backend's
+    nearest-PRO match + binarization LIVE as the match-window slider moves, so the binarization
+    histogram and the timeline coloring stay faithful to `matched_sample_counts` without a recompute.
+
+    Returns a list of {"t": epoch_s, "channel": "<CANON>_<HEMI>", "source": str}.
+    """
+    out = []
+
+    def _index(recs, source_label):
+        for r in recs or []:
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames") or [])
+            keep = [n for n in names if str(n).upper() in _MAIN_BIPOLAR]
+            if not keep:
+                continue
+            t0 = availability._to_epoch(r.get("StartTime"))
+            if t0 is None:
+                continue
+            for n in keep:
+                out.append({"t": float(t0), "channel": str(n).upper(), "source": source_label})
+
+    _index(td_list, "TD streaming")
+    _index(psd_list, "Montage/survey")
+    return out
+
+
 def _psd_cache_dir():
     try:
         from django.conf import settings
@@ -1153,15 +1187,20 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             samples[ch] = availability.inspector_samples(
                 ch, td_recs=td_all, psd_recs=psd_all,
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
+        # Scan-sample index: the (t, channel, source) of every full-spectrum PSD the exploratory
+        # scan pools (same `_MAIN_BIPOLAR` filter as `_assemble_psd_rows`), so the frontend can
+        # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
+        psd_scan_index = _psd_sample_index(td_all, psd_all)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
-                "events": events, "montage_events": montage_events}
+                "events": events, "montage_events": montage_events,
+                "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
                 "events": {"events": [], "n": 0},
-                "montage_events": {"events": [], "n": 0}}
+                "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
 
 def availability_for_participant(request_data):

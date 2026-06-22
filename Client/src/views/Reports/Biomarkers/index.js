@@ -20,6 +20,7 @@ import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+import { computeMatchedScanModel } from "./binarizationModel";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -68,6 +69,11 @@ function Biomarkers() {
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
   // view dirty (a recompute re-matches). Exploratory — default 15 min.
   const [matchTolerance, setMatchTolerance] = useState(15);
+  // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
+  // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
+  // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
+  // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
+  const [timelineColorMode, setTimelineColorMode] = useState("multimodal");
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
@@ -220,6 +226,22 @@ function Biomarkers() {
     return { metric, t: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
   }, [previewPoints, metric]);
 
+  // LIVE matched-scan model: replicate the backend's nearest-PRO match + binarization over the
+  // PSDs the exploratory scan pools (availability.psd_scan_index), at the CURRENT match window /
+  // metric / strategy — no recompute. This single object feeds BOTH the binarization-preview
+  // histogram (which neural data is available to binarize, updating as the slider moves) AND the
+  // timeline's binarization color overlay. Counts are verified identical to the backend
+  // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
+  const scanIndex = (timelineData && timelineData.availability && timelineData.availability.psd_scan_index)
+    || (data && data.availability && data.availability.psd_scan_index) || null;
+  const scanModel = useMemo(() => {
+    if (!scanIndex || !painSeriesLive) return null;
+    return computeMatchedScanModel({
+      scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance,
+      strategy, percentileLow, percentileHigh,
+    });
+  }, [scanIndex, painSeriesLive, matchTolerance, strategy, percentileLow, percentileHigh]);
+
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
@@ -316,7 +338,7 @@ function Biomarkers() {
                   <Grid item xs={12}>
                     <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
                       <MDTypography variant="h5" fontSize={28} fontWeight="bold">
-                        {"Pain Biomarkers"}
+                        {"Pain Biomarker Exploration"}
                       </MDTypography>
                     </MDBox>
                   </Grid>
@@ -331,7 +353,9 @@ function Biomarkers() {
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
                     <Grid item xs={12}>
-                      <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive} />
+                      <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
+                        scanModel={scanModel} colorMode={timelineColorMode}
+                        setColorMode={setTimelineColorMode} />
                     </Grid>
                   ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
                     <Grid item xs={12}>
@@ -355,7 +379,7 @@ function Biomarkers() {
                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
                              gap={2} flexWrap="wrap" justifyContent="center">
                         <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 30 }}>
-                          {"Pain metric (drives the pain plot above):"}
+                          {"Pain metric (drives exploratory analysis):"}
                         </MDTypography>
                         <FormControl size="small" sx={{ minWidth: 420 }}>
                           <Select value={metric} onChange={(e) => setMetric(e.target.value)}
@@ -456,8 +480,8 @@ function Biomarkers() {
                                 loading={painLoading}
                                 matchTolerance={matchTolerance}
                                 setMatchTolerance={setMatchTolerance}
-                                matchedCounts={(data && data.analytics && data.analytics.timedomain
-                                  && data.analytics.timedomain.matched_sample_counts) || null}
+                                scanModel={scanModel}
+                                matchedLoading={availLoading}
                                 matchDirty={dirty}
                               />
                             </MDBox>

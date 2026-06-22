@@ -20,8 +20,20 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import Plotly from "plotly.js-dist";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 
 import MDBox from "components/MDBox";
+
+// Binarization color identity — MUST match the histogram / binarizationModel (Okabe-Ito).
+// excluded-middle is darkened to #5A6066 (was #7E8794) so "matched but dropped by the cut" is
+// categorically distinct from "never matched" and readable on white (design + eng review).
+const BIN_COLORS = { high: "#D55E00", low: "#0072B2", excluded: "#5A6066" };
+// "Not included in the binarized set" (unmatched, or a modality the scan doesn't pool): a dimmed but
+// clearly-present grey (~2:1 on white) so existing-but-unselected data never reads as ABSENT. The
+// previous #D7DBDF was ~1.39:1 — effectively invisible, making real data look like missing data.
+const DIM_GREY = "#AEB4BB";
+const DIM_GREY_FAINT = "rgba(150,157,165,0.42)";
 
 // ---- platform palette (ported from BiomarkerTimeline.js) --------------------------------------
 const FREQ_BIN_HZ = 250 / 256;
@@ -147,9 +159,19 @@ function painAxis(metric, yvals) {
   return [lo, hi, [lo, Math.round((lo + hi) / 2), hi]];
 }
 
-export default function BiomarkerDataTimeline({ data, height, painOverride }) {
+export default function BiomarkerDataTimeline({ data, height, painOverride,
+                                               scanModel, colorMode, setColorMode }) {
   const ref = useRef(null);
   const av = data && data.availability ? data.availability : null;
+  // Binarization color mode is active only when the parent both selects it AND a live scan model
+  // (matched PSDs at the current window) exists. `binOf(ch, t)` returns "high"|"low"|"excluded"|
+  // "unmatched" for a mark at (canonical channel, epoch seconds) — the lookup the scan model built.
+  const binMode = colorMode === "binarization" && !!(scanModel && scanModel.binByKey);
+  const binOf = (ch, tSec) => {
+    if (!binMode || tSec == null) return null;
+    return scanModel.binByKey.get(`${String(ch).toUpperCase()}|${Math.round(tSec)}`) || "unmatched";
+  };
+  const hasToggle = typeof setColorMode === "function";
   // Unique channels present, ordered L-then-R by contact pair. Only the main bipolar SENSING pairs
   // (0-3, 1-3, 0-2 per hemisphere) are shown: ring/segment montage contacts are not used for
   // biomarker discovery and are dropped entirely (no expert view). RING variants of a standard pair
@@ -282,12 +304,21 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       const yb = laneBase[ch], lh = LH(ch), hemi = hemiOf(ch);
       const tdc = HEMI2[hemi].td;
 
-      // (a) TD coverage = desaturated hemisphere color blocks
+      // (a) TD coverage blocks. TD streaming IS pooled into the scan, so in BINARIZATION mode each
+      // block is recolored by its matched pain bin (high=vermillion / low=blue / excluded=grey),
+      // and any block not matched-and-included dims to very light grey. In MULTIMODAL mode it keeps
+      // the desaturated hemisphere tint.
       recordsFor(ch, "timedomain").forEach((r) => {
         const ts = tEpoch(r.t_start);
         const te = ts + Math.max(r.dur_s || 0, 86400 * 1.6);
+        let fc = tdc, op = 0.85;
+        if (binMode) {
+          const b = binOf(ch, ts);
+          if (b === "high" || b === "low" || b === "excluded") { fc = BIN_COLORS[b]; op = 0.92; }
+          else { fc = DIM_GREY; op = 0.45; }
+        }
         shapes.push({ type: "rect", xref: X, yref: Y, x0: D(ts), x1: D(te),
-          y0: yb + 0.04 * lh, y1: yb + 0.26 * lh, fillcolor: tdc, opacity: 0.85,
+          y0: yb + 0.04 * lh, y1: yb + 0.26 * lh, fillcolor: fc, opacity: op,
           line: { width: 0 }, layer: "above" });
       });
 
@@ -320,7 +351,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
             const end = Math.min(k + 1, ct.length);
             const c = snapAt(seg);
             if (c != null) present.add(c);
-            const fc = c == null ? "rgba(90,90,90,0.55)" : freqColor(c);
+            // Band-power LSB is NOT in the pooled-PSD scan, so in binarization mode it is "not part
+            // of the selected set" → dim. In multimodal mode it is colored by sensing center freq.
+            const fc = binMode ? DIM_GREY_FAINT : (c == null ? "rgba(90,90,90,0.55)" : freqColor(c));
             const xs = ct.slice(seg, end), ys = cy.slice(seg, end);
             traces.push({ type: "scattergl", mode: "lines",
               x: xs.map(D), y: ys.map(sc),
@@ -344,7 +377,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
           Object.keys(byFreq).forEach((key) => {
             const ss = byFreq[key];
             const c = key === "na" ? null : Number(key);
-            const fc = freqColor(c);
+            // Streaming LSB sessions are band-power, not pooled PSDs → dim in binarization mode.
+            const fc = binMode ? DIM_GREY_FAINT : freqColor(c);
             const bx = [], by = [], wx = [], wy = [], cd = [];
             ss.forEach((s) => {
               const x0 = D(s.t0), x1 = D(Math.max(s.t1, s.t0 + 86400 * 1.2)); // min visible width
@@ -401,13 +435,30 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
           font: { size: 9.5, color: "#9AA0A6" } });
       }
 
-      // (c) PSD ticks — demoted to mid-gray, short
-      const psd = recordsFor(ch, "psd");
-      if (psd.length) traces.push({ type: "scattergl", mode: "markers",
-        x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
-        marker: { symbol: "line-ns-open", size: 7, color: "#9AA0A6", line: { width: 1.2 } },
-        customdata: psd.map((r) => r.product),
-        hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
+      // (c) PSD ticks (montage/survey) — these ARE pooled into the binarization scan. In
+      // binarization mode each tick is colored by its matched pain bin (and a bit larger/taller so
+      // the selected spectra read clearly); in-scan-but-unmatched ticks dim. Ticks that are NOT in
+      // the scan at all (not poolable) are hidden in binarization mode — they can never be colored,
+      // so showing ~1200 permanently-grey ticks is clutter with no decoding value. In multimodal
+      // mode all ticks show as the neutral mid-gray "spectrum captured here" marks.
+      const inScan = (r) => binMode && scanModel.binByKey.has(`${String(ch).toUpperCase()}|${Math.round(tEpoch(r.t_start))}`);
+      const psdAll = recordsFor(ch, "psd");
+      const psd = binMode ? psdAll.filter(inScan) : psdAll;
+      if (psd.length) {
+        const tickColor = (r) => {
+          if (!binMode) return "#9AA0A6";
+          const b = binOf(ch, tEpoch(r.t_start));
+          return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY;
+        };
+        const colors = psd.map(tickColor);
+        const sizes = colors.map((c) => (binMode && c !== DIM_GREY ? 11 : 7));
+        traces.push({ type: "scattergl", mode: "markers",
+          x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
+          marker: { symbol: "line-ns-open", size: sizes,
+                    color: colors, line: { width: binMode ? 2.0 : 1.2 } },
+          customdata: psd.map((r) => r.product),
+          hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
+      }
 
       // (d) lane label — bold for committed, lighter for exploratory
       annotations.push({ xref: "paper", yref: Y, x: -0.05, y: yb + 0.5 * lh,
@@ -478,10 +529,28 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       y0: painTop + 0.16, y1: painTop + 0.16, line: { color: "#e0e0e0", width: 1 } });
     if (pain.t && pain.t.length) {
       const py = pain.y.map((v) => yScale(v, pLo, pHi, painBase, painTop));
+      // In binarization mode, color each PRO marker by which side of the LIVE cut(s) it falls on
+      // (high=vermillion / low=blue / excluded-middle=grey), so the threshold the matched PSDs are
+      // binarized at is visible directly on the pain row. The connecting line stays a faint neutral.
+      const cuts = binMode ? scanModel.cuts : null;
+      const classifyPain = (v) => {
+        if (!cuts || cuts.kind === "none") return PAL.pain;
+        if (cuts.kind === "two-cut") return v <= cuts.lowCut ? BIN_COLORS.low
+          : (v >= cuts.highCut ? BIN_COLORS.high : BIN_COLORS.excluded);
+        return v <= cuts.cut ? BIN_COLORS.low : BIN_COLORS.high;
+      };
+      // Multimodal pain color: a neutral dark slate (#3A4A63), NOT PAL.pain #C44E00 — the latter is
+      // within ~1.2:1 of the high-pain vermillion #D55E00, so a clinician glancing at the multimodal
+      // pain row would read every point as "high pain" before any binarization. Reserving vermillion
+      // for the HIGH semantic that only exists in binarization mode removes that cross-toggle clash.
+      const PAIN_NEUTRAL = "#3A4A63";
+      const lineColor = binMode ? "rgba(120,120,120,0.35)" : PAIN_NEUTRAL;
+      const markColors = binMode ? pain.y.map(classifyPain) : PAIN_NEUTRAL;
       traces.push({ type: "scattergl", mode: "lines", x: pain.t.map(D), y: py,
-        line: { color: PAL.pain, width: 2.4 }, opacity: 0.45, hoverinfo: "skip", showlegend: false });
+        line: { color: lineColor, width: 2.4 }, opacity: binMode ? 0.5 : 0.45,
+        hoverinfo: "skip", showlegend: false });
       traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
-        marker: { size: 5, color: PAL.pain }, opacity: 0.6,
+        marker: { size: binMode ? 6 : 5, color: markColors }, opacity: binMode ? 0.92 : 0.6,
         hovertemplate: `${pain.metric || "pain"} %{customdata}<br>%{x}<extra></extra>`,
         customdata: pain.y, showlegend: false });
     } else {
@@ -521,24 +590,44 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       text: "<span style='font-size:14px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
 
     // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
-    traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-      marker: { symbol: "square", size: 12, color: "#C9BBDF" },
-      name: "raw TD coverage  (zoom → waveform)" });
-    traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-      line: { color: "#009E73", width: 2 },
-      name: "chronic LSB · 24/7 trend · color = sensing Hz" });
-    traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-      line: { color: "#009E73", width: 6 },
-      name: "streaming LSB session · color = sensing Hz (hover → detail)" });
-    traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-      marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-      name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
+    if (binMode) {
+      // Binarization view: the key explains the pain-bin colors, not the sensing-frequency colors.
+      // Live counts are appended so a category that is empty (e.g. excluded-middle = 0 on integer
+      // NRS) is explained, not hunted for; distinct marker SYMBOLS add a non-color channel.
+      const bc = (scanModel && scanModel.counts) || {};
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "square", size: 12, color: BIN_COLORS.high },
+        name: `HIGH pain  (≥ high cut)${bc.n_high != null ? `  ·  ${bc.n_high}` : ""}` });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "square", size: 12, color: BIN_COLORS.low },
+        name: `LOW pain  (≤ low cut)${bc.n_low != null ? `  ·  ${bc.n_low}` : ""}` });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "diamond", size: 11, color: BIN_COLORS.excluded },
+        name: `excluded middle  (dropped from training)${bc.n_excluded_middle != null ? `  ·  ${bc.n_excluded_middle}` : ""}` });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
+        name: "not in binarized set  (no PRO in window / band-power)" });
+    } else {
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "square", size: 12, color: "#C9BBDF" },
+        name: "raw TD coverage  (zoom → waveform)" });
+      traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
+        line: { color: "#009E73", width: 2 },
+        name: "chronic LSB · 24/7 trend · color = sensing Hz" });
+      traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
+        line: { color: "#009E73", width: 6 },
+        name: "streaming LSB session · color = sensing Hz (hover → detail)" });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
+        name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
+    }
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
 
-    // ---- right-side frequency legend: only realized centers ----------------------------------
-    const pcs = [...present].filter((c) => c != null).sort((a, b) => a - b);
-    annotations.push({ xref: "paper", yref: "paper", x: 1.015, y: 0.90,
+    // ---- right-side frequency legend: only realized centers (multimodal mode only — in
+    // binarization mode the lanes are not frequency-colored, so the freq legend would mislead) ----
+    const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
+    if (pcs.length) annotations.push({ xref: "paper", yref: "paper", x: 1.015, y: 0.90,
       text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "left",
       font: { size: 11, color: "#333" } });
     pcs.forEach((cen, i) => {
@@ -559,6 +648,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       height: height || Math.max(560, 150 * channels.length + 320),
       margin: { l: 330, r: 120, t: 170, b: 46 },
       hovermode: "closest",
+      // Constant uirevision: preserve the clinician's zoom/pan/legend state across re-renders driven
+      // by the match-window slider, strategy, or the color-mode toggle (Plotly resets the view on
+      // react() otherwise). Keyed by metric so a metric change — a genuinely different x/y domain —
+      // intentionally resets the view; everything else keeps it.
+      uirevision: (pain && pain.metric) ? `tl-${pain.metric}` : "tl",
       plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
@@ -589,7 +683,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     // back to the top on each metric/binarization change. Purge happens once on unmount (below).
     Plotly.react(gd, traces, layout, { responsive: true, displayModeBar: true,
       modeBarButtonsToRemove: ["lasso2d", "select2d"] });
-  }, [av, channels, height, painOverride, data]);
+  }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
 
   // Free the WebGL context only when the component actually unmounts (NOT between redraws).
   useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
@@ -603,6 +697,33 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   }
   return (
     <MDBox p={1}>
+      {hasToggle ? (
+        <MDBox display="flex" flexDirection="row" justifyContent="flex-end" alignItems="center"
+               gap={1.25} sx={{ px: 1, pb: 0.5 }}>
+          {/* Mode caption swaps with the toggle so the metaphor is explicit without reading the
+              footer — "what does this color mean right now" is answered in place. */}
+          <span style={{ fontSize: 12, color: "#777", fontStyle: "italic", textAlign: "right" }}>
+            {colorMode === "binarization"
+              ? "Matched samples colored by pain label; everything else dimmed"
+              : "Neural lanes colored by sensing frequency"}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#555", whiteSpace: "nowrap" }}>{"Color by"}</span>
+          <ToggleButtonGroup
+            value={colorMode || "multimodal"} exclusive size="small"
+            onChange={(e, v) => { if (v) setColorMode(v); }}
+            sx={{
+              "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12.5, fontWeight: 600,
+                px: 1.5, py: 0.4, color: "#555", borderColor: "#C7CCD1" },
+              "& .Mui-selected": { color: "#fff !important", backgroundColor: "#344767 !important" },
+            }}
+          >
+            <ToggleButton value="multimodal">{"Multimodal data"}</ToggleButton>
+            <ToggleButton value="binarization" disabled={!(scanModel && scanModel.binByKey)}>
+              {"Binarization"}
+            </ToggleButton>
+          </ToggleButtonGroup>
+        </MDBox>
+      ) : null}
       <div ref={ref} style={{ width: "100%" }} />
     </MDBox>
   );
