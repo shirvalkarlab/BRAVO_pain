@@ -266,10 +266,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       shapes.push({ type: "rect", xref: "paper", yref: Y, x0: 0, x1: 1, y0: bot, y1: top,
         fillcolor: HEMI2[hemi].band, line: { width: 0 }, layer: "below" });
       // Hemisphere/region label pinned to the far LEFT BORDER (rotated 90°), clear of the
-      // right-anchored per-contact names (at x ≈ -0.018) which it used to overlap.
-      annotations.push({ xref: "paper", yref: Y, x: -0.135, y: (top + bot) / 2,
+      // right-anchored per-contact names (now larger, anchored at x ≈ -0.05) and the row labels.
+      annotations.push({ xref: "paper", yref: Y, x: -0.37, y: (top + bot) / 2,
         text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
-        font: { size: 14, color: HEMI2[hemi].col }, align: "center" });
+        font: { size: 20, color: HEMI2[hemi].col }, align: "center" });
     });
     // faint lane separators
     channels.forEach((ch) => shapes.push({ type: "line", xref: "paper", yref: Y,
@@ -389,11 +389,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
         // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
         if (committed.has(ch)) {
           annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_HI, text: `${Math.round(hi)}`,
-            showarrow: false, xanchor: "right", font: { size: 8, color: "#aaa" } });
+            showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
           annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_LO, text: `${Math.round(lo)}`,
-            showarrow: false, xanchor: "right", font: { size: 8, color: "#aaa" } });
+            showarrow: false, xanchor: "right", font: { size: 14, color: "#aaa" } });
           annotations.push({ xref: "paper", yref: Y, x: -0.004, y: (BP_LO + BP_HI) / 2,
-            text: "<span style='font-size:7.5px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
+            text: "<span style='font-size:13px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
         }
       } else {
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
@@ -410,10 +410,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
         hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
 
       // (d) lane label — bold for committed, lighter for exploratory
-      annotations.push({ xref: "paper", yref: Y, x: -0.018, y: yb + 0.5 * lh,
+      annotations.push({ xref: "paper", yref: Y, x: -0.05, y: yb + 0.5 * lh,
         text: committed.has(ch) ? `<b>${prettyContact(labelFor(ch))}</b>` : prettyContact(labelFor(ch)),
         showarrow: false, xanchor: "right",
-        font: { size: 15, color: committed.has(ch) ? PAL.ink : "#888" } });
+        font: { size: 30, color: committed.has(ch) ? PAL.ink : "#888" } });
     });
 
     // ---- EVENT row: PATIENT-ANNOTATED events (labeled button presses) ------------------------
@@ -449,9 +449,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: eventY,
         text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: eventY,
-      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:8px;color:#999">${evList.length} presses</span>` : ""}`,
-      showarrow: false, xanchor: "right", font: { size: 12, color: "#555" } });
+    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: eventY,
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} presses</span>` : ""}`,
+      showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
     // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
     // montage/survey PSD recording (de-duplicated server-side). Rendered as small grey ticks along
@@ -488,12 +488,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
         text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: (painBase + painTop) / 2,
-      text: `<b>PAIN</b><br><span style="font-size:8px;color:#999">${pain.metric || ""}</span>`,
-      showarrow: false, xanchor: "right", font: { size: 13, color: PAL.pain } });
+    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: (painBase + painTop) / 2,
+      text: `<b>PAIN</b><br><span style="font-size:14px;color:#999">${pain.metric || ""}</span>`,
+      showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
     pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
       y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
-      xanchor: "right", font: { size: 9.5, color: "#888" } }));
+      xanchor: "right", font: { size: 19, color: "#888" } }));
 
     // ---- thin separator between pain and stim, then stim step with y-axis --------------------
     shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
@@ -511,14 +511,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
         text: "no stim data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
     }
-    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: (stimBase + stimTop) / 2,
+    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: (stimBase + stimTop) / 2,
       text: "<b>STIM</b>", showarrow: false, xanchor: "right",
-      font: { size: 13, color: PAL.stim } });
+      font: { size: 26, color: PAL.stim } });
     [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
       y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
-      xanchor: "right", font: { size: 9.5, color: "#888" } }));
-    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: stimBase - 0.30,
-      text: "<span style='font-size:9px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
+      xanchor: "right", font: { size: 19, color: "#888" } }));
+    annotations.push({ xref: "paper", yref: Y, x: -0.055, y: stimBase - 0.30,
+      text: "<span style='font-size:14px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
 
     // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
     traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
@@ -557,7 +557,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
 
     const layout = {
       height: height || Math.max(560, 150 * channels.length + 320),
-      margin: { l: 170, r: 120, t: 170, b: 46 },
+      margin: { l: 330, r: 120, t: 170, b: 46 },
       hovermode: "closest",
       plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
@@ -577,7 +577,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       // stim. Darker than the old faint shapes per the request.
       xaxis: { range: [D(t0), D(t1)], type: "date", autorange: false,
                showgrid: true, gridcolor: "rgba(0,0,0,0.18)", gridwidth: 1,
-               tickfont: { size: 11.5 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc",
+               tickfont: { size: 17 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc",
                showspikes: true, spikemode: "across", spikethickness: 1,
                spikecolor: "rgba(0,0,0,0.35)", spikedash: "solid" },
       yaxis: { visible: false, range: [stimBase - 0.5, FULL_TOP], fixedrange: true },

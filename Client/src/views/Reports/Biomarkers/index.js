@@ -348,15 +348,15 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
                              gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
+                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 30 }}>
                           {"Pain metric (drives the pain plot above):"}
                         </MDTypography>
-                        <FormControl size="small" sx={{ minWidth: 260 }}>
+                        <FormControl size="small" sx={{ minWidth: 420 }}>
                           <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{ fontSize: 15, fontWeight: 500 }}>
+                                  sx={{ fontSize: 30, fontWeight: 500 }}>
                             {((timelineData && timelineData.available_metrics)
                                || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 15 }}>{m.label}</MenuItem>
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 30 }}>{m.label}</MenuItem>
                             ))}
                           </Select>
                         </FormControl>
