@@ -394,6 +394,78 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None):
     return out
 
 
+def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
+    """Compact the per-sample LSB series into RENDER-CHEAP geometry for the calendar-scale timeline.
+
+    Drawing every 2 Hz streaming sample as its own point makes the page sluggish (tens of thousands
+    of WebGL points + per-point hover tests). At year scale a 2 Hz session is an unresolvable spike
+    anyway, so this collapses each series into two light-weight layers that carry the SAME
+    information:
+
+      * chronic  -> a single decimated LINE of the real ~10-min trend (continuous around-the-clock
+                    band power; chronic carries no per-sample sensing freq, so it renders grey).
+      * streaming-> one BLOCK per session (contiguous run of samples with <= session_gap_s spacing),
+                    summarizing that on-demand recording: start/end time, median LSB, 10-90 pct band,
+                    sample count, and the session's sensing center frequency (for the categorical
+                    color). ~one block per recording instead of hundreds of points.
+
+    Returns {channel: {"chronic": {"t":[],"y":[]} | None,
+                       "sessions": [{"t0","t1","med","lo","hi","center_hz","n"}],
+                       "y_lo","y_hi"}}  where y_lo/y_hi are the robust (2-98 pct) magnitude window
+    across BOTH layers, so the frontend scales the lane once and consistently.
+    """
+    out = {}
+    for ch, d in (lsb or {}).items():
+        t = np.asarray(d.get("t", []), dtype=float)
+        y = np.asarray(d.get("y", []), dtype=float)
+        cen = list(d.get("center_hz", []))
+        src = list(d.get("source", []))
+        if t.size == 0:
+            continue
+        # robust magnitude window across all real samples in this lane
+        finite = y[np.isfinite(y)]
+        y_lo = float(np.percentile(finite, 2)) if finite.size else 0.0
+        y_hi = float(np.percentile(finite, 98)) if finite.size else 1.0
+
+        chronic_mask = np.array([s == "chronic" for s in src], dtype=bool)
+        # --- chronic: decimated real line ---
+        chronic = None
+        if chronic_mask.any():
+            ct, cy = t[chronic_mask], y[chronic_mask]
+            ct_d = _decimate(ct, chronic_max_points)
+            cy_d = _decimate(cy, chronic_max_points)
+            chronic = {"t": [float(v) for v in ct_d], "y": [float(v) for v in cy_d]}
+
+        # --- streaming: one block per session (split on time gaps) ---
+        sessions = []
+        s_idx = np.where(~chronic_mask)[0]
+        if s_idx.size:
+            st, sy = t[s_idx], y[s_idx]
+            scen = [snap_freq(cen[i]) for i in s_idx]
+            # contiguous runs: a new session starts when the time gap exceeds session_gap_s OR the
+            # sensing center frequency changes (a re-config is a distinct recording session).
+            start = 0
+            for k in range(1, len(st) + 1):
+                brk = (k == len(st))
+                if not brk:
+                    gap = st[k] - st[k - 1] > session_gap_s
+                    freq_change = scen[k] != scen[start]
+                    brk = gap or freq_change
+                if brk:
+                    seg_y = sy[start:k]
+                    seg_y = seg_y[np.isfinite(seg_y)]
+                    if seg_y.size:
+                        sessions.append({
+                            "t0": float(st[start]), "t1": float(st[k - 1]),
+                            "med": float(np.median(seg_y)),
+                            "lo": float(np.percentile(seg_y, 10)),
+                            "hi": float(np.percentile(seg_y, 90)),
+                            "center_hz": scen[start], "n": int(seg_y.size)})
+                    start = k
+        out[ch] = {"chronic": chronic, "sessions": sessions, "y_lo": y_lo, "y_hi": y_hi}
+    return out
+
+
 def present_freq_bands(records):
     """Distinct snapped sensing center frequencies that actually appear on bandpower channels.
     Drives the categorical legend so it matches the lanes that render a trend (not all channels)."""

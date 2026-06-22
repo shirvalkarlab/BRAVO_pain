@@ -155,25 +155,36 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       return r ? (r.label || ch) : ch;
     };
     const hemiOf = (ch) => (ch.toUpperCase().indexOf("LEFT") >= 0 ? "LEFT" : "RIGHT");
-    // REAL LSB series for a lane: av.lsb is keyed by RAW channel; collapse to this normalized pair
-    // and merge any raw keys that map to it (e.g. streaming "ZERO_THREE_LEFT" + chronic mapped to
-    // the same contact). Returns {t:[epoch_s], y:[lsb], cen:[hz], source:[]} time-sorted, or null.
+    // COMPACT LSB overview for a lane: av.lsb_overview is keyed by RAW channel; collapse to this
+    // normalized pair and merge any raw keys that map to it. The overview is render-cheap geometry
+    // (a decimated chronic LINE + one BLOCK per streaming session) so the page stays responsive
+    // while zooming — vs tens of thousands of 2 Hz points. Returns:
+    //   { chronic:{t:[],y:[]}|null, sessions:[{t0,t1,med,lo,hi,center_hz,n}], y_lo, y_hi } | null
     const lsbFor = (ch) => {
-      const lsb = av.lsb || {};
-      const keys = Object.keys(lsb).filter((k) => normalizeChannel(k) === ch);
+      const ov = av.lsb_overview || {};
+      const keys = Object.keys(ov).filter((k) => normalizeChannel(k) === ch);
       if (!keys.length) return null;
-      const m = { t: [], y: [], cen: [], source: [] };
+      const chronicT = [], chronicY = [], sessions = [];
+      let yLo = Infinity, yHi = -Infinity;
       keys.forEach((k) => {
-        const s = lsb[k] || {};
-        (s.t || []).forEach((tt, i) => {
-          m.t.push(tt); m.y.push((s.y || [])[i]);
-          m.cen.push((s.center_hz || [])[i]); m.source.push((s.source || [])[i]);
-        });
+        const d = ov[k] || {};
+        if (d.chronic && d.chronic.t && d.chronic.t.length) {
+          (d.chronic.t).forEach((tt, i) => { chronicT.push(tt); chronicY.push(d.chronic.y[i]); });
+        }
+        (d.sessions || []).forEach((s) => sessions.push(s));
+        if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
+        if (Number.isFinite(d.y_hi)) yHi = Math.max(yHi, d.y_hi);
       });
-      if (!m.t.length) return null;
-      const order = m.t.map((tt, i) => i).sort((a, b) => m.t[a] - m.t[b]);
-      return { t: order.map((i) => m.t[i]), y: order.map((i) => m.y[i]),
-               cen: order.map((i) => m.cen[i]), source: order.map((i) => m.source[i]) };
+      if (!chronicT.length && !sessions.length) return null;
+      // time-sort chronic samples (merged keys may interleave)
+      let chronic = null;
+      if (chronicT.length) {
+        const ord = chronicT.map((_, i) => i).sort((a, b) => chronicT[a] - chronicT[b]);
+        chronic = { t: ord.map((i) => chronicT[i]), y: ord.map((i) => chronicY[i]) };
+      }
+      sessions.sort((a, b) => a.t0 - b.t0);
+      return { chronic, sessions,
+               y_lo: Number.isFinite(yLo) ? yLo : 0, y_hi: Number.isFinite(yHi) ? yHi : 1 };
     };
     // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
     // exploratory lanes (early channel-switching) get a thinner lane and lighter label.
@@ -245,49 +256,83 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
           line: { width: 0 }, layer: "above" });
       });
 
-      // (b) band-power: the REAL LSB values vs time (av.lsb[channel] = the actual per-sample band
-      // power from streaming ~2 Hz + chronic ~10-min, each sample tagged with its sensing center
-      // frequency). The samples are drawn at their TRUE magnitude, scaled into the lane band by a
-      // robust 2-98 pct window, colored by center frequency (so a sensing-frequency switch shows as
-      // a color change), with the real LSB range printed on a mini y-axis. Zoom reveals the values.
-      const series = lsbFor(ch);
+      // (b) band-power: the REAL LSB, drawn as RENDER-CHEAP geometry (av.lsb_overview) so the page
+      // stays fast while zooming. Two layers carry the same information as the raw 2 Hz cloud:
+      //   - chronic  -> ONE grey line of the real ~10-min around-the-clock trend
+      //   - streaming-> ONE thick colored BLOCK per recording session, at that session's median LSB
+      //                 (color = sensing center freq; hover shows median/range/n/freq). Sessions are
+      //                 grouped into one trace PER frequency, so a lane is ~13 traces, not 50k points.
+      // Both layers share the lane's robust magnitude window so the mini LSB axis is consistent.
+      const ov = lsbFor(ch);
       const BP_LO = yb + 0.34 * lh, BP_HI = yb + 0.76 * lh;
-      if (series && series.t && series.t.length) {
-        series.cen.forEach((c) => { const s = snapFreq(c); if (s != null) present.add(s); });
-        const yvals = series.y;
-        // robust scale window (ignore extreme spikes so the trend fills the lane)
-        const sorted = yvals.slice().sort((a, b) => a - b);
-        const q = (p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
-        const lo = q(0.02), hi = q(0.98);
-        const sy = yvals.map((v) => BP_LO + (BP_HI - BP_LO)
-          * Math.min(Math.max((v - lo) / (hi - lo + 1e-9), 0), 1));
-        const xs = series.t.map(D);
-        const cols = series.cen.map((c) => freqColor(c));
-        // continuous line in a neutral ink (so the trend is readable) UNDER the freq-colored points
-        traces.push({ type: "scattergl", mode: "lines", x: xs, y: sy,
-          line: { color: "rgba(60,60,60,0.35)", width: 1 }, hoverinfo: "skip", showlegend: false });
-        // the REAL samples, colored by sensing center frequency, carrying the true LSB in hover
-        traces.push({ type: "scattergl", mode: "markers", x: xs, y: sy,
-          marker: { size: committed.has(ch) ? 3.5 : 5, color: cols },
-          customdata: yvals.map((v, i) => [Math.round(v), fmtHz(series.cen[i]), series.source[i]]),
-          hovertemplate: `${prettyContact(labelFor(ch))}<br>%{customdata[0]} LSB · %{customdata[1]} Hz · %{customdata[2]}<br>%{x}<extra></extra>`,
-          showlegend: false });
-        // Hz labels at each sensing-frequency transition (committed lanes), spaced to avoid overlap
-        if (committed.has(ch)) {
+      if (ov) {
+        const lo = ov.y_lo, hi = ov.y_hi;
+        const sc = (v) => BP_LO + (BP_HI - BP_LO) * Math.min(Math.max((v - lo) / (hi - lo + 1e-9), 0), 1);
+        // chronic real line (grey) — one decimated polyline
+        if (ov.chronic && ov.chronic.t.length) {
+          traces.push({ type: "scattergl", mode: "lines",
+            x: ov.chronic.t.map(D), y: ov.chronic.y.map(sc),
+            line: { color: "rgba(90,90,90,0.55)", width: 1.2 },
+            customdata: ov.chronic.y.map((v) => Math.round(v)),
+            hovertemplate: `${prettyContact(labelFor(ch))} · chronic<br>%{customdata} LSB<br>%{x}<extra></extra>`,
+            showlegend: false });
+        }
+        // streaming sessions: one BLOCK (median bar + 10-90 whisker) per recording, batched by freq
+        if (ov.sessions.length) {
+          const byFreq = {};
+          ov.sessions.forEach((s) => {
+            const c = snapFreq(s.center_hz);
+            if (c != null) present.add(c);
+            const key = c == null ? "na" : String(c);
+            (byFreq[key] = byFreq[key] || []).push(s);
+          });
+          Object.keys(byFreq).forEach((key) => {
+            const ss = byFreq[key];
+            const c = key === "na" ? null : Number(key);
+            const fc = freqColor(c);
+            const bx = [], by = [], wx = [], wy = [], cd = [];
+            ss.forEach((s) => {
+              const x0 = D(s.t0), x1 = D(Math.max(s.t1, s.t0 + 86400 * 1.2)); // min visible width
+              const ym = sc(s.med);
+              // thick median bar as a 2-point horizontal segment (cheap vs filled rect per session)
+              bx.push(x0, x1, null); by.push(ym, ym, null);
+              // 10-90 whisker at session midpoint
+              const xm = D((s.t0 + s.t1) / 2);
+              wx.push(xm, xm, null); wy.push(sc(s.lo), sc(s.hi), null);
+              cd.push([Math.round(s.med), Math.round(s.lo), Math.round(s.hi), fmtHz(c), s.n]);
+            });
+            // whiskers (thin, same color, no hover)
+            traces.push({ type: "scattergl", mode: "lines", x: wx, y: wy,
+              line: { color: fc, width: 1 }, opacity: 0.5, hoverinfo: "skip", showlegend: false });
+            // median bars (thick) — hover carries the session summary
+            traces.push({ type: "scattergl", mode: "lines", x: bx, y: by,
+              line: { color: fc, width: committed.has(ch) ? 5 : 6 },
+              hoverinfo: "skip", showlegend: false });
+            // invisible hover anchors at each session median (one marker per session, tiny count)
+            traces.push({ type: "scattergl", mode: "markers",
+              x: ss.map((s) => D((s.t0 + s.t1) / 2)), y: ss.map((s) => sc(s.med)),
+              marker: { size: 10, color: "rgba(0,0,0,0)" }, customdata: cd,
+              hovertemplate: `${prettyContact(labelFor(ch))} · ${key === "na" ? "?" : fmtHz(c)} Hz<br>`
+                + `median %{customdata[0]} LSB (10-90: %{customdata[1]}–%{customdata[2]})<br>`
+                + `n=%{customdata[4]} samples<extra></extra>`,
+              showlegend: false });
+          });
+        }
+        // Hz labels at each sensing-frequency transition across sessions (committed lanes)
+        if (committed.has(ch) && ov.sessions.length) {
           let lastLbl = -1e18, lastCen = null;
-          for (let i = 0; i < series.cen.length; i += 1) {
-            const c = snapFreq(series.cen[i]);
-            if (c !== lastCen) {
-              const ts = series.t[i];
-              if (ts - lastLbl >= MIN_LBL_GAP) {
-                annotations.push({ xref: X, yref: Y, x: xs[i], y: BP_HI, text: fmtHz(c),
-                  showarrow: false, yshift: 8, font: { size: 9, color: freqColor(c) } });
-                lastLbl = ts;
-              }
-              lastCen = c;
+          ov.sessions.forEach((s) => {
+            const c = snapFreq(s.center_hz);
+            if (c !== lastCen && c != null && (s.t0 - lastLbl) >= MIN_LBL_GAP) {
+              annotations.push({ xref: X, yref: Y, x: D(s.t0), y: BP_HI, text: fmtHz(c),
+                showarrow: false, yshift: 8, font: { size: 9, color: freqColor(c) } });
+              lastLbl = s.t0;
             }
-          }
-          // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
+            if (c != null) lastCen = c;
+          });
+        }
+        // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
+        if (committed.has(ch)) {
           annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_HI, text: `${Math.round(hi)}`,
             showarrow: false, xanchor: "right", font: { size: 8, color: "#aaa" } });
           annotations.push({ xref: "paper", yref: Y, x: -0.004, y: BP_LO, text: `${Math.round(lo)}`,
@@ -370,9 +415,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
       marker: { symbol: "square", size: 12, color: "#C9BBDF" },
       name: "raw TD coverage  (zoom → waveform)" });
-    traces.push({ x: [null], y: [null], mode: "lines+markers", type: "scatter",
-      line: { color: "#009E73", width: 3 }, marker: { size: 5, color: "#009E73" },
-      name: "band-power (LSB) · color = sensing Hz" });
+    traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
+      line: { color: "rgba(90,90,90,0.55)", width: 2 },
+      name: "chronic LSB · 24/7 trend (grey line)" });
+    traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
+      line: { color: "#009E73", width: 6 },
+      name: "streaming LSB session · color = sensing Hz (hover → detail)" });
     traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
       marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
       name: "PSD snapshot  (hover → spectrum)" });

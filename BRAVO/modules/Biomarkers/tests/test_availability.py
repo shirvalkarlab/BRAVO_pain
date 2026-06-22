@@ -160,3 +160,38 @@ def test_lsb_series_chronic_remaps_to_sensing_contact_and_pools():
     s = out["ZERO_THREE_LEFT"]
     assert s["source"] == ["streaming", "streaming", "chronic", "chronic"]   # time-sorted
     assert s["y"] == [500.0, 520.0, 810.0, 830.0]
+
+
+def test_lsb_overview_compacts_to_chronic_line_and_session_blocks():
+    """The overview collapses per-sample LSB into a chronic LINE + per-session BLOCKS, splitting
+    sessions on a time gap AND on a sensing-frequency change."""
+    # two streaming sessions (gap > 30 min) at the same freq, then one chronic run
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0,                      # session A (12.7 Hz)
+              T0 + 7200, T0 + 7200.5,                      # session B (after a 2 h gap)
+              T0 + 20000, T0 + 20600, T0 + 21200],         # chronic run
+        "y": [500.0, 520.0, 510.0, 900.0, 920.0, 810.0, 830.0, 820.0],
+        "center_hz": [12.7, 12.7, 12.7, 12.7, 12.7, 12.7, 12.7, 12.7],
+        "source": ["streaming", "streaming", "streaming", "streaming", "streaming",
+                   "chronic", "chronic", "chronic"]}}
+    ov = av.lsb_overview(lsb)
+    d = ov["ZERO_THREE_LEFT"]
+    assert d["chronic"] is not None and len(d["chronic"]["t"]) == 3   # chronic line present
+    assert len(d["sessions"]) == 2                                    # two streaming blocks
+    s0 = d["sessions"][0]
+    assert s0["t0"] == T0 and s0["n"] == 3 and s0["med"] == 510.0     # session summary stats
+    assert s0["center_hz"] == 12.7
+    assert d["y_lo"] <= 510.0 <= d["y_hi"]                            # robust window spans values
+
+
+def test_lsb_overview_splits_session_on_frequency_change():
+    """A sensing-frequency change starts a NEW session block even without a time gap."""
+    lsb = {"ZERO_THREE_RIGHT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0, T0 + 1.5],
+        "y": [100.0, 110.0, 700.0, 720.0],
+        "center_hz": [8.78, 8.78, 26.37, 26.37],         # freq switches mid-stream
+        "source": ["streaming", "streaming", "streaming", "streaming"]}}
+    ov = av.lsb_overview(lsb)
+    sessions = ov["ZERO_THREE_RIGHT"]["sessions"]
+    assert len(sessions) == 2
+    assert [s["center_hz"] for s in sessions] == [8.8, 26.4]   # snapped to FFT bins

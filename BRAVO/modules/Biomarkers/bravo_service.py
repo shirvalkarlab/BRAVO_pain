@@ -825,6 +825,9 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
         # draws the true trace (not a placeholder). Keyed by raw channel; frontend normalizes.
         lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map)
+        # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
+        # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
+        lsb_overview = availability.lsb_overview(lsb)
         bands = availability.present_freq_bands(records)
         ts = [r["t_start"] for r in records] + pain["t"] + stim["t"]
         span = [min(ts), max(ts)] if ts else []
@@ -840,11 +843,11 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 ch, td_recs=td_all, psd_recs=psd_all,
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
-                "span": span, "samples": samples, "lsb": lsb}
+                "span": span, "samples": samples, "lsb_overview": lsb_overview}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
-                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb": {}}
+                "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {}}
 
 
 def availability_for_participant(request_data):

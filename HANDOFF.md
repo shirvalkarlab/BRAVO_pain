@@ -10,6 +10,65 @@
 
 ## NOW — current state (most recent sessions)
 
+### Biomarker Data Timeline — REAL inline LSB + performance compaction (2026-06-22, latest)
+
+The `BiomarkerDataTimeline` component (the availability timeline that replaced `BiomarkerTimeline`)
+now draws the **real** band-power LSB and is render-cheap at calendar scale. Three commits this span:
+`7275fb8` (v9 redesign + always-on `/api/queryDataAvailability` endpoint), `31e0e8b` (real inline
+LSB + per-metric pain axis + dynamic gridlines + boxed legend), and the **performance compaction**
+commit below.
+
+**Backend (`BRAVO/modules/Biomarkers/routines/availability.py`):**
+- `lsb_series(chronic_recordings, powerdomain_recordings, region_map=None)` — emits the REAL
+  per-sample band power per channel: `{channel: {t:[epoch_s], y:[lsb], center_hz:[hz|None],
+  source:["streaming"|"chronic"]}}`. Power-domain `<contact> Power` columns → streaming series at
+  ~2 Hz (center from `Descriptor.Therapy`); chronic `Data[:,0]` LFP → ~10-min series. Drops the
+  device sentinel `2**31-1`, negatives, non-finite. **Chronic→contact remap:** chronic logs named by
+  hemisphere (`LeftHemisphere LFP`) are keyed onto the configured sensing CONTACT for that side
+  (built from the power-domain channel keys) so streaming + chronic for one physical channel pool
+  into ONE lane. Verified end-to-end by decoding raw RCS08 JSONs (`BrainSenseLfp` + `LFPTrendLogs`):
+  exact device values (535/596 L, 96/113 R), correct timestamps, correct center freqs.
+- `lsb_overview(lsb, *, session_gap_s=1800, chronic_max_points=1500)` — **performance layer.** The
+  raw 2 Hz cloud (tens of thousands of WebGL points) made the page lag on zoom, so this compacts the
+  per-sample series into render-cheap geometry that carries the same information:
+  - chronic → one **decimated grey LINE** of the real ~10-min trend.
+  - streaming → one **BLOCK per session** (contiguous run split on a >`session_gap_s` time gap OR a
+    sensing-frequency change): `{t0,t1,med,lo,hi,center_hz,n}` (median LSB, 10-90 pct band, sample
+    count, snapped center). Returns `{channel: {chronic, sessions, y_lo, y_hi}}`; `y_lo/y_hi` =
+    robust 2-98 pct window across both layers so the lane scales once.
+- `_build_availability` (in `bravo_service.py`) now calls both and ships **`lsb_overview`** in the
+  payload (the heavy per-sample `lsb` is NOT shipped — frontend renders from the overview). Return
+  key is `availability["lsb_overview"]`.
+
+**Frontend (`Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js`):**
+- Reads `av.lsb_overview` via `lsbFor(ch)` (collapses raw keys to the normalized pair). Band-power
+  lanes draw: grey chronic polyline + per-session thick colored bars (color = sensing Hz) with a
+  thin 10-90 whisker and an invisible hover-anchor per session (median/range/n/freq) — ~13
+  frequency-grouped traces + one chronic line per lane instead of 50k points. This keeps the
+  **grey-chronic / colored-streaming** look the user explicitly liked.
+- Three other fixes in `31e0e8b`: (1) **pain y-axis by metric** via `painAxis(metric, yvals)` — NRS
+  0-10, MPQ 0-50, VAS family 0-100, composite/unknown spans its own range; ticks + label update live
+  with the picker. (2) **Dynamic time gridlines** — the x-axis draws them (no fixed `dtick`), so they
+  auto-densify on zoom (month→week→day→hour) and span all rows (neural + pain + stim); darker
+  `rgba(0,0,0,0.18)` + a cursor spike line across all plots. (3) **Glyph legend** vertical-stacked in
+  a black-bordered box anchored high (margin top bumped to 170) so it never overlaps PSD ticks.
+
+**Tests:** `BRAVO/modules/Biomarkers/tests/test_availability.py` — 13 tests (added `lsb_series`
+real-values/sentinel + chronic-remap, and `lsb_overview` chronic-line/session-blocks +
+freq-change-split). **Full Biomarkers suite: 84 passed**, zero regressions.
+
+**STILL NEEDS LIVE VERIFICATION (the one open item):** the HTTP round-trip + browser render against
+the running server. The agent sandbox cannot reach the live stack (Docker socket = permission
+denied; `localhost`/`docker.internal` = hard private-IP refusal that `request_network_access` cannot
+grant). To make this self-serve for the agent, expose the backend on a public hostname — e.g.
+`cloudflared tunnel --url http://localhost:27286` or `ngrok http 27286` — then the agent can request
+allowlist access to that domain and hit `/api/queryDataAvailability` directly. Until then: after
+pulling, `docker compose restart bravo-server` + hard refresh (Cmd+Shift+R) and confirm the timeline
+renders the compact LSB (grey chronic line + colored session bars) and stays smooth on zoom.
+
+Latest preview render (real-style values; only 3 raw JSONs reachable in-sandbox, full 500 live on the
+server): `timeline_v11_preview.png` (artifact).
+
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
