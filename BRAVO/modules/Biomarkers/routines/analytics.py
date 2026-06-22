@@ -8,6 +8,8 @@ card plots. They build on the verbatim science in `threshold_biomarker.py` / `st
 scatter, and the Pearson-R-vs-frequency correlation spectrum).
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -1082,10 +1084,18 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
     out_channels = []
     C = psd.shape[1]
+    label_fin_all = np.isfinite(labels)            # epochs with a matched PRO label
+    n_pooled = int(label_fin_all.sum())            # pooled matched PSDs across ALL channels
     for ci in range(C):
         raw = chans[ci] if ci < len(chans) else f"ch{ci}"
         region = region_map.get(raw) if region_map else None
         fmt = format_channel(raw, region=region)
+        # Per-channel sample CEILING: matched epochs that were actually recorded on THIS channel.
+        # The pooled matched count (`n_pooled`) splits across the C bipolar montages because each
+        # PSD recording captures one montage, so this is the max n any band on this channel's curve
+        # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
+        chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
+        n_channel = int(chan_fin.sum())
         r_curve, auc_curve, n_curve = [], [], []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
         for c in centers:
@@ -1095,7 +1105,11 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 band_power_by_center.append(None)
                 continue
             sub = psd[:, ci, bmask]                         # (E, nbins) power in band
-            with np.errstate(invalid="ignore", divide="ignore"):
+            with np.errstate(invalid="ignore", divide="ignore"), \
+                 warnings.catch_warnings():
+                # All-NaN slices (epochs not recorded on this channel) are expected — nanmean's
+                # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
+                warnings.simplefilter("ignore", category=RuntimeWarning)
                 if prelog:
                     # Already log (+ z-scored): the band feature is the mean over the band's bins.
                     bp_log = np.nanmean(sub, axis=1)
@@ -1127,7 +1141,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
             "r": r_curve,            # Pearson r vs continuous PRO, per band center
             "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
-            "n": n_curve,            # matched samples used per band
+            "n": n_curve,            # matched samples used per band (this channel)
+            "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
             # frontend reads scatter via the band index). Stored compact (one row per center).
@@ -1166,8 +1181,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "adaptive_band": ([a_lo, a_hi] if a_lo is not None else None),
         "strategy": strategy,
         "transform": "log_bandpower",
+        "n_pooled": n_pooled,        # matched PSDs pooled across ALL channels (the preview total)
         "note": ("Exploratory only. r is Pearson vs the continuous PRO; AUC is cross-validated "
-                 "single-feature logistic vs the binarized PRO. Neither is a validated biomarker."),
+                 "single-feature logistic vs the binarized PRO. Neither is a validated biomarker. "
+                 "Each curve/scatter uses only the PSDs recorded on THAT channel, so its n is a "
+                 "fraction of the pooled matched-sample count shown in the binarization preview "
+                 "(every recording captures one bipolar montage)."),
     }
 
 

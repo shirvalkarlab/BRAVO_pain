@@ -99,12 +99,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
     const traces = [];
     channels.forEach((ch, ci) => {
       const color = hemiOf(ch) === "Right" ? HI : LO;
+      // Per-channel matched-sample ceiling: the pooled matched count splits across the bipolar
+      // montages (one montage per recording), so each channel's curve uses only its own PSDs.
+      const nch = (ch.n_channel != null) ? ` (n=${ch.n_channel})` : "";
       // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
-      traces.push({ x: centers, y: ch.r, name: `${ch.short} · r`, type: "scattergl", mode: "lines",
+      traces.push({ x: centers, y: ch.r, name: `${ch.short}${nch} · r`, type: "scattergl", mode: "lines",
         line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
         customdata: centers.map((c, bi) => [ci, bi]),
         hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      traces.push({ x: centers, y: ch.auc, name: `${ch.short} · AUC`, type: "scattergl", mode: "lines",
+      traces.push({ x: centers, y: ch.auc, name: `${ch.short}${nch} · AUC`, type: "scattergl", mode: "lines",
         line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
         customdata: centers.map((c, bi) => [ci, bi]),
         hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
@@ -188,6 +191,13 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
           <MDTypography variant="caption" color="text" display="block" mb={0.5}>
             {scan && scan.note}
           </MDTypography>
+          {scan && scan.n_pooled != null && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
+              {`${scan.n_pooled} PSDs matched a pain rating across all channels (the binarization-preview total). `
+               + `Each channel's curve uses only the PSDs recorded on that montage — the per-channel n in `
+               + `the legend — so any single correlation/AUC draws on a fraction of that pooled count.`}
+            </MDTypography>
+          )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />
           {scatterNode}
         </MDBox>
