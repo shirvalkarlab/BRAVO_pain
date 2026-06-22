@@ -672,6 +672,53 @@ class QueryPainScores(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryDataAvailability(RestViews.APIView):
+    """
+    API View for the always-on DATA-AVAILABILITY timeline (Shirvalkar Lab Biomarkers module).
+
+    **URL:** ``/queryDataAvailability``  **Methods:** POST
+
+    Returns the lightweight per-channel data-availability payload (what neural data exists, when,
+    and its inline values) plus the patient-reported pain series and chronic stim series on the
+    shared calendar axis. This is for VISUALIZATION and EXPLORATION -- it does NOT run the biomarker
+    detector, so the timeline can render the moment the page opens, before "Compute biomarker now".
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param LabelMetric: pain metric for the pain row (default nrs); the row also updates client-side
+        from the lightweight pain-scores endpoint, so this only seeds the initial render.
+    :param ProcessedPRO: optional list of PRO record dicts (else REDCap env vars are used)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.availability_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface an empty payload it can render as an empty-state.
+            return Response(status=200, data={
+                "availability": {"records": [], "pain": {"t": [], "y": []},
+                                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": []},
+                "message": "Data-availability error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryBurstAnalysis(RestViews.APIView):
     """
     API View for neural burst analysis. 

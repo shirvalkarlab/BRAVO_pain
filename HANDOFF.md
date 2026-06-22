@@ -682,3 +682,17 @@ curl -s -c $J -b $J -X POST -H 'Content-Type: application/json' \
   uid `e30b54dc17d3488dbe1945bb911f5549` — any participant with that MRN returns synthetic demo data.
 - **REDCap env:** set `REDCAP_API_URL` / `REDCAP_API_TOKEN` on the `bravo-server` service (compose) for
   live PRO pulls; otherwise only demo data flows.
+
+## Plotly → PNG render recipe (agent sandbox, env `bravo_app`) — proven 2026-06-22
+The macOS app Chrome (`/Applications/Google Chrome.app`) aborts instantly under the agent
+sandbox (SIGABRT/exit 134); kaleido 1.x cannot fetch Chrome-for-Testing (host denylisted).
+What works — pin **kaleido==0.2.1** (bundles its own chromium, honors `chromium_args`):
+```python
+import os, plotly.io as pio
+os.environ["HOME"] = "/tmp/choreo_home"   # writable profile dir (mkdir -p first)
+pio.kaleido.scope.chromium_args = ('--single-process','--no-zygote','--no-sandbox',
+                                   '--disable-gpu','--disable-dev-shm-usage')
+pio.write_image(fig, "out.png", width=1500, height=820)
+```
+`--no-zygote` + `--single-process` are load-bearing. kaleido 1.3.0 removed `pio.kaleido.scope.*`,
+so the 0.2.1 pin is required. `bravo_app` already has kaleido==0.2.1.

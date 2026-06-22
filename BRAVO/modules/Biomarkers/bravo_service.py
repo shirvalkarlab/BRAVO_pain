@@ -843,6 +843,64 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": []}
 
 
+def availability_for_participant(request_data):
+    """Lightweight DATA-AVAILABILITY payload for one participant — no biomarker computation.
+
+    This powers the always-on exploration timeline (BiomarkerDataTimeline), which must render the
+    moment the page opens, BEFORE (and independent of) the expensive "Compute biomarker now" run.
+    It loads only what the availability extractor needs (TD / chronic / power-domain / montage-survey
+    PSD recordings + REDCap PROs + chronic stim) and reuses `_build_availability` verbatim, so the
+    timeline here is byte-identical to the `availability` block returned by the full run.
+
+    Returns {availability:{records,pain,stim,freq_bands,span,samples}, available_metrics,
+             label_metric, message?}. Never raises — missing inputs yield an empty payload with a
+    friendly `message` the card renders as an empty-state.
+    """
+    participant_uid = request_data["ParticipantId"]
+    Participant = models.Participant.find(uid=participant_uid)
+
+    # Demo participant -> synthetic availability (so the card renders before real data exists).
+    if Participant is not None and getattr(Participant, "mrn", "") == DEMO_MRN:
+        recordings, chronic, pro, chan_order = _demo_inputs()
+        pro, label_metric, _ = _resolve_biomarker_metric(request_data, pro)
+        region_map = {c: ("GPi" if "LEFT" in c.upper() else "VIM") for c in chan_order}
+        for c in ([chronic] if isinstance(chronic, dict) else (chronic or [])):
+            if isinstance(c, dict):
+                c.setdefault("Source", "chronic")
+        av = _build_availability(
+            participant_uid, chronic_list=([chronic] if isinstance(chronic, dict) else (chronic or [])),
+            powerdomain_list=[], td_list=recordings, pro_df=pro,
+            label_metric=label_metric, region_map=region_map)
+        return {"availability": av, "available_metrics": BIOMARKER_METRICS,
+                "label_metric": label_metric,
+                "message": "DEMO DATA — synthetic availability timeline."}
+
+    # Real participant: load only the recordings the availability extractor consumes.
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+    powerdomain_list = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+    for c in chronic_list:
+        if isinstance(c, dict):
+            c.setdefault("Source", "chronic")
+    pro_df = _load_pros(request_data, Participant)
+    pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+
+    chan_order = _derive_chan_order(td)
+    recorded_powers = _recorded_powers(powerdomain_list)
+    region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
+
+    av = _build_availability(
+        participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
+        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map)
+
+    msg = None
+    if not av.get("records"):
+        msg = ("No Percept recordings decoded for this participant yet — upload sessions to populate "
+               "the availability timeline.")
+    return {"availability": av, "available_metrics": BIOMARKER_METRICS,
+            "label_metric": label_metric, "message": msg}
+
+
 def run_for_participant(request_data):
     """Assemble inputs from the DB + REDCap and run the biomarker pipeline for one participant.
 

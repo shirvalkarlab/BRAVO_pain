@@ -82,6 +82,14 @@ function Biomarkers() {
   const [painScores, setPainScores] = useState(null);
   const [painLoading, setPainLoading] = useState(false);
 
+  // ALWAYS-ON data-availability timeline. This is for visualization/exploration and must show on
+  // page load WITHOUT requiring "Compute biomarker now" — so it has its own lightweight endpoint
+  // (/queryDataAvailability assembles records/pain/stim/freq_bands with NO biomarker computation),
+  // fetched once per participant. The heavy compute still returns its own availability payload;
+  // we prefer the live one here so the timeline is populated before (and independent of) compute.
+  const [availData, setAvailData] = useState(null);
+  const [availLoading, setAvailLoading] = useState(false);
+
   // Window/step now drive BOTH the time-domain sliding correlation heatmap and the power-domain
   // detector/performance, so show them for every source. The sliding ON/OFF switch is
   // power-domain-specific (all-data vs sliding), so it's hidden on the time-domain-only tab.
@@ -134,6 +142,26 @@ function Biomarkers() {
       })
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
   }, [participant_uid]);
+
+  // Fetch the data-availability payload ONCE per participant (lightweight, no biomarker compute),
+  // so the timeline renders immediately on page load.
+  useEffect(() => {
+    if (!participant_uid) return;
+    setAvailLoading(true);
+    SessionController.query("/api/queryDataAvailability", { ParticipantId: participant_uid })
+      .then((response) => {
+        setAvailData(response.data);
+        setAvailLoading(false);
+      })
+      .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
+  }, [participant_uid]);
+
+  // The object handed to the timeline: prefer the live availability payload; fall back to the
+  // availability embedded in a heavy compute result if the live fetch is unavailable.
+  const timelineData = (availData && availData.availability && availData.availability.records
+    && availData.availability.records.length > 0)
+    ? availData
+    : data;
 
   // The points array for the currently-selected pain metric, fed straight into the preview card.
   // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
@@ -284,10 +312,72 @@ function Biomarkers() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <Grid container>
-                  {/* Big red COMPUTE button at the top — biomarkers (re)compute ONLY when clicked,
-                      so the user can set source / metric / window freely before running. */}
+                  {/* Title row (source tabs removed — analysis is always unified time + power) */}
                   <Grid item xs={12}>
-                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
+                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
+                        {"Pain Biomarkers"}
+                      </MDTypography>
+                    </MDBox>
+                  </Grid>
+
+                  {/* ── DATA-AVAILABILITY TIMELINE up front (ALWAYS shown) ────────────────────
+                      For visualization/exploration: rendered on page load from the lightweight
+                      /queryDataAvailability payload (timelineData), with NO "Compute biomarker
+                      now" required. The pain row is driven LIVE by the selected metric
+                      (painSeriesLive) so it updates instantly when the metric picker below
+                      changes. Falls back to the legacy timeline only if no availability payload
+                      is available at all. The Compute button lives BELOW this. */}
+                  {timelineData && timelineData.availability && timelineData.availability.records
+                        && timelineData.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive} />
+                    </Grid>
+                  ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerTimeline data={timelineData} figureTitle={"BiomarkerTimeline"} />
+                    </Grid>
+                  ) : (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1.5}>
+                        <MDTypography variant="button" color="text" fontStyle="italic">
+                          {availLoading ? "Loading data-availability timeline…"
+                                        : "No decoded Percept recordings available for this participant yet."}
+                        </MDTypography>
+                      </MDBox>
+                    </Grid>
+                  ))}
+
+                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
+                  {timelineData && timelineData.availability && timelineData.availability.records
+                        && timelineData.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
+                             gap={2} flexWrap="wrap" justifyContent="center">
+                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
+                          {"Pain metric (drives the pain plot above):"}
+                        </MDTypography>
+                        <FormControl size="small" sx={{ minWidth: 260 }}>
+                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                                  sx={{ fontSize: 15, fontWeight: 500 }}>
+                            {((timelineData && timelineData.available_metrics)
+                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 15 }}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </MDBox>
+                    </Grid>
+                  ) : null}
+
+                  {/* ── Biomarker COMPUTE below the exploration timeline ──────────────────────
+                      The timeline above is for visualization and needs no compute. The heavy
+                      biomarker analysis (detector over full-resolution data) runs ONLY when this
+                      button is clicked; settings (metric / binarization / window) are chosen in
+                      the card below first. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pt={1} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap"
+                           sx={{ borderTop: "1px solid #E0E0E0" }}>
                       <MDButton
                         variant="contained" color="error" size="large"
                         onClick={compute} disabled={computing}
@@ -317,56 +407,9 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
                         <MDTypography variant="button" fontWeight="medium" color="dark" display="block" mb={0.5}>
-                          {`Computing ${source === "both" ? "time-domain + power-domain" : source === "timedomain" ? "time-domain" : "power-domain"} biomarker on full-resolution data — this can take ~10–40 s…`}
+                          {"Computing time-domain + power-domain biomarker on full-resolution data — this can take ~10–40 s…"}
                         </MDTypography>
                         <LinearProgress color="error" />
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
-                  {/* Title row (source tabs removed — analysis is always unified time + power) */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
-                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
-                        {"Pain Biomarkers"}
-                      </MDTypography>
-                    </MDBox>
-                  </Grid>
-
-                  {/* ── DATA-AVAILABILITY TIMELINE up front ───────────────────────────────────
-                      Replaces BiomarkerTimeline. Shown as soon as a compute returns the
-                      availability payload; the pain row is driven LIVE by the selected metric
-                      (painSeriesLive) so it updates instantly when the metric picker below
-                      changes — no recompute needed. Falls back to the legacy timeline only if
-                      the backend returns no availability payload. */}
-                  {data && data.availability && data.availability.records
-                        && data.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerDataTimeline data={data} painOverride={painSeriesLive} />
-                    </Grid>
-                  ) : (data && data.timeline && data.timeline.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
-                    </Grid>
-                  ) : null)}
-
-                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
-                  {data && data.availability && data.availability.records
-                        && data.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
-                             gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 15 }}>
-                          {"Pain metric (drives the pain plot above):"}
-                        </MDTypography>
-                        <FormControl size="small" sx={{ minWidth: 260 }}>
-                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{ fontSize: 15, fontWeight: 500 }}>
-                            {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 15 }}>{m.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
                       </MDBox>
                     </Grid>
                   ) : null}

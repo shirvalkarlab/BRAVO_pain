@@ -23,12 +23,7 @@ import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
 
-// ---- platform palette (ported verbatim from BiomarkerTimeline.js) -----------------------------
-const C = { pain: "#D55E00", stim: "#E69F00", td: "#BCBCBC", ink: "#1a1a1a" };
-const HEMI = {
-  Left: { lane: "#0072B2", sel: "rgba(0,114,178,0.10)" },
-  Right: { lane: "#D55E00", sel: "rgba(213,94,0,0.10)" },
-};
+// ---- platform palette (ported from BiomarkerTimeline.js) --------------------------------------
 const FREQ_BIN_HZ = 250 / 256;
 const FREQ_PALETTE = {
   3.9: "#882255", 4.9: "#AA4499", 5.9: "#CC6677", 6.8: "#993377",
@@ -50,11 +45,6 @@ function freqColor(hz) {
   if (FREQ_PALETTE[b] != null) return FREQ_PALETTE[b];
   return FREQ_FALLBACK[Math.abs(Math.round(b)) % FREQ_FALLBACK.length];
 }
-function textOn(hexcol) {
-  const h = hexcol.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#111111" : "#FFFFFF";
-}
 function fmtHz(hz) {
   const b = snapFreq(hz);
   if (b == null) return "";
@@ -68,13 +58,6 @@ function prettyContact(label) {
   return s.replace(/(\d+)\s*-\s*(\d+)/, (_, a, b) => `${a}${SUP["-"]}${b}${SUP["+"]}`);
 }
 const toDate = (epoch_s) => new Date(epoch_s * 1000);
-// hex "#RRGGBB" -> "rgba(r,g,b,a)" for translucent fills (freqColor always returns hex).
-function hexA(hexcol, a) {
-  const h = String(hexcol).replace("#", "");
-  if (h.length < 6) return hexcol;
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
 
 // Normalize a Percept channel label to its physical contact-pair identity, so the SAME pair
 // recorded by different products (streaming "ZERO_THREE_LEFT" vs montage "ZERO_AND_THREE_LEFT")
@@ -114,76 +97,43 @@ function isMainSensingChannel(ch) {
   return /(ZERO_THREE|ONE_THREE|ZERO_TWO|ZERO_AND_THREE|ONE_AND_THREE|ZERO_AND_TWO)/.test(up);
 }
 
-// ---- inspector: selected channel's real PSD curve, raw uV waveform, LSB trend ----------------
-// Uses decimated `samples` the backend attaches per channel under av.samples[channel] =
-//   { psd:{freq:[],mag:[],peak_hz}, td:{fs,sample:[]}, lsb:{t:[epoch_s],y:[]} }.
-// Each is optional; a missing block shows an honest placeholder. Three stacked panels in the
-// right column [OV_R..1], rows mapped onto dedicated axes appended after the overview axes.
-function buildInspector(traces, layout, OV_R, av, selected, centerHzOf, recordsFor) {
-  const IL = OV_R + 0.06;             // inspector left edge
-  // av.samples is keyed by RAW channel; selected is a NORMALIZED pair id — find a sample whose
-  // raw key normalizes to the selection (prefer one that actually carries a signal block).
-  let samp = null;
-  if (av.samples && selected) {
-    const keys = Object.keys(av.samples).filter((k) => normalizeChannel(k) === selected);
-    samp = keys.map((k) => av.samples[k]).find((s) => s && (s.psd || s.td || s.lsb)) || (keys.length ? av.samples[keys[0]] : null);
-  }
-  const chz = selected ? centerHzOf(selected) : null;
-  const fc = chz != null ? freqColor(chz) : "#0072B2";
-  const hemi = selected && selected.toUpperCase().indexOf("LEFT") >= 0 ? "Left" : "Right";
-  const accent = HEMI[hemi] ? HEMI[hemi].lane : "#0072B2";
-
-  // three stacked inspector panels (top->bottom): PSD, TD, LSB
-  const panels = [
-    { key: "psd", title: "Spectrum (PSD)", dom: [0.70, 0.92] },
-    { key: "td", title: "Raw time-domain · 250 Hz", dom: [0.40, 0.62] },
-    { key: "lsb", title: `Band power${chz != null ? ` @ ${fmtHz(chz)} Hz` : ""}`, dom: [0.08, 0.30] },
-  ];
-  // axis numbering continues after overview axes already placed on the layout
-  let axN = 1;
-  while (layout[axN === 1 ? "xaxis" : `xaxis${axN}`]) axN += 1;
-
-  layout.annotations.push({
-    xref: "paper", yref: "paper", x: IL, y: 0.965, xanchor: "left",
-    text: selected ? `INSPECTOR — ${prettyContact((av.records.find((r) => normalizeChannel(r.channel) === selected) || {}).label || selected)}`
-                   : "INSPECTOR",
-    showarrow: false, font: { size: 11, color: accent, family: "Arial Black, Arial" },
-  });
-
-  panels.forEach((p) => {
-    const xKey = `xaxis${axN}`, yKey = `yaxis${axN}`;
-    const xref = `x${axN}`, yref = `y${axN}`;
-    layout[xKey] = { domain: [IL, 1.0], anchor: yref, showgrid: false,
-                     tickfont: { size: 8 }, linecolor: "#C9CCD6" };
-    layout[yKey] = { domain: p.dom, anchor: xref, showgrid: false, zeroline: false,
-                     tickfont: { size: 8 }, title: { text: p.title, font: { size: 9 } } };
-
-    if (p.key === "psd" && samp && samp.psd && samp.psd.freq) {
-      traces.push({ type: "scatter", mode: "lines", x: samp.psd.freq, y: samp.psd.mag,
-        xaxis: xref, yaxis: yref, line: { color: fc, width: 1.4 }, fill: "tozeroy",
-        fillcolor: hexA(fc, 0.12), hoverinfo: "x+y" });
-      if (chz != null) layout.shapes.push({ type: "line", xref, yref,
-        x0: chz, x1: chz, y0: 0, y1: 1, line: { color: C.ink, width: 0.8, dash: "dot" } });
-      layout[xKey].title = { text: "Frequency (Hz)", font: { size: 9 } };
-      layout[xKey].range = [0, 97];
-    } else if (p.key === "td" && samp && samp.td && samp.td.sample) {
-      const fs = samp.td.fs || 250;
-      const tt = samp.td.sample.map((_, i) => i / fs);
-      traces.push({ type: "scattergl", mode: "lines", x: tt, y: samp.td.sample,
-        xaxis: xref, yaxis: yref, line: { color: fc, width: 0.6 }, hoverinfo: "x+y" });
-      layout[xKey].title = { text: "Time (s)", font: { size: 9 } };
-    } else if (p.key === "lsb" && samp && samp.lsb && samp.lsb.t) {
-      traces.push({ type: "scattergl", mode: "lines", x: samp.lsb.t.map(toDate), y: samp.lsb.y,
-        xaxis: xref, yaxis: yref, line: { color: fc, width: 1.0 }, hoverinfo: "x+y" });
-      layout[xKey].type = "date";
-    } else {
-      layout.annotations.push({ xref: "paper", yref: "paper",
-        x: (IL + 1) / 2, y: (p.dom[0] + p.dom[1]) / 2,
-        text: "n.d.", showarrow: false, font: { size: 10, color: "#bbb" } });
-    }
-    axN += 1;
-  });
+// ---- epoch coercion: backend emits epoch floats; the older probe emitted ISO strings ----------
+function tEpoch(v) {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const p = Date.parse(String(v));
+  return Number.isFinite(p) ? p / 1000 : null;
 }
+// run-length groups of equal snapped center over a time-sorted record list -> [{cen,recs}]
+function freqRuns(recs) {
+  const out = [];
+  recs.forEach((r) => {
+    const cen = snapFreq(r.meta && r.meta.center_hz);
+    const last = out[out.length - 1];
+    if (last && last.cen === cen) last.recs.push(r);
+    else out.push({ cen, recs: [r] });
+  });
+  return out;
+}
+
+// hemisphere identity: saturated accent for headers, DESATURATED tint for TD coverage (so the
+// saturated frequency color on the band-power trend is the only loud mark in a lane), faint band.
+const HEMI2 = {
+  LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)", region: "GPi" },
+  RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)", region: "VIM" },
+};
+const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
+const linspace = (a, b, n) => (n <= 1 ? [a] : Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1)));
+const monthStarts = (t0, t1) => {
+  const out = [];
+  const d = new Date(t0 * 1000);
+  d.setUTCDate(1); d.setUTCHours(0, 0, 0, 0);
+  while (d.getTime() / 1000 < t1) {
+    if (d.getTime() / 1000 >= t0) out.push(d.getTime() / 1000);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return out;
+};
 
 export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   const ref = useRef(null);
@@ -194,7 +144,6 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
   // bipolar sensing pairs; expert mode adds the ring/segment montage contacts.
   const { channels, nHidden } = useMemo(() => {
     if (!av || !av.records) return { channels: [], nHidden: 0 };
-    // group by NORMALIZED contact-pair identity (collapses streaming+montage labels for one pair)
     const seen = new Set();
     av.records.forEach((r) => seen.add(normalizeChannel(r.channel)));
     const all = [...seen];
@@ -204,228 +153,261 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
     return { channels: shown, nHidden: all.length - shown.length };
   }, [av, expert]);
 
-  const [selected, setSelected] = useState(null);
-  useEffect(() => {
-    // default selection: first channel that actually has a configured band power (a trend to show)
-    if (!channels.length) { setSelected(null); return; }
-    const withBand = channels.find((ch) =>
-      (av.records || []).some((r) => normalizeChannel(r.channel) === ch && r.dtype === "bandpower" && r.meta && r.meta.center_hz != null));
-    setSelected((prev) => (prev && channels.includes(prev)) ? prev : (withBand || channels[0]));
-  }, [channels, av]);
-
   useEffect(() => {
     if (!ref.current || !av || !channels.length) return;
     const gd = ref.current;
 
-    // match records by NORMALIZED contact-pair identity (a lane unifies a pair's products)
     const recordsFor = (ch, dtype) => (av.records || [])
       .filter((r) => normalizeChannel(r.channel) === ch && r.dtype === dtype);
     const labelFor = (ch) => {
       const r = (av.records || []).find((x) => normalizeChannel(x.channel) === ch);
       return r ? (r.label || ch) : ch;
     };
-    const centerHzOf = (ch) => {
-      const bp = (av.records || []).find((r) => normalizeChannel(r.channel) === ch
-        && r.dtype === "bandpower" && r.meta && r.meta.center_hz != null);
-      return bp ? bp.meta.center_hz : null;
-    };
+    const hemiOf = (ch) => (ch.toUpperCase().indexOf("LEFT") >= 0 ? "LEFT" : "RIGHT");
+    // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
+    // exploratory lanes (early channel-switching) get a thinner lane and lighter label.
+    const nBand = (ch) => recordsFor(ch, "bandpower")
+      .filter((r) => r.meta && r.meta.center_hz != null).length;
+    const committed = new Set(channels.filter((ch) => nBand(ch) >= 20));
 
-    // ---- layout geometry: N channel lanes + pain + stim, shared x ---------------------------
-    const nLane = channels.length;
-    const LANE_H = 0.46, PAIN_H = 0.62, STIM_H = 0.34, GAP = 0.16;
-    const units = [];
-    channels.forEach((ch) => units.push({ kind: "lane", ch, h: LANE_H }));
-    units.push({ kind: "pain", h: PAIN_H });
-    units.push({ kind: "stim", h: STIM_H });
-    const totalH = units.reduce((s, u) => s + u.h, 0) + GAP * (units.length - 1);
+    // ---- time span ---------------------------------------------------------------------------
+    const allT = (av.records || []).map((r) => tEpoch(r.t_start)).filter((v) => v != null);
+    const t0 = (av.span && av.span.length === 2) ? tEpoch(av.span[0]) : Math.min(...allT);
+    const t1 = (av.span && av.span.length === 2) ? tEpoch(av.span[1]) : Math.max(...allT);
+    const SPAN = Math.max(t1 - t0, 1);
+    const MIN_LBL_GAP = SPAN * 0.05;            // min spacing between Hz transition labels
+    const D = (e) => toDate(e);
 
-    // overview occupies left ~74%, inspector right ~26%
-    const OV_R = 0.72;
-    const domains = [];
-    let acc = 1.0;
-    units.forEach((u) => {
-      const top = acc, bot = acc - u.h / totalH;
-      domains.push([Math.max(0, bot), top]);
-      acc = bot - GAP / totalH;
+    // ---- vertical geometry (data-coord single axis; mirrors the signed-off figure) -----------
+    const GAPL = 0.28, ROWGAP = 0.62, PAIN_H = 1.6, STIM_H = 0.9, INTER_GAP = 1.0;
+    const LH = (ch) => (committed.has(ch) ? 1.5 : 0.72);
+    const laneTop = {}, laneBase = {};
+    let y = 0.0, prev = null;
+    channels.forEach((ch) => {
+      const h = hemiOf(ch);
+      if (prev === "LEFT" && h === "RIGHT") y -= (0.9 + GAPL) * INTER_GAP;
+      laneTop[ch] = y; laneBase[ch] = y - LH(ch); y = laneBase[ch] - GAPL; prev = h;
     });
+    const neuralBottom = y + GAPL;
+    const painTop = neuralBottom - ROWGAP, painBase = painTop - PAIN_H;
+    const stimTop = painBase - ROWGAP * 0.55, stimBase = stimTop - STIM_H;
+    const FULL_TOP = 0.40;
+    const yScale = (v, lo, hi, yb, yt) => yb + (yt - yb) * (v - lo) / (hi - lo + 1e-9);
 
     const traces = [];
-    const layout = {
-      height: height || Math.max(420, 64 * nLane + 200),
-      margin: { l: 96, r: 14, t: 64, b: 44 },
-      showlegend: false,
-      hovermode: "closest",
-      plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
-      font: { family: "Arial, Helvetica, sans-serif", size: 11, color: C.ink },
-      shapes: [], annotations: [],
-      title: {
-        text: "Biomarker Data Timeline — Percept RC sensing overview",
-        x: 0.005, xanchor: "left", font: { size: 15 },
-      },
-    };
+    const shapes = [];
+    const annotations = [];
+    const X = "x", Y = "y";
 
-    const xSpan = (av.span && av.span.length === 2)
-      ? [toDate(av.span[0]), toDate(av.span[1])]
-      : undefined;
+    // (0) full-height month reference lines (carry through pain/stim so you can drop a plumb line)
+    monthStarts(t0, t1).forEach((ms) => shapes.push({
+      type: "line", xref: X, yref: Y, x0: D(ms), x1: D(ms), y0: stimBase - 0.3, y1: FULL_TOP,
+      line: { color: "rgba(0,0,0,0.07)", width: 1 }, layer: "below",
+    }));
 
-    // ---- per-channel overview lanes ----------------------------------------------------------
-    units.forEach((u, i) => {
-      const axN = i + 1;
-      const xaxisKey = axN === 1 ? "xaxis" : `xaxis${axN}`;
-      const yaxisKey = axN === 1 ? "yaxis" : `yaxis${axN}`;
-      const xref = axN === 1 ? "x" : `x${axN}`;
-      const yref = axN === 1 ? "y" : `y${axN}`;
-      layout[xaxisKey] = {
-        domain: [0, OV_R], anchor: yref,
-        type: "date", showgrid: true, gridcolor: "#EEF1F4",
-        range: xSpan, matches: axN === 1 ? undefined : "x",
-        showticklabels: i === units.length - 1,
-        tickfont: { size: 9 }, linecolor: "#C9CCD6",
-      };
-      layout[yaxisKey] = {
-        domain: domains[i], anchor: xref,
-        showgrid: false, zeroline: false,
-      };
+    // (1) hemisphere tint bands + rotated region headers
+    ["LEFT", "RIGHT"].forEach((hemi) => {
+      const hl = channels.filter((ch) => hemiOf(ch) === hemi);
+      if (!hl.length) return;
+      const top = laneTop[hl[0]] + 0.04, bot = laneBase[hl[hl.length - 1]] - 0.04;
+      shapes.push({ type: "rect", xref: "paper", yref: Y, x0: 0, x1: 1, y0: bot, y1: top,
+        fillcolor: HEMI2[hemi].band, line: { width: 0 }, layer: "below" });
+      annotations.push({ xref: "paper", yref: Y, x: -0.085, y: (top + bot) / 2,
+        text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
+        font: { size: 14, color: HEMI2[hemi].col }, align: "center" });
+    });
+    // faint lane separators
+    channels.forEach((ch) => shapes.push({ type: "line", xref: "paper", yref: Y,
+      x0: 0, x1: 1, y0: laneBase[ch] - 0.02, y1: laneBase[ch] - 0.02,
+      line: { color: "rgba(0,0,0,0.13)", width: 1 }, layer: "below" }));
 
-      if (u.kind === "lane") {
-        const ch = u.ch;
-        const hemi = ch.toUpperCase().indexOf("LEFT") >= 0 ? "Left" : "Right";
-        const hc = HEMI[hemi];
-        const sel = ch === selected;
-        const chz = centerHzOf(ch);
-        const fc = chz != null ? freqColor(chz) : "#BDBDBD";
-        layout[yaxisKey].range = [0, 1];
-        layout[yaxisKey].showticklabels = false;
+    // ---- per-channel lane content ------------------------------------------------------------
+    const present = new Set();
+    channels.forEach((ch) => {
+      const yb = laneBase[ch], lh = LH(ch), hemi = hemiOf(ch);
+      const tdc = HEMI2[hemi].td;
 
-        if (sel) {
-          layout.shapes.push({
-            type: "rect", xref: "paper", yref, x0: 0, x1: OV_R,
-            y0: 0, y1: 1, fillcolor: hc.sel, line: { width: 0 }, layer: "below",
-          });
-        }
+      // (a) TD coverage = desaturated hemisphere color blocks
+      recordsFor(ch, "timedomain").forEach((r) => {
+        const ts = tEpoch(r.t_start);
+        const te = ts + Math.max(r.dur_s || 0, 86400 * 1.6);
+        shapes.push({ type: "rect", xref: X, yref: Y, x0: D(ts), x1: D(te),
+          y0: yb + 0.04 * lh, y1: yb + 0.26 * lh, fillcolor: tdc, opacity: 0.85,
+          line: { width: 0 }, layer: "above" });
+      });
 
-        // (1) TD coverage blocks
-        recordsFor(ch, "timedomain").forEach((r) => {
-          const x0 = toDate(r.t_start);
-          const x1 = toDate(r.t_start + Math.max(r.dur_s, 60));
-          layout.shapes.push({
-            type: "rect", xref, yref, x0, x1, y0: 0.04, y1: 0.30,
-            fillcolor: C.td, opacity: 0.85, line: { width: 0 }, layer: "above",
-          });
-        });
-
-        // (2) band-power LSB inline trend, colored by sensing freq (categorical)
-        const bp = recordsFor(ch, "bandpower")
-          .slice().sort((a, b) => a.t_start - b.t_start);
-        if (bp.length) {
-          // one marker per bandpower recording at its start, scaled into the lane mid-band
-          const xs = bp.map((r) => toDate(r.t_start));
-          const ys = bp.map((r) => (r.meta && Number.isFinite(r.meta.n) ? r.meta.n : 1));
-          const ymin = Math.min(...ys), ymax = Math.max(...ys);
-          const norm = ys.map((v) => 0.34 + (ymax > ymin ? (v - ymin) / (ymax - ymin) : 0.5) * 0.58);
-          traces.push({
-            type: "scattergl", mode: "lines+markers", x: xs, y: norm,
-            xaxis: xref, yaxis: yref,
-            line: { color: fc, width: 2.4 }, marker: { color: fc, size: 4 },
-            hovertemplate: `${prettyContact(labelFor(ch))} band power<br>%{x}<br>@ ${fmtHz(chz)} Hz<extra></extra>`,
-          });
-          // left-edge categorical swatch + luminance-aware Hz label
-          layout.shapes.push({
-            type: "rect", xref: "paper", yref, x0: -0.014, x1: -0.004,
-            y0: 0, y1: 1, fillcolor: fc, line: { color: C.ink, width: 0.4 }, layer: "above",
-          });
-          layout.annotations.push({
-            xref: "paper", yref, x: -0.009, y: 0.5, text: `${fmtHz(chz)} Hz`,
-            showarrow: false, textangle: -90, font: { size: 8, color: textOn(fc) },
-          });
+      // (b) band-power: ONE time-ordered trend, color changes with sensing center freq.
+      const bp = recordsFor(ch, "bandpower")
+        .filter((r) => r.meta && r.meta.center_hz != null)
+        .slice().sort((a, b) => tEpoch(a.t_start) - tEpoch(b.t_start));
+      const BP_LO = yb + 0.36 * lh, BP_HI = yb + 0.74 * lh;
+      if (bp.length) {
+        const n = bp.length;
+        const runs = freqRuns(bp);
+        runs.forEach((r) => present.add(r.cen));
+        if (n === 1) {
+          const cen = snapFreq(bp[0].meta.center_hz);
+          traces.push({ type: "scattergl", mode: "markers", x: [D(tEpoch(bp[0].t_start))],
+            y: [(BP_LO + BP_HI) / 2], line: { width: 0 },
+            marker: { size: 8, color: freqColor(cen) }, hoverinfo: "skip", showlegend: false });
+          annotations.push({ xref: X, yref: Y, x: D(tEpoch(bp[0].t_start)), y: BP_HI,
+            text: fmtHz(cen), showarrow: false, yshift: 6,
+            font: { size: 8.5, color: freqColor(cen) } });
         } else {
-          layout.annotations.push({
-            xref: "paper", yref, x: OV_R / 2, y: 0.55, text: "no band power configured · n.d.",
-            showarrow: false, font: { size: 9, color: "#8a8a8a" },
+          // deterministic gentle wave so the trend reads as a line; magnitude shown on zoom/hover
+          const wave = linspace(0, 9, n).map((v) => 0.5 + 0.42 * Math.sin(v));
+          const yy = wave.map((v) => BP_LO + (BP_HI - BP_LO) * Math.min(Math.max(v, 0), 1));
+          let idx = 0, lastLbl = -1e18;
+          runs.forEach((run) => {
+            const a = idx, b = idx + run.recs.length - 1;
+            const fc = freqColor(run.cen);
+            traces.push({ type: "scattergl", mode: "lines+markers",
+              x: run.recs.map((r) => D(tEpoch(r.t_start))), y: yy.slice(a, b + 1),
+              line: { color: fc, width: 3.0 }, marker: { size: 4, color: fc },
+              hovertemplate: `${prettyContact(labelFor(ch))} · ${fmtHz(run.cen)} Hz<br>%{x}<extra></extra>`,
+              showlegend: false });
+            if (committed.has(ch)) {
+              const ts = tEpoch(run.recs[0].t_start);
+              if (ts - lastLbl >= MIN_LBL_GAP) {
+                annotations.push({ xref: X, yref: Y, x: D(ts), y: yy[a], text: fmtHz(run.cen),
+                  showarrow: false, yshift: 10, font: { size: 9, color: fc } });
+                lastLbl = ts;
+              }
+            }
+            if (b + 1 < n) {  // connect runs so the trend stays continuous (next color)
+              traces.push({ type: "scattergl", mode: "lines",
+                x: [D(tEpoch(bp[b].t_start)), D(tEpoch(bp[b + 1].t_start))], y: [yy[b], yy[b + 1]],
+                line: { color: freqColor(snapFreq(bp[b + 1].meta.center_hz)), width: 3.0 },
+                hoverinfo: "skip", showlegend: false });
+            }
+            idx += run.recs.length;
           });
         }
-
-        // (3) PSD ticks (shared sensing-freq color when configured, else ink)
-        const psd = recordsFor(ch, "psd");
-        if (psd.length) {
-          traces.push({
-            type: "scattergl", mode: "markers",
-            x: psd.map((r) => toDate(r.t_start)),
-            y: psd.map(() => 0.95),
-            xaxis: xref, yaxis: yref,
-            marker: { color: chz != null ? fc : C.ink, size: 6, symbol: "line-ns-open",
-                      line: { width: 1.4, color: chz != null ? fc : C.ink } },
-            customdata: psd.map((r) => r.product),
-            hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`,
-          });
-        }
-
-        // lane label (channel) — clickable target handled by relayout/click below
-        layout.annotations.push({
-          xref: "paper", yref, x: -0.052, y: 0.5,
-          text: prettyContact(labelFor(ch)),
-          showarrow: false, xanchor: "right",
-          font: { size: 11, color: hc.lane, family: sel ? "Arial Black, Arial" : "Arial" },
-        });
-      } else if (u.kind === "pain") {
-        // painOverride (the live, metric-driven series from the picker) wins over the baked-in
-        // av.pain, so changing the metric updates this row instantly without a recompute.
-        const p = (painOverride && painOverride.t && painOverride.t.length)
-          ? painOverride : (av.pain || { t: [], y: [] });
-        layout[yaxisKey].title = { text: `Pain (${p.metric || "PRO"})`, font: { size: 10 } };
-        layout[yaxisKey].showticklabels = true;
-        layout[yaxisKey].tickfont = { size: 9 };
-        if (p.t && p.t.length) {
-          traces.push({
-            type: "scattergl", mode: "markers", x: p.t.map(toDate), y: p.y,
-            xaxis: xref, yaxis: yref,
-            marker: { color: C.pain, size: 5, opacity: 0.6 },
-            hovertemplate: `pain %{y}<br>%{x}<extra></extra>`,
-          });
-        } else {
-          layout.annotations.push({ xref: "paper", yref, x: OV_R / 2, y: 0.5,
-            text: "no PRO data", showarrow: false, font: { size: 9, color: "#8a8a8a" } });
-        }
-      } else { // stim
-        const s = av.stim || { t: [], y: [] };
-        layout[yaxisKey].title = { text: "Stim (mA)", font: { size: 10 } };
-        layout[yaxisKey].showticklabels = true;
-        layout[yaxisKey].tickfont = { size: 9 };
-        if (s.t && s.t.length) {
-          traces.push({
-            type: "scattergl", mode: "lines", x: s.t.map(toDate), y: s.y,
-            xaxis: xref, yaxis: yref, line: { color: C.stim, width: 1.5, shape: "hv" },
-            hovertemplate: `stim %{y} mA<br>%{x}<extra></extra>`,
-          });
-        } else {
-          layout.annotations.push({ xref: "paper", yref, x: OV_R / 2, y: 0.5,
-            text: "no stim data", showarrow: false, font: { size: 9, color: "#8a8a8a" } });
-        }
+        if (committed.has(ch)) annotations.push({ xref: "paper", yref: Y, x: -0.004,
+          y: (BP_LO + BP_HI) / 2, text: "<span style='font-size:8px;color:#aaa'>LSB</span>",
+          showarrow: false, xanchor: "right" });
+      } else {
+        annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
+          text: "no band power configured · n.d.", showarrow: false,
+          font: { size: 9.5, color: "#9AA0A6" } });
       }
+
+      // (c) PSD ticks — demoted to mid-gray, short
+      const psd = recordsFor(ch, "psd");
+      if (psd.length) traces.push({ type: "scattergl", mode: "markers",
+        x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
+        marker: { symbol: "line-ns-open", size: 7, color: "#9AA0A6", line: { width: 1.2 } },
+        customdata: psd.map((r) => r.product),
+        hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
+
+      // (d) lane label — bold for committed, lighter for exploratory
+      annotations.push({ xref: "paper", yref: Y, x: -0.018, y: yb + 0.5 * lh,
+        text: committed.has(ch) ? `<b>${prettyContact(labelFor(ch))}</b>` : prettyContact(labelFor(ch)),
+        showarrow: false, xanchor: "right",
+        font: { size: 15, color: committed.has(ch) ? PAL.ink : "#888" } });
     });
 
-    // ---- inspector (right column): selected channel PSD / TD / LSB ---------------------------
-    buildInspector(traces, layout, OV_R, av, selected, centerHzOf, recordsFor);
+    // ---- pain row: dots + medium-alpha overlay line, with y-axis ticks -----------------------
+    const pain = (painOverride && painOverride.t && painOverride.t.length)
+      ? painOverride : (av.pain || { t: [], y: [], metric: "PRO" });
+    shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
+      y0: painTop + 0.16, y1: painTop + 0.16, line: { color: "#e0e0e0", width: 1 } });
+    if (pain.t && pain.t.length) {
+      const py = pain.y.map((v) => yScale(v, 0, 10, painBase, painTop));
+      traces.push({ type: "scattergl", mode: "lines", x: pain.t.map(D), y: py,
+        line: { color: PAL.pain, width: 2.4 }, opacity: 0.45, hoverinfo: "skip", showlegend: false });
+      traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
+        marker: { size: 5, color: PAL.pain }, opacity: 0.6,
+        hovertemplate: `${pain.metric || "pain"} %{customdata}<br>%{x}<extra></extra>`,
+        customdata: pain.y, showlegend: false });
+    } else {
+      annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
+        text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
+    }
+    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: (painBase + painTop) / 2,
+      text: "<b>PAIN</b>", showarrow: false, xanchor: "right",
+      font: { size: 13, color: PAL.pain } });
+    [0, 5, 10].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
+      y: yScale(val, 0, 10, painBase, painTop), text: String(val), showarrow: false,
+      xanchor: "right", font: { size: 9.5, color: "#888" } }));
+
+    // ---- thin separator between pain and stim, then stim step with y-axis --------------------
+    shapes.push({ type: "line", xref: "paper", yref: Y, x0: 0, x1: 1,
+      y0: (painBase + stimTop) / 2, y1: (painBase + stimTop) / 2,
+      line: { color: "#cfcfcf", width: 1 } });
+    const stim = av.stim || { t: [], y: [] };
+    const SMAX = stim.y && stim.y.length ? Math.max(3, Math.ceil(Math.max(...stim.y))) : 3;
+    if (stim.t && stim.t.length) {
+      traces.push({ type: "scattergl", mode: "lines", x: stim.t.map(D),
+        y: stim.y.map((v) => yScale(v, 0, SMAX, stimBase, stimTop)),
+        line: { color: PAL.stim, width: 1.8, shape: "hv" },
+        hovertemplate: `stim %{customdata} mA<br>%{x}<extra></extra>`, customdata: stim.y,
+        showlegend: false });
+    } else {
+      annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (stimBase + stimTop) / 2,
+        text: "no stim data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
+    }
+    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: (stimBase + stimTop) / 2,
+      text: "<b>STIM</b>", showarrow: false, xanchor: "right",
+      font: { size: 13, color: PAL.stim } });
+    [0, SMAX].forEach((val) => annotations.push({ xref: "paper", yref: Y, x: -0.004,
+      y: yScale(val, 0, SMAX, stimBase, stimTop), text: String(val), showarrow: false,
+      xanchor: "right", font: { size: 9.5, color: "#888" } }));
+    annotations.push({ xref: "paper", yref: Y, x: -0.018, y: stimBase - 0.30,
+      text: "<span style='font-size:9px;color:#999'>mA</span>", showarrow: false, xanchor: "right" });
+
+    // ---- glyph key (top, near title) via dummy legend traces ---------------------------------
+    traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+      marker: { symbol: "square", size: 12, color: "#C9BBDF" },
+      name: "raw TD coverage  (zoom → waveform)" });
+    traces.push({ x: [null], y: [null], mode: "lines+markers", type: "scatter",
+      line: { color: "#009E73", width: 3 }, marker: { size: 5, color: "#009E73" },
+      name: "band-power (LSB) · color = sensing Hz" });
+    traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+      marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
+      name: "PSD snapshot  (hover → spectrum)" });
+
+    // ---- right-side frequency legend: only realized centers ----------------------------------
+    const pcs = [...present].filter((c) => c != null).sort((a, b) => a - b);
+    annotations.push({ xref: "paper", yref: "paper", x: 1.015, y: 0.90,
+      text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "left",
+      font: { size: 11, color: "#333" } });
+    pcs.forEach((cen, i) => {
+      const yy = 0.855 - i * 0.046;
+      shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: 1.015, x1: 1.033,
+        y0: yy - 0.014, y1: yy + 0.014, fillcolor: freqColor(cen), line: { color: "#fff", width: 0.5 } });
+      annotations.push({ xref: "paper", yref: "paper", x: 1.039, y: yy, text: fmtHz(cen),
+        showarrow: false, xanchor: "left", font: { size: 10.5, color: "#333" } });
+    });
+
+    // ---- provenance subtitle -----------------------------------------------------------------
+    const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
+      { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
+    const subj = (data && data.participant_label) || (av && av.participant) || "";
+    const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
+
+    const layout = {
+      height: height || Math.max(560, 150 * channels.length + 320),
+      margin: { l: 140, r: 120, t: 128, b: 46 },
+      hovermode: "closest",
+      plot_bgcolor: "#ffffff", paper_bgcolor: "#ffffff",
+      font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
+      shapes, annotations,
+      showlegend: true,
+      legend: { orientation: "h", x: 0.31, xanchor: "left", y: 1.075, yanchor: "top",
+                font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0)" },
+      title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:#777">${sub}</span>`,
+               x: 0.012, xanchor: "left", y: 0.965, font: { size: 26, color: "#1a1a1a" } },
+      xaxis: { range: [D(t0), D(t1)], type: "date", showgrid: false, dtick: "M1",
+               tickfont: { size: 11.5 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc" },
+      yaxis: { visible: false, range: [stimBase - 0.5, FULL_TOP], fixedrange: true },
+    };
 
     Plotly.react(gd, traces, layout, { responsive: true, displayModeBar: true,
       modeBarButtonsToRemove: ["lasso2d", "select2d"] });
 
-    // click a lane -> select that channel for the inspector
-    const onClick = (ev) => {
-      if (!ev || !ev.points || !ev.points.length) return;
-      const pt = ev.points[0];
-      const axName = pt.data && pt.data.yaxis ? pt.data.yaxis : "y";
-      const idx = axName === "y" ? 0 : parseInt(axName.slice(1), 10) - 1;
-      const u = units[idx];
-      if (u && u.kind === "lane") setSelected(u.ch);
-    };
-    gd.on("plotly_click", onClick);
-
-    return () => {
-      try { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); } catch (e) { /* noop */ }
-      Plotly.purge(gd);
-    };
-  }, [av, channels, selected, height, painOverride]);
+    return () => { Plotly.purge(gd); };
+  }, [av, channels, height, painOverride, data]);
 
   if (!av || !channels.length) {
     return (
