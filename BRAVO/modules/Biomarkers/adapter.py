@@ -90,7 +90,7 @@ def _to_datetime(value):
 def align_pros(pro_df, *, target, recordings=None, chronic=None,
                metrics=("nrs", "vas", "mpq_sum"),
                timestamp_col="date_time_s1_daily",
-               stim_amplitudes=None):
+               stim_amplitudes=None, match_tolerance_min=None):
     """
     Align REDCap PRO rows to the decoded timeline.
 
@@ -115,6 +115,16 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     stim_amplitudes : list[float] | None
         Optional per-session stim amplitude (mA) for target="session", aligned to
         `recordings`. For target="chronic" the amplitude comes from `chronic["Data"][:,1]`.
+    match_tolerance_min : float | None
+        Time-window matching for target="session" (the EXPLORATORY pain<->PSD match). When set,
+        each session is matched to the SINGLE NEAREST PRO report whose full timestamp falls within
+        +/- this many minutes of the session start, instead of averaging that calendar day's reports.
+        The daily PROs carry real clock times (median ~2/day), so a tight window (e.g. 15 min) is a
+        far finer match than the legacy same-day mean. `*_mean` and `*_min` are both set to that one
+        matched report's value (a single report has no spread); sessions with no PRO inside the window
+        get NaN metrics and `matched=False`. When None, the legacy same-calendar-day mean/min is used.
+        Every session row carries `matched` (bool) and `match_dt_min` (signed minutes PRO-minus-session,
+        NaN when unmatched) so the caller can count matched neural samples and surface sparsity.
 
     Returns
     -------
@@ -127,12 +137,60 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     if target == "session":
         if recordings is None:
             raise ValueError('target="session" requires `recordings`.')
+
+        # Time-window matching path: pre-sort PRO reports by timestamp once, then for each session
+        # take the nearest report within tolerance. Vectorized via searchsorted on the sorted times.
+        tol = None if match_tolerance_min is None else float(match_tolerance_min)
+        if tol is not None and tol > 0:
+            valid = df[pd.notna(df[timestamp_col])].sort_values(timestamp_col).reset_index(drop=True)
+            pro_times = valid[timestamp_col].to_numpy("datetime64[ns]")
+            tol_ns = np.timedelta64(int(round(tol * 60.0 * 1e9)), "ns")
+            rows = []
+            for i, rec in enumerate(recordings):
+                ts = _to_datetime(rec.get("StartTime"))
+                row = {"session_index": i, "session_start": ts,
+                       "session_date": (ts.date() if not pd.isna(ts) else None),
+                       "matched": False, "match_dt_min": np.nan}
+                j = -1
+                if not pd.isna(ts) and len(pro_times):
+                    ts64 = np.datetime64(ts.to_datetime64())
+                    pos = int(np.searchsorted(pro_times, ts64))
+                    # Nearest of the two neighbours straddling ts (searchsorted gives the right one).
+                    best, best_d = -1, None
+                    for k in (pos - 1, pos):
+                        if 0 <= k < len(pro_times):
+                            d = abs(pro_times[k] - ts64)
+                            if d <= tol_ns and (best_d is None or d < best_d):
+                                best, best_d = k, d
+                    j = best
+                if j >= 0:
+                    rr = valid.iloc[j]
+                    dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
+                    row["matched"] = True
+                    row["match_dt_min"] = float(dt_min)
+                    for m in metrics:
+                        v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
+                        row[f"{m}_mean"] = v
+                        row[f"{m}_min"] = v
+                else:
+                    for m in metrics:
+                        row[f"{m}_mean"] = np.nan
+                        row[f"{m}_min"] = np.nan
+                if stim_amplitudes is not None and i < len(stim_amplitudes):
+                    row["stim_amplitude"] = stim_amplitudes[i]
+                else:
+                    row["stim_amplitude"] = _session_stim_amplitude(rec)
+                rows.append(row)
+            return pd.DataFrame(rows)
+
+        # Legacy same-calendar-day mean/min (match_tolerance_min is None).
         rows = []
         for i, rec in enumerate(recordings):
             ts = _to_datetime(rec.get("StartTime"))
             sess_date = ts.date() if not pd.isna(ts) else None
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
-            row = {"session_index": i, "session_start": ts, "session_date": sess_date}
+            row = {"session_index": i, "session_start": ts, "session_date": sess_date,
+                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan}
             for m in metrics:
                 if m in same_day.columns and len(same_day) > 0:
                     row[f"{m}_mean"] = same_day[m].mean()

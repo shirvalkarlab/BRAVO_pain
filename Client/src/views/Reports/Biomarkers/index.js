@@ -63,6 +63,11 @@ function Biomarkers() {
   const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
+  // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
+  // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
+  // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
+  // view dirty (a recompute re-matches). Exploratory — default 15 min.
+  const [matchTolerance, setMatchTolerance] = useState(15);
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
@@ -89,6 +94,7 @@ function Biomarkers() {
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
     PercentileLow: percentileLow, PercentileHigh: percentileHigh,
+    MatchToleranceMin: matchTolerance,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
@@ -364,39 +370,6 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {/* ── Biomarker COMPUTE below the exploration timeline ──────────────────────
-                      The timeline above is for visualization and needs no compute. The heavy
-                      biomarker analysis (detector over full-resolution data) runs ONLY when this
-                      button is clicked; settings (metric / binarization / window) are chosen in
-                      the card below first. */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pt={1} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap"
-                           sx={{ borderTop: "1px solid #E0E0E0" }}>
-                      <MDButton
-                        variant="contained" color="error" size="large"
-                        onClick={compute} disabled={computing}
-                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
-                              backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" },
-                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
-                      >
-                        {computing ? (
-                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
-                        ) : (data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now")}
-                      </MDButton>
-                      {!computing && dirty && data ? (
-                        <MDTypography variant="button" color="error" fontWeight="medium">
-                          {"Settings changed — click to recompute."}
-                        </MDTypography>
-                      ) : null}
-                      {data && data.timeline_points_full ? (
-                        <MDTypography variant="caption" color="dark">
-                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
-                        </MDTypography>
-                      ) : null}
-                    </MDBox>
-                  </Grid>
-
                   {computing ? (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
@@ -481,12 +454,49 @@ function Biomarkers() {
                                 metricLabel={previewMetricLabel}
                                 metricKey={metric}
                                 loading={painLoading}
+                                matchTolerance={matchTolerance}
+                                setMatchTolerance={setMatchTolerance}
+                                matchedCounts={(data && data.analytics && data.analytics.timedomain
+                                  && data.analytics.timedomain.matched_sample_counts) || null}
+                                matchDirty={dirty}
                               />
                             </MDBox>
                           </Grid>
 
                         </Grid>
                       </Card>
+                    </MDBox>
+                  </Grid>
+
+                  {/* ── Exploratory analysis trigger, DIRECTLY BENEATH the Pain Biomarkers box ──
+                      The timeline + preview above are live (no compute). The full-spectrum
+                      exploration (5 Hz sliding-band r + AUC over the matched PSDs) is EXPENSIVE
+                      and runs ONLY on click, using the metric / binarization / match-window chosen
+                      in the box above. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pt={0.5} pb={1.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                      <MDButton
+                        variant="contained" color="error" size="large"
+                        onClick={compute} disabled={computing}
+                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
+                              backgroundColor: "#d32f2f", color: "#ffffff",
+                              "&:hover": { backgroundColor: "#b71c1c" },
+                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
+                      >
+                        {computing ? (
+                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
+                        ) : (data ? "↻ Recompute full-spectrum exploration" : "▶ Start exploratory analysis")}
+                      </MDButton>
+                      {!computing && dirty && data ? (
+                        <MDTypography variant="button" color="error" fontWeight="medium">
+                          {"Settings changed — click to recompute."}
+                        </MDTypography>
+                      ) : null}
+                      {data && data.timeline_points_full ? (
+                        <MDTypography variant="caption" color="dark">
+                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
+                        </MDTypography>
+                      ) : null}
                     </MDBox>
                   </Grid>
 

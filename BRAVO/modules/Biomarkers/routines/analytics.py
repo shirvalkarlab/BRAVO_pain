@@ -902,6 +902,364 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
             "significance_method": "BH-FDR over displayed channel x freq family"}
 
 
+# --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
+def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                     pain_cutoff=None):
+    """Binary 0/1 label (NaN for the excluded middle) from a 1-D continuous PRO array.
+
+    Mirrors adapter._threshold_pain_level but operates on a flat array (one value per matched
+    neural sample, NOT daily-broadcast — the matching already gave us one PRO per session). The cut
+    is computed on the FINITE values present:
+      * "tertile"/"percentile": <= low_pct quantile -> 0, >= high_pct quantile -> 1, middle -> NaN
+      * "median": >= median -> 1 else 0
+      * "cutoff": >= pain_cutoff (default = median) -> 1 else 0
+      * "kmeans": 2-cluster split on the 1-D values (>= cluster midpoint -> 1)
+    """
+    v = np.asarray(values, dtype=float)
+    out = np.full(v.shape, np.nan)
+    fin = np.isfinite(v)
+    ref = v[fin]
+    if ref.size == 0:
+        return out
+    if strategy in ("tertile", "percentile"):
+        lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
+        hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
+        lo = float(np.percentile(ref, lo_q))
+        hi = float(np.percentile(ref, hi_q))
+        out[fin & (v <= lo)] = 0.0
+        out[fin & (v >= hi)] = 1.0
+        # values strictly between lo and hi stay NaN (excluded middle)
+    elif strategy == "kmeans":
+        s = np.sort(ref)
+        # 1-D 2-means via the largest gap is unstable; use the midpoint of the two cluster means
+        # from a single Lloyd step seeded at the tertiles — adequate for an exploratory split.
+        c0, c1 = float(np.percentile(ref, 25)), float(np.percentile(ref, 75))
+        for _ in range(25):
+            a = ref[np.abs(ref - c0) <= np.abs(ref - c1)]
+            b = ref[np.abs(ref - c0) > np.abs(ref - c1)]
+            nc0 = float(a.mean()) if a.size else c0
+            nc1 = float(b.mean()) if b.size else c1
+            if abs(nc0 - c0) < 1e-9 and abs(nc1 - c1) < 1e-9:
+                break
+            c0, c1 = nc0, nc1
+        mid = (c0 + c1) / 2.0
+        out[fin] = (v[fin] >= mid).astype(float)
+    else:  # "median" / "cutoff"
+        cut = float(pain_cutoff) if (strategy == "cutoff" and pain_cutoff is not None) \
+            else float(np.median(ref))
+        out[fin] = (v[fin] >= cut).astype(float)
+    return out
+
+
+def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                          pain_cutoff=None, match_dt_min=None, tolerance_min=None):
+    """Count, ON THE PSD/NEURAL SAMPLES, how many carry a matched pain label and how that label
+    binarizes into high/low (+ excluded middle).
+
+    `labels` is the per-session continuous PRO already matched within the tolerance window (NaN
+    where no PRO fell inside the window). This is the count the binarization histogram must report:
+    distinct matched neural samples, not raw daily pain surveys. `match_dt_min` (signed minutes,
+    optional) lets us report the median |offset| of the matches so the user sees how tight the
+    window actually bit.
+    """
+    y = np.asarray(labels, dtype=float)
+    n_sessions = int(y.size)
+    matched = np.isfinite(y)
+    n_matched = int(matched.sum())
+    pl = _binarize_labels(y, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                          pain_cutoff=pain_cutoff)
+    n_high = int(np.nansum(pl == 1.0))
+    n_low = int(np.nansum(pl == 0.0))
+    # Excluded middle only exists for the tertile/percentile labelers.
+    n_excluded = int(n_matched - n_high - n_low) if strategy in ("tertile", "percentile") else 0
+    out = {
+        "n_sessions": n_sessions,          # total streaming/PSD sessions
+        "n_matched": n_matched,            # sessions with a pain report inside the window
+        "n_unmatched": int(n_sessions - n_matched),
+        "n_high": n_high,
+        "n_low": n_low,
+        "n_excluded_middle": max(n_excluded, 0),
+        "strategy": strategy,
+        "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
+    }
+    if match_dt_min is not None:
+        d = np.asarray(match_dt_min, dtype=float)
+        d = d[np.isfinite(d)]
+        if d.size:
+            out["median_abs_offset_min"] = float(np.median(np.abs(d)))
+            out["max_abs_offset_min"] = float(np.max(np.abs(d)))
+    return out
+
+
+def _cv_logistic_auc(x, y, n_splits=5, seed=0):
+    """Cross-validated logistic-regression AUC for a SINGLE feature `x` against binary `y`.
+
+    Out-of-fold predicted probabilities -> one ROC-AUC over all held-out samples (so each sample is
+    scored by a model that did not see it). Oriented to >= 0.5 (max(auc, 1-auc)) because the
+    feature's sign vs pain is itself part of the exploration. Returns (auc, n_used). NaN when a
+    class is missing or too few samples to split."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import roc_auc_score
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    n = x.size
+    if n < 8 or len(np.unique(y)) < 2:
+        return np.nan, int(n)
+    pos, neg = int((y == 1).sum()), int((y == 0).sum())
+    k = int(min(n_splits, pos, neg))
+    if k < 2:
+        return np.nan, int(n)
+    X = x.reshape(-1, 1)
+    oof = np.full(n, np.nan)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+    for tr, te in skf.split(X, y):
+        if len(np.unique(y[tr])) < 2:
+            continue
+        clf = LogisticRegression(max_iter=200)
+        clf.fit(X[tr], y[tr])
+        oof[te] = clf.predict_proba(X[te])[:, 1]
+    ok = np.isfinite(oof)
+    if ok.sum() < 4 or len(np.unique(y[ok])) < 2:
+        return np.nan, int(n)
+    auc = float(roc_auc_score(y[ok], oof[ok]))
+    return max(auc, 1.0 - auc), int(n)
+
+
+def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.3333,
+                                high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
+                                step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
+                                region_map=None, n_peaks=6, max_scatter=400):
+    """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
+
+    Slides a `band_width_hz`-wide window in `step_hz` increments across 0..`fmax`. For each
+    (channel, band):
+      * band power per epoch = mean LINEAR PSD over the band, then 10*log10 (one feature/session)
+      * Pearson r vs the CONTINUOUS pain label (the exploratory signal, no binarization)
+      * ROC-AUC of the BINARIZED label via cross-validated single-feature logistic regression
+
+    The two curves are returned per channel for the same band-center x-axis so the UI can overlay
+    them. `adaptive_band` (8-30 Hz on the Percept RC) is flagged per band so the UI can shade the
+    device-valid region. Per band we also return a compact scatter (band power vs continuous label,
+    with dates) so a click on any band shows the underlying relationship. NOTHING here is a
+    validated biomarker — this is a discovery view.
+    """
+    if not td_detail:
+        return None
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)          # (E, C, F) power (linear or prelog)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)    # (E,) continuous PRO
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    # `prelog`: the stored feature is ALREADY 10*log10 (and possibly within-source z-scored), as the
+    # pooled-PSD builder emits. Then band power = mean over the band directly (no second log10).
+    prelog = bool(td_detail.get("prelog", False))
+    if f.size == 0 or psd.ndim != 3 or labels.size == 0:
+        return None
+
+    fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
+    w = float(band_width_hz)
+    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax].
+    lo_c = w / 2.0
+    hi_c = fmax - w / 2.0
+    if hi_c <= lo_c:
+        return None
+    centers = np.arange(lo_c, hi_c + 1e-9, float(step_hz))
+    a_lo, a_hi = (None, None) if adaptive_band is None else (float(adaptive_band[0]), float(adaptive_band[1]))
+
+    # Binarize the continuous label ONCE (same split for every band).
+    y_bin = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+
+    band_meta = []
+    for c in centers:
+        b0, b1 = c - w / 2.0, c + w / 2.0
+        adaptive_valid = bool(a_lo is not None and b0 >= a_lo - 1e-9 and b1 <= a_hi + 1e-9)
+        band_meta.append({"center": float(c), "lo": float(b0), "hi": float(b1),
+                          "adaptive_valid": adaptive_valid})
+
+    out_channels = []
+    C = psd.shape[1]
+    for ci in range(C):
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        region = region_map.get(raw) if region_map else None
+        fmt = format_channel(raw, region=region)
+        r_curve, auc_curve, n_curve = [], [], []
+        band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
+        for c in centers:
+            bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
+            if not bmask.any():
+                r_curve.append(None); auc_curve.append(None); n_curve.append(0)
+                band_power_by_center.append(None)
+                continue
+            sub = psd[:, ci, bmask]                         # (E, nbins) power in band
+            with np.errstate(invalid="ignore", divide="ignore"):
+                if prelog:
+                    # Already log (+ z-scored): the band feature is the mean over the band's bins.
+                    bp_log = np.nanmean(sub, axis=1)
+                else:
+                    bp = np.nanmean(sub, axis=1)            # (E,) mean linear power in band
+                    bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
+            band_power_by_center.append(bp_log)
+            # Pearson r vs CONTINUOUS label
+            m = np.isfinite(bp_log) & np.isfinite(labels)
+            if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
+                r = float(np.corrcoef(bp_log[m], labels[m])[0, 1])
+            else:
+                r = None
+            r_curve.append(_f(r) if r is not None else None)
+            # AUC vs BINARIZED label (CV logistic)
+            auc, n_used = _cv_logistic_auc(bp_log, y_bin)
+            auc_curve.append(_f(auc) if np.isfinite(auc) else None)
+            n_curve.append(int(n_used))
+
+        # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
+        from scipy.signal import find_peaks
+        absr = np.array([abs(x) if x is not None else 0.0 for x in r_curve], dtype=float)
+        pk, _ = find_peaks(absr, prominence=0.05)
+        pk = sorted(pk, key=lambda k: -absr[k])[:n_peaks]
+        peaks = [{"center": float(centers[k]), "r": r_curve[k], "auc": auc_curve[k]}
+                 for k in sorted(pk)]
+
+        out_channels.append({
+            "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
+            "r": r_curve,            # Pearson r vs continuous PRO, per band center
+            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
+            "n": n_curve,            # matched samples used per band
+            "peaks": peaks,
+            # Keep the per-band log power around for click-to-scatter (server-side cache; the
+            # frontend reads scatter via the band index). Stored compact (one row per center).
+            "_band_power": band_power_by_center,
+        })
+
+    # Build click-scatter payloads: for each channel & band center, (band power, continuous label,
+    # date) for matched sessions. Done here (not in the loop) so we can cap the payload size.
+    label_fin = np.isfinite(labels)
+    for ch in out_channels:
+        bp_list = ch.pop("_band_power")
+        scat = []
+        for bp_log in bp_list:
+            if bp_log is None:
+                scat.append(None); continue
+            m = np.isfinite(bp_log) & label_fin
+            idx = np.where(m)[0]
+            if idx.size < 3:
+                scat.append(None); continue
+            if idx.size > max_scatter:
+                idx = idx[np.linspace(0, idx.size - 1, max_scatter).astype(int)]
+            scat.append({
+                "x": [_f(bp_log[i]) for i in idx],          # log band power
+                "y": [_f(labels[i]) for i in idx],          # continuous PRO
+                "dates": ([str(times[i]) for i in idx] if times is not None else None),
+            })
+        ch["scatter"] = scat
+
+    return {
+        "centers": [float(c) for c in centers],
+        "bands": band_meta,
+        "channels": out_channels,
+        "band_width_hz": w,
+        "step_hz": float(step_hz),
+        "fmax": fmax,
+        "adaptive_band": ([a_lo, a_hi] if a_lo is not None else None),
+        "strategy": strategy,
+        "transform": "log_bandpower",
+        "note": ("Exploratory only. r is Pearson vs the continuous PRO; AUC is cross-validated "
+                 "single-feature logistic vs the binarized PRO. Neither is a validated biomarker."),
+    }
+
+
+def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                              strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                              pain_cutoff=None, cluster="era"):
+    """Cluster-robust inference for ONE selected (channel, band) via a logistic MIXED-EFFECTS model
+    (pymer4 -> R lme4 glmer): pain_high ~ band_power + (1 | session_cluster).
+
+    Run ONLY on the band the user clicks (one glmer fit), not across the sweep. Returns the fixed
+    effect of band power (coef, OR, z, p) with the within-cluster correlation modelled explicitly —
+    the honest 'is this band real?' number for clustered repeated measures. Degrades to
+    {available: False, reason: ...} when pymer4/R is unavailable, so the sweep still works without R.
+    """
+    try:
+        from pymer4.models import Lmer
+    except Exception as e:        # pymer4 or its R backend not installed
+        return {"available": False, "reason": f"pymer4 unavailable: {e}"}
+    if not td_detail:
+        return {"available": False, "reason": "no detail"}
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    # Resolve the channel index from the raw name (or the formatted short).
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i
+            break
+    if ci is None:
+        return {"available": False, "reason": f"channel {channel_raw} not found"}
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return {"available": False, "reason": "empty band"}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                         pain_cutoff=pain_cutoff)
+    # Cluster id: group sessions into temporal eras (weekly) when dates are present; else a single
+    # cluster (the random effect then collapses but the model still fits).
+    if times is not None and len(times) == len(bp_log):
+        wk = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce").dt.isocalendar()
+        cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
+    else:
+        cl = np.array(["all"] * len(bp_log))
+    m = np.isfinite(bp_log) & np.isfinite(y)
+    if m.sum() < 12 or len(np.unique(y[m])) < 2:
+        return {"available": False, "reason": "too few matched samples for a mixed model"}
+    df = pd.DataFrame({"pain_high": y[m].astype(int),
+                       "band_power": (bp_log[m] - np.nanmean(bp_log[m])) / (np.nanstd(bp_log[m]) or 1.0),
+                       "cluster": cl[m]})
+    n_clusters = int(df["cluster"].nunique())
+    formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
+    try:
+        mod = Lmer(formula, data=df, family="binomial")
+        mod.fit(summarize=False)
+        coefs = mod.coefs
+        row = coefs.loc["band_power"]
+        est = float(row.get("Estimate"))
+        # pymer4 exposes OR / P-val / Z-stat directly for a binomial fit; fall back to exp(coef)
+        # and the alternate p-value column name across pymer4 versions.
+        p = float(row["P-val"]) if "P-val" in row else (float(row["Pr(>|z|)"]) if "Pr(>|z|)" in row else np.nan)
+        z = float(row["Z-stat"]) if "Z-stat" in row else np.nan
+        odds = float(row["OR"]) if "OR" in row else float(np.exp(est))
+        # Complete/quasi-complete separation: the predictor (z-scored) drives an implausibly large
+        # coefficient and the SE/p-value explode (Hessian singular). Report it as unreliable rather
+        # than a spurious OR ~ 1e90. |coef| > 10 on a z-scored feature => OR > ~22000, not credible.
+        if not np.isfinite(est) or abs(est) > 10.0:
+            return {
+                "available": True, "model": "glmer logistic (lme4 via pymer4)",
+                "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                "coef": _f(est), "odds_ratio": None, "z": None, "p": None,
+                "separation": True,
+                "note": ("Complete/quasi-complete separation — band power separates high/low "
+                         "pain perfectly at this window, so the logistic estimate is degenerate. "
+                         "Widen the match window or loosen the binarization to get a stable fit."),
+            }
+        return {
+            "available": True, "model": "glmer logistic (lme4 via pymer4)",
+            "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+            "coef": _f(est), "odds_ratio": _f(odds),
+            "z": _f(z), "p": _f(p), "separation": False,
+            "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
+        }
+    except Exception as e:
+        return {"available": False, "reason": f"glmer fit failed: {e}"}
+
+
 # --- Time-domain (streaming) analytics -------------------------------------------------------
 def psd_spectra(td_detail, db=True, region_map=None):
     """Mean PSD per channel split by pain group (high vs low, by median label).

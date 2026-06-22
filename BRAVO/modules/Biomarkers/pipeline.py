@@ -523,7 +523,8 @@ def select_biomarker_band(result, q_threshold=0.05, ignore_band=None):
 # ---------------------------------------------------------------------------
 def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
                           label_metric="nrs", label_reduce="min",
-                          transform="log", stim_amplitudes=None):
+                          transform="log", stim_amplitudes=None,
+                          match_tolerance_min=None):
     """Time-domain (250 Hz streaming) PSD<->pain branch -> SourceRun with a td_* timeline.
 
     `align` is accepted for signature back-compat but no longer changes the timeline: the
@@ -543,6 +544,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     session_df = adapter.align_pros(
         pro_df, target="session", recordings=recordings,
         metrics=metrics, stim_amplitudes=stim_amplitudes,
+        match_tolerance_min=match_tolerance_min,
     )
     label_col = f"{label_metric}_{label_reduce}"
     labels = session_df[label_col].to_numpy(dtype=float)
@@ -565,6 +567,13 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     else:
         timeline["td_biomarker_value"] = np.nan
     timeline["td_stim_amplitude"] = session_df.get("stim_amplitude", np.nan)
+    # Carry the PRO<->PSD match bookkeeping so the analytics step can count matched neural samples
+    # (and how far off, in minutes) without re-running the match. Present for both the time-window
+    # and the legacy same-day path (matched=True there means the session had a same-day PRO).
+    if "matched" in session_df.columns:
+        timeline["td_matched"] = session_df["matched"].to_numpy()
+    if "match_dt_min" in session_df.columns:
+        timeline["td_match_dt_min"] = session_df["match_dt_min"].to_numpy()
     for m in metrics:
         for red in ("mean", "min"):
             col = f"{m}_{red}"
@@ -1054,7 +1063,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
-                  stim_amplitudes=None, sliding=True):
+                  stim_amplitudes=None, sliding=True, match_tolerance_min=None):
     """
     Run biomarker identification with a selectable data source.
 
@@ -1077,7 +1086,8 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
     def _td():
         return run_timedomain_branch(recordings, pro_df, chan_order, align=align,
                                      label_metric=label_metric, label_reduce=label_reduce,
-                                     transform=transform, stim_amplitudes=stim_amplitudes)
+                                     transform=transform, stim_amplitudes=stim_amplitudes,
+                                     match_tolerance_min=match_tolerance_min)
 
     def _power():
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,

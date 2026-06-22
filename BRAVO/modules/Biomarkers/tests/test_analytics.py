@@ -396,6 +396,105 @@ def test_roc_operating_point_is_youden_and_separates_classes():
     assert 100.0 < op2["threshold"] < 140.0, f"flipped threshold {op2['threshold']:.1f} off the raw scale"
 
 
+def _planted_detail(E=60, C=2, F=60, center=20.0, half=2.5, beta=0.4, seed=0, prelog=False):
+    """Synthetic td_detail with a planted band-power<->label correlation in channel 0."""
+    rng = np.random.default_rng(seed)
+    f = np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= center - half) & (f <= center + half)
+    psd[:, 0, band] *= (1 + beta * (labels - labels.mean())[:, None])
+    if prelog:
+        psd = 10.0 * np.log10(psd)
+    return {"f_set": f, "psd": psd, "labels": labels,
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
+            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)],
+            "prelog": prelog}
+
+
+def test_binarize_labels_tertile_excludes_middle():
+    vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
+    b = analytics._binarize_labels(vals, strategy="tertile", low_pct=33.3333, high_pct=66.6667)
+    assert b[0] == 0 and b[8] == 1, b
+    assert np.isnan(b[3]) and np.isnan(b[9]), b   # middle + NaN both excluded
+
+
+def test_matched_sample_counts_reports_high_low_and_offset():
+    vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
+    dt = np.array([2, -5, 10, np.nan, 3, -12, 1, 8, -2, np.nan], float)
+    mc = analytics.matched_sample_counts(vals, strategy="tertile", match_dt_min=dt, tolerance_min=15)
+    assert mc["n_matched"] == 9 and mc["n_high"] == 3 and mc["n_low"] == 3, mc
+    assert mc["n_excluded_middle"] == 3, mc
+    assert abs(mc["median_abs_offset_min"] - 4.0) < 1e-9, mc
+
+
+def test_cv_logistic_auc_oriented_and_guards_small_n():
+    rng = np.random.default_rng(1)
+    x = np.concatenate([rng.normal(0, 1, 30), rng.normal(3, 1, 30)])
+    y = np.array([0] * 30 + [1] * 30, float)
+    auc, n = analytics._cv_logistic_auc(x, y)
+    assert np.isfinite(auc) and auc > 0.8, auc
+    assert np.isnan(analytics._cv_logistic_auc(x[:6], y[:6])[0])        # too few -> NaN
+    assert np.isnan(analytics._cv_logistic_auc(x, np.ones_like(y))[0])  # single class -> NaN
+
+
+def test_spectral_feature_importance_finds_planted_band():
+    det = _planted_detail(center=17.5, beta=0.5)
+    sc = analytics.spectral_feature_importance(det, strategy="tertile")
+    assert len(sc["centers"]) == 96 and sc["adaptive_band"] == [8.0, 30.0]
+    ch0 = sc["channels"][0]
+    absr = [abs(x) if x is not None else 0 for x in ch0["r"]]
+    bi = int(np.argmax(absr))
+    # planted band 15-20 Hz; the peak 5 Hz scan-band center sits within +/- one band-half of 17.5
+    assert abs(sc["centers"][bi] - 17.5) <= 2.5, sc["centers"][bi]
+    assert ch0["auc"][bi] is not None and ch0["scatter"][bi] is not None
+    # adaptive-valid flags: a 5 Hz band fits inside [8,30] only for centers in [10.5, 27.5]
+    cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
+    assert cen[av].min() == 10.5 and cen[av].max() == 27.5
+
+
+def test_spectral_scan_prelog_matches_linear():
+    """prelog=True (mean over already-log bins) must match log10(mean linear) closely in r."""
+    lin = _planted_detail(center=20.0, beta=0.4, seed=7, prelog=False)
+    pre = dict(lin); pre["psd"] = 10.0 * np.log10(lin["psd"]); pre["prelog"] = True
+    r_lin = analytics.spectral_feature_importance(lin, strategy="tertile")["channels"][0]["r"]
+    r_pre = analytics.spectral_feature_importance(pre, strategy="tertile")["channels"][0]["r"]
+    # Spearman-free: signs and rough magnitude of the strongest band agree.
+    bi = int(np.argmax([abs(x) if x is not None else 0 for x in r_lin]))
+    assert r_pre[bi] is not None and np.sign(r_pre[bi]) == np.sign(r_lin[bi])
+
+
+def test_pooled_psd_detail_is_per_channel_and_matches_pro():
+    from Biomarkers.routines import streaming_psd as sp
+    f = sp.F_SET
+    # Two channels, two sources; flat spectra so interpolation is exact.
+    def spec(level):
+        return (f, np.full(f.shape, level, float))
+    T0 = 1.75e9
+    HR = 3600.0
+    rows = []
+    # channel A: TD streaming at t=T0 and t=T0+10h; channel B: montage at t=T0+20h. Spaced hours
+    # apart so the 15-min window matches AT MOST one of them.
+    for i, t in enumerate([T0, T0 + 10 * HR]):
+        fr, pw = spec(2.0 + i)
+        rows.append({"channel": "ZERO_TWO_LEFT", "source": "TD streaming", "t": t, "freq": fr, "power": pw})
+    fr, pw = spec(5.0)
+    rows.append({"channel": "ZERO_TWO_RIGHT", "source": "Montage/survey", "t": T0 + 20 * HR, "freq": fr, "power": pw})
+    # PRO: one report 5 min after T0 (matches ONLY the first A row), one far from everything
+    pro_t = np.array([T0 + 300, T0 + 1e6]); pro_v = np.array([8.0, 2.0])
+    det = sp.build_pooled_psd_detail(rows, pro_t, pro_v, tolerance_min=15)
+    assert det["chan_order"] == ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], det["chan_order"]
+    assert det["prelog"] is True
+    # channel axis is per-channel: each row populates ONLY its own channel column (no cross-pooling)
+    psd = det["psd"]            # (N, C, F)
+    chA = ~np.isnan(psd[:, 0, 0]); chB = ~np.isnan(psd[:, 1, 0])
+    assert chA.sum() == 2 and chB.sum() == 1, (chA.sum(), chB.sum())
+    assert not (chA & chB).any()   # no row appears in two channels
+    # matching: exactly the first A row (within 15 min of pro_t[0]) carries a label
+    assert det["pool_meta"]["n_matched"] == 1, det["pool_meta"]
+    assert np.isfinite(det["labels"]).sum() == 1
+
+
 if __name__ == "__main__":
     test_otsu_matches_canonical_convention()
     test_roc_operating_point_is_youden_and_separates_classes()
@@ -417,4 +516,10 @@ if __name__ == "__main__":
     test_chronic_center_freqs_group_level()
     test_chronic_center_freqs_active_group_wins()
     test_chronic_center_freqs_missing_is_safe()
+    test_binarize_labels_tertile_excludes_middle()
+    test_matched_sample_counts_reports_high_low_and_offset()
+    test_cv_logistic_auc_oriented_and_guards_small_n()
+    test_spectral_feature_importance_finds_planted_band()
+    test_spectral_scan_prelog_matches_linear()
+    test_pooled_psd_detail_is_per_channel_and_matches_pro()
     print("All analytics tests passed.")

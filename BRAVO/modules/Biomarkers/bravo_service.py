@@ -29,6 +29,7 @@ from . import adapter
 from .routines import redcap_client
 from .routines import analytics
 from .routines import availability
+from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
 
@@ -276,6 +277,124 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
                     psds.append((list(f), list(m)))
         out.append({"name": "Montage PSD", "t": float(t0), "psds": psds})
     return out
+
+
+# The six main bipolar sensing pairs (per hemisphere). The exploratory spectral scan is restricted
+# to these — ring/segment montages and reference-electrode channels are dropped (they aren't the
+# closed-loop sensing channels and don't map to a single bipolar pair). DESIGN: channel is the gate.
+_MAIN_BIPOLAR = {
+    "ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT", "ONE_THREE_RIGHT",
+    "ZERO_TWO_LEFT", "ZERO_TWO_RIGHT",
+}
+
+# Single-worker pool that warms the PSD-matrix cache off the request thread (eager compute while the
+# user reviews the availability timeline). Daemon threads so it never blocks process shutdown.
+_PSD_WARM_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="psd-warm")
+
+
+def _assemble_psd_rows(participant_uid, td_list, psd_list):
+    """Gather EVERY full-spectrum PSD for the main bipolar channels, one row per (recording, channel).
+
+    Two full-spectrum sources carry the main bipolar pairs:
+      * TD streaming (BrainSenseTimeDomain + IndefiniteStream): raw 250 Hz time domain -> Welch PSD.
+      * Montage/survey (Survey + Baseline + Stim Montages): also raw time domain -> Welch PSD; these
+        sweep all six bipolar pairs.
+    (NeuralActivitySnapshot and patient-event PSDs use reference-montage / per-hemisphere identities
+    that don't correspond to a single bipolar pair, so they're excluded from the per-channel scan —
+    they remain timeline markers.)
+
+    Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} — the input to
+    `streaming_psd.psd_rows_to_matrix`. The Welch transform here is the expensive part that the
+    cache exists to avoid repeating.
+    """
+    from .routines import streaming_psd as _sp
+    rows = []
+
+    def _welch_rows(recs, source_label):
+        for r in recs or []:
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames") or [])
+            keep = [(i, n) for i, n in enumerate(names) if str(n).upper() in _MAIN_BIPOLAR]
+            if not keep:
+                continue
+            data = np.asarray(r.get("Data"))
+            if data.ndim != 2:
+                continue
+            # welch expects (n_ch, n_samples); montage/TD Data is (n_samples, n_ch).
+            sig = data.T if data.shape[0] != len(names) else data
+            fs = float(r.get("SamplingRate") or 250.0)
+            t0 = availability._to_epoch(r.get("StartTime"))
+            if t0 is None:
+                continue
+            keep_names = [n for _, n in keep]
+            try:
+                psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names)  # (1, k, F)
+            except Exception:
+                continue
+            psd = np.asarray(psd)
+            for j, n in enumerate(keep_names):
+                rows.append({"channel": str(n).upper(), "source": source_label,
+                             "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :]})
+
+    _welch_rows(td_list, "TD streaming")
+    _welch_rows(psd_list, "Montage/survey")
+    return rows
+
+
+def _psd_cache_dir():
+    try:
+        from django.conf import settings
+        base = getattr(settings, "DATASERVER_PATH", None) or os.environ.get("DATASERVER_PATH") or "/tmp/"
+    except Exception:
+        base = os.environ.get("DATASERVER_PATH") or "/tmp/"
+    d = os.path.join(base, "cache", "biomarker_psd")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _psd_matrix_signature(td_list, psd_list):
+    """Content signature over the recordings feeding the matrix — StartTime + channel count per rec.
+    Changes iff the underlying recordings change, so a stale cache is never silently reused."""
+    import hashlib
+    parts = []
+    for src, recs in (("td", td_list), ("psd", psd_list)):
+        for r in recs or []:
+            if isinstance(r, dict):
+                parts.append(f"{src}:{availability._to_epoch(r.get('StartTime'))}:"
+                             f"{len(r.get('ChannelNames') or [])}")
+    parts.sort()
+    return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16]
+
+
+def _cached_psd_matrix(participant_uid, td_list, psd_list):
+    """Load the per-channel PSD matrix for this participant from disk, or compute (Welch over all
+    recordings) and persist it. Keyed by participant + a content signature of the recordings, so it
+    is reused across compute clicks and across sessions until the recordings change.
+
+    Returns the dict from `streaming_psd.psd_rows_to_matrix` (or None if no PSDs)."""
+    from .routines import streaming_psd as _sp
+    sig = _psd_matrix_signature(td_list, psd_list)
+    path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
+    if os.path.exists(path):
+        try:
+            z = np.load(path, allow_pickle=True)
+            return {"logX": z["logX"], "t": z["t"],
+                    "channel": z["channel"].astype(object), "source": z["source"].astype(object),
+                    "f_set": z["f_set"]}
+        except Exception as e:
+            _log.warning("Biomarkers: PSD cache read failed (%s); recomputing", e)
+    rows = _assemble_psd_rows(participant_uid, td_list, psd_list)
+    mat = _sp.psd_rows_to_matrix(rows)
+    if mat is None:
+        return None
+    try:
+        np.savez(path, logX=mat["logX"], t=mat["t"],
+                 channel=np.asarray(mat["channel"], dtype=str),
+                 source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
+    except Exception as e:
+        _log.warning("Biomarkers: PSD cache write failed (%s)", e)
+    return mat
 
 
 def _derive_chan_order(td_recordings):
@@ -657,7 +776,8 @@ def _run_parallel(tasks):
 def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
                        label_strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                       train_days=None, step_days=None, sliding=True, region_map=None):
+                       train_days=None, step_days=None, sliding=True, region_map=None,
+                       match_tolerance_min=None, psd_matrix=None, pro_match=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -674,9 +794,41 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             td_step_days = step_days if step_days is not None else 7
             # Inject times into det so corr_spectrum can build per-session scatter data.
             det["times"] = times
+            # PRO<->PSD match offsets (signed minutes) carried on the td timeline, for the matched-
+            # sample count readout. Present only when time-window matching ran.
+            match_dt = (tl["td_match_dt_min"].to_numpy()
+                        if (tl is not None and "td_match_dt_min" in tl) else None)
+            # DESIGN §8b/§8c: the exploratory scan runs on the POOLED full-spectrum PSDs (TD
+            # streaming + montage/survey), per main bipolar channel, each PSD matched to the nearest
+            # continuous PRO within the window — NOT just the TD streaming sessions. Built from the
+            # cached per-channel matrix (Welch already done) + the PRO times/values, so a compute
+            # only pays for the cheap z-score + match + scan.
+            pooled = None
+            if psd_matrix is not None and pro_match is not None:
+                try:
+                    pooled = streaming_psd.build_pooled_detail_from_matrix(
+                        psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min)
+                except Exception as e:
+                    _log.warning("Biomarkers: pooled PSD detail failed (%s)", e)
+            scan_src = pooled if pooled is not None else det
+            # Matched counts come from the POOLED labels when available (all-source matches), with the
+            # signed offsets the pooled matcher recorded; else fall back to the TD timeline offsets.
+            if pooled is not None:
+                count_task = lambda: analytics.matched_sample_counts(
+                    pooled.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+                    match_dt_min=None, tolerance_min=match_tolerance_min)
+            else:
+                count_task = lambda: analytics.matched_sample_counts(
+                    det.get("labels"), strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+                    match_dt_min=match_dt, tolerance_min=match_tolerance_min)
             td_tasks = {
                 "corr_spectrum": lambda: analytics.corr_spectrum(det, region_map=region_map),
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
+                "spectral_feature_importance": lambda: analytics.spectral_feature_importance(
+                    scan_src, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+                    region_map=region_map),
+                "matched_sample_counts": count_task,
+                "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
                 # panels); no longer computed to keep the response lean.
             }
@@ -884,6 +1036,51 @@ def _label_strategy_params(request_data):
     return strat, low, high
 
 
+# PRO timestamp column (REDCap daily survey clock time). Carries real clock times (not midnight),
+# so it supports fine-grained PRO<->PSD time matching.
+_PRO_TIME_COL = "date_time_s1_daily"
+
+
+def _pro_match_arrays(pro_df, label_metric):
+    """Extract (timestamps_epoch_s, metric_values) for PRO<->PSD time matching.
+
+    Returns (np.ndarray, np.ndarray) of equal length over the rows that have BOTH a parseable
+    timestamp and a finite metric value, or None if unavailable."""
+    if pro_df is None or len(pro_df) == 0 or _PRO_TIME_COL not in pro_df.columns \
+            or label_metric not in pro_df.columns:
+        return None
+    ts = pd.to_datetime(pro_df[_PRO_TIME_COL], errors="coerce")
+    val = pd.to_numeric(pro_df[label_metric], errors="coerce")
+    ok = ts.notna() & val.notna()
+    if ok.sum() == 0:
+        return None
+    t_ep = (ts[ok].view("int64").to_numpy() / 1e9)
+    return t_ep, val[ok].to_numpy(dtype=float)
+
+
+# Default PRO<->PSD match window (minutes) when the request does not specify one. Exploratory:
+# a daily PRO is matched to the nearest streaming/PSD session whose timestamp falls within this
+# many minutes. The frontend slider sends `MatchToleranceMin`; None disables time-matching and
+# falls back to the legacy same-calendar-day aggregation.
+DEFAULT_MATCH_TOLERANCE_MIN = 15.0
+
+
+def _match_tolerance_param(request_data):
+    """Resolve the PRO<->PSD match window (minutes) from the request.
+
+    `MatchToleranceMin` is a positive number of minutes (the frontend tolerance slider). A missing
+    key uses DEFAULT_MATCH_TOLERANCE_MIN; an explicit 0 / negative / non-numeric value disables
+    time-matching (returns None -> legacy same-day aggregation).
+    """
+    if "MatchToleranceMin" not in request_data:
+        return DEFAULT_MATCH_TOLERANCE_MIN
+    try:
+        v = float(request_data.get("MatchToleranceMin"))
+    except (TypeError, ValueError):
+        return DEFAULT_MATCH_TOLERANCE_MIN
+    return v if v > 0 else None
+
+
 def _window_params_body(request_data, sliding):
 
     train_days, window_months = _months_to_days(request_data.get("WindowMonths"))
@@ -1017,6 +1214,16 @@ def availability_for_participant(request_data):
         participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
         td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map)
 
+    # Eagerly warm the per-channel PSD matrix (Welch over all full-spectrum recordings) WHILE the
+    # user reviews the just-loaded availability timeline, so the expensive transform is already on
+    # disk by the time they click "Start exploratory analysis". Runs in a background thread; failure
+    # is non-fatal (the compute path recomputes if the cache is absent).
+    try:
+        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        _PSD_WARM_POOL.submit(_cached_psd_matrix, participant_uid, td, psd_list)
+    except Exception as e:
+        _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
+
     msg = None
     if not av.get("records"):
         msg = ("No Percept recordings decoded for this participant yet — upload sessions to populate "
@@ -1082,9 +1289,11 @@ def run_for_participant(request_data):
 
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
+    match_tol_min = _match_tolerance_param(request_data)
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
-                 "low_pct": low_pct, "high_pct": high_pct}
+                 "low_pct": low_pct, "high_pct": high_pct,
+                 "match_tolerance_min": match_tol_min}
     if train_days is not None:
         rb_kwargs["train_days"] = train_days
     if step_days is not None:
@@ -1099,12 +1308,22 @@ def run_for_participant(request_data):
     run = pipeline.run_biomarker(td, pro_df, chan_order, source=source, chronic=chronic,
                                  label_metric=label_metric, kmeans_features=kmeans_features,
                                  **rb_kwargs)
+
+    # Pooled per-channel PSD matrix (TD streaming + montage/survey), cached on disk so the expensive
+    # Welch is computed once (eagerly, when the availability timeline loaded) and reused here. The
+    # cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
+    psd_list_for_scan = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    psd_matrix = _cached_psd_matrix(participant_uid, td, psd_list_for_scan)
+    pro_match = _pro_match_arrays(pro_df, label_metric)
+
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
                                                  label_strategy=label_strategy,
                                                  low_pct=low_pct, high_pct=high_pct,
                                                  train_days=train_days, step_days=step_days,
-                                                 sliding=sliding, region_map=region_map),
+                                                 sliding=sliding, region_map=region_map,
+                                                 match_tolerance_min=match_tol_min,
+                                                 psd_matrix=psd_matrix, pro_match=pro_match),
                          label_metric=label_metric)
     out["label_metric"] = label_metric
     out["available_metrics"] = BIOMARKER_METRICS
@@ -1112,6 +1331,7 @@ def run_for_participant(request_data):
     out["available_strategies"] = BINARIZATION_STRATEGIES
     out["percentile_low"] = low_pct
     out["percentile_high"] = high_pct
+    out["match_tolerance_min"] = match_tol_min
     out["sliding_window"] = sliding
     out["window_months"] = window_months
     out["window_step_months"] = window_step_months

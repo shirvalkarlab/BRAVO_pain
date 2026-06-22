@@ -22,6 +22,8 @@
 
 import { useMemo, useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
+import Slider from "@mui/material/Slider";
+import TextField from "@mui/material/TextField";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -94,8 +96,11 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 }
 
 
-function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh, metricLabel, metricKey, loading }) {
+function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
+                               metricLabel, metricKey, loading,
+                               matchTolerance, setMatchTolerance, matchedCounts, matchDirty }) {
   const ref = useRef(null);
+  const hasTolControl = typeof setMatchTolerance === "function";
 
   // Aggregate the raw PRO reports to ONE value per calendar day (the mean of that day's reports),
   // EXACTLY as the backend labeler does (adapter._threshold_pain_level with daily_broadcast=True:
@@ -275,7 +280,58 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : (loading ? "loading…" : "no data yet")}
         </MDTypography>
       </MDBox>
-      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 380 }} />
+
+      {/* PRO<->PSD match-window control (minutes). ABOVE the histogram, since it sets which neural
+          samples carry a pain label at all — and therefore the high/low counts reported below. A
+          compute param: changing it makes the result stale until the user re-runs the analysis. */}
+      {hasTolControl ? (
+        <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.25} mb={0.5}
+               sx={{ px: 0.5, py: 0.5, borderRadius: 1, backgroundColor: "#F4F6F8" }}>
+          <MDTypography variant="caption" fontWeight="bold" color="dark" sx={{ fontSize: 12, whiteSpace: "nowrap" }}>
+            {"Match window ± "}
+          </MDTypography>
+          <Slider
+            value={Number(matchTolerance) || 0} min={1} max={120} step={1}
+            valueLabelDisplay="auto" size="small" sx={{ flex: 1, mx: 0.5 }}
+            onChange={(e, v) => setMatchTolerance(v)}
+          />
+          <TextField
+            value={matchTolerance} type="number" size="small" variant="outlined"
+            onChange={(e) => {
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v) && v > 0) setMatchTolerance(v);
+            }}
+            inputProps={{ min: 1, max: 240, step: 1, style: { width: 52, padding: "4px 6px", fontSize: 13 } }}
+          />
+          <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>{"min"}</MDTypography>
+        </MDBox>
+      ) : null}
+
+      {/* Matched neural-sample readout — counts computed by the backend ON THE PSDs (distinct
+          sessions matched to a pain report within the window), not the raw daily surveys above. */}
+      {matchedCounts ? (
+        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25 }}>
+          <b>{`${(matchedCounts.n_matched ?? 0).toLocaleString()}`}</b>
+          {` of ${(matchedCounts.n_sessions ?? 0).toLocaleString()} neural samples matched a pain report `}
+          {`(±${matchedCounts.tolerance_min ?? matchTolerance} min`}
+          {Number.isFinite(matchedCounts.median_abs_offset_min)
+            ? `, median offset ${matchedCounts.median_abs_offset_min.toFixed(1)} min` : ""}
+          {") → "}
+          <span style={{ color: HI, fontWeight: 700 }}>{`${(matchedCounts.n_high ?? 0).toLocaleString()} high`}</span>
+          {" / "}
+          <span style={{ color: LO, fontWeight: 700 }}>{`${(matchedCounts.n_low ?? 0).toLocaleString()} low`}</span>
+          {matchedCounts.n_excluded_middle
+            ? <span style={{ color: MID }}>{` / ${matchedCounts.n_excluded_middle.toLocaleString()} excluded`}</span>
+            : null}
+          {matchDirty ? <i style={{ color: "#B00" }}>{"  (stale — recompute)"}</i> : null}
+        </MDTypography>
+      ) : (hasTolControl ? (
+        <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
+          {"Run the exploratory analysis to see how many neural samples match a pain report at this window."}
+        </MDTypography>
+      ) : null)}
+
+      <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 340 }} />
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, textAlign: "center" }}>
         {cuts.kind === "two-cut"
           ? `Cuts on the daily distribution at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — ` +

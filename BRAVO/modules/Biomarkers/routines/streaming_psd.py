@@ -31,6 +31,8 @@ The transform functions operate on PSD arrays of shape (E, C, F):
     E = epochs (e.g. days / sessions), C = channels, F = frequency bins (== len(F_SET)).
 """
 
+import datetime as _dt
+
 import numpy as np
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
@@ -320,6 +322,174 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
             continue
         psd[0, chan_order.index(ch_name), :] = Pxx[local_idx]
     return psd
+
+
+def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min):
+    """Nearest-PRO-within-window match for a vector of PSD timestamps.
+
+    `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the (sorted-by-time) PRO
+    report timestamps + the chosen continuous metric value. Returns (labels (N,), dt_min (N,)):
+    the matched continuous PRO value (NaN if no report within +/- tolerance) and the signed minutes
+    PRO-minus-PSD. Vectorized via searchsorted on the sorted PRO times."""
+    import numpy as _np
+    n = len(times_s)
+    lab = _np.full(n, _np.nan)
+    dt = _np.full(n, _np.nan)
+    pt = _np.asarray(pro_times_s, dtype=float)
+    pv = _np.asarray(pro_values, dtype=float)
+    order = _np.argsort(pt)
+    pt, pv = pt[order], pv[order]
+    if pt.size == 0 or tolerance_min is None or tolerance_min <= 0:
+        return lab, dt
+    tol_s = float(tolerance_min) * 60.0
+    for i, t in enumerate(times_s):
+        if not _np.isfinite(t):
+            continue
+        pos = int(_np.searchsorted(pt, t))
+        best, best_d = -1, None
+        for k in (pos - 1, pos):
+            if 0 <= k < pt.size:
+                d = abs(pt[k] - t)
+                if d <= tol_s and (best_d is None or d < best_d):
+                    best, best_d = k, d
+        if best >= 0:
+            lab[i] = pv[best]
+            dt[i] = (pt[best] - t) / 60.0
+    return lab, dt
+
+
+def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=15.0,
+                            f_set=F_SET, min_per_group=3):
+    """Assemble ALL full-spectrum PSDs (time-domain, montage/survey, snapshot, patient events) into
+    one scan-ready detail dict, KEYED BY ELECTRODE CHANNEL (DESIGN: channel is the top-level gate),
+    each PSD matched to the nearest continuous PRO within the window.
+
+    Every full-spectrum source contributes rows; rows on the SAME bipolar channel pool together no
+    matter which source they came from (streaming session, montage sweep, snapshot, patient event).
+    Each spectrum is interpolated onto a common `f_set`, taken to 10*log10, then Z-SCORED PER
+    FREQUENCY WITHIN (channel, source) so heterogeneous units (uV^2 vs LSB vs FFT bins) become
+    comparable before pooling (§8c "within-stream standardization removes the need for unit
+    conversion to pool"). Pearson r and single-feature logistic AUC are invariant to this affine
+    transform, so a single-source channel is unaffected; the standardization only matters where two
+    sources share a channel.
+
+    Parameters
+    ----------
+    psd_rows : list[dict]
+        One dict per (recording, channel) spectrum:
+            {"channel": str (canonical bipolar, e.g. "ZERO_THREE_LEFT"),
+             "source":  str ("TD streaming" | "Montage/survey" | "Snapshot" | "Patient event"),
+             "t":       epoch_s,
+             "freq":    array-like, "power": array-like}
+    pro_times_s, pro_values : array-like
+        Continuous PRO report timestamps (epoch s) and the chosen metric value, aligned.
+    tolerance_min : float
+        Match window (minutes). None / <=0 -> no PSD carries a label (all NaN).
+
+    Returns
+    -------
+    dict shaped like compute_psd_pain_correlation's output (so spectral_feature_importance consumes
+    it unchanged) with `prelog=True`, channel axis = the bipolar channels found, plus `pool_meta`.
+    """
+    mat = psd_rows_to_matrix(psd_rows, f_set=f_set)
+    if mat is None:
+        return None
+    return build_pooled_detail_from_matrix(mat, pro_times_s, pro_values,
+                                           tolerance_min=tolerance_min, min_per_group=min_per_group)
+
+
+def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
+    """Interpolate raw per-(recording, channel) spectra onto a common grid -> a CACHEABLE matrix.
+
+    This is the expensive-to-recompute artifact (the upstream Welch/decode feeds it): a fixed-shape
+    (N, F) log-power matrix plus parallel channel/source/timestamp arrays. It depends ONLY on the
+    recordings — NOT on the match tolerance or the pain metric — so it can be computed once (eagerly,
+    while the availability timeline loads) and reloaded on every subsequent compute.
+
+    `psd_rows`: list of {"channel", "source", "t": epoch_s, "freq", "power"}.
+    Returns {"logX": (N,F) float, "t": (N,), "channel": (N,) str, "source": (N,) str, "f_set": (F,)}.
+    """
+    f_set = np.asarray(f_set, dtype=float)
+    logs, ts, chs, srcs = [], [], [], []
+    for r in psd_rows or []:
+        t = r.get("t")
+        ch = r.get("channel")
+        if t is None or not ch:
+            continue
+        fr = np.asarray(r.get("freq"), dtype=float)
+        pw = np.asarray(r.get("power"), dtype=float)
+        ok = np.isfinite(fr) & np.isfinite(pw) & (pw > 0)
+        if ok.sum() < 4:
+            continue
+        logs.append(10.0 * np.log10(np.interp(f_set, fr[ok], pw[ok])))
+        ts.append(float(t)); chs.append(str(ch)); srcs.append(str(r.get("source") or "?"))
+    if not logs:
+        return None
+    return {"logX": np.vstack(logs), "t": np.asarray(ts, dtype=float),
+            "channel": np.asarray(chs, dtype=object), "source": np.asarray(srcs, dtype=object),
+            "f_set": f_set}
+
+
+def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=15.0,
+                                    min_per_group=3):
+    """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
+    continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
+    matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated."""
+    f_set = np.asarray(mat["f_set"], dtype=float)
+    F = f_set.size
+    X = np.asarray(mat["logX"], dtype=float)
+    t_arr = np.asarray(mat["t"], dtype=float)
+    ch_arr = np.asarray(mat["channel"], dtype=object)
+    src_arr = np.asarray(mat["source"], dtype=object)
+
+    # Within-(channel,source) per-frequency z-score so sources sharing a channel become poolable.
+    Xz = X.copy()
+    for ch in np.unique(ch_arr):
+        for sc in np.unique(src_arr[ch_arr == ch]):
+            m = (ch_arr == ch) & (src_arr == sc)
+            if m.sum() >= min_per_group:
+                mu = np.nanmean(X[m], axis=0); sd = np.nanstd(X[m], axis=0)
+                sd[~np.isfinite(sd) | (sd == 0)] = 1.0
+                Xz[m] = (X[m] - mu) / sd
+            else:
+                # too few to standardize -> center only (keeps it on a comparable additive scale)
+                Xz[m] = X[m] - np.nanmean(X[m], axis=0)
+
+    labels, dt_min = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min)
+
+    chan_order = list(np.unique(ch_arr))
+    C = len(chan_order)
+    N = X.shape[0]
+    psd_stack = np.full((N, C, F), np.nan)
+    for ci, ch in enumerate(chan_order):
+        m = ch_arr == ch
+        psd_stack[m, ci, :] = Xz[m]
+
+    def _src_breakdown(mask):
+        u, c = np.unique(src_arr[mask], return_counts=True)
+        return {str(k): int(v) for k, v in zip(u, c)}
+
+    matched_mask = np.isfinite(labels)
+    return {
+        "f_set": f_set,
+        "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
+        "feature": psd_stack,
+        "labels": labels,                    # continuous PRO matched within the window (NaN = none)
+        "chan_order": chan_order,
+        "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
+        "prelog": True,                      # spectral_feature_importance: do NOT re-log
+        "transform": "log_zscore_within_channel_source",
+        "pool_meta": {
+            "n_psds": int(N),
+            "n_matched": int(matched_mask.sum()),
+            "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
+            "per_source": _src_breakdown(np.ones(N, bool)),
+            "per_source_matched": _src_breakdown(matched_mask),
+            "per_channel": {ch: int((ch_arr == ch).sum()) for ch in chan_order},
+            "median_abs_offset_min": (float(np.nanmedian(np.abs(dt_min)))
+                                      if np.isfinite(dt_min).any() else None),
+        },
+    }
 
 
 def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,

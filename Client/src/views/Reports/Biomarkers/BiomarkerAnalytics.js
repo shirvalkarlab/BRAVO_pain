@@ -77,6 +77,125 @@ function Panel({ title, children, lg = 6 }) {
   );
 }
 
+// DESIGN §8b — the exploratory spectral feature-importance scan, the centerpiece TD panel.
+// One dual-axis curve per main bipolar channel: Pearson r vs the CONTINUOUS PRO (left axis) and
+// cross-validated logistic AUC vs the BINARIZED PRO (right axis), both over the same 5 Hz sliding
+// band-center x-axis, so the two complementary views of "which band tracks pain" overlay. The
+// 8–30 Hz Percept-RC adaptive-valid range is shaded (that's the band the device can actually act
+// on). CLICK any band on a curve to drop a scatter of that band's power vs the PRO below it.
+function SpectralFeatureImportance({ scan, pain, HI, LO }) {
+  const ref = useRef(null);
+  const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
+  const channels = (scan && scan.channels) || [];
+  const centers = (scan && scan.centers) || [];
+  const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
+  const fmax = (scan && scan.fmax) || 100;
+
+  // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
+  const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
+
+  useEffect(() => {
+    if (!ref.current || !channels.length || !centers.length) return;
+    const traces = [];
+    channels.forEach((ch, ci) => {
+      const color = hemiOf(ch) === "Right" ? HI : LO;
+      // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
+      traces.push({ x: centers, y: ch.r, name: `${ch.short} · r`, type: "scattergl", mode: "lines",
+        line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
+        customdata: centers.map((c, bi) => [ci, bi]),
+        hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
+      traces.push({ x: centers, y: ch.auc, name: `${ch.short} · AUC`, type: "scattergl", mode: "lines",
+        line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
+        customdata: centers.map((c, bi) => [ci, bi]),
+        hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
+    });
+    // Marker for the currently-selected band (vertical guide).
+    const shapes = [];
+    if (adaptive && adaptive.length === 2) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
+        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
+    }
+    if (sel) shapes.push({ type: "line", xref: "x", yref: "paper", x0: centers[sel.bi], x1: centers[sel.bi],
+      y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
+
+    const layout = {
+      ...FIG_BASE, autosize: true, height: 420,
+      xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" }, range: [0, fmax] },
+      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
+        range: [-1.05, 1.05], zeroline: true },
+      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
+        overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
+      legend: { orientation: "h", y: -0.18, groupclick: "togglegroup", font: { size: 10 } },
+      shapes,
+      annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
+        yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
+        showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
+    };
+    Plotly.react(ref.current, traces, layout, {
+      responsive: true, displaylogo: false,
+      modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
+    });
+    const gd = ref.current;
+    const onClick = (ev) => {
+      const pt = ev && ev.points && ev.points[0];
+      if (pt && pt.customdata) setSel({ ci: pt.customdata[0], bi: pt.customdata[1] });
+    };
+    gd.on("plotly_click", onClick);
+    return () => { if (gd) { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); Plotly.purge(gd); } };
+  }, [scan, sel, pain, HI, LO]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scatter for the selected (channel, band): band power vs continuous PRO.
+  let scatterNode = null;
+  if (sel && channels[sel.ci]) {
+    const ch = channels[sel.ci];
+    const sc = ch.scatter && ch.scatter[sel.bi];
+    const center = centers[sel.bi];
+    const r = ch.r && ch.r[sel.bi];
+    const auc = ch.auc && ch.auc[sel.bi];
+    const n = ch.n && ch.n[sel.bi];
+    if (sc && sc.x && sc.x.length) {
+      const color = hemiOf(ch) === "Right" ? HI : LO;
+      const traces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
+        marker: { color, size: 6, opacity: 0.7 }, text: sc.dates || [],
+        hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
+      scatterNode = (
+        <MDBox mt={1}>
+          <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 14 }}>
+            {`${ch.short} @ ${center.toFixed(1)} Hz (5 Hz band) vs ${pain} — r=${r != null ? r.toFixed(2) : "—"}, AUC=${auc != null ? auc.toFixed(2) : "—"}, n=${n || 0}`}
+          </MDTypography>
+          <Fig height={300} traces={traces} layout={{
+            xaxis: { title: `Standardized log band power @ ${center.toFixed(1)} Hz` },
+            yaxis: { title: pain }, showlegend: false }} />
+        </MDBox>
+      );
+    } else {
+      scatterNode = (
+        <MDTypography variant="caption" color="text" mt={1} display="block">
+          {`No scatter for ${ch.short} @ ${center.toFixed(1)} Hz (fewer than 3 matched samples in this band).`}
+        </MDTypography>
+      );
+    }
+  }
+
+  if (!channels.length) return null;
+  return (
+    <Grid item xs={12}>
+      <Card sx={{ width: "100%", scrollMarginTop: "96px" }}>
+        <MDBox p={2}>
+          <MDTypography variant="h6" fontSize={17} mb={0.25}>
+            {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
+          </MDTypography>
+          <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+            {scan && scan.note}
+          </MDTypography>
+          <div ref={ref} style={{ width: "100%", height: 420 }} />
+          {scatterNode}
+        </MDBox>
+      </Card>
+    </Grid>
+  );
+}
+
 function Section({ title, subtitle, panels, header = null }) {
   if (!panels || panels.length === 0) return null;
   return (
@@ -284,7 +403,6 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // Human-readable pain score these correlations / AUCs are computed against (biological best
   // practice: every correlation/AUC panel should say what it is correlated WITH). Falls back gracefully.
   const pain = metricLabel || "pain";
-  const tdSum = (summary && summary.timedomain) || {};
   const pdSum = (summary && summary.powerdomain) || {};
   // When a per-channel view is active, overlay its summary on the pooled one so the honest-perf
   // bar reflects the selected channel's AUC. IMPORTANT: per-channel/aggregate summaries carry
@@ -402,240 +520,14 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
-  const spectrum = td.corr_spectrum || null;
-  if (spectrum && spectrum.channels && spectrum.channels.length) {
-    const f = spectrum.freqs;
-    const traces = [];
-    // Order the spectrum channels by hemisphere — LEFT group first, then RIGHT — and color each
-    // by its hemisphere family (blue = Left, orange = Right), so the legend reads anatomically
-    // grouped rather than interleaved (same principle as the power-domain ROC panel). Hemisphere
-    // from the channel's short label (leading L/R); anything else falls to an "Other" group last.
-    const specHemi = (ch) => {
-      const s = (ch.short || ch.name || "").trim();
-      return s[0] === "L" ? "Left" : (s[0] === "R" ? "Right" : "Other");
-    };
-    const OTHER_SHADES = ["#009E73", "#CC79A7", "#7E8794"];
-    const specShades = (h) => (h === "Left" ? LEFT_SHADES : h === "Right" ? RIGHT_SHADES : OTHER_SHADES);
-    const ordered = [];
-    ["Left", "Right", "Other"].forEach((h) => {
-      spectrum.channels.forEach((ch) => { if (specHemi(ch) === h) ordered.push({ ch, h }); });
-    });
-    const idxInHemi = {};
-    ordered.forEach(({ ch, h }, oi) => {
-      idxInHemi[h] = (idxInHemi[h] ?? -1) + 1;
-      const shades = specShades(h);
-      const color = shades[idxInHemi[h] % shades.length];
-      const isFirstInHemi = ordered.findIndex((o) => o.h === h) === oi;
-      // Hover (not fixed labels) gives the value on demand. The curve and its peaks share a color +
-      // legendgroup, so toggling the curve in the legend also hides its stars. Legend grouped by
-      // hemisphere (Left group, then Right) with a per-group title on the first member.
-      traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines",
-        line: { width: 2, color }, connectgaps: false, legendgroup: h,
-        legendgrouptitle: isFirstInHemi ? { text: `${h} hemisphere` } : undefined,
-        hovertemplate: "%{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      if (ch.peaks && ch.peaks.length) {
-        // Stars MARK the peaks (the strongest |R| local maxima — positive OR negative — so a strong
-        // negative correlation is starred too); the value is read by hovering.
-        traces.push({ x: ch.peaks.map((p) => p.freq), y: ch.peaks.map((p) => p.r),
-          type: "scatter", mode: "markers", legendgroup: h, showlegend: false,
-          marker: { symbol: "star", size: 12, color, line: { width: 1, color: "#fff" } },
-          name: `${ch.name} peak`,
-          hovertemplate: "peak · %{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      }
-    });
-    // Biomarker frequency cap: the band selection and peak picking are restricted to < 50 Hz
-    // (the validated theta/alpha/beta/low-gamma sensing range). Shade ≥ 50 Hz so the limit is
-    // visible; the spectrum curve is still drawn full-range for context.
-    const FCAP = 50;
-    const fMax = (spectrum.freqs && spectrum.freqs.length) ? spectrum.freqs[spectrum.freqs.length - 1] : 100;
+  // DESIGN §8b: the three former TD panels (Pearson-R spectrum, permutation-null + per-session
+  // scatter, and mean-PSD-by-pain-state) are replaced by ONE exploratory scan over ALL pooled
+  // full-spectrum PSDs (TD streaming + montage/survey) per channel — r vs continuous PRO and CV
+  // logistic AUC vs binarized PRO over a 5 Hz sliding band, click-to-scatter.
+  const scan = td.spectral_feature_importance || null;
+  if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
-      <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★ (significance FDR-corrected)`} lg={12}>
-        <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
-          yaxis: { title: `Correlation with ${pain} (R)`, range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.22, groupclick: "togglegroup" },
-          shapes: fMax > FCAP ? [{ type: "rect", xref: "x", yref: "paper", x0: FCAP, x1: fMax,
-            y0: 0, y1: 1, fillcolor: "#9E9E9E", opacity: 0.12, line: { width: 0 } },
-            { type: "line", xref: "x", yref: "paper", x0: FCAP, x1: FCAP, y0: 0, y1: 1,
-              line: { color: "#7E8794", width: 1.5, dash: "dot" } }] : [],
-          annotations: fMax > FCAP ? [{ x: FCAP, yref: "paper", y: 1.0, yanchor: "bottom",
-            xanchor: "left", text: " ≥50 Hz excluded from biomarker selection", showarrow: false,
-            font: { size: 10, color: "#7E8794" } }] : [] }} />
-      </Panel>
-    );
-  }
-
-  // Permutation null + per-session scatter — one row per hemisphere (Left, then Right).
-  // Each row: LEFT panel = perm-null histogram with THIS channel's observed |R| marked;
-  //           RIGHT panel = scatter of per-session log-power at peak freq vs pain label.
-  // The "observed" line uses the channel's own max-|R| peak (argmax |R| for that electrode),
-  // NOT the family-max perm_obs — so the title correctly shows e.g. "R Med. Thal @ 27.7 Hz".
-  // The global perm_null (family-max under block-permuted labels) is still the background null;
-  // a channel-specific |R| that exceeds the family-max null is very conservative and fair.
-  if (tdSum.perm_null && tdSum.perm_null.length && spectrum && spectrum.channels) {
-    const pStr = tdSum.perm_p == null ? "—" : fmtP(tdSum.perm_p);
-    const nCells = spectrum.channels.length * (spectrum.freqs ? spectrum.freqs.length : 0);
-
-    // Group channels by hemisphere so Left and Right each get their own row.
-    const hemiOrder = ["Left", "Right"];
-    const byHemi = {};
-    spectrum.channels.forEach((ch) => {
-      const h = ch.short && ch.short.startsWith("L") ? "Left"
-              : ch.short && ch.short.startsWith("R") ? "Right" : "Other";
-      if (!byHemi[h]) byHemi[h] = [];
-      byHemi[h].push(ch);
-    });
-
-    hemiOrder.forEach((hemi) => {
-      const hChans = byHemi[hemi] || [];
-      if (!hChans.length) return;
-      // Best channel for this hemisphere = highest |peak_r| (or highest |r| anywhere).
-      const best = hChans.reduce((a, b) => {
-        const ar = a.peak_scatter ? Math.abs(a.peak_scatter.peak_r || 0)
-                                   : Math.max(...(a.r || [0]).map(Math.abs));
-        const br = b.peak_scatter ? Math.abs(b.peak_scatter.peak_r || 0)
-                                   : Math.max(...(b.r || [0]).map(Math.abs));
-        return br > ar ? b : a;
-      });
-      const ps = best.peak_scatter;
-      const peakFreq = ps ? ps.peak_freq : null;
-      const peakR    = ps ? ps.peak_r    : null;
-      const obsR     = peakR != null ? Math.abs(peakR) : tdSum.perm_obs;
-      const chLabel  = best.region ? `${best.short} (${best.region})` : best.short;
-      const freqLabel = peakFreq != null ? ` @ ${peakFreq.toFixed(1)} Hz` : "";
-      const permColor = hemi === "Left" ? LO : HI;
-
-      // Perm-null panel (left half of row).
-      tdPanels.push(
-        <Panel key={`perm_${hemi}`} lg={6}
-          title={`${hemi} — perm. null vs observed: ${chLabel}${freqLabel} (p=${pStr})`}>
-          <Fig height={300} traces={[
-            { x: tdSum.perm_null, type: "histogram", name: "null (shuffled labels)",
-              marker: { color: "#90A4AE" }, opacity: 0.82, nbinsx: 40,
-              hovertemplate: "max|R|≈%{x:.2f} · %{y} shuffles<extra></extra>" },
-          ]} layout={{
-            xaxis: { title: "Family-max |R| (all contacts × freqs)", range: [0, 1] },
-            yaxis: { title: "Permutations" }, bargap: 0.02, showlegend: false,
-            shapes: obsR != null ? [{ type: "line", x0: obsR, x1: obsR,
-              yref: "paper", y0: 0, y1: 1, line: { color: permColor, width: 2.5 } }] : [],
-            annotations: obsR != null ? [{ x: obsR, yref: "paper", y: 1.04,
-              yanchor: "bottom", xanchor: "center",
-              text: `|R|=${obsR.toFixed(2)}${freqLabel}`,
-              showarrow: false, font: { color: permColor, size: 10 } }] : [],
-          }} />
-          <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
-            {obsR != null
-              ? `${chLabel}${freqLabel}: |R|=${obsR.toFixed(2)}, perm p=${pStr} ` +
-                `(${tdSum.perm_n || tdSum.perm_null.length} block-shuffles, ~${nCells}-cell search).`
-              : `Permutation null (${tdSum.perm_null.length} shuffles, perm p=${pStr}).`}
-          </MDTypography>
-        </Panel>
-      );
-
-      // Scatter panel (right half of row) — per-session log-power at peak freq vs pain.
-      // Require a finite peakFreq too: the title/axis format it with .toFixed and would throw on null.
-      if (ps && ps.x && ps.x.length && peakFreq != null && Number.isFinite(peakFreq)) {
-        const trendLine = (() => {
-          // Filter x/y JOINTLY: independent .filter() calls misalign the pair when a null sits at
-          // different indices in x vs y (and make the two arrays different lengths), corrupting the
-          // slope. Keep only sessions where BOTH coordinates are finite.
-          const xs = [], ys = [];
-          (ps.x || []).forEach((vx, i) => {
-            const vy = ps.y ? ps.y[i] : null;
-            if (vx != null && Number.isFinite(vx) && vy != null && Number.isFinite(vy)) { xs.push(vx); ys.push(vy); }
-          });
-          if (xs.length < 3) return null;
-          const n = xs.length;
-          const mx = xs.reduce((s, v) => s + v, 0) / n;
-          const my = ys.reduce((s, v) => s + v, 0) / n;
-          const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
-          const den = xs.reduce((s, v) => s + (v - mx) ** 2, 0);
-          if (den === 0) return null;
-          const slope = num / den, int = my - slope * mx;
-          const xmin = Math.min(...xs), xmax = Math.max(...xs);
-          return { x: [xmin, xmax], y: [xmin * slope + int, xmax * slope + int] };
-        })();
-        const scatterTraces = [
-          { x: ps.x, y: ps.y, type: "scatter", mode: "markers", name: "sessions",
-            marker: { color: permColor, size: 6, opacity: 0.7 },
-            text: ps.dates || [],
-            hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}%{text}<extra></extra>` },
-        ];
-        if (trendLine) scatterTraces.push({
-          x: trendLine.x, y: trendLine.y, type: "scatter", mode: "lines",
-          name: "linear fit", line: { color: permColor, width: 1.5, dash: "dot" },
-          hoverinfo: "skip", showlegend: false,
-        });
-        tdPanels.push(
-          <Panel key={`scatter_${hemi}`} lg={6}
-            title={`${hemi} — log power at ${peakFreq.toFixed(1)} Hz vs ${pain}: ${chLabel}`}>
-            <Fig height={300} traces={scatterTraces} layout={{
-              xaxis: { title: `Log PSD at ${peakFreq.toFixed(1)} Hz` },
-              yaxis: { title: pain },
-              legend: { orientation: "h", y: -0.2 },
-            }} />
-            <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
-              {`Each dot = one recording session. R=${(peakR || 0).toFixed(2)} at the peak frequency.`}
-            </MDTypography>
-          </Panel>
-        );
-      }
-    });
-  }
-
-  // Mean PSD by pain state, per contact — grouped into a LEFT-hemisphere column and a
-  // RIGHT-hemisphere column, each wrapped in a thick black border (so the three left contacts
-  // and three right contacts read as two anatomical blocks). yaxis autorange + a small headroom
-  // pad fixes the previous top-of-curve clipping.
-  const spectra = td.psd_spectra || null;
-  if (spectra && spectra.channels) {
-    const oneSpectrum = (ch, i) => {
-      const traces = [
-        { x: spectra.freqs, y: ch.high, name: `High ${pain}`, type: "scatter", mode: "lines", line: { color: HI, width: 2 }, connectgaps: false },
-        { x: spectra.freqs, y: ch.low, name: `Low ${pain}`, type: "scatter", mode: "lines", line: { color: LO, width: 2 }, connectgaps: false },
-      ];
-      return (
-        <MDBox key={"psd" + i} mb={1.5}>
-          <MDTypography variant="h6" fontSize={15} mb={0.25}>
-            {`${ch.short}${ch.region ? ` · ${ch.region}` : ""}`}
-          </MDTypography>
-          <Fig height={260} traces={traces} layout={{
-            xaxis: { title: "Frequency (Hz)" },
-            yaxis: { title: `Power (${spectra.unit})`, autorange: true, rangemode: "normal", automargin: true },
-            margin: { l: 64, r: 20, t: 16, b: 44 },
-            legend: { orientation: "h", y: -0.28 } }} />
-        </MDBox>
-      );
-    };
-    const leftCh = [], rightCh = [], otherCh = [];
-    spectra.channels.forEach((ch, i) => {
-      const s = ch.short || "";
-      (s.startsWith("L") ? leftCh : s.startsWith("R") ? rightCh : otherCh).push(oneSpectrum(ch, i));
-    });
-    const hemiColumn = (figs, label, key) => figs.length ? (
-      <Grid item xs={12} lg={6} key={key}>
-        <Card sx={{ width: "100%", height: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-          <MDBox p={2}>
-            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">
-              {`Mean PSD by ${pain} — ${label}`}
-            </MDTypography>
-            {figs}
-          </MDBox>
-        </Card>
-      </Grid>
-    ) : null;
-    const lcol = hemiColumn(leftCh, "Left hemisphere", "psd-left");
-    const rcol = hemiColumn(rightCh, "Right hemisphere", "psd-right");
-    if (lcol) tdPanels.push(lcol);
-    if (rcol) tdPanels.push(rcol);
-    if (otherCh.length) tdPanels.push(
-      <Grid item xs={12} key="psd-other">
-        <Card sx={{ width: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-          <MDBox p={2}>
-            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">{`Mean PSD by ${pain}`}</MDTypography>
-            {otherCh}
-          </MDBox>
-        </Card>
-      </Grid>
+      <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO} />
     );
   }
 
@@ -1460,8 +1352,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
 
   return (
     <>
-      <Section title="Time-domain analysis (250 Hz streaming PSD)"
-               subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
+      <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
+               subtitle="Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle={(slidingActive
