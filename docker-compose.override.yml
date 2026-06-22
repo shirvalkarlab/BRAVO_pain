@@ -14,3 +14,9 @@ services:
     # REDCAP_API_TOKEN so the Biomarkers module can pull real PRO surveys.
     env_file:
       - ./secrets/redcap.env
+    # Dev-only: auto-start the Operon agent bridge (in-container command watcher on the
+    # ./BRAVO bind mount), then run the normal nginx+migrate+gunicorn startup. The watcher
+    # lets the sandboxed agent execute jobs in this container without the Docker socket.
+    # boot.sh execs the same gunicorn line as the base image's command, so behavior is
+    # otherwise identical. Lives in the dev override only — the prod image is untouched.
+    command: ["bash", "/usr/src/BRAVO/_agent_bridge/boot.sh"]

@@ -1,0 +1,5 @@
+# Agent bridge runtime — scaffolding code is tracked, runtime mailbox is not
+inbox/
+outbox/
+processed/
+logs/
