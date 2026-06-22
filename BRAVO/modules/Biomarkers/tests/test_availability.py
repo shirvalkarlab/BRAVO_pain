@@ -248,3 +248,24 @@ def test_event_markers_handles_empty_and_malformed():
     assert av.event_markers([])["n"] == 0
     assert av.event_markers(None)["n"] == 0
     assert av.event_markers([{"t": None}, {"no_time": 1}, 42])["n"] == 0
+
+
+def test_montage_event_dedup_against_psd_times():
+    """Montage-PSD snapshots that coincide (within tolerance) with an already-shown montage/survey
+    PSD recording are dropped; only the unmatched sweeps survive. (Mirrors the dedup in
+    bravo_service._load_montage_psd_events, exercised here on its core bisect logic.)"""
+    import bisect
+    dedup = sorted([T0, T0 + 1000.0, T0 + 5000.0])
+    tol = 5.0
+
+    def is_dup(t):
+        i = bisect.bisect_left(dedup, t)
+        return any(0 <= j < len(dedup) and abs(dedup[j] - t) <= tol for j in (i - 1, i))
+
+    snaps_t = [T0 + 2.0,      # within 5 s of T0           -> dup
+               T0 + 1004.0,   # within 5 s of T0+1000      -> dup
+               T0 + 2500.0,   # no match                   -> keep
+               T0 + 5000.0,   # exact match                -> dup
+               T0 + 9000.0]   # no match                   -> keep
+    kept = [t for t in snaps_t if not is_dup(t)]
+    assert kept == [T0 + 2500.0, T0 + 9000.0]

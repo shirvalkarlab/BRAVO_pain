@@ -455,6 +455,23 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:8px;color:#999">${evList.length} presses</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 12, color: "#555" } });
 
+    // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
+    // montage/survey PSD recording (de-duplicated server-side). Rendered as small grey ticks along
+    // the BOTTOM of the event strip so they read as "extra montage spectra captured here" without
+    // competing with the colored patient-annotation diamonds above them.
+    const mWrap = av.montage_events || { events: [] };
+    const mList = (mWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    if (mList.length) {
+      traces.push({ type: "scattergl", mode: "markers",
+        x: mList.map((e) => D(e.t)), y: mList.map(() => eventBase + 0.06),
+        marker: { symbol: "line-ns-open", size: 7, color: "#9AA0A6", line: { width: 1.2 } },
+        customdata: mList.map((e) => [
+          e.peak_hz == null ? "n/a" : fmtHz(e.peak_hz),
+          e.n_chan == null ? "?" : e.n_chan]),
+        hovertemplate: "montage PSD · %{x}<br>peak %{customdata[0]} Hz · %{customdata[1]} ch<extra></extra>",
+        name: "montage PSD", showlegend: false });
+    }
+
     // ---- pain row: dots + medium-alpha overlay line, with y-axis ticks -----------------------
     const pain = (painOverride && painOverride.t && painOverride.t.length)
       ? painOverride : (av.pain || { t: [], y: [], metric: "PRO" });
@@ -517,7 +534,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride }) {
       name: "streaming LSB session · color = sensing Hz (hover → detail)" });
     traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
       marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-      name: "PSD snapshot  (hover → spectrum)" });
+      name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
 

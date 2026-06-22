@@ -236,6 +236,48 @@ def _load_patient_events(participant_uid):
     return out
 
 
+def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
+    """Load NeuralActivitySnapshot montage sweeps as montage-PSD marker events, de-duplicated
+    against the montage/survey PSD recordings that ALREADY render on the timeline.
+
+    A NeuralActivitySnapshot is an automatic ~20 s montage survey: full-band Welch PSDs over
+    reference-montage channels (`PSD[i] = {Frequency, Power, ...}`). ~80% of them coincide (within
+    a few seconds) with a MedtronicBrainSenseSurvey/Montages recording already shown as PSD ticks,
+    so to avoid double-counting we DROP any snapshot whose StartTime is within `tol_s` of a time in
+    `dedup_times` (the montage/survey PSD record StartTimes). The remainder — montage sweeps with no
+    matching survey/montage recording — are surfaced as their own markers.
+
+    Returns events normalized for `availability.event_markers`:
+        [{"name": "Montage PSD", "t": epoch_s, "psds": [(freq, power), ...]}, ...]
+    """
+    snaps = _load_recordings(participant_uid, ["NeuralActivitySnapshot"])
+    dedup = sorted(float(t) for t in (dedup_times or []) if t is not None)
+    import bisect
+    def _is_dup(t):
+        if not dedup:
+            return False
+        i = bisect.bisect_left(dedup, t)
+        for j in (i - 1, i):
+            if 0 <= j < len(dedup) and abs(dedup[j] - t) <= tol_s:
+                return True
+        return False
+    out = []
+    for s in snaps:
+        if not isinstance(s, dict):
+            continue
+        t0 = availability._to_epoch(s.get("StartTime"))
+        if t0 is None or _is_dup(t0):
+            continue
+        psds = []
+        for p in (s.get("PSD") or []):
+            if isinstance(p, dict):
+                f, m = p.get("Frequency"), p.get("Power")
+                if f is not None and m is not None and len(f) == len(m) and len(f) > 0:
+                    psds.append((list(f), list(m)))
+        out.append({"name": "Montage PSD", "t": float(t0), "psds": psds})
+    return out
+
+
 def _derive_chan_order(td_recordings):
     order = []
     for r in td_recordings:
@@ -892,8 +934,16 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # Patient-annotated events (labeled button presses) — demarcated on the timeline.
         event_list = _load_patient_events(participant_uid)
         events = availability.event_markers(event_list)
+        # Montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already represented by a
+        # montage/survey PSD recording (de-duplicated against those StartTimes so we don't double-
+        # count). Surfaced as their own marker row, separate from the labeled patient events.
+        psd_times = [availability._to_epoch(r.get("StartTime")) for r in (psd_list or [])
+                     if isinstance(r, dict)]
+        montage_events = availability.event_markers(
+            _load_montage_psd_events(participant_uid, dedup_times=psd_times))
         ts = [r["t_start"] for r in records] + pain["t"] + stim["t"] \
-            + [e["t"] for e in events.get("events", [])]
+            + [e["t"] for e in events.get("events", [])] \
+            + [e["t"] for e in montage_events.get("events", [])]
         span = [min(ts), max(ts)] if ts else []
         # Inspector samples: decimated real PSD/TD/LSB per channel for the right-hand detail panels.
         # Only for channels that actually have data (cap to keep the payload bounded); the frontend
@@ -908,12 +958,13 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 chronic_recs=chronic_list, powerdomain_recs=powerdomain_list)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
-                "events": events}
+                "events": events, "montage_events": montage_events}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
-                "events": {"events": [], "n": 0}}
+                "events": {"events": [], "n": 0},
+                "montage_events": {"events": [], "n": 0}}
 
 
 def availability_for_participant(request_data):
