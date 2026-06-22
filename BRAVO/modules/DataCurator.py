@@ -371,6 +371,30 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     person.last_update = models.current_time()
     person.save()
+
+    # Eagerly warm the per-recording biomarker PSD cache for this participant so the spectra of the
+    # files just ingested are Welch'd and persisted NOW, off the upload's critical path. This is what
+    # makes a later "Calculate biomarker" reuse cached spectra instead of recomputing them. Fully
+    # decoupled: a daemon thread, a lazy import (a Biomarkers import error cannot break ingestion),
+    # and a broad except (a cache failure is logged, never raised). The cache itself only decodes the
+    # recordings not already cached, so re-running on an existing participant is cheap.
+    try:
+        import threading
+
+        def _warm_biomarker_psd(uid):
+            try:
+                from modules.Biomarkers import bravo_service as _bs
+                _bs.warm_psd_cache(uid)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Biomarker PSD cache warm after ingestion failed for %s", uid, exc_info=True)
+
+        threading.Thread(target=_warm_biomarker_psd, args=(person.uid,),
+                         name="biomarker-psd-warm", daemon=True).start()
+    except Exception:
+        pass   # never let cache warming affect the ingestion result
+
     return True
 
 def NeuroImageStorage(source_file, person):

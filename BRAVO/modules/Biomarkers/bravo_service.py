@@ -309,37 +309,44 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     """
     from .routines import streaming_psd as _sp
     rows = []
-
-    def _welch_rows(recs, source_label):
-        for r in recs or []:
-            if not isinstance(r, dict):
-                continue
-            names = list(r.get("ChannelNames") or [])
-            keep = [(i, n) for i, n in enumerate(names) if str(n).upper() in _MAIN_BIPOLAR]
-            if not keep:
-                continue
-            data = np.asarray(r.get("Data"))
-            if data.ndim != 2:
-                continue
-            # welch expects (n_ch, n_samples); montage/TD Data is (n_samples, n_ch).
-            sig = data.T if data.shape[0] != len(names) else data
-            fs = float(r.get("SamplingRate") or 250.0)
-            t0 = availability._to_epoch(r.get("StartTime"))
-            if t0 is None:
-                continue
-            keep_names = [n for _, n in keep]
-            try:
-                psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names)  # (1, k, F)
-            except Exception:
-                continue
-            psd = np.asarray(psd)
-            for j, n in enumerate(keep_names):
-                rows.append({"channel": str(n).upper(), "source": source_label,
-                             "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :]})
-
-    _welch_rows(td_list, "TD streaming")
-    _welch_rows(psd_list, "Montage/survey")
+    _welch_rows_into(rows, td_list, "TD streaming", _sp)
+    _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
     return rows
+
+
+def _welch_rows_into(rows, recs, source_label, _sp):
+    """Welch every main-bipolar channel of each loaded recording dict, appending one
+    {"channel", "source", "t", "freq", "power"} row per (recording-instance, channel) to `rows`.
+
+    Single source of truth for the row schema: BOTH the legacy whole-participant assembly
+    (`_assemble_psd_rows`) and the per-recording cache (`_recording_psd_rows`) build rows through
+    here, so a matrix assembled from the cache is byte-identical to one assembled the old way.
+    """
+    for r in recs or []:
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        keep = [(i, n) for i, n in enumerate(names) if str(n).upper() in _MAIN_BIPOLAR]
+        if not keep:
+            continue
+        data = np.asarray(r.get("Data"))
+        if data.ndim != 2:
+            continue
+        # welch expects (n_ch, n_samples); montage/TD Data is (n_samples, n_ch).
+        sig = data.T if data.shape[0] != len(names) else data
+        fs = float(r.get("SamplingRate") or 250.0)
+        t0 = availability._to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        keep_names = [n for _, n in keep]
+        try:
+            psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names)  # (1, k, F)
+        except Exception:
+            continue
+        psd = np.asarray(psd)
+        for j, n in enumerate(keep_names):
+            rows.append({"channel": str(n).upper(), "source": source_label,
+                         "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :]})
 
 
 def _psd_sample_index(td_list, psd_list):
@@ -387,9 +394,154 @@ def _psd_cache_dir():
     return d
 
 
+def _psd_rows_cache_dir():
+    """Directory for the PER-RECORDING PSD-row cache (one .npz per recording instance).
+
+    Distinct from `_psd_cache_dir` (the whole-participant assembled matrix). The per-recording cache
+    is keyed by the recording's DB identity (uid + hashed), BOTH of which are columns on the
+    Recording row — so we can tell whether a recording's spectra are already cached WITHOUT opening
+    its .bdat file. That is what lets the compute path skip the ~190 s cold decode of recordings it
+    has already Welch'd: only the genuinely-new files are loaded.
+    """
+    base_dir = os.path.dirname(_psd_cache_dir())   # .../cache
+    d = os.path.join(base_dir, "biomarker_psd_rows")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _recording_psd_cache_path(rec_uid, rec_hash):
+    """Cache path for one recording's PSD rows. Keyed by uid + a short slice of the stored hash, so
+    re-uploading the same data (new uid) or a content change (new hash) both miss and recompute."""
+    h = (str(rec_hash or "") or "nohash")[:16]
+    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}.npz")
+
+
+def _save_recording_psd_rows(path, rows):
+    """Persist one recording's PSD rows (the per-channel spectra) to a compact .npz.
+
+    `rows` is a list of {"channel","source","t","freq","power"} for a SINGLE recording instance.
+    Stored as parallel arrays; an empty list is still written (a valid 0-row cache entry) so a
+    recording that legitimately yields no main-bipolar spectra is not re-decoded every time.
+    """
+    chans = np.asarray([str(r["channel"]) for r in rows], dtype=object)
+    srcs = np.asarray([str(r["source"]) for r in rows], dtype=object)
+    ts = np.asarray([float(r["t"]) for r in rows], dtype=float)
+    powers = np.asarray([np.asarray(r["power"], dtype=float) for r in rows], dtype=float) \
+        if rows else np.zeros((0, 0), dtype=float)
+    freq = np.asarray(rows[0]["freq"], dtype=float) if rows else np.zeros((0,), dtype=float)
+    # np.savez APPENDS ".npz" if the name lacks it, so the temp name must already end in ".npz"
+    # (else savez writes "<tmp>.npz" and the os.replace below moves a nonexistent file). Keep ".npz".
+    tmp = path[:-4] + ".tmp.npz" if path.endswith(".npz") else path + ".tmp.npz"
+    np.savez(tmp, channel=chans, source=srcs, t=ts, power=powers, freq=freq, n=np.asarray([len(rows)]))
+    os.replace(tmp, path)   # atomic — a concurrent reader never sees a half-written file
+
+
+def _load_recording_psd_rows(path):
+    """Reload one recording's PSD rows from its .npz, reconstructing the row dicts (or None on miss/
+    error so the caller recomputes). Returns a possibly-empty list when the cache entry is valid."""
+    try:
+        z = np.load(path, allow_pickle=True)
+        n = int(z["n"][0])
+        if n == 0:
+            return []
+        freq = z["freq"]
+        chans, srcs, ts, powers = z["channel"], z["source"], z["t"], z["power"]
+        return [{"channel": str(chans[i]), "source": str(srcs[i]), "t": float(ts[i]),
+                 "freq": freq, "power": powers[i]} for i in range(n)]
+    except Exception as e:
+        _log.warning("Biomarkers: per-recording PSD cache read failed (%s); will recompute", e)
+        return None
+
+
+def _recording_rows_for_psd(participant_uid):
+    """ORM-only: the Recording rows that feed the PSD matrix (TD streaming + montage/survey), with
+    just the identity columns needed to consult the per-recording cache — NO .bdat decode.
+
+    Returns [{"rec": <Recording>, "uid": str, "hash": str, "source": str}], where `source` is the
+    SAME label `_assemble_psd_rows` uses ("TD streaming" / "Montage/survey"), so cache hits and the
+    freshly-Welch'd rows carry identical source strings.
+    """
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return []
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    if not SourceFiles:
+        return []
+    out = []
+    for types, source_label in ((TIMEDOMAIN_TYPES, "TD streaming"),
+                                (AVAILABILITY_PSD_TYPES, "Montage/survey")):
+        for rec in models.Recording.find_all(source__in=SourceFiles, type__in=types):
+            out.append({"rec": rec, "uid": rec.uid, "hash": getattr(rec, "hashed", ""),
+                        "source": source_label})
+    return out
+
+
+def _assemble_psd_rows_cached(participant_uid):
+    """Assemble the full PSD-row list for a participant using the per-recording cache, decoding +
+    Welch'ing ONLY the recordings whose spectra are not already on disk.
+
+    This is the load-skipping fast path behind `_cached_psd_matrix`: a participant whose recordings
+    are all cached pays zero .bdat decodes (the ~190 s cold load disappears); a partially-warm
+    participant pays only for the new files. The resulting rows are identical to
+    `_assemble_psd_rows(td_list, psd_list)` because both go through `_welch_rows_into`.
+
+    Returns (rows, n_cached, n_computed) — the row counts let callers log/verify the cache hit rate.
+    """
+    from .routines import streaming_psd as _sp
+    entries = _recording_rows_for_psd(participant_uid)
+    if not entries:
+        return [], 0, 0
+
+    rows = []
+    n_cached = 0
+    missing = []   # entries needing a decode+Welch
+    for e in entries:
+        path = _recording_psd_cache_path(e["uid"], e["hash"])
+        cached = _load_recording_psd_rows(path) if os.path.exists(path) else None
+        if cached is not None:
+            rows.extend(cached)
+            n_cached += 1
+        else:
+            missing.append(e)
+
+    n_computed = 0
+    if missing:
+        # Decode only the misses, concurrently (same threaded decode as _load_recordings), then
+        # Welch each recording's dict(s) in isolation and cache its rows keyed by that recording.
+        def _decode(e):
+            rec = e["rec"]
+            try:
+                data = Database.loadSourceFile(rec.pointer, rec.hashed)
+            except Exception:
+                _log.warning("Biomarkers: failed to decode recording %r for PSD cache; skipping",
+                             getattr(rec, "pointer", "?"), exc_info=True)
+                return e, None
+            dicts = [d for d in (data if isinstance(data, list) else [data]) if isinstance(d, dict)]
+            return e, dicts
+
+        workers = max(1, min(len(missing), _loader_threads()))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for e, dicts in pool.map(_decode, missing):
+                rec_rows = []
+                if dicts:
+                    _welch_rows_into(rec_rows, dicts, e["source"], _sp)
+                rows.extend(rec_rows)
+                n_computed += 1
+                # Persist this recording's rows (even if empty) so it is never re-decoded.
+                try:
+                    _save_recording_psd_rows(_recording_psd_cache_path(e["uid"], e["hash"]), rec_rows)
+                except Exception as ex:
+                    _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
+
+    return rows, n_cached, n_computed
+
+
 def _psd_matrix_signature(td_list, psd_list):
     """Content signature over the recordings feeding the matrix — StartTime + channel count per rec.
-    Changes iff the underlying recordings change, so a stale cache is never silently reused."""
+    Changes iff the underlying recordings change, so a stale cache is never silently reused.
+
+    Legacy signature, computed from the LOADED recording dicts. Retained for back-compat; the
+    primary path now uses `_psd_matrix_signature_orm`, which needs no file load."""
     import hashlib
     parts = []
     for src, recs in (("td", td_list), ("psd", psd_list)):
@@ -401,14 +553,37 @@ def _psd_matrix_signature(td_list, psd_list):
     return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16]
 
 
-def _cached_psd_matrix(participant_uid, td_list, psd_list):
-    """Load the per-channel PSD matrix for this participant from disk, or compute (Welch over all
-    recordings) and persist it. Keyed by participant + a content signature of the recordings, so it
-    is reused across compute clicks and across sessions until the recordings change.
+def _psd_matrix_signature_orm(participant_uid):
+    """Content signature over the PSD-feeding recordings, computed from the DB rows ALONE (uid +
+    hashed) — NO .bdat decode. Changes iff the set of recordings (or any one's content hash)
+    changes, so the assembled-matrix cache is invalidated exactly when it must be, without paying
+    the ~190 s cold load just to compute the key.
 
-    Returns the dict from `streaming_psd.psd_rows_to_matrix` (or None if no PSDs)."""
+    Returns (signature_hex, entries) where `entries` is the `_recording_rows_for_psd` list, so the
+    caller can reuse it for the cache-aware assembly without a second ORM round-trip.
+    """
+    import hashlib
+    entries = _recording_rows_for_psd(participant_uid)
+    parts = sorted(f"{e['source']}:{e['uid']}:{str(e['hash'] or '')[:16]}" for e in entries)
+    return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16], entries
+
+
+def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None):
+    """Load the per-channel PSD matrix for this participant from disk, or build it and persist it.
+
+    Two-level cache:
+      1. Assembled-matrix npz, keyed by participant + an ORM-derived content signature
+         (`_psd_matrix_signature_orm`). A hit returns the matrix with ZERO file decodes.
+      2. On a matrix miss, assemble via `_assemble_psd_rows_cached`, which decodes + Welch's ONLY
+         the recordings whose per-recording spectra are not already cached. So ingesting one new
+         file re-Welch's just that file (not all ~330), and the cold ~190 s load disappears once the
+         per-recording cache is warm.
+
+    `td_list`/`psd_list` are accepted for call-site back-compat but no longer needed (the assembly
+    is keyed off the DB). Returns the `psd_rows_to_matrix` dict (or None if no PSDs).
+    """
     from .routines import streaming_psd as _sp
-    sig = _psd_matrix_signature(td_list, psd_list)
+    sig, _entries = _psd_matrix_signature_orm(participant_uid)
     path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
     if os.path.exists(path):
         try:
@@ -417,8 +592,12 @@ def _cached_psd_matrix(participant_uid, td_list, psd_list):
                     "channel": z["channel"].astype(object), "source": z["source"].astype(object),
                     "f_set": z["f_set"]}
         except Exception as e:
-            _log.warning("Biomarkers: PSD cache read failed (%s); recomputing", e)
-    rows = _assemble_psd_rows(participant_uid, td_list, psd_list)
+            _log.warning("Biomarkers: PSD matrix cache read failed (%s); recomputing", e)
+
+    rows, n_cached, n_computed = _assemble_psd_rows_cached(participant_uid)
+    if n_computed or n_cached:
+        _log.info("Biomarkers: PSD rows assembled for %s — %d from per-recording cache, %d Welch'd",
+                  participant_uid, n_cached, n_computed)
     mat = _sp.psd_rows_to_matrix(rows)
     if mat is None:
         return None
@@ -427,8 +606,21 @@ def _cached_psd_matrix(participant_uid, td_list, psd_list):
                  channel=np.asarray(mat["channel"], dtype=str),
                  source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
     except Exception as e:
-        _log.warning("Biomarkers: PSD cache write failed (%s)", e)
+        _log.warning("Biomarkers: PSD matrix cache write failed (%s)", e)
     return mat
+
+
+def warm_psd_cache(participant_uid):
+    """Build/refresh the per-recording PSD cache (and the assembled matrix) for a participant.
+
+    Safe to call off the request thread or from ingestion: decodes + Welch's only the recordings not
+    already cached, persists each, and writes the assembled-matrix npz. Idempotent and non-fatal.
+    """
+    try:
+        return _cached_psd_matrix(participant_uid)
+    except Exception as e:
+        _log.warning("Biomarkers: warm_psd_cache failed for %s (%s)", participant_uid, e)
+        return None
 
 
 def _derive_chan_order(td_recordings):
@@ -1253,13 +1445,13 @@ def availability_for_participant(request_data):
         participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
         td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map)
 
-    # Eagerly warm the per-channel PSD matrix (Welch over all full-spectrum recordings) WHILE the
-    # user reviews the just-loaded availability timeline, so the expensive transform is already on
-    # disk by the time they click "Start exploratory analysis". Runs in a background thread; failure
-    # is non-fatal (the compute path recomputes if the cache is absent).
+    # Eagerly warm the per-channel PSD matrix WHILE the user reviews the just-loaded availability
+    # timeline, so the expensive transform is already on disk by the time they click "Start
+    # exploratory analysis". `warm_psd_cache` consults the per-recording cache and decodes + Welch's
+    # ONLY the recordings not already cached (the DB-keyed assembly needs no preloaded lists). Runs
+    # in a background thread; failure is non-fatal (the compute path rebuilds if the cache is absent).
     try:
-        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-        _PSD_WARM_POOL.submit(_cached_psd_matrix, participant_uid, td, psd_list)
+        _PSD_WARM_POOL.submit(warm_psd_cache, participant_uid)
     except Exception as e:
         _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
 
@@ -1350,9 +1542,9 @@ def run_for_participant(request_data):
 
     # Pooled per-channel PSD matrix (TD streaming + montage/survey), cached on disk so the expensive
     # Welch is computed once (eagerly, when the availability timeline loaded) and reused here. The
-    # cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
-    psd_list_for_scan = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
-    psd_matrix = _cached_psd_matrix(participant_uid, td, psd_list_for_scan)
+    # DB-keyed cache decodes only recordings not already Welch'd, so no full reload is needed here.
+    # The cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
+    psd_matrix = _cached_psd_matrix(participant_uid)
     pro_match = _pro_match_arrays(pro_df, label_metric)
 
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
