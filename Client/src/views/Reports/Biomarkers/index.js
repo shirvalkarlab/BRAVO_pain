@@ -749,6 +749,8 @@ function Biomarkers() {
                 programmedThresholds={data.programmed_thresholds}
                 binStrategy={strategy} binMetricKey={metric}
                 binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
+                participantUid={participant_uid}
+                requestParams={requestParams}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}

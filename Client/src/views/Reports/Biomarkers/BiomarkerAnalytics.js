@@ -14,6 +14,7 @@ import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/materi
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import BinarizationPreview from "./BinarizationPreview";
+import { SessionController } from "database/session-control";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -83,9 +84,101 @@ function Panel({ title, children, lg = 6 }) {
 // band-center x-axis, so the two complementary views of "which band tracks pain" overlay. The
 // 8–30 Hz Percept-RC adaptive-valid range is shaded (that's the band the device can actually act
 // on). CLICK any band on a curve to drop a scatter of that band's power vs the PRO below it.
-function SpectralFeatureImportance({ scan, pain, HI, LO }) {
+// Click-validate readout — renders the mixed-effects OR + 95% CI, the stim-stability badge, and
+// the per-era ORs from /queryBandValidation. Stays compact (three lines + one badge) so it tucks
+// under the violin without pushing the layout. Empty-state and in-flight handled.
+function ValidationReadout({ validation, validating }) {
+  if (validating) {
+    return (
+      <MDTypography variant="caption" color="text" display="block" mt={0.5}
+        sx={{ fontStyle: "italic", fontSize: 11 }}>
+        Running mixed-effects validation (glmer fit + stim-era LRT)…
+      </MDTypography>
+    );
+  }
+  if (!validation || !validation.available) {
+    if (validation && validation.reason) {
+      return (
+        <MDTypography variant="caption" color="text" display="block" mt={0.5}
+          sx={{ fontStyle: "italic", fontSize: 11 }}>
+          {`Click-validate: ${validation.reason}.`}
+        </MDTypography>
+      );
+    }
+    return null;
+  }
+  const g = validation.glmer || {};
+  const s = validation.stim || {};
+  const verdict = validation.verdict || "—";
+  // Badge color: green for validated, amber for stim-dependent, grey for n.s./degenerate.
+  const badgeColor =
+    /VALIDATED \(stim-stable\)/.test(verdict) ? "#0a7f3f"
+    : /VALIDATED \(stim-dependent\)/.test(verdict) ? "#B17500"
+    : /failed/.test(verdict) ? "#9A3324"
+    : "#6c757d";
+  const fmt = (v, d = 2) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
+  const fmtP = (p) => (p == null || !Number.isFinite(p) ? "—"
+    : p < 0.001 ? p.toExponential(1) : p.toFixed(3));
+  // Effect direction in plain language for the headline.
+  const direction = g.odds_ratio != null && Number.isFinite(g.odds_ratio)
+    ? (g.odds_ratio < 1 ? "lower" : "higher") : null;
+  const dirLine = direction
+    ? `Higher band power → ${direction} odds of high pain.`
+    : null;
+  const erasArr = s.or_by_era ? ["OFF", "LOW", "HIGH"]
+    .map((tag) => `${tag} (${(s.era_counts && s.era_counts[tag]) || 0}): ${fmt(s.or_by_era[tag])}`)
+    .join("  ·  ") : null;
+  return (
+    <MDBox mt={1}>
+      <MDBox display="flex" alignItems="center" gap={1} mb={0.5}>
+        <MDBox px={1.2} py={0.3} sx={{ backgroundColor: badgeColor, color: "white",
+          borderRadius: "10px", fontSize: 10.5, fontWeight: "bold", letterSpacing: 0.2 }}>
+          {verdict}
+        </MDBox>
+        {dirLine ? (
+          <MDTypography variant="caption" color="text" sx={{ fontSize: 11 }}>{dirLine}</MDTypography>
+        ) : null}
+      </MDBox>
+      {g.available !== false ? (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Mixed-effects logistic regression (glmer, random intercept per weekly era): `
+           + `odds ratio per 1 SD increase in band power = ${fmt(g.odds_ratio)}`
+           + (g.or_lo != null && g.or_hi != null
+              ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
+           + `p = ${fmtP(g.p)}, n = ${g.n} samples across ${g.n_clusters} weekly eras.`}
+        </MDTypography>
+      ) : (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
+        </MDTypography>
+      )}
+      {s.available !== false ? (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Band × stim-era interaction (likelihood-ratio test): `
+           + `χ² = ${fmt(s.chisq)}, p = ${fmtP(s.lrt_p)} `
+           + `(${s.stim_stable ? "stim-stable" : "stim-dependent"}). `
+           + `Per-era odds ratio (n samples): ${erasArr}. `
+           + `Stim eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
+           + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
+        </MDTypography>
+      ) : (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
+        </MDTypography>
+      )}
+    </MDBox>
+  );
+}
+
+
+function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams }) {
   const ref = useRef(null);
   const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
+  // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
+  // /queryBandValidation endpoint. Re-fetched whenever the user clicks a new band so the readout
+  // matches the band the violin is showing. `validating` flags the in-flight state for the spinner.
+  const [validation, setValidation] = useState(null);
+  const [validating, setValidating] = useState(false);
   const channels = (scan && scan.channels) || [];
   const centers = (scan && scan.centers) || [];
   const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
@@ -93,6 +186,41 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
 
   // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
   const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
+
+  // Click-triggered VALIDATION fetch (mixed-effects logistic + band x stim-era LRT). Fires only
+  // when the user has clicked a band AND we have the request envelope from the parent (carries
+  // LabelMetric / binarization / match knobs so the band feature is defined identically to the
+  // clicked scan dot). selChannelRaw/selCenterHz are the two coordinates the endpoint keys on.
+  const selChannel = sel && channels[sel.ci];
+  const selChannelRaw = selChannel ? (selChannel.raw || selChannel.short) : null;
+  const selCenterHz = sel != null ? centers[sel.bi] : null;
+  useEffect(() => {
+    if (!participantUid || !requestParams || sel == null || selChannelRaw == null
+        || selCenterHz == null) {
+      setValidation(null); return undefined;
+    }
+    let cancelled = false;
+    setValidating(true);
+    setValidation(null);
+    SessionController.query("/api/queryBandValidation", {
+      ParticipantId: participantUid,
+      Channel: selChannelRaw,
+      CenterHz: Number(selCenterHz),
+      BandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
+      ...requestParams,
+    }).then((response) => {
+      if (cancelled) return;
+      setValidation(response && response.data ? response.data : null);
+      setValidating(false);
+    }).catch(() => {
+      if (cancelled) return;
+      // Network/API failure -> empty-state caption; never block the rest of the panel.
+      setValidation({ available: false, reason: "validation request failed" });
+      setValidating(false);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantUid, requestParams, selChannelRaw, selCenterHz]);
 
   useEffect(() => {
     if (!ref.current || !channels.length || !centers.length) return;
@@ -323,6 +451,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
                  + "Power is z-scored within channel/source, so Δ is in SD units; "
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
+              <ValidationReadout validation={validation} validating={validating} />
             </Grid>
           </Grid>
         </MDBox>
@@ -475,7 +604,8 @@ const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").repla
 
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
   binStrategy: previewStrategy, binMetricKey: previewMetricKey,
-  binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh }) {
+  binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
+  participantUid, requestParams }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -742,7 +872,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const scan = td.spectral_feature_importance || null;
   if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
-      <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO} />
+      <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
+        participantUid={participantUid} requestParams={requestParams} />
     );
   }
 
