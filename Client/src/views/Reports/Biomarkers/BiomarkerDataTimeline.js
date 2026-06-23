@@ -653,15 +653,21 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
         name: "not in binarized set  (no PRO in window / band-power)" });
     } else {
+      // Glyph key listed TOP→BOTTOM in the order the layers stack within a neural lane: raw TD
+      // coverage band, then the chronic 24/7 LSB trend, then the streaming LSB session blocks, then
+      // the montage/PSD ticks at the bottom of the lane. The two LSB families share a distinct GREEN
+      // (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line, streaming
+      // = a solid block. (The lanes themselves stay colored by sensing Hz — see the right-side key.)
+      const LSB_GREEN = "#2CA02C";
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (zoom → waveform)" });
       traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-        line: { color: "#009E73", width: 2 },
-        name: "chronic LSB · 24/7 trend · color = sensing Hz" });
-      traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-        line: { color: "#009E73", width: 6 },
-        name: "streaming LSB session · color = sensing Hz (hover → detail)" });
+        line: { color: LSB_GREEN, width: 2.5, dash: "dashdot", shape: "spline" },
+        name: "chronic LSB · 24/7 trend  (squiggle; lane color = sensing Hz)" });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "square", size: 15, color: LSB_GREEN },
+        name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
         name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
@@ -705,11 +711,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
-      // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes,
-      // up by the title) so it never overlaps the PSD ticks or any lane content.
-      // Glyph key on the RIGHT, anchored to the plot's right edge — clears the LEFT-aligned title
-      // (x≈0.012) entirely so the two can never overlap regardless of width.
-      legend: { orientation: "v", x: 1.0, xanchor: "right", y: 1.155, yanchor: "top",
+      // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes, up
+      // by the title) so it never overlaps the PSD ticks or any lane content. CENTERED horizontally
+      // (x:0.5, xanchor:"center") at that same height — the box sits centered over the plot, with the
+      // title on the far left and the sensing-Hz key on the far right both clear of it.
+      legend: { orientation: "v", x: 0.5, xanchor: "center", y: 1.155, yanchor: "top",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
