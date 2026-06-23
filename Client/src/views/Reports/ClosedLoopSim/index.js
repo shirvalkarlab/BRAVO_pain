@@ -24,6 +24,7 @@ import {
 } from "./bandCandidateStore";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
+import EraRefitPanel from "./EraRefitPanel";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -272,8 +273,8 @@ function ClosedLoopSim() {
                   requestParams={requestParamsFromCandidate(bc)} cutpoint={cutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <PhasePlaceholder phase="Phase D" title="Per-era cross-validation"
-                  blurb="ROC + cut-point refit per stim era (OFF / LOW / HIGH); flags divergence — the deployment-time analog of the stim-stability LRT." />
+                <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParamsFromCandidate(bc)} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <PhasePlaceholder phase="Phase E" title="Deploy-to-Percept sign-off card"
