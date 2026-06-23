@@ -47,9 +47,29 @@ POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # Auto-generated "Streaming" markers are excluded. These only corroborate (DESIGN §2/§6), never feed
 # the decoder, but are demarcated (with their label) on the timeline.
 PATIENT_EVENT_TYPE = "PatientControllerEvent"
-_EVENT_NAME_EXCLUDE = {"streaming"}   # auto-markers, not patient annotations
+_EVENT_NAME_EXCLUDE = {"streaming"}   # auto-markers, not patient annotations (timeline display only)
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
                           "MedtronicStimulationMontages"]
+
+# Source label for PSDs harvested from PatientControllerEvent markers (incl. "Streaming" markers the
+# patient was instructed to fire around each survey). These carry the device's ONBOARD FFT
+# (Frequency/FFTBinData on the row metadata) rather than a Welch-of-time-domain spectrum, so they sit
+# ~6 dB higher than the TD/Montage Welch PSDs on the same channel. That constant offset is removed
+# automatically because the matrix builder z-scores within (channel, source): tagging events as their
+# own source makes them poolable with the rest without re-scaling. (psd_rows_to_matrix already lists
+# "Patient event" as a recognised source.)
+EVENT_PSD_SOURCE = "Patient event"
+
+# Map a patient-event PSD block to its canonical bipolar channel. The block's identity lives in
+# SenseID (a SensingElectrodeConfigDef, e.g. "...ZERO_AND_THREE") plus the hemisphere key; SenseID is
+# frequently blank, so we fall back to the hemisphere's habitual sensing pair, established empirically
+# on RCS08: Right hemisphere always sensed ZERO_AND_THREE (-> ZERO_THREE_RIGHT) across all groups;
+# Left hemisphere sensed ONE_AND_THREE (-> ONE_THREE_LEFT). An explicit SenseID overrides the default.
+_EVENT_SENSE_CONTACT = {
+    "ZERO_AND_THREE": "ZERO_THREE", "ONE_AND_THREE": "ONE_THREE",
+    "ZERO_AND_TWO": "ZERO_TWO", "ONE_AND_TWO": "ONE_TWO",
+}
+_EVENT_HEMI_DEFAULT_CONTACT = {"Right": "ZERO_THREE", "Left": "ONE_THREE"}
 
 # How many worker threads the recording loader uses. Decoding each .bdat is independent and
 # largely GIL-friendly (file I/O + numpy), so threads give near-linear speedup. Defaults to all
@@ -237,6 +257,83 @@ def _load_patient_events(participant_uid):
     return out
 
 
+def _event_block_channel(hemi_key, sense_id):
+    """Resolve a patient-event PSD block's canonical bipolar channel (e.g. 'ZERO_THREE_RIGHT').
+
+    `hemi_key` is the metadata key for this block (e.g. 'HemisphereLocationDef.Right'); `sense_id`
+    is its SenseID (e.g. 'SensingElectrodeConfigDef.ZERO_AND_THREE' or '' / None). The contact pair
+    comes from SenseID when present, else from the hemisphere's habitual sensing pair
+    (`_EVENT_HEMI_DEFAULT_CONTACT`). Returns a name in `_MAIN_BIPOLAR`, or None if it can't be
+    resolved to one of the six main bipolar channels."""
+    hemi = "Right" if str(hemi_key).endswith("Right") else ("Left" if str(hemi_key).endswith("Left") else None)
+    if hemi is None:
+        return None
+    contact = None
+    if sense_id:
+        tail = str(sense_id).split(".")[-1]
+        contact = _EVENT_SENSE_CONTACT.get(tail)
+    if contact is None:
+        contact = _EVENT_HEMI_DEFAULT_CONTACT.get(hemi)
+    if contact is None:
+        return None
+    name = f"{contact}_{hemi.upper()}"
+    return name if name in _MAIN_BIPOLAR else None
+
+
+def _event_psd_rows(participant_uid):
+    """Harvest EVERY PatientControllerEvent PSD (incl. the auto 'Streaming' markers) as poolable
+    PSD rows for the per-channel biomarker scan.
+
+    Unlike `_load_patient_events` (timeline display, which drops 'Streaming' and pools hemispheres
+    without channel identity), this assigns each per-hemisphere FFT block to its canonical bipolar
+    channel (`_event_block_channel`) so the spectra join the same per-channel pool as TD/Montage.
+    The onboard-FFT vs Welch scale offset is absorbed by the within-(channel, source) z-score, since
+    every row here is tagged `source=EVENT_PSD_SOURCE`. No .bdat decode — the spectra live on the
+    ORM row `metadata`, one subdict per hemisphere with `DateTime` / `Frequency` / `FFTBinData`.
+
+    Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} rows — the SAME schema
+    `_welch_rows_into` emits, ready for `streaming_psd.psd_rows_to_matrix`.
+    """
+    import datetime as _dt
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return []
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    if not SourceFiles:
+        return []
+    rows = []
+    for r in models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
+        md = getattr(r, "metadata", None)
+        if not isinstance(md, dict):
+            continue
+        for hemi_key, hb in md.items():
+            if not isinstance(hb, dict):
+                continue
+            ch = _event_block_channel(hemi_key, hb.get("SenseID"))
+            if ch is None:
+                continue
+            freq = hb.get("Frequency")
+            power = hb.get("FFTBinData")
+            if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
+                    and len(freq) == len(power) and len(freq) > 0):
+                continue
+            t = None
+            if hb.get("DateTime"):
+                try:
+                    t = _dt.datetime.fromisoformat(
+                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
+                except (ValueError, TypeError):
+                    t = None
+            if t is None:
+                t = getattr(r, "date", None)
+            if t is None:
+                continue
+            rows.append({"channel": ch, "source": EVENT_PSD_SOURCE, "t": float(t),
+                         "freq": np.asarray(freq, dtype=float),
+                         "power": np.asarray(power, dtype=float)})
+    return rows
+
+
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     """Load NeuralActivitySnapshot montage sweeps as montage-PSD marker events, de-duplicated
     against the montage/survey PSD recordings that ALREADY render on the timeline.
@@ -311,6 +408,12 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     rows = []
     _welch_rows_into(rows, td_list, "TD streaming", _sp)
     _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
+    # Patient-event PSDs (ORM metadata, no decode) — keeps this legacy path consistent with the
+    # cached assembly so a matrix built either way carries the same "Patient event" source.
+    try:
+        rows.extend(_event_psd_rows(participant_uid))
+    except Exception:
+        pass
     return rows
 
 
@@ -533,6 +636,18 @@ def _assemble_psd_rows_cached(participant_uid):
                 except Exception as ex:
                     _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
 
+    # Patient-event PSDs (incl. Streaming markers): read off ORM metadata, no decode/Welch, so they
+    # need no per-recording cache. Appended on every assembly — newly-ingested files with event
+    # markers therefore enter the pool automatically (the matrix signature below tracks them).
+    try:
+        ev_rows = _event_psd_rows(participant_uid)
+        rows.extend(ev_rows)
+        if ev_rows:
+            _log.info("Biomarkers: appended %d patient-event PSD rows for %s", len(ev_rows),
+                      participant_uid)
+    except Exception as ex:
+        _log.warning("Biomarkers: patient-event PSD harvest failed (%s); pool excludes events", ex)
+
     return rows, n_cached, n_computed
 
 
@@ -565,6 +680,18 @@ def _psd_matrix_signature_orm(participant_uid):
     import hashlib
     entries = _recording_rows_for_psd(participant_uid)
     parts = sorted(f"{e['source']}:{e['uid']}:{str(e['hash'] or '')[:16]}" for e in entries)
+    # Patient-event PSDs also feed the pool, so their recordings must invalidate the matrix cache
+    # too — otherwise a newly-ingested file that adds event markers would be silently missed. Hash
+    # the event recordings' (uid, hash) the same way; no decode (the PSDs live on the row metadata).
+    try:
+        Participant = models.Participant.find(uid=participant_uid)
+        SourceFiles = models.SourceFile.find_all(owner=Participant) if Participant else []
+        ev_parts = sorted(f"event:{getattr(r, 'uid', '')}:{str(getattr(r, 'hashed', '') or '')[:16]}"
+                          for r in models.Recording.find_all(source__in=SourceFiles,
+                                                             type=PATIENT_EVENT_TYPE)) if SourceFiles else []
+        parts = parts + ev_parts
+    except Exception as ex:
+        _log.warning("Biomarkers: event signature component failed (%s); cache may miss new events", ex)
     return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16], entries
 
 
