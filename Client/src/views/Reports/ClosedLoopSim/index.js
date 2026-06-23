@@ -22,6 +22,22 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import {
   loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
 } from "./bandCandidateStore";
+import DeploymentRocPanel from "./DeploymentRocPanel";
+
+// Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
+// committed candidate's label provenance, so the deployment ROC defines the band feature with the
+// SAME binarization the candidate was validated under.
+function requestParamsFromCandidate(bc) {
+  const lbl = (bc && bc.label) || {};
+  const bin = lbl.binarization || {};
+  const rp = {};
+  if (lbl.pro_metric) rp.LabelMetric = lbl.pro_metric;
+  if (bin.strategy) rp.LabelStrategy = bin.strategy;
+  if (bin.low_pct != null) rp.PercentileLow = bin.low_pct;
+  if (bin.high_pct != null) rp.PercentileHigh = bin.high_pct;
+  if (lbl.match_tolerance_min != null) rp.MatchToleranceMin = lbl.match_tolerance_min;
+  return rp;
+}
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "—"
@@ -162,6 +178,7 @@ function ClosedLoopSim() {
 
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
   const [showJson, setShowJson] = useState(false);
+  const [cutpoint, setCutpoint] = useState(null);   // chosen operating point, lifted from Phase B
 
   useEffect(() => {
     if (!participant_uid) { navigate("/database", { replace: false }); return; }
@@ -246,12 +263,16 @@ function ClosedLoopSim() {
               </Grid>
 
               <Grid item xs={12} md={6}>
-                <PhasePlaceholder phase="Phase B" title="Deployment ROC + cut-point search"
-                  blurb="Rating-clustered AUC with bootstrap CI, plus a Youden / F1 / Net-Benefit cut-point selector drawn on the ROC and the high-vs-low band-power density." />
+                <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParamsFromCandidate(bc)} onCutpoint={setCutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <PhasePlaceholder phase="Phase C" title="LSB conversion + power / sample-size"
-                  blurb="Cut-point in z-units, raw band power, and Timeline LSB (empirical µV²/LSB, confidence-rated), plus the 80%-power readout for whether more data is needed." />
+                  blurb={cutpoint && cutpoint.threshold != null
+                    ? `Cut-point handed from Phase B: power ≥ ${Number(cutpoint.threshold).toFixed(3)} `
+                      + `(${cutpoint.rule}, ${cutpoint.matchDir}). Next: map to Timeline LSB `
+                      + `(empirical µV²/LSB, confidence-rated) + the 80%-power readout.`
+                    : "Cut-point in z-units, raw band power, and Timeline LSB (empirical µV²/LSB, confidence-rated), plus the 80%-power readout for whether more data is needed."} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <PhasePlaceholder phase="Phase D" title="Per-era cross-validation"
