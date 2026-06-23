@@ -2714,6 +2714,54 @@ def build_band_candidate(request_data):
     }
 
 
+def band_deployment_roc(request_data):
+    """Rating-clustered deployment ROC + cut-point table for ONE committed band (Phase B).
+
+    Reuses `_validate_band_core` so the band feature + pooled detail are byte-identical to the
+    committed BandCandidate, then runs `analytics.deployment_roc` on that detail. The match
+    direction defaults to **prior/forecasting** here (the controller can only act on PSDs that
+    PRECEDE a rating), unlike the discovery scan's `pro_first` — the frontend exposes a toggle to
+    switch back to `pro_first` for the full-pool AUC. Pass `MatchDirection` to override.
+
+    Inputs: same as /emitBandCandidate, plus optional NBoot (bootstrap replicates, default 500).
+    Output: {available, channel, center_hz, band_lo, band_hi, label_metric, match_direction,
+             roc:{auc, auc_lo, auc_hi, fpr[], tpr[], thr[], operating_point, ...}} or
+            {available: False, reason: ...}.
+    """
+    # Deployment default = causal forecasting unless the caller is explicit.
+    rd = dict(request_data)
+    if not rd.get("MatchDirection"):
+        rd["MatchDirection"] = "prior"
+    core = _validate_band_core(rd)
+    if not core.get("available"):
+        return core
+
+    n_boot = _int_param(rd, "NBoot", default=500, lo=50, hi=5000)
+    roc = analytics.deployment_roc(
+        core["pooled"], core["channel"], core["center_hz"],
+        band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
+        low_pct=core["low_pct"], high_pct=core["high_pct"], n_boot=n_boot)
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    center_hz = core["center_hz"]; band_width_hz = core["band_width_hz"]
+    return {
+        "available": roc.get("available", False),
+        "reason": roc.get("reason"),
+        "channel": core["channel"],
+        "center_hz": _ff(center_hz),
+        "band_lo": _ff(center_hz - band_width_hz / 2.0),
+        "band_hi": _ff(center_hz + band_width_hz / 2.0),
+        "band_width_hz": _ff(band_width_hz),
+        "label_metric": core["label_metric"],
+        "match_direction": core["match_direction"],
+        "roc": roc,
+    }
+
+
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 

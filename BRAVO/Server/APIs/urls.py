@@ -82,6 +82,7 @@ urlpatterns = [
     path('queryBiomarkerAnalysis', DataAnalysis.QueryBiomarkerAnalysis.as_view()),
     path('queryBandValidation', DataAnalysis.QueryBandValidation.as_view()),
     path('emitBandCandidate', DataAnalysis.EmitBandCandidate.as_view()),
+    path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
     path('queryDataAvailability', DataAnalysis.QueryDataAvailability.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),

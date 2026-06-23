@@ -1414,6 +1414,153 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     }
 
 
+def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5.0):
+    """Extract the per-sample log band-power feature + matched labels + rating clusters + times for
+    ONE (channel, band) from a pooled td_detail — the SAME feature definition the glmer uses.
+
+    Returns (bp_log (N,), labels (N,), rating_group (N,), times (N,)) restricted to finite-feature
+    rows, or None on any structural failure (channel/band not found). Caller binarizes labels.
+    """
+    if not td_detail:
+        return None
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    rating_group = td_detail.get("rating_group")
+    times = td_detail.get("times")
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i
+            break
+    if ci is None:
+        return None
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    rg = (np.asarray(rating_group) if rating_group is not None
+          else np.arange(len(bp_log)))
+    tt = (np.asarray([str(t) for t in times]) if times is not None
+          else np.array([""] * len(bp_log)))
+    return bp_log, labels, rg, tt
+
+
+def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                   strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
+                   n_boot=500, max_points=300, seed=0):
+    """Deployment-grade ROC for ONE committed (channel, band), with a RATING-CLUSTERED bootstrap CI
+    on the AUC and a full operating-point table for the cut-point search panel.
+
+    Why clustered: many neural samples share a single PRO rating (the matched cluster). A naive
+    per-sample bootstrap treats those near-duplicate samples as independent and reports an
+    over-tight AUC CI — the same double-dipping the cross-validation guards against on the discovery
+    side. Here we resample WHOLE rating clusters with replacement (the deployment analog of the
+    per-rating random intercept), so the CI reflects the count of INDEPENDENT ratings, not raw
+    samples.
+
+    The band feature is z-scored-log power oriented so AUC >= 0.5; the threshold scale returned is
+    the same oriented log-power feature the device sees (Phase C converts it to LSB). The operating
+    point defaults to Youden's J; the frontend re-solves F1 / cost-sensitive / net-benefit live from
+    the returned (fpr, tpr, thr, prevalence).
+
+    Returns {available, auc, auc_lo, auc_hi, n_boot_ok, fpr[], tpr[], thr[], prevalence, n_pos,
+    n_neg, n_samples, n_clusters, operating_point{...}, flip, note} or {available: False, reason}.
+    """
+    from sklearn import metrics
+
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
+    bp_log, labels, rating_group, _times = feat
+    y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+    m = np.isfinite(bp_log) & np.isfinite(y_all)
+    if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
+        return {"available": False, "reason": "too few matched high/low samples for an ROC"}
+    x = bp_log[m].astype(float)
+    y = y_all[m].astype(int)
+    g = rating_group[m]
+
+    raw_auc = float(metrics.roc_auc_score(y, x))
+    flip = raw_auc < 0.5                       # orient so higher score = higher pain
+    use_score = -x if flip else x
+    auc = float(max(raw_auc, 1.0 - raw_auc))
+    fpr, tpr, thr = metrics.roc_curve(y, use_score)
+    # Map decision thresholds back to the ORIGINAL oriented log-power scale (rule: power >= thr).
+    thr_device = (-thr if flip else thr).astype(float)
+
+    n_pos = int(np.sum(y == 1)); n_neg = int(np.sum(y == 0))
+    prevalence = float(n_pos) / float(n_pos + n_neg) if (n_pos + n_neg) > 0 else None
+    n_clusters = int(len(np.unique(g)))
+
+    # ---- rating-clustered bootstrap CI on AUC ----
+    # Resample whole clusters with replacement; recompute AUC per replicate. Skip replicates that
+    # lose a class. CI = percentile 2.5 / 97.5 over the valid replicates.
+    rng = np.random.default_rng(seed)
+    uniq_clusters = np.unique(g)
+    # Precompute per-cluster row indices once.
+    cluster_rows = {c: np.where(g == c)[0] for c in uniq_clusters}
+    boot_aucs = []
+    n_cl = len(uniq_clusters)
+    for _b in range(int(n_boot)):
+        pick = rng.choice(uniq_clusters, size=n_cl, replace=True)
+        idx = np.concatenate([cluster_rows[c] for c in pick])
+        yb = y[idx]
+        if len(np.unique(yb)) < 2:
+            continue
+        try:
+            ab = metrics.roc_auc_score(yb, use_score[idx])
+            boot_aucs.append(max(ab, 1.0 - ab))
+        except ValueError:
+            continue
+    if len(boot_aucs) >= 20:
+        auc_lo = float(np.percentile(boot_aucs, 2.5))
+        auc_hi = float(np.percentile(boot_aucs, 97.5))
+    else:
+        auc_lo = auc_hi = None
+
+    # ---- default operating point: Youden's J ----
+    op = None
+    if len(thr) > 1:
+        j = tpr - fpr
+        j[~np.isfinite(thr)] = -np.inf
+        k = int(np.argmax(j))
+        op = {
+            "fpr": float(fpr[k]), "tpr": float(tpr[k]),
+            "threshold": float(thr_device[k]),
+            "sensitivity": float(tpr[k]),
+            "specificity": float(1.0 - fpr[k]),
+            "youden_j": float(tpr[k] - fpr[k]),
+            "direction": "ge",
+            "rule": "youden",
+        }
+
+    # ---- downsample the curve (keep thr parallel) ----
+    fpr_o, tpr_o, thr_o = fpr, tpr, thr_device
+    if max_points and len(fpr_o) > max_points:
+        sel = np.unique(np.linspace(0, len(fpr_o) - 1, int(max_points)).astype(int))
+        fpr_o, tpr_o, thr_o = fpr_o[sel], tpr_o[sel], thr_o[sel]
+
+    return {
+        "available": True,
+        "auc": auc, "auc_lo": auc_lo, "auc_hi": auc_hi,
+        "n_boot_ok": len(boot_aucs),
+        "fpr": [float(v) for v in fpr_o], "tpr": [float(v) for v in tpr_o],
+        "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
+        "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
+        "n_samples": int(m.sum()), "n_clusters": n_clusters,
+        "operating_point": op, "flip": bool(flip),
+        "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
+        "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
+                 f"{n_clusters} independent ratings). AUC oriented >= 0.5."),
+    }
+
+
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                               pain_cutoff=None, cluster="era"):

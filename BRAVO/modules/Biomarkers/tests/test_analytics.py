@@ -643,3 +643,50 @@ if __name__ == "__main__":
     test_band_mixedmodel_inference_emits_or_ci()
     test_pooled_psd_detail_is_per_channel_and_matches_pro()
     print("All analytics tests passed.")
+
+
+def test_deployment_roc_recovers_planted_band():
+    """deployment_roc on a planted band: AUC>0.5 with a bootstrap CI that brackets it, ROC endpoints
+    anchored at (0,0)/(1,1), a Youden operating point, and parallel fpr/tpr/thr arrays."""
+    det = _planted_detail(E=120, center=20.0, beta=0.8, seed=3)
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, band_width_hz=5.0,
+                                   strategy="tertile", n_boot=200, seed=1)
+    assert roc["available"] is True, roc.get("reason")
+    assert 0.5 <= roc["auc"] <= 1.0 and roc["auc"] > 0.6
+    # bootstrap CI present and brackets the point estimate
+    assert roc["auc_lo"] is not None and roc["auc_hi"] is not None
+    assert roc["auc_lo"] <= roc["auc"] + 1e-9 and roc["auc_hi"] >= roc["auc"] - 1e-9
+    assert roc["n_boot_ok"] >= 20
+    # ROC arrays parallel, endpoints anchored
+    assert len(roc["fpr"]) == len(roc["tpr"]) == len(roc["thr"])
+    assert roc["fpr"][0] <= 1e-9 and abs(roc["fpr"][-1] - 1.0) < 1e-9
+    op = roc["operating_point"]
+    assert op is not None and op["rule"] == "youden" and 0.0 <= op["sensitivity"] <= 1.0
+    assert 0.0 <= roc["prevalence"] <= 1.0 and roc["n_pos"] > 0 and roc["n_neg"] > 0
+
+
+def test_deployment_roc_clustered_ci_wider_than_naive():
+    """With many samples sharing each rating cluster, the rating-clustered bootstrap CI must be
+    WIDER than a per-sample bootstrap would give (it counts independent ratings, not raw rows)."""
+    import numpy as _np
+    rng = _np.random.default_rng(0)
+    # 40 ratings, 6 near-duplicate samples each (one shared label per cluster). Signal is kept weak
+    # (beta 0.10 against noise 0.6) so the AUC sits mid-range (~0.67) rather than at the separation
+    # ceiling — only then does the bootstrap CI have real width to test.
+    n_clu, per = 40, 6
+    f = _np.linspace(0.95, 100, 40)
+    labels = _np.repeat(rng.normal(5, 2, n_clu), per)
+    rg = _np.repeat(_np.arange(n_clu), per)
+    psd = _np.abs(rng.normal(1, 0.6, (n_clu * per, 2, 40)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.10 * (labels - labels.mean())[:, None])
+    det = {"f_set": f, "psd": psd, "labels": labels, "rating_group": rg,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(n_clu * per)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=300, seed=2)
+    # Tertile binarization drops the middle-third ratings, so the surviving clusters are fewer than
+    # the planted n_clu but still a substantial, clustered set (each an independent rating).
+    assert roc["available"] and 12 < roc["n_clusters"] < n_clu
+    # The clustered CI has real width (not the degenerate ~0 a per-sample bootstrap of duplicates
+    # would give); just assert it is a positive-width interval over the independent ratings.
+    assert roc["auc_hi"] - roc["auc_lo"] > 0.02
