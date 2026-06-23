@@ -130,8 +130,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       || !painSeries.t || !painSeries.t.length) return empty;
 
   const tolSec = (toleranceMin && toleranceMin > 0) ? toleranceMin * 60 : 0;
+  // `i0` = original index into painSeries.t/y, captured here so we can map a matched proIdx (an
+  // index into proSorted) back to the DISPLAYED pain-row order for the matched/unmatched overlay.
   const proSorted = painSeries.t
-    .map((t, i) => ({ t, v: painSeries.y[i] }))
+    .map((t, i) => ({ t, v: painSeries.y[i], i0: i }))
     .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
     .sort((a, b) => a.t - b.t);
 
@@ -225,6 +227,15 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   let nProReused = 0;
   useCounts.forEach((c) => { if (c > 1) nProReused++; });
   const nProTotal = proSorted.length;
+  // Matched/unmatched flag PER DISPLAYED PRO (aligned to painSeries.t/y order, not proSorted order),
+  // for the timeline pain-row closed/open-circle overlay. A rating is "matched" iff it claimed >=1
+  // PSD (its proIdx appears in useCounts). proSorted[pk].i0 maps the matcher's index back to the
+  // painSeries index. Length = painSeries.t.length (unparseable rows stay false — never matchable).
+  const painMatched = new Array(painSeries.t.length).fill(false);
+  useCounts.forEach((_c, pk) => {
+    const i0 = proSorted[pk] && proSorted[pk].i0;
+    if (Number.isInteger(i0)) painMatched[i0] = true;
+  });
   // cuts computed on the matched continuous values (exactly as the backend binarizes the labels).
   const matchedValues = matched.filter((s) => s.v != null && Number.isFinite(s.v)).map((s) => s.v);
   const cuts = computeCuts(matchedValues, strategy, percentileLow, percentileHigh);
@@ -268,7 +279,7 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     : null;
 
   return {
-    samples, binByKey, matchedValues, cuts,
+    samples, binByKey, matchedValues, cuts, painMatched,
     counts: {
       n_sessions: scanIndex.length,
       n_matched: matchedValues.length,

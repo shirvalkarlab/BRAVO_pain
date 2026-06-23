@@ -590,14 +590,37 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // for the HIGH semantic that only exists in binarization mode removes that cross-toggle clash.
       const PAIN_NEUTRAL = "#3A4A63";
       const lineColor = binMode ? "rgba(120,120,120,0.35)" : PAIN_NEUTRAL;
-      const markColors = binMode ? pain.y.map(classifyPain) : PAIN_NEUTRAL;
       traces.push({ type: "scattergl", mode: "lines", x: pain.t.map(D), y: py,
         line: { color: lineColor, width: 2.4 }, opacity: binMode ? 0.5 : 0.45,
         hoverinfo: "skip", showlegend: false });
-      traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
-        marker: { size: binMode ? 6 : 5, color: markColors }, opacity: binMode ? 0.92 : 0.6,
-        hovertemplate: `${pain.metric || "pain"} %{customdata}<br>%{x}<extra></extra>`,
-        customdata: pain.y, showlegend: false });
+      if (binMode) {
+        // Binarization mode: each REAL pain rating encodes two things at once —
+        //   fill  : CLOSED circle = this rating claimed >=1 PSD (matched); OPEN circle = matched none;
+        //   color : class color (high=vermillion / low=blue / excluded-mid=grey) from the live cut.
+        // painMatched (from binarizationModel) is aligned to pain.t order. For an open circle Plotly
+        // draws an unfilled ring in marker.line.color, so we set the ring to the class color -> an
+        // open marker still reads as its class.
+        const cls = pain.y.map(classifyPain);
+        const pm = (scanModel && scanModel.painMatched) || [];
+        const symb = pain.y.map((_v, i) => (pm[i] ? "circle" : "circle-open"));
+        const classifyName = (v) => {
+          if (!cuts || cuts.kind === "none") return "pain";
+          if (cuts.kind === "two-cut") return v <= cuts.lowCut ? "low"
+            : (v >= cuts.highCut ? "high" : "excluded");
+          return v <= cuts.cut ? "low" : "high";
+        };
+        traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
+          marker: { size: 8, symbol: symb, color: cls, line: { width: 1.6, color: cls } },
+          opacity: 0.95,
+          customdata: pain.y.map((v, i) => [v, (pm[i] ? "matched" : "no neural match"), classifyName(v)]),
+          hovertemplate: `${pain.metric || "pain"} %{customdata[0]}<br>%{customdata[2]} pain · %{customdata[1]}<extra></extra>`,
+          showlegend: false });
+      } else {
+        traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
+          marker: { size: 5, color: PAIN_NEUTRAL }, opacity: 0.6,
+          hovertemplate: `${pain.metric || "pain"} %{customdata}<br>%{x}<extra></extra>`,
+          customdata: pain.y, showlegend: false });
+      }
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
         text: "no PRO data", showarrow: false, font: { size: 9.5, color: "#9AA0A6" } });
@@ -605,6 +628,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: (painBase + painTop) / 2,
       text: `<b>PAIN</b><br><span style="font-size:14px;color:#999">${pain.metric || ""}</span>`,
       showarrow: false, xanchor: "right", font: { size: 26, color: PAL.pain } });
+    // Binarization-mode pain-row subtitle: matched vs unmatched ratings (closed vs open circles).
+    if (binMode) {
+      const su = (scanModel && scanModel.counts && scanModel.counts.survey_usage) || {};
+      if (su.n_pro_total) {
+        annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: painBase - 0.30,
+          text: `<span style="font-size:13px;color:#999">${su.n_pro_used || 0} matched · ${su.n_pro_unused || 0} unmatched of ${su.n_pro_total} (${su.pct_pro_used != null ? su.pct_pro_used : 0}%)</span>`,
+          showarrow: false, xanchor: "right" });
+      }
+    }
     pTicks.forEach((val) => annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK,
       y: yScale(val, pLo, pHi, painBase, painTop), text: String(val), showarrow: false,
       xanchor: "right", font: { size: 19, color: "#888" } }));
@@ -652,6 +684,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
         name: "not in binarized set  (no PRO in window / band-power)" });
+      // Pain-row encoding has a SECOND axis (symbol = matched/unmatched) layered on the class color
+      // above. Teach it with two neutral-grey style swatches so the reader composes color × symbol.
+      const su = bc.survey_usage || {};
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "circle", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
+        name: `pain rating · matched ≥1 PSD${su.n_pro_used != null ? `  ·  ${su.n_pro_used}` : ""}` });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "circle-open", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
+        name: `pain rating · no neural match${su.n_pro_unused != null ? `  ·  ${su.n_pro_unused}` : ""}` });
     } else {
       // Glyph key listed TOP→BOTTOM in the order the layers actually stack within a neural lane:
       // montage/PSD ticks at the TOP, then the chronic 24/7 LSB trend, then the streaming LSB session
