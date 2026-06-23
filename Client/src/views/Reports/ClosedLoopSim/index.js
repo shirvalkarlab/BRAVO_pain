@@ -23,6 +23,7 @@ import {
   loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
 } from "./bandCandidateStore";
 import DeploymentRocPanel from "./DeploymentRocPanel";
+import LsbPowerPanel from "./LsbPowerPanel";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -267,12 +268,8 @@ function ClosedLoopSim() {
                   requestParams={requestParamsFromCandidate(bc)} onCutpoint={setCutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <PhasePlaceholder phase="Phase C" title="LSB conversion + power / sample-size"
-                  blurb={cutpoint && cutpoint.threshold != null
-                    ? `Cut-point handed from Phase B: power ≥ ${Number(cutpoint.threshold).toFixed(3)} `
-                      + `(${cutpoint.rule}, ${cutpoint.matchDir}). Next: map to Timeline LSB `
-                      + `(empirical µV²/LSB, confidence-rated) + the 80%-power readout.`
-                    : "Cut-point in z-units, raw band power, and Timeline LSB (empirical µV²/LSB, confidence-rated), plus the 80%-power readout for whether more data is needed."} />
+                <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParamsFromCandidate(bc)} cutpoint={cutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <PhasePlaceholder phase="Phase D" title="Per-era cross-validation"
