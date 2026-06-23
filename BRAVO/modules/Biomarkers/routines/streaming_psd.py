@@ -334,7 +334,8 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     return psd
 
 
-def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest"):
+def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest",
+                  channels=None, max_per_rating=None):
     """Match each PSD timestamp to a PRO report within the window.
 
     `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the PRO report timestamps +
@@ -344,11 +345,18 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="ne
     callers can audit how many neural samples share one PRO (double-dipping).
 
     `direction`:
-      * "nearest" — match the closest PRO in EITHER time direction (symmetric ± tolerance).
-      * "prior"   — FORECASTING semantics: the PSD must be recorded BEFORE the rating, so a PSD is
-        matched to the nearest PRO at or after it within the window (PRO time >= PSD time). This is
-        the causal direction for predicting future pain from neural data — every matched PSD
-        precedes the rating it is paired with. dt_min is then >= 0 (PRO minus PSD).
+      * "nearest"   — PSD-first. Each PSD is matched to its closest PRO in EITHER time direction
+                       (symmetric ± tolerance). The intuitive symmetric matcher for discovery.
+      * "prior"     — PSD-first FORECASTING semantics: a PSD is matched to the nearest PRO at or
+                       after it within the window. Every matched PSD precedes the rating it pairs
+                       with. dt_min then >= 0. The causal direction for closed-loop deployment.
+      * "pro_first" — Walk PROs (the units of independence), and for each PRO claim up to
+                       `max_per_rating` closest PSDs PER CHANNEL within tolerance (either
+                       direction). A PSD already claimed by an earlier-walked PRO cannot be
+                       claimed again. This maximizes PRO coverage instead of PSD coverage — every
+                       PRO with neural coverage in the window contributes, which is the right
+                       framing for biomarker discovery (each PRO is one independent observation).
+                       Requires `channels` (N,) array and `max_per_rating` (int).
     Vectorized via searchsorted on the sorted PRO times."""
     import numpy as _np
     n = len(times_s)
@@ -362,6 +370,51 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="ne
     if pt.size == 0 or tolerance_min is None or tolerance_min <= 0:
         return lab, dt, pro_idx
     tol_s = float(tolerance_min) * 60.0
+
+    # --- PRO-FIRST branch ----------------------------------------------------------------------
+    # Walk PROs, claim the K closest PSDs PER CHANNEL within tolerance. This inverts the natural
+    # PSD-first loop so a PRO with sparse PSD coverage still contributes to discovery — every
+    # PRO with neural data in its window emits at least one matched row per channel that has it.
+    # Each PSD can be claimed by AT MOST ONE PRO (closeness wins on contention), so the
+    # downstream per-(channel, rating) cap is still well-defined.
+    if direction == "pro_first":
+        if channels is None or max_per_rating is None or int(max_per_rating) < 1:
+            # Misuse: fall through to PSD-first nearest so we never silently emit zero matches.
+            direction = "nearest"
+        else:
+            ts_arr = _np.asarray(times_s, dtype=float)
+            ch_arr_local = _np.asarray(channels, dtype=object)
+            claimed = _np.zeros(n, dtype=bool)
+            kpr = int(max_per_rating)
+            # Walk PROs in temporal order (pt is already sorted). The `order` array maps the
+            # k-th sorted PRO back to the caller's original PRO ordering, which is what
+            # pro_idx stores.
+            for k in range(pt.size):
+                t_pro = pt[k]
+                pv_k = pv[k]
+                if not _np.isfinite(t_pro) or not _np.isfinite(pv_k):
+                    continue
+                # Candidates: unclaimed, finite-time PSDs within tol of this PRO.
+                near = (_np.isfinite(ts_arr)
+                        & ~claimed
+                        & (_np.abs(ts_arr - t_pro) <= tol_s))
+                if not near.any():
+                    continue
+                # Per-channel: pick the kpr PSDs closest to t_pro.
+                for ch in _np.unique(ch_arr_local[near]):
+                    cand = _np.where(near & (ch_arr_local == ch))[0]
+                    if cand.size == 0:
+                        continue
+                    # closeness ranking; ties broken by PSD-time order (deterministic).
+                    d_cand = _np.abs(ts_arr[cand] - t_pro)
+                    take = cand[_np.argsort(d_cand)[:kpr]]
+                    lab[take] = pv_k
+                    dt[take] = (t_pro - ts_arr[take]) / 60.0
+                    pro_idx[take] = int(order[k])
+                    claimed[take] = True
+            return lab, dt, pro_idx
+
+    # --- PSD-first branches ("prior", "nearest") -----------------------------------------------
     for i, t in enumerate(times_s):
         if not _np.isfinite(t):
             continue
@@ -465,10 +518,10 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
             "dur": np.asarray(durs, dtype=float), "f_set": f_set}
 
 
-def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=15.0,
+def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=60.0,
                                     min_per_group=3, aggregate="all",
                                     max_per_rating=3, refractory_min=2.0,
-                                    match_direction="prior"):
+                                    match_direction="pro_first"):
     """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
     continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
     matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated.
@@ -517,8 +570,11 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
+    # PRO-first matching gets the channels array and max_per_rating up-front so the matcher can
+    # claim PSDs per channel per PRO; PSD-first ignores those args.
     labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min,
-                                            direction=match_direction)
+                                            direction=match_direction,
+                                            channels=ch_arr, max_per_rating=max_per_rating)
 
     # --- Per-(channel, rating) CAP with refractory window ---------------------------------------
     # A single pain rating can sit within tolerance of a whole BURST of PSDs (the patient triggered
@@ -527,8 +583,10 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     # PSDs closest in time to the rating, but never two closer together than `refractory_min` minutes
     # (so the kept set is temporally spread, not a tight cluster). Dropped PSDs become unmatched
     # (label NaN, pro_idx -1) — they stay in the pool as unmatched samples but feed no rating.
+    # When matching is PRO-first the matcher already enforced max_per_rating per channel, so this
+    # cap would be a no-op at best and a double-cap at worst — skip it cleanly.
     n_capped_dropped = 0
-    if max_per_rating is not None and max_per_rating >= 1:
+    if (match_direction != "pro_first") and max_per_rating is not None and max_per_rating >= 1:
         ref_s = float(refractory_min or 0.0) * 60.0
         matched_i = np.where(np.isfinite(labels) & (pro_idx >= 0))[0]
         # group matched rows by (channel, matched-PRO index)

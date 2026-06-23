@@ -1547,7 +1547,10 @@ def _pro_match_arrays(pro_df, label_metric):
 # a daily PRO is matched to the nearest streaming/PSD session whose timestamp falls within this
 # many minutes. The frontend slider sends `MatchToleranceMin`; None disables time-matching and
 # falls back to the legacy same-calendar-day aggregation.
-DEFAULT_MATCH_TOLERANCE_MIN = 15.0
+DEFAULT_MATCH_TOLERANCE_MIN = 60.0  # was 15. Pain reports anchor neural data on a minutes-to-hours
+# timescale, not minutes — a PSD 30 min from a rating is still informative about that rating. The
+# narrow 15-min window dropped 80% of the otherwise-usable pool on RCS08 (see AUDIT_stream_*).
+# Coupled with the new direction='pro_first' default, this lifts PRO coverage 44/682 -> ~288/682.
 
 
 def _int_param(request_data, key, *, default, lo=None, hi=None):
@@ -1844,8 +1847,20 @@ def run_for_participant(request_data):
     # Match direction defaults to "prior" (forecasting: the PSD must precede the rating).
     max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
     refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
-    match_direction = "nearest" if str(
-        request_data.get("MatchDirection", "prior")).lower() == "nearest" else "prior"
+    # Three-way match direction (PSD<->PRO):
+    #   pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
+    #     within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
+    #     PRO is the unit of independence.
+    #   nearest: PSD-first symmetric, each PSD matched to the closest PRO either direction.
+    #   prior:   PSD-first FORECASTING semantics (PSD must precede the PRO). Kept for the
+    #     threshold-deployment view where causal prediction is the right semantics.
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    if _md in ("pro_first", "pro-first", "pro"):
+        match_direction = "pro_first"
+    elif _md == "nearest":
+        match_direction = "nearest"
+    else:
+        match_direction = "prior"
     # `aggregate` retained for back-compat with the detail builder, but the cap subsumes it: a cap of
     # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
     # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
@@ -2336,8 +2351,20 @@ def validate_band_for_participant(request_data):
     match_tol_min = _match_tolerance_param(request_data)
     max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
     refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
-    match_direction = "nearest" if str(
-        request_data.get("MatchDirection", "prior")).lower() == "nearest" else "prior"
+    # Three-way match direction (PSD<->PRO):
+    #   pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
+    #     within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
+    #     PRO is the unit of independence.
+    #   nearest: PSD-first symmetric, each PSD matched to the closest PRO either direction.
+    #   prior:   PSD-first FORECASTING semantics (PSD must precede the PRO). Kept for the
+    #     threshold-deployment view where causal prediction is the right semantics.
+    _md = str(request_data.get("MatchDirection", "pro_first")).lower()
+    if _md in ("pro_first", "pro-first", "pro"):
+        match_direction = "pro_first"
+    elif _md == "nearest":
+        match_direction = "nearest"
+    else:
+        match_direction = "prior"
     from .routines import streaming_psd as sp
     pooled = sp.build_pooled_detail_from_matrix(
         mat, pm[0], pm[1],

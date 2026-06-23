@@ -70,7 +70,11 @@ function Biomarkers() {
   // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
   // view dirty (a recompute re-matches). Exploratory — default 15 min.
-  const [matchTolerance, setMatchTolerance] = useState(15);
+  // Match window for PSD<->PRO pairing. Bumped from 15 to 60 min after the matching audit on RCS08:
+  // pain reports anchor neural data on a minutes-to-hours timescale, and the 15-min window dropped
+  // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
+  // lifts PRO coverage 44/682 -> ~288/682 of the matched discovery pool.
+  const [matchTolerance, setMatchTolerance] = useState(60);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
@@ -81,7 +85,12 @@ function Biomarkers() {
   const [refractoryMin, setRefractoryMin] = useState(2);
   // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
   // tolerance; pairs the closest PSD in either time direction). Default "prior".
-  const [matchDirection, setMatchDirection] = useState("prior");
+  // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
+  // PSDs per channel each within tolerance, maximizing PRO coverage (each PRO is an independent
+  // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
+  // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
+  // view where causal direction is the right semantics.
+  const [matchDirection, setMatchDirection] = useState("pro_first");
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -508,7 +517,8 @@ function Biomarkers() {
                                       : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
 
-                              {/* Match direction: forecasting (PSD before rating) vs nearest (symmetric). */}
+                              {/* Match direction: pro_first (PRO-anchored, default) vs nearest (PSD-first
+                                  symmetric) vs prior (PSD-first forecasting). */}
                               <MDBox mt={1.5}>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
@@ -519,14 +529,17 @@ function Biomarkers() {
                                   onChange={(e, v) => { if (v) setMatchDirection(v); }}
                                   sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
                                 >
-                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
+                                  <ToggleButton value="pro_first">PRO-first (discovery)</ToggleButton>
                                   <ToggleButton value="nearest">Nearest (±)</ToggleButton>
+                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
                                 </ToggleButtonGroup>
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {matchDirection === "prior"
-                                    ? "Each rating is paired only with PSDs recorded BEFORE it (causal/forecasting direction)."
-                                    : "Each rating is paired with the closest PSD in EITHER time direction (symmetric ± window). Use for cross-sectional association, not forecasting."}
+                                  {matchDirection === "pro_first"
+                                    ? "Walks pain ratings (the unit of independence) and claims up to N closest PSDs PER CHANNEL each, within the window. Maximizes the number of ratings that contribute to discovery — the right framing when 'does this band track pain?' is the question."
+                                    : matchDirection === "nearest"
+                                    ? "Each PSD is paired with the closest pain rating in EITHER time direction (symmetric ± window). Cross-sectional association, not forecasting."
+                                    : "Each PSD is paired only with pain ratings recorded AFTER it within the window (causal/forecasting direction). Use for closed-loop deployment."}
                                 </MDTypography>
                               </MDBox>
 
