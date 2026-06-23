@@ -25,6 +25,7 @@ import {
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
+import DeploySignoffCard from "./DeploySignoffCard";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -62,24 +63,6 @@ function KV({ label, children }) {
         color: "#555" }}>{label}</MDTypography>
       <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>{children}</MDTypography>
     </MDBox>
-  );
-}
-
-// A placeholder card for a panel a later phase will build.
-function PhasePlaceholder({ phase, title, blurb }) {
-  return (
-    <Card sx={{ width: "100%", border: "1px dashed #cfcfcf", backgroundColor: "#fafafa" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" alignItems="center" gap={1} mb={0.5}>
-          <Chip label={phase} size="small"
-            sx={{ height: 18, fontSize: 10, backgroundColor: "#e9e9e9" }} />
-          <MDTypography variant="h6" sx={{ fontSize: 14, color: "#777" }}>{title}</MDTypography>
-        </MDBox>
-        <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic" }}>
-          {blurb}
-        </MDTypography>
-      </MDBox>
-    </Card>
   );
 }
 
@@ -276,9 +259,9 @@ function ClosedLoopSim() {
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParamsFromCandidate(bc)} />
               </Grid>
-              <Grid item xs={12} md={6}>
-                <PhasePlaceholder phase="Phase E" title="Deploy-to-Percept sign-off card"
-                  blurb="Read-only clinician summary: channel, band, cut-point in LSB, direction, expected sensitivity/specificity with CI, and deployment caveats." />
+              <Grid item xs={12}>
+                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParamsFromCandidate(bc)} cutpoint={cutpoint} />
               </Grid>
 
               <Grid item xs={12}>
