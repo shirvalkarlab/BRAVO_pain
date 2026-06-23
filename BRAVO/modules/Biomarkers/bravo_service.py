@@ -1409,6 +1409,7 @@ def _window_params(request_data):
 # See docs/binarization_recommendation_RCS08.md.
 BINARIZATION_STRATEGIES = [
     {"key": "tertile", "label": "Tertile (low/high, drop middle)"},
+    {"key": "percentile", "label": "Percentile (adjustable cuts)"},
     {"key": "median",  "label": "Median split"},
     {"key": "kmeans",  "label": "KMeans (legacy)"},
 ]

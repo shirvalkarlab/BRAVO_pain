@@ -47,6 +47,7 @@ const DEFAULT_METRIC_OPTIONS = [
 // See docs/binarization_recommendation_RCS08.md.
 const DEFAULT_STRATEGY_OPTIONS = [
   { key: "tertile", label: "Tertile (low/high, drop middle)" },
+  { key: "percentile", label: "Percentile (adjustable cuts)" },
   { key: "median", label: "Median split" },
   { key: "kmeans", label: "KMeans (legacy)" },
 ];

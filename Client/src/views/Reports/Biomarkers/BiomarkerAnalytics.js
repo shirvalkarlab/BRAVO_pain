@@ -97,7 +97,17 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
   useEffect(() => {
     if (!ref.current || !channels.length || !centers.length) return;
     const traces = [];
-    channels.forEach((ch, ci) => {
+    // Legend order: all LEFT-hemisphere contacts first, then all RIGHT, each block alphabetized,
+    // so the key reads as two tidy hemisphere groups. Keep the ORIGINAL channel index (ci) for the
+    // band-click customdata so selection still maps to the right channel after reordering.
+    const orderedChannels = channels
+      .map((ch, ci) => ({ ch, ci }))
+      .sort((a, b) => {
+        const ha = hemiOf(a.ch), hb = hemiOf(b.ch);
+        if (ha !== hb) return ha === "Left" ? -1 : 1;
+        return String(a.ch.short || "").localeCompare(String(b.ch.short || ""));
+      });
+    orderedChannels.forEach(({ ch, ci }) => {
       const color = hemiOf(ch) === "Right" ? HI : LO;
       // Per-channel matched-sample ceiling: the pooled matched count splits across the bipolar
       // montages (one montage per recording), so each channel's curve uses only its own PSDs.
@@ -122,13 +132,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
       y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
 
     const layout = {
-      ...FIG_BASE, autosize: true, height: 420,
+      ...FIG_BASE, autosize: true, height: 460,
+      margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
       xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" }, range: [0, fmax] },
       yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
         overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
-      legend: { orientation: "h", y: -0.18, groupclick: "togglegroup", font: { size: 10 } },
+      legend: { orientation: "h", y: -0.20, groupclick: "togglegroup", font: { size: 13 },
+                tracegroupgap: 14 },
       shapes,
       annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
         yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
