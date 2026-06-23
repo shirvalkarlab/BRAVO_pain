@@ -489,13 +489,19 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           const b = binOf(ch, tEpoch(r.t_start));
           return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY;
         };
-        const colors = psd.map(tickColor);
-        const sizes = colors.map((c) => (binMode && c !== DIM_GREY ? 11 : 7));
+        const isEvent = (r) => r.product === "patient_event";
+        // Multimodal mode: tint imported event-marker PSDs a faint teal so the new population is
+        // visible against the neutral-grey montage/survey ticks; binarization mode colors both by bin.
+        const colors = psd.map((r) => (!binMode && isEvent(r) ? "#3B8A8F" : tickColor(r)));
+        const sizes = colors.map((c, i) => (binMode && c !== DIM_GREY ? 11 : (isEvent(psd[i]) ? 6 : 7)));
+        // Hover label: for imported event-marker PSDs show the marker's own NAME (e.g. "Streaming",
+        // "Higher Pain"); for ordinary snapshots show the product.
+        const tickLabel = (r) => (isEvent(r) ? `${r.event_name || "Event"} (event PSD)` : r.product);
         traces.push({ type: "scattergl", mode: "markers",
           x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
           marker: { symbol: "line-ns-open", size: sizes,
                     color: colors, line: { width: binMode ? 2.0 : 1.2 } },
-          customdata: psd.map((r) => r.product),
+          customdata: psd.map((r) => tickLabel(r)),
           hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
       }
 

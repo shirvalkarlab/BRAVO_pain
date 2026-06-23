@@ -141,22 +141,27 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   // not misread as "PSDs".
   const samples = [];
   const binByKey = new Map();
-  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0;
-  // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. LSB (band power)
-  // is NOT pooled into psd_scan_index — sources are only "TD streaming" / "Montage/survey" — so the
-  // lsb slot stays 0 here (the renderer shows it as "n/a", and a future backend that pools LSB into
-  // the scan index needs no further model change).
-  const bySrc = { low: { td: 0, montage: 0, lsb: 0 },
-                  high: { td: 0, montage: 0, lsb: 0 },
-                  excluded: { td: 0, montage: 0, lsb: 0 } };
+  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0, nMatchedEvent = 0;
+  // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. psd_scan_index
+  // ships three sources: "TD streaming", "Montage/survey", and "Patient event" (the imported
+  // event-marker PSDs). LSB (band power) is NOT pooled — its slot stays 0 (renderer shows "n/a").
+  const bySrc = { low: { td: 0, montage: 0, event: 0, lsb: 0 },
+                  high: { td: 0, montage: 0, event: 0, lsb: 0 },
+                  excluded: { td: 0, montage: 0, event: 0, lsb: 0 } };
+  const srcBucket = (src) => {
+    const s = String(src || "").toLowerCase();
+    if (s.indexOf("td") >= 0) return "td";
+    if (s.indexOf("event") >= 0) return "event";
+    return "montage";
+  };
   for (const s of matched) {
     let bin;
     if (s.v == null || !Number.isFinite(s.v)) bin = "unmatched";
     else {
       bin = classify(s.v, cuts);
       if (bin === "high") nHigh++; else if (bin === "low") nLow++; else nMid++;
-      const srcKey = String(s.source || "").toLowerCase().indexOf("td") >= 0 ? "td" : "montage";
-      if (srcKey === "td") nMatchedTd++; else nMatchedMontage++;
+      const srcKey = srcBucket(s.source);
+      if (srcKey === "td") nMatchedTd++; else if (srcKey === "event") nMatchedEvent++; else nMatchedMontage++;
       if (bySrc[bin]) bySrc[bin][srcKey] += 1;   // bin is high|low|excluded (matched-only branch)
     }
     samples.push({ ...s, bin });
@@ -176,6 +181,7 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       n_high: nHigh, n_low: nLow,
       n_excluded_middle: (strategy === "tertile" || strategy === "percentile") ? nMid : 0,
       n_matched_td: nMatchedTd, n_matched_montage: nMatchedMontage,
+      n_matched_event: nMatchedEvent,
       by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,

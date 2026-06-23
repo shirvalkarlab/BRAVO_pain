@@ -334,6 +334,51 @@ def _event_psd_rows(participant_uid):
     return rows
 
 
+def _event_psd_index(participant_uid):
+    """Lightweight {t, channel, source} index of the patient-event PSDs (incl. 'Streaming'), one
+    entry per (event, hemisphere block) assigned to its canonical bipolar channel — the SAME set
+    `_event_psd_rows` pools into the matrix, minus the freq/power arrays. Feeds `psd_scan_index` so
+    the imported event PSDs render as tick marks on their contact lanes and the live binarization
+    preview counts them, mirroring the backend pool (TD + montage + Patient event)."""
+    import datetime as _dt
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return []
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    if not SourceFiles:
+        return []
+    out = []
+    for r in models.Recording.find_all(source__in=SourceFiles, type=PATIENT_EVENT_TYPE):
+        md = getattr(r, "metadata", None)
+        if not isinstance(md, dict):
+            continue
+        ev_name = (getattr(r, "name", "") or "").strip() or "Event"
+        for hemi_key, hb in md.items():
+            if not isinstance(hb, dict):
+                continue
+            ch = _event_block_channel(hemi_key, hb.get("SenseID"))
+            if ch is None:
+                continue
+            freq = hb.get("Frequency"); power = hb.get("FFTBinData")
+            if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
+                    and len(freq) == len(power) and len(freq) > 0):
+                continue
+            t = None
+            if hb.get("DateTime"):
+                try:
+                    t = _dt.datetime.fromisoformat(
+                        str(hb["DateTime"]).replace("Z", "+00:00")).timestamp()
+                except (ValueError, TypeError):
+                    t = None
+            if t is None:
+                t = getattr(r, "date", None)
+            if t is None:
+                continue
+            out.append({"t": float(t), "channel": ch, "source": EVENT_PSD_SOURCE,
+                        "name": ev_name})
+    return out
+
+
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     """Load NeuralActivitySnapshot montage sweeps as montage-PSD marker events, de-duplicated
     against the montage/survey PSD recordings that ALREADY render on the timeline.
@@ -1503,6 +1548,26 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             "MedtronicBaselineMontages": [r for r in (psd_list or []) if isinstance(r, dict)],
         }
         records = availability.extract_availability(recs_by_type, region_map=region_map)
+        # Patient-event PSDs (incl. 'Streaming') are imported into the per-channel scan pool, so they
+        # must also render as PSD TICKS on their contact lanes (DESIGN: "a PSD mark at those
+        # contacts"). Append one synthetic dtype="psd" record per (event, hemisphere block) on its
+        # assigned bipolar channel — same record schema extract_availability emits, product tagged
+        # "patient_event" so the lane draws them as ticks alongside montage/survey PSDs.
+        try:
+            for ev in _event_psd_index(participant_uid):
+                ch = ev["channel"]
+                fmt = availability.analytics.format_channel(ch, region=region_map.get(ch))
+                records.append({
+                    "channel": ch, "label": fmt.get("short", ch),
+                    "hemisphere": availability._hemisphere(ch),
+                    "dtype": "psd", "product": "patient_event",
+                    "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming")
+                    "t_start": float(ev["t"]), "dur_s": 30.0,
+                    "meta": {"center_hz": None, "peak_hz": None, "n": None},
+                })
+            records.sort(key=lambda x: (x["channel"], x["t_start"]))
+        except Exception as e:
+            _log.warning("Biomarkers: event PSD records failed (%s)", e)
         pain = availability.pain_series(pro_df, label_metric)
         stim = availability.stim_series(chronic_list)
         # REAL inline LSB: the actual per-sample band-power series (streaming ~2 Hz + chronic
@@ -1542,6 +1607,13 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # scan pools (same `_MAIN_BIPOLAR` filter as `_assemble_psd_rows`), so the frontend can
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
         psd_scan_index = _psd_sample_index(td_all, psd_all)
+        # Patient-event PSDs (incl. 'Streaming') are imported into the per-channel pool, so index
+        # them here too — they render as ticks on their contact lanes and the live binarization
+        # preview counts them, matching the backend pool (TD + montage + Patient event).
+        try:
+            psd_scan_index = psd_scan_index + _event_psd_index(participant_uid)
+        except Exception as e:
+            _log.warning("Biomarkers: event PSD index failed (%s)", e)
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
                 "events": events, "montage_events": montage_events,
