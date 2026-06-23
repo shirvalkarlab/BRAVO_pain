@@ -1562,26 +1562,42 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 
 
 def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
-    """Map per-sample times to a stim era (OFF/LOW/HIGH) via nearest-time interpolation on the
-    chronic stim trajectory. Returns an object-array of era tags aligned to `times`, or None when
+    """Map per-sample times to a stim era (OFF/LOW/HIGH) by carrying the stim trajectory forward
+    (LOCF) onto each sample. Returns an object-array of era tags aligned to `times`, or None when
     no usable stim series is available. Shared by band_stim_stability and deployment_roc_by_era so
-    the era boundaries are identical across the stability LRT and the per-era refit."""
+    the era boundaries are identical across the stability LRT and the per-era refit.
+
+    LOCF (last-observation-carried-forward) is the physically correct semantics: a PSD sample's stim
+    context is the amplitude *in effect at or before* it was recorded, NOT the next programmed change.
+    `searchsorted(side='right') - 1` gives the index of the latest stim reading at-or-before each
+    sample time; clipped to >=0 so a sample preceding the first reading carries that first value.
+    (The prior next-sample/NOCB form mislabeled ~17% of samples' era and biased the stim-stability
+    LRT that selects closed-loop anchors — see PARITY_audit §7.)"""
     if not stim_series or not stim_series.get("t") or not stim_series.get("y"):
         return None
     if times is None:
         return None
-    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce")
-    t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
+    # NOTE: parse with an explicit ISO8601 format. The sample-time strings are a mix of values WITH
+    # fractional seconds ("...:28.850000") and WITHOUT ("...:20:05"); pandas 2.x infers ONE format
+    # from the first element and coerces every non-matching string to NaT — which here silently
+    # NaT'd ~83% of rows, clipping them to the first stim reading and ballooning the HIGH era. The
+    # NaT mask drives the None-era guard below.
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    nat = t_dt.isna().to_numpy()
+    t_epoch = (t_dt.view("int64").to_numpy() / 1e9)
     stim_t = np.asarray(stim_series["t"], dtype=float)
     stim_y = np.asarray(stim_series["y"], dtype=float)
     if len(stim_t) < 2:
         return None
     order = np.argsort(stim_t)
     stim_t = stim_t[order]; stim_y = stim_y[order]
-    idx = np.searchsorted(stim_t, t_epoch).clip(0, len(stim_t) - 1)
+    # LOCF: latest stim reading at or before each sample. Look the NaT rows up at the first reading
+    # (harmless — they are masked out to None immediately after) so searchsorted sees no NaN.
+    lookup = np.where(nat, stim_t[0], t_epoch)
+    idx = (np.searchsorted(stim_t, lookup, side="right") - 1).clip(0, len(stim_t) - 1)
     stim_mA = stim_y[idx]
     era = np.where(stim_mA < off_max, "OFF", np.where(stim_mA <= low_max, "LOW", "HIGH"))
-    era = np.where(np.isfinite(t_epoch), era, None)
+    era = np.where(nat, None, era)
     return era
 
 
@@ -1897,7 +1913,8 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     # Cluster id: group sessions into temporal eras (weekly) when dates are present; else a single
     # cluster (the random effect then collapses but the model still fits).
     if times is not None and len(times) == len(bp_log):
-        wk = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce").dt.isocalendar()
+        # ISO8601 format (mixed microsecond/non-microsecond strings; naive inference NaT's ~83%).
+        wk = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601").dt.isocalendar()
         cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
     else:
         cl = np.array(["all"] * len(bp_log))
@@ -2020,13 +2037,19 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
     if era is None:
         return {"available": False, "reason": "stim series too short"}
-    era = np.where(era == None, "OFF", era)  # noqa: E711 — keep alignment; NaN-time rows dropped by mask below
-    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce")
+    era_none = np.array([e is None for e in era])
+    # Parse with explicit ISO8601 (the sample-time strings mix microsecond / non-microsecond forms;
+    # naive inference NaT's the non-matching ~83% — see _assign_stim_eras). This array drives BOTH
+    # the LRT row mask and the weekly cluster id, so a naive parse here would silently drop those
+    # rows from the interaction test even though _assign_stim_eras assigned their era correctly.
+    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
     t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
+    t_epoch = np.where(t_samples.isna().to_numpy(), np.nan, t_epoch)
     # Weekly cluster id
     wk = t_samples.dt.isocalendar()
     cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
-    m = np.isfinite(bp_log) & np.isfinite(y) & np.isfinite(t_epoch)
+    # Drop unparseable-time / no-era rows from the LRT (do NOT relabel them OFF).
+    m = np.isfinite(bp_log) & np.isfinite(y) & np.isfinite(t_epoch) & (~era_none)
     if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
         return {"available": False, "reason": "too few samples / eras for an interaction test"}
     df = pd.DataFrame({

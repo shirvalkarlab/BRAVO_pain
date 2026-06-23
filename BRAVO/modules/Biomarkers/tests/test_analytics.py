@@ -798,3 +798,26 @@ def test_deployment_roc_by_era_splits_eras():
         e = res["eras"][tag]
         if e.get("available"):
             assert 0.5 <= e["auc"] <= 1.0
+
+
+def test_assign_stim_eras_uses_locf_not_nocb():
+    """_assign_stim_eras must carry the stim trajectory FORWARD (LOCF): a sample's era is the stim
+    amplitude in effect at or before it, not the next programmed change. Guards PARITY_audit §7
+    (the next-sample/NOCB form mislabeled ~17% of samples and biased the stim-stability LRT)."""
+    import numpy as _np
+    import datetime as _dt
+    # stim steps 0.0 mA -> 3.0 mA exactly at t=1000. A sample at t=999 is OFF (carry forward the
+    # 0.0 still in effect); a sample at t=1001 is HIGH. NOCB would wrongly call t=999 HIGH (next
+    # reading) and could call t=1001 by a later reading.
+    stim_series = {"t": [0.0, 1000.0, 2000.0], "y": [0.0, 3.0, 3.0]}
+    def _iso(ep):
+        return _dt.datetime.utcfromtimestamp(ep).isoformat(sep=" ")
+    times = [_iso(999.0), _iso(1000.0), _iso(1001.0)]
+    era = analytics._assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5)
+    assert era is not None
+    assert era[0] == "OFF",  f"t=999 should carry forward 0.0 mA (OFF), got {era[0]}"   # LOCF, not NOCB
+    assert era[1] == "HIGH", f"t=1000 is exactly the 3.0 mA step (HIGH), got {era[1]}"
+    assert era[2] == "HIGH", f"t=1001 should be 3.0 mA (HIGH), got {era[2]}"
+    # explicit contrast: the buggy NOCB (searchsorted left, no -1) would call t=999 -> HIGH.
+    nocb_idx = int(_np.searchsorted(_np.asarray(stim_series["t"]), 999.0))   # -> 1 -> 3.0 mA -> HIGH
+    assert stim_series["y"][nocb_idx] == 3.0, "sanity: NOCB would have mislabeled t=999 as HIGH"
