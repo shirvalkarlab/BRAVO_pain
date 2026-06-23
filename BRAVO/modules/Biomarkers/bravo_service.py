@@ -1130,7 +1130,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        kmeans_features=("left_leg_vas", "mpq_sum"),
                        label_strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                        train_days=None, step_days=None, sliding=True, region_map=None,
-                       match_tolerance_min=None, psd_matrix=None, pro_match=None):
+                       match_tolerance_min=None, psd_matrix=None, pro_match=None,
+                       aggregate="all"):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -1160,7 +1161,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
             if psd_matrix is not None and pro_match is not None:
                 try:
                     pooled = streaming_psd.build_pooled_detail_from_matrix(
-                        psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min)
+                        psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min,
+                        aggregate=aggregate)
                 except Exception as e:
                     _log.warning("Biomarkers: pooled PSD detail failed (%s)", e)
             scan_src = pooled if pooled is not None else det
@@ -1678,6 +1680,12 @@ def run_for_participant(request_data):
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
+    # Sample-aggregation policy for the exploratory scan. "all" = every matched PSD is a sample
+    # (rating modeled as a CV grouping factor in the binary AUC); "one_per_rating" = collapse each
+    # (channel, rating) to one independent feature vector. Frontend toggle sends `Aggregate`.
+    aggregate = "one_per_rating" if str(
+        request_data.get("Aggregate", "all")).lower() in ("one_per_rating", "oneperrating",
+                                                          "one-per-rating") else "all"
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
@@ -1711,9 +1719,11 @@ def run_for_participant(request_data):
                                                  train_days=train_days, step_days=step_days,
                                                  sliding=sliding, region_map=region_map,
                                                  match_tolerance_min=match_tol_min,
-                                                 psd_matrix=psd_matrix, pro_match=pro_match),
+                                                 psd_matrix=psd_matrix, pro_match=pro_match,
+                                                 aggregate=aggregate),
                          label_metric=label_metric)
     out["label_metric"] = label_metric
+    out["aggregate"] = aggregate
     out["available_metrics"] = BIOMARKER_METRICS
     out["label_strategy"] = label_strategy
     out["available_strategies"] = BINARIZATION_STRATEGIES

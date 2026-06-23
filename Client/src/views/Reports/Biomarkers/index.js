@@ -10,7 +10,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress, CircularProgress } from "@mui/material";
+  Slider, LinearProgress, CircularProgress,
+  ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -69,6 +70,13 @@ function Biomarkers() {
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
   // view dirty (a recompute re-matches). Exploratory — default 15 min.
   const [matchTolerance, setMatchTolerance] = useState(15);
+  // Sample-aggregation policy for the exploratory scan (sent as Aggregate):
+  //   "all"            — every matched PSD is a sample; the binary-classification AUC models the
+  //                      pain rating as a grouping factor (rating-grouped cross-validation) so
+  //                      repeated PSDs sharing one rating cannot inflate it.
+  //   "one_per_rating" — collapse each (channel, rating) cluster to ONE mean feature vector first,
+  //                      so every remaining sample is an independent (channel, rating) observation.
+  const [aggregate, setAggregate] = useState("all");
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -101,6 +109,7 @@ function Biomarkers() {
     source, LabelMetric: metric, LabelStrategy: strategy,
     PercentileLow: percentileLow, PercentileHigh: percentileHigh,
     MatchToleranceMin: matchTolerance,
+    Aggregate: aggregate,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
@@ -489,6 +498,29 @@ function Biomarkers() {
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
+
+                              {/* Sample-aggregation toggle: every matched PSD (rating-grouped AUC)
+                                  vs one independent feature vector per (channel, rating). */}
+                              <MDBox mt={1.5}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  Sample aggregation
+                                </MDTypography>
+                                <ToggleButtonGroup
+                                  value={aggregate} exclusive size="small"
+                                  onChange={(e, v) => { if (v) setAggregate(v); }}
+                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
+                                >
+                                  <ToggleButton value="all">All samples</ToggleButton>
+                                  <ToggleButton value="one_per_rating">One per rating</ToggleButton>
+                                </ToggleButtonGroup>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {aggregate === "all"
+                                    ? "Every matched PSD is a sample. Because a burst of PSDs can share one survey rating, the binary-classification AUC is cross-validated with folds grouped by rating (a per-rating random effect), so reused ratings cannot inflate it — the AUC n is the count of independent ratings."
+                                    : "Each (channel, rating) cluster is averaged to ONE feature vector before the scan, so every sample is an independent rating. Removes double-dipping directly; fewer, cleaner points."}
+                                </MDTypography>
+                              </MDBox>
                             </MDBox>
                           </Grid>
 

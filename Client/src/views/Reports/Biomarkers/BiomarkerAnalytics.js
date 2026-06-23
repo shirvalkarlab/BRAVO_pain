@@ -167,7 +167,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
           <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 14 }}>
             {`${ch.short} @ ${center.toFixed(1)} Hz (5 Hz band) vs ${pain} — `
              + `r=${r != null ? r.toFixed(2) : "—"} (n=${nR || 0} matched), `
-             + `AUC=${auc != null ? auc.toFixed(2) : "—"} (n=${n || 0} high+low)`}
+             + `AUC=${auc != null ? auc.toFixed(2) : "—"} `
+             + (scan && scan.auc_mode === "rating_grouped"
+                ? `(n=${n || 0} independent ratings)`
+                : `(n=${n || 0} high+low)`)}
           </MDTypography>
           <Fig height={300} traces={traces} layout={{
             xaxis: { title: `Standardized log band power @ ${center.toFixed(1)} Hz` },
@@ -194,6 +197,14 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
           <MDTypography variant="caption" color="text" display="block" mb={0.5}>
             {scan && scan.note}
           </MDTypography>
+          {scan && scan.aggregate && (
+            <MDTypography variant="caption" display="block" mb={0.5}
+              sx={{ color: "#2C5282", fontWeight: "bold" }}>
+              {scan.aggregate === "one_per_rating"
+                ? "Mode: one feature vector per (channel, rating) — every sample is an independent pain rating, so the AUC needs no grouping correction."
+                : "Mode: all matched PSDs — the binary-classification AUC is cross-validated with folds grouped by pain rating (a per-rating random effect), so the AUC n is the count of independent ratings, not raw samples."}
+            </MDTypography>
+          )}
           {scan && scan.n_pooled != null && (
             <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
               {`${scan.n_pooled} PSDs matched a pain rating across all channels (the binarization-preview total). `
@@ -218,8 +229,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
               {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
                + `map to only ${scan.pro_independence.n_unique_pro} unique pain scores `
                + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
-               + `${scan.pro_independence.max_reuse}×). Effective sample size is well below the matched n — `
-               + `treat r/AUC as exploratory, not as independent observations.`}
+               + `${scan.pro_independence.max_reuse}×). `
+               + (scan.auc_mode === "rating_grouped"
+                  ? "The AUC already corrects for this (folds grouped by rating); the Pearson r still pools all matched samples, so treat r as exploratory."
+                  : "Effective sample size is well below the matched n — treat r/AUC as exploratory, not as independent observations.")}
             </MDTypography>
           )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />

@@ -993,31 +993,56 @@ def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=
     return out
 
 
-def _cv_logistic_auc(x, y, n_splits=5, seed=0):
+def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
     """Cross-validated logistic-regression AUC for a SINGLE feature `x` against binary `y`.
 
     Out-of-fold predicted probabilities -> one ROC-AUC over all held-out samples (so each sample is
     scored by a model that did not see it). Oriented to >= 0.5 (max(auc, 1-auc)) because the
     feature's sign vs pain is itself part of the exploration. Returns (auc, n_used). NaN when a
-    class is missing or too few samples to split."""
+    class is missing or too few samples to split.
+
+    `groups` (optional, same length as x/y): a per-sample cluster id (the matched PRO/rating). When
+    given, folds are split with StratifiedGroupKFold so all samples sharing a rating stay on the
+    same side of every train/test split — the predictive analog of a per-rating random intercept.
+    This removes the optimism that double-dipping injects when many neural samples share one rating
+    (a plain StratifiedKFold would leak a rating's near-duplicate samples across folds and inflate
+    the AUC). `n_used` is then reported as the number of independent groups, not raw samples."""
     from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import StratifiedKFold
+    from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold
     from sklearn.metrics import roc_auc_score
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
+    g = np.asarray(groups) if groups is not None else None
     m = np.isfinite(x) & np.isfinite(y)
+    if g is not None:
+        m = m & (g >= 0)
     x, y = x[m], y[m]
+    g = g[m] if g is not None else None
     n = x.size
     if n < 8 or len(np.unique(y)) < 2:
         return np.nan, int(n)
     pos, neg = int((y == 1).sum()), int((y == 0).sum())
-    k = int(min(n_splits, pos, neg))
-    if k < 2:
-        return np.nan, int(n)
+    # n_used reported as independent units: groups when grouping, else samples.
+    n_units = int(np.unique(g).size) if g is not None else n
     X = x.reshape(-1, 1)
     oof = np.full(n, np.nan)
-    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
-    for tr, te in skf.split(X, y):
+    if g is not None:
+        # Need >=2 groups per class to form grouped folds without a rating crossing the split.
+        n_grp = int(np.unique(g).size)
+        # groups-per-class count
+        gpos = int(np.unique(g[y == 1]).size); gneg = int(np.unique(g[y == 0]).size)
+        k = int(min(n_splits, gpos, gneg))
+        if k < 2:
+            return np.nan, n_units
+        splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+        split_iter = splitter.split(X, y, groups=g)
+    else:
+        k = int(min(n_splits, pos, neg))
+        if k < 2:
+            return np.nan, int(n)
+        splitter = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+        split_iter = splitter.split(X, y)
+    for tr, te in split_iter:
         if len(np.unique(y[tr])) < 2:
             continue
         clf = LogisticRegression(max_iter=200)
@@ -1025,15 +1050,16 @@ def _cv_logistic_auc(x, y, n_splits=5, seed=0):
         oof[te] = clf.predict_proba(X[te])[:, 1]
     ok = np.isfinite(oof)
     if ok.sum() < 4 or len(np.unique(y[ok])) < 2:
-        return np.nan, int(n)
+        return np.nan, n_units
     auc = float(roc_auc_score(y[ok], oof[ok]))
-    return max(auc, 1.0 - auc), int(n)
+    return max(auc, 1.0 - auc), n_units
 
 
 def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.3333,
                                 high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
-                                region_map=None, n_peaks=6, max_scatter=400):
+                                region_map=None, n_peaks=6, max_scatter=400,
+                                rating_aware_auc=None):
     """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
 
     Slides a `band_width_hz`-wide window in `step_hz` increments across 0..`fmax`. For each
@@ -1060,6 +1086,18 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     prelog = bool(td_detail.get("prelog", False))
     if f.size == 0 or psd.ndim != 3 or labels.size == 0:
         return None
+
+    # Rating-aware AUC: in "all" mode many epochs share one pain rating (double-dipping), so the
+    # binary classifier's cross-validation should keep each rating wholly within a fold (grouped CV)
+    # — the predictive analog of a per-rating random intercept. Auto-on when the detail is the "all"
+    # pool AND carries a rating_group; off for one_per_rating (already independent). Caller can force
+    # with `rating_aware_auc=True/False`.
+    rating_group = td_detail.get("rating_group")
+    rg = np.asarray(rating_group) if rating_group is not None else None
+    agg_mode = td_detail.get("aggregate", "all")
+    if rating_aware_auc is None:
+        rating_aware_auc = (agg_mode == "all" and rg is not None and rg.size == labels.size)
+    auc_groups = rg if (rating_aware_auc and rg is not None and rg.size == labels.size) else None
 
     fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
     w = float(band_width_hz)
@@ -1127,8 +1165,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             r_curve.append(_f(r) if r is not None else None)
             # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
             # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
-            # n_used here is generally < the Pearson n above.
-            auc, n_used = _cv_logistic_auc(bp_log, y_bin)
+            # n_used here is generally < the Pearson n above. When rating-aware (default in "all"
+            # mode), folds are grouped by rating so no rating leaks across train/test and n_used is
+            # the count of INDEPENDENT ratings, not raw samples.
+            auc, n_used = _cv_logistic_auc(bp_log, y_bin, groups=auc_groups)
             auc_curve.append(_f(auc) if np.isfinite(auc) else None)
             n_curve.append(int(n_used))
 
@@ -1186,6 +1226,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         "n_pooled": n_pooled,        # matched PSDs pooled across ALL channels (the preview total)
+        # Aggregation + AUC mode so the UI can state what the numbers mean. aggregate: "all" (every
+        # matched PSD a sample) vs "one_per_rating" (each (channel,rating) collapsed to one). auc_mode:
+        # "rating_grouped" => folds split by rating so the AUC n is the count of INDEPENDENT ratings;
+        # "pooled" => plain stratified CV (used in one_per_rating, where samples are already independent).
+        "aggregate": agg_mode,
+        "auc_mode": ("rating_grouped" if auc_groups is not None else "pooled"),
         # Finalized binarization actually used by the logistic AUC (high vs low; the excluded
         # middle is dropped). Lets the UI show how many of the matched samples the AUC ran on.
         "binarization": {

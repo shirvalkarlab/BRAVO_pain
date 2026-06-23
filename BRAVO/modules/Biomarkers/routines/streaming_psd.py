@@ -435,10 +435,22 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
 
 
 def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=15.0,
-                                    min_per_group=3):
+                                    min_per_group=3, aggregate="all"):
     """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
     continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
-    matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated."""
+    matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated.
+
+    `aggregate` controls how repeated PSDs that match the SAME pain rating are handled:
+      * "all" (default): every matched PSD is its own sample. Many neural samples can share one
+        rating (a Streaming burst -> one survey), so the samples are non-independent; the downstream
+        AUC should be run rating-group-aware (see `rating_group` in the return). Reported by the
+        PRO-independence audit.
+      * "one_per_rating": collapse each (channel, matched-rating) cluster to ONE mean feature vector
+        BEFORE the scan, so every remaining sample is an independent (channel, rating) observation.
+        Unmatched PSDs are dropped (they carry no rating to aggregate on).
+    Either way the return carries `rating_group` (N,) — the matched PRO's index per row (-1 if
+    unmatched) — so the binary classifier can model the rating as a grouping factor.
+    """
     f_set = np.asarray(mat["f_set"], dtype=float)
     F = f_set.size
     X = np.asarray(mat["logX"], dtype=float)
@@ -461,9 +473,41 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
     labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min)
 
-    chan_order = list(np.unique(ch_arr))
+    # --- Optional one-per-rating aggregation ----------------------------------------------------
+    # Collapse every (channel, matched-PRO) cluster of z-scored spectra to a single mean vector, so
+    # each surviving row is an INDEPENDENT (channel, rating) observation (no double-dipping). Done
+    # on the z-scored features (averaging standardized spectra), after the within-source z-score.
+    if aggregate == "one_per_rating":
+        keep = (pro_idx >= 0) & np.isfinite(labels)
+        if keep.any():
+            keys = {}
+            for i in np.where(keep)[0]:
+                keys.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
+            rows_Xz, rows_ch, rows_src, rows_t, rows_lab, rows_dt, rows_pidx = ([] for _ in range(7))
+            for (ch, pidx), idxs in keys.items():
+                idxs = np.asarray(idxs)
+                rows_Xz.append(np.nanmean(Xz[idxs], axis=0))
+                rows_ch.append(ch)
+                su = np.unique(src_arr[idxs])
+                rows_src.append(str(su[0]) if su.size == 1 else "aggregated")
+                rows_t.append(float(np.nanmean(t_arr[idxs])))
+                rows_lab.append(float(labels[idxs[0]]))      # same rating across the cluster
+                rows_dt.append(float(np.nanmean(dt_min[idxs])))
+                rows_pidx.append(int(pidx))
+            Xz = np.vstack(rows_Xz)
+            ch_arr = np.asarray(rows_ch, dtype=object)
+            src_arr = np.asarray(rows_src, dtype=object)
+            t_arr = np.asarray(rows_t, dtype=float)
+            labels = np.asarray(rows_lab, dtype=float)
+            dt_min = np.asarray(rows_dt, dtype=float)
+            pro_idx = np.asarray(rows_pidx, dtype=int)
+        else:
+            Xz = Xz[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
+            t_arr = t_arr[:0]; labels = labels[:0]; dt_min = dt_min[:0]; pro_idx = pro_idx[:0]
+
+    chan_order = list(np.unique(ch_arr)) if ch_arr.size else []
     C = len(chan_order)
-    N = X.shape[0]
+    N = Xz.shape[0]
     psd_stack = np.full((N, C, F), np.nan)
     for ci, ch in enumerate(chan_order):
         m = ch_arr == ch
@@ -510,6 +554,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
         "feature": psd_stack,
         "labels": labels,                    # continuous PRO matched within the window (NaN = none)
+        "rating_group": pro_idx,             # (N,) matched PRO index per row (-1 unmatched) = the
+                                             # grouping factor for rating-aware AUC ("all" mode)
+        "aggregate": aggregate,
         "chan_order": chan_order,
         "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
         "prelog": True,                      # spectral_feature_importance: do NOT re-log
@@ -517,6 +564,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "pool_meta": {
             "n_psds": int(N),
             "n_matched": int(matched_mask.sum()),
+            "aggregate": aggregate,
             "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
             "per_source": _src_breakdown(np.ones(N, bool)),
             "per_source_matched": _src_breakdown(matched_mask),
