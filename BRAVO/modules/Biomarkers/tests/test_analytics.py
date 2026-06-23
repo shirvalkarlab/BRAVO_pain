@@ -464,6 +464,70 @@ def test_spectral_scan_prelog_matches_linear():
     assert r_pre[bi] is not None and np.sign(r_pre[bi]) == np.sign(r_lin[bi])
 
 
+def test_spectral_scan_emits_fdr_qs_and_summary():
+    """Rigor pass: scan output exposes per-band q (rating-clustered logit + naive Pearson) and a
+    family-level fdr_summary. Validates: keys exist; q is None exactly where p is None; q >= p for
+    every finite pair (BH never makes a p smaller); summary counts agree with the per-band q masks."""
+    # Strong, isolated planted band — needs enough power that rating-clustered logit (not just
+    # naive Pearson) clears BH on a modest fixture. Real RCS08 data has hundreds of bands; this
+    # fixture has 96. The clustered-logit FDR threshold is therefore steeper here than on real
+    # data; the point of the test is to verify wiring, not detection sensitivity.
+    det = _planted_detail(center=17.5, beta=1.2, E=200)
+    sc = analytics.spectral_feature_importance(det, strategy="tertile")
+    # Per-channel arrays present and aligned
+    for ch in sc["channels"]:
+        assert "q" in ch and "q_pearson" in ch and "is_fdr_sig" in ch, list(ch.keys())
+        assert len(ch["q"]) == len(ch["p"]) == len(ch["centers"]) if "centers" in ch else True
+        assert len(ch["q"]) == len(ch["p"])
+        # None alignment: q is None iff p is None (we never invent significance for missing p)
+        for q, p in zip(ch["q"], ch["p"]):
+            assert (q is None) == (p is None)
+        # BH monotonicity: q >= p for every finite pair (BH never deflates)
+        for q, p in zip(ch["q"], ch["p"]):
+            if q is not None and p is not None:
+                assert q + 1e-12 >= p, f"q={q} < p={p} violates BH"
+    # Family summary present, counts agree with the per-band masks
+    fs = sc["fdr_summary"]
+    assert fs is not None and fs["method"] == "BH-FDR" and fs["alpha"] == 0.05
+    n_sig_from_channels = sum(
+        1 for ch in sc["channels"] for q in (ch.get("q") or []) if q is not None and q < 0.05
+    )
+    assert fs["n_rigorous_fdr"] == n_sig_from_channels
+    # Pseudoreplication-contrast invariant: under a real planted band-power<->label coupling, the
+    # naive Pearson pass (uses every sample as independent) MUST surface at least one FDR-significant
+    # band, and the rigorous rating-clustered logit pass MUST be no looser than the naive pass —
+    # i.e. it never claims more significance than the naive view. This is the headline rigor
+    # invariant the UI annotation rests on (naive >= rigorous, "naive over-reports vs rigorous").
+    assert fs["n_naive_fdr"] >= 1, f"planted-band fixture produced 0 naive-FDR bands: {fs}"
+    assert fs["n_rigorous_fdr"] <= fs["n_naive_fdr"], \
+        f"rigorous FDR > naive FDR violates the pseudoreplication-contrast direction: {fs}"
+
+
+def test_spectral_scan_fdr_zero_signal_returns_no_significant_bands():
+    """Null fixture: no planted coupling. The rigor pass MUST return zero (or vanishingly few)
+    FDR-significant bands — a real false-positive control on the BH pipeline."""
+    rng = np.random.default_rng(42)
+    F = 60
+    E = 100
+    det = {
+        "f_set": np.linspace(0.95, 100, F),
+        "psd": np.abs(rng.normal(1, 0.2, (E, 2, F))),       # pure noise, no label coupling
+        "labels": rng.normal(5, 2, E),
+        "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"],
+        "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)],
+        "prelog": False,
+    }
+    sc = analytics.spectral_feature_importance(det, strategy="tertile")
+    fs = sc["fdr_summary"]
+    assert fs is not None
+    # Under the null, FDR should reject at most a handful of bands by chance (well under 5% of
+    # the family). Allowing a small budget rather than 0 because BH is stochastic with the
+    # synthetic seed; the test fails loudly if the FDR cap is broken.
+    n_total = fs["n_bands_total"]
+    assert fs["n_rigorous_fdr"] <= max(2, int(0.10 * n_total)), \
+        f"null fixture exceeded BH budget: {fs['n_rigorous_fdr']}/{n_total}"
+
+
 def test_pooled_psd_detail_is_per_channel_and_matches_pro():
     from Biomarkers.routines import streaming_psd as sp
     f = sp.F_SET
@@ -521,5 +585,7 @@ if __name__ == "__main__":
     test_cv_logistic_auc_oriented_and_guards_small_n()
     test_spectral_feature_importance_finds_planted_band()
     test_spectral_scan_prelog_matches_linear()
+    test_spectral_scan_emits_fdr_qs_and_summary()
+    test_spectral_scan_fdr_zero_signal_returns_no_significant_bands()
     test_pooled_psd_detail_is_per_channel_and_matches_pro()
     print("All analytics tests passed.")

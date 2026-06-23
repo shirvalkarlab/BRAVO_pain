@@ -1173,13 +1173,18 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
         chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
         n_channel = int(chan_fin.sum())
+        # `p_pearson_curve` is the independence-assuming Pearson p (treats every PSD as independent).
+        # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
+        # it only so the FDR pass below can quantify the pseudoreplication inflation (naive bands
+        # at FDR vs rigorous bands at FDR), which is the rigor-pass UI annotation.
         r_curve, auc_curve, n_curve, n_r_curve, p_curve = [], [], [], [], []
+        p_pearson_curve = []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
             if not bmask.any():
                 r_curve.append(None); auc_curve.append(None); n_curve.append(0)
-                n_r_curve.append(0); p_curve.append(None)
+                n_r_curve.append(0); p_curve.append(None); p_pearson_curve.append(None)
                 band_power_by_center.append(None)
                 continue
             sub = psd[:, ci, bmask]                         # (E, nbins) power in band
@@ -1195,14 +1200,19 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                     bp = np.nanmean(sub, axis=1)            # (E,) mean linear power in band
                     bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
             band_power_by_center.append(bp_log)
-            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization)
+            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization). We also
+            # compute the naive two-sided Pearson p here so the rigor pass can quantify the
+            # pseudoreplication inflation (it is the independence-assuming p, not the inferential
+            # number to report — that's `p_curve`).
             m = np.isfinite(bp_log) & np.isfinite(labels)
             n_r_curve.append(int(m.sum()))
+            r = p_pearson = None
             if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
-                r = float(np.corrcoef(bp_log[m], labels[m])[0, 1])
-            else:
-                r = None
+                from scipy.stats import pearsonr as _pr
+                _r, _p = _pr(bp_log[m], labels[m])
+                r = float(_r); p_pearson = float(_p)
             r_curve.append(_f(r) if r is not None else None)
+            p_pearson_curve.append(_f(p_pearson) if (p_pearson is not None and np.isfinite(p_pearson)) else None)
             # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
             # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
             # n_used here is generally < the Pearson n above. When rating-aware (default in "all"
@@ -1233,6 +1243,9 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
             "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
             "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
+            # Per-band naive Pearson p (independence-assuming) — kept so the FDR pass below can
+            # quantify the pseudoreplication inflation vs the rating-clustered logit p.
+            "p_pearson": p_pearson_curve,
             "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
@@ -1294,6 +1307,59 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             })
         ch["scatter"] = scat
 
+    # --------------------------------------------------------------------------------------------
+    # Rigor pass: BH-FDR over the full band x channel family, separately for the rating-clustered
+    # logit p (the inferential headline) and the naive Pearson p (a foil). We do TWO families
+    # because the user-facing annotation is a contrast: "naive Pearson reports N FDR-significant
+    # bands, rating-clustered logistic reports M" — typically M << N on rating-pseudoreplicated
+    # data. Each channel gets a per-band `q` (clustered-logit q, the deployment number) plus an
+    # `is_fdr_sig` boolean so the frontend can style dots without recomputing the cutoff.
+    #
+    # Implementation: flatten all channel p-curves into one vector per family, BH-correct, scatter
+    # back to per-channel arrays. nan-aware (None entries treated as missing, get q=None).
+    try:
+        from statsmodels.stats.multitest import multipletests
+    except Exception:
+        multipletests = None
+    fdr_summary = None
+    if multipletests is not None and out_channels:
+        def _bh_per_band_grid(p_field):
+            """Run BH over the union of channels' per-band p values; return list-of-lists q (per channel, per band)."""
+            flat, locator = [], []   # locator[k] = (chan_idx, band_idx) for flat[k]
+            for ci, ch in enumerate(out_channels):
+                arr = ch.get(p_field) or []
+                for bi, pv in enumerate(arr):
+                    if pv is not None and np.isfinite(pv):
+                        flat.append(float(pv)); locator.append((ci, bi))
+            if not flat:
+                return [[None] * len(centers) for _ in out_channels], 0
+            _, qvals, _, _ = multipletests(np.asarray(flat, dtype=float), alpha=0.05, method="fdr_bh")
+            qmat = [[None] * len(centers) for _ in out_channels]
+            n_sig = 0
+            for (ci, bi), q in zip(locator, qvals):
+                qmat[ci][bi] = float(q)
+                if q < 0.05:
+                    n_sig += 1
+            return qmat, n_sig
+
+        q_logit_mat, n_rigorous_fdr = _bh_per_band_grid("p")
+        q_pearson_mat, n_naive_fdr = _bh_per_band_grid("p_pearson")
+        for ci, ch in enumerate(out_channels):
+            ch["q"] = q_logit_mat[ci]                 # rating-clustered logit FDR q per band (the headline)
+            ch["q_pearson"] = q_pearson_mat[ci]       # naive Pearson FDR q per band (for the contrast)
+            ch["is_fdr_sig"] = [
+                (q is not None and q < 0.05) for q in q_logit_mat[ci]
+            ]
+        fdr_summary = {
+            "n_bands_total": int(sum(1 for ch in out_channels for q in (ch.get("q") or []) if q is not None)),
+            "n_rigorous_fdr": int(n_rigorous_fdr),    # bands surviving FDR under rating-clustered logit
+            "n_naive_fdr": int(n_naive_fdr),          # bands surviving FDR under naive Pearson (pseudoreplicated)
+            "alpha": 0.05,
+            "method": "BH-FDR",
+            "family": "band x channel (per metric)",
+        }
+    # --------------------------------------------------------------------------------------------
+
     return {
         "centers": [float(c) for c in centers],
         "bands": band_meta,
@@ -1304,6 +1370,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "adaptive_band": ([a_lo, a_hi] if a_lo is not None else None),
         "strategy": strategy,
         "transform": "log_bandpower",
+        # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
+        # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
+        # dict; this summary is the UI's pseudoreplication-contrast annotation source.
+        "fdr_summary": fdr_summary,
         "n_pooled": n_pooled,        # matched PSDs pooled across ALL channels (the preview total)
         # Aggregation + AUC mode so the UI can state what the numbers mean. aggregate: "all" (every
         # matched PSD a sample) vs "one_per_rating" (each (channel,rating) collapsed to one). auc_mode:
