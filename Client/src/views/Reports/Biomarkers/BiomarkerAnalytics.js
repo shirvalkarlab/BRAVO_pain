@@ -157,6 +157,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
     const auc = ch.auc && ch.auc[sel.bi];
     const n = ch.n && ch.n[sel.bi];           // AUC n (binarized high+low)
     const nR = ch.n_r && ch.n_r[sel.bi];      // Pearson n (all matched continuous = dot count)
+    const pBand = ch.p && ch.p[sel.bi];       // rating-clustered logistic Wald p (AUC's inference twin)
     if (sc && sc.x && sc.x.length) {
       const color = hemiOf(ch) === "Right" ? HI : LO;
       const traces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
@@ -170,7 +171,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
              + `AUC=${auc != null ? auc.toFixed(2) : "—"} `
              + (scan && scan.auc_mode === "rating_grouped"
                 ? `(n=${n || 0} independent ratings)`
-                : `(n=${n || 0} high+low)`)}
+                : `(n=${n || 0} high+low)`)
+             + `, ${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p=${fmtP(pBand)}`}
           </MDTypography>
           <Fig height={300} traces={traces} layout={{
             xaxis: { title: `Standardized log band power @ ${center.toFixed(1)} Hz` },
@@ -201,8 +203,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
             <MDTypography variant="caption" display="block" mb={0.5}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
               {scan.aggregate === "one_per_rating"
-                ? "Mode: one feature vector per (channel, rating) — every sample is an independent pain rating, so the AUC needs no grouping correction."
-                : "Mode: all matched PSDs — the binary-classification AUC is cross-validated with folds grouped by pain rating (a per-rating random effect), so the AUC n is the count of independent ratings, not raw samples."}
+                ? "Mode: one feature vector per (channel, rating) — every sample is an independent pain rating, so the AUC needs no grouping correction. Click a band for its scatter: p is the logistic Wald p-value for band power vs high/low pain."
+                : "Mode: all matched PSDs — the binary-classification AUC is cross-validated with folds grouped by pain rating (a per-rating random effect), so the AUC n is the count of independent ratings, not raw samples. Click a band for its scatter: p is the rating-clustered (cluster-robust) logistic Wald p-value — the inference twin of the grouped AUC, so a band can look high-AUC yet non-significant once rating reuse is accounted for."}
             </MDTypography>
           )}
           {scan && scan.n_pooled != null && (

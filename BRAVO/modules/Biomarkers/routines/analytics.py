@@ -1055,6 +1055,45 @@ def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
     return max(auc, 1.0 - auc), n_units
 
 
+def _cluster_robust_logit_p(x, y, groups=None):
+    """Two-sided Wald p-value for the band-power coefficient in a single-feature logistic fit.
+
+    When `groups` is given (the matched pain rating per sample), the standard error is cluster-robust
+    (sandwich estimator clustered on rating) — the inference companion to the rating-grouped AUC: it
+    models each rating as a cluster so repeated PSDs sharing one rating don't shrink the SE and
+    fabricate significance. This is the rating-as-random-effect p the binary classification reports.
+    Without groups it's the ordinary logistic Wald p. Returns (p, n_used, n_clusters) — NaN p when
+    the fit can't run (a class missing, separation, or too few samples)."""
+    import numpy as _np
+    x = _np.asarray(x, dtype=float); y = _np.asarray(y, dtype=float)
+    g = _np.asarray(groups) if groups is not None else None
+    m = _np.isfinite(x) & _np.isfinite(y)
+    if g is not None:
+        m = m & (g >= 0)
+    x, y = x[m], y[m]
+    g = g[m] if g is not None else None
+    n = x.size
+    if n < 8 or len(_np.unique(y)) < 2:
+        return _np.nan, int(n), 0
+    if _np.nanstd(x) <= 0:
+        return _np.nan, int(n), (int(_np.unique(g).size) if g is not None else 0)
+    n_clusters = int(_np.unique(g).size) if g is not None else 0
+    try:
+        import statsmodels.api as sm
+        X = sm.add_constant(x)
+        if g is not None and n_clusters >= 2:
+            res = sm.GLM(y, X, family=sm.families.Binomial()).fit(
+                cov_type="cluster", cov_kwds={"groups": g})
+        else:
+            res = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+        p = float(res.pvalues[1])
+        if not _np.isfinite(p):
+            return _np.nan, int(n), n_clusters
+        return p, int(n), n_clusters
+    except Exception:
+        return _np.nan, int(n), n_clusters
+
+
 def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.3333,
                                 high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
@@ -1134,12 +1173,13 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
         chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
         n_channel = int(chan_fin.sum())
-        r_curve, auc_curve, n_curve, n_r_curve = [], [], [], []
+        r_curve, auc_curve, n_curve, n_r_curve, p_curve = [], [], [], [], []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
             if not bmask.any():
                 r_curve.append(None); auc_curve.append(None); n_curve.append(0)
+                n_r_curve.append(0); p_curve.append(None)
                 band_power_by_center.append(None)
                 continue
             sub = psd[:, ci, bmask]                         # (E, nbins) power in band
@@ -1171,6 +1211,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             auc, n_used = _cv_logistic_auc(bp_log, y_bin, groups=auc_groups)
             auc_curve.append(_f(auc) if np.isfinite(auc) else None)
             n_curve.append(int(n_used))
+            # Inference companion to the AUC: cluster-robust (rating-clustered) logistic Wald p when
+            # rating-aware, else ordinary logistic Wald p. Same band feature, same high-vs-low split.
+            with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                p_band, _np_n, _np_g = _cluster_robust_logit_p(bp_log, y_bin, groups=auc_groups)
+            p_curve.append(_f(p_band) if np.isfinite(p_band) else None)
 
         # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
         from scipy.signal import find_peaks
@@ -1186,6 +1232,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
             "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
             "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
+            "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
             "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
