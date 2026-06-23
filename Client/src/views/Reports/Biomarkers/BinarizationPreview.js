@@ -410,11 +410,23 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {matchDirty ? <i style={{ color: "#777" }}>{"  (live preview — recompute to score)"}</i> : null}
         </MDTypography>
       ) : null}
+      {matchedMode && counts && counts.survey_usage ? (
+        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25, display: "block" }}>
+          <b>{`${counts.survey_usage.n_pro_used}`}</b>
+          {` of ${counts.survey_usage.n_pro_total} pain surveys used `}
+          {`(${counts.survey_usage.pct_pro_used}%)`}
+          {counts.survey_usage.n_pro_reused
+            ? `; ${counts.survey_usage.n_pro_reused} assigned to >1 neural sample` : ""}
+          {counts.n_capped_dropped
+            ? ` · ${counts.n_capped_dropped} PSDs dropped by the per-rating cap` : ""}
+        </MDTypography>
+      ) : null}
       {matchedMode ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
-          {"Pooled PSD sources: TD streaming (250 Hz time-domain → Welch PSD), montage/survey PSD, and "
-           + "patient-event PSD (the imported event markers, incl. Streaming). Band-power LSB is shown on "
-           + "the timeline but is NOT a full-spectrum PSD, so it is not pooled into binarization."}
+          {`Each rating is paired with up to ${(counts && counts.max_per_rating) || 3} PSD(s) per channel `
+           + "recorded just BEFORE it (forecasting), within the match window. Pooled sources: TD streaming "
+           + "(250 Hz → 30 s Welch PSD), montage/survey PSD, and patient-event PSD (incl. Streaming). "
+           + "Band-power LSB shows on the timeline but is not a full-spectrum PSD, so it is not pooled."}
         </MDTypography>
       ) : (hasTolControl ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>

@@ -146,6 +146,22 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
         yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
         showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
     };
+    // Preserve per-trace legend on/off state across re-renders (e.g. a band click re-runs this
+    // effect with freshly built traces that have no `visible` field, which would otherwise reset
+    // every manually hidden trace back to visible:true). Read the current visibility off the live
+    // graph div keyed by the unique trace `name`, then re-apply it to the new traces. groupclick is
+    // 'togglegroup', so a group toggle hides both that channel's r and AUC traces — capturing
+    // per-name visibility reproduces that correctly. Skip on first render (no existing data).
+    const prevData = ref.current.data;
+    if (prevData && prevData.length === traces.length) {
+      const visByName = {};
+      prevData.forEach((t) => { if (t && t.name != null) visByName[t.name] = t.visible; });
+      traces.forEach((t) => {
+        if (Object.prototype.hasOwnProperty.call(visByName, t.name) && visByName[t.name] !== undefined) {
+          t.visible = visByName[t.name];
+        }
+      });
+    }
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false,
       modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
@@ -211,29 +227,45 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
           <MDTypography variant="caption" color="text" display="block" mb={0.5}>
             {scan && scan.note}
           </MDTypography>
-          {scan && scan.aggregate && (
+          {/* Matching policy — one concise line stating exactly how PSDs were paired to ratings. */}
+          {scan && scan.max_per_rating != null && (
             <MDTypography variant="caption" display="block" mb={0.5}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
-              {scan.aggregate === "one_per_rating"
-                ? "Mode: one feature vector per (channel, rating) — every sample is an independent pain rating, so the AUC needs no grouping correction. Click a band for its scatter: p is the logistic Wald p-value for band power vs high/low pain."
-                : "Mode: all matched PSDs — the binary-classification AUC is cross-validated with folds grouped by pain rating (a per-rating random effect), so the AUC n is the count of independent ratings, not raw samples. Click a band for its scatter: p is the rating-clustered (cluster-robust) logistic Wald p-value — the inference twin of the grouped AUC, so a band can look high-AUC yet non-significant once rating reuse is accounted for."}
+              {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
+               + `${scan.max_per_rating > 1 ? "s" : ""} per channel recorded just BEFORE it `
+               + `(forecasting), within the match window`
+               + (scan.max_per_rating > 1 && scan.refractory_min
+                  ? `, no two closer than ${scan.refractory_min} min` : "")
+               + (scan.n_capped_dropped ? ` — ${scan.n_capped_dropped} extra PSDs dropped by the cap.` : ".")
+               + (scan.max_per_rating > 1
+                  ? " AUC is cross-validated with folds grouped by rating, so its n is the count of independent ratings; a band's scatter p is the rating-clustered logistic Wald p."
+                  : " Every sample is an independent (channel, rating) pair; a band's scatter p is the logistic Wald p.")}
+            </MDTypography>
+          )}
+          {/* Survey usage — the rating-centric view the clinician asked for. */}
+          {scan && scan.survey_usage && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+              {`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} available `
+               + `(${scan.survey_usage.pct_pro_used}%); ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
             </MDTypography>
           )}
           {scan && scan.n_pooled != null && (
             <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
-              {`${scan.n_pooled} PSDs matched a pain rating across all channels (the binarization-preview total). `
-               + `Each channel's curve uses only the PSDs recorded on that montage — the per-channel n in `
-               + `the legend — so any single correlation/AUC draws on a fraction of that pooled count.`}
+              {`${scan.n_pooled} PSDs matched a rating across all channels. Each channel's curve uses only the PSDs `
+               + `recorded on that montage (the per-channel n in the legend), so any single curve draws on a fraction of that total.`}
             </MDTypography>
           )}
           {scan && scan.binarization && (
             <MDTypography variant="caption" color="text" display="block" mb={0.5}>
-              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + `
-               + `${scan.binarization.n_low} low`
+              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
                + (scan.binarization.n_excluded_middle > 0
                   ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
-                  : ` (no middle excluded — discrete PRO values collapse the ${scan.binarization.strategy} cut). `)
-               + `Pearson r uses all matched samples.`}
+                  : ` (no middle excluded — discrete ratings collapse the ${scan.binarization.strategy} cut). `)
+               + `Pearson r uses all matched samples.`
+               + (scan.td_welch_duration
+                  ? ` TD epochs Welch'd over ${scan.td_welch_duration.mean_s}±${scan.td_welch_duration.sd_s} s `
+                    + `(n=${scan.td_welch_duration.n}), matching the ~30 s onboard event/montage PSDs.`
+                  : "")}
             </MDTypography>
           )}
           {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (

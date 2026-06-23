@@ -492,9 +492,14 @@ def _welch_rows_into(rows, recs, source_label, _sp):
         except Exception:
             continue
         psd = np.asarray(psd)
+        # Duration (s) actually used by Welch for this recording = min(window, available). Reported
+        # downstream as mean +/- SD so the clinician knows the TD epoch length feeding each PSD.
+        nsamp = int(sig.shape[-1])
+        used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
         for j, n in enumerate(keep_names):
             rows.append({"channel": str(n).upper(), "source": source_label,
-                         "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :]})
+                         "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :],
+                         "dur": used_dur})
 
 
 def _psd_sample_index(td_list, psd_list):
@@ -559,9 +564,13 @@ def _psd_rows_cache_dir():
 
 def _recording_psd_cache_path(rec_uid, rec_hash):
     """Cache path for one recording's PSD rows. Keyed by uid + a short slice of the stored hash, so
-    re-uploading the same data (new uid) or a content change (new hash) both miss and recompute."""
+    re-uploading the same data (new uid) or a content change (new hash) both miss and recompute.
+    The Welch epoch length is also in the key: changing it produces different spectra, so the file
+    name carries it (w<sec>) and a window change misses the old cache instead of serving stale PSDs."""
+    from .routines import streaming_psd as _sp
     h = (str(rec_hash or "") or "nohash")[:16]
-    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}.npz")
+    w = str(_sp.WELCH_MAX_SECONDS).replace(".", "p")
+    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}_w{w}.npz")
 
 
 def _save_recording_psd_rows(path, rows):
@@ -574,13 +583,15 @@ def _save_recording_psd_rows(path, rows):
     chans = np.asarray([str(r["channel"]) for r in rows], dtype=object)
     srcs = np.asarray([str(r["source"]) for r in rows], dtype=object)
     ts = np.asarray([float(r["t"]) for r in rows], dtype=float)
+    durs = np.asarray([float(r.get("dur", np.nan)) for r in rows], dtype=float)
     powers = np.asarray([np.asarray(r["power"], dtype=float) for r in rows], dtype=float) \
         if rows else np.zeros((0, 0), dtype=float)
     freq = np.asarray(rows[0]["freq"], dtype=float) if rows else np.zeros((0,), dtype=float)
     # np.savez APPENDS ".npz" if the name lacks it, so the temp name must already end in ".npz"
     # (else savez writes "<tmp>.npz" and the os.replace below moves a nonexistent file). Keep ".npz".
     tmp = path[:-4] + ".tmp.npz" if path.endswith(".npz") else path + ".tmp.npz"
-    np.savez(tmp, channel=chans, source=srcs, t=ts, power=powers, freq=freq, n=np.asarray([len(rows)]))
+    np.savez(tmp, channel=chans, source=srcs, t=ts, dur=durs, power=powers, freq=freq,
+             n=np.asarray([len(rows)]))
     os.replace(tmp, path)   # atomic — a concurrent reader never sees a half-written file
 
 
@@ -594,8 +605,11 @@ def _load_recording_psd_rows(path):
             return []
         freq = z["freq"]
         chans, srcs, ts, powers = z["channel"], z["source"], z["t"], z["power"]
+        durs = z["dur"] if "dur" in z.files else None   # older cache entries lack dur
         return [{"channel": str(chans[i]), "source": str(srcs[i]), "t": float(ts[i]),
-                 "freq": freq, "power": powers[i]} for i in range(n)]
+                 "freq": freq, "power": powers[i],
+                 "dur": (float(durs[i]) if durs is not None else float("nan"))}
+                for i in range(n)]
     except Exception as e:
         _log.warning("Biomarkers: per-recording PSD cache read failed (%s); will recompute", e)
         return None
@@ -723,8 +737,13 @@ def _psd_matrix_signature_orm(participant_uid):
     caller can reuse it for the cache-aware assembly without a second ORM round-trip.
     """
     import hashlib
+    from .routines import streaming_psd as _sp
     entries = _recording_rows_for_psd(participant_uid)
     parts = sorted(f"{e['source']}:{e['uid']}:{str(e['hash'] or '')[:16]}" for e in entries)
+    # The Welch epoch length is a property of the matrix CONTENT (different window -> different PSDs),
+    # so fold it into the signature: changing WELCH_MAX_SECONDS invalidates the cache and forces a
+    # re-Welch. Without this, a window change would silently serve stale spectra from the old cache.
+    parts.append(f"welch_s:{_sp.WELCH_MAX_SECONDS}")
     # Patient-event PSDs also feed the pool, so their recordings must invalidate the matrix cache
     # too — otherwise a newly-ingested file that adds event markers would be silently missed. Hash
     # the event recordings' (uid, hash) the same way; no decode (the PSDs live on the row metadata).
@@ -1176,7 +1195,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        label_strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                        train_days=None, step_days=None, sliding=True, region_map=None,
                        match_tolerance_min=None, psd_matrix=None, pro_match=None,
-                       aggregate="all"):
+                       aggregate="all", max_per_rating=3, refractory_min=2.0,
+                       match_direction="prior"):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -1207,7 +1227,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 try:
                     pooled = streaming_psd.build_pooled_detail_from_matrix(
                         psd_matrix, pro_match[0], pro_match[1], tolerance_min=match_tolerance_min,
-                        aggregate=aggregate)
+                        aggregate=aggregate, max_per_rating=max_per_rating,
+                        refractory_min=refractory_min, match_direction=match_direction)
                 except Exception as e:
                     _log.warning("Biomarkers: pooled PSD detail failed (%s)", e)
             scan_src = pooled if pooled is not None else det
@@ -1496,6 +1517,36 @@ def _pro_match_arrays(pro_df, label_metric):
 DEFAULT_MATCH_TOLERANCE_MIN = 15.0
 
 
+def _int_param(request_data, key, *, default, lo=None, hi=None):
+    """Parse an integer request param, clamped to [lo, hi]; missing/invalid -> default."""
+    if key not in request_data:
+        return default
+    try:
+        v = int(round(float(request_data.get(key))))
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
+def _float_param(request_data, key, *, default, lo=None, hi=None):
+    """Parse a float request param, clamped to [lo, hi]; missing/invalid -> default."""
+    if key not in request_data:
+        return default
+    try:
+        v = float(request_data.get(key))
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
 def _match_tolerance_param(request_data):
     """Resolve the PRO<->PSD match window (minutes) from the request.
 
@@ -1753,12 +1804,19 @@ def run_for_participant(request_data):
     pro_df, label_metric, kmeans_features = _resolve_biomarker_metric(request_data, pro_df)
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
-    # Sample-aggregation policy for the exploratory scan. "all" = every matched PSD is a sample
-    # (rating modeled as a CV grouping factor in the binary AUC); "one_per_rating" = collapse each
-    # (channel, rating) to one independent feature vector. Frontend toggle sends `Aggregate`.
-    aggregate = "one_per_rating" if str(
-        request_data.get("Aggregate", "all")).lower() in ("one_per_rating", "oneperrating",
-                                                          "one-per-rating") else "all"
+    # Per-rating CAP for the exploratory scan: how many PSDs one pain rating may absorb per channel,
+    # and the refractory gap (min) enforced among the kept set, so a streaming BURST around one survey
+    # can't double-count. `MaxPerRating` (>=1) and `RefractoryMin` (>=0) come from the frontend.
+    # max_per_rating=1 reduces to the old "one per rating" behavior (the single nearest-prior PSD).
+    # Match direction defaults to "prior" (forecasting: the PSD must precede the rating).
+    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
+    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    match_direction = "nearest" if str(
+        request_data.get("MatchDirection", "prior")).lower() == "nearest" else "prior"
+    # `aggregate` retained for back-compat with the detail builder, but the cap subsumes it: a cap of
+    # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
+    # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
+    aggregate = "all"
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
@@ -1793,10 +1851,15 @@ def run_for_participant(request_data):
                                                  sliding=sliding, region_map=region_map,
                                                  match_tolerance_min=match_tol_min,
                                                  psd_matrix=psd_matrix, pro_match=pro_match,
-                                                 aggregate=aggregate),
+                                                 aggregate=aggregate, max_per_rating=max_per_rating,
+                                                 refractory_min=refractory_min,
+                                                 match_direction=match_direction),
                          label_metric=label_metric)
     out["label_metric"] = label_metric
     out["aggregate"] = aggregate
+    out["max_per_rating"] = max_per_rating
+    out["refractory_min"] = refractory_min
+    out["match_direction"] = match_direction
     out["available_metrics"] = BIOMARKER_METRICS
     out["label_strategy"] = label_strategy
     out["available_strategies"] = BINARIZATION_STRATEGIES

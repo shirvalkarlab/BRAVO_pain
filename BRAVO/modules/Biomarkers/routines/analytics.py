@@ -1292,6 +1292,15 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "pro_independence": (td_detail.get("pool_meta", {}) or {}).get("pro_independence"),
         "pro_independence_per_channel": (td_detail.get("pool_meta", {}) or {}).get(
             "pro_independence_per_channel"),
+        # Matching policy + usage, carried through so the UI can state it transparently: the per-rating
+        # cap, refractory gap, match direction, how many PSDs the cap dropped, the survey-usage view
+        # (PROs used / available / reused), and the TD Welch epoch length (mean +/- SD).
+        "match_direction": (td_detail.get("pool_meta", {}) or {}).get("match_direction"),
+        "max_per_rating": (td_detail.get("pool_meta", {}) or {}).get("max_per_rating"),
+        "refractory_min": (td_detail.get("pool_meta", {}) or {}).get("refractory_min"),
+        "n_capped_dropped": (td_detail.get("pool_meta", {}) or {}).get("n_capped_dropped"),
+        "survey_usage": (td_detail.get("pool_meta", {}) or {}).get("survey_usage"),
+        "td_welch_duration": (td_detail.get("pool_meta", {}) or {}).get("td_welch_duration"),
         "note": ("Exploratory only. r is Pearson vs the continuous PRO (ALL matched samples); AUC "
                  "is cross-validated single-feature logistic on the FINALIZED high-vs-low split "
                  "(excluded-middle tertile dropped), so the AUC n (legend 'n') is generally < the "

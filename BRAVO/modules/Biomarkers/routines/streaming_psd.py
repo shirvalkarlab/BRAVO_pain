@@ -270,8 +270,15 @@ def align_and_standardize_label(label):
 # Welch PSD epoching -- PORTED from notebook cell 8 (see PROVENANCE note)
 # ============================================================================
 
+# TD-streaming Welch epoch length (seconds). Set to 30 s so the time-domain PSD is computed over the
+# SAME duration as the onboard patient-event / montage snapshot PSDs (~30 s), making the sources
+# directly comparable. Recordings shorter than this use all available samples. This value is part of
+# the matrix-cache key (bravo_service): changing it invalidates the cache so PSDs are re-Welch'd.
+WELCH_MAX_SECONDS = 30.0
+
+
 def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
-                           f_set=F_SET, max_seconds=5 * 60):
+                           f_set=F_SET, max_seconds=WELCH_MAX_SECONDS):
     """
     Compute one PSD epoch, shaped (1, len(chan_order), len(f_set)), from one streaming
     group. Signal-processing: 4th-order Butterworth high-pass at Wn=1/nyq, Welch nperseg=1024,
@@ -291,7 +298,10 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     f_set : ndarray
         Frequency grid to interpolate the PSD onto (default F_SET).
     max_seconds : float
-        Use only the first `max_seconds` of each group (notebook intent: first 5 minutes).
+        Use only the first `max_seconds` of each group. Default 30 s to match the duration of the
+        onboard patient-event / montage PSDs (those are ~30 s snapshots), so the TD-streaming Welch
+        PSD is computed over the SAME epoch length and the sources are directly comparable. If a
+        recording is shorter than 30 s, all available samples are used.
     """
     fs = float(fs)
     nyq = fs / 2.0
@@ -324,15 +334,22 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     return psd
 
 
-def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min):
-    """Nearest-PRO-within-window match for a vector of PSD timestamps.
+def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest"):
+    """Match each PSD timestamp to a PRO report within the window.
 
-    `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the (sorted-by-time) PRO
-    report timestamps + the chosen continuous metric value. Returns (labels (N,), dt_min (N,),
-    pro_idx (N,)): the matched continuous PRO value (NaN if no report within +/- tolerance), the
-    signed minutes PRO-minus-PSD, and the index of the matched PRO report in the caller's ORIGINAL
-    pro ordering (-1 if unmatched) so callers can audit how many neural samples share one PRO
-    (double-dipping). Vectorized via searchsorted on the sorted PRO times."""
+    `times_s` (N,) epoch seconds per PSD; `pro_times_s` / `pro_values` the PRO report timestamps +
+    the chosen continuous metric value. Returns (labels (N,), dt_min (N,), pro_idx (N,)): the matched
+    continuous PRO value (NaN if no report within tolerance), the signed minutes PRO-minus-PSD, and
+    the index of the matched PRO report in the caller's ORIGINAL pro ordering (-1 if unmatched) so
+    callers can audit how many neural samples share one PRO (double-dipping).
+
+    `direction`:
+      * "nearest" — match the closest PRO in EITHER time direction (symmetric ± tolerance).
+      * "prior"   — FORECASTING semantics: the PSD must be recorded BEFORE the rating, so a PSD is
+        matched to the nearest PRO at or after it within the window (PRO time >= PSD time). This is
+        the causal direction for predicting future pain from neural data — every matched PSD
+        precedes the rating it is paired with. dt_min is then >= 0 (PRO minus PSD).
+    Vectorized via searchsorted on the sorted PRO times."""
     import numpy as _np
     n = len(times_s)
     lab = _np.full(n, _np.nan)
@@ -350,11 +367,21 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min):
             continue
         pos = int(_np.searchsorted(pt, t))
         best, best_d = -1, None
-        for k in (pos - 1, pos):
+        if direction == "prior":
+            # PSD must precede the rating: consider only PRO times at or after t (pt[k] >= t), and
+            # pick the nearest such within tolerance. searchsorted(pt, t) is the first index with
+            # pt[k] >= t, so the candidate is pos (and pos itself if pt[pos]==t).
+            k = pos
             if 0 <= k < pt.size:
-                d = abs(pt[k] - t)
-                if d <= tol_s and (best_d is None or d < best_d):
+                d = pt[k] - t
+                if 0 <= d <= tol_s:
                     best, best_d = k, d
+        else:
+            for k in (pos - 1, pos):
+                if 0 <= k < pt.size:
+                    d = abs(pt[k] - t)
+                    if d <= tol_s and (best_d is None or d < best_d):
+                        best, best_d = k, d
         if best >= 0:
             lab[i] = pv[best]
             dt[i] = (pt[best] - t) / 60.0
@@ -414,7 +441,7 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
     Returns {"logX": (N,F) float, "t": (N,), "channel": (N,) str, "source": (N,) str, "f_set": (F,)}.
     """
     f_set = np.asarray(f_set, dtype=float)
-    logs, ts, chs, srcs = [], [], [], []
+    logs, ts, chs, srcs, durs = [], [], [], [], []
     for r in psd_rows or []:
         t = r.get("t")
         ch = r.get("channel")
@@ -427,15 +454,21 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
             continue
         logs.append(10.0 * np.log10(np.interp(f_set, fr[ok], pw[ok])))
         ts.append(float(t)); chs.append(str(ch)); srcs.append(str(r.get("source") or "?"))
+        # Welch epoch length (s) for this PSD; NaN for sources without a time-domain epoch
+        # (event/montage onboard PSDs). Carried so the report can show the TD epoch mean +/- SD.
+        d = r.get("dur")
+        durs.append(float(d) if d is not None else float("nan"))
     if not logs:
         return None
     return {"logX": np.vstack(logs), "t": np.asarray(ts, dtype=float),
             "channel": np.asarray(chs, dtype=object), "source": np.asarray(srcs, dtype=object),
-            "f_set": f_set}
+            "dur": np.asarray(durs, dtype=float), "f_set": f_set}
 
 
 def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=15.0,
-                                    min_per_group=3, aggregate="all"):
+                                    min_per_group=3, aggregate="all",
+                                    max_per_rating=3, refractory_min=2.0,
+                                    match_direction="prior"):
     """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
     continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
     matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated.
@@ -457,6 +490,19 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     t_arr = np.asarray(mat["t"], dtype=float)
     ch_arr = np.asarray(mat["channel"], dtype=object)
     src_arr = np.asarray(mat["source"], dtype=object)
+    dur_arr = (np.asarray(mat["dur"], dtype=float) if "dur" in mat
+               else np.full(t_arr.shape, np.nan))
+    # TD-streaming Welch epoch length stats (mean +/- SD over the TD PSDs that carry a finite
+    # duration). Computed up-front on the full matrix (before any cap/aggregation reshapes arrays).
+    _td_dur = dur_arr[np.array([str(s) == "TD streaming" for s in src_arr]) & np.isfinite(dur_arr)] \
+        if dur_arr.size else np.array([])
+    td_welch_duration = ({
+        "n": int(_td_dur.size),
+        "mean_s": round(float(np.mean(_td_dur)), 1),
+        "sd_s": round(float(np.std(_td_dur)), 1),
+        "min_s": round(float(np.min(_td_dur)), 1),
+        "max_s": round(float(np.max(_td_dur)), 1),
+    } if _td_dur.size else None)
 
     # Within-(channel,source) per-frequency z-score so sources sharing a channel become poolable.
     Xz = X.copy()
@@ -471,7 +517,41 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
-    labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min)
+    labels, dt_min, pro_idx = _match_to_pro(t_arr, pro_times_s, pro_values, tolerance_min,
+                                            direction=match_direction)
+
+    # --- Per-(channel, rating) CAP with refractory window ---------------------------------------
+    # A single pain rating can sit within tolerance of a whole BURST of PSDs (the patient triggered
+    # streaming many times around one survey), which double-counts that rating in every downstream
+    # stat. Cap how many PSDs any one rating absorbs PER CHANNEL: keep the `max_per_rating` matched
+    # PSDs closest in time to the rating, but never two closer together than `refractory_min` minutes
+    # (so the kept set is temporally spread, not a tight cluster). Dropped PSDs become unmatched
+    # (label NaN, pro_idx -1) — they stay in the pool as unmatched samples but feed no rating.
+    n_capped_dropped = 0
+    if max_per_rating is not None and max_per_rating >= 1:
+        ref_s = float(refractory_min or 0.0) * 60.0
+        matched_i = np.where(np.isfinite(labels) & (pro_idx >= 0))[0]
+        # group matched rows by (channel, matched-PRO index)
+        groups = {}
+        for i in matched_i:
+            groups.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
+        for key, idxs in groups.items():
+            if len(idxs) <= 1:
+                continue
+            idxs = np.asarray(idxs)
+            # order candidates by closeness to the rating (|dt|), then greedily keep up to N that
+            # respect the refractory gap among the KEPT set.
+            order_close = idxs[np.argsort(np.abs(dt_min[idxs]))]
+            kept_t = []
+            for i in order_close:
+                if len(kept_t) >= int(max_per_rating):
+                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
+                    continue
+                ti = float(t_arr[i])
+                if ref_s > 0 and any(abs(ti - tk) < ref_s for tk in kept_t):
+                    labels[i] = np.nan; dt_min[i] = np.nan; pro_idx[i] = -1; n_capped_dropped += 1
+                    continue
+                kept_t.append(ti)
 
     # --- Optional one-per-rating aggregation ----------------------------------------------------
     # Collapse every (channel, matched-PRO) cluster of z-scored spectra to a single mean vector, so
@@ -549,6 +629,32 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     dip_global = _dipstats(all_mask)
     dip_per_channel = {ch: _dipstats(ch_arr == ch) for ch in chan_order}
 
+    # --- Pain-survey usage --------------------------------------------------------------------
+    # The matcher is PSD-centric, but the clinician also wants the survey-centric view: of all the
+    # pain ratings AVAILABLE in the window-eligible PRO series, how many were actually used (matched
+    # to >=1 PSD), and how many were REUSED (matched by >1 PSD, i.e. repeat-assigned). n_pro_total is
+    # the count of finite PRO values supplied. Counts collapse across channels (a rating used on two
+    # channels is one used survey) AND per the still-matched rows after the cap.
+    pv_all = np.asarray(pro_values, dtype=float)
+    n_pro_total = int(np.isfinite(pv_all).sum())
+    used_idx = pro_idx[np.isfinite(labels) & (pro_idx >= 0)]
+    used_unique = np.unique(used_idx) if used_idx.size else np.array([], dtype=int)
+    n_pro_used = int(used_unique.size)
+    # reuse counts the SAME (channel, rating) cell only once, then tallies ratings matched by more
+    # than one DISTINCT (channel, PSD) pairing — i.e. assigned to multiple neural samples.
+    if used_idx.size:
+        u, c = np.unique(used_idx, return_counts=True)
+        n_pro_reused = int((c > 1).sum())     # ratings assigned to >1 neural sample (repeat-assigned)
+    else:
+        n_pro_reused = 0
+    survey_usage = {
+        "n_pro_total": n_pro_total,           # finite pain ratings available
+        "n_pro_used": n_pro_used,             # ratings matched to >=1 PSD after the cap
+        "n_pro_unused": int(max(0, n_pro_total - n_pro_used)),
+        "n_pro_reused": n_pro_reused,         # ratings assigned to >1 neural sample
+        "pct_pro_used": (round(100.0 * n_pro_used / n_pro_total, 1) if n_pro_total else 0.0),
+    }
+
     return {
         "f_set": f_set,
         "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
@@ -565,6 +671,12 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             "n_psds": int(N),
             "n_matched": int(matched_mask.sum()),
             "aggregate": aggregate,
+            "match_direction": match_direction,
+            "max_per_rating": (None if max_per_rating is None else int(max_per_rating)),
+            "refractory_min": float(refractory_min or 0.0),
+            "n_capped_dropped": int(n_capped_dropped),
+            "survey_usage": survey_usage,
+            "td_welch_duration": td_welch_duration,
             "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
             "per_source": _src_breakdown(np.ones(N, bool)),
             "per_source_matched": _src_breakdown(matched_mask),

@@ -32,25 +32,35 @@ function percentile(values, q) {
   return a[lo] + (a[hi] - a[lo]) * (idx - lo);
 }
 
-// Nearest PRO within ±tolerance for one sample time, replicating streaming_psd._match_to_pro.
-// `proSorted` is [{t, v}] sorted ascending by t. Returns {v, dtMin} or null when none in window.
-function matchNearest(tSec, proSorted, tolSec) {
+// Match one PSD time to a PRO within the window, replicating streaming_psd._match_to_pro.
+// `proSorted` is [{t, v}] sorted ascending by t. `direction`: "prior" pairs the PSD with the
+// nearest PRO at or AFTER it (PSD precedes rating — forecasting); "nearest" is symmetric ±tol.
+// Returns {v, dtMin, idx} (idx into proSorted) or null when none in window.
+function matchNearest(tSec, proSorted, tolSec, direction = "prior") {
   if (!proSorted.length || !(tolSec > 0)) return null;
-  // binary search for insertion point
+  // binary search for insertion point (first index with proSorted[i].t >= tSec)
   let lo = 0, hi = proSorted.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     if (proSorted[mid].t < tSec) lo = mid + 1; else hi = mid;
   }
   let best = -1, bestD = Infinity;
-  for (const k of [lo - 1, lo]) {
-    if (k >= 0 && k < proSorted.length) {
-      const d = Math.abs(proSorted[k].t - tSec);
-      if (d <= tolSec && d < bestD) { best = k; bestD = d; }
+  if (direction === "prior") {
+    // only PRO at or after the PSD (proSorted[lo].t >= tSec)
+    if (lo >= 0 && lo < proSorted.length) {
+      const d = proSorted[lo].t - tSec;
+      if (d >= 0 && d <= tolSec) { best = lo; bestD = d; }
+    }
+  } else {
+    for (const k of [lo - 1, lo]) {
+      if (k >= 0 && k < proSorted.length) {
+        const d = Math.abs(proSorted[k].t - tSec);
+        if (d <= tolSec && d < bestD) { best = k; bestD = d; }
+      }
     }
   }
   if (best < 0) return null;
-  return { v: proSorted[best].v, dtMin: (proSorted[best].t - tSec) / 60 };
+  return { v: proSorted[best].v, dtMin: (proSorted[best].t - tSec) / 60, idx: best };
 }
 
 // Compute the cut(s) on the matched continuous values, faithful to analytics._binarize_labels:
@@ -104,7 +114,9 @@ function classify(v, cuts) {
  *              median_abs_offset_min} }
  */
 export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
-                                          strategy, percentileLow, percentileHigh }) {
+                                          strategy, percentileLow, percentileHigh,
+                                          maxPerRating = 3, refractoryMin = 2,
+                                          matchDirection = "prior" }) {
   const empty = {
     samples: [], binByKey: new Map(), matchedValues: [], cuts: { kind: "none" },
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
@@ -123,14 +135,50 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
     .sort((a, b) => a.t - b.t);
 
-  // 1st pass: match each scan sample to its nearest PRO within the window.
-  const matched = [];   // {t, channel, source, v, dtMin}
-  const offsets = [];
+  // 1st pass: match each scan sample to a PRO within the window (prior-direction by default), then
+  // apply the per-(channel, rating) cap with a refractory gap — faithful to the backend matcher.
+  const matched = [];   // {t, channel, source, v, dtMin, proIdx}
   for (const e of scanIndex) {
-    const m = matchNearest(e.t, proSorted, tolSec);
-    matched.push({ t: e.t, channel: e.channel, source: e.source, v: m ? m.v : null });
-    if (m) offsets.push(Math.abs(m.dtMin));
+    const m = matchNearest(e.t, proSorted, tolSec, matchDirection);
+    matched.push({ t: e.t, channel: e.channel, source: e.source,
+                   v: m ? m.v : null, dtMin: m ? m.dtMin : null, proIdx: m ? m.idx : -1 });
   }
+  // Per-(channel, rating) cap: keep up to maxPerRating matched PSDs closest to the rating, no two
+  // within refractoryMin of each other; the rest become unmatched.
+  let nCappedDropped = 0;
+  if (maxPerRating >= 1) {
+    const refSec = (refractoryMin || 0) * 60;
+    const groups = new Map();   // "channel|proIdx" -> [matched index]
+    matched.forEach((s, i) => {
+      if (s.v != null && Number.isFinite(s.v) && s.proIdx >= 0) {
+        const k = `${s.channel}|${s.proIdx}`;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(i);
+      }
+    });
+    for (const idxs of groups.values()) {
+      if (idxs.length <= 1) continue;
+      idxs.sort((a, b) => Math.abs(matched[a].dtMin) - Math.abs(matched[b].dtMin));
+      const keptT = [];
+      for (const i of idxs) {
+        const drop = keptT.length >= maxPerRating
+          || (refSec > 0 && keptT.some((tk) => Math.abs(matched[i].t - tk) < refSec));
+        if (drop) { matched[i].v = null; matched[i].proIdx = -1; nCappedDropped++; }
+        else keptT.push(matched[i].t);
+      }
+    }
+  }
+  const offsets = matched.filter((s) => s.v != null && Number.isFinite(s.v))
+    .map((s) => Math.abs(s.dtMin));
+  // Survey usage (rating-centric): how many distinct ratings were used and how many reused.
+  const usedIdx = matched.filter((s) => s.v != null && Number.isFinite(s.v) && s.proIdx >= 0)
+    .map((s) => s.proIdx);
+  const useCounts = new Map();
+  usedIdx.forEach((k) => useCounts.set(k, (useCounts.get(k) || 0) + 1));
+  const nProUsed = useCounts.size;
+  let nProReused = 0;
+  useCounts.forEach((c) => { if (c > 1) nProReused++; });
+  const nProTotal = proSorted.length;
   // cuts computed on the matched continuous values (exactly as the backend binarizes the labels).
   const matchedValues = matched.filter((s) => s.v != null && Number.isFinite(s.v)).map((s) => s.v);
   const cuts = computeCuts(matchedValues, strategy, percentileLow, percentileHigh);
@@ -185,6 +233,14 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,
+      max_per_rating: maxPerRating,
+      refractory_min: refractoryMin,
+      match_direction: matchDirection,
+      n_capped_dropped: nCappedDropped,
+      survey_usage: { n_pro_total: nProTotal, n_pro_used: nProUsed,
+                      n_pro_unused: Math.max(0, nProTotal - nProUsed),
+                      n_pro_reused: nProReused,
+                      pct_pro_used: nProTotal ? Math.round((1000 * nProUsed) / nProTotal) / 10 : 0 },
     },
   };
 }
