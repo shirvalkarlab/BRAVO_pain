@@ -79,6 +79,7 @@ const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis')
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
 const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
+const ClosedLoopSim = lazy(() => import('views/Reports/ClosedLoopSim'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
@@ -403,6 +404,13 @@ const routes = {
         icon: <TimelineIcon />,
         route: "/reports/biomarkers/:participant_uid",
         component: <Biomarkers />,
+      },
+      {
+        key: "closedLoopSim",
+        name: "Closed-Loop Deployment",
+        icon: <MdBuildCircle />,
+        route: "/reports/closed-loop/:participant_uid",
+        component: <ClosedLoopSim />,
       },
       {
         key: "AIHealthcare",

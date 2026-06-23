@@ -13,8 +13,10 @@ import Plotly from "plotly.js-dist";
 import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
 import BinarizationPreview from "./BinarizationPreview";
 import { SessionController } from "database/session-control";
+import { commitBandCandidate, downloadBandCandidate } from "../ClosedLoopSim/bandCandidateStore";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -87,7 +89,13 @@ function Panel({ title, children, lg = 6 }) {
 // Click-validate readout — renders the mixed-effects OR + 95% CI, the stim-stability badge, and
 // the per-era ORs from /queryBandValidation. Stays compact (three lines + one badge) so it tucks
 // under the violin without pushing the layout. Empty-state and in-flight handled.
-function ValidationReadout({ validation, validating }) {
+function ValidationReadout({ validation, validating, emitContext }) {
+  // Commit-to-band: when the clicked band is VALIDATED, the user can export it as a §6
+  // BandCandidate into the threshold-deployment (Closed-Loop Sim) view. We POST the IDENTICAL
+  // band-feature envelope the validation used (emitContext), so the committed candidate is
+  // byte-identical to what the readout shows.
+  const [committing, setCommitting] = useState(false);
+  const [committed, setCommitted] = useState(null);   // {ok, msg} after a commit attempt
   if (validating) {
     return (
       <MDTypography variant="caption" color="text" display="block" mt={0.5}
@@ -166,6 +174,53 @@ function ValidationReadout({ validation, validating }) {
           {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
         </MDTypography>
       )}
+      {/* Commit-to-band: only offered for a VALIDATED verdict and when the parent supplied the
+          emit envelope. POSTs /api/emitBandCandidate with the SAME band feature the readout used,
+          stashes the returned §6 BandCandidate for the threshold-deployment view, and offers a
+          JSON download as the persistence escape hatch. */}
+      {emitContext && /VALIDATED/.test(verdict) ? (
+        <MDBox mt={1.2} display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <MDButton
+            size="small" color="info" variant="gradient"
+            disabled={committing}
+            onClick={() => {
+              setCommitting(true); setCommitted(null);
+              SessionController.query("/api/emitBandCandidate", {
+                ParticipantId: emitContext.participantUid,
+                Channel: emitContext.channelRaw,
+                CenterHz: Number(emitContext.centerHz),
+                BandWidthHz: emitContext.bandWidthHz,
+                ...emitContext.requestParams,
+              }).then((response) => {
+                const data = response && response.data;
+                if (data && data.available && data.band_candidate) {
+                  commitBandCandidate(emitContext.participantUid, data.band_candidate);
+                  downloadBandCandidate(emitContext.participantUid, data.band_candidate);
+                  setCommitted({ ok: true, msg: "Committed → Closed-Loop Sim (JSON downloaded)." });
+                } else {
+                  setCommitted({ ok: false, msg: (data && data.reason) || "emit failed" });
+                }
+                setCommitting(false);
+              }).catch(() => {
+                setCommitted({ ok: false, msg: "emit request failed" });
+                setCommitting(false);
+              });
+            }}
+          >
+            {committing ? "Committing…" : "Commit this band →"}
+          </MDButton>
+          {committed ? (
+            <MDTypography variant="caption" sx={{ fontSize: 11,
+              color: committed.ok ? "#0a7f3f" : "#9A3324" }}>
+              {committed.msg}
+            </MDTypography>
+          ) : (
+            <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5, fontStyle: "italic" }}>
+              Export this validated band as a deployment BandCandidate.
+            </MDTypography>
+          )}
+        </MDBox>
+      ) : null}
     </MDBox>
   );
 }
@@ -451,7 +506,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                  + "Power is z-scored within channel/source, so Δ is in SD units; "
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
-              <ValidationReadout validation={validation} validating={validating} />
+              <ValidationReadout validation={validation} validating={validating}
+                emitContext={(participantUid && requestParams && selChannelRaw != null
+                              && selCenterHz != null) ? {
+                  participantUid,
+                  channelRaw: selChannelRaw,
+                  centerHz: Number(selCenterHz),
+                  bandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
+                  requestParams,
+                } : null} />
             </Grid>
           </Grid>
         </MDBox>
