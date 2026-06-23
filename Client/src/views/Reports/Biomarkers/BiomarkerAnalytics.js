@@ -121,6 +121,30 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
         line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
         customdata: centers.map((c, bi) => [ci, bi]),
         hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
+      // Rigor-pass overlay: solid black-outlined markers at every band whose rating-clustered
+      // logit p survives BH-FDR over the band x channel grid (`is_fdr_sig` from the backend).
+      // The markers sit on the r curve (left axis) — same color as the channel, with a black ring
+      // so they read as "validated under proper clustered inference" against the unstyled
+      // pooled-by-default points the line implies. legendgroup ties them to the channel toggle so
+      // hiding a channel hides its FDR markers too. showlegend=false (channel curve already
+      // identifies the channel; a separate "FDR" entry is in the style legend up top).
+      const fdrMask = ch.is_fdr_sig || [];
+      const fdrCenters = [], fdrRs = [], fdrCustom = [], fdrHover = [];
+      for (let bi = 0; bi < centers.length; bi += 1) {
+        if (fdrMask[bi] && ch.r && ch.r[bi] != null) {
+          fdrCenters.push(centers[bi]); fdrRs.push(ch.r[bi]);
+          fdrCustom.push([ci, bi]);
+          const q = ch.q && ch.q[bi];
+          fdrHover.push(`${centers[bi].toFixed(1)} Hz · r=${ch.r[bi].toFixed(2)} · q=${q != null ? q.toFixed(3) : "—"}`);
+        }
+      }
+      if (fdrCenters.length) {
+        traces.push({ x: fdrCenters, y: fdrRs, name: `${ch.short} · FDR`, type: "scattergl", mode: "markers",
+          marker: { size: 9, color, line: { width: 1.2, color: "#000" } },
+          legendgroup: ch.short, yaxis: "y", showlegend: false,
+          customdata: fdrCustom,
+          hovertext: fdrHover, hoverinfo: "text" });
+      }
     });
     // Marker for the currently-selected band (vertical guide).
     const shapes = [];
@@ -150,9 +174,17 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
       uirevision: "biomarker-scan",
       // Legend group selection follows the same rule — explicit so a band click doesn't reset it.
       legend_uirevision: "biomarker-scan-legend",
-      annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
-        yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
-        showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
+      annotations: [
+        ...(adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
+          yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
+          showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
+        // FDR-marker style legend — explains the black-ringed dots overlaid on the r curves.
+        // Right-justified at the top so it doesn't fight with the adaptive-band label (which is
+        // centered on the band's midpoint). Quiet styling — small, grey.
+        { x: 1.0, y: 1.02, xref: "paper", yref: "paper", xanchor: "right", yanchor: "bottom",
+          text: "●ringed dot = band survives BH-FDR (rating-clustered logistic, q<0.05)",
+          showarrow: false, font: { size: 10, color: "#555" } },
+      ],
     };
     // Fallback preservation of per-trace legend on/off state (belt-and-suspenders for the
     // uirevision above, and for plotly.js versions that don't honor uirevision for trace
@@ -1513,10 +1545,21 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     </Grid>
   ) : null;
 
+  // Rigor-pass annotation: if the backend supplied a band x channel BH-FDR summary, append the
+  // naive-vs-rigorous count contrast to the subtitle. This is the headline pseudoreplication
+  // honesty number — naive Pearson over-reports significance because every PSD is treated as
+  // independent, while the rating-clustered logistic q accounts for the ~7-8 PSDs that share each
+  // pain report. Reads as e.g. "[N bands FDR-significant by rating-clustered logistic vs M by
+  // naive Pearson over a 558-cell grid; ringed dots above mark the validated bands]".
+  const fdrSummary = scan && scan.fdr_summary;
+  const rigorAnnotation = fdrSummary
+    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive naive Pearson FDR (treats every PSD as independent — over-reports because of pseudoreplication). Ringed dots above mark the rigorous-FDR survivors.`
+    : "";
+
   return (
     <>
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
-               subtitle="Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
+               subtitle={"Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter." + rigorAnnotation}
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle={(slidingActive
