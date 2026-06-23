@@ -563,12 +563,14 @@ function Biomarkers() {
                                   <Slider
                                     value={refractoryMin} min={0} max={30} step={1}
                                     valueLabelDisplay="auto" size="small"
-                                    disabled={maxPerRating <= 1}
+                                    disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
                                     onChange={(e, v) => setRefractoryMin(v)} />
                                 </MDBox>
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
+                                  {matchDirection === "pro_first"
+                                    ? "Refractory gap does not apply in PRO-first matching: each PSD is claimed by at most one rating, so a streaming burst can't double-count regardless of the gap. Switch to Nearest or Prior to enforce a minimum spacing between kept PSDs."
+                                    : (`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
                                    + (matchDirection === "prior"
                                       ? "the ones recorded closest in time BEFORE the rating (forecasting direction)"
                                       : "the ones closest in time to the rating (either direction)")
@@ -577,7 +579,7 @@ function Biomarkers() {
                                       : " — i.e. one independent sample per rating. ")
                                    + (maxPerRating > 1
                                       ? "The binary-classification AUC is still cross-validated with folds grouped by rating, so reused ratings can't inflate it; the AUC n is the count of independent ratings."
-                                      : "Every sample is an independent (channel, rating) pair — no double-dipping.")}
+                                      : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
                                 </MDTypography>
                               </MDBox>
                             </MDBox>
@@ -644,8 +646,8 @@ function Biomarkers() {
                     <Grid item xs={12}>
                       <MDBox p={2}>
                         <MDTypography variant="button" color="dark">
-                          {"Choose a source, pain metric, and (for Power-domain) the window above, then click "}
-                          <strong>Compute biomarker now</strong>{" to run the analysis."}
+                          {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
+                          <strong>▶ Start exploratory analysis</strong>{" to run the full-spectrum scan."}
                         </MDTypography>
                       </MDBox>
                     </Grid>

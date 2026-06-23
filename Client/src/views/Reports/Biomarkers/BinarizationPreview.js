@@ -338,8 +338,18 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false, displayModeBar: false,
     });
-    return () => { if (ref.current) Plotly.purge(ref.current); };
+    // NOTE: no per-run Plotly.purge cleanup here. Purging before each re-run destroys the graph div,
+    // which defeats the `uirevision: hist-${metricKey}` set below — the user's histogram zoom would
+    // reset on every match-window / strategy drag. Plotly.react diffs in place, so the live recolor
+    // works without a purge; we purge only on unmount (separate effect below), mirroring
+    // BiomarkerDataTimeline's deliberate same pattern.
   }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey]);
+
+  // Purge ONCE on unmount only (not before every recompute) so zoom survives live recolors.
+  useEffect(() => {
+    const node = ref.current;
+    return () => { if (node) Plotly.purge(node); };
+  }, []);
 
   // Header caption — PRO-first by default (the discovery framing). For PSD-first modes (nearest /
   // prior) lead with the PSD-coverage number instead, so the headline matches the toggle.
