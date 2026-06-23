@@ -2292,30 +2292,38 @@ def _demo_stages():
     ]
 
 
-def validate_band_for_participant(request_data):
-    """Run the click-triggered VALIDATION bundle for one band on one participant.
+def _band_decide_verdict(g, h):
+    """Badge text from the glmer + stim-stability results.
 
-    Inputs (in request_data): ParticipantId, Channel (raw or short name), CenterHz, plus the same
-    LabelMetric/BinarizationStrategy/LowPct/HighPct/MatchToleranceMin/MaxPerRating/RefractoryMin
-    /MatchDirection knobs the scan uses (so the band feature is defined identically to what the
-    scan dot represents). Optional BandWidthHz (default 5.0).
+    Uses the RAW glmer p (a single-click validate is one test; the band x channel q lives on the
+    scan side). alpha=0.05 mirrors the scan FDR; bands that survived FDR on the scan arrive here
+    with q<0.05, so this is a per-band reaffirmation in the mixed-effects frame, with the
+    stim-stability flag deciding which validated label shows.
+    """
+    if not g.get("available"):
+        return "unavailable"
+    if g.get("separation"):
+        return "failed (separation)"
+    if g.get("singular"):
+        return "failed (singular random effect)"
+    p = g.get("p")
+    if p is None or not isinstance(p, (int, float)) or p >= 0.05:
+        return "candidate (mixed-effects n.s.)"
+    if h.get("available") and h.get("stim_stable") is False:
+        return "VALIDATED (stim-dependent)"
+    return "VALIDATED (stim-stable)"
 
-    Output: {
-      'available': True,
-      'channel': '...', 'center_hz': N.N, 'band_lo': N.N, 'band_hi': N.N,
-      'glmer': {                      # from analytics.band_mixedmodel_inference, OR + CI + q
-         'available', 'odds_ratio', 'or_lo', 'or_hi', 'p', 'q_glmer',
-         'n', 'n_clusters', 'separation', 'singular', 'note', ...
-      },
-      'stim': {                       # from analytics.band_stim_stability
-         'available', 'chisq', 'lrt_p', 'stim_stable', 'or_by_era', 'era_counts',
-         'thresholds_mA', ...
-      },
-      'verdict': 'VALIDATED (stim-stable)' | 'VALIDATED (stim-dependent)' |
-                 'candidate (FDR n.s.)' | 'failed (separation/singular)' | 'unavailable',
-    }
-    Degrades to {available: False, reason: ...} when the participant has no matched data or pymer4
-    isn't installed; the frontend renders an empty-state caption rather than erroring.
+
+def _validate_band_core(request_data):
+    """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
+
+    Resolves the participant, PRO metric, binarization, and PSD<->PRO match params from the
+    request; builds the same pooled td_detail the scan uses (so the band feature is defined
+    identically); then runs the mixed-effects logistic (glmer) and the band x stim-era LRT.
+
+    Returns a rich intermediate dict consumed by BOTH `validate_band_for_participant` (which
+    trims it to the click-panel shape) and `build_band_candidate` (which assembles the full
+    §6 BandCandidate). On any failure returns {available: False, reason: ...}.
     """
     participant_uid = request_data.get("ParticipantId")
     channel = request_data.get("Channel")
@@ -2338,14 +2346,18 @@ def validate_band_for_participant(request_data):
     pro_df = _load_pros(request_data, Participant)
     if pro_df is None or len(pro_df) == 0:
         return {"available": False, "reason": "no PRO data"}
-    pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+    pro_df, label_metric, composite_parts = _resolve_biomarker_metric(request_data, pro_df)
     pm = _pro_match_arrays(pro_df, label_metric)
     if pm is None:
         return {"available": False, "reason": f"no matchable PRO values for metric={label_metric}"}
 
     # Build the same pooled td_detail the scan uses so the band feature is defined identically.
+    # The assembled matrix is {logX (N,F), t (N,), channel (N,), source (N,), f_set (F,)} — there
+    # is no "rows" key (that was the pre-matrix row-list representation). Gate on the actual sample
+    # count instead, or this bails "no PSD samples" on a perfectly valid cached matrix.
     mat = _cached_psd_matrix(participant_uid)
-    if mat is None or not mat.get("rows"):
+    if mat is None or np.asarray(mat.get("t")).size == 0 \
+            or np.asarray(mat.get("logX")).size == 0:
         return {"available": False, "reason": "no PSD samples for this participant"}
     label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
     match_tol_min = _match_tolerance_param(request_data)
@@ -2389,42 +2401,316 @@ def validate_band_for_participant(request_data):
         pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
         strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
 
-    # Verdict — the badge text the UI shows. We deliberately use the RAW glmer p (q across many
-    # candidates lives on the scan side; a single-click validate is one test). The headline
-    # threshold is the same alpha=0.05 the scan FDR uses; bands that survived FDR on the scan
-    # already arrive here with q<0.05, so this is a per-band reaffirmation in the mixed-effects
-    # frame, with the stim-stability flag deciding which validated label is shown.
-    def _decide_verdict(g, h):
-        if not g.get("available"):
-            return "unavailable"
-        if g.get("separation"):
-            return "failed (separation)"
-        if g.get("singular"):
-            return "failed (singular random effect)"
-        p = g.get("p")
-        if p is None or not isinstance(p, (int, float)) or p >= 0.05:
-            return "candidate (mixed-effects n.s.)"
-        if h.get("available") and h.get("stim_stable") is False:
-            return "VALIDATED (stim-dependent)"
-        return "VALIDATED (stim-stable)"
-    verdict = _decide_verdict(glmer, hetero)
+    return {
+        "available": True,
+        "participant_uid": participant_uid,
+        "Participant": Participant,
+        "channel": channel,
+        "center_hz": center_hz,
+        "band_width_hz": band_width_hz,
+        "label_metric": label_metric,
+        "is_composite": (label_metric == COMPOSITE_METRIC),
+        "composite_parts": list(composite_parts) if label_metric == COMPOSITE_METRIC else None,
+        "label_strategy": label_strategy,
+        "low_pct": low_pct,
+        "high_pct": high_pct,
+        "match_tol_min": match_tol_min,
+        "max_per_rating": max_per_rating,
+        "refractory_min": refractory_min,
+        "match_direction": match_direction,
+        "pm": pm,
+        "pooled": pooled,
+        "stim_series": stim,
+        "glmer": glmer,
+        "stim": hetero,
+        "verdict": _band_decide_verdict(glmer, hetero),
+    }
+
+
+def validate_band_for_participant(request_data):
+    """Run the click-triggered VALIDATION bundle for one band on one participant.
+
+    Inputs (in request_data): ParticipantId, Channel (raw or short name), CenterHz, plus the same
+    LabelMetric/BinarizationStrategy/LowPct/HighPct/MatchToleranceMin/MaxPerRating/RefractoryMin
+    /MatchDirection knobs the scan uses (so the band feature is defined identically to what the
+    scan dot represents). Optional BandWidthHz (default 5.0).
+
+    Output: {
+      'available': True,
+      'channel': '...', 'center_hz': N.N, 'band_lo': N.N, 'band_hi': N.N,
+      'glmer': {                      # from analytics.band_mixedmodel_inference, OR + CI + q
+         'available', 'odds_ratio', 'or_lo', 'or_hi', 'p', 'q_glmer',
+         'n', 'n_clusters', 'separation', 'singular', 'note', ...
+      },
+      'stim': {                       # from analytics.band_stim_stability
+         'available', 'chisq', 'lrt_p', 'stim_stable', 'or_by_era', 'era_counts',
+         'thresholds_mA', ...
+      },
+      'verdict': 'VALIDATED (stim-stable)' | 'VALIDATED (stim-dependent)' |
+                 'candidate (FDR n.s.)' | 'failed (separation/singular)' | 'unavailable',
+    }
+    Degrades to {available: False, reason: ...} when the participant has no matched data or pymer4
+    isn't installed; the frontend renders an empty-state caption rather than erroring.
+    """
+    core = _validate_band_core(request_data)
+    if not core.get("available"):
+        return core
 
     def _ff(x):
         try:
             return float(x) if x is not None and np.isfinite(x) else None
         except (TypeError, ValueError):
             return None
+    center_hz = core["center_hz"]
+    band_width_hz = core["band_width_hz"]
     return {
         "available": True,
-        "channel": channel,
+        "channel": core["channel"],
         "center_hz": _ff(center_hz),
         "band_lo": _ff(center_hz - band_width_hz / 2.0),
         "band_hi": _ff(center_hz + band_width_hz / 2.0),
         "band_width_hz": _ff(band_width_hz),
-        "label_metric": label_metric,
+        "label_metric": core["label_metric"],
+        "glmer": core["glmer"],
+        "stim": core["stim"],
+        "verdict": core["verdict"],
+    }
+
+
+# --- Percept RC device-mapping constants (DESIGN_biomarker_pipeline_v2 §1) ----------------------
+ADAPTIVE_LO_HZ = 8.0    # Percept PD-mode adaptive sensing floor
+ADAPTIVE_HI_HZ = 30.0   # Percept PD-mode adaptive sensing ceiling
+# Empirical LFP-Power LSB <-> µV² rule of thumb (Medtronic) and measured RCS08 ratio (§4). The
+# measured constant is normalization-dependent — trusted no better than ~3×; Phase C measures it
+# per overlapping session and flags divergence. Carried here only as the schema default.
+LSB_RULE_OF_THUMB = 0.01
+
+
+def _band_credible_ci(or_lo, or_hi, min_width=0.10):
+    """v2 credible-CI rule: OR-space CI width > min_width (default 0.10).
+
+    The 5 narrow-CI v2 candidates carry saturated-random-effect Wald CIs (width < 0.005) that are
+    not trustworthy; Phase B re-validates these by cluster bootstrap. Returns (credible_bool,
+    ci_width_or_None)."""
+    try:
+        if or_lo is None or or_hi is None:
+            return None, None
+        w = float(or_hi) - float(or_lo)
+        if not np.isfinite(w):
+            return None, None
+        return bool(w > float(min_width)), float(w)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _suggested_percept_mode(polarity, adaptive_valid):
+    """Map (polarity, adaptive-validity) to a Percept RC control mode + a plain-language reason.
+
+    Percept adaptive ramps stim UP when band power exceeds the upper threshold (§1). So:
+      * positive-direction biomarker (higher power -> higher pain) maps naturally onto Dual/Single
+        adaptive — more pain drives more stim, no inversion needed.
+      * negative-direction biomarker (higher power -> LOWER pain) needs the inverse control law,
+        which Percept implements only as 'Single Threshold Inverse' — a SENSING-ONLY mode, not
+        closed-loop. So a negative biomarker is not directly deployable in adaptive mode without a
+        custom feature mapping (e.g. invert/negate the feature on a custom band).
+    Returns (suggested_mode|None, reason).
+    """
+    if not adaptive_valid:
+        return None, (f"center freq outside the {ADAPTIVE_LO_HZ:.0f}–{ADAPTIVE_HI_HZ:.0f} Hz "
+                      "adaptive sensing range — needs a custom sensing band before adaptive use")
+    if polarity == "positive":
+        return "Dual", ("positive-direction biomarker maps onto Dual/Single adaptive directly "
+                        "(stim ramps up as the biomarker rises)")
+    return None, ("negative-direction biomarker (higher power → lower pain) requires the inverse "
+                  "control law; Percept adaptive supports inverse only as sensing-only 'Single "
+                  "Threshold Inverse' — deploy via a custom/negated feature, not stock adaptive")
+
+
+def build_band_candidate(request_data):
+    """Assemble a serializable BandCandidate object (DESIGN_biomarker_pipeline_v2 §6) for ONE
+    validated (channel, band) — the contract handed from the discovery/Biomarkers view to the
+    Closed-Loop Simulation / threshold-deployment view.
+
+    Reuses `_validate_band_core` (identical pooled-detail + glmer + stim-stability machinery as the
+    click-validate panel), so the committed band is defined byte-identically to the scan dot the
+    user clicked. Phase A populates identity, label provenance, device-control mapping, evidence,
+    and pool-bias provenance; the threshold (`threshold_lsb`), the unit-conversion FYI
+    (`conversion_check`), and the labeled time-series handoff (`timeseries_ref`) are filled by the
+    deployment view in later phases and ship here as honest nulls/stubs.
+
+    Output: {available: True, band_candidate: {...§6 schema...}, verdict, glmer, stim} OR
+    {available: False, reason: ...}.
+    """
+    core = _validate_band_core(request_data)
+    if not core.get("available"):
+        return core
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+
+    channel = core["channel"]
+    center_hz = core["center_hz"]
+    band_width_hz = core["band_width_hz"]
+    glmer = core["glmer"]
+    hetero = core["stim"]
+    verdict = core["verdict"]
+
+    # ---- identity ----
+    fmt = analytics.format_channel(channel)
+    hemisphere = fmt.get("hemisphere") or ("Left" if "LEFT" in str(channel).upper()
+                                           else "Right" if "RIGHT" in str(channel).upper() else None)
+    # Percept FFT-bin snap: Dual-threshold uses a 256-pt FFT on 250 Hz -> 250/256 ≈ 0.977 Hz bins;
+    # Single uses 64-pt -> 250/64 ≈ 3.906 Hz bins. We snap the center to the Dual grid (the closed-
+    # loop default) and note the assumption so the sim module can re-snap for Single if needed.
+    fs = 250.0
+    bin_dual = fs / 256.0
+    snapped_center = round(center_hz / bin_dual) * bin_dual
+    snapped_note = (f"snapped to Dual-threshold 256-pt FFT grid ({bin_dual:.3f} Hz bins); "
+                    f"{center_hz:.2f} → {snapped_center:.2f} Hz. Re-snap to 64-pt "
+                    f"({fs/64.0:.3f} Hz) for Single-threshold mode.")
+
+    # ---- device-control mapping ----
+    adaptive_valid = bool(ADAPTIVE_LO_HZ <= center_hz <= ADAPTIVE_HI_HZ)
+    adaptive_reason = ("within the 8–30 Hz adaptive sensing range" if adaptive_valid
+                       else (f"{center_hz:.1f} Hz outside the 8–30 Hz adaptive range — "
+                             f"{'below the 8 Hz floor' if center_hz < ADAPTIVE_LO_HZ else 'above the 30 Hz ceiling'}"))
+    odds = glmer.get("odds_ratio")
+    coef = glmer.get("coef")
+    # Polarity = sign of corr(band power, pain). OR>1 (or coef>0) => higher power tracks higher
+    # pain => positive; OR<1 => negative. Fall back to coef sign when OR is unavailable.
+    polarity = None
+    if isinstance(odds, (int, float)) and np.isfinite(odds):
+        polarity = "positive" if odds > 1.0 else "negative"
+    elif isinstance(coef, (int, float)) and np.isfinite(coef):
+        polarity = "positive" if coef > 0 else "negative"
+    suggested_mode, mode_reason = _suggested_percept_mode(polarity, adaptive_valid)
+
+    # ---- credible-CI flag (v2 rule) ----
+    credible_ci, ci_width = _band_credible_ci(glmer.get("or_lo"), glmer.get("or_hi"))
+
+    # ---- label provenance ----
+    pm = core["pm"]
+    pro_vals = np.asarray(pm[1], dtype=float) if pm is not None else np.array([])
+    pl = analytics._binarize_labels(pro_vals, strategy=core["label_strategy"],
+                                    low_pct=core["low_pct"], high_pct=core["high_pct"])
+    n_labeled = int(np.isfinite(pl).sum())
+    n_pos = int(np.nansum(pl == 1.0))
+    n_neg = int(np.nansum(pl == 0.0))
+    metric_label = next((m["label"] for m in BIOMARKER_METRICS
+                         if m["key"] == core["label_metric"]), core["label_metric"])
+
+    # ---- evidence: per-era ORs + stim eras from the LRT result ----
+    or_by_era = hetero.get("or_by_era") if hetero.get("available") else None
+    era_counts = hetero.get("era_counts") if hetero.get("available") else None
+    stim_thresholds = hetero.get("thresholds_mA") if hetero.get("available") else None
+
+    band_candidate = {
+        # ---- identity (the atomic device unit) ----
+        "hemisphere": hemisphere,
+        "contact": fmt.get("raw") or str(channel),
+        "contact_label": fmt.get("short") or fmt.get("label"),
+        "center_freq_hz": _ff(center_hz),
+        "bandwidth_hz": _ff(band_width_hz),
+        "band_lo_hz": _ff(center_hz - band_width_hz / 2.0),
+        "band_hi_hz": _ff(center_hz + band_width_hz / 2.0),
+        "snapped_center_freq_hz": _ff(snapped_center),
+        "snapped_bin_note": snapped_note,
+
+        # ---- label provenance (REDCap PRO, NOT events) ----
+        "label": {
+            "pro_metric": core["label_metric"],
+            "pro_metric_label": metric_label,
+            "is_composite": core["is_composite"],
+            "composite_parts": core["composite_parts"],
+            "binarization": {
+                "strategy": core["label_strategy"],
+                "pain_cutoff": None,
+                "low_pct": _ff(core["low_pct"]),
+                "high_pct": _ff(core["high_pct"]),
+                "daily_broadcast": False,
+            },
+            "join": "pro_first" if core["match_direction"] == "pro_first" else core["match_direction"],
+            "match_tolerance_min": _ff(core["match_tol_min"]),
+            "n_labeled_days": n_labeled,
+            "n_pos_days": n_pos,
+            "n_neg_days": n_neg,
+        },
+
+        # ---- device-control mapping ----
+        "adaptive_valid": adaptive_valid,
+        "adaptive_valid_reason": adaptive_reason,
+        "polarity": polarity,
+        "suggested_mode": suggested_mode,
+        "suggested_mode_reason": mode_reason,
+
+        # ---- threshold, in DEPLOYMENT-STREAM LSB (set by Phase B/C deployment view) ----
+        "threshold_lsb": {"upper": None, "lower": None},
+        "threshold_basis": "not yet set — assign in the threshold-deployment view (Phase B cut-point + Phase C LSB anchoring)",
+
+        # ---- unit sanity check (FYI, confidence-rated; §4 — filled by Phase C) ----
+        "conversion_check": {
+            "ratio_uV2_per_lsb": None,
+            "n_overlap_sessions": 0,
+            "scatter_cv": None,
+            "rule_of_thumb": LSB_RULE_OF_THUMB,
+            "fold_off_rule": None,
+            "diverges": None,
+            "confidence": "low",
+            "note": "empirical LSB↔µV² ratio measured in Phase C from concurrent streaming-TD + device-LSB at ~0 mA",
+        },
+
+        # ---- evidence (cluster-robust mixed-effects; stim-context aware) ----
+        "evidence": {
+            "discovery_method": "glmer logistic (lme4 via pymer4), pain_high ~ band_power + (1|weekly_era)",
+            "odds_ratio": _ff(odds),
+            "or_lo": _ff(glmer.get("or_lo")),
+            "or_hi": _ff(glmer.get("or_hi")),
+            "ci_width_or": _ff(ci_width),
+            "credible_ci": credible_ci,
+            "p_glmer": _ff(glmer.get("p")),
+            "z_glmer": _ff(glmer.get("z")),
+            "coef": _ff(coef),
+            "n_matched_samples": glmer.get("n"),
+            "n_clusters": glmer.get("n_clusters"),
+            "separation": glmer.get("separation"),
+            "singular": glmer.get("singular"),
+            "stim_stable": (hetero.get("stim_stable") if hetero.get("available") else None),
+            "stim_lrt_p": _ff(hetero.get("lrt_p")) if hetero.get("available") else None,
+            "or_by_era": or_by_era,
+            "per_stream_n": {"matched_total": glmer.get("n")},
+            "mixed_model_effect": _ff(coef),
+            "stim_off_only": False,
+        },
+
+        # ---- confounds / honesty about the pool (§5) ----
+        "provenance": {
+            "selection_biased": True,
+            "selection_note": ("candidate pool is intuition-narrowed and non-uniform by construction "
+                               "(e.g. right 0-3 ~26 Hz over-sampled by design); cross-candidate "
+                               "ranking must treat the pool as biased"),
+            "stim_context_eras": era_counts,        # OFF/LOW/HIGH sample counts (full montage/freq/mA reconstruction is a §5 TODO)
+            "stim_era_thresholds_mA": stim_thresholds,
+            "stim_era_heterogeneity_tested": bool(hetero.get("available")),
+            "match_direction": core["match_direction"],
+        },
+
+        # ---- handoff to the Closed-Loop Simulation module (set when the labeled series is exported) ----
+        "timeseries_ref": None,
+
+        # ---- top-level verdict echo (for the sign-off card) ----
+        "verdict": verdict,
+        "schema_version": "bandcandidate_v1",
+    }
+
+    return {
+        "available": True,
+        "band_candidate": band_candidate,
+        "verdict": verdict,
         "glmer": glmer,
         "stim": hetero,
-        "verdict": verdict,
     }
 
 
