@@ -135,36 +135,82 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
     .sort((a, b) => a.t - b.t);
 
-  // 1st pass: match each scan sample to a PRO within the window (prior-direction by default), then
-  // apply the per-(channel, rating) cap with a refractory gap — faithful to the backend matcher.
-  const matched = [];   // {t, channel, source, v, dtMin, proIdx}
-  for (const e of scanIndex) {
-    const m = matchNearest(e.t, proSorted, tolSec, matchDirection);
-    matched.push({ t: e.t, channel: e.channel, source: e.source,
-                   v: m ? m.v : null, dtMin: m ? m.dtMin : null, proIdx: m ? m.idx : -1 });
-  }
-  // Per-(channel, rating) cap: keep up to maxPerRating matched PSDs closest to the rating, no two
-  // within refractoryMin of each other; the rest become unmatched.
+  // 1st pass: match each scan sample to a PRO within the window. Three branches:
+  //   pro_first  -- walk PROs (units of independence), claim up to maxPerRating closest PSDs PER
+  //                 CHANNEL each within tolerance. Maximizes PRO coverage for discovery. A PSD
+  //                 already claimed cannot be re-claimed.
+  //   nearest    -- PSD-first symmetric: each PSD matched to closest PRO either direction.
+  //   prior      -- PSD-first forecasting: PSD must precede the rating.
+  // Faithful to backend modules/Biomarkers/routines/streaming_psd.py:_match_to_pro.
+  const matched = scanIndex.map((e) => ({
+    t: e.t, channel: e.channel, source: e.source, v: null, dtMin: null, proIdx: -1,
+  }));
   let nCappedDropped = 0;
-  if (maxPerRating >= 1) {
-    const refSec = (refractoryMin || 0) * 60;
-    const groups = new Map();   // "channel|proIdx" -> [matched index]
-    matched.forEach((s, i) => {
-      if (s.v != null && Number.isFinite(s.v) && s.proIdx >= 0) {
-        const k = `${s.channel}|${s.proIdx}`;
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push(i);
+  if (matchDirection === "pro_first" && proSorted.length && tolSec > 0 && maxPerRating >= 1) {
+    // Index scan rows for searchsorted by time.
+    const idxByT = matched.map((_, i) => i).sort((a, b) => matched[a].t - matched[b].t);
+    const sortedT = idxByT.map((i) => matched[i].t);
+    const claimed = new Array(matched.length).fill(false);
+    // For each PRO in time order, find unclaimed PSDs within tol, then per channel keep K closest.
+    for (let pk = 0; pk < proSorted.length; pk++) {
+      const tPro = proSorted[pk].t;
+      const vPro = proSorted[pk].v;
+      // Binary-search the tolerance window in the time-sorted scan rows.
+      let lo = 0, hi = sortedT.length;
+      while (lo < hi) { const mi = (lo + hi) >> 1; if (sortedT[mi] < tPro - tolSec) lo = mi + 1; else hi = mi; }
+      const winLo = lo;
+      lo = 0; hi = sortedT.length;
+      while (lo < hi) { const mi = (lo + hi) >> 1; if (sortedT[mi] <= tPro + tolSec) lo = mi + 1; else hi = mi; }
+      const winHi = lo;
+      if (winHi <= winLo) continue;
+      // Bucket window candidates per channel.
+      const perCh = new Map();
+      for (let k = winLo; k < winHi; k++) {
+        const mi = idxByT[k];
+        if (claimed[mi]) continue;
+        const ch = matched[mi].channel;
+        if (!perCh.has(ch)) perCh.set(ch, []);
+        perCh.get(ch).push(mi);
       }
-    });
-    for (const idxs of groups.values()) {
-      if (idxs.length <= 1) continue;
-      idxs.sort((a, b) => Math.abs(matched[a].dtMin) - Math.abs(matched[b].dtMin));
-      const keptT = [];
-      for (const i of idxs) {
-        const drop = keptT.length >= maxPerRating
-          || (refSec > 0 && keptT.some((tk) => Math.abs(matched[i].t - tk) < refSec));
-        if (drop) { matched[i].v = null; matched[i].proIdx = -1; nCappedDropped++; }
-        else keptT.push(matched[i].t);
+      // Per channel: keep K closest to tPro; mark them matched + claimed.
+      for (const idxs of perCh.values()) {
+        idxs.sort((a, b) => Math.abs(matched[a].t - tPro) - Math.abs(matched[b].t - tPro));
+        const take = idxs.slice(0, Math.max(1, maxPerRating));
+        for (const mi of take) {
+          matched[mi].v = vPro;
+          matched[mi].dtMin = (tPro - matched[mi].t) / 60;
+          matched[mi].proIdx = pk;
+          claimed[mi] = true;
+        }
+      }
+    }
+    // pro_first enforces the cap at claim-time, so no post-hoc cap pass is needed.
+  } else {
+    // PSD-first ("nearest" or "prior") + post-hoc per-(channel, rating) cap.
+    for (const s of matched) {
+      const m = matchNearest(s.t, proSorted, tolSec, matchDirection);
+      if (m) { s.v = m.v; s.dtMin = m.dtMin; s.proIdx = m.idx; }
+    }
+    if (maxPerRating >= 1) {
+      const refSec = (refractoryMin || 0) * 60;
+      const groups = new Map();   // "channel|proIdx" -> [matched index]
+      matched.forEach((s, i) => {
+        if (s.v != null && Number.isFinite(s.v) && s.proIdx >= 0) {
+          const k = `${s.channel}|${s.proIdx}`;
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k).push(i);
+        }
+      });
+      for (const idxs of groups.values()) {
+        if (idxs.length <= 1) continue;
+        idxs.sort((a, b) => Math.abs(matched[a].dtMin) - Math.abs(matched[b].dtMin));
+        const keptT = [];
+        for (const i of idxs) {
+          const drop = keptT.length >= maxPerRating
+            || (refSec > 0 && keptT.some((tk) => Math.abs(matched[i].t - tk) < refSec));
+          if (drop) { matched[i].v = null; matched[i].proIdx = -1; nCappedDropped++; }
+          else keptT.push(matched[i].t);
+        }
       }
     }
   }
@@ -237,10 +283,27 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       refractory_min: refractoryMin,
       match_direction: matchDirection,
       n_capped_dropped: nCappedDropped,
-      survey_usage: { n_pro_total: nProTotal, n_pro_used: nProUsed,
-                      n_pro_unused: Math.max(0, nProTotal - nProUsed),
-                      n_pro_reused: nProReused,
-                      pct_pro_used: nProTotal ? Math.round((1000 * nProUsed) / nProTotal) / 10 : 0 },
+      survey_usage: (() => {
+        // PRO-first depth-of-coverage stats: per rating that got data, how many neural samples
+        // did it receive? Reported alongside coverage so the caption can show both at once.
+        const cArr = Array.from(useCounts.values());
+        cArr.sort((a, b) => a - b);
+        const meanPP = cArr.length ? cArr.reduce((s, x) => s + x, 0) / cArr.length : 0;
+        const medianPP = cArr.length
+          ? (cArr.length % 2 ? cArr[(cArr.length - 1) / 2]
+              : (cArr[cArr.length / 2 - 1] + cArr[cArr.length / 2]) / 2) : 0;
+        return {
+          n_pro_total: nProTotal, n_pro_used: nProUsed,
+          n_pro_unused: Math.max(0, nProTotal - nProUsed),
+          n_pro_reused: nProReused,
+          pct_pro_used: nProTotal ? Math.round((1000 * nProUsed) / nProTotal) / 10 : 0,
+          psd_per_pro_mean: Math.round(meanPP * 100) / 100,
+          psd_per_pro_median: Math.round(medianPP * 10) / 10,
+          psd_per_pro_max: cArr.length ? cArr[cArr.length - 1] : 0,
+        };
+      })(),
+      pct_psd_used: scanIndex.length
+        ? Math.round((1000 * matchedValues.length) / scanIndex.length) / 10 : 0,
     },
   };
 }

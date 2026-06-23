@@ -126,6 +126,11 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   // to the daily-PRO distribution.
   const matchedMode = !!(scanModel && scanModel.matchedValues && scanModel.matchedValues.length > 0);
   const counts = scanModel ? scanModel.counts : null;
+  // Match-direction-aware framing constants. PRO-first leads with pain ratings as the unit of
+  // independence; PSD-first (nearest/prior) leads with the neural-sample count. `su` is the
+  // survey-usage block carried on counts (n_pro_total, n_pro_used, pct_pro_used, depth stats).
+  const su = counts && counts.survey_usage;
+  const dir = (counts && counts.match_direction) || "pro_first";
 
   const dailyVals = useMemo(() => dayAgg.map((d) => d.mean), [dayAgg]);
   const dailyCuts = useMemo(() => computeCuts(dailyVals, strategy, percentileLow, percentileHigh),
@@ -249,12 +254,41 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       font: { size: 10.5, color: "#FFFFFF" },
       bgcolor: color, bordercolor: color, borderwidth: 1.5, borderpad: 4, opacity: 0.94,
     });
-    const lowTxt = matchedMode ? [`${(counts.n_low || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.low)]
-                               : [`${dailyStats.nLowDays.toLocaleString()} days`, `${dailyStats.nLowSamp.toLocaleString()} samples`];
-    const highTxt = matchedMode ? [`${(counts.n_high || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.high)]
-                                : [`${dailyStats.nHighDays.toLocaleString()} days`, `${dailyStats.nHighSamp.toLocaleString()} samples`];
-    const midTxt = matchedMode ? [`${(counts.n_excluded_middle || 0).toLocaleString()} samples`, srcLine(bySrc && bySrc.excluded)]
-                               : [`${dailyStats.nMidDays.toLocaleString()} days`, `${dailyStats.nMidSamp.toLocaleString()} samples`];
+    // Signpost-badge copy. In matched mode the FRAMING follows the match-direction toggle:
+    //   pro_first   -- leads with the PRO count (units of independence), then PSDs as supporting
+    //                  detail. Matches the headline caption's framing.
+    //   nearest/prior (PSD-first) -- leads with the PSD count, then PROs as supporting detail.
+    // Unmatched-mode (daily PRO distribution) still shows days + raw samples as before.
+    //
+    // PRO counts come from rating_group via the matched-sample bin → which rating it belongs to.
+    // Pre-compute unique-PRO counts per bin once on each render.
+    const proIdxByBin = (matchedMode && Array.isArray(scanModel && scanModel.samples))
+      ? (() => {
+          const sets = { low: new Set(), high: new Set(), excluded: new Set() };
+          for (const s of scanModel.samples) {
+            if (s.proIdx != null && s.proIdx >= 0 && sets[s.bin]) sets[s.bin].add(s.proIdx);
+          }
+          return { low: sets.low.size, high: sets.high.size, excluded: sets.excluded.size };
+        })()
+      : { low: 0, high: 0, excluded: 0 };
+    const proFirst = matchedMode && dir === "pro_first";
+    const psdLine = (n) => `${(n || 0).toLocaleString()} PSD${n === 1 ? "" : "s"}`;
+    const proLine = (n) => `${(n || 0).toLocaleString()} pain rating${n === 1 ? "" : "s"}`;
+    const lowTxt = matchedMode
+      ? (proFirst
+          ? [proLine(proIdxByBin.low), `${psdLine(counts.n_low)} · ${srcLine(bySrc && bySrc.low) || "—"}`]
+          : [psdLine(counts.n_low), `${proLine(proIdxByBin.low)} · ${srcLine(bySrc && bySrc.low) || "—"}`])
+      : [`${dailyStats.nLowDays.toLocaleString()} days`, `${dailyStats.nLowSamp.toLocaleString()} samples`];
+    const highTxt = matchedMode
+      ? (proFirst
+          ? [proLine(proIdxByBin.high), `${psdLine(counts.n_high)} · ${srcLine(bySrc && bySrc.high) || "—"}`]
+          : [psdLine(counts.n_high), `${proLine(proIdxByBin.high)} · ${srcLine(bySrc && bySrc.high) || "—"}`])
+      : [`${dailyStats.nHighDays.toLocaleString()} days`, `${dailyStats.nHighSamp.toLocaleString()} samples`];
+    const midTxt = matchedMode
+      ? (proFirst
+          ? [proLine(proIdxByBin.excluded), `${psdLine(counts.n_excluded_middle)} · ${srcLine(bySrc && bySrc.excluded) || "—"}`]
+          : [psdLine(counts.n_excluded_middle), `${proLine(proIdxByBin.excluded)} · ${srcLine(bySrc && bySrc.excluded) || "—"}`])
+      : [`${dailyStats.nMidDays.toLocaleString()} days`, `${dailyStats.nMidSamp.toLocaleString()} samples`];
     if (cuts.kind === "two-cut") {
       if (matchedMode) {
         // Float Low/High in the headroom band; Excluded sits higher still, above the max line.
@@ -307,9 +341,12 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey]);
 
-  // Header caption.
+  // Header caption — PRO-first by default (the discovery framing). For PSD-first modes (nearest /
+  // prior) lead with the PSD-coverage number instead, so the headline matches the toggle.
   const headerCaption = matchedMode
-    ? `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} PSDs matched at ±${matchTolerance} min`
+    ? (dir === "pro_first" && su
+        ? `${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports paired with neural data at ±${matchTolerance} min (${su.pct_pro_used}%)`
+        : `${(counts.n_matched || 0).toLocaleString()} of ${(counts.n_sessions || 0).toLocaleString()} neural samples paired with a pain report at ±${matchTolerance} min`)
     : (vals.length
         ? `${dayAgg.reduce((s, d) => s + d.nSamples, 0).toLocaleString()} PRO reports across ${vals.length.toLocaleString()} days`
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
@@ -384,52 +421,68 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         </MDBox>
       ) : null}
 
-      {/* Matched neural-sample readout — counts computed LIVE on the samples the scan pools. The
+      {/* Matched neural-sample readout — PRO-first leads the headline (units of independence),
+          PSD coverage carries the supporting numbers; in PSD-first modes the order flips. The
           pool is mostly TD-streaming (not montage PSDs), so the count is broken down by source and
           uses the modality-neutral noun "neural samples". aria-live announces updates to readers. */}
-      {matchedMode ? (
+      {matchedMode && su ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25 }}
                       aria-live="polite">
-          <b>{`${(counts.n_matched ?? 0).toLocaleString()}`}</b>
-          {` of ${(counts.n_sessions ?? 0).toLocaleString()} neural samples matched a pain report `}
-          {`(±${matchTolerance} min`}
-          {Number.isFinite(counts.median_abs_offset_min)
-            ? `, median offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
-          {") → "}
-          <span style={{ color: HI, fontWeight: 700 }}>{`${(counts.n_high ?? 0).toLocaleString()} high`}</span>
-          {" / "}
-          <span style={{ color: LO, fontWeight: 700 }}>{`${(counts.n_low ?? 0).toLocaleString()} low`}</span>
-          {counts.n_excluded_middle
-            ? <span style={{ color: MID }}>{` / ${counts.n_excluded_middle.toLocaleString()} excluded`}</span>
-            : null}
-          {(counts.n_matched_td != null && counts.n_matched_montage != null && counts.n_matched > 0)
-            ? <span style={{ color: "#777" }}>
-                {`  (${counts.n_matched_td.toLocaleString()} TD-streaming · ${counts.n_matched_montage.toLocaleString()} montage PSD · ${(counts.n_matched_event || 0).toLocaleString()} event PSD)`}
-              </span>
-            : null}
+          {dir === "pro_first" ? (
+            <>
+              <b>{`${(su.n_pro_used || 0).toLocaleString()}`}</b>
+              {` of ${(su.n_pro_total || 0).toLocaleString()} pain reports `}
+              <b>{`(${su.pct_pro_used}%)`}</b>
+              {` paired with neural data within ±${matchTolerance} min`}
+              {Number.isFinite(counts.median_abs_offset_min)
+                ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
+              {`. Each paired rating carries ${su.psd_per_pro_mean} PSDs on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
+            </>
+          ) : (
+            <>
+              <b>{`${(counts.n_matched ?? 0).toLocaleString()}`}</b>
+              {` of ${(counts.n_sessions ?? 0).toLocaleString()} neural samples `}
+              <b>{`(${counts.pct_psd_used != null ? counts.pct_psd_used + "%" : "—"})`}</b>
+              {` paired with a pain report within ±${matchTolerance} min`}
+              {Number.isFinite(counts.median_abs_offset_min)
+                ? `, median offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
+              {`. ${(su.n_pro_used || 0).toLocaleString()} of ${(su.n_pro_total || 0).toLocaleString()} pain reports (${su.pct_pro_used}%) received at least one PSD`}
+              {su.n_pro_reused ? `; ${su.n_pro_reused} received >1.` : "."}
+            </>
+          )}
           {matchDirty ? <i style={{ color: "#777" }}>{"  (live preview — recompute to score)"}</i> : null}
         </MDTypography>
       ) : null}
-      {matchedMode && counts && counts.survey_usage ? (
-        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25, display: "block" }}>
-          <b>{`${counts.survey_usage.n_pro_used}`}</b>
-          {` of ${counts.survey_usage.n_pro_total} pain surveys used `}
-          {`(${counts.survey_usage.pct_pro_used}%)`}
-          {counts.survey_usage.n_pro_reused
-            ? `; ${counts.survey_usage.n_pro_reused} assigned to >1 neural sample` : ""}
+      {matchedMode ? (
+        <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, mb: 0.25, display: "block" }}
+                      aria-live="polite">
+          {`Binarized → `}
+          <span style={{ color: HI, fontWeight: 700 }}>{`${(counts.n_high ?? 0).toLocaleString()} high pain`}</span>
+          {" / "}
+          <span style={{ color: LO, fontWeight: 700 }}>{`${(counts.n_low ?? 0).toLocaleString()} low pain`}</span>
+          {counts.n_excluded_middle
+            ? <span style={{ color: MID }}>{` / ${counts.n_excluded_middle.toLocaleString()} mid-range (excluded)`}</span>
+            : null}
+          {(counts.n_matched_td != null && counts.n_matched_montage != null && counts.n_matched > 0)
+            ? <span style={{ color: "#777" }}>
+                {`  · sources: ${counts.n_matched_td.toLocaleString()} TD streaming, ${counts.n_matched_montage.toLocaleString()} montage PSD, ${(counts.n_matched_event || 0).toLocaleString()} event PSD`}
+              </span>
+            : null}
           {counts.n_capped_dropped
-            ? ` · ${counts.n_capped_dropped} PSDs dropped by the per-rating cap` : ""}
+            ? <span style={{ color: "#777" }}>{` · ${counts.n_capped_dropped} PSDs over the per-rating cap`}</span>
+            : null}
         </MDTypography>
       ) : null}
       {matchedMode ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
-          {`Each rating is paired with up to ${(counts && counts.max_per_rating) || 3} PSD(s) per channel `
-           + ((counts && counts.match_direction === "nearest")
-              ? "closest in time (either direction), within the match window. "
-              : "recorded just BEFORE it (forecasting), within the match window. ")
-           + "Pooled sources: TD streaming (250 Hz → 30 s Welch PSD), montage/survey PSD, and "
-           + "patient-event PSD (incl. Streaming). Band-power LSB shows on the timeline but is not a "
-           + "full-spectrum PSD, so it is not pooled."}
+          {dir === "pro_first"
+            ? (`Matching is PRO-first: each pain rating claims up to ${(counts.max_per_rating || 3)} closest PSDs per channel within the match window. `
+               + `A PSD already claimed by an earlier rating is not re-claimed. This maximizes the number of independent pain ratings that contribute to discovery. `)
+            : dir === "nearest"
+            ? (`Matching is PSD-first (symmetric ±${matchTolerance} min): each PSD is paired with the closest pain rating in either time direction, then a per-(channel, rating) cap of ${(counts.max_per_rating || 3)} keeps the closest PSDs to each rating. Cross-sectional association, not forecasting. `)
+            : (`Matching is PSD-first (forecasting): each PSD is paired with the nearest pain rating RECORDED AFTER it within ±${matchTolerance} min, capped at ${(counts.max_per_rating || 3)} per channel per rating. Causal direction; preferred for closed-loop deployment, conservative for discovery. `)}
+          {"Pooled neural sources: TD streaming (250 Hz → 30 s Welch PSD), montage/survey PSD, and patient-event PSD. "}
+          {"Band-power LSB appears on the timeline but is not a full-spectrum PSD, so it is not pooled here."}
         </MDTypography>
       ) : (hasTolControl ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>

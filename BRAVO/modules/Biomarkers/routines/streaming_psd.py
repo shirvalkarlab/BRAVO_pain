@@ -705,12 +705,25 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         n_pro_reused = int((c > 1).sum())     # ratings assigned to >1 neural sample (repeat-assigned)
     else:
         n_pro_reused = 0
+    # Mean / median number of PSDs ASSIGNED PER USED PRO -- the headline depth-of-coverage stat
+    # for the PRO-first framing. If a rating has multiple channels worth of PSDs, each (channel,
+    # PSD) pair counts once (matching the rating_group emission).
+    if used_idx.size:
+        u, c = np.unique(used_idx, return_counts=True)
+        psd_per_pro_mean = float(np.mean(c)); psd_per_pro_median = float(np.median(c))
+        psd_per_pro_max = int(c.max())
+    else:
+        psd_per_pro_mean = psd_per_pro_median = 0.0; psd_per_pro_max = 0
     survey_usage = {
         "n_pro_total": n_pro_total,           # finite pain ratings available
         "n_pro_used": n_pro_used,             # ratings matched to >=1 PSD after the cap
         "n_pro_unused": int(max(0, n_pro_total - n_pro_used)),
         "n_pro_reused": n_pro_reused,         # ratings assigned to >1 neural sample
         "pct_pro_used": (round(100.0 * n_pro_used / n_pro_total, 1) if n_pro_total else 0.0),
+        # PRO-first depth stats: per rating that got data, how many neural samples did it get?
+        "psd_per_pro_mean": round(psd_per_pro_mean, 2),
+        "psd_per_pro_median": round(psd_per_pro_median, 1),
+        "psd_per_pro_max": psd_per_pro_max,
     }
 
     return {
