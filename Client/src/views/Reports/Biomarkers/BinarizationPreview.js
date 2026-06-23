@@ -231,16 +231,16 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     // Class-count badges. In matched mode the unit is matched NEURAL SAMPLES (the neural data that
     // feeds binarization); in daily mode it is calendar days + the raw reports they carry.
     //
-    // In matched mode each badge also shows the per-group MODALITY breakdown (TD streaming / montage
-    // PSD / band-power LSB). LSB is not pooled into the binarization scan (the scan index only carries
-    // "TD streaming" / "Montage/survey" sources), so it is shown as "n/a" rather than a misleading 0.
-    // The badges are floated into y-axis HEADROOM (the matched-mode yaxis range is extended below) so
-    // they sit ABOVE the tallest bar and never overlap the histogram. The Excluded badge in particular
-    // is placed above a dotted "max" reference line drawn at the tallest-bar height.
+    // In matched mode each badge also shows the per-group MODALITY breakdown across the THREE sources
+    // pooled into the scan: TD streaming, montage/survey PSD, and Patient-event PSD (the imported
+    // event markers, incl. Streaming). Band-power LSB is NOT pooled into the binarization scan, so it
+    // is intentionally absent here (not a source the scan uses) — see the caption note. The badges are
+    // floated into y-axis HEADROOM (the matched-mode yaxis range is extended below) so they sit ABOVE
+    // the tallest bar and never overlap the histogram.
     const yMax = cnt.length ? Math.max(1, ...cnt) : 1;
     const bySrc = (matchedMode && counts && counts.by_source) ? counts.by_source : null;
     const srcLine = (g) => g
-      ? `${(g.td || 0).toLocaleString()} TD · ${(g.montage || 0).toLocaleString()} PSD · LSB n/a`
+      ? `${(g.td || 0).toLocaleString()} TD · ${(g.montage || 0).toLocaleString()} montage · ${(g.event || 0).toLocaleString()} event`
       : null;
     const badge = (xRel, yRel, color, label, primary, secondary) => ({
       xref: "paper", yref: "paper", x: xRel, y: yRel, xanchor: "center", yanchor: "top",
@@ -404,10 +404,17 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : null}
           {(counts.n_matched_td != null && counts.n_matched_montage != null && counts.n_matched > 0)
             ? <span style={{ color: "#777" }}>
-                {`  (${counts.n_matched_td.toLocaleString()} TD-streaming · ${counts.n_matched_montage.toLocaleString()} montage PSD)`}
+                {`  (${counts.n_matched_td.toLocaleString()} TD-streaming · ${counts.n_matched_montage.toLocaleString()} montage PSD · ${(counts.n_matched_event || 0).toLocaleString()} event PSD)`}
               </span>
             : null}
           {matchDirty ? <i style={{ color: "#777" }}>{"  (live preview — recompute to score)"}</i> : null}
+        </MDTypography>
+      ) : null}
+      {matchedMode ? (
+        <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
+          {"Pooled PSD sources: TD streaming (250 Hz time-domain → Welch PSD), montage/survey PSD, and "
+           + "patient-event PSD (the imported event markers, incl. Streaming). Band-power LSB is shown on "
+           + "the timeline but is NOT a full-spectrum PSD, so it is not pooled into binarization."}
         </MDTypography>
       ) : (hasTolControl ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
