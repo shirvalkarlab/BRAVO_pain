@@ -653,15 +653,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
         name: "not in binarized set  (no PRO in window / band-power)" });
     } else {
-      // Glyph key listed TOP→BOTTOM in the order the layers stack within a neural lane: raw TD
-      // coverage band, then the chronic 24/7 LSB trend, then the streaming LSB session blocks, then
-      // the montage/PSD ticks at the bottom of the lane. The two LSB families share a distinct GREEN
-      // (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line, streaming
-      // = a solid block. (The lanes themselves stay colored by sensing Hz — see the right-side key.)
+      // Glyph key listed TOP→BOTTOM in the order the layers actually stack within a neural lane:
+      // montage/PSD ticks at the TOP, then the chronic 24/7 LSB trend, then the streaming LSB session
+      // blocks, then the raw TD coverage band at the BOTTOM. The two LSB families share a distinct
+      // GREEN (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line,
+      // streaming = a solid block. (The lanes themselves stay colored by sensing Hz — right-side key.)
       const LSB_GREEN = "#2CA02C";
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "square", size: 12, color: "#C9BBDF" },
-        name: "raw TD coverage  (zoom → waveform)" });
+        marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
+        name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
       traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
         line: { color: LSB_GREEN, width: 2.5, dash: "dashdot", shape: "spline" },
         name: "chronic LSB · 24/7 trend  (squiggle; lane color = sensing Hz)" });
@@ -669,8 +669,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         marker: { symbol: "square", size: 15, color: LSB_GREEN },
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-        name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
+        marker: { symbol: "square", size: 12, color: "#C9BBDF" },
+        name: "raw TD coverage  (zoom → waveform)" });
     }
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
