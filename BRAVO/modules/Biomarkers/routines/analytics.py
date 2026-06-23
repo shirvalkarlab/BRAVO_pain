@@ -1561,6 +1561,124 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     }
 
 
+def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
+    """Map per-sample times to a stim era (OFF/LOW/HIGH) via nearest-time interpolation on the
+    chronic stim trajectory. Returns an object-array of era tags aligned to `times`, or None when
+    no usable stim series is available. Shared by band_stim_stability and deployment_roc_by_era so
+    the era boundaries are identical across the stability LRT and the per-era refit."""
+    if not stim_series or not stim_series.get("t") or not stim_series.get("y"):
+        return None
+    if times is None:
+        return None
+    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce")
+    t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
+    stim_t = np.asarray(stim_series["t"], dtype=float)
+    stim_y = np.asarray(stim_series["y"], dtype=float)
+    if len(stim_t) < 2:
+        return None
+    order = np.argsort(stim_t)
+    stim_t = stim_t[order]; stim_y = stim_y[order]
+    idx = np.searchsorted(stim_t, t_epoch).clip(0, len(stim_t) - 1)
+    stim_mA = stim_y[idx]
+    era = np.where(stim_mA < off_max, "OFF", np.where(stim_mA <= low_max, "LOW", "HIGH"))
+    era = np.where(np.isfinite(t_epoch), era, None)
+    return era
+
+
+def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, band_width_hz=5.0,
+                          strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
+                          n_boot=300, off_max=0.1, low_max=1.5, seed=0):
+    """Refit the deployment ROC + cut-point WITHIN each stimulation era (OFF / LOW / HIGH).
+
+    The pooled `deployment_roc` answers "how well does this band predict pain overall?"; this answers
+    the closed-loop-critical follow-up "does the SAME threshold hold once stim is actually on?" — a
+    band whose AUC or Youden cut-point swings across eras is a fragile controller anchor even if its
+    pooled AUC looks good. Eras are assigned with the SAME nearest-time stim interpolation +
+    bucketing as band_stim_stability, so the per-era refit and the stability LRT agree on boundaries.
+
+    Returns {available, eras:{OFF:{...roc}, LOW:{...}, HIGH:{...}}, pooled:{...roc}, cutpoint_spread,
+             era_counts, thresholds_mA, note} or {available: False, reason}.
+    """
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found"}
+    bp_log, labels, rating_group, times = feat
+    era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
+    if era is None:
+        return {"available": False, "reason": "no usable stim series for era assignment"}
+
+    from sklearn import metrics
+
+    def _roc_for(mask):
+        """Compact ROC + Youden cut-point + clustered bootstrap CI over a boolean sample mask."""
+        x = bp_log[mask]; yv = labels[mask]; gv = rating_group[mask]
+        y = _binarize_labels(yv, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+        ok = np.isfinite(x) & np.isfinite(y)
+        x = x[ok].astype(float); y = y[ok].astype(int); gv = gv[ok]
+        if x.size < 12 or len(np.unique(y)) < 2:
+            return {"available": False, "reason": "too few high/low samples in this era",
+                    "n_samples": int(x.size)}
+        raw = float(metrics.roc_auc_score(y, x))
+        flip = raw < 0.5
+        use = -x if flip else x
+        auc = float(max(raw, 1.0 - raw))
+        fpr, tpr, thr = metrics.roc_curve(y, use)
+        thr_dev = (-thr if flip else thr).astype(float)
+        # Youden cut-point
+        op = None
+        if len(thr) > 1:
+            j = tpr - fpr
+            j[~np.isfinite(thr)] = -np.inf
+            k = int(np.argmax(j))
+            op = {"threshold": float(thr_dev[k]), "sensitivity": float(tpr[k]),
+                  "specificity": float(1.0 - fpr[k]), "fpr": float(fpr[k]), "tpr": float(tpr[k])}
+        # clustered bootstrap CI
+        rng = np.random.default_rng(seed)
+        uc = np.unique(gv); rows = {c: np.where(gv == c)[0] for c in uc}
+        baucs = []
+        for _b in range(int(n_boot)):
+            pick = rng.choice(uc, size=len(uc), replace=True)
+            ii = np.concatenate([rows[c] for c in pick])
+            if len(np.unique(y[ii])) < 2:
+                continue
+            try:
+                ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(max(ab, 1.0 - ab))
+            except ValueError:
+                continue
+        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
+        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
+        return {"available": True, "auc": auc, "auc_lo": lo, "auc_hi": hi,
+                "n_samples": int(x.size), "n_clusters": int(len(uc)),
+                "n_pos": int(np.sum(y == 1)), "n_neg": int(np.sum(y == 0)),
+                "operating_point": op, "flip": bool(flip),
+                "prevalence": float(np.mean(y == 1))}
+
+    eras_out = {}
+    for tag in ["OFF", "LOW", "HIGH"]:
+        eras_out[tag] = _roc_for(era == tag)
+    pooled = _roc_for(np.ones(len(bp_log), dtype=bool))
+
+    # Cut-point portability: spread of the per-era Youden thresholds that are actually estimable.
+    era_thr = [eras_out[t]["operating_point"]["threshold"] for t in ["OFF", "LOW", "HIGH"]
+               if eras_out[t].get("available") and eras_out[t].get("operating_point")]
+    cutpoint_spread = (float(np.max(era_thr) - np.min(era_thr)) if len(era_thr) >= 2 else None)
+    era_aucs = [eras_out[t]["auc"] for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available")]
+    auc_spread = (float(np.max(era_aucs) - np.min(era_aucs)) if len(era_aucs) >= 2 else None)
+
+    return {
+        "available": True,
+        "eras": eras_out, "pooled": pooled,
+        "cutpoint_spread": cutpoint_spread, "auc_spread": auc_spread,
+        "era_counts": {t: int(np.sum(era == t)) for t in ["OFF", "LOW", "HIGH"]},
+        "thresholds_mA": {"off_max": off_max, "low_max": low_max},
+        "n_eras_estimable": int(sum(1 for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available"))),
+        "note": ("Per-era refit of the deployment ROC + Youden cut-point. A band whose AUC or "
+                 "threshold swings across OFF/LOW/HIGH is a fragile controller anchor even with a "
+                 "strong pooled AUC. Eras share band_stim_stability's boundaries."),
+    }
+
+
 ADC_NV_PER_LSB = 146.0   # Percept time-domain ADC scale (nV per LSB), exact per Medtronic.
 
 
@@ -1897,18 +2015,14 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
         bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct)
-    # Sample-time -> stim_mA via nearest-time interpolation on the stim trajectory.
+    # Sample-time -> era via the SHARED nearest-time interpolation + bucketing (identical boundaries
+    # to deployment_roc_by_era so the stability LRT and the per-era refit agree).
+    era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
+    if era is None:
+        return {"available": False, "reason": "stim series too short"}
+    era = np.where(era == None, "OFF", era)  # noqa: E711 — keep alignment; NaN-time rows dropped by mask below
     t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce")
     t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
-    stim_t = np.asarray(stim_series["t"], dtype=float)
-    stim_y = np.asarray(stim_series["y"], dtype=float)
-    if len(stim_t) < 2:
-        return {"available": False, "reason": "stim series too short"}
-    order = np.argsort(stim_t); stim_t = stim_t[order]; stim_y = stim_y[order]
-    idx = np.searchsorted(stim_t, t_epoch).clip(0, len(stim_t) - 1)
-    stim_mA = stim_y[idx]
-    # Era bucketing
-    era = np.where(stim_mA < off_max, "OFF", np.where(stim_mA <= low_max, "LOW", "HIGH"))
     # Weekly cluster id
     wk = t_samples.dt.isocalendar()
     cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()

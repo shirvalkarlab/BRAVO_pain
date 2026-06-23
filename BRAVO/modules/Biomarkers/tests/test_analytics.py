@@ -759,3 +759,42 @@ def test_empirical_lsb_ratio_needs_pairs():
            "Data": __import__("numpy").ones((60, 2))}]
     res = analytics.empirical_lsb_ratio(td, pd, lambda r, c: 20.0)
     assert res["available"] is False
+
+
+def test_deployment_roc_by_era_splits_eras():
+    """deployment_roc_by_era assigns OFF/LOW/HIGH from the stim trajectory and refits the ROC per
+    era; a band present in all eras yields estimable per-era AUCs and a finite cut-point spread."""
+    import numpy as _np
+    rng = _np.random.default_rng(1)
+    E, C, F = 180, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.3, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.5 * (labels - labels.mean())[:, None])
+    # times across 90 days; stim trajectory steps OFF -> LOW -> HIGH over that window.
+    base = 1_700_000_000.0
+    t_epoch = base + _np.sort(rng.uniform(0, 90 * 86400, E))
+    times = [__import__("datetime").datetime.utcfromtimestamp(t).isoformat(sep=" ") for t in t_epoch]
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+    # stim: 0 mA for first third, 1.0 mA middle, 3.0 mA last third
+    st = _np.linspace(base, base + 90 * 86400, 9)
+    sy = _np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
+    stim_series = {"t": list(st), "y": list(sy)}
+    res = analytics.deployment_roc_by_era(det, "ZERO_TWO_LEFT", 20.0, stim_series,
+                                          band_width_hz=5.0, n_boot=120, seed=0)
+    assert res["available"], res.get("reason")
+    # all three eras populated by the trajectory
+    counts = res["era_counts"]
+    assert counts["OFF"] > 0 and counts["LOW"] > 0 and counts["HIGH"] > 0
+    # at least two eras estimable, and the pooled ROC is available
+    assert res["n_eras_estimable"] >= 2 and res["pooled"]["available"]
+    # cut-point spread is a finite number when >=2 eras have an operating point
+    if res["cutpoint_spread"] is not None:
+        assert res["cutpoint_spread"] >= 0.0
+    # each estimable era carries a clustered-bootstrap AUC in [0.5, 1]
+    for tag in ["OFF", "LOW", "HIGH"]:
+        e = res["eras"][tag]
+        if e.get("available"):
+            assert 0.5 <= e["auc"] <= 1.0

@@ -2894,6 +2894,41 @@ def band_lsb_and_power(request_data):
     }
 
 
+def band_deployment_roc_by_era(request_data):
+    """Phase D: refit the deployment ROC + cut-point WITHIN each stim era (OFF/LOW/HIGH).
+
+    Reuses _validate_band_core (same band feature + pooled detail + chronic stim trajectory as the
+    committed candidate), then runs analytics.deployment_roc_by_era. Defaults MatchDirection to
+    causal 'prior' like the pooled deployment ROC. Inputs: same as /queryDeploymentROC.
+    """
+    rd = dict(request_data)
+    if not rd.get("MatchDirection"):
+        rd["MatchDirection"] = "prior"
+    core = _validate_band_core(rd)
+    if not core.get("available"):
+        return core
+    n_boot = _int_param(rd, "NBoot", default=300, lo=50, hi=5000)
+    by_era = analytics.deployment_roc_by_era(
+        core["pooled"], core["channel"], core["center_hz"], core.get("stim_series"),
+        band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
+        low_pct=core["low_pct"], high_pct=core["high_pct"], n_boot=n_boot)
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    center_hz = core["center_hz"]; band_width_hz = core["band_width_hz"]
+    return {
+        "available": by_era.get("available", False),
+        "reason": by_era.get("reason"),
+        "channel": core["channel"], "center_hz": _ff(center_hz),
+        "band_width_hz": _ff(band_width_hz),
+        "label_metric": core["label_metric"], "match_direction": core["match_direction"],
+        "by_era": by_era,
+    }
+
+
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 

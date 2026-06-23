@@ -84,6 +84,7 @@ urlpatterns = [
     path('emitBandCandidate', DataAnalysis.EmitBandCandidate.as_view()),
     path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
     path('queryLsbPower', DataAnalysis.QueryLsbPower.as_view()),
+    path('queryDeploymentRocByEra', DataAnalysis.QueryDeploymentRocByEra.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
     path('queryDataAvailability', DataAnalysis.QueryDataAvailability.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
