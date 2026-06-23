@@ -861,3 +861,31 @@ def test_normalize_pro_times_idempotent_and_safe():
     first = once["_pro_time_utc"].copy()
     twice = bs._normalize_pro_times(once)   # must not double-localize
     assert (twice["_pro_time_utc"] == first).all(), "second normalize shifted the column"
+
+
+def test_pain_scores_emit_utc_t_epoch():
+    """pain_scores_for_participant must emit a numeric `t_epoch` (UTC seconds) on every point, equal
+    to the UTC parse of the display string. Clients match on t_epoch so a browser's Date.parse of the
+    tz-naive string (which re-reads it in local time, -7/-8 h) can't drop PROs off the PSDs -- the
+    '61/682 instead of 290/682' live-preview symptom. FIXHANDOUT_pro_timezone_mismatch."""
+    import pandas as pd
+    from modules.Biomarkers import bravo_service as bs
+    # ProcessedPRO path -> _load_pros normalizes -> pain_scores emits t_epoch. A non-DEMO
+    # ParticipantId that doesn't resolve to a real Participant falls through to the ProcessedPRO body.
+    req = {"ParticipantId": "test-uid-not-a-real-participant",
+           "ProcessedPRO": [
+        {"date_time_s1_daily": "2025-07-20 14:00:00", "nrs": 5},   # PDT 14:00 -> 21:00Z
+        {"date_time_s1_daily": "2025-12-20 14:00:00", "nrs": 7},   # PST 14:00 -> 22:00Z
+    ]}
+    out = bs.pain_scores_for_participant(req)
+    mets = out.get("metrics", [])
+    assert mets, "no metrics emitted"
+    pts = mets[0]["points"]
+    assert pts and all("t_epoch" in p for p in pts), "points missing t_epoch"
+    for p in pts:
+        e_str = pd.Timestamp(p["t"]).value / 1e9   # UTC parse of the display string
+        assert abs(p["t_epoch"] - e_str) < 1, f"t_epoch {p['t_epoch']} != UTC parse {e_str}"
+    # PDT row epoch must be 21:00Z, PST row 22:00Z (DST-correct, not the naive-as-UTC 14:00).
+    epochs = sorted(p["t_epoch"] for p in pts)
+    assert abs(epochs[0] - pd.Timestamp("2025-07-20 21:00:00").value / 1e9) < 1
+    assert abs(epochs[1] - pd.Timestamp("2025-12-20 22:00:00").value / 1e9) < 1

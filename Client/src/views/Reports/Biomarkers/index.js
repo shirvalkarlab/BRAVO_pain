@@ -219,14 +219,19 @@ function Biomarkers() {
         pts.forEach((p) => {
           if (p.v == null || !Number.isFinite(p.v)) return;
           const key = String(p.t);
-          (zByT[key] = zByT[key] || {})[slot] = (p.v - st.mu) / st.sd;
+          const e = (zByT[key] = zByT[key] || {});
+          e[slot] = (p.v - st.mu) / st.sd;
+          // Preserve the numeric epoch so the composite series matches in UTC like the raw metrics.
+          if (Number.isFinite(p.t_epoch)) e.t_epoch = p.t_epoch;
         });
       };
       add(mpq, sM, "m"); add(leg, sL, "l");
       return Object.keys(zByT).sort().map((t) => {
         const z = zByT[t];
         const parts = [z.m, z.l].filter((v) => v != null && Number.isFinite(v));
-        return parts.length ? { t, v: parts.reduce((s, v) => s + v, 0) / parts.length } : null;
+        return parts.length
+          ? { t, t_epoch: z.t_epoch, v: parts.reduce((s, v) => s + v, 0) / parts.length }
+          : null;
       }).filter(Boolean);
     }
     const m = painScores.metrics.find((x) => x.key === metric);
@@ -245,8 +250,14 @@ function Biomarkers() {
   // metric or the underlying preview points actually change.
   const painSeriesLive = useMemo(() => {
     if (!previewPoints || !previewPoints.length) return null;
+    // Use the backend's numeric `t_epoch` (UTC seconds) when present — NOT Date.parse(p.t). The
+    // backend pain timestamps are tz-naive UTC strings; Date.parse re-reads them in the BROWSER's
+    // local zone, shifting every rating 7-8 h and dropping ~3/4 of the otherwise-matchable PROs off
+    // the PSDs (the "61/682 instead of 290/682" symptom). t_epoch is zone-independent. Fall back to
+    // Date.parse only for older payloads that predate t_epoch.
+    const epochOf = (p) => (Number.isFinite(p.t_epoch) ? p.t_epoch : Date.parse(p.t) / 1000);
     const pairs = previewPoints
-      .map((p) => [Date.parse(p.t) / 1000, p.v])
+      .map((p) => [epochOf(p), p.v])
       .filter(([t, v]) => Number.isFinite(t) && v != null && Number.isFinite(v))
       .sort((a, b) => a[0] - b[0]);
     return { metric, t: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };

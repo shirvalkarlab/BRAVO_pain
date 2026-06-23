@@ -3183,9 +3183,16 @@ def pain_scores_for_participant(request_data):
         if key not in pro.columns:
             continue
         vals = pd.to_numeric(pro[key], errors="coerce")
-        pts = [{"t": str(tt), "v": _f(v)} for tt, v in zip(t, vals) if pd.notna(tt) and pd.notna(v)]
+        # Emit BOTH a display string `t` and an unambiguous numeric `t_epoch` (UTC seconds). `t` is
+        # tz-naive UTC; a browser doing `Date.parse(t)` / `new Date(t)` on a naive string re-reads it
+        # in the BROWSER's local zone, shifting the corrected instant 7-8 h and knocking PROs off the
+        # PSDs in the live match preview (the "61/682 instead of 290/682" symptom). `t_epoch` is
+        # zone-independent: `tt.value/1e9` treats the tz-naive UTC Timestamp as UTC (NOT .timestamp(),
+        # which would re-apply a local tz). Clients should match/plot on t_epoch. (FIXHANDOUT tz.)
+        pts = [{"t": str(tt), "t_epoch": _f(tt.value / 1e9), "v": _f(v)}
+               for tt, v in zip(t, vals) if pd.notna(tt) and pd.notna(v)]
         if pts:
-            pts.sort(key=lambda p: p["t"])
+            pts.sort(key=lambda p: p["t_epoch"])
             metrics.append({"key": key, "label": label, "range": rng_, "points": pts})
 
     # Pearson correlation between metrics (pairwise over aligned reports).
