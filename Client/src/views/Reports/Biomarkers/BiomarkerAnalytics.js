@@ -146,6 +146,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
           hovertext: fdrHover, hoverinfo: "text" });
       }
     });
+    // Single dedicated legend entry explaining the FDR-marker style — drawn invisibly off-axis
+    // with `visible: 'legendonly'` so it never plots data, just adds a labeled swatch to the
+    // legend. Placed at the end of `traces` so it appears as the last legend item.
+    traces.push({
+      x: [null], y: [null], type: "scattergl", mode: "markers",
+      name: "● FDR-significant (q<0.05, rating-clustered logit)",
+      marker: { size: 9, color: "#777", line: { width: 1.2, color: "#000" } },
+      showlegend: true, hoverinfo: "skip",
+    });
     // Marker for the currently-selected band (vertical guide).
     const shapes = [];
     if (adaptive && adaptive.length === 2) {
@@ -163,8 +172,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
         range: [-1.05, 1.05], zeroline: true },
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
         overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
-      legend: { orientation: "h", y: -0.20, groupclick: "togglegroup", font: { size: 13 },
-                tracegroupgap: 14 },
+      legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
+                // Disable plotly's double-click-to-reset behavior on legend entries. Without this,
+                // a double-click anywhere in the legend isolates one item (hides all others) and a
+                // second double-click restores everything — which surprises users who expect their
+                // hidden curves to STAY hidden. Single-click still toggles a group on/off. To
+                // restore everything, the user uses the modebar Reset Axes button (an explicit
+                // gesture).
+                itemdoubleclick: false,
+                font: { size: 13 }, tracegroupgap: 14 },
       shapes,
       // Plotly preserves user UI state (legend visibility, zoom, axis ranges, selections) across
       // Plotly.react calls whenever `uirevision` is unchanged. We use a constant string here so
@@ -174,27 +190,25 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
       uirevision: "biomarker-scan",
       // Legend group selection follows the same rule — explicit so a band click doesn't reset it.
       legend_uirevision: "biomarker-scan-legend",
-      annotations: [
-        ...(adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
-          yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
-          showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
-        // FDR-marker style legend — explains the black-ringed dots overlaid on the r curves.
-        // Right-justified at the top so it doesn't fight with the adaptive-band label (which is
-        // centered on the band's midpoint). Quiet styling — small, grey.
-        { x: 1.0, y: 1.02, xref: "paper", yref: "paper", xanchor: "right", yanchor: "bottom",
-          text: "●ringed dot = band survives BH-FDR (rating-clustered logistic, q<0.05)",
-          showarrow: false, font: { size: 10, color: "#555" } },
-      ],
+      annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
+        yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
+        showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
     };
-    // Fallback preservation of per-trace legend on/off state (belt-and-suspenders for the
-    // uirevision above, and for plotly.js versions that don't honor uirevision for trace
-    // visibility). Read the current visibility off the live graph div keyed by the unique trace
-    // `name`, then re-apply it to the new traces. groupclick is 'togglegroup', so a group toggle
-    // hides both that channel's r and AUC traces — capturing per-name visibility reproduces that
-    // correctly. We treat anything that's NOT explicitly `true` as a hide signal — that catches
+    // Preserve per-trace legend on/off state across renders. Two layers:
+    //  (a) layout.uirevision (set below) — Plotly's canonical mechanism; when the revision string
+    //      is unchanged, plotly preserves user UI state (legend visibility, zoom, axis ranges)
+    //      across Plotly.react calls.
+    //  (b) explicit visibility carry-over keyed by trace `name` — belt-and-suspenders for cases
+    //      where plotly's uirevision doesn't catch (older versions; trace insertions/deletions
+    //      that shift indices). We DO NOT gate on prevData.length === traces.length because the
+    //      FDR-marker overlay traces flip on per-channel based on backend output, so the count
+    //      changes between renders. Keying purely by `name` survives that: matched names get
+    //      their previous visibility; new traces get plotly's default (visible).
+    //
+    // We treat anything that's NOT explicitly `true` as a hide signal — that catches
     // "legendonly" (the value plotly sets on legend click) and any other non-true sentinel.
     const prevData = ref.current.data;
-    if (prevData && prevData.length === traces.length) {
+    if (prevData && prevData.length) {
       const visByName = {};
       prevData.forEach((t) => { if (t && t.name != null) visByName[t.name] = t.visible; });
       traces.forEach((t) => {
@@ -250,10 +264,16 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
         .map((g) => {
           const ys = sc.x.filter((_, i) => gArr[i] === g);
           if (!ys.length) return null;
+          // Darker shade of the group color for the jittered dots so they pop against the fill
+          // (which is the same hue at low opacity). White outline draws the eye to individual
+          // observations without competing with the violin silhouette.
+          const dotColor = { low: "#053D6E", high: "#7A2C00", mid: "#3C3F45" }[g] || GRP[g];
           return {
             type: "violin", y: ys, x: ys.map(() => glabel[g]), name: glabel[g],
             legendgroup: g, scalemode: "width", width: 0.85, spanmode: "soft",
-            points: "all", jitter: 0.35, pointpos: 0, marker: { color: GRP[g], size: 5, opacity: 0.6 },
+            points: "all", jitter: 0.5, pointpos: 0,
+            marker: { color: dotColor, size: 6, opacity: 0.85,
+                      line: { color: "#fff", width: 0.8 } },
             line: { color: GRP[g], width: 1.4 }, fillcolor: GRP[g], opacity: g === "mid" ? 0.28 : 0.42,
             box: { visible: true, width: 0.18 }, meanline: { visible: false },
             hovertemplate: `${glabel[g]}<br>std log power=%{y:.2f}<extra></extra>` };
