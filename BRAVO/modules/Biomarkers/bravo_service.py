@@ -429,6 +429,30 @@ _MAIN_BIPOLAR = {
     "ZERO_TWO_LEFT", "ZERO_TWO_RIGHT",
 }
 
+# Bump when the channel-canonicalization rule below changes — folded into the PSD-matrix cache
+# signature so a rule change forces a re-Welch instead of serving the stale pre-fix matrix.
+_CHANNEL_CANON_VERSION = "v2_ring_aware"
+
+
+def _canon_channel(name):
+    """Normalize a Medtronic channel name to the canonical bipolar form used by `_MAIN_BIPOLAR`.
+
+    The same physical bipolar pair is spelled differently across products:
+      * TD streaming / Stim+Baseline montages:  `ZERO_THREE_LEFT`         (already canonical)
+      * BrainSense Survey / montage sweeps:      `ZERO_AND_THREE_LEFT_RING`
+
+    Before this normalizer the per-channel scan tested membership with an EXACT string match, so the
+    Survey product's ring-named channels never matched and its 202 recordings contributed ZERO rows
+    to the pool (the pool only looked healthy because Stim/Baseline montages re-export three of the
+    same pairs under the short spelling). Stripping `_AND_` and the `_RING` suffix maps the ring
+    names onto the canonical pairs (`ZERO_AND_THREE_LEFT_RING` -> `ZERO_THREE_LEFT`); already-short
+    names are unchanged (idempotent). Returns the canonical upper-case name.
+    """
+    u = str(name).upper().replace("_AND_", "_")
+    if u.endswith("_RING"):
+        u = u[:-len("_RING")]
+    return u
+
 # Single-worker pool that warms the PSD-matrix cache off the request thread (eager compute while the
 # user reviews the availability timeline). Daemon threads so it never blocks process shutdown.
 _PSD_WARM_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="psd-warm")
@@ -474,7 +498,9 @@ def _welch_rows_into(rows, recs, source_label, _sp):
         if not isinstance(r, dict):
             continue
         names = list(r.get("ChannelNames") or [])
-        keep = [(i, n) for i, n in enumerate(names) if str(n).upper() in _MAIN_BIPOLAR]
+        # Test membership on the CANONICAL form so ring-named survey channels are kept, but carry the
+        # RAW name forward (Welch selects channels by raw name from the signal below).
+        keep = [(i, n) for i, n in enumerate(names) if _canon_channel(n) in _MAIN_BIPOLAR]
         if not keep:
             continue
         data = np.asarray(r.get("Data"))
@@ -497,7 +523,9 @@ def _welch_rows_into(rows, recs, source_label, _sp):
         nsamp = int(sig.shape[-1])
         used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
         for j, n in enumerate(keep_names):
-            rows.append({"channel": str(n).upper(), "source": source_label,
+            # Store the CANONICAL channel so ring-named survey rows pool with the short-named TD/Stim
+            # rows for the same physical bipolar pair (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT).
+            rows.append({"channel": _canon_channel(n), "source": source_label,
                          "t": float(t0), "freq": _sp.F_SET, "power": psd[0, j, :],
                          "dur": used_dur})
 
@@ -522,14 +550,14 @@ def _psd_sample_index(td_list, psd_list):
             if not isinstance(r, dict):
                 continue
             names = list(r.get("ChannelNames") or [])
-            keep = [n for n in names if str(n).upper() in _MAIN_BIPOLAR]
+            keep = [n for n in names if _canon_channel(n) in _MAIN_BIPOLAR]
             if not keep:
                 continue
             t0 = availability._to_epoch(r.get("StartTime"))
             if t0 is None:
                 continue
             for n in keep:
-                out.append({"t": float(t0), "channel": str(n).upper(), "source": source_label})
+                out.append({"t": float(t0), "channel": _canon_channel(n), "source": source_label})
 
     _index(td_list, "TD streaming")
     _index(psd_list, "Montage/survey")
@@ -570,7 +598,9 @@ def _recording_psd_cache_path(rec_uid, rec_hash):
     from .routines import streaming_psd as _sp
     h = (str(rec_hash or "") or "nohash")[:16]
     w = str(_sp.WELCH_MAX_SECONDS).replace(".", "p")
-    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}_w{w}.npz")
+    # Channel-canon rule is in the key too: a Survey recording previously cached with ZERO kept rows
+    # (ring names dropped) must miss and re-Welch under the ring-aware rule instead of serving empty.
+    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}.npz")
 
 
 def _save_recording_psd_rows(path, rows):
@@ -744,6 +774,9 @@ def _psd_matrix_signature_orm(participant_uid):
     # so fold it into the signature: changing WELCH_MAX_SECONDS invalidates the cache and forces a
     # re-Welch. Without this, a window change would silently serve stale spectra from the old cache.
     parts.append(f"welch_s:{_sp.WELCH_MAX_SECONDS}")
+    # Channel-canonicalization rule is part of the matrix CONTENT (it decides which channels enter
+    # and under what canonical name), so a rule change must invalidate the cache and force a re-Welch.
+    parts.append(f"chan_canon:{_CHANNEL_CANON_VERSION}")
     # Patient-event PSDs also feed the pool, so their recordings must invalidate the matrix cache
     # too — otherwise a newly-ingested file that adds event markers would be silently missed. Hash
     # the event recordings' (uid, hash) the same way; no decode (the PSDs live on the row metadata).
