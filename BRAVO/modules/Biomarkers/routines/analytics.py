@@ -1255,9 +1255,41 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 scat.append(None); continue
             if idx.size > max_scatter:
                 idx = idx[np.linspace(0, idx.size - 1, max_scatter).astype(int)]
+            # Per-sample binarization group from the SAME high/low/excluded split the AUC uses
+            # (y_bin: 1.0=high, 0.0=low, NaN=excluded middle), so the click panel's violin can
+            # color points by pain group without recomputing the cut client-side.
+            def _grp(i):
+                v = y_bin[i]
+                if v == 1.0:
+                    return "high"
+                if v == 0.0:
+                    return "low"
+                return "mid"
+            gs = [_grp(i) for i in idx]
+            xs = np.array([bp_log[i] for i in idx], dtype=float)
+            ga = np.array(gs)
+            # Effect size of the low-vs-high band-power separation (the click panel's headline):
+            #   * cohens_d  — pooled-SD standardized mean difference (high minus low). Positive => the
+            #     band is higher in high-pain samples. |d|: 0.2 small / 0.5 medium / 0.8 large.
+            #   * median_delta — median(high) - median(low). x is ALREADY standardized log band power
+            #     (z within channel/source), so this is expressed directly in standard-deviation units.
+            x_lo, x_hi = xs[ga == "low"], xs[ga == "high"]
+            cohens_d = median_delta = None
+            if x_lo.size >= 2 and x_hi.size >= 2:
+                s_lo, s_hi = np.nanstd(x_lo, ddof=1), np.nanstd(x_hi, ddof=1)
+                n_lo, n_hi = x_lo.size, x_hi.size
+                sp2 = ((n_lo - 1) * s_lo ** 2 + (n_hi - 1) * s_hi ** 2) / max(n_lo + n_hi - 2, 1)
+                if sp2 > 0:
+                    cohens_d = _f(float((np.nanmean(x_hi) - np.nanmean(x_lo)) / np.sqrt(sp2)))
+                median_delta = _f(float(np.nanmedian(x_hi) - np.nanmedian(x_lo)))
             scat.append({
                 "x": [_f(bp_log[i]) for i in idx],          # log band power
                 "y": [_f(labels[i]) for i in idx],          # continuous PRO
+                "g": gs,                                    # pain group: high | low | mid (excluded)
+                "cohens_d": cohens_d,                       # standardized mean diff, high - low
+                "median_delta": median_delta,               # median(high) - median(low), in SD units
+                "n_grp": {"high": int((ga == "high").sum()), "low": int((ga == "low").sum()),
+                          "mid": int((ga == "mid").sum())},
                 "dates": ([str(times[i]) for i in idx] if times is not None else None),
             })
         ch["scatter"] = scat

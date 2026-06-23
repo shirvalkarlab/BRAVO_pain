@@ -188,9 +188,48 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
     const pBand = ch.p && ch.p[sel.bi];       // rating-clustered logistic Wald p (AUC's inference twin)
     if (sc && sc.x && sc.x.length) {
       const color = hemiOf(ch) === "Right" ? HI : LO;
-      const traces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
-        marker: { color, size: 6, opacity: 0.7 }, text: sc.dates || [],
+      // Fixed pain-group identity colors (DESIGN §8d/§8e idiom): high = vermillion, low = blue,
+      // excluded-middle = grey. Shared by the scatter point colors and the violin fills.
+      const GRP = { high: "#D55E00", low: "#0072B2", mid: "#9AA0A6" };
+      const gArr = sc.g || [];
+      const ptColors = gArr.length ? gArr.map((g) => GRP[g] || color) : color;
+
+      // LEFT — band power vs continuous PRO, points colored by pain group (keeps the original view).
+      const scTraces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
+        marker: { color: ptColors, size: 6, opacity: 0.72 }, text: sc.dates || [],
         hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
+
+      // RIGHT — violin of THIS band's power split by pain group, with jittered raw points + box +
+      // median, so you SEE how low vs high segregate (the comparison the scatter only implies).
+      // One violin trace per group; excluded-middle drawn last in grey so it never dominates.
+      const order = ["low", "high", "mid"];
+      const glabel = { low: "Low pain", high: "High pain", mid: "Excluded (middle)" };
+      const vioTraces = order
+        .map((g) => {
+          const ys = sc.x.filter((_, i) => gArr[i] === g);
+          if (!ys.length) return null;
+          return {
+            type: "violin", y: ys, x: ys.map(() => glabel[g]), name: glabel[g],
+            legendgroup: g, scalemode: "width", width: 0.85, spanmode: "soft",
+            points: "all", jitter: 0.35, pointpos: 0, marker: { color: GRP[g], size: 5, opacity: 0.6 },
+            line: { color: GRP[g], width: 1.4 }, fillcolor: GRP[g], opacity: g === "mid" ? 0.28 : 0.42,
+            box: { visible: true, width: 0.18 }, meanline: { visible: false },
+            hovertemplate: `${glabel[g]}<br>std log power=%{y:.2f}<extra></extra>` };
+        })
+        .filter(Boolean);
+
+      // Effect-size annotation (computed server-side on this band's matched samples): Cohen's d
+      // (pooled-SD standardized mean diff, high−low), median delta in SD units, and the
+      // rating-clustered logistic p already in the payload. The headline of the right panel.
+      const cd = sc.cohens_d, md = sc.median_delta;
+      const nlo = (sc.n_grp && sc.n_grp.low) || 0, nhi = (sc.n_grp && sc.n_grp.high) || 0;
+      const nmid = (sc.n_grp && sc.n_grp.mid) || 0;
+      const dMag = cd == null ? "" : (Math.abs(cd) >= 0.8 ? " (large)"
+        : Math.abs(cd) >= 0.5 ? " (medium)" : Math.abs(cd) >= 0.2 ? " (small)" : " (negligible)");
+      const effLine = `Low vs high band power:  Cohen's d = ${cd != null ? cd.toFixed(2) : "—"}${dMag}`
+        + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
+        + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
+
       scatterNode = (
         <MDBox mt={1}>
           <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 14 }}>
@@ -202,9 +241,28 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
                 : `(n=${n || 0} high+low)`)
              + `, ${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p=${fmtP(pBand)}`}
           </MDTypography>
-          <Fig height={300} traces={traces} layout={{
-            xaxis: { title: `Standardized log band power @ ${center.toFixed(1)} Hz` },
-            yaxis: { title: pain }, showlegend: false }} />
+          <Grid container spacing={2} mt={0}>
+            <Grid item xs={12} lg={6}>
+              <Fig height={300} traces={scTraces} layout={{
+                xaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                yaxis: { title: pain }, showlegend: false }} />
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <Fig height={300} traces={vioTraces} layout={{
+                xaxis: { title: "" },
+                yaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                showlegend: false, violingap: 0.25, violinmode: "group" }} />
+              <MDTypography variant="caption" display="block" mt={0.5}
+                sx={{ color: "#344767", fontWeight: "bold", fontSize: 12.5 }}>
+                {effLine}
+              </MDTypography>
+              <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
+                {`Groups: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
+                 + "Power is z-scored within channel/source, so Δ is in SD units; "
+                 + "d>0 means the band is higher when pain is high."}
+              </MDTypography>
+            </Grid>
+          </Grid>
         </MDBox>
       );
     } else {
