@@ -10,7 +10,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress, CircularProgress } from "@mui/material";
+  Slider, LinearProgress, CircularProgress,
+  ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -78,6 +79,9 @@ function Biomarkers() {
   // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
   const [maxPerRating, setMaxPerRating] = useState(3);
   const [refractoryMin, setRefractoryMin] = useState(2);
+  // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
+  // tolerance; pairs the closest PSD in either time direction). Default "prior".
+  const [matchDirection, setMatchDirection] = useState("prior");
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -112,7 +116,7 @@ function Biomarkers() {
     MatchToleranceMin: matchTolerance,
     MaxPerRating: maxPerRating,
     RefractoryMin: refractoryMin,
-    MatchDirection: "prior",
+    MatchDirection: matchDirection,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
@@ -251,10 +255,10 @@ function Biomarkers() {
     return computeMatchedScanModel({
       scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance,
       strategy, percentileLow, percentileHigh,
-      maxPerRating, refractoryMin, matchDirection: "prior",
+      maxPerRating, refractoryMin, matchDirection,
     });
   }, [scanIndex, painSeriesLive, matchTolerance, strategy, percentileLow, percentileHigh,
-      maxPerRating, refractoryMin]);
+      maxPerRating, refractoryMin, matchDirection]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -504,6 +508,28 @@ function Biomarkers() {
                                       : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
 
+                              {/* Match direction: forecasting (PSD before rating) vs nearest (symmetric). */}
+                              <MDBox mt={1.5}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  Match direction
+                                </MDTypography>
+                                <ToggleButtonGroup
+                                  value={matchDirection} exclusive size="small"
+                                  onChange={(e, v) => { if (v) setMatchDirection(v); }}
+                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
+                                >
+                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
+                                  <ToggleButton value="nearest">Nearest (±)</ToggleButton>
+                                </ToggleButtonGroup>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {matchDirection === "prior"
+                                    ? "Each rating is paired only with PSDs recorded BEFORE it (causal/forecasting direction)."
+                                    : "Each rating is paired with the closest PSD in EITHER time direction (symmetric ± window). Use for cross-sectional association, not forecasting."}
+                                </MDTypography>
+                              </MDBox>
+
                               {/* Per-rating CAP (replaces the old all / one-per-rating toggle). */}
                               <MDBox mt={1.5}>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
@@ -530,7 +556,9 @@ function Biomarkers() {
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
                                   {`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
-                                   + "the ones recorded closest in time BEFORE the rating (forecasting direction)"
+                                   + (matchDirection === "prior"
+                                      ? "the ones recorded closest in time BEFORE the rating (forecasting direction)"
+                                      : "the ones closest in time to the rating (either direction)")
                                    + (maxPerRating > 1
                                       ? `, and no two kept PSDs within ${refractoryMin} min of each other, so a streaming burst around one survey can't dominate. `
                                       : " — i.e. one independent sample per rating. ")

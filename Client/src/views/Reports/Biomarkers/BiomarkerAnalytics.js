@@ -232,8 +232,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
             <MDTypography variant="caption" display="block" mb={0.5}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
               {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
-               + `${scan.max_per_rating > 1 ? "s" : ""} per channel recorded just BEFORE it `
-               + `(forecasting), within the match window`
+               + `${scan.max_per_rating > 1 ? "s" : ""} per channel `
+               + (scan.match_direction === "nearest"
+                  ? "closest in time (either direction), within the match window"
+                  : "recorded just BEFORE it (forecasting), within the match window")
                + (scan.max_per_rating > 1 && scan.refractory_min
                   ? `, no two closer than ${scan.refractory_min} min` : "")
                + (scan.n_capped_dropped ? ` — ${scan.n_capped_dropped} extra PSDs dropped by the cap.` : ".")

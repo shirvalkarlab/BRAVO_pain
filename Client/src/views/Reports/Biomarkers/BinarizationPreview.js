@@ -424,9 +424,12 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       {matchedMode ? (
         <MDTypography variant="caption" color="text" sx={{ fontSize: 11, fontStyle: "italic", mb: 0.25, display: "block" }}>
           {`Each rating is paired with up to ${(counts && counts.max_per_rating) || 3} PSD(s) per channel `
-           + "recorded just BEFORE it (forecasting), within the match window. Pooled sources: TD streaming "
-           + "(250 Hz → 30 s Welch PSD), montage/survey PSD, and patient-event PSD (incl. Streaming). "
-           + "Band-power LSB shows on the timeline but is not a full-spectrum PSD, so it is not pooled."}
+           + ((counts && counts.match_direction === "nearest")
+              ? "closest in time (either direction), within the match window. "
+              : "recorded just BEFORE it (forecasting), within the match window. ")
+           + "Pooled sources: TD streaming (250 Hz → 30 s Welch PSD), montage/survey PSD, and "
+           + "patient-event PSD (incl. Streaming). Band-power LSB shows on the timeline but is not a "
+           + "full-spectrum PSD, so it is not pooled."}
         </MDTypography>
       ) : (hasTolControl ? (
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
