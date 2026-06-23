@@ -906,7 +906,7 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
 
 # --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
 def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                     pain_cutoff=None):
+                     pain_cutoff=None, finite_mask=None):
     """Binary 0/1 label (NaN for the excluded middle) from a 1-D continuous PRO array.
 
     Mirrors adapter._threshold_pain_level but operates on a flat array (one value per matched
@@ -916,10 +916,17 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
       * "median": >= median -> 1 else 0
       * "cutoff": >= pain_cutoff (default = median) -> 1 else 0
       * "kmeans": 2-cluster split on the 1-D values (>= cluster midpoint -> 1)
+
+    `finite_mask` (optional bool array, same shape) restricts BOTH the cut reference and the output
+    to a subset of rows — used by the glmer/stim-stability click-validate path to binarize on a
+    single channel's own labels (PARITY audit §6b), reproducing the offline per-channel cut. Rows
+    outside the mask stay NaN. When None, the cut is global over all finite values (scan behaviour).
     """
     v = np.asarray(values, dtype=float)
     out = np.full(v.shape, np.nan)
     fin = np.isfinite(v)
+    if finite_mask is not None:
+        fin = fin & np.asarray(finite_mask, dtype=bool)
     ref = v[fin]
     if ref.size == 0:
         return out
@@ -1561,6 +1568,27 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     }
 
 
+def _elapsed_week_cluster(times, n):
+    """Integer elapsed-week index from the first sample, as the offline validation (phase2) derives
+    its random-intercept cluster: ((t_epoch - t0) / (7*86400)).astype(int). PARITY audit §6a — the
+    live path previously used the ISO-calendar-week STRING, which splits elapsed-week buckets across
+    Monday boundaries and gives a different random-effect structure (hence different SE/p/OR-CI).
+
+    Returns an int array length n. Unparseable-time rows get cluster -1 (they are dropped by the
+    finite-time mask in the caller). Times parsed with explicit ISO8601 (mixed microsecond forms).
+    """
+    if times is None or len(times) != n:
+        return np.zeros(n, dtype=int)
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    te = (t_dt.view("int64").to_numpy() / 1e9)
+    nat = t_dt.isna().to_numpy()
+    if (~nat).sum() == 0:
+        return np.zeros(n, dtype=int)
+    t0 = np.nanmin(np.where(nat, np.nan, te))
+    wk = np.where(nat, -1, ((te - t0) / (7.0 * 86400.0)))
+    return np.where(nat, -1, wk.astype(int)).astype(int)
+
+
 def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
     """Map per-sample times to a stim era (OFF/LOW/HIGH) by carrying the stim trajectory forward
     (LOCF) onto each sample. Returns an object-array of era tags aligned to `times`, or None when
@@ -1908,21 +1936,25 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     with np.errstate(invalid="ignore", divide="ignore"):
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
         bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    # PARITY (audit §6b): binarize on THIS CHANNEL's own labels, not the global pooled cut. The
+    # offline validated set (phase2) cuts the tertile on labels restricted to the rows where this
+    # channel's band power is finite; a global cut flips borderline samples high/low between the two
+    # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
+    chan_finite = np.isfinite(bp_log)
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                         pain_cutoff=pain_cutoff)
-    # Cluster id: group sessions into temporal eras (weekly) when dates are present; else a single
-    # cluster (the random effect then collapses but the model still fits).
-    if times is not None and len(times) == len(bp_log):
-        # ISO8601 format (mixed microsecond/non-microsecond strings; naive inference NaT's ~83%).
-        wk = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601").dt.isocalendar()
-        cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
-    else:
-        cl = np.array(["all"] * len(bp_log))
+                         pain_cutoff=pain_cutoff, finite_mask=chan_finite)
+    # PARITY (audit §6a): cluster = integer ELAPSED-week index from the first sample (phase2),
+    # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
+    # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
+    cl = _elapsed_week_cluster(times, len(bp_log))
     m = np.isfinite(bp_log) & np.isfinite(y)
     if m.sum() < 12 or len(np.unique(y[m])) < 2:
         return {"available": False, "reason": "too few matched samples for a mixed model"}
+    # PARITY (audit §6 minor): z-score with ddof=1 (phase2), matching the offline sample SD.
+    _bpm = bp_log[m]
+    _sd = np.nanstd(_bpm, ddof=1)
     df = pd.DataFrame({"pain_high": y[m].astype(int),
-                       "band_power": (bp_log[m] - np.nanmean(bp_log[m])) / (np.nanstd(bp_log[m]) or 1.0),
+                       "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),
                        "cluster": cl[m]})
     n_clusters = int(df["cluster"].nunique())
     formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
@@ -1948,8 +1980,9 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         or_lo = _ci_or("2.5_ci"); or_hi = _ci_or("97.5_ci")
         # Complete/quasi-complete separation: the predictor (z-scored) drives an implausibly large
         # coefficient and the SE/p-value explode (Hessian singular). Report it as unreliable rather
-        # than a spurious OR ~ 1e90. |coef| > 10 on a z-scored feature => OR > ~22000, not credible.
-        if not np.isfinite(est) or abs(est) > 10.0:
+        # than a spurious OR ~ 1e90. PARITY (audit §6 minor): phase2 flags |beta| > 50 — use the
+        # same threshold so a band the validated set kept isn't dropped here as "separated".
+        if not np.isfinite(est) or abs(est) > 50.0:
             return {
                 "available": True, "model": "glmer logistic (lme4 via pymer4)",
                 "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
@@ -2031,30 +2064,30 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     with np.errstate(invalid="ignore", divide="ignore"):
         sub = np.nanmean(psd[:, ci, bmask], axis=1)
         bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
-    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct)
+    # PARITY (audit §6b): per-channel binarization (cut on this channel's own labels), matching the
+    # offline phase2b stim-stability LRT. Shares the same basis as band_mixedmodel_inference.
+    chan_finite = np.isfinite(bp_log)
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                         finite_mask=chan_finite)
     # Sample-time -> era via the SHARED nearest-time interpolation + bucketing (identical boundaries
     # to deployment_roc_by_era so the stability LRT and the per-era refit agree).
     era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
     if era is None:
         return {"available": False, "reason": "stim series too short"}
     era_none = np.array([e is None for e in era])
-    # Parse with explicit ISO8601 (the sample-time strings mix microsecond / non-microsecond forms;
-    # naive inference NaT's the non-matching ~83% — see _assign_stim_eras). This array drives BOTH
-    # the LRT row mask and the weekly cluster id, so a naive parse here would silently drop those
-    # rows from the interaction test even though _assign_stim_eras assigned their era correctly.
-    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
-    t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
-    t_epoch = np.where(t_samples.isna().to_numpy(), np.nan, t_epoch)
-    # Weekly cluster id
-    wk = t_samples.dt.isocalendar()
-    cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
+    # PARITY (audit §6a): random-intercept cluster = integer ELAPSED-week index (phase2b), not the
+    # ISO-calendar-week string. -1 marks unparseable-time rows (dropped by the mask below).
+    cl = _elapsed_week_cluster(times, len(bp_log))
+    t_finite = cl >= 0
     # Drop unparseable-time / no-era rows from the LRT (do NOT relabel them OFF).
-    m = np.isfinite(bp_log) & np.isfinite(y) & np.isfinite(t_epoch) & (~era_none)
+    m = np.isfinite(bp_log) & np.isfinite(y) & t_finite & (~era_none)
     if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
         return {"available": False, "reason": "too few samples / eras for an interaction test"}
+    # PARITY (audit §6 minor): ddof=1 z-score (phase2b).
+    _bpm = bp_log[m]; _sd = np.nanstd(_bpm, ddof=1)
     df = pd.DataFrame({
         "pain_high": y[m].astype(int),
-        "band_power": (bp_log[m] - np.nanmean(bp_log[m])) / (np.nanstd(bp_log[m]) or 1.0),
+        "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),
         "stim_era": pd.Categorical(era[m], categories=["OFF", "LOW", "HIGH"]),
         "cluster": cl[m],
     })
@@ -2062,14 +2095,21 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     re_term = "+ (1|cluster)" if n_clusters > 1 else ""
     formula_red = f"pain_high ~ band_power + stim_era {re_term}"
     formula_full = f"pain_high ~ band_power * stim_era {re_term}"
+    n_eras_present = int(df["stim_era"].cat.remove_unused_categories().nunique())
     try:
         m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
         m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
-        # LRT via R's anova(); pull Chisq + p from the last row.
-        ro.globalenv["m0"] = m0.model_obj; ro.globalenv["m1"] = m1.model_obj
-        anv = ro.r("as.data.frame(anova(m0, m1, test='Chisq'))")
-        chisq = float(anv.rx2("Chisq")[-1])
-        p_lrt = float(anv.rx2("Pr(>Chisq)")[-1])
+        # PARITY (audit §6): compute the LRT exactly as offline phase2b — chi2 = 2*(ll_full -
+        # ll_reduced), p from chi2 with df = number of interaction terms added = (n_eras - 1). The
+        # previous live path used R's anova(m0, m1), whose df accounting for the lme4 nested fit
+        # differed (df=1 vs the 2 interaction terms a 3-era model adds), shifting borderline p's
+        # across 0.05 (e.g. vas@61.5 ZERO_TWO_LEFT: anova p=0.048 -> dependent, but the validated
+        # report's 2-df LRT p=0.127 -> stable).
+        ll0 = float(m0.logLike); ll1 = float(m1.logLike)
+        chisq = 2.0 * (ll1 - ll0)
+        from scipy.stats import chi2 as _chi2dist
+        dof = max(n_eras_present - 1, 1)
+        p_lrt = float(1.0 - _chi2dist.cdf(chisq, df=dof))
     except Exception as e:
         return {"available": False, "reason": f"LRT failed: {e}"}
     # Per-era ORs via simple per-era GLM (no random intercept — each era is one block already).
