@@ -503,6 +503,58 @@ def test_spectral_scan_emits_fdr_qs_and_summary():
         f"rigorous FDR > naive FDR violates the pseudoreplication-contrast direction: {fs}"
 
 
+def test_band_mixedmodel_inference_emits_or_ci():
+    """The click-triggered glmer fit must expose OR + 95% CI bounds so the frontend can render the
+    confidence interval next to the odds ratio. The fit itself depends on pymer4/R availability;
+    when the backend isn't installed, we accept the available=False degradation but still verify
+    the schema contract (no KeyError on or_lo/or_hi access)."""
+    det = _planted_detail(center=20.0, beta=1.0, E=120, seed=3)
+    out = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    # Schema: regardless of success, the keys we wired must exist or the call returns
+    # available=False with a reason.
+    if not out.get("available"):
+        assert "reason" in out, out
+        return
+    # Successful fit: OR present; CI may be None on older pymer4 (we degrade gracefully).
+    assert "odds_ratio" in out and "or_lo" in out and "or_hi" in out, list(out)
+    if out["odds_ratio"] is not None and out["or_lo"] is not None and out["or_hi"] is not None:
+        assert out["or_lo"] <= out["odds_ratio"] <= out["or_hi"], \
+            f"OR {out['odds_ratio']} not bracketed by [{out['or_lo']}, {out['or_hi']}]"
+    # Guards documented in the function: separation/singular flags carried explicitly.
+    assert "separation" in out and "singular" in out, list(out)
+
+
+def test_band_stim_stability_shape_and_no_stim_degrades():
+    """band_stim_stability returns the LRT schema we wire to the click panel, and degrades cleanly
+    when stim data is absent (which is the common case for participants without chronic stim)."""
+    det = _planted_detail(center=20.0, beta=0.8, E=80, seed=4)
+    # No stim series provided -> must degrade with a reason, not crash.
+    out_no_stim = analytics.band_stim_stability(det, "ZERO_TWO_LEFT", 20.0, stim_series=None)
+    assert out_no_stim.get("available") is False, out_no_stim
+    assert "reason" in out_no_stim, out_no_stim
+
+    # With a synthetic stim series spanning all 3 eras, schema is populated (or degrades to a
+    # documented reason if pymer4/R isn't installed -- same contract as the glmer test).
+    rng = np.random.default_rng(0)
+    # Stim trajectory: 3 distinct levels over the sample span, one per era
+    n = det["psd"].shape[0]
+    sample_times_iso = det["times"]
+    epoch_s = pd.to_datetime(pd.Series(sample_times_iso)).view("int64").to_numpy() / 1e9
+    # Build a stim trajectory at the same epochs with three plateaus: OFF / LOW / HIGH
+    third = n // 3
+    stim_mA = np.r_[np.zeros(third), 0.7 * np.ones(third), 2.5 * np.ones(n - 2 * third)]
+    out = analytics.band_stim_stability(det, "ZERO_TWO_LEFT", 20.0,
+                                        stim_series={"t": list(epoch_s), "y": list(stim_mA)})
+    if not out.get("available"):
+        assert "reason" in out, out
+        return
+    # Schema contract
+    for k in ("chisq", "lrt_p", "stim_stable", "or_by_era", "era_counts", "thresholds_mA"):
+        assert k in out, list(out)
+    assert set(out["or_by_era"].keys()) == {"OFF", "LOW", "HIGH"}, out["or_by_era"]
+    assert set(out["era_counts"].keys()) == {"OFF", "LOW", "HIGH"}, out["era_counts"]
+
+
 def test_spectral_scan_fdr_zero_signal_returns_no_significant_bands():
     """Null fixture: no planted coupling. The rigor pass MUST return zero (or vanishingly few)
     FDR-significant bands — a real false-positive control on the BH pipeline."""
@@ -587,5 +639,7 @@ if __name__ == "__main__":
     test_spectral_scan_prelog_matches_linear()
     test_spectral_scan_emits_fdr_qs_and_summary()
     test_spectral_scan_fdr_zero_signal_returns_no_significant_bands()
+    test_band_stim_stability_shape_and_no_stim_degrades()
+    test_band_mixedmodel_inference_emits_or_ci()
     test_pooled_psd_detail_is_per_channel_and_matches_pro()
     print("All analytics tests passed.")

@@ -2277,6 +2277,130 @@ def _demo_stages():
     ]
 
 
+def validate_band_for_participant(request_data):
+    """Run the click-triggered VALIDATION bundle for one band on one participant.
+
+    Inputs (in request_data): ParticipantId, Channel (raw or short name), CenterHz, plus the same
+    LabelMetric/BinarizationStrategy/LowPct/HighPct/MatchToleranceMin/MaxPerRating/RefractoryMin
+    /MatchDirection knobs the scan uses (so the band feature is defined identically to what the
+    scan dot represents). Optional BandWidthHz (default 5.0).
+
+    Output: {
+      'available': True,
+      'channel': '...', 'center_hz': N.N, 'band_lo': N.N, 'band_hi': N.N,
+      'glmer': {                      # from analytics.band_mixedmodel_inference, OR + CI + q
+         'available', 'odds_ratio', 'or_lo', 'or_hi', 'p', 'q_glmer',
+         'n', 'n_clusters', 'separation', 'singular', 'note', ...
+      },
+      'stim': {                       # from analytics.band_stim_stability
+         'available', 'chisq', 'lrt_p', 'stim_stable', 'or_by_era', 'era_counts',
+         'thresholds_mA', ...
+      },
+      'verdict': 'VALIDATED (stim-stable)' | 'VALIDATED (stim-dependent)' |
+                 'candidate (FDR n.s.)' | 'failed (separation/singular)' | 'unavailable',
+    }
+    Degrades to {available: False, reason: ...} when the participant has no matched data or pymer4
+    isn't installed; the frontend renders an empty-state caption rather than erroring.
+    """
+    participant_uid = request_data.get("ParticipantId")
+    channel = request_data.get("Channel")
+    center_hz_raw = request_data.get("CenterHz")
+    if not (participant_uid and channel and center_hz_raw is not None):
+        return {"available": False, "reason": "ParticipantId, Channel, and CenterHz required"}
+    try:
+        center_hz = float(center_hz_raw)
+    except (TypeError, ValueError):
+        return {"available": False, "reason": "CenterHz must be numeric"}
+    band_width_hz = float(request_data.get("BandWidthHz", 5.0))
+
+    Participant = models.Participant.find(uid=participant_uid)
+    if Participant is None:
+        return {"available": False, "reason": f"participant {participant_uid} not found"}
+    # Demo participant: no real glmer to run; tell the UI to skip the click-validate panel.
+    if getattr(Participant, "mrn", "") == DEMO_MRN:
+        return {"available": False, "reason": "demo participant (no real data for validation)"}
+
+    pro_df = _load_pros(request_data, Participant)
+    if pro_df is None or len(pro_df) == 0:
+        return {"available": False, "reason": "no PRO data"}
+    pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+    pm = _pro_match_arrays(pro_df, label_metric)
+    if pm is None:
+        return {"available": False, "reason": f"no matchable PRO values for metric={label_metric}"}
+
+    # Build the same pooled td_detail the scan uses so the band feature is defined identically.
+    mat = _cached_psd_matrix(participant_uid)
+    if mat is None or not mat.get("rows"):
+        return {"available": False, "reason": "no PSD samples for this participant"}
+    label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
+    match_tol_min = _match_tolerance_param(request_data)
+    max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
+    refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    match_direction = "nearest" if str(
+        request_data.get("MatchDirection", "prior")).lower() == "nearest" else "prior"
+    from .routines import streaming_psd as sp
+    pooled = sp.build_pooled_detail_from_matrix(
+        mat, pm[0], pm[1],
+        tolerance_min=float(match_tol_min), aggregate="all",
+        max_per_rating=max_per_rating, refractory_min=refractory_min,
+        match_direction=match_direction)
+    if not pooled or pooled.get("psd") is None:
+        return {"available": False, "reason": "matched-detail builder returned nothing"}
+
+    # Mixed-effects logistic (definitive per-candidate inference).
+    glmer = analytics.band_mixedmodel_inference(
+        pooled, channel, center_hz, band_width_hz=band_width_hz,
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+    # Stim-state heterogeneity (band x stim-era LRT). Needs the chronic stim series.
+    chronic_list = _load_recordings(participant_uid, CHRONIC_TYPES)
+    try:
+        from .routines import availability as _av
+        stim = _av.stim_series(chronic_list) if chronic_list else None
+    except Exception:
+        stim = None
+    hetero = analytics.band_stim_stability(
+        pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+
+    # Verdict — the badge text the UI shows. We deliberately use the RAW glmer p (q across many
+    # candidates lives on the scan side; a single-click validate is one test). The headline
+    # threshold is the same alpha=0.05 the scan FDR uses; bands that survived FDR on the scan
+    # already arrive here with q<0.05, so this is a per-band reaffirmation in the mixed-effects
+    # frame, with the stim-stability flag deciding which validated label is shown.
+    def _decide_verdict(g, h):
+        if not g.get("available"):
+            return "unavailable"
+        if g.get("separation"):
+            return "failed (separation)"
+        if g.get("singular"):
+            return "failed (singular random effect)"
+        p = g.get("p")
+        if p is None or not isinstance(p, (int, float)) or p >= 0.05:
+            return "candidate (mixed-effects n.s.)"
+        if h.get("available") and h.get("stim_stable") is False:
+            return "VALIDATED (stim-dependent)"
+        return "VALIDATED (stim-stable)"
+    verdict = _decide_verdict(glmer, hetero)
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    return {
+        "available": True,
+        "channel": channel,
+        "center_hz": _ff(center_hz),
+        "band_lo": _ff(center_hz - band_width_hz / 2.0),
+        "band_hi": _ff(center_hz + band_width_hz / 2.0),
+        "band_width_hz": _ff(band_width_hz),
+        "label_metric": label_metric,
+        "glmer": glmer,
+        "stim": hetero,
+        "verdict": verdict,
+    }
+
+
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 

@@ -1479,6 +1479,15 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         p = float(row["P-val"]) if "P-val" in row else (float(row["Pr(>|z|)"]) if "Pr(>|z|)" in row else np.nan)
         z = float(row["Z-stat"]) if "Z-stat" in row else np.nan
         odds = float(row["OR"]) if "OR" in row else float(np.exp(est))
+        # OR confidence interval — pymer4 reports the Wald CI on the linear predictor scale as
+        # '2.5_ci' / '97.5_ci'; exponentiate to OR space. Falls back to None if columns missing
+        # (older pymer4) so the caller never crashes when the bounds aren't available.
+        def _ci_or(col):
+            try:
+                v = float(row[col]); return float(np.exp(v)) if np.isfinite(v) else None
+            except (KeyError, TypeError, ValueError):
+                return None
+        or_lo = _ci_or("2.5_ci"); or_hi = _ci_or("97.5_ci")
         # Complete/quasi-complete separation: the predictor (z-scored) drives an implausibly large
         # coefficient and the SE/p-value explode (Hessian singular). Report it as unreliable rather
         # than a spurious OR ~ 1e90. |coef| > 10 on a z-scored feature => OR > ~22000, not credible.
@@ -1486,21 +1495,151 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             return {
                 "available": True, "model": "glmer logistic (lme4 via pymer4)",
                 "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
-                "coef": _f(est), "odds_ratio": None, "z": None, "p": None,
-                "separation": True,
+                "coef": _f(est), "odds_ratio": None,
+                "or_lo": None, "or_hi": None,
+                "z": None, "p": None,
+                "separation": True, "singular": False,
                 "note": ("Complete/quasi-complete separation — band power separates high/low "
                          "pain perfectly at this window, so the logistic estimate is degenerate. "
                          "Widen the match window or loosen the binarization to get a stable fit."),
             }
+        # Singular random-effect variance: lme4 returns a fit but the era-level variance has
+        # collapsed to ~0, meaning the random intercept added nothing (effectively pooled OLS).
+        # We still report the fit but flag it so the UI can downgrade confidence.
+        singular = False
+        try:
+            ranef = mod.ranef_var
+            if "Var" in ranef.columns and len(ranef):
+                singular = bool(float(ranef["Var"].iloc[0]) < 1e-6)
+        except Exception:
+            pass
         return {
             "available": True, "model": "glmer logistic (lme4 via pymer4)",
             "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
             "coef": _f(est), "odds_ratio": _f(odds),
-            "z": _f(z), "p": _f(p), "separation": False,
+            "or_lo": _f(or_lo) if or_lo is not None else None,
+            "or_hi": _f(or_hi) if or_hi is not None else None,
+            "z": _f(z), "p": _f(p), "separation": False, "singular": singular,
             "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
         }
     except Exception as e:
         return {"available": False, "reason": f"glmer fit failed: {e}"}
+
+
+def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
+                        band_width_hz=5.0, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                        off_max=0.1, low_max=1.5):
+    """Test whether one (channel, band)'s pain-prediction holds across stim states (band x stim-era
+    LRT). Compares pain_high ~ band_power + stim_era + (1|era)  (m0, reduced) against
+    pain_high ~ band_power * stim_era + (1|era)  (m1, full). The LRT p answers
+    "does the band's effect depend on stim?" — small p means the biomarker is stim-state-dependent
+    (i.e. a poor closed-loop threshold anchor); large p means the biomarker is stim-stable.
+
+    Per-era ORs are computed via separate per-era GLM fits (slope on band_power) so the UI can show
+    OFF / LOW / HIGH OR side-by-side.
+
+    `stim_series` is the chronic stim trajectory {t:[epoch_s], y:[mA]} from bravo_service. We
+    nearest-time-interpolate sample-level stim_mA from the td_detail times and bin into eras:
+      OFF   stim_mA < off_max  (default <0.1 mA)
+      LOW   off_max <= stim_mA <= low_max
+      HIGH  stim_mA > low_max
+    Returns {available: False, reason: ...} on failure (no R, no stim, fit fails, only 1 era).
+    """
+    try:
+        from pymer4.models import Lmer
+        import rpy2.robjects as ro
+    except Exception as e:
+        return {"available": False, "reason": f"pymer4/rpy2 unavailable: {e}"}
+    if not td_detail or not stim_series or not stim_series.get("t") or not stim_series.get("y"):
+        return {"available": False, "reason": "no stim series"}
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    if times is None or len(times) != len(labels):
+        return {"available": False, "reason": "missing sample times"}
+    # Resolve channel
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i; break
+    if ci is None:
+        return {"available": False, "reason": f"channel {channel_raw} not found"}
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return {"available": False, "reason": "empty band"}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct)
+    # Sample-time -> stim_mA via nearest-time interpolation on the stim trajectory.
+    t_samples = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce")
+    t_epoch = (t_samples.view("int64").to_numpy() / 1e9)
+    stim_t = np.asarray(stim_series["t"], dtype=float)
+    stim_y = np.asarray(stim_series["y"], dtype=float)
+    if len(stim_t) < 2:
+        return {"available": False, "reason": "stim series too short"}
+    order = np.argsort(stim_t); stim_t = stim_t[order]; stim_y = stim_y[order]
+    idx = np.searchsorted(stim_t, t_epoch).clip(0, len(stim_t) - 1)
+    stim_mA = stim_y[idx]
+    # Era bucketing
+    era = np.where(stim_mA < off_max, "OFF", np.where(stim_mA <= low_max, "LOW", "HIGH"))
+    # Weekly cluster id
+    wk = t_samples.dt.isocalendar()
+    cl = (wk["year"].astype("Int64").astype(str) + "-W" + wk["week"].astype("Int64").astype(str)).to_numpy()
+    m = np.isfinite(bp_log) & np.isfinite(y) & np.isfinite(t_epoch)
+    if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
+        return {"available": False, "reason": "too few samples / eras for an interaction test"}
+    df = pd.DataFrame({
+        "pain_high": y[m].astype(int),
+        "band_power": (bp_log[m] - np.nanmean(bp_log[m])) / (np.nanstd(bp_log[m]) or 1.0),
+        "stim_era": pd.Categorical(era[m], categories=["OFF", "LOW", "HIGH"]),
+        "cluster": cl[m],
+    })
+    n_clusters = int(df["cluster"].nunique())
+    re_term = "+ (1|cluster)" if n_clusters > 1 else ""
+    formula_red = f"pain_high ~ band_power + stim_era {re_term}"
+    formula_full = f"pain_high ~ band_power * stim_era {re_term}"
+    try:
+        m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
+        m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
+        # LRT via R's anova(); pull Chisq + p from the last row.
+        ro.globalenv["m0"] = m0.model_obj; ro.globalenv["m1"] = m1.model_obj
+        anv = ro.r("as.data.frame(anova(m0, m1, test='Chisq'))")
+        chisq = float(anv.rx2("Chisq")[-1])
+        p_lrt = float(anv.rx2("Pr(>Chisq)")[-1])
+    except Exception as e:
+        return {"available": False, "reason": f"LRT failed: {e}"}
+    # Per-era ORs via simple per-era GLM (no random intercept — each era is one block already).
+    try:
+        import statsmodels.api as sm
+        or_by_era = {}
+        for tag in ["OFF", "LOW", "HIGH"]:
+            sub = df[df["stim_era"] == tag]
+            if len(sub) < 6 or sub["pain_high"].nunique() < 2:
+                or_by_era[tag] = None; continue
+            X = sm.add_constant(sub["band_power"].to_numpy())
+            try:
+                res = sm.GLM(sub["pain_high"].to_numpy(), X, family=sm.families.Binomial()).fit()
+                or_by_era[tag] = float(np.exp(res.params[1])) if np.isfinite(res.params[1]) else None
+            except Exception:
+                or_by_era[tag] = None
+    except Exception:
+        or_by_era = {"OFF": None, "LOW": None, "HIGH": None}
+    return {
+        "available": True, "model": "band x stim_era LRT (glmer logistic, lme4 via pymer4)",
+        "formula_reduced": formula_red, "formula_full": formula_full,
+        "n": int(m.sum()), "n_clusters": n_clusters,
+        "chisq": _f(chisq), "lrt_p": _f(p_lrt),
+        # The headline interpretation flag: stim-stable iff the interaction LRT is NOT significant.
+        # We carry the raw p here; the calling endpoint can FDR if it's running across many bands.
+        "stim_stable": (np.isfinite(p_lrt) and p_lrt >= 0.05),
+        "or_by_era": {k: (_f(v) if v is not None else None) for k, v in or_by_era.items()},
+        "era_counts": {tag: int((df["stim_era"] == tag).sum()) for tag in ["OFF", "LOW", "HIGH"]},
+        "thresholds_mA": {"off_max": off_max, "low_max": low_max},
+    }
 
 
 # --- Time-domain (streaming) analytics -------------------------------------------------------
