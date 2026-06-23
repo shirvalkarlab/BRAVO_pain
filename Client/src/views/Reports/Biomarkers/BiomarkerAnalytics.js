@@ -100,7 +100,7 @@ function ValidationReadout({ validation, validating, emitContext }) {
     return (
       <MDTypography variant="caption" color="text" display="block" mt={0.5}
         sx={{ fontStyle: "italic", fontSize: 11 }}>
-        Running mixed-effects validation (glmer fit + stim-era LRT)…
+        Running mixed-effects validation (mixed-effects logistic fit + stim-era likelihood-ratio test)…
       </MDTypography>
     );
   }
@@ -149,7 +149,7 @@ function ValidationReadout({ validation, validating, emitContext }) {
       </MDBox>
       {g.available !== false ? (
         <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
-          {`Mixed-effects logistic regression (glmer, random intercept per weekly era): `
+          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era): `
            + `odds ratio per 1 SD increase in band power = ${fmt(g.odds_ratio)}`
            + (g.or_lo != null && g.or_hi != null
               ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
@@ -334,7 +334,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     // legend. Placed at the end of `traces` so it appears as the last legend item.
     traces.push({
       x: [null], y: [null], type: "scattergl", mode: "markers",
-      name: "● FDR-significant (q<0.05, rating-clustered logit)",
+      name: "● False Discovery Rate-significant (q<0.05, rating-clustered logistic)",
       marker: { size: 9, color: "#777", line: { width: 1.2, color: "#000" } },
       showlegend: true, hoverinfo: "skip",
     });

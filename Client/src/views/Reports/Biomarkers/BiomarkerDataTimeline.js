@@ -123,9 +123,14 @@ function tEpoch(v) {
 }
 // hemisphere identity: saturated accent for headers, DESATURATED tint for TD coverage (so the
 // saturated frequency color on the band-power trend is the only loud mark in a lane), faint band.
+// Hemisphere accent/tint only — NO hardcoded brain region. The region label (e.g. GPi / VIM / VPL)
+// must come from the participant's electrode/lead metadata (per-channel `region` on the record, or
+// data.region_map), never a static guess: hardcoding LEFT→GPi / RIGHT→VIM mislabels anatomy the
+// moment this view opens on a participant with different targets. We fall back to NO region label
+// rather than a wrong one (FRONTEND_review item 6).
 const HEMI2 = {
-  LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)", region: "GPi" },
-  RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)", region: "VIM" },
+  LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)" },
+  RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)" },
 };
 const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
 
@@ -328,8 +333,20 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // right-anchored per-contact names (now larger, anchored at x ≈ -0.05) and the row labels.
       // Pinned to the left border with a FIXED-PIXEL xshift (not a paper fraction) so it hugs the
       // lanes at any width — paper-fraction x scaled with plot width and drifted off-figure when wide.
+      // Region label from metadata only: a per-channel `region` on the record (backend
+      // format_channel) or data.region_map[channel]; fall back to NO region (hemisphere alone)
+      // rather than a hardcoded guess.
+      const regionOf = (h) => {
+        const rmap = (data && data.region_map) || {};
+        const rec = (av.records || []).find((r) =>
+          (r.hemisphere || (String(r.channel).toUpperCase().indexOf("LEFT") >= 0 ? "LEFT" : "RIGHT")) === h
+          && (r.region || rmap[r.channel]));
+        const reg = rec ? (rec.region || rmap[rec.channel]) : null;
+        return (reg && String(reg).trim()) ? String(reg).trim() : "";
+      };
+      const regionLabel = regionOf(hemi);
       annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_REGION, y: (top + bot) / 2,
-        text: `<b>${hemi}</b><br>${HEMI2[hemi].region}`, showarrow: false, textangle: -90,
+        text: `<b>${hemi}</b>${regionLabel ? `<br>${regionLabel}` : ""}`, showarrow: false, textangle: -90,
         font: { size: F_REGION, color: HEMI2[hemi].col }, align: "center" });
     });
     // faint lane separators

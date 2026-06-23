@@ -270,7 +270,14 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       if (bySrc[bin]) bySrc[bin][srcKey] += 1;   // bin is high|low|excluded (matched-only branch)
     }
     samples.push({ ...s, bin });
-    binByKey.set(`${String(s.channel).toUpperCase()}|${Math.round(s.t)}`, bin);
+    // Collision-proof key set: `Math.round(s.t)` buckets samples to the integer second, and >=2
+    // samples can share a (channel, second) — most often patient-event PSDs. Plain Map.set would be
+    // last-write-wins, so the painted timeline could disagree with the badge counts (which tally the
+    // full per-sample array). Resolve collisions by PRECEDENCE: a matched class (high/low/excluded)
+    // always wins over "unmatched", so a key with any matched sample paints as that class.
+    const tk = `${String(s.channel).toUpperCase()}|${Math.round(s.t)}`;
+    const prev = binByKey.get(tk);
+    if (prev === undefined || (prev === "unmatched" && bin !== "unmatched")) binByKey.set(tk, bin);
   }
   offsets.sort((a, b) => a - b);
   const medianOffset = offsets.length

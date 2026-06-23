@@ -73,7 +73,8 @@ function Biomarkers() {
   // Match window for PSD<->PRO pairing. Bumped from 15 to 60 min after the matching audit on RCS08:
   // pain reports anchor neural data on a minutes-to-hours timescale, and the 15-min window dropped
   // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
-  // lifts PRO coverage 44/682 -> ~288/682 of the matched discovery pool.
+  // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
+  // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
   const [matchTolerance, setMatchTolerance] = useState(60);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
@@ -315,7 +316,7 @@ function Biomarkers() {
     if (s.band !== undefined || s.freq_hz !== undefined) {
       const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
       const ciTxt = ci && ci[0] != null && ci[1] != null ? `  95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
-      const fdrTxt = s.fdr_q != null ? `  FDR q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
+      const fdrTxt = s.fdr_q != null ? `  False Discovery Rate q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
       // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
       // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
       const permTxt = s.perm_p != null ? `  perm p=${fmtP(s.perm_p)}` : `  p=${fmtP(s.p)}`;

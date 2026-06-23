@@ -1596,7 +1596,8 @@ def _pro_match_arrays(pro_df, label_metric):
 DEFAULT_MATCH_TOLERANCE_MIN = 60.0  # was 15. Pain reports anchor neural data on a minutes-to-hours
 # timescale, not minutes — a PSD 30 min from a rating is still informative about that rating. The
 # narrow 15-min window dropped 80% of the otherwise-usable pool on RCS08 (see AUDIT_stream_*).
-# Coupled with the new direction='pro_first' default, this lifts PRO coverage 44/682 -> ~288/682.
+# Coupled with the new direction='pro_first' default, this lifts PRO coverage to 290/682 (42.5%) of
+# the matched discovery pool (RCS08, vas, ±60 min) — matching the offline validation pool.
 
 
 def _int_param(request_data, key, *, default, lo=None, hi=None):
