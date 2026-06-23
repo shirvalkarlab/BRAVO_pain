@@ -1266,16 +1266,46 @@ def _label_strategy_params(request_data):
 # so it supports fine-grained PRO<->PSD time matching.
 _PRO_TIME_COL = "date_time_s1_daily"
 
+# REDCap stores survey timestamps as the participant's LOCAL wall-clock time (DST-aware: the REDCap
+# server records local time, so a summer 2pm and a winter 2pm both read "14:00" in the export). The
+# study is entirely in California, so the correct UTC instant is obtained by localizing each naive
+# string to America/Los_Angeles and converting to UTC — this applies +7 h (PDT) or +8 h (PST)
+# automatically from the tz database's real DST transition dates. The DEVICE side needs no such fix:
+# per the Medtronic Percept white paper, all report data (BrainSense PSD/TD, patient events) is
+# already stored in UTC (ISO-8601), and an internal consistency check confirmed the stored epochs
+# match true CA wall-clock to <1 min in every DST era. So ONLY the PRO clock is corrected here.
+_PRO_LOCAL_TZ = "America/Los_Angeles"
+
+
+def _pro_timestamps_utc(pro_df):
+    """Parse the PRO timestamp column as DST-aware California-local time and return a tz-NAIVE UTC
+    pandas datetime Series (NaT where unparseable).
+
+    The raw REDCap strings (e.g. '2025-07-20 18:17:46') are local wall-clock with no offset; parsing
+    them as UTC (the historical behaviour) placed every pain score 7-8 h too early, smearing the
+    PSD<->pain match. Here we localize to America/Los_Angeles (handling DST + ambiguous/nonexistent
+    fall-back/spring-forward instants gracefully) then convert to UTC, dropping the tz so the result
+    is directly comparable to the device's naive-UTC epochs."""
+    ts_local = pd.to_datetime(pro_df[_PRO_TIME_COL], errors="coerce")
+    try:
+        ts_utc = (ts_local.dt.tz_localize(_PRO_LOCAL_TZ, ambiguous="NaT", nonexistent="shift_forward")
+                  .dt.tz_convert("UTC").dt.tz_localize(None))
+    except (TypeError, AttributeError):
+        # Already tz-aware (defensive): just convert.
+        ts_utc = ts_local.dt.tz_convert("UTC").dt.tz_localize(None)
+    return ts_utc
+
 
 def _pro_match_arrays(pro_df, label_metric):
     """Extract (timestamps_epoch_s, metric_values) for PRO<->PSD time matching.
 
     Returns (np.ndarray, np.ndarray) of equal length over the rows that have BOTH a parseable
-    timestamp and a finite metric value, or None if unavailable."""
+    timestamp and a finite metric value, or None if unavailable. Timestamps are DST-corrected
+    California-local -> UTC (see `_pro_timestamps_utc`)."""
     if pro_df is None or len(pro_df) == 0 or _PRO_TIME_COL not in pro_df.columns \
             or label_metric not in pro_df.columns:
         return None
-    ts = pd.to_datetime(pro_df[_PRO_TIME_COL], errors="coerce")
+    ts = _pro_timestamps_utc(pro_df)
     val = pd.to_numeric(pro_df[label_metric], errors="coerce")
     ok = ts.notna() & val.notna()
     if ok.sum() == 0:
@@ -1963,7 +1993,8 @@ def pain_scores_for_participant(request_data):
         return {"metrics": [], "n_reports": 0,
                 "message": "PRO data has no 'date_time_s1_daily' timestamp column."}
 
-    t = pd.to_datetime(pro[ts_col], errors="coerce")
+    # DST-aware California-local -> UTC, so the pain trace shares the device's UTC time axis.
+    t = _pro_timestamps_utc(pro)
     metrics = []
     for key, label, rng_ in PAIN_METRICS:
         if key not in pro.columns:
