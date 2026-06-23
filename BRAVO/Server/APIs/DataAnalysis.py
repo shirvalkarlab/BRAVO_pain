@@ -844,6 +844,42 @@ class QueryDeploymentRocByEra(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryDeploymentSummary(RestViews.APIView):
+    """
+    API View that assembles the one authoritative Deploy-to-Percept review payload for a committed
+    band: identity, device-control mapping, evidence (AUC/OR with CI), the percentile-anchored LSB
+    threshold, power/sample-size, per-era portability, and the explicit GATES + CAVEATS a clinician
+    signs against (DESIGN_biomarker_pipeline_v2 Phase E).
+
+    **URL:** ``/queryDeploymentSummary``  **Methods:** POST
+
+    **Request Parameters:** same as /queryLsbPower (Channel, CenterHz, Cutpoint, ...).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.deployment_summary(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "summary error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryPainScores(RestViews.APIView):
     """
     API View for patient-reported pain-score reports (Surveys & Questionnaires).

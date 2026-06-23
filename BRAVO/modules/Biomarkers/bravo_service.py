@@ -2824,7 +2824,7 @@ def band_lsb_and_power(request_data):
     half = band_width_hz / 2.0
     threshold_lsb = {"available": False, "reason": "not computed"}
     band_lsb_vals = None
-    series = lsb.get(channel) or lsb.get(format_channel(channel)["short"])
+    series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
     if series is not None:
         y = np.asarray(series.get("y"), dtype=float)
         hz = np.asarray(series.get("center_hz"), dtype=float)
@@ -2926,6 +2926,184 @@ def band_deployment_roc_by_era(request_data):
         "band_width_hz": _ff(band_width_hz),
         "label_metric": core["label_metric"], "match_direction": core["match_direction"],
         "by_era": by_era,
+    }
+
+
+def deployment_summary(request_data):
+    """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
+
+    Calls _validate_band_core ONCE and runs every deployment analytic on the shared pooled detail
+    (the ROC, the per-era refit, the LSB anchor, the power readout) so the sign-off card is a single
+    fetch rather than re-deriving from four panel states. Assembles an explicit GATES list (the
+    hard yes/no checks a clinician signs against) and a CAVEATS list (soft warnings). Inputs: same
+    as /queryLsbPower (Channel, CenterHz, Cutpoint, ...).
+
+    Output: {available, identity{...}, device_control{...}, evidence{...}, threshold{...},
+             power{...}, portability{...}, gates[...], caveats[...], match_direction, verdict}.
+    """
+    rd = dict(request_data)
+    if not rd.get("MatchDirection"):
+        rd["MatchDirection"] = "prior"
+    core = _validate_band_core(rd)
+    if not core.get("available"):
+        return core
+
+    pooled = core["pooled"]; channel = core["channel"]
+    center_hz = core["center_hz"]; band_width_hz = core["band_width_hz"]
+    g = core.get("glmer") or {}; st = core.get("stim") or {}
+    verdict = core.get("verdict")
+    n_boot = _int_param(rd, "NBoot", default=300, lo=50, hi=5000)
+
+    # ROC + per-era refit on the shared detail.
+    roc = analytics.deployment_roc(pooled, channel, center_hz, band_width_hz=band_width_hz,
+                                   strategy=core["label_strategy"], low_pct=core["low_pct"],
+                                   high_pct=core["high_pct"], n_boot=n_boot)
+    by_era = analytics.deployment_roc_by_era(
+        pooled, channel, center_hz, core.get("stim_series"), band_width_hz=band_width_hz,
+        strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
+        n_boot=n_boot)
+
+    # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
+    cutpoint = _float_param(rd, "Cutpoint", default=None)
+    feat = analytics._band_feature_from_detail(pooled, channel, center_hz, band_width_hz)
+    percentile = None
+    if feat is not None and cutpoint is not None:
+        bp = np.asarray(feat[0], dtype=float); bp = bp[np.isfinite(bp)]
+        if bp.size:
+            percentile = float((bp <= float(cutpoint)).mean() * 100.0)
+    chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
+    pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
+    from modules.Biomarkers.routines import availability as _av
+    lsb = _av.lsb_series(chronic_list, pd_list)
+    half = band_width_hz / 2.0
+    series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
+    thr_lsb = None; n_tl = 0
+    if series is not None:
+        y = np.asarray(series.get("y"), dtype=float); hz = np.asarray(series.get("center_hz"), dtype=float)
+        bm = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+        vals = y[bm]; n_tl = int(vals.size)
+        if vals.size >= 20 and percentile is not None:
+            thr_lsb = round(float(np.percentile(vals, percentile)), 1)
+
+    # Power on the clustered effective n.
+    power = {"available": False, "reason": "ROC unavailable"}
+    if roc.get("available"):
+        n_clu = int(roc.get("n_clusters") or 0); prev = roc.get("prevalence")
+        if n_clu >= 4 and prev is not None and 0 < prev < 1:
+            n_pos = int(round(n_clu * prev)); power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos)
+
+    # Device-control mapping (same as build_band_candidate).
+    or_val = g.get("odds_ratio"); coef = g.get("coef")
+    if isinstance(or_val, (int, float)) and np.isfinite(or_val) and or_val > 0:
+        polarity = "positive" if or_val > 1 else "negative"
+    elif isinstance(coef, (int, float)) and np.isfinite(coef):
+        polarity = "positive" if coef > 0 else "negative"
+    else:
+        polarity = "unknown"
+    snapped = round(center_hz / (250.0 / 256.0)) * (250.0 / 256.0)   # Dual 256-pt FFT grid
+    adaptive_valid = bool(ADAPTIVE_LO_HZ <= center_hz <= ADAPTIVE_HI_HZ)
+    suggested_mode, mode_reason = _suggested_percept_mode(polarity, adaptive_valid)
+    credible, _ci_width = _band_credible_ci(g.get("or_lo"), g.get("or_hi"))
+
+    # ---- GATES (hard checks the clinician signs against) ----
+    gates = []
+    gates.append({"key": "validated", "label": "Band validated (mixed-effects)",
+                  "pass": bool(verdict and "VALIDATED" in str(verdict)), "detail": verdict})
+    gates.append({"key": "adaptive_band", "label": "In Percept adaptive range (8–30 Hz)",
+                  "pass": adaptive_valid,
+                  "detail": f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)"})
+    gates.append({"key": "deployable_threshold", "label": "Deployable LSB threshold available",
+                  "pass": thr_lsb is not None,
+                  "detail": (f"power ≥ {thr_lsb} LSB" if thr_lsb is not None
+                             else f"device sensed this band {n_tl} times")})
+    gates.append({"key": "credible_ci", "label": "Credible effect-size CI",
+                  "pass": bool(credible), "detail": f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"})
+    # Stim-stability gate: consistent with the verdict badge. The verdict labels a band
+    # "stim-dependent" only when the LRT EXPLICITLY finds instability; an unavailable LRT (e.g. a
+    # singular fit on a tiny OFF stratum under the prior match-direction) is treated as not-dependent.
+    # The gate mirrors that, but the detail is transparent about whether the LRT actually ran.
+    if st.get("available"):
+        stim_pass = bool(st.get("stim_stable"))
+        stim_detail = (f"band×era LRT p={st.get('lrt_p')} ({'stable' if stim_pass else 'stim-dependent'})")
+    else:
+        # LRT did not converge on this path; fall back to the verdict's determination.
+        stim_pass = bool(verdict and "stim-stable" in str(verdict))
+        stim_detail = ("LRT did not converge on this match-direction; "
+                       + ("treated as stim-stable per the band's validated verdict"
+                          if stim_pass else "stim-stability unconfirmed"))
+    gates.append({"key": "stim_stable", "label": "Stim-stable (band×era LRT n.s.)",
+                  "pass": stim_pass, "detail": stim_detail})
+    gates.append({"key": "powered", "label": "Adequately powered (≥80%)",
+                  "pass": bool(power.get("available") and not power.get("more_data_needed")),
+                  "detail": (f"power {round(power.get('power_current',0)*100)}%, "
+                             f"need {power.get('n_ratings_needed')} ratings"
+                             if power.get("available") else "n/a")})
+
+    # ---- CAVEATS (soft warnings) ----
+    caveats = []
+    if not adaptive_valid:
+        caveats.append("Band is OUTSIDE the 8–30 Hz Percept adaptive sensing range — not deployable "
+                       "as an adaptive control band without re-anchoring to an in-range band.")
+    if polarity == "negative":
+        caveats.append("Negative polarity (band power DOWN with pain): Dual/Single-threshold adaptive "
+                       "would ramp the wrong way. Requires the inverse control law or a re-signed feature.")
+    if by_era.get("available"):
+        if (by_era.get("auc_spread") or 0) > 0.10 or (by_era.get("cutpoint_spread") or 0) > 0.5:
+            caveats.append(f"Per-era fragility: AUC swings {round(by_era.get('auc_spread') or 0,2)} / "
+                           f"cut-point swings {round(by_era.get('cutpoint_spread') or 0,2)} across "
+                           "OFF/LOW/HIGH — the threshold may not hold once stim changes.")
+    if power.get("available") and power.get("more_data_needed"):
+        caveats.append(f"Underpowered: ~{(power.get('n_ratings_needed',0) - power.get('n_ratings_current',0))} "
+                       "more independent pain ratings needed for 80% power.")
+    caveats.append("Selection bias: this band was chosen from a sweep on the same data; the OR/AUC are "
+                   "optimistic. Out-of-sample / prospective confirmation is the honest test.")
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    return {
+        "available": True,
+        "match_direction": core["match_direction"], "verdict": verdict,
+        "identity": {
+            "participant": core.get("Participant"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
+            "contact": channel, "contact_label": analytics.format_channel(channel)["label"],
+            "region": analytics.format_channel(channel)["region"],
+            "center_freq_hz": _ff(center_hz), "bandwidth_hz": _ff(band_width_hz),
+            "band_lo_hz": _ff(center_hz - half), "band_hi_hz": _ff(center_hz + half),
+            "snapped_center_freq_hz": _ff(snapped),
+            "pro_metric": core["label_metric"], "binarization": core["label_strategy"],
+        },
+        "device_control": {
+            "adaptive_valid": adaptive_valid, "polarity": polarity,
+            "suggested_mode": suggested_mode, "suggested_mode_reason": mode_reason,
+        },
+        "threshold": {
+            "available": thr_lsb is not None, "upper_lsb": thr_lsb,
+            "percentile": round(percentile, 1) if percentile is not None else None,
+            "cutpoint_feature": _ff(cutpoint), "n_timeline_samples": n_tl,
+            "method": "percentile-anchored on device Timeline LSB",
+        },
+        "evidence": {
+            "auc": _ff(roc.get("auc")), "auc_lo": _ff(roc.get("auc_lo")), "auc_hi": _ff(roc.get("auc_hi")),
+            "odds_ratio": _ff(or_val), "or_ci_low": _ff(g.get("or_lo")),
+            "or_ci_high": _ff(g.get("or_hi")), "credible_ci": bool(credible),
+            "p_glmer": _ff(g.get("p")), "n_matched_samples": g.get("n"),
+            "n_clusters": roc.get("n_clusters") if roc.get("available") else None,
+            "operating_point": roc.get("operating_point") if roc.get("available") else None,
+        },
+        "power": power,
+        "portability": ({"available": True, "auc_spread": _ff(by_era.get("auc_spread")),
+                         "cutpoint_spread": _ff(by_era.get("cutpoint_spread")),
+                         "n_eras_estimable": by_era.get("n_eras_estimable"),
+                         "era_counts": by_era.get("era_counts"),
+                         "eras": {k: {"auc": _ff(v.get("auc")) if v.get("available") else None,
+                                      "available": v.get("available", False)}
+                                  for k, v in (by_era.get("eras") or {}).items()}}
+                        if by_era.get("available") else {"available": False, "reason": by_era.get("reason")}),
+        "gates": gates, "caveats": caveats,
+        "n_gates_passed": int(sum(1 for x in gates if x["pass"])), "n_gates": len(gates),
     }
 
 
