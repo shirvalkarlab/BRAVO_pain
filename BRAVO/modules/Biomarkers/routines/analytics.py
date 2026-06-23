@@ -1561,6 +1561,182 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     }
 
 
+ADC_NV_PER_LSB = 146.0   # Percept time-domain ADC scale (nV per LSB), exact per Medtronic.
+
+
+def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
+                        band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
+    """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device
+    PowerDomain LSB (DESIGN §4). For each BrainSense TD streaming session paired (within pair_tol_s)
+    to a PowerDomain session, compute the band-power in µV² from the raw 250 Hz TD (Welch, integrated
+    over the device's sensing band) and the median device LSB over the same window/channel at near-
+    zero stim, then take µV²/LSB per (session, channel).
+
+    This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold: the absolute conversion
+    is normalization-dependent and trustworthy to no better than ~3× (and on RCS08 diverges far more
+    from the 0.01 rule of thumb). The deployable threshold is percentile-anchored on the device's own
+    Timeline LSB instead (see the service layer). `sensing_hz_for_pd(pd_rec, contact)` resolves a
+    PowerDomain recording's sensing center frequency for a contact (the TD recording itself carries
+    no Therapy snapshot).
+
+    Returns {available, n, median, iqr_lo, iqr_hi, cv, p10, p90, fold_off_rule, rule_of_thumb,
+             confidence, note} or {available: False, reason}.
+    """
+    try:
+        from scipy import signal as _sig
+    except Exception as e:
+        return {"available": False, "reason": f"scipy unavailable: {e}"}
+
+    def _epoch(r):
+        st = r.get("StartTime")
+        try:
+            return float(st)
+        except (TypeError, ValueError):
+            return None
+
+    pd_idx = {}
+    for r in pd_recs or []:
+        s = _epoch(r)
+        if s is not None:
+            pd_idx.setdefault(round(s), []).append(r)
+
+    def _find_pd(s):
+        base = round(s)
+        for d in range(-int(pair_tol_s), int(pair_tol_s) + 1):
+            if base + d in pd_idx:
+                return pd_idx[base + d]
+        return []
+
+    ratios = []
+    for tr in td_recs or []:
+        s = _epoch(tr)
+        if s is None:
+            continue
+        pds = _find_pd(s)
+        if not pds:
+            continue
+        chans = tr.get("ChannelNames") or []
+        data = np.asarray(tr.get("Data"), dtype=float)
+        fs = float(tr.get("SamplingRate") or 250.0)
+        if data.ndim != 2:
+            continue
+        for ci, ch in enumerate(chans):
+            if ci >= data.shape[1]:
+                continue
+            hz = None
+            for pr in pds:
+                hz = sensing_hz_for_pd(pr, ch)
+                if hz is not None:
+                    break
+            if hz is None:
+                continue
+            x = data[:, ci] * adc_nv_per_lsb / 1000.0    # device counts -> µV (nV/1000)
+            x = x[np.isfinite(x)]
+            if len(x) < fs * min_secs:
+                continue
+            f, P = _sig.welch(x, fs=fs, nperseg=int(fs))   # µV²/Hz
+            bmask = (f >= hz - band_half_hz) & (f < hz + band_half_hz)
+            if not bmask.any():
+                continue
+            uV2 = float(np.trapz(P[bmask], f[bmask]))      # µV² in band
+            for pr in pds:
+                pnames = pr.get("ChannelNames") or []
+                pdata = np.asarray(pr.get("Data"), dtype=float)
+                if pdata.ndim != 2:
+                    continue
+                pcol = scol = None
+                cu = ch.upper()
+                for pi, nm in enumerate(pnames):
+                    u = str(nm).upper()
+                    if cu in u and "POWER" in u:
+                        pcol = pi
+                    if cu in u and "STIM" in u:
+                        scol = pi
+                if pcol is None or pcol >= pdata.shape[1]:
+                    continue
+                lsb = pdata[:, pcol]
+                mA = (pdata[:, scol] if (scol is not None and scol < pdata.shape[1])
+                      else np.zeros_like(lsb))
+                off = (mA < stim_off_mA) & np.isfinite(lsb) & (lsb > 0)
+                if off.sum() < 3:
+                    continue
+                med_lsb = float(np.median(lsb[off]))
+                if med_lsb <= 0:
+                    continue
+                ratio = uV2 / med_lsb
+                if np.isfinite(ratio) and ratio > 0:
+                    ratios.append(ratio)
+                break
+
+    if len(ratios) < 5:
+        return {"available": False, "reason": f"only {len(ratios)} paired TD/LSB sessions (need >= 5)"}
+    a = np.asarray(ratios, dtype=float)
+    med = float(np.median(a))
+    cv = float(np.std(a) / np.mean(a)) if np.mean(a) > 0 else None
+    fold = med / 0.01 if med > 0 else None
+    # Confidence: the §4 ceiling is ~3×; flag low whenever the spread or the rule-of-thumb
+    # divergence exceeds that, which on RCS08 it does (so this is honestly "low").
+    conf = "moderate"
+    if (cv is not None and cv > 0.5) or (fold is not None and (fold > 3.0 or fold < 1.0 / 3.0)):
+        conf = "low"
+    return {
+        "available": True, "n": int(len(a)),
+        "median": med, "iqr_lo": float(np.percentile(a, 25)), "iqr_hi": float(np.percentile(a, 75)),
+        "cv": cv, "p10": float(np.percentile(a, 10)), "p90": float(np.percentile(a, 90)),
+        "fold_off_rule": fold, "rule_of_thumb": 0.01, "confidence": conf,
+        "note": ("Empirical µV²/LSB from concurrent on-demand TD + device LSB at ~0 mA. FYI cross-"
+                 "check only — the deployable threshold is percentile-anchored on the device Timeline, "
+                 "not via this absolute conversion (normalization-dependent, trust to ~3×)."),
+    }
+
+
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
+    """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
+    clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
+
+    Reports the current power to reject AUC=0.5 at the given alpha, and the number of independent
+    ratings (at the observed prevalence) needed for `target_power`. The honest 'do we have enough
+    pain ratings to trust this cut-point yet?' number — pairs with the bootstrap CI from the ROC.
+
+    Returns {available, auc, power_current, n_ratings_current, n_ratings_needed, more_data_needed,
+             se_auc, alpha, target_power} or {available: False, reason}.
+    """
+    try:
+        from scipy import stats as _st
+    except Exception as e:
+        return {"available": False, "reason": f"scipy unavailable: {e}"}
+    auc = float(max(auc, 1.0 - auc))
+    n_pos = int(n_pos); n_neg = int(n_neg)
+    if n_pos < 2 or n_neg < 2:
+        return {"available": False, "reason": "too few independent ratings for a power estimate"}
+    if auc <= 0.5:
+        return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
+                "n_ratings_current": n_pos + n_neg, "n_ratings_needed": None,
+                "more_data_needed": True, "alpha": alpha, "target_power": target_power,
+                "note": "AUC at or below chance — no power to detect a real effect."}
+    Q1 = auc / (2.0 - auc)
+    Q2 = 2.0 * auc * auc / (1.0 + auc)
+    var = (auc * (1 - auc) + (n_pos - 1) * (Q1 - auc * auc)
+           + (n_neg - 1) * (Q2 - auc * auc)) / (n_pos * n_neg)
+    se = float(np.sqrt(max(var, 1e-12)))
+    var0 = (0.25 + (n_pos - 1) * (1.0 / 3 - 0.25) + (n_neg - 1) * (1.0 / 3 - 0.25)) / (n_pos * n_neg)
+    se0 = float(np.sqrt(max(var0, 1e-12)))
+    za = float(_st.norm.ppf(1 - alpha / 2.0))
+    zb = float(_st.norm.ppf(target_power))
+    power = float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
+    N0 = n_pos + n_neg
+    # SE^2 * N is ~constant in N; solve (auc-0.5)*sqrt(N) = za*sqrt(se0^2 N0) + zb*sqrt(se^2 N0).
+    rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
+    n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    return {
+        "available": True, "auc": auc, "n_pos": n_pos, "n_neg": n_neg, "se_auc": se,
+        "power_current": power, "n_ratings_current": int(N0), "n_ratings_needed": n_need,
+        "more_data_needed": bool(n_need > N0), "alpha": alpha, "target_power": target_power,
+        "note": ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
+                 "effective n). Power to reject AUC = 0.5."),
+    }
+
+
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                               pain_cutoff=None, cluster="era"):

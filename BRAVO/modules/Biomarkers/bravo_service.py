@@ -2762,6 +2762,138 @@ def band_deployment_roc(request_data):
     }
 
 
+def _sensing_hz_for_pd(pd_rec, contact):
+    """Resolve a PowerDomain recording's sensing center frequency for a contact, from its
+    Descriptor.Therapy snapshot (the TD streaming recording carries no Therapy)."""
+    d = pd_rec.get("Descriptor")
+    th = d.get("Therapy") if isinstance(d, dict) else None
+    if not isinstance(th, dict):
+        return None
+    side = "Left" if "LEFT" in str(contact).upper() else "Right"
+    try:
+        return analytics.sensing_center_hz(th.get(side))
+    except Exception:
+        return None
+
+
+def band_lsb_and_power(request_data):
+    """Phase C: anchor a Phase-B cut-point to deployable device units and report power / sample-size.
+
+    Three products, in order of how much weight the clinician should put on them:
+      1) **Percentile-anchored Timeline LSB threshold** (the deployable number): take where the
+         cut-point sits as a percentile of the matched-sample band-power feature, then read the
+         device's OWN Timeline LSB at that same percentile, restricted to samples the device sensed
+         in this band. This sidesteps BOTH the z-scoring of the feature AND the fragile µV²↔LSB
+         conversion — it is in the LSB units the clinician programs. Returns unavailable (honestly)
+         when the device never sensed this band (e.g. off the 8–30 Hz adaptive range).
+      2) **Empirical µV²/LSB ratio** (FYI cross-check): measured from concurrent on-demand TD + LSB
+         at ~0 mA, confidence-rated. NOT used for the deployable threshold.
+      3) **Power / sample-size**: AUC power on the count of independent ratings + the ratings needed
+         for 80% power — the 'is there enough pain-rating data yet?' readout.
+
+    Inputs: same as /queryDeploymentROC, plus Cutpoint (the oriented log-power threshold chosen in
+    Phase B) and MatchDirection (defaults to prior). Output: {available, threshold_lsb{...},
+    lsb_ratio{...}, power{...}, percentile, ...}.
+    """
+    rd = dict(request_data)
+    if not rd.get("MatchDirection"):
+        rd["MatchDirection"] = "prior"
+    core = _validate_band_core(rd)
+    if not core.get("available"):
+        return core
+
+    pooled = core["pooled"]; channel = core["channel"]
+    center_hz = core["center_hz"]; band_width_hz = core["band_width_hz"]
+
+    # ---- 1) percentile of the cut-point in the matched-sample feature distribution ----
+    cutpoint = _float_param(rd, "Cutpoint", default=None)
+    feat = analytics._band_feature_from_detail(pooled, channel, center_hz, band_width_hz)
+    percentile = None; n_feat = 0
+    if feat is not None:
+        bp = np.asarray(feat[0], dtype=float)
+        bp = bp[np.isfinite(bp)]
+        n_feat = int(bp.size)
+        if cutpoint is not None and n_feat > 0:
+            percentile = float((bp <= float(cutpoint)).mean() * 100.0)
+
+    # ---- device Timeline LSB for this channel, restricted to this band's sensing ----
+    chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
+    pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
+    from modules.Biomarkers.routines import availability as _av
+    lsb = _av.lsb_series(chronic_list, pd_list)
+    half = band_width_hz / 2.0
+    threshold_lsb = {"available": False, "reason": "not computed"}
+    band_lsb_vals = None
+    series = lsb.get(channel) or lsb.get(format_channel(channel)["short"])
+    if series is not None:
+        y = np.asarray(series.get("y"), dtype=float)
+        hz = np.asarray(series.get("center_hz"), dtype=float)
+        bmask = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+        band_lsb_vals = y[bmask]
+    if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
+        thr_lsb = float(np.percentile(band_lsb_vals, percentile))
+        threshold_lsb = {
+            "available": True, "method": "percentile-anchored on device Timeline LSB",
+            "upper_lsb": round(thr_lsb, 1), "lower_lsb": None,
+            "percentile": round(percentile, 1),
+            "n_timeline_samples": int(band_lsb_vals.size),
+            "device_lsb_p10": round(float(np.percentile(band_lsb_vals, 10)), 1),
+            "device_lsb_median": round(float(np.median(band_lsb_vals)), 1),
+            "device_lsb_p90": round(float(np.percentile(band_lsb_vals, 90)), 1),
+            "note": ("Threshold to PROGRAM, in device LSB. Anchored by matching the cut-point's "
+                     "percentile in the matched-sample distribution to the device's own Timeline LSB "
+                     "at the same percentile (band-restricted) — no µV²↔LSB conversion needed."),
+        }
+    else:
+        n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
+        threshold_lsb = {
+            "available": False,
+            "reason": (f"device sensed this band only {n_band} times"
+                       if percentile is not None
+                       else "no Phase-B cut-point supplied (Cutpoint param)"),
+            "n_timeline_samples": n_band,
+            "hint": ("This band is likely off the device's programmed sensing range (the Percept "
+                     "adaptive band is 8–30 Hz); a percentile anchor needs Timeline LSB recorded in "
+                     "this band."),
+        }
+
+    # ---- 2) empirical µV²/LSB ratio (FYI) ----
+    td_list = _load_recordings(core["participant_uid"], ["MedtronicBrainSenseTimeDomain"])
+    lsb_ratio = analytics.empirical_lsb_ratio(td_list, pd_list, _sensing_hz_for_pd)
+
+    # ---- 3) power / sample-size on the clustered effective n ----
+    n_boot = _int_param(rd, "NBoot", default=300, lo=50, hi=5000)
+    roc = analytics.deployment_roc(pooled, channel, center_hz, band_width_hz=band_width_hz,
+                                   strategy=core["label_strategy"], low_pct=core["low_pct"],
+                                   high_pct=core["high_pct"], n_boot=n_boot)
+    power = {"available": False, "reason": "ROC unavailable"}
+    if roc.get("available"):
+        # independent-rating effective n at the observed prevalence.
+        n_clu = int(roc.get("n_clusters") or 0)
+        prev = roc.get("prevalence")
+        if n_clu >= 4 and prev is not None and 0 < prev < 1:
+            n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
+            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff)
+
+    def _ff(x):
+        try:
+            return float(x) if x is not None and np.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    return {
+        "available": True,
+        "channel": channel, "center_hz": _ff(center_hz), "band_width_hz": _ff(band_width_hz),
+        "label_metric": core["label_metric"], "match_direction": core["match_direction"],
+        "cutpoint_feature": _ff(cutpoint), "percentile": _ff(percentile), "n_matched_samples": n_feat,
+        "threshold_lsb": threshold_lsb,
+        "lsb_ratio": lsb_ratio,
+        "power": power,
+        "auc": _ff(roc.get("auc")) if roc.get("available") else None,
+        "auc_lo": _ff(roc.get("auc_lo")) if roc.get("available") else None,
+        "auc_hi": _ff(roc.get("auc_hi")) if roc.get("available") else None,
+    }
+
+
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 

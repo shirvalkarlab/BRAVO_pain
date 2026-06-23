@@ -690,3 +690,72 @@ def test_deployment_roc_clustered_ci_wider_than_naive():
     # The clustered CI has real width (not the degenerate ~0 a per-sample bootstrap of duplicates
     # would give); just assert it is a positive-width interval over the independent ratings.
     assert roc["auc_hi"] - roc["auc_lo"] > 0.02
+
+
+def test_auc_power_monotone_and_sample_size():
+    """auc_power: power rises with n and with AUC; n_ratings_needed falls as AUC rises; chance AUC
+    yields ~alpha power and flags more_data_needed."""
+    # more ratings -> more power at the same AUC
+    p_small = analytics.auc_power(0.70, 13, 13)
+    p_big = analytics.auc_power(0.70, 75, 75)
+    assert p_small["available"] and p_big["available"]
+    assert p_big["power_current"] > p_small["power_current"]
+    # stronger AUC -> fewer ratings needed for 80% power
+    need_weak = analytics.auc_power(0.60, 20, 20)["n_ratings_needed"]
+    need_strong = analytics.auc_power(0.80, 20, 20)["n_ratings_needed"]
+    assert need_weak > need_strong > 0
+    # a well-powered case is flagged as sufficient
+    assert analytics.auc_power(0.80, 60, 60)["more_data_needed"] is False
+    # chance AUC -> power ~ alpha, more data needed
+    chance = analytics.auc_power(0.50, 30, 30)
+    assert chance["power_current"] <= 0.06 and chance["more_data_needed"] is True
+    # orientation: AUC < 0.5 is treated as |AUC-0.5| (a strong negative biomarker still has power)
+    neg = analytics.auc_power(0.20, 40, 40)
+    assert neg["auc"] == 0.80 and neg["power_current"] > 0.5
+
+
+def test_empirical_lsb_ratio_recovers_planted_ratio():
+    """empirical_lsb_ratio: planted concurrent TD (µV) + device LSB at a known ratio is recovered to
+    within the documented ~3× confidence band, and the result is flagged accordingly."""
+    import numpy as _np
+    rng = _np.random.default_rng(0)
+    fs = 250.0; hz = 20.0; secs = 30
+    true_ratio = 0.0034            # µV² per LSB we plant
+    td_recs, pd_recs = [], []
+    for k in range(12):
+        t = _np.arange(int(fs * secs)) / fs
+        amp = 2.0 + 0.5 * k        # vary band amplitude across sessions
+        # narrowband signal at hz (µV), plus white noise; convert to device counts (µV -> /146nV*1000)
+        sig_uV = amp * _np.sin(2 * _np.pi * hz * t) + rng.normal(0, 0.3, t.size)
+        counts = sig_uV / (analytics.ADC_NV_PER_LSB / 1000.0)
+        td_recs.append({"StartTime": 1000.0 + 100 * k, "SamplingRate": fs,
+                        "ChannelNames": ["ZERO_TWO_LEFT"], "Data": counts[:, None]})
+        # device LSB such that µV²_band / LSB ≈ true_ratio. Welch band power of a sine amp A ≈ A²/2.
+        uV2 = (amp ** 2) / 2.0
+        lsb_val = uV2 / true_ratio
+        n_pd = 60
+        pd_data = _np.column_stack([_np.full(n_pd, lsb_val) * (1 + rng.normal(0, 0.02, n_pd)),
+                                    _np.zeros(n_pd)])     # Power col, Stim col (0 mA)
+        pd_recs.append({"StartTime": 1000.0 + 100 * k + 1, "SamplingRate": 2.0,
+                        "ChannelNames": ["ZERO_TWO_LEFT Power", "ZERO_TWO_LEFT Stimulation"],
+                        "Data": pd_data})
+
+    def _hz(_pd_rec, _contact):
+        return hz
+    res = analytics.empirical_lsb_ratio(td_recs, pd_recs, _hz)
+    assert res["available"], res.get("reason")
+    assert res["n"] >= 8
+    # recovered within ~3x of the planted ratio (the documented confidence ceiling)
+    assert (true_ratio / 3.0) <= res["median"] <= (true_ratio * 3.0), res["median"]
+    assert "confidence" in res and res["rule_of_thumb"] == 0.01
+
+
+def test_empirical_lsb_ratio_needs_pairs():
+    """With no time-paired PowerDomain session, the ratio is unavailable (not a crash)."""
+    td = [{"StartTime": 0.0, "SamplingRate": 250.0, "ChannelNames": ["ZERO_TWO_LEFT"],
+           "Data": __import__("numpy").zeros((7500, 1))}]
+    pd = [{"StartTime": 99999.0, "SamplingRate": 2.0,
+           "ChannelNames": ["ZERO_TWO_LEFT Power", "ZERO_TWO_LEFT Stimulation"],
+           "Data": __import__("numpy").ones((60, 2))}]
+    res = analytics.empirical_lsb_ratio(td, pd, lambda r, c: 20.0)
+    assert res["available"] is False

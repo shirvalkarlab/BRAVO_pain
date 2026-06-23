@@ -773,6 +773,42 @@ class QueryDeploymentROC(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryLsbPower(RestViews.APIView):
+    """
+    API View that anchors a Phase-B cut-point to deployable device LSB units (percentile-anchored on
+    the device Timeline), reports the empirical µV²/LSB ratio (FYI cross-check), and the AUC power /
+    sample-size on the count of independent ratings (DESIGN_biomarker_pipeline_v2 Phase C).
+
+    **URL:** ``/queryLsbPower``  **Methods:** POST
+
+    **Request Parameters:** same as /queryDeploymentROC, plus Cutpoint (the oriented log-power
+    threshold chosen in Phase B).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_lsb_and_power(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "lsb/power error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryPainScores(RestViews.APIView):
     """
     API View for patient-reported pain-score reports (Surveys & Questionnaires).
