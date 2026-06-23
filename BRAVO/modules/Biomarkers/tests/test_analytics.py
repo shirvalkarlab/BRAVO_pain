@@ -821,3 +821,43 @@ def test_assign_stim_eras_uses_locf_not_nocb():
     # explicit contrast: the buggy NOCB (searchsorted left, no -1) would call t=999 -> HIGH.
     nocb_idx = int(_np.searchsorted(_np.asarray(stim_series["t"]), 999.0))   # -> 1 -> 3.0 mA -> HIGH
     assert stim_series["y"][nocb_idx] == 3.0, "sanity: NOCB would have mislabeled t=999 as HIGH"
+
+
+def test_pain_series_epochs_match_pro_match_arrays():
+    """pain_series and _pro_match_arrays must agree on PRO epoch seconds to the second — both read
+    the canonical UTC instant (ingestion-normalized _pro_time_utc, or the same localized parse as a
+    fallback). Guards the 7-8 h timezone smear (RCS08 live readout bug: 67/682 instead of 290/682).
+    FIXHANDOUT_pro_timezone_mismatch."""
+    import pandas as pd, numpy as np
+    from modules.Biomarkers.routines import availability
+    from modules.Biomarkers import bravo_service as bs
+    # synthetic pro_df: one summer (PDT, +7h) and one winter (PST, +8h) timestamp
+    df = pd.DataFrame({
+        "date_time_s1_daily": ["2025-07-20 14:00:00", "2025-12-20 14:00:00"],
+        "vas": [50.0, 60.0],
+    })
+    # Ingestion normalizer adds the canonical _pro_time_utc column.
+    df = bs._normalize_pro_times(df)
+    assert "_pro_time_utc" in df.columns, "ingestion did not add _pro_time_utc"
+    back_t, _ = bs._pro_match_arrays(df, "vas")
+    live = availability.pain_series(df, "vas")
+    assert np.allclose(np.sort(back_t), np.sort(np.asarray(live["t"]))), \
+        "pain_series epochs drift from _pro_match_arrays (timezone bug regressed)"
+    # PDT row: 14:00 local -> 21:00 UTC; PST row: 14:00 local -> 22:00 UTC. Confirm the DST-correct
+    # offset vs the naive-as-UTC interpretation (which would be 7-8 h earlier).
+    naive = pd.to_datetime(df["date_time_s1_daily"]).view("int64").to_numpy() / 1e9
+    diff = np.sort(back_t) - np.sort(naive)
+    assert set(np.round(diff).astype(int)) == {7 * 3600, 8 * 3600}, \
+        f"expected +7h (PDT) and +8h (PST) corrections, got {diff}"
+
+
+def test_normalize_pro_times_idempotent_and_safe():
+    """_normalize_pro_times is idempotent and a no-op on empty/None / already-normalized frames."""
+    import pandas as pd
+    from modules.Biomarkers import bravo_service as bs
+    assert bs._normalize_pro_times(None) is None
+    df = pd.DataFrame({"date_time_s1_daily": ["2025-07-20 14:00:00"], "vas": [50.0]})
+    once = bs._normalize_pro_times(df)
+    first = once["_pro_time_utc"].copy()
+    twice = bs._normalize_pro_times(once)   # must not double-localize
+    assert (twice["_pro_time_utc"] == first).all(), "second normalize shifted the column"

@@ -131,7 +131,15 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     pandas.DataFrame  (the combined aligned timeline)
     """
     df = pro_df.copy()
-    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
+    # PRO TIMES: prefer the canonical `_pro_time_utc` column that bravo_service._load_pros adds at
+    # ingestion (DST-aware CA-local -> tz-naive UTC). Parsing the raw `timestamp_col` naively here
+    # left the legacy chronic-detector / same-day matching path 7-8 h early vs the device's UTC
+    # session times (PARITY audit §2). Fall back to the raw column for DataFrames built outside
+    # _load_pros. Either way `timestamp_col` is overwritten with the correct instant from here on.
+    if "_pro_time_utc" in df.columns:
+        df[timestamp_col] = pd.to_datetime(df["_pro_time_utc"], errors="coerce")
+    else:
+        df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
     df["_date"] = df[timestamp_col].dt.date
 
     if target == "session":

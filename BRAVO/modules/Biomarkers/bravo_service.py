@@ -1091,7 +1091,23 @@ def _resolve_field_map(request_data, participant):
 
 
 def _load_pros(request_data, participant=None):
-    """Resolve the tidy PRO DataFrame (canonical columns: `date_time_s1_daily`, `nrs`, `vas`, ...).
+    """Resolve the tidy PRO DataFrame (canonical columns: `date_time_s1_daily`, `nrs`, `vas`, ...),
+    NORMALIZED to a canonical UTC time column at this single ingestion choke-point.
+
+    REDCap delivers survey timestamps as the participant's naive California-local wall-clock string.
+    Every downstream consumer that re-parses that raw string risks forgetting the DST-aware
+    local->UTC correction (that is exactly how `availability.pain_series` drifted 7-8 h while
+    `_pro_match_arrays` stayed correct — FIXHANDOUT_pro_timezone_mismatch). To make a naive local
+    string un-representable downstream, we compute the correct UTC instant ONCE here, in a derived
+    `_pro_time_utc` column, and every reader (`_pro_match_arrays`, `availability.pain_series`,
+    `pain_scores_for_participant`, ...) consumes that column instead of re-localizing.
+    """
+    df = _load_pros_raw(request_data, participant)
+    return _normalize_pro_times(df)
+
+
+def _load_pros_raw(request_data, participant=None):
+    """Resolve the tidy PRO DataFrame from its source (no time normalization — see `_load_pros`).
 
     Priority:
       1. `ProcessedPRO` in the request body (a list of already-tidy dicts).
@@ -1525,16 +1541,46 @@ def _pro_timestamps_utc(pro_df):
     return ts_utc
 
 
+# Canonical UTC PRO-time column name added by `_normalize_pro_times` at ingestion. Every reader that
+# needs a PRO instant must consume THIS column (tz-naive UTC datetime64), never re-parse the raw
+# local string. Centralizing the localization here is the architectural fix from
+# FIXHANDOUT_pro_timezone_mismatch (so the next reader can't reintroduce the 7-8 h smear).
+_PRO_TIME_UTC_COL = "_pro_time_utc"
+
+
+def _normalize_pro_times(pro_df):
+    """Add the canonical `_pro_time_utc` column (DST-aware CA-local -> tz-naive UTC) to `pro_df`,
+    in place + returned. No-op when `pro_df` is None/empty or lacks the raw timestamp column, or
+    when the canonical column is already present (idempotent — safe to call more than once)."""
+    if pro_df is None or len(pro_df) == 0:
+        return pro_df
+    if _PRO_TIME_UTC_COL in pro_df.columns:
+        return pro_df
+    if _PRO_TIME_COL in pro_df.columns:
+        pro_df[_PRO_TIME_UTC_COL] = _pro_timestamps_utc(pro_df)
+    return pro_df
+
+
+def _pro_times_utc_series(pro_df):
+    """Return the tz-naive UTC PRO datetime Series, preferring the canonical normalized column when
+    present (the ingestion-normalized form) and falling back to a fresh localized parse for
+    DataFrames built outside `_load_pros` (e.g. standalone tests). Single read path for every
+    consumer so the live and offline epochs are bit-identical."""
+    if pro_df is not None and _PRO_TIME_UTC_COL in getattr(pro_df, "columns", []):
+        return pd.to_datetime(pro_df[_PRO_TIME_UTC_COL], errors="coerce")
+    return _pro_timestamps_utc(pro_df)
+
+
 def _pro_match_arrays(pro_df, label_metric):
     """Extract (timestamps_epoch_s, metric_values) for PRO<->PSD time matching.
 
     Returns (np.ndarray, np.ndarray) of equal length over the rows that have BOTH a parseable
     timestamp and a finite metric value, or None if unavailable. Timestamps are DST-corrected
     California-local -> UTC (see `_pro_timestamps_utc`)."""
-    if pro_df is None or len(pro_df) == 0 or _PRO_TIME_COL not in pro_df.columns \
-            or label_metric not in pro_df.columns:
+    if pro_df is None or len(pro_df) == 0 or label_metric not in pro_df.columns \
+            or (_PRO_TIME_COL not in pro_df.columns and _PRO_TIME_UTC_COL not in pro_df.columns):
         return None
-    ts = _pro_timestamps_utc(pro_df)
+    ts = _pro_times_utc_series(pro_df)
     val = pd.to_numeric(pro_df[label_metric], errors="coerce")
     ok = ts.notna() & val.notna()
     if ok.sum() == 0:
@@ -3124,13 +3170,13 @@ def pain_scores_for_participant(request_data):
                 "message": "No pain-score reports found. Set REDCAP_API_URL / REDCAP_API_TOKEN "
                            "(or pass ProcessedPRO) to load this patient's REDCap surveys."}
 
-    ts_col = "date_time_s1_daily"
-    if ts_col not in pro.columns:
+    if _PRO_TIME_COL not in pro.columns and _PRO_TIME_UTC_COL not in pro.columns:
         return {"metrics": [], "n_reports": 0,
                 "message": "PRO data has no 'date_time_s1_daily' timestamp column."}
 
-    # DST-aware California-local -> UTC, so the pain trace shares the device's UTC time axis.
-    t = _pro_timestamps_utc(pro)
+    # Canonical UTC instant (prefers the ingestion-normalized _pro_time_utc column; DST-aware
+    # CA-local -> UTC), so the pain trace shares the device's UTC time axis.
+    t = _pro_times_utc_series(pro)
     metrics = []
     for key, label, rng_ in PAIN_METRICS:
         if key not in pro.columns:

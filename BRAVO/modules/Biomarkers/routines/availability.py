@@ -174,25 +174,42 @@ def extract_availability(recordings_by_type, region_map=None):
     return records
 
 
-def pain_series(pro_df, metric, timestamp_col="date_time_s1_daily"):
+def pain_series(pro_df, metric, timestamp_col="date_time_s1_daily", utc_col="_pro_time_utc"):
     """Real patient-reported pain series for the shared-axis pain row.
 
     Returns {"metric": metric, "t": [epoch_s...], "y": [value...]} sorted by time, dropping rows
     with a missing timestamp or metric value. `pro_df` is the REDCap PRO table already loaded by
     bravo_service._load_pros; `metric` is the resolved LabelMetric (nrs/vas/.../composite).
+
+    PRO TIMES: prefer the canonical `_pro_time_utc` column that bravo_service._load_pros adds at
+    ingestion (DST-aware CA-local -> tz-naive UTC). Epochs come from `.view("int64")/1e9` — the SAME
+    convention bravo_service._pro_match_arrays uses — NOT Timestamp.timestamp(), which would re-apply
+    a tz interpretation to the tz-naive UTC value and reintroduce the offset. This keeps the live
+    pain row bit-identical to the offline match pool. Falls back to a localize-free naive parse of
+    `timestamp_col` ONLY for DataFrames built outside _load_pros (the historical 7-8 h-early path);
+    production always carries the normalized column. (FIXHANDOUT_pro_timezone_mismatch)
     """
     if pro_df is None or metric is None or len(pro_df) == 0:
         return {"metric": metric, "t": [], "y": []}
-    if timestamp_col not in pro_df.columns or metric not in pro_df.columns:
+    if metric not in pro_df.columns:
         return {"metric": metric, "t": [], "y": []}
     import pandas as pd
-    ts = pd.to_datetime(pro_df[timestamp_col], errors="coerce")
+    import numpy as np
+    if utc_col in pro_df.columns:
+        ts = pd.to_datetime(pro_df[utc_col], errors="coerce")
+    elif timestamp_col in pro_df.columns:
+        ts = pd.to_datetime(pro_df[timestamp_col], errors="coerce")
+    else:
+        return {"metric": metric, "t": [], "y": []}
     vals = pd.to_numeric(pro_df[metric], errors="coerce")
     keep = ts.notna() & vals.notna()
-    pairs = sorted(zip(ts[keep], vals[keep]), key=lambda p: p[0])
+    ts_k = ts[keep]
+    ep = (ts_k.view("int64").to_numpy() / 1e9)
+    vy = vals[keep].to_numpy(dtype=float)
+    order = np.argsort(ep)
     return {"metric": metric,
-            "t": [p[0].timestamp() for p in pairs],
-            "y": [float(p[1]) for p in pairs]}
+            "t": ep[order].tolist(),
+            "y": vy[order].tolist()}
 
 
 def stim_series(chronic_recordings):
