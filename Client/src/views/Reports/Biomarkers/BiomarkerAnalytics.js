@@ -142,23 +142,33 @@ function SpectralFeatureImportance({ scan, pain, HI, LO }) {
       legend: { orientation: "h", y: -0.20, groupclick: "togglegroup", font: { size: 13 },
                 tracegroupgap: 14 },
       shapes,
+      // Plotly preserves user UI state (legend visibility, zoom, axis ranges, selections) across
+      // Plotly.react calls whenever `uirevision` is unchanged. We use a constant string here so
+      // every re-render of this effect (e.g. a band click that re-builds traces with new
+      // customdata) keeps whichever channels the user has toggled off in the legend. The toolbar
+      // "Reset axes" button still works — it's a user action, not a react call.
+      uirevision: "biomarker-scan",
+      // Legend group selection follows the same rule — explicit so a band click doesn't reset it.
+      legend_uirevision: "biomarker-scan-legend",
       annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
         yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
         showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
     };
-    // Preserve per-trace legend on/off state across re-renders (e.g. a band click re-runs this
-    // effect with freshly built traces that have no `visible` field, which would otherwise reset
-    // every manually hidden trace back to visible:true). Read the current visibility off the live
-    // graph div keyed by the unique trace `name`, then re-apply it to the new traces. groupclick is
-    // 'togglegroup', so a group toggle hides both that channel's r and AUC traces — capturing
-    // per-name visibility reproduces that correctly. Skip on first render (no existing data).
+    // Fallback preservation of per-trace legend on/off state (belt-and-suspenders for the
+    // uirevision above, and for plotly.js versions that don't honor uirevision for trace
+    // visibility). Read the current visibility off the live graph div keyed by the unique trace
+    // `name`, then re-apply it to the new traces. groupclick is 'togglegroup', so a group toggle
+    // hides both that channel's r and AUC traces — capturing per-name visibility reproduces that
+    // correctly. We treat anything that's NOT explicitly `true` as a hide signal — that catches
+    // "legendonly" (the value plotly sets on legend click) and any other non-true sentinel.
     const prevData = ref.current.data;
     if (prevData && prevData.length === traces.length) {
       const visByName = {};
       prevData.forEach((t) => { if (t && t.name != null) visByName[t.name] = t.visible; });
       traces.forEach((t) => {
-        if (Object.prototype.hasOwnProperty.call(visByName, t.name) && visByName[t.name] !== undefined) {
-          t.visible = visByName[t.name];
+        if (Object.prototype.hasOwnProperty.call(visByName, t.name)) {
+          const prev = visByName[t.name];
+          if (prev !== undefined && prev !== true) t.visible = prev;
         }
       });
     }
