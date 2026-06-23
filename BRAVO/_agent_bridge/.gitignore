@@ -3,3 +3,33 @@ inbox/
 outbox/
 processed/
 logs/
+
+# One-off analysis / probe / smoke scripts written through the bridge. The tracked
+# infrastructure (agent_runner.py, boot.sh, bridge_client.py, run_tests.py,
+# HANDOFF_agent_bridge.md) is force-added below; everything else here is scratch.
+audit_*.py
+probe_*.py
+phase*.py
+grab_*.py
+parity_probe*.py
+verify_*.py
+smoke_*.py
+proto_*.py
+diag*.py
+dbg*.py
+check_*.py
+
+# Data dumps produced by those scripts — never commit (CSV/NPZ/figures/JSON outputs).
+*.csv
+*.npz
+*.png
+*.json
+*.parquet
+
+# Keep the bridge infrastructure tracked regardless of the patterns above.
+!agent_runner.py
+!boot.sh
+!bridge_client.py
+!run_tests.py
+!HANDOFF_agent_bridge.md
+!.gitignore
