@@ -276,9 +276,22 @@ def align_and_standardize_label(label):
 # the matrix-cache key (bravo_service): changing it invalidates the cache so PSDs are re-Welch'd.
 WELCH_MAX_SECONDS = 30.0
 
+# Maximum fraction of a Welch window that may be MISSING (zero-filled) before the window is rejected.
+# Background: BrainSenseStream.saveBrainSenseStreams' FixBreaking block concatenates consecutive,
+# time-separated TD recordings and ZERO-FILLS the inter-recording gap (up to a 30 s ceiling), marking
+# those samples 1 in the recording's `Missing` array (verified firing on real RCS08 data:
+# AUDIT_streaming_concatenation_RCS08.md). Those zeros are not neural signal — Welch'ing over them
+# deflates broadband power and leaks spectrally. A window whose missing fraction exceeds this
+# threshold is dropped (centered path) or flagged (first-window path) rather than returned as a
+# trustworthy spectrum. The PowerDomain adapter already drops missing>0 samples; this brings the TD
+# Welch path to parity. Part of the TD PSD cache key (bravo_service `_TD_MISSING_VERSION`): changing
+# it invalidates the cache so PSDs are re-Welch'd.
+WELCH_MAX_MISSING_FRAC = 0.10
+
 
 def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
-                           f_set=F_SET, max_seconds=WELCH_MAX_SECONDS):
+                           f_set=F_SET, max_seconds=WELCH_MAX_SECONDS,
+                           missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
     """
     Compute one PSD epoch, shaped (1, len(chan_order), len(f_set)), from one streaming
     group. Signal-processing: 4th-order Butterworth high-pass at Wn=1/nyq, Welch nperseg=1024,
@@ -316,6 +329,19 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     n_keep = int(max_seconds * fs)
     if data.shape[-1] > n_keep:
         data = data[:, :n_keep]
+
+    # (a') Missing-aware rejection. `missing` is the recording's per-sample Missing flag (1 where the
+    # decoder zero-filled a dropped packet or a FixBreaking concatenation gap). Truncate it the SAME
+    # way as the data, then reject the whole window if too much of it is fabricated zeros — Welch over
+    # zero-fill biases the spectrum (see WELCH_MAX_MISSING_FRAC). Returning a NaN-filled PSD lets the
+    # downstream nan-aware aggregation (nanmean/nanstd across epochs) exclude it cleanly instead of
+    # pooling a deflated spectrum.
+    if missing is not None:
+        miss = np.asarray(missing, dtype=float).ravel()
+        if miss.size >= data.shape[-1]:
+            miss = miss[:data.shape[-1]]
+            if miss.size and float(np.mean(miss > 0)) > float(max_missing_frac):
+                return np.full((1, len(chan_order), len(f_set)), np.nan)
 
     data = filtfilt(b, a, data, axis=-1)
 
@@ -358,7 +384,8 @@ WELCH_CENTERED_MIN_SECONDS = 10.0   # floor: clipped windows shorter than this a
 
 def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s, *,
                           f_set=F_SET, win_s=WELCH_MAX_SECONDS,
-                          min_s=WELCH_CENTERED_MIN_SECONDS):
+                          min_s=WELCH_CENTERED_MIN_SECONDS,
+                          missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
     """Welch one rating-centered window per entry in `centers_s`, for ONE streaming recording.
 
     Parameters
@@ -416,6 +443,23 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
     hi = np.clip(ci + half, 0, N)
     dur_n = hi - lo
     kept_mask = dur_n >= min_n
+
+    # Missing-aware rejection (per rating-centered window). `missing` is the recording's per-sample
+    # Missing flag; a FixBreaking concatenation zero-fills the gap BETWEEN two merged sub-recordings,
+    # so a window centered on a PRO that sits near such a gap can be mostly fabricated zeros. Reject
+    # any window whose clipped [lo, hi) span is more than `max_missing_frac` missing — its PSD would
+    # be a deflated/leaked estimate, not neural signal. Uses a prefix-sum so the per-window fraction
+    # is O(1). A rejected center is treated exactly like an under-length one (dropped from kept_mask),
+    # so the caller's first-window fallback still gets a chance to match the rating to a cleaner PSD.
+    if missing is not None:
+        miss = np.asarray(missing, dtype=float).ravel()
+        if miss.size >= N:
+            miss = (miss[:N] > 0).astype(np.int64)
+            csum = np.concatenate(([0], np.cumsum(miss)))   # csum[k] = #missing in [0, k)
+            win_missing = csum[hi] - csum[lo]
+            frac = np.where(dur_n > 0, win_missing / np.maximum(dur_n, 1), 0.0)
+            kept_mask = kept_mask & (frac <= float(max_missing_frac))
+
     kept_idx = np.nonzero(kept_mask)[0]
     if kept_idx.size == 0:
         return (np.zeros((0, n_ch, len(f_set))), np.zeros((0,)), kept_mask)

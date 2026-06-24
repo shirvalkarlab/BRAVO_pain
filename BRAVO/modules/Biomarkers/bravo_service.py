@@ -442,6 +442,35 @@ _CHANNEL_CANON_VERSION = "v2_ring_aware"
 #     which greyed out every short-session TD lane and undercounted the matched pool.
 _TD_CENTERED_VERSION = "v2_fallback"
 
+# Version of the TD Missing-aware Welch rejection. Folded into the TD per-recording cache key (same
+# places as _TD_CENTERED_VERSION) so enabling/retuning the missing-fraction rejection re-Welch's the
+# TD-dependent caches without a full montage re-decode.
+#   v1_missing_aware: reject Welch windows whose Missing fraction exceeds WELCH_MAX_MISSING_FRAC, so
+#     FixBreaking concatenation zero-fill no longer biases the TD PSD (parity with the PowerDomain
+#     adapter, which already drops missing>0 samples).
+_TD_MISSING_VERSION = "v1_missing_aware"
+
+
+def _missing_time_vector(missing, nsamp):
+    """Collapse a recording's `Missing` field to a per-sample (n_samples,) 0/1 flag, or None.
+
+    The decoder stores Missing aligned to the Data array, which is (n_samples,) for a single channel
+    or (n_samples, n_ch) after hemisphere pairing. A sample is considered missing if ANY channel is
+    flagged there (the zero-fill from FixBreaking / dropped-packet insertion spans all channels, so
+    this is exact for those; an any-channel rule is the conservative choice regardless). Returns None
+    when no usable mask is present, so the Welch helpers keep their legacy (mask-free) behavior.
+    """
+    if missing is None:
+        return None
+    m = np.asarray(missing)
+    if m.size == 0:
+        return None
+    if m.ndim == 2:
+        # (n_samples, n_ch) or (n_ch, n_samples) -> reduce over the channel axis to (n_samples,)
+        axis = 1 if m.shape[0] == nsamp else (0 if m.shape[1] == nsamp else 1)
+        m = (np.asarray(m) > 0).any(axis=axis)
+    return np.asarray(m).ravel()
+
 
 def _canon_channel(name):
     """Normalize a Medtronic channel name to the canonical bipolar form used by `_MAIN_BIPOLAR`.
@@ -554,8 +583,14 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
             if in_win.size:
                 centers_s = in_win - t0   # offsets from session start (s)
                 try:
+                    # Missing mask aligned to the TIME axis of `sig` (n_ch, n_samples). The decoder
+                    # stores Missing as (n_samples,) or (n_samples, n_ch); collapse to a per-sample
+                    # flag (any channel missing -> sample missing) so the centered Welch can reject
+                    # windows dominated by FixBreaking zero-fill.
+                    miss_vec = _missing_time_vector(r.get("Missing"), nsamp)
                     psd_k, used_k, kept = _sp.welch_rating_centered(
-                        sig, keep_names, fs, keep_names, centers_s)  # (K,k,F),(K,),(len,)
+                        sig, keep_names, fs, keep_names, centers_s,
+                        missing=miss_vec)  # (K,k,F),(K,),(len,)
                     kept_times = in_win[kept]   # PRO timestamps that produced a PSD
                     psd_k = np.asarray(psd_k)
                     for kk in range(psd_k.shape[0]):
@@ -572,10 +607,19 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
             # else: no overlapping rating (or all dropped by the floor) -> fall through to first-window
 
         try:
-            psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names)  # (1, k, F)
+            miss_vec = _missing_time_vector(r.get("Missing"), nsamp)
+            psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names,
+                                             missing=miss_vec)  # (1, k, F)
         except Exception:
             continue
         psd = np.asarray(psd)
+        # Missing-aware rejection: welch_psd_for_instance returns an all-NaN PSD when the first
+        # `WELCH_MAX_SECONDS` window is more than WELCH_MAX_MISSING_FRAC zero-fill (e.g. a short
+        # recording that a FixBreaking merge padded with a gap). Skip emitting a row for it rather
+        # than storing a deflated spectrum; the rating then matches a cleaner montage/event PSD if
+        # one is in window, exactly as an un-decodable recording would behave.
+        if not np.isfinite(psd).any():
+            continue
         # Duration (s) actually used by Welch for this recording = min(window, available). Reported
         # downstream as mean +/- SD so the clinician knows the TD epoch length feeding each PSD.
         used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
@@ -722,8 +766,11 @@ def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
     # `_TD_CENTERED_VERSION` rides along only for the rating-centered TD recordings (pro_sig set), so
     # a change to the centering/fall-back rule invalidates exactly those entries, not montage/survey.
     p = f"_p{pro_sig}_{_TD_CENTERED_VERSION}" if pro_sig else ""
+    # `_TD_MISSING_VERSION` rides in the BASE key (unconditional): the Missing-aware rejection runs in
+    # the first-window path too, which serves montage/survey/event recordings (pro_sig=""), so every
+    # entry must invalidate when the rejection rule changes.
     return os.path.join(_psd_rows_cache_dir(),
-                        f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}{p}.npz")
+                        f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}{p}.npz")
 
 
 def _save_recording_psd_rows(path, rows):
@@ -917,6 +964,9 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     # Channel-canonicalization rule is part of the matrix CONTENT (it decides which channels enter
     # and under what canonical name), so a rule change must invalidate the cache and force a re-Welch.
     parts.append(f"chan_canon:{_CHANNEL_CANON_VERSION}")
+    # Missing-aware TD Welch rejection is part of the matrix CONTENT (it decides which windows yield a
+    # spectrum), and it runs in the first-window path too, so fold it in unconditionally.
+    parts.append(f"td_missing:{_TD_MISSING_VERSION}")
     # Rating-centered TD spectra depend on the PRO set, so it is part of the matrix CONTENT: fold the
     # PRO-set signature in (empty when pro_times is None -> the legacy first-window matrix key, fully
     # back-compatible). A PRO add/remove/shift changes this and re-Welch's the TD rows; montage/event

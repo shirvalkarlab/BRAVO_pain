@@ -260,3 +260,42 @@ never needed pandas2ri.
 - Full module suite: **PASS=133 FAIL=0** (run_tests.py, analytics reloaded in live container).
 
 Gunicorn `--reload` picks up the edit automatically. No image rebuild needed.
+
+---
+
+## Fix A — Missing-aware TD Welch epochs (concatenation zero-fill no longer biases the PSD)
+
+**Date:** 2026-06-24 (this session). **Files:** `routines/streaming_psd.py`, `bravo_service.py`,
+new `tests/test_welch_missing_aware.py`. **Audits:** `AUDIT_streaming_concatenation_RCS08.md`,
+`AUDIT_concat_vs_PRO_matching_RCS08.md`.
+
+**Background.** `BrainSenseStream.saveBrainSenseStreams`' `FixBreaking` block concatenates
+consecutive, time-separated TD recordings and ZERO-FILLS the inter-recording gap (≤30 s ceiling),
+marking those samples 1 in the recording's `Missing` array. Verified firing on real RCS08 data:
+2 of 3 multi-time sessions merged pairs, zero-filling real gaps of 26.0 / 29.5 / 25.5 s. The TD→Welch
+adapter ignored `Missing` (while the PowerDomain adapter already drops `missing>0`), so those zeros
+entered the Welch PSD as genuine signal — deflating broadband power and leaking spectrally.
+
+**Prerequisite check (done first, per PI):** confirmed neural matching is ROBUST to concatenation
+before touching the PSD. Across all 224 ingested RCS08 TD recordings and 678 PROs, concatenation
+changes ZERO PRO→neural matches (only 2/678 PROs fall within the 60-min tolerance of any TD start;
+both match identically with/without concat). See AUDIT_concat_vs_PRO_matching_RCS08.md. The risk is
+real structurally (nearest-fallback keys on a single StartTime) but nil empirically here because
+streaming sessions and pain ratings are almost entirely disjoint in time.
+
+**Fix.** Added `WELCH_MAX_MISSING_FRAC = 0.10` and an optional `missing=` arg to both
+`welch_psd_for_instance` (first-window path → returns all-NaN when the window exceeds the floor, and
+`_welch_rows_into` skips storing a NaN row) and `welch_rating_centered` (per-window prefix-sum
+rejection → drops over-missing centers from `kept_mask`, so the caller's first-window fallback still
+gets a clean shot). `_welch_rows_into` collapses each recording's `Missing` to a per-sample flag via
+new helper `_missing_time_vector` (any-channel rule) and passes it to both Welch calls. Cache
+invalidation: new `_TD_MISSING_VERSION = "v1_missing_aware"` folded into the per-recording TD cache
+key (BASE, unconditional — the first-window path serves montage/survey too) and the matrix signature.
+
+**Validation (in-container via bridge):**
+- Full module suite **PASS=138 FAIL=0** (133 prior + 5 new missing-aware tests).
+- Real-data effect: two real RCS08 recordings with 32% and 15% first-window missing produce a finite
+  (deflated) PSD under the legacy path and are correctly REJECTED under fix A.
+- No regression: a real clean (0% missing) recording yields byte-identical rows pre/post fix.
+
+Gunicorn `--reload` picks up the edit. No image rebuild needed.
