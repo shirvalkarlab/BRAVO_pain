@@ -19,6 +19,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
@@ -74,6 +75,7 @@ function solveCutpoint(roc, rule, costRatio) {
 
 function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint }) {
   const ref = useRef(null);
+  const histRef = useRef(null);
   const [matchDir, setMatchDir] = useState("prior");      // deploy default = causal forecasting
   const [rule, setRule] = useState("youden");
   const [logCost, setLogCost] = useState(0);              // log2(cFP/cFN); 0 => symmetric
@@ -141,11 +143,11 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",
         line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
       { x: roc.fpr, y: roc.tpr, type: "scatter", mode: "lines", name: "ROC",
-        line: { color: "#1A73E8", width: 2.2 }, showlegend: false,
+        line: { color: PAL.accent, width: 2.2 }, showlegend: false,
         hovertemplate: "FPR %{x:.2f} · TPR %{y:.2f}<extra></extra>" },
       // cut-point marker placeholder — kept at a fixed trace index so restyle can move it.
       { x: [], y: [], type: "scatter", mode: "markers", name: "cut-point", showlegend: false,
-        marker: { color: "#0a7f3f", size: 12, line: { color: "#fff", width: 2 } },
+        marker: { color: PAL.cutpoint, size: 12, line: { color: "#fff", width: 2 } },
         hovertemplate: "cut-point<extra></extra>" },
     ];
     const layout = {
@@ -167,7 +169,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     if (!gd || !roc || !gd.data) return;
     if (op) {
       // Degenerate operating points get an amber marker so the warning box and the curve agree.
-      const mColor = op.degenerate ? "#B17500" : "#0a7f3f";
+      const mColor = op.degenerate ? PAL.cutpointDegenerate : PAL.cutpoint;
       Plotly.restyle(gd, {
         x: [[op.fpr]], y: [[op.tpr]],
         "marker.color": [mColor],
@@ -193,8 +195,67 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     }
   }, [roc, opThr, opRule, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Purge only on unmount (NOT on every roc/op change) so the figure node is reused across refits.
-  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
+  // (C) Draw the FEATURE-DISTRIBUTION HISTOGRAM base once per ROC dataset: the per-sample oriented
+  // log-power feature split into pain-high vs pain-low, overlaid on shared bins. This is the most
+  // direct view of WHY the band separates pain — it shows the clinician the class overlap the AUC
+  // summarizes and where any cut-point falls within it. The feature scale here is identical to the
+  // cut-point threshold scale (op.threshold), so the threshold line (effect D) maps directly on top.
+  // Drawn once and updated in place; the threshold line is a layout shape moved by relayout, never a
+  // rebuild — same no-reset discipline as the ROC.
+  useEffect(() => {
+    const gd = histRef.current;
+    const fh = roc && roc.feature_hist;
+    if (!gd || !fh) return;
+    const traces = [
+      { x: fh.bin_centers, y: fh.counts_low, type: "bar", name: "pain-low",
+        marker: { color: PAL.painLow, opacity: 0.62 },
+        hovertemplate: "low pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
+      { x: fh.bin_centers, y: fh.counts_high, type: "bar", name: "pain-high",
+        marker: { color: PAL.painHigh, opacity: 0.62 },
+        hovertemplate: "high pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
+    ];
+    const binW = (fh.bin_centers.length > 1)
+      ? (fh.bin_centers[1] - fh.bin_centers[0]) : (fh.x_max - fh.x_min) || 1;
+    const layout = {
+      barmode: "overlay", bargap: 0.04,
+      margin: { l: 46, r: 12, t: 8, b: 38 }, height: 168,
+      xaxis: { title: { text: "Oriented band power (cut-point scale)", font: { size: 10.5 } },
+        zeroline: false, tickfont: { size: 9.5 },
+        range: [fh.x_min - binW, fh.x_max + binW] },
+      yaxis: { title: { text: "samples", font: { size: 10 } }, zeroline: false,
+        tickfont: { size: 9.5 } },
+      legend: { orientation: "h", x: 0, y: 1.16, font: { size: 9.5 } },
+      shapes: [], annotations: [],
+    };
+    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
+  }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // (D) Move ONLY the threshold line on the histogram when the operating point changes — a vertical
+  // layout shape via relayout, so dragging the cost slider slides the line across the class overlap
+  // live with no histogram rebuild.
+  useEffect(() => {
+    const gd = histRef.current;
+    const fh = roc && roc.feature_hist;
+    if (!gd || !fh || !gd.layout) return;
+    if (opThr != null && Number.isFinite(Number(opThr))) {
+      const lineColor = (op && op.degenerate) ? PAL.cutpointDegenerate : PAL.thresholdLine;
+      Plotly.relayout(gd, {
+        shapes: [{ type: "line", x0: opThr, x1: opThr, yref: "paper", y0: 0, y1: 1,
+          line: { color: lineColor, width: 2, dash: "dash" } }],
+        annotations: [{ x: opThr, y: 1, yref: "paper", yanchor: "bottom",
+          text: `cut ≥ ${fmt(opThr)}`, showarrow: false, font: { size: 9.5, color: lineColor },
+          xanchor: opThr > (fh.x_min + fh.x_max) / 2 ? "right" : "left" }],
+      });
+    } else {
+      Plotly.relayout(gd, { shapes: [], annotations: [] });
+    }
+  }, [roc, opThr, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Purge only on unmount (NOT on every roc/op change) so the figure nodes are reused across refits.
+  useEffect(() => {
+    const g1 = ref.current; const g2 = histRef.current;
+    return () => { if (g1) Plotly.purge(g1); if (g2) Plotly.purge(g2); };
+  }, []);
 
   return (
     <Card sx={{ width: "100%" }}>
@@ -222,7 +283,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             Computing rating-clustered ROC (bootstrap CI)…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: "#9A3324" }}>
+          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>
             {`ROC unavailable: ${err}.`}
           </MDTypography>
         ) : null}
@@ -230,6 +291,12 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         {/* Always-mounted figure container. Hidden (not unmounted) when there's no ROC yet, so the
             Plotly graph object survives loading/refit cycles instead of being torn down. */}
         <div ref={ref} style={{ width: "100%", display: roc ? "block" : "none" }} />
+
+        {/* Feature-distribution histogram beneath the ROC (pain-high vs pain-low), with the cut-point
+            threshold line drawn on top. Also always-mounted so it survives refits. Only shown when
+            the backend returns feature_hist (older payloads / off-band candidates may omit it). */}
+        <div ref={histRef}
+          style={{ width: "100%", display: roc && roc.feature_hist ? "block" : "none" }} />
 
         {roc && !loading && !err ? (
           <>
@@ -273,10 +340,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
 
             {op ? (
               <MDBox mt={1} p={1} sx={{
-                backgroundColor: op.degenerate ? "#fff6e6" : "#f3f8f4", borderRadius: "6px",
-                border: op.degenerate ? "1px solid #f3d99b" : "none" }}>
+                backgroundColor: op.degenerate ? PAL.warnFill : PAL.passFill, borderRadius: "6px",
+                border: op.degenerate ? `1px solid ${PAL.warnBorder}` : "none" }}>
                 {op.degenerate ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: "#B17500", mb: 0.3 }}>
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warn, mb: 0.3 }}>
                     ⚠ Degenerate operating point — this cut alarms almost{op.sensitivity < 0.30 ? " never" : " always"} (sensitivity {fmt(op.sensitivity)} · specificity {fmt(op.specificity)}). Not a deployable threshold; move the cost slider toward balance.
                   </MDTypography>
                 ) : null}

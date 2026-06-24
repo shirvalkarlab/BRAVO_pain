@@ -26,6 +26,7 @@ import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
+import PAL from "./palette";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -46,13 +47,14 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "—"
   : Number(p) < 0.001 ? Number(p).toExponential(1) : Number(p).toFixed(3));
 
-// Verdict badge color, mirrors the discovery view's ValidationReadout palette.
+// Verdict badge color, mirrors the discovery view's ValidationReadout palette (now via the shared
+// colorblind-safe roles: stim-stable = pass, stim-dependent = warn, failed = fail).
 function verdictColor(verdict) {
   const v = verdict || "";
-  if (/VALIDATED \(stim-stable\)/.test(v)) return "#0a7f3f";
-  if (/VALIDATED \(stim-dependent\)/.test(v)) return "#B17500";
-  if (/failed/.test(v)) return "#9A3324";
-  return "#6c757d";
+  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.pass;
+  if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
+  if (/failed/.test(v)) return PAL.fail;
+  return PAL.neutral;
 }
 
 // A labeled key/value row used across the identity + evidence blocks.
@@ -101,7 +103,7 @@ function BandCandidateIdentity({ bc, envelope }) {
               <KV label="Center → FFT-snap">{`${fmt(bc.center_freq_hz, 2)} → ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}</KV>
               <KV label="Polarity">{bc.polarity || "—"}</KV>
               <KV label="Suggested mode">
-                {bc.suggested_mode || <span style={{ color: "#B17500" }}>none — see note</span>}
+                {bc.suggested_mode || <span style={{ color: PAL.warn }}>none — see note</span>}
               </KV>
             </MDBox>
           </Grid>
@@ -113,9 +115,9 @@ function BandCandidateIdentity({ bc, envelope }) {
                 {`${fmt(ev.odds_ratio)} `}
                 {ev.or_lo != null && ev.or_hi != null ? `(95% CI ${fmt(ev.or_lo)}–${fmt(ev.or_hi)})` : ""}
                 {ev.credible_ci === false
-                  ? <span style={{ color: "#9A3324" }}> · narrow CI — re-bootstrap (Phase B)</span>
+                  ? <span style={{ color: PAL.fail }}> · narrow CI — re-bootstrap (Phase B)</span>
                   : ev.credible_ci === true
-                    ? <span style={{ color: "#0a7f3f" }}> · credible</span> : null}
+                    ? <span style={{ color: PAL.pass }}> · credible</span> : null}
               </KV>
               <KV label="p (glmer)">{fmtP(ev.p_glmer)}</KV>
               <KV label="Samples / eras">{`${ev.n_matched_samples ?? "—"} samples · ${ev.n_clusters ?? "—"} weekly eras`}</KV>

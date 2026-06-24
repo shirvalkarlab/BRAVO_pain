@@ -10,33 +10,20 @@
  *   3) Empirical µV²/LSB ratio — a confidence-rated FYI cross-check, explicitly NOT the deployable
  *      number.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Plotly from "plotly.js-dist";
 
-import { Card, Grid } from "@mui/material";
+import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
-function StatBox({ label, value, sub, color }) {
-  return (
-    <MDBox sx={{ textAlign: "center", px: 1 }}>
-      <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#999", fontWeight: "bold" }}>
-        {label}
-      </MDTypography>
-      <MDTypography variant="h6" sx={{ fontSize: 17, color: color || "#344767", lineHeight: 1.1 }}>
-        {value}
-      </MDTypography>
-      {sub ? (
-        <MDTypography variant="caption" sx={{ fontSize: 9, color: "#999" }}>{sub}</MDTypography>
-      ) : null}
-    </MDBox>
-  );
-}
-
 function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {
+  const pwRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
@@ -75,6 +62,59 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
   const pw = data && data.power;
   const lr = data && data.lsb_ratio;
 
+  // Draw the POWER-vs-N sufficiency curve once per payload: power to reject AUC=0.5 as the count of
+  // independent ratings grows, with the 80% target line, and markers at the current N and the N
+  // needed for 80% power. This replaces a 3-number readout a reviewer flagged — a clinician asking
+  // "do I have enough pain ratings yet?" reads the answer off the curve's shape and the gap between
+  // the two markers, not three separate figures. Plotly.react updates in place (no rebuild).
+  useEffect(() => {
+    const gd = pwRef.current;
+    const curve = pw && pw.available && pw.curve;
+    if (!gd || !curve || !Array.isArray(curve.n) || curve.n.length < 2) return;
+    const tgt = pw.target_power != null ? pw.target_power : 0.80;
+    const sufficient = !pw.more_data_needed;
+    const curColor = sufficient ? PAL.pass : PAL.warn;
+    const traces = [
+      // power curve
+      { x: curve.n, y: curve.power.map((p) => p * 100), type: "scatter", mode: "lines",
+        line: { color: PAL.accent, width: 2.2 }, hoverinfo: "skip", showlegend: false },
+      // current N marker
+      { x: [pw.n_ratings_current], y: [pw.power_current * 100], type: "scatter", mode: "markers",
+        marker: { color: curColor, size: 12, line: { color: "#fff", width: 2 } },
+        hovertemplate: `now: ${pw.n_ratings_current} ratings<br>power %{y:.0f}%<extra></extra>`,
+        showlegend: false },
+    ];
+    // needed-N marker (only when more data is needed and the number is known)
+    if (pw.more_data_needed && pw.n_ratings_needed != null) {
+      traces.push({
+        x: [pw.n_ratings_needed], y: [tgt * 100], type: "scatter", mode: "markers",
+        marker: { color: PAL.neutral, size: 11, symbol: "circle-open", line: { width: 2 } },
+        hovertemplate: `need ${pw.n_ratings_needed} for ${(tgt * 100).toFixed(0)}% power<extra></extra>`,
+        showlegend: false });
+    }
+    const nMax = Math.max(...curve.n);
+    const layout = {
+      margin: { l: 44, r: 12, t: 8, b: 36 }, height: 170,
+      xaxis: { title: { text: "independent pain ratings (N)", font: { size: 10.5 } },
+        zeroline: false, tickfont: { size: 9.5 }, range: [0, nMax * 1.02] },
+      yaxis: { title: { text: "power vs AUC 0.5 (%)", font: { size: 10 } },
+        range: [0, 102], zeroline: false, tickfont: { size: 9.5 }, dtick: 25 },
+      shapes: [
+        // 80% target line
+        { type: "line", x0: 0, x1: nMax * 1.02, y0: tgt * 100, y1: tgt * 100,
+          line: { color: PAL.pass, width: 1, dash: "dot" } },
+      ],
+      annotations: [
+        { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
+          text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
+          font: { size: 9, color: PAL.pass } },
+      ],
+    };
+    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
+  }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => { if (pwRef.current) Plotly.purge(pwRef.current); }, []);
+
   return (
     <Card sx={{ width: "100%" }}>
       <MDBox p={2}>
@@ -92,7 +132,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
             Anchoring to device Timeline LSB + computing power…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: "#9A3324" }}>
+          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>
             {`Unavailable: ${err}.`}
           </MDTypography>
         ) : data ? (
@@ -100,9 +140,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
             {/* Guard: a degenerate ROC operating point (alarm-always / alarm-never) must not be
                 presented as a confident device threshold. Warn before the big number. */}
             {cutDegenerate ? (
-              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: "#fff6e6", borderRadius: "6px",
-                border: "1px solid #f3d99b" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#B17500" }}>
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
+                border: `1px solid ` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warn }}>
                   ⚠ The selected ROC operating point is degenerate (near-zero sensitivity or
                   specificity). The threshold below is not clinically deployable — return to the ROC
                   panel and choose a balanced cut-point before programming.
@@ -112,12 +152,12 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
 
             {/* 1) THRESHOLD TO PROGRAM */}
             {tl && tl.available ? (
-              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: "#eef5ff", borderRadius: "6px",
-                border: "1px solid #cfe0fb" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#1A73E8" }}>
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
+                border: `1px solid ${PAL.accentBorder}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
                   THRESHOLD TO PROGRAM (device LSB)
                 </MDTypography>
-                <MDTypography variant="h4" sx={{ fontSize: 26, color: "#1A73E8", lineHeight: 1.1 }}>
+                <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.accent, lineHeight: 1.1 }}>
                   {`power ≥ ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
@@ -130,9 +170,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                 </MDTypography>
               </MDBox>
             ) : (
-              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: "#fff6e6", borderRadius: "6px",
-                border: "1px solid #f3d99b" }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#B17500" }}>
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
+                border: `1px solid ${PAL.warnBorder}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warn }}>
                   NO DEPLOYABLE LSB THRESHOLD
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
@@ -142,26 +182,21 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
               </MDBox>
             )}
 
-            {/* 2) POWER / SAMPLE-SIZE */}
+            {/* 2) POWER / SAMPLE-SIZE — a power-vs-N sufficiency curve instead of three numbers. */}
             {pw && pw.available ? (
               <MDBox mb={1.2}>
-                <Grid container alignItems="center">
-                  <Grid item xs={4}>
-                    <StatBox label="POWER (vs AUC 0.5)" value={`${fmt(pw.power_current * 100, 0)}%`}
-                      color={pw.power_current >= 0.8 ? "#0a7f3f" : "#B17500"}
-                      sub={`α=${fmt(pw.alpha, 2)}`} />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <StatBox label="RATINGS NOW" value={pw.n_ratings_current}
-                      sub="independent" />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <StatBox label="NEED FOR 80%" value={pw.n_ratings_needed ?? "—"}
-                      color={pw.more_data_needed ? "#B17500" : "#0a7f3f"}
-                      sub={pw.more_data_needed ? "more data" : "sufficient"} />
-                  </Grid>
-                </Grid>
-                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 9.5, mt: 0.4, textAlign: "center" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#999", fontWeight: "bold" }}>
+                  POWER vs SAMPLE SIZE
+                  <span style={{ fontWeight: "normal", color: pw.power_current >= 0.8 ? PAL.pass : PAL.warn }}>
+                    {`  —  now ${fmt(pw.power_current * 100, 0)}% at ${pw.n_ratings_current} ratings`}
+                  </span>
+                </MDTypography>
+                {/* curve when present (newer payloads); fall back to the readout line otherwise. */}
+                <div ref={pwRef}
+                  style={{ width: "100%", display: pw.curve ? "block" : "none" }} />
+                <MDTypography variant="caption" display="block" color="text"
+                  sx={{ fontSize: 9.5, mt: 0.2, textAlign: "center",
+                    color: pw.more_data_needed ? PAL.warn : PAL.pass, fontWeight: "bold" }}>
                   {pw.more_data_needed
                     ? `Underpowered: ~${(pw.n_ratings_needed - pw.n_ratings_current)} more independent pain ratings needed for 80% power.`
                     : "Adequately powered at the current rating count."}
@@ -181,7 +216,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
               {lr && lr.available ? (
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2 }}>
                   {`median ${lr.median.toExponential(2)} µV²/LSB `}
-                  <span style={{ color: lr.confidence === "low" ? "#9A3324" : "#B17500", fontWeight: "bold" }}>
+                  <span style={{ color: lr.confidence === "low" ? PAL.fail : PAL.warn, fontWeight: "bold" }}>
                     {`(confidence: ${lr.confidence})`}
                   </span>
                   {` · CV ${fmt(lr.cv)} · ${fmt(lr.fold_off_rule, 2)}× the 0.01 rule · n=${lr.n} paired sessions`}
