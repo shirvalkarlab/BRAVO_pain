@@ -71,6 +71,23 @@ function prettyContact(label) {
 }
 const toDate = (epoch_s) => new Date(epoch_s * 1000);
 
+// Robust low/high window from a sample list: the p_lo / p_hi percentiles (linear interpolation),
+// so a single LSB spike or dropout can't compress the visible trend. Used by the zoom-adaptive LSB
+// rescale to fill each lane with the 1st–99th percentile of the data currently in view. Returns
+// null when too few finite samples to be meaningful (caller falls back to the global window).
+function robustWindow(vals, pLo = 1, pHi = 99) {
+  const a = vals.filter((v) => v != null && Number.isFinite(v)).sort((x, y) => x - y);
+  if (a.length < 3) return null;
+  const q = (p) => {
+    const idx = (p / 100) * (a.length - 1);
+    const i = Math.floor(idx), f = idx - i;
+    return i + 1 < a.length ? a[i] * (1 - f) + a[i + 1] * f : a[i];
+  };
+  let lo = q(pLo), hi = q(pHi);
+  if (!(hi > lo)) { const m = (hi + lo) / 2 || 0; lo = m - 0.5; hi = m + 0.5; }  // degenerate guard
+  return [lo, hi];
+}
+
 // Human-readable date / clock-time / duration for the time-domain coverage-block hover. The block
 // rects are Plotly SHAPES (no hover), so the hover lives on invisible anchor markers; these helpers
 // build its three lines: acquisition date, streaming start time, and captured duration.
@@ -186,6 +203,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
   // plotly_relayout handler can recompute x1 against the live x-range (constant-PIXEL floor, true
   // length when zoomed in). Rebuilt on every draw; read only by the zoom handler.
   const tdRectsRef = useRef([]);
+  // Per-lane LSB band-power rescale state, rebuilt every draw and read by the zoom handler. Each
+  // entry carries the lane's pixel band [BP_LO,BP_HI], its GLOBAL magnitude window [full_lo,full_hi]
+  // (used at full-span so the default view is unchanged), the raw (unscaled) LSB samples per trace
+  // with their epoch-second timestamps, and the annotation indices of the lane's low/high LSB ticks.
+  // On zoom the handler recomputes a ROBUST window (1st–99th pct) over the samples visible in the
+  // live x-range and restyles the trace y + tick text, so the LSB mini-axis fills the lane.
+  const lsbScaleRef = useRef([]);
   const av = data && data.availability ? data.availability : null;
   // Binarization color mode is active only when the parent both selects it AND a live scan model
   // (matched PSDs at the current window) exists. `binOf(ch, t)` returns "high"|"low"|"excluded"|
@@ -300,6 +324,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const annotations = [];
     const X = "x", Y = "y";
     tdRectsRef.current = [];   // rebuilt this draw; the zoom handler resizes these TD rects
+    lsbScaleRef.current = [];   // rebuilt this draw; the zoom handler rescales the per-lane LSB axis
 
     // ---- LEFT-LABEL COLUMN GEOMETRY (robust, self-sizing) ------------------------------------
     // The left gutter holds THREE right-to-left columns that must never overlap each other or run
@@ -438,6 +463,19 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       if (ov) {
         const lo = ov.y_lo, hi = ov.y_hi;
         const sc = (v) => BP_LO + (BP_HI - BP_LO) * Math.min(Math.max((v - lo) / (hi - lo + 1e-9), 0), 1);
+        // Zoom-adaptive LSB rescale registration. `reg` collects everything the plotly_relayout
+        // handler needs to refit THIS lane's band-power mini-axis to the data currently in view:
+        //   - reg.samples : representative {t, v} magnitude points (chronic samples + session
+        //                   medians) used to compute the robust 1st–99th-pct window over the visible
+        //                   x-range. Span-wide view falls back to the global [full_lo, full_hi] so
+        //                   the default look is unchanged.
+        //   - reg.traces  : each scalable trace as {idx, raw} where `raw` is the UNSCALED LSB array
+        //                   aligned to the trace's y (nulls preserved), so the handler can re-map
+        //                   y = raw.map(scale) under the new window without rebuilding the figure.
+        //   - tickHiIdx/tickLoIdx : annotation indices of the lane's high/low LSB tick text, so the
+        //                   numbers shown on the left edge track the live window.
+        const reg = { BP_LO, BP_HI, full_lo: lo, full_hi: hi,
+                      samples: [], traces: [], tickHiIdx: null, tickLoIdx: null };
         // chronic real line — colored by sensing CENTER FREQUENCY (which changes over the implant
         // as the chronic 24/7 sensing band is reprogrammed). Split the decimated polyline into
         // contiguous same-frequency runs and draw each run in its band color (categorical
@@ -459,6 +497,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             // of the selected set" → dim. In multimodal mode it is colored by sensing center freq.
             const fc = binMode ? DIM_GREY_FAINT : (c == null ? "rgba(90,90,90,0.55)" : freqColor(c));
             const xs = ct.slice(seg, end), ys = cy.slice(seg, end);
+            reg.traces.push({ idx: traces.length, raw: ys });
+            xs.forEach((tt, ii) => reg.samples.push({ t: tt, v: ys[ii] }));
             traces.push({ type: "scattergl", mode: "lines",
               x: xs.map(D), y: ys.map(sc),
               line: { color: fc, width: 1.4 },
@@ -484,24 +524,33 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             // Streaming LSB sessions are band-power, not pooled PSDs → dim in binarization mode.
             const fc = binMode ? DIM_GREY_FAINT : freqColor(c);
             const bx = [], by = [], wx = [], wy = [], cd = [];
+            const byRaw = [], wyRaw = [], anchRaw = [];   // unscaled LSB, aligned to by/wy/anchor y
             ss.forEach((s) => {
               const x0 = D(s.t0), x1 = D(Math.max(s.t1, s.t0 + 86400 * 1.2)); // min visible width
               const ym = sc(s.med);
               // thick median bar as a 2-point horizontal segment (cheap vs filled rect per session)
               bx.push(x0, x1, null); by.push(ym, ym, null);
+              byRaw.push(s.med, s.med, null);
               // 10-90 whisker at session midpoint
               const xm = D((s.t0 + s.t1) / 2);
               wx.push(xm, xm, null); wy.push(sc(s.lo), sc(s.hi), null);
+              wyRaw.push(s.lo, s.hi, null);
+              anchRaw.push(s.med);
               cd.push([Math.round(s.med), Math.round(s.lo), Math.round(s.hi), fmtHz(c), s.n]);
+              // session median is the representative magnitude sample for the visible-window refit
+              reg.samples.push({ t: (s.t0 + s.t1) / 2, v: s.med });
             });
             // whiskers (thin, same color, no hover)
+            reg.traces.push({ idx: traces.length, raw: wyRaw });
             traces.push({ type: "scattergl", mode: "lines", x: wx, y: wy,
               line: { color: fc, width: 1 }, opacity: 0.5, hoverinfo: "skip", showlegend: false });
             // median bars (thick) — hover carries the session summary
+            reg.traces.push({ idx: traces.length, raw: byRaw });
             traces.push({ type: "scattergl", mode: "lines", x: bx, y: by,
               line: { color: fc, width: committed.has(ch) ? 5 : 6 },
               hoverinfo: "skip", showlegend: false });
             // invisible hover anchors at each session median (one marker per session, tiny count)
+            reg.traces.push({ idx: traces.length, raw: anchRaw });
             traces.push({ type: "scattergl", mode: "markers",
               x: ss.map((s) => D((s.t0 + s.t1) / 2)), y: ss.map((s) => sc(s.med)),
               marker: { size: 10, color: "rgba(0,0,0,0)" }, customdata: cd,
@@ -526,13 +575,17 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         }
         // real LSB mini-axis: low/high tick on the left edge so magnitude is legible
         if (committed.has(ch)) {
+          reg.tickHiIdx = annotations.length;
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_HI, text: `${Math.round(hi)}`,
             showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
+          reg.tickLoIdx = annotations.length;
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: BP_LO, text: `${Math.round(lo)}`,
             showarrow: false, xanchor: "right", font: { size: F_TICK, color: "#aaa" } });
           annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_TICK, y: (BP_LO + BP_HI) / 2,
             text: "<span style='font-size:13px;color:#bbb'>LSB</span>", showarrow: false, xanchor: "right" });
         }
+        // Register this lane for zoom-adaptive rescale only if it carries scalable LSB geometry.
+        if (reg.traces.length) lsbScaleRef.current.push(reg);
       } else {
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
@@ -879,11 +932,49 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       Plotly.relayout(gd, upd);
     };
     applyTdWidths();                              // set correct widths for the initial view
+
+    // Zoom-adaptive LSB band-power rescale: when zoomed into a time window, refit each lane's
+    // band-power mini-axis to the data IN VIEW, using a robust 1st–99th-percentile window so a
+    // single spike/dropout can't compress the trend. At (or near) full span, fall back to the lane's
+    // global window so the default look is identical to before. Restyles only the affected traces'
+    // y arrays + the two LSB tick numbers — one batched Plotly.restyle/relayout, no React re-render.
+    // The 3-left + 3-right row structure is untouched: this only remaps Y WITHIN each lane's band.
+    const FULL_SPAN_S = Math.max(t1 - t0, 1);
+    const applyLsbScales = () => {
+      const lanes = lsbScaleRef.current;
+      if (!lanes || !lanes.length || !gd._fullLayout || !gd._fullLayout.xaxis) return;
+      const xa = gd._fullLayout.xaxis;
+      const rng = xa.range;
+      const vLo = new Date(rng[0]).getTime() / 1000;   // visible window in epoch SECONDS
+      const vHi = new Date(rng[1]).getTime() / 1000;
+      // "Zoomed in" = the visible window is meaningfully narrower than the full span. At full view we
+      // keep the global window so nothing shifts from the original rendering.
+      const zoomedIn = (vHi - vLo) < 0.985 * FULL_SPAN_S;
+      const tyVals = [], tyIdx = [], annUpd = {};
+      lanes.forEach((L) => {
+        let lo = L.full_lo, hi = L.full_hi;
+        if (zoomedIn) {
+          const vis = L.samples.filter((p) => p.v != null && p.t >= vLo && p.t <= vHi).map((p) => p.v);
+          const w = robustWindow(vis, 1, 99);
+          if (w) { lo = w[0]; hi = w[1]; }   // else: not enough visible points -> keep global window
+        }
+        const span = (hi - lo) + 1e-9;
+        const sc = (v) => (v == null ? null
+          : L.BP_LO + (L.BP_HI - L.BP_LO) * Math.min(Math.max((v - lo) / span, 0), 1));
+        L.traces.forEach((tr) => { tyVals.push(tr.raw.map(sc)); tyIdx.push(tr.idx); });
+        if (L.tickHiIdx != null) annUpd[`annotations[${L.tickHiIdx}].text`] = `${Math.round(hi)}`;
+        if (L.tickLoIdx != null) annUpd[`annotations[${L.tickLoIdx}].text`] = `${Math.round(lo)}`;
+      });
+      if (tyIdx.length) Plotly.restyle(gd, { y: tyVals }, tyIdx);
+      if (Object.keys(annUpd).length) Plotly.relayout(gd, annUpd);
+    };
+    applyLsbScales();                             // set correct LSB scaling for the initial view
+
     const onRelayout = (ev) => {
       // Only react to x-range changes (zoom/pan/autorange), not to our own shape edits or y/legend.
       if (!ev) return;
       const touchedX = Object.keys(ev).some((k) => k.indexOf("xaxis") === 0) || ev.autosize;
-      if (touchedX) applyTdWidths();
+      if (touchedX) { applyTdWidths(); applyLsbScales(); }
     };
     gd.on("plotly_relayout", onRelayout);
     return () => { try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ } };
