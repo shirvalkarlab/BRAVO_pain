@@ -71,6 +71,21 @@ function prettyContact(label) {
 }
 const toDate = (epoch_s) => new Date(epoch_s * 1000);
 
+// Human-readable date / clock-time / duration for the time-domain coverage-block hover. The block
+// rects are Plotly SHAPES (no hover), so the hover lives on invisible anchor markers; these helpers
+// build its three lines: acquisition date, streaming start time, and captured duration.
+const fmtHoverDate = (epoch_s) => toDate(epoch_s).toLocaleDateString("en-US",
+  { year: "numeric", month: "short", day: "numeric" });
+const fmtHoverTime = (epoch_s) => toDate(epoch_s).toLocaleTimeString("en-US",
+  { hour: "2-digit", minute: "2-digit" });
+const fmtDur = (s) => {
+  if (s == null || !Number.isFinite(s) || s <= 0) return "—";
+  if (s < 90) return `${Math.round(s)} s`;
+  if (s < 5400) return `${(s / 60).toFixed(1)} min`;      // < 90 min
+  if (s < 172800) return `${(s / 3600).toFixed(1)} h`;    // < 2 days
+  return `${(s / 86400).toFixed(1)} days`;
+};
+
 // Normalize a Percept channel label to its physical contact-pair identity, so the SAME pair
 // recorded by different products (streaming "ZERO_THREE_LEFT" vs montage "ZERO_AND_THREE_LEFT")
 // collapses into ONE lane. Maps the contact-word pair + hemisphere to a canonical "<PAIR>_<HEMI>".
@@ -167,6 +182,10 @@ function painAxis(metric, yvals) {
 export default function BiomarkerDataTimeline({ data, height, painOverride,
                                                scanModel, colorMode, setColorMode }) {
   const ref = useRef(null);
+  // TD coverage rects re-sized on zoom: each entry is {i: shape index, ts: epoch_s, dur_s} so the
+  // plotly_relayout handler can recompute x1 against the live x-range (constant-PIXEL floor, true
+  // length when zoomed in). Rebuilt on every draw; read only by the zoom handler.
+  const tdRectsRef = useRef([]);
   const av = data && data.availability ? data.availability : null;
   // Binarization color mode is active only when the parent both selects it AND a live scan model
   // (matched PSDs at the current window) exists. `binOf(ch, t)` returns "high"|"low"|"excluded"|
@@ -280,6 +299,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const shapes = [];
     const annotations = [];
     const X = "x", Y = "y";
+    tdRectsRef.current = [];   // rebuilt this draw; the zoom handler resizes these TD rects
 
     // ---- LEFT-LABEL COLUMN GEOMETRY (robust, self-sizing) ------------------------------------
     // The left gutter holds THREE right-to-left columns that must never overlap each other or run
@@ -364,19 +384,47 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // block is recolored by its matched pain bin (high=vermillion / low=blue / excluded=grey),
       // and any block not matched-and-included dims to very light grey. In MULTIMODAL mode it keeps
       // the desaturated hemisphere tint.
+      // The visible block has a constant-PIXEL minimum width (MIN_TD_PX) so a short stream stays
+      // visible when zoomed out (like the PSD raster ticks) WITHOUT the old constant-TIME floor that
+      // painted a 30 s session 1.6 days wide and made it look like it covered nearby ratings. The
+      // zoom handler (plotly_relayout, below) recomputes each block's x1 against the live x-range, so
+      // as you zoom in the block shrinks to its TRUE dur_s once the real length exceeds the floor.
+      // The HOVER always reports the REAL captured duration (r.dur_s). Anchor the hover marker at the
+      // block's TRUE center (ts + dur_s/2) so it stays over the rect at any zoom (the 18 px marker
+      // easily covers a floor-width block when zoomed out).
+      // INITIAL x1 uses a floor of span/200 (~= MIN_TD_PX at full-view pixel width) so the very first
+      // paint is already short-and-visible, not 1.6 days; the handler refines it on the first zoom.
+      const initFloorS = Math.max((t1 - t0) / 200, 1);
+      const tdHx = [], tdHy = [], tdHc = [];
       recordsFor(ch, "timedomain").forEach((r) => {
         const ts = tEpoch(r.t_start);
-        const te = ts + Math.max(r.dur_s || 0, 86400 * 1.6);
+        const durS = r.dur_s || 0;
+        const te = ts + Math.max(durS, initFloorS);
         let fc = tdc, op = 0.85;
         if (binMode) {
           const b = binOf(ch, ts);
           if (b === "high" || b === "low" || b === "excluded") { fc = BIN_COLORS[b]; op = 0.92; }
           else { fc = DIM_GREY; op = 0.45; }
         }
+        tdRectsRef.current.push({ i: shapes.length, ts, dur_s: durS });
         shapes.push({ type: "rect", xref: X, yref: Y, x0: D(ts), x1: D(te),
           y0: yb + 0.04 * lh, y1: yb + 0.26 * lh, fillcolor: fc, opacity: op,
           line: { width: 0 }, layer: "above" });
+        tdHx.push(D(ts + durS / 2));
+        tdHy.push(yb + 0.15 * lh);
+        tdHc.push([fmtHoverDate(ts), fmtHoverTime(ts), fmtDur(r.dur_s)]);
       });
+      if (tdHx.length) {
+        // Invisible markers span the FULL block height band so the hover triggers anywhere over the
+        // coverage rect, reporting date · start time · captured duration (the info the PSD/montage
+        // hovers already show, which TD blocks were missing entirely).
+        traces.push({ type: "scattergl", mode: "markers", x: tdHx, y: tdHy,
+          marker: { size: 18, color: "rgba(0,0,0,0)" }, customdata: tdHc,
+          hovertemplate: `${prettyContact(labelFor(ch))} · time-domain streaming<br>`
+            + `%{customdata[0]} · started %{customdata[1]}<br>`
+            + `duration %{customdata[2]}<extra></extra>`,
+          showlegend: false });
+      }
 
       // (b) band-power: the REAL LSB, drawn as RENDER-CHEAP geometry (av.lsb_overview) so the page
       // stays fast while zooming. Two layers carry the same information as the raw 2 Hz cloud:
@@ -522,11 +570,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           hovertemplate: `PSD snapshot<br>%{x}<br>%{customdata}<extra></extra>`, showlegend: false });
       }
 
-      // (d) lane label — bold for committed, lighter for exploratory
+      // (d) lane label — ALWAYS bold AND always dark ink, so every contact (committed or
+      // exploratory, e.g. R 1-3+, R 0-2+) reads identically crisp and black. (The committed vs
+      // exploratory distinction is carried elsewhere — lane content / commit markers — not by
+      // dimming the label, which made the exploratory names look like a washed-out grey.)
+      // The gutter geometry already budgets every contact at the bold width (textW(..., true) on
+      // line ~303), so bolding all of them does not widen the column.
       annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: yb + 0.5 * lh,
-        text: committed.has(ch) ? `<b>${prettyContact(labelFor(ch))}</b>` : prettyContact(labelFor(ch)),
+        text: `<b>${prettyContact(labelFor(ch))}</b>`,
         showarrow: false, xanchor: "right",
-        font: { size: F_CONTACT, color: committed.has(ch) ? PAL.ink : "#888" } });
+        font: { size: F_CONTACT, color: PAL.ink } });
     });
 
     // ---- EVENT row: PATIENT-ANNOTATED events (labeled button presses) ------------------------
@@ -629,14 +682,19 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
           marker: { size: 8, symbol: symb, color: cls, line: { width: 1.6, color: cls } },
           opacity: 0.95,
-          customdata: pain.y.map((v, i) => [v, (pm[i] ? "matched" : "no neural match"), classifyName(v)]),
-          hovertemplate: `${pain.metric || "pain"} %{customdata[0]}<br>%{customdata[2]} pain · %{customdata[1]}<extra></extra>`,
+          customdata: pain.y.map((v, i) => [v, (pm[i] ? "matched" : "no neural match"),
+            classifyName(v), fmtHoverDate(pain.t[i]), fmtHoverTime(pain.t[i])]),
+          hovertemplate: `<b>${pain.metric || "pain"} %{customdata[0]}</b><br>`
+            + `%{customdata[3]} · %{customdata[4]}<br>`
+            + `%{customdata[2]} pain · %{customdata[1]}<extra></extra>`,
           showlegend: false });
       } else {
         traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
           marker: { size: 5, color: PAIN_NEUTRAL }, opacity: 0.6,
-          hovertemplate: `${pain.metric || "pain"} %{customdata}<br>%{x}<extra></extra>`,
-          customdata: pain.y, showlegend: false });
+          customdata: pain.y.map((v, i) => [v, fmtHoverDate(pain.t[i]), fmtHoverTime(pain.t[i])]),
+          hovertemplate: `<b>${pain.metric || "pain"} %{customdata[0]}</b><br>`
+            + `%{customdata[1]} · %{customdata[2]}<extra></extra>`,
+          showlegend: false });
       }
     } else {
       annotations.push({ xref: "paper", yref: Y, x: 0.5, y: (painBase + painTop) / 2,
@@ -797,6 +855,38 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // back to the top on each metric/binarization change. Purge happens once on unmount (below).
     Plotly.react(gd, traces, layout, { responsive: true, displayModeBar: true,
       modeBarButtonsToRemove: ["lasso2d", "select2d"] });
+
+    // Zoom-adaptive TD block widths: keep every TD coverage rect at least MIN_TD_PX wide on screen
+    // (so a short stream stays visible like a raster tick when zoomed OUT), but never wider than its
+    // true dur_s (so it renders its real length when zoomed IN). Recomputed on each zoom/pan from the
+    // live x-range; one batched Plotly.relayout, no React re-render -> negligible overhead. This is
+    // what removes the "fake-out" where a 30 s session looked like it spanned days.
+    const MIN_TD_PX = 6;
+    const applyTdWidths = () => {
+      const rects = tdRectsRef.current;
+      if (!rects || !rects.length || !gd._fullLayout || !gd._fullLayout.xaxis) return;
+      const xa = gd._fullLayout.xaxis;
+      const rng = xa.range;                       // [ms-or-date, ...] in the axis' coordinate space
+      const x0ms = new Date(rng[0]).getTime(), x1ms = new Date(rng[1]).getTime();
+      const plotPx = (xa._length || gd._fullLayout.width || 1000);
+      const sPerPx = ((x1ms - x0ms) / 1000) / Math.max(plotPx, 1);   // seconds of data per pixel
+      const floorS = MIN_TD_PX * sPerPx;          // min block width expressed in seconds
+      const upd = {};
+      rects.forEach(({ i, ts, dur_s }) => {
+        const wS = Math.max(dur_s || 0, floorS);  // true length, or the pixel floor if shorter
+        upd[`shapes[${i}].x1`] = toDate(ts + wS);
+      });
+      Plotly.relayout(gd, upd);
+    };
+    applyTdWidths();                              // set correct widths for the initial view
+    const onRelayout = (ev) => {
+      // Only react to x-range changes (zoom/pan/autorange), not to our own shape edits or y/legend.
+      if (!ev) return;
+      const touchedX = Object.keys(ev).some((k) => k.indexOf("xaxis") === 0) || ev.autosize;
+      if (touchedX) applyTdWidths();
+    };
+    gd.on("plotly_relayout", onRelayout);
+    return () => { try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ } };
   }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
 
   // Free the WebGL context only when the component actually unmounts (NOT between redraws).

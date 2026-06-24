@@ -344,8 +344,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
         y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
     }
-    if (sel) shapes.push({ type: "line", xref: "x", yref: "paper", x0: centers[sel.bi], x1: centers[sel.bi],
-      y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
+    // The selected-band vertical guide is NOT drawn here. It is applied by a separate
+    // Plotly.relayout effect keyed on `sel` (below), so that clicking a band never rebuilds the
+    // traces — a rebuild is what used to wipe the user's legend on/off state (the cleanup purge
+    // emptied gd.data before the visibility carry-over could read it). This effect omits `sel`.
 
     const layout = {
       ...FIG_BASE, autosize: true, height: 460,
@@ -356,14 +358,19 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
         overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
       legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
-                // Disable plotly's double-click-to-reset behavior on legend entries. Without this,
-                // a double-click anywhere in the legend isolates one item (hides all others) and a
-                // second double-click restores everything — which surprises users who expect their
-                // hidden curves to STAY hidden. Single-click still toggles a group on/off. To
-                // restore everything, the user uses the modebar Reset Axes button (an explicit
-                // gesture).
+                // Single-click toggles a group on/off; that's the only legend gesture that changes
+                // visibility. Double-click-to-isolate is disabled — without this, a double-click
+                // isolates one item (hides all others) and a second restores everything, which
+                // surprises users who expect their hidden curves to STAY hidden. To restore
+                // everything the user uses the modebar Reset Axes button (an explicit gesture).
+                itemclick: "toggle",
                 itemdoubleclick: false,
                 font: { size: 13 }, tracegroupgap: 14 },
+      // Larger, higher-contrast hover tooltip on the scan curves (the per-band r=… / AUC=… readout):
+      // 14 px dark text on a near-opaque white card with a darker (less washed-out) gray border, so
+      // the label reads clearly even where it sits near the cursor.
+      hoverlabel: { bgcolor: "rgba(255,255,255,0.97)", bordercolor: "#5A6470",
+                    font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 14, color: "#1A1A1A" } },
       shapes,
       // Plotly preserves user UI state (legend visibility, zoom, axis ranges, selections) across
       // Plotly.react calls whenever `uirevision` is unchanged. We use a constant string here so
@@ -412,7 +419,34 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     };
     gd.on("plotly_click", onClick);
     return () => { if (gd) { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); Plotly.purge(gd); } };
-  }, [scan, sel, pain, HI, LO]);   // eslint-disable-line react-hooks/exhaustive-deps
+    // NOTE: `sel` is intentionally NOT in this dependency list. A band click only updates `sel`,
+    // and the selected-band guide line is applied by the relayout effect below — so a click never
+    // re-runs this effect, never triggers the cleanup purge, and therefore never resets the user's
+    // legend visibility toggles. (That purge-on-every-click was the cause of hidden curves coming
+    // back when isolating a single curve.)
+  }, [scan, pain, HI, LO]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Selected-band vertical guide — applied without rebuilding traces, so legend on/off state set by
+  // the user survives every band click. Re-applies the adaptive-band shaded rect alongside it
+  // (Plotly.relayout replaces the whole `shapes` array, so both must be specified together).
+  useEffect(() => {
+    const gd = ref.current;
+    if (!gd || !gd.data || !centers.length) return;
+    const shapes = [];
+    if (adaptive && adaptive.length === 2) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
+        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
+    }
+    if (sel && centers[sel.bi] != null) {
+      shapes.push({ type: "line", xref: "x", yref: "paper", x0: centers[sel.bi], x1: centers[sel.bi],
+        y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
+    }
+    Plotly.relayout(gd, { shapes });
+    // Depends on `scan` too so that after the draw effect rebuilds the plot (scan/pain change), the
+    // current selected-band guide is re-applied on top. relayout never touches trace visibility, so
+    // the user's legend toggles are unaffected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, scan]);
 
   // Scatter for the selected (channel, band): band power vs continuous PRO.
   let scatterNode = null;
@@ -421,10 +455,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     const sc = ch.scatter && ch.scatter[sel.bi];
     const center = centers[sel.bi];
     const r = ch.r && ch.r[sel.bi];
-    const auc = ch.auc && ch.auc[sel.bi];
-    const n = ch.n && ch.n[sel.bi];           // AUC n (binarized high+low)
-    const nR = ch.n_r && ch.n_r[sel.bi];      // Pearson n (all matched continuous = dot count)
     const pBand = ch.p && ch.p[sel.bi];       // rating-clustered logistic Wald p (AUC's inference twin)
+    const pPearson = ch.p_pearson && ch.p_pearson[sel.bi];   // Pearson r's own p-value (independence-assuming)
     if (sc && sc.x && sc.x.length) {
       const color = hemiOf(ch) === "Right" ? HI : LO;
       // Fixed pain-group identity colors (DESIGN §8d/§8e idiom): high = vermillion, low = blue,
@@ -475,17 +507,30 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
         + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
 
+      // Number of samples actually drawn in the left scatter (the dot count = all matched
+      // continuous samples for this channel+band). Use the plotted length so the title's n always
+      // matches what the eye sees, not a separately-tracked count.
+      const nShown = sc.x.length;
       scatterNode = (
         <MDBox mt={1}>
-          <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 14 }}>
-            {`${ch.short} @ ${center.toFixed(1)} Hz (5 Hz band) vs ${pain} — `
-             + `r=${r != null ? r.toFixed(2) : "—"} (n=${nR || 0} matched), `
-             + `AUC=${auc != null ? auc.toFixed(2) : "—"} `
-             + (scan && scan.auc_mode === "rating_grouped"
-                ? `(n=${n || 0} independent ratings)`
-                : `(n=${n || 0} high+low)`)
-             + `, ${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p=${fmtP(pBand)}`}
-          </MDTypography>
+          {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
+              it reads as the heading for the whole selected-band readout below it. Line 1: contact
+              + samples shown. Line 2: center frequency + Pearson r (with its p-value when available). */}
+          {/* pt gives the first line room so its ascenders aren't clipped by the panel edge; the
+              generous lineHeight (1.45) keeps each line's glyph box taller than the bumped-up
+              fontSize so neither line is cut at the top (the MUI variant's default line-height is
+              tighter than these sizes, which was clipping the second line). */}
+          <MDBox sx={{ textAlign: "center", mb: 1, pt: 1 }}>
+            <MDTypography fontWeight="bold" color="dark"
+              sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
+              {`${ch.short} (n=${nShown})`}
+            </MDTypography>
+            <MDTypography fontWeight="bold" color="dark"
+              sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
+              {`${center.toFixed(1)} Hz · Pearson r = ${r != null ? r.toFixed(2) : "—"}`
+               + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
+            </MDTypography>
+          </MDBox>
           <Grid container spacing={2} mt={0}>
             <Grid item xs={12} lg={6}>
               <Fig height={300} traces={scTraces} layout={{
