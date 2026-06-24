@@ -311,3 +311,16 @@ correctly-timed pool: matched 67 vs 67, **0 lost / 0 gained / 0 status changes**
 change 0.00 min across the 8 files where merges fired. Also confirmed `MedtronicIndefiniteStream` is a
 TD-Welch source (`TIMEDOMAIN_TYPES`) but is NOT subject to FixBreaking (groups strictly by
 FirstPacketDateTime). Conclusion unchanged: matching is robust to concatenation; fix A stands.
+
+### Fix A confirmed to cover BOTH TD sources (IndefiniteStream, not just BrainSenseTimeDomain)
+
+`TIMEDOMAIN_TYPES = ["MedtronicBrainSenseTimeDomain", "MedtronicIndefiniteStream"]` — both route
+through the same `_welch_rows_into`, so the Missing-aware rejection applies to IndefiniteStream too.
+Verified on real RCS08 data: all 108 IndefiniteStream recordings carry a 2-D (n_samples, 6ch)
+`Missing` array; `_missing_time_vector` collapses every one with 0 failures; 7/108 exceed 10%
+whole-recording missing (max 61.6%). Direct test on contrasting windows within the SAME IndefiniteStream
+recording: a rating-centered window with 12-17% zero-fill is DROPPED while a clean (0% missing) window
+is KEPT (legacy kept both). Note IndefiniteStream is NOT subject to FixBreaking concatenation; its
+zero-fill comes from `checkMissingPackage` (dropped-packet insertion), so the rejection guards a
+distinct-but-related contamination source. Added `test_indefinitestream_shape_6ch_centered` (2-D
+6-channel Missing). Suite now PASS=139 FAIL=0.
