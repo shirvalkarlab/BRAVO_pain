@@ -42,17 +42,29 @@ export const PAL = {
 
   // Deploy-decision axis — NO red/green pairing.
   pass: OKABE_ITO.bluishGreen,   // gate passed / sufficient / non-degenerate cut-point
-  warn: OKABE_ITO.orange,        // soft caveat / degenerate operating point / underpowered
+  warn: OKABE_ITO.orange,        // soft caveat / degenerate operating point / underpowered (FILLS/AREA)
   fail: OKABE_ITO.vermillion,    // gate failed / hard stop
   neutral: OKABE_ITO.gray,       // chance line, "not estimable", baseline
+  // Audit C6: #E69F00 as TEXT (or white-on-#E69F00) measures 2.25:1 — below WCAG AA (4.5) and
+  // even large-text AA (3.0) — yet it carries the module's most safety-critical alerts (verdict
+  // badge, degenerate-cutpoint callout, underpowered notice, "review caveats" sign-off line).
+  // Reserve `warn` (#E69F00) for FILLS/AREA only; use `warnText` (a darkened amber, 5.5:1 on white)
+  // for any warn-role TEXT, and dark `onWarn` text when sitting ON an orange fill (7.7:1).
+  warnText: "#8A6100",           // WCAG-AA amber for small/critical warn text on white
+  onWarn: "#1A1A1A",             // near-black text to place ON a #E69F00 fill
+  indeterminate: OKABE_ITO.gray, // gate state: test did not run (absence of evidence, non-pass)
 
   // Cut-point marker on the ROC.
   cutpoint: OKABE_ITO.bluishGreen,
   cutpointDegenerate: OKABE_ITO.orange,
 
   // Feature-distribution histogram (pain-high vs pain-low) — blue↔vermillion, max CVD contrast.
+  // Audit C7: overlaying two 0.62-opacity bars blends to a muddy purple-brown in the separation
+  // zone (and is uninterpretable in grayscale). Render pain-low as a filled bar and pain-high as a
+  // step OUTLINE so the two classes never blend into a phantom third category.
   painHigh: OKABE_ITO.vermillion,
   painLow: OKABE_ITO.blue,
+  painHighOutline: OKABE_ITO.vermillion,
   thresholdLine: OKABE_ITO.black,
 
   // Light fills / borders for MUI boxes, derived from the roles above (hex + alpha suffix).

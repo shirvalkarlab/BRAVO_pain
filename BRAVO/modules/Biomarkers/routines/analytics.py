@@ -1508,6 +1508,16 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # ---- rating-clustered bootstrap CI on AUC ----
     # Resample whole clusters with replacement; recompute AUC per replicate. Skip replicates that
     # lose a class. CI = percentile 2.5 / 97.5 over the valid replicates.
+    #
+    # DE-FOLDED (audit C1): the score is oriented ONCE on the full sample (use_score above, so the
+    # point AUC >= 0.5). Each replicate must append the FIXED-DIRECTION AUC — NOT max(ab, 1-ab).
+    # Re-folding per replicate reflects any replicate whose weak signal reverses back above 0.5,
+    # which CENSORS the lower tail of the CI at chance: the lower bound can essentially never fall
+    # below 0.5, manufacturing a floor that reads as "beats chance" even for a true-null band
+    # (simulated folded lower 95% ~0.505 vs an honest ~0.411). Appending the un-folded ab lets the
+    # lower bound honestly drop below 0.5 when the data do not support the band, so the CI is a valid
+    # percentile interval for the oriented AUC. Power (auc_power) and the PE credible-CI/powered
+    # gates inherit this CI, so the de-fold is what makes those downstream readouts honest too.
     rng = np.random.default_rng(seed)
     uniq_clusters = np.unique(g)
     # Precompute per-cluster row indices once.
@@ -1522,7 +1532,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
             continue
         try:
             ab = metrics.roc_auc_score(yb, use_score[idx])
-            boot_aucs.append(max(ab, 1.0 - ab))
+            boot_aucs.append(float(ab))          # fixed orientation — do NOT re-fold with max()
         except ValueError:
             continue
     if len(boot_aucs) >= 20:
@@ -1587,9 +1597,14 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
         "n_samples": int(m.sum()), "n_clusters": n_clusters,
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
+        "ci_method": "rating-clustered bootstrap (de-folded; fixed orientation)",
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
         "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
-                 f"{n_clusters} independent ratings). AUC oriented >= 0.5."),
+                 f"{n_clusters} independent ratings). The point AUC is oriented >= 0.5 and is "
+                 f"optimistic near chance for borderline bands; the CI is de-folded (fixed "
+                 f"orientation), so its lower bound can honestly fall below 0.5 when the band does "
+                 f"not beat chance. Class-collapsed replicates are dropped (mildly narrows the CI "
+                 f"at low prevalence)."),
     }
 
 
@@ -1678,8 +1693,17 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
 
     from sklearn import metrics
 
-    def _roc_for(mask):
-        """Compact ROC + Youden cut-point + clustered bootstrap CI over a boolean sample mask."""
+    def _roc_for(mask, fixed_flip=None):
+        """Compact ROC + Youden cut-point + clustered bootstrap CI over a boolean sample mask.
+
+        `fixed_flip` carries the POOLED orientation onto an era (audit C3). When None (the pooled
+        call) the sign is chosen from this mask's own data so the pooled AUC is oriented >= 0.5.
+        When a bool is passed (each era) that SAME sign is applied, so an era whose band-pain
+        relationship REVERSES under stim is reported as a SIGNED AUC below 0.5 — the worst
+        closed-loop failure (controller would ramp the wrong way) — instead of being folded back
+        above 0.5 and mis-read as "still portable". The fixed sign also puts every era's Youden
+        threshold on one comparable scale, so cutpoint_spread is meaningful across eras.
+        """
         x = bp_log[mask]; yv = labels[mask]; gv = rating_group[mask]
         y = _binarize_labels(yv, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                              pain_cutoff=pain_cutoff)
@@ -1689,9 +1713,12 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
             return {"available": False, "reason": "too few high/low samples in this era",
                     "n_samples": int(x.size)}
         raw = float(metrics.roc_auc_score(y, x))
-        flip = raw < 0.5
+        flip = (raw < 0.5) if fixed_flip is None else bool(fixed_flip)
         use = -x if flip else x
-        auc = float(max(raw, 1.0 - raw))
+        # Pooled (fixed_flip=None) is oriented to its own data -> auc >= 0.5. Eras reuse the pooled
+        # sign and report the SIGNED AUC (no fold), so a reversal shows as auc < 0.5.
+        auc = float(metrics.roc_auc_score(y, use))
+        reversed_dir = bool(auc < 0.5)
         fpr, tpr, thr = metrics.roc_curve(y, use)
         thr_dev = (-thr if flip else thr).astype(float)
         # Youden cut-point
@@ -1702,7 +1729,9 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
             k = int(np.argmax(j))
             op = {"threshold": float(thr_dev[k]), "sensitivity": float(tpr[k]),
                   "specificity": float(1.0 - fpr[k]), "fpr": float(fpr[k]), "tpr": float(tpr[k])}
-        # clustered bootstrap CI
+        # clustered bootstrap CI — DE-FOLDED (audit C1): fixed orientation, append float(ab), never
+        # max(ab, 1-ab), so the lower bound can honestly fall below 0.5 (and below the pooled CI when
+        # the era reverses or genuinely fails to separate).
         rng = np.random.default_rng(seed)
         uc = np.unique(gv); rows = {c: np.where(gv == c)[0] for c in uc}
         baucs = []
@@ -1712,39 +1741,73 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
             if len(np.unique(y[ii])) < 2:
                 continue
             try:
-                ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(max(ab, 1.0 - ab))
+                ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(float(ab))
             except ValueError:
                 continue
         lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
         hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
         return {"available": True, "auc": auc, "auc_lo": lo, "auc_hi": hi,
+                "reversed": reversed_dir, "n_boot_ok": int(len(baucs)),
                 "n_samples": int(x.size), "n_clusters": int(len(uc)),
                 "n_pos": int(np.sum(y == 1)), "n_neg": int(np.sum(y == 0)),
                 "operating_point": op, "flip": bool(flip),
                 "prevalence": float(np.mean(y == 1))}
 
+    # Orient ONCE from the pooled fit, then refit every era under that fixed sign.
+    pooled = _roc_for(np.ones(len(bp_log), dtype=bool))
+    pooled_flip = pooled.get("flip") if pooled.get("available") else None
     eras_out = {}
     for tag in ["OFF", "LOW", "HIGH"]:
-        eras_out[tag] = _roc_for(era == tag)
-    pooled = _roc_for(np.ones(len(bp_log), dtype=bool))
+        eras_out[tag] = _roc_for(era == tag, fixed_flip=pooled_flip)
 
     # Cut-point portability: spread of the per-era Youden thresholds that are actually estimable.
+    # With the shared pooled orientation these thresholds are on one comparable signed scale.
     era_thr = [eras_out[t]["operating_point"]["threshold"] for t in ["OFF", "LOW", "HIGH"]
                if eras_out[t].get("available") and eras_out[t].get("operating_point")]
     cutpoint_spread = (float(np.max(era_thr) - np.min(era_thr)) if len(era_thr) >= 2 else None)
     era_aucs = [eras_out[t]["auc"] for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available")]
     auc_spread = (float(np.max(era_aucs) - np.min(era_aucs)) if len(era_aucs) >= 2 else None)
 
+    # ---- portability by INFERENCE, not raw spread (audit C3) ----
+    # A band is portable only if (a) NO estimable era's direction reverses (signed AUC >= 0.5) and
+    # (b) every estimable era's bootstrap CI OVERLAPS the pooled CI (the eras do not differ from the
+    # pooled estimate beyond sampling error). Raw auc_spread / cutpoint_spread are retained as
+    # DESCRIPTIVE annotations only. The band×era LRT (band_stim_stability) is the formal test and is
+    # surfaced alongside this by the service layer; this CI signal is the figure-level companion.
+    est = [eras_out[t] for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available")]
+    any_reversed = bool(any(e.get("reversed") for e in est))
+
+    def _ci_overlap(a, b):
+        if a is None or b is None:
+            return None
+        if None in (a.get("auc_lo"), a.get("auc_hi"), b.get("auc_lo"), b.get("auc_hi")):
+            return None
+        return bool(a["auc_lo"] <= b["auc_hi"] and b["auc_lo"] <= a["auc_hi"])
+
+    ci_overlaps_pooled = {}
+    for t in ["OFF", "LOW", "HIGH"]:
+        e = eras_out[t]
+        ci_overlaps_pooled[t] = (_ci_overlap(e, pooled)
+                                 if (e.get("available") and pooled.get("available")) else None)
+    ov_vals = [v for v in ci_overlaps_pooled.values() if v is not None]
+    portable_by_ci = ((len(ov_vals) >= 1 and all(ov_vals) and not any_reversed)
+                      if len(est) >= 2 else None)
+
     return {
         "available": True,
         "eras": eras_out, "pooled": pooled,
         "cutpoint_spread": cutpoint_spread, "auc_spread": auc_spread,
+        "any_reversed": any_reversed, "ci_overlaps_pooled": ci_overlaps_pooled,
+        "portable_by_ci": portable_by_ci,
         "era_counts": {t: int(np.sum(era == t)) for t in ["OFF", "LOW", "HIGH"]},
         "thresholds_mA": {"off_max": off_max, "low_max": low_max},
         "n_eras_estimable": int(sum(1 for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available"))),
-        "note": ("Per-era refit of the deployment ROC + Youden cut-point. A band whose AUC or "
-                 "threshold swings across OFF/LOW/HIGH is a fragile controller anchor even with a "
-                 "strong pooled AUC. Eras share band_stim_stability's boundaries."),
+        "note": ("Per-era refit of the deployment ROC + Youden cut-point, all oriented to the POOLED "
+                 "sign so a direction reversal under stim shows as a signed AUC below 0.5 (not folded "
+                 "above it). Portability keys on CI overlap with pooled and the band×era LRT, not raw "
+                 "spread; a band whose AUC reverses or whose per-era CIs miss the pooled CI is a "
+                 "fragile controller anchor even with a strong pooled AUC. Eras share "
+                 "band_stim_stability's boundaries."),
     }
 
 

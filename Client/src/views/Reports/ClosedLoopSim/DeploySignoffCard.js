@@ -20,19 +20,39 @@ import PAL from "./palette";
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
 function GateRow({ gate }) {
-  const ok = gate.pass;
-  // Pass/fail carry BOTH a CVD-safe color (bluish-green vs vermillion — never green/red) AND a
-  // distinct check/cancel icon, so the gate verdict is never color-only.
+  // Tri-state gate (audit C8): pass / fail / indeterminate. Each state carries BOTH a CVD-safe color
+  // (bluish-green / vermillion / gray — never green-vs-red alone) AND a distinct icon, so the verdict
+  // is never color-only. "indeterminate" (the stim-stability LRT did not run) is a NEUTRAL help icon,
+  // not a check — absence of evidence must never look like a pass. A NECESSARY gate (a hard
+  // prerequisite to program at all) is tagged so a clinician sees which failures are blocking.
+  const state = gate.state || (gate.pass ? "pass" : "fail");
+  const STYLE = {
+    pass: { color: PAL.pass, icon: "check_circle" },
+    fail: { color: PAL.fail, icon: "cancel" },
+    indeterminate: { color: PAL.indeterminate, icon: "help" },
+  };
+  const s = STYLE[state] || STYLE.fail;
   return (
     <MDBox display="flex" alignItems="flex-start" py={0.4}
       sx={{ borderBottom: "1px solid #f0f0f0" }}>
-      <Icon sx={{ fontSize: "18px !important", color: ok ? PAL.pass : PAL.fail, mr: 1, mt: 0.1 }}>
-        {ok ? "check_circle" : "cancel"}
+      <Icon sx={{ fontSize: "18px !important", color: s.color, mr: 1, mt: 0.1 }}>
+        {s.icon}
       </Icon>
       <MDBox flex={1}>
-        <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-          color: ok ? PAL.pass : PAL.fail }}>
+        <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold", color: s.color }}>
           {gate.label}
+          {gate.necessary ? (
+            <span style={{ fontSize: 8.5, fontWeight: "bold", color: PAL.neutral,
+              marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
+              REQUIRED
+            </span>
+          ) : null}
+          {state === "indeterminate" ? (
+            <span style={{ fontSize: 8.5, fontWeight: "bold", color: PAL.indeterminate,
+              marginLeft: 6, verticalAlign: "middle", letterSpacing: "0.04em" }}>
+              NOT TESTED
+            </span>
+          ) : null}
         </MDTypography>
         <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: "#777" }}>
           {gate.detail}
@@ -106,10 +126,16 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const ev = data && data.evidence;
   const th = data && data.threshold;
   const pw = data && data.power;
-  const allPass = data && data.n_gates_passed === data.n_gates;
+  // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
+  // blocks deployment even at a high passed-count), NOT on n_gates_passed === n_gates. Fall back to
+  // the count only for older payloads that predate ready_to_program.
+  const ready = data
+    ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
+    : false;
+  const nIndet = (data && data.n_gates_indeterminate) || 0;
 
   return (
-    <Card sx={{ width: "100%", border: data ? `2px solid ${allPass ? PAL.pass : PAL.warn}` : undefined }}>
+    <Card sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
       <MDBox p={2.5}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
@@ -133,15 +159,20 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
           <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>{`Unavailable: ${err}.`}</MDTypography>
         ) : data ? (
           <>
-            {/* headline verdict */}
+            {/* headline verdict — driven by the NECESSARY gates (audit C8), not the passed-count */}
             <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
-              backgroundColor: allPass ? PAL.passFill : PAL.warnFill }}>
-              <MDTypography variant="h6" sx={{ fontSize: 14, color: allPass ? PAL.pass : PAL.warn }}>
-                {`${data.n_gates_passed} of ${data.n_gates} deployment gates passed`}
-                {allPass ? " — ready to program" : " — review caveats before programming"}
+              backgroundColor: ready ? PAL.passFill : PAL.warnFill }}>
+              <MDTypography variant="h6" sx={{ fontSize: 14, color: ready ? PAL.pass : PAL.warnText }}>
+                {ready
+                  ? "Ready to program — all required gates passed"
+                  : (data.n_necessary != null
+                    ? `Not ready — ${data.n_necessary_passed} of ${data.n_necessary} required gates passed`
+                    : "Not ready — review caveats before programming")}
               </MDTypography>
-              <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#666" }}>
-                {`Verdict: ${data.verdict} · match direction: ${data.match_direction}`}
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#666" }}>
+                {`${data.n_gates_passed} of ${data.n_gates} total gates passed`}
+                {nIndet ? ` · ${nIndet} not tested` : ""}
+                {` · verdict: ${data.verdict} · match direction: ${data.match_direction}`}
               </MDTypography>
             </MDBox>
 
@@ -166,7 +197,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   backgroundColor: th && th.available ? PAL.accentFill : PAL.warnFill,
                   border: `1px solid ${th && th.available ? PAL.accentBorder : PAL.warnBorder}` }}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-                    color: th && th.available ? PAL.accent : PAL.warn }}>
+                    color: th && th.available ? PAL.accent : PAL.warnText }}>
                     THRESHOLD TO PROGRAM
                   </MDTypography>
                   {th && th.available ? (
@@ -199,12 +230,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   </MDTypography>
                   {ev ? (
                     <>
-                      <KV k="Deployment AUC (95% CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                      <KV k="Deployment AUC (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
                       <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                       <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
                       <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />
                       {pw && pw.available ? (
-                        <KV k="Power (vs AUC 0.5)" v={`${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`} />
+                        <KV k="Power (vs AUC 0.5)" v={pw.more_data_needed
+                          ? `${fmt(pw.power_current * 100, 0)}% · need ${pw.n_ratings_needed} ratings`
+                          : `${fmt(pw.power_current * 100, 0)}% · adequately powered`} />
                       ) : null}
                     </>
                   ) : null}
@@ -220,7 +253,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
                 </MDBox>
 
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warn }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
                   CAVEATS
                 </MDTypography>
                 <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>

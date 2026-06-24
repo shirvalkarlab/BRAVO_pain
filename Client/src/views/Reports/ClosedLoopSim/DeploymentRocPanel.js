@@ -137,8 +137,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // or dragging the cost slider never rebuilds the curve and never discards the user's zoom/pan.
   useEffect(() => {
     if (!ref.current || !roc) return;
+    // Audit C7: name the CI method ON the figure (a reader of the figure alone can't tell this is a
+    // rating-clustered bootstrap — the property that distinguishes it from a naive over-tight CI).
     const ciTxt = (roc.auc_lo != null && roc.auc_hi != null)
-      ? ` (95% CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
+      ? ` (95% clustered-bootstrap CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
     const traces = [
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",
         line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
@@ -182,10 +184,13 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       const nearTop = op.tpr > 0.85;
       const ax = nearRight ? -30 : 28;
       const ay = nearTop ? 24 : -26;   // positive ay pushes the box DOWN (interior) when near the top
+      // Audit C6: white-on-#E69F00 (the degenerate warn fill) is 2.25:1 — below WCAG. Use near-black
+      // text on the orange callout (7.7:1); keep white only on the bluish-green non-degenerate marker.
+      const labelTextColor = op.degenerate ? PAL.onWarn : "#fff";
       Plotly.relayout(gd, { annotations: [{
         x: op.fpr, y: op.tpr, xref: "x", yref: "y",
         text: `<b>power ≥ ${fmt(op.threshold)}</b>`, showarrow: true, arrowhead: 0,
-        arrowcolor: mColor, ax, ay, font: { size: 11, color: "#fff" },
+        arrowcolor: mColor, ax, ay, font: { size: 11, color: labelTextColor },
         bgcolor: mColor, bordercolor: mColor, borderpad: 3,
         xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
       }] });
@@ -206,12 +211,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     const gd = histRef.current;
     const fh = roc && roc.feature_hist;
     if (!gd || !fh) return;
+    // Audit C7: pain-low as a SOLID filled bar; pain-high as an OUTLINE-only bar (transparent fill,
+    // 2px vermillion edge). Overlaying two semi-opaque fills blended to a muddy purple-brown in the
+    // exact separation zone the figure exists to show — and vanished in grayscale. A fill-vs-outline
+    // pair never blends into a phantom third category and survives a printout. Still one trace per
+    // class, drawn once per dataset — the Plotly.react-once discipline is untouched.
     const traces = [
       { x: fh.bin_centers, y: fh.counts_low, type: "bar", name: "pain-low",
-        marker: { color: PAL.painLow, opacity: 0.62 },
+        marker: { color: PAL.painLow, opacity: 0.55 },
         hovertemplate: "low pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
       { x: fh.bin_centers, y: fh.counts_high, type: "bar", name: "pain-high",
-        marker: { color: PAL.painHigh, opacity: 0.62 },
+        marker: { color: "rgba(0,0,0,0)", line: { color: PAL.painHighOutline, width: 1.6 } },
         hovertemplate: "high pain<br>power %{x:.2f}<br>%{y} samples<extra></extra>" },
     ];
     const binW = (fh.bin_centers.length > 1)
@@ -219,7 +229,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     const layout = {
       barmode: "overlay", bargap: 0.04,
       margin: { l: 46, r: 12, t: 8, b: 38 }, height: 168,
-      xaxis: { title: { text: "Oriented band power (cut-point scale)", font: { size: 10.5 } },
+      xaxis: { title: { text: "Oriented band power (standardized, cut-point scale)", font: { size: 10.5 } },
         zeroline: false, tickfont: { size: 9.5 },
         range: [fh.x_min - binW, fh.x_max + binW] },
       yaxis: { title: { text: "samples", font: { size: 10 } }, zeroline: false,
@@ -343,7 +353,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                 backgroundColor: op.degenerate ? PAL.warnFill : PAL.passFill, borderRadius: "6px",
                 border: op.degenerate ? `1px solid ${PAL.warnBorder}` : "none" }}>
                 {op.degenerate ? (
-                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warn, mb: 0.3 }}>
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText, mb: 0.3 }}>
                     ⚠ Degenerate operating point — this cut alarms almost{op.sensitivity < 0.30 ? " never" : " always"} (sensitivity {fmt(op.sensitivity)} · specificity {fmt(op.specificity)}). Not a deployable threshold; move the cost slider toward balance.
                   </MDTypography>
                 ) : null}

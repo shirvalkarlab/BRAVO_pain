@@ -3289,6 +3289,15 @@ def band_deployment_roc_by_era(request_data):
         except (TypeError, ValueError):
             return None
     center_hz = core["center_hz"]; band_width_hz = core["band_width_hz"]
+    # Surface the formal band×era LRT (band_stim_stability) alongside the per-era refit so the panel
+    # verdict can key on the test the module already runs, not raw point-AUC spread (audit C3).
+    st = core.get("stim") or {}
+    if isinstance(by_era, dict) and by_era.get("available"):
+        by_era["stim_lrt"] = {
+            "available": bool(st.get("available")),
+            "lrt_p": _ff(st.get("lrt_p")) if st.get("available") else None,
+            "stim_stable": (st.get("stim_stable") if st.get("available") else None),
+        }
     return {
         "available": by_era.get("available", False),
         "reason": by_era.get("reason"),
@@ -3376,38 +3385,51 @@ def deployment_summary(request_data):
     credible, _ci_width = _band_credible_ci(g.get("or_lo"), g.get("or_hi"))
 
     # ---- GATES (hard checks the clinician signs against) ----
+    # Each gate carries a tri-state `state` ("pass" | "fail" | "indeterminate") AND a `necessary`
+    # flag (audit C8). `pass` (bool) is retained for back-compat but is True only for state=="pass",
+    # so absence-of-evidence (indeterminate) never counts as a pass. NECESSARY gates are the hard
+    # prerequisites to program at all (a validated band, an in-range adaptive band, a deployable
+    # threshold); SUPPORTIVE gates strengthen the case but do not by themselves block. "Ready to
+    # program" requires every NECESSARY gate to pass — not merely a high passed-count.
+    def _gate(key, label, state, detail, necessary=False):
+        return {"key": key, "label": label, "state": state,
+                "pass": state == "pass", "necessary": bool(necessary), "detail": detail}
+
     gates = []
-    gates.append({"key": "validated", "label": "Band validated (mixed-effects)",
-                  "pass": bool(verdict and "VALIDATED" in str(verdict)), "detail": verdict})
-    gates.append({"key": "adaptive_band", "label": "In Percept adaptive range (8–30 Hz)",
-                  "pass": adaptive_valid,
-                  "detail": f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)"})
-    gates.append({"key": "deployable_threshold", "label": "Deployable LSB threshold available",
-                  "pass": thr_lsb is not None,
-                  "detail": (f"power ≥ {thr_lsb} LSB" if thr_lsb is not None
-                             else f"device sensed this band {n_tl} times")})
-    gates.append({"key": "credible_ci", "label": "Credible effect-size CI",
-                  "pass": bool(credible), "detail": f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"})
-    # Stim-stability gate: consistent with the verdict badge. The verdict labels a band
-    # "stim-dependent" only when the LRT EXPLICITLY finds instability; an unavailable LRT (e.g. a
-    # singular fit on a tiny OFF stratum under the prior match-direction) is treated as not-dependent.
-    # The gate mirrors that, but the detail is transparent about whether the LRT actually ran.
+    gates.append(_gate("validated", "Band validated (mixed-effects)",
+                       "pass" if (verdict and "VALIDATED" in str(verdict)) else "fail",
+                       verdict, necessary=True))
+    gates.append(_gate("adaptive_band", "In Percept adaptive range (8–30 Hz)",
+                       "pass" if adaptive_valid else "fail",
+                       f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)",
+                       necessary=True))
+    gates.append(_gate("deployable_threshold", "Deployable LSB threshold available",
+                       "pass" if thr_lsb is not None else "fail",
+                       (f"power ≥ {thr_lsb} LSB" if thr_lsb is not None
+                        else f"device sensed this band {n_tl} times"),
+                       necessary=True))
+    gates.append(_gate("credible_ci", "Credible effect-size CI",
+                       "pass" if credible else "fail",
+                       f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"))
+    # Stim-stability gate (audit C8): FAIL-CLOSED / ABSTAIN, never fail-open. The LRT explicitly
+    # decides stable vs stim-dependent only when it RAN; an unavailable LRT (e.g. a singular fit on a
+    # tiny OFF stratum under the prior match-direction) is absence of evidence, NOT evidence of
+    # stability — it is rendered "indeterminate" (neutral, non-pass) so a non-converged stability
+    # test can never count toward "all gates passed → ready to program".
     if st.get("available"):
-        stim_pass = bool(st.get("stim_stable"))
-        stim_detail = (f"band×era LRT p={st.get('lrt_p')} ({'stable' if stim_pass else 'stim-dependent'})")
+        stim_state = "pass" if st.get("stim_stable") else "fail"
+        stim_detail = (f"band×era LRT p={st.get('lrt_p')} "
+                       f"({'stable' if stim_state == 'pass' else 'stim-dependent'})")
     else:
-        # LRT did not converge on this path; fall back to the verdict's determination.
-        stim_pass = bool(verdict and "stim-stable" in str(verdict))
-        stim_detail = ("LRT did not converge on this match-direction; "
-                       + ("treated as stim-stable per the band's validated verdict"
-                          if stim_pass else "stim-stability unconfirmed"))
-    gates.append({"key": "stim_stable", "label": "Stim-stable (band×era LRT n.s.)",
-                  "pass": stim_pass, "detail": stim_detail})
-    gates.append({"key": "powered", "label": "Adequately powered (≥80%)",
-                  "pass": bool(power.get("available") and not power.get("more_data_needed")),
-                  "detail": (f"power {round(power.get('power_current',0)*100)}%, "
-                             f"need {power.get('n_ratings_needed')} ratings"
-                             if power.get("available") else "n/a")})
+        stim_state = "indeterminate"
+        stim_detail = ("band×era LRT did not converge on this match-direction — stim-stability "
+                       "UNCONFIRMED (absence of evidence, not evidence of stability).")
+    gates.append(_gate("stim_stable", "Stim-stable (band×era LRT n.s.)", stim_state, stim_detail))
+    gates.append(_gate("powered", "Adequately powered (≥80%)",
+                       "pass" if (power.get("available") and not power.get("more_data_needed")) else "fail",
+                       (f"power {round(power.get('power_current',0)*100)}%, "
+                        f"need {power.get('n_ratings_needed')} ratings"
+                        if power.get("available") else "n/a")))
 
     # ---- CAVEATS (soft warnings) ----
     caveats = []
@@ -3474,6 +3496,12 @@ def deployment_summary(request_data):
                         if by_era.get("available") else {"available": False, "reason": by_era.get("reason")}),
         "gates": gates, "caveats": caveats,
         "n_gates_passed": int(sum(1 for x in gates if x["pass"])), "n_gates": len(gates),
+        "n_gates_indeterminate": int(sum(1 for x in gates if x.get("state") == "indeterminate")),
+        # "Ready to program" is gated on the NECESSARY checks alone, not the passed count: a hard
+        # prerequisite failing blocks deployment even if 5 of 6 gates pass (audit C8).
+        "ready_to_program": bool(all(x["pass"] for x in gates if x.get("necessary"))),
+        "n_necessary": int(sum(1 for x in gates if x.get("necessary"))),
+        "n_necessary_passed": int(sum(1 for x in gates if x.get("necessary") and x["pass"])),
     }
 
 
