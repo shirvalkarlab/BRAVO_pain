@@ -433,6 +433,15 @@ _MAIN_BIPOLAR = {
 # signature so a rule change forces a re-Welch instead of serving the stale pre-fix matrix.
 _CHANNEL_CANON_VERSION = "v2_ring_aware"
 
+# Version of the rating-centered TD emission LOGIC. Folded into the TD per-recording cache key and
+# the rating-centered matrix signature (NOT the montage/survey keys), so changing how centered rows
+# are produced invalidates exactly the TD-dependent caches without forcing a full montage re-decode.
+# Bump when the centering/fall-back rule changes.
+#   v2_fallback: a TD session with NO rating inside its real coverage falls back to a single
+#     session-start PSD (tolerance-matchable) instead of emitting nothing. v1 dropped such sessions,
+#     which greyed out every short-session TD lane and undercounted the matched pool.
+_TD_CENTERED_VERSION = "v2_fallback"
+
 
 def _canon_channel(name):
     """Normalize a Medtronic channel name to the canonical bipolar form used by `_MAIN_BIPOLAR`.
@@ -486,14 +495,29 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     return rows
 
 
-def _welch_rows_into(rows, recs, source_label, _sp):
-    """Welch every main-bipolar channel of each loaded recording dict, appending one
-    {"channel", "source", "t", "freq", "power"} row per (recording-instance, channel) to `rows`.
+def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None):
+    """Welch every main-bipolar channel of each loaded recording dict, appending
+    {"channel", "source", "t", "freq", "power", "dur"} rows to `rows`.
 
     Single source of truth for the row schema: BOTH the legacy whole-participant assembly
     (`_assemble_psd_rows`) and the per-recording cache (`_recording_psd_rows`) build rows through
     here, so a matrix assembled from the cache is byte-identical to one assembled the old way.
+
+    `pro_times` : array-like of PRO timestamps (UTC epoch s) or None.
+        When None (default — preserves the legacy behavior and every existing test): each recording
+        emits ONE row per channel, Welch'd over its FIRST `WELCH_MAX_SECONDS` and stamped at the
+        recording START.
+        When provided AND `source_label == "TD streaming"`: each TD session emits one
+        RATING-CENTERED row per (overlapping PRO, channel) instead — a `WELCH_MAX_SECONDS` window
+        centered on each PRO that falls inside [t0, t0+dur], clipped to the session boundary, with
+        windows below `WELCH_CENTERED_MIN_SECONDS` of coverage dropped. The row's `t` is the PRO's
+        own timestamp, so timestamp matching finds it at offset ~0 (this is the fix for the
+        "TD coverage present but no neural match" artifact). Montage/survey/event sources ignore
+        `pro_times` and keep the first-window behavior (they are already short ~30 s snapshots whose
+        start time IS the rating-relevant time).
     """
+    centered = (pro_times is not None and source_label == "TD streaming")
+    pt = np.asarray(pro_times, dtype=float) if centered else None
     for r in recs or []:
         if not isinstance(r, dict):
             continue
@@ -513,6 +537,40 @@ def _welch_rows_into(rows, recs, source_label, _sp):
         if t0 is None:
             continue
         keep_names = [n for _, n in keep]
+        nsamp = int(sig.shape[-1])
+
+        if centered:
+            # Ratings that fall inside this session's [t0, t0+dur] coverage. dur is the ACTUAL
+            # recorded span (nsamp/fs == the decoder's Duration), so a PRO only "overlaps" if real
+            # samples exist around it. When >=1 rating overlaps, emit a rating-CENTERED PSD per kept
+            # rating (the fix for a mid-stream rating being un-matchable). When NONE overlaps -- the
+            # common case for short ~30 s sessions, which almost never contain a rating -- FALL BACK
+            # to the legacy first-window emission below (one PSD at t0) so the session can still match
+            # a nearby rating via the tolerance window, exactly as it did before rating-centering.
+            # Dropping it here is what greyed out every short-session TD lane.
+            dur_s = nsamp / fs if fs > 0 else 0.0
+            in_win = pt[(pt >= t0) & (pt <= t0 + dur_s)]
+            emitted = False
+            if in_win.size:
+                centers_s = in_win - t0   # offsets from session start (s)
+                try:
+                    psd_k, used_k, kept = _sp.welch_rating_centered(
+                        sig, keep_names, fs, keep_names, centers_s)  # (K,k,F),(K,),(len,)
+                    kept_times = in_win[kept]   # PRO timestamps that produced a PSD
+                    psd_k = np.asarray(psd_k)
+                    for kk in range(psd_k.shape[0]):
+                        tk = float(kept_times[kk]); dk = float(used_k[kk])
+                        for j, n in enumerate(keep_names):
+                            rows.append({"channel": _canon_channel(n), "source": source_label,
+                                         "t": tk, "freq": _sp.F_SET, "power": psd_k[kk, j, :],
+                                         "dur": dk})
+                    emitted = psd_k.shape[0] > 0
+                except Exception:
+                    emitted = False
+            if emitted:
+                continue
+            # else: no overlapping rating (or all dropped by the floor) -> fall through to first-window
+
         try:
             psd = _sp.welch_psd_for_instance(sig, names, fs, keep_names)  # (1, k, F)
         except Exception:
@@ -520,7 +578,6 @@ def _welch_rows_into(rows, recs, source_label, _sp):
         psd = np.asarray(psd)
         # Duration (s) actually used by Welch for this recording = min(window, available). Reported
         # downstream as mean +/- SD so the clinician knows the TD epoch length feeding each PSD.
-        nsamp = int(sig.shape[-1])
         used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
         for j, n in enumerate(keep_names):
             # Store the CANONICAL channel so ring-named survey rows pool with the short-named TD/Stim
@@ -530,7 +587,7 @@ def _welch_rows_into(rows, recs, source_label, _sp):
                          "dur": used_dur})
 
 
-def _psd_sample_index(td_list, psd_list):
+def _psd_sample_index(td_list, psd_list, pro_times=None):
     """Lightweight index of the scan's pooled-PSD samples: one entry per (recording, channel) the
     full-spectrum scan would include, WITHOUT the expensive Welch transform.
 
@@ -541,11 +598,22 @@ def _psd_sample_index(td_list, psd_list):
     nearest-PRO match + binarization LIVE as the match-window slider moves, so the binarization
     histogram and the timeline coloring stay faithful to `matched_sample_counts` without a recompute.
 
+    `pro_times` mirrors `_welch_rows_into`: when provided, TD-streaming entries become
+    RATING-CENTERED — one entry per (overlapping PRO, channel), stamped at the PRO's own timestamp
+    and gated by the same [t0, t0+dur] coverage + `WELCH_CENTERED_MIN_SECONDS` floor the Welch path
+    uses. This keeps the live preview's match count IDENTICAL to the backend pool (a TD PRO inside
+    coverage matches at offset 0; one near a session edge with < floor coverage is dropped, exactly
+    as the spectra are). Montage/survey entries keep their start-time stamp regardless.
+
     Returns a list of {"t": epoch_s, "channel": "<CANON>_<HEMI>", "source": str}.
     """
+    from .routines import streaming_psd as _sp
     out = []
+    pt = np.asarray(pro_times, dtype=float) if pro_times is not None else None
+    min_s = _sp.WELCH_CENTERED_MIN_SECONDS
+    half_s = _sp.WELCH_MAX_SECONDS / 2.0
 
-    def _index(recs, source_label):
+    def _index(recs, source_label, centered=False):
         for r in recs or []:
             if not isinstance(r, dict):
                 continue
@@ -556,10 +624,36 @@ def _psd_sample_index(td_list, psd_list):
             t0 = availability._to_epoch(r.get("StartTime"))
             if t0 is None:
                 continue
-            for n in keep:
-                out.append({"t": float(t0), "channel": _canon_channel(n), "source": source_label})
+            emitted = False
+            if centered and pt is not None:
+                # Replicate welch_rating_centered's keep rule WITHOUT Welch'ing: a PRO inside
+                # [t0, t0+dur] yields a window clipped to the session, kept iff its clipped length
+                # >= min_s. Clipped length = min(t0+dur, pro+half) - max(t0, pro-half).
+                data = np.asarray(r.get("Data"))
+                if data.ndim == 2:
+                    nsamp = data.shape[0] if data.shape[1] == len(names) else data.shape[1]
+                    fs = float(r.get("SamplingRate") or 250.0)
+                    dur_s = (nsamp / fs) if fs > 0 else 0.0
+                    cand = pt[(pt >= t0) & (pt <= t0 + dur_s)]
+                    if cand.size:
+                        lo = np.maximum(t0, cand - half_s)
+                        hi = np.minimum(t0 + dur_s, cand + half_s)
+                        kept = cand[(hi - lo) >= min_s]
+                        for tk in kept:
+                            for n in keep:
+                                out.append({"t": float(tk), "channel": _canon_channel(n),
+                                            "source": source_label})
+                        emitted = kept.size > 0
+            if not emitted:
+                # No rating overlaps this session's real coverage (or all dropped by the floor) ->
+                # one entry at the session START, matched via the tolerance window downstream. This
+                # MIRRORS the Welch fall-back in `_welch_rows_into`, so the live count == backend pool
+                # for short sessions too (without it, every short-session TD lane greys out).
+                for n in keep:
+                    out.append({"t": float(t0), "channel": _canon_channel(n),
+                                "source": source_label})
 
-    _index(td_list, "TD streaming")
+    _index(td_list, "TD streaming", centered=(pt is not None))
     _index(psd_list, "Montage/survey")
     return out
 
@@ -590,7 +684,29 @@ def _psd_rows_cache_dir():
     return d
 
 
-def _recording_psd_cache_path(rec_uid, rec_hash):
+def _pro_set_signature(pro_times):
+    """Short, order-independent signature of the PRO timestamp SET feeding rating-centered TD PSDs.
+
+    Rating-centered TD spectra depend on WHICH PROs exist (each PRO inside coverage emits a centered
+    window), so the PRO set is part of the TD matrix CONTENT — exactly like WELCH_MAX_SECONDS or the
+    channel-canon rule. Folding this into the TD cache keys means: add/remove/shift a PRO and the TD
+    spectra are recomputed; leave the PROs unchanged and the cache serves the same centered rows.
+    PROs are rounded to whole seconds (sub-second jitter never moves a 30 s window meaningfully) and
+    sorted, so the signature is independent of row order. Returns "" for an empty/None set (the
+    caller then uses the legacy first-window path, whose key carries no PRO component).
+    """
+    import hashlib
+    if pro_times is None:
+        return ""
+    pt = np.asarray(pro_times, dtype=float)
+    pt = pt[np.isfinite(pt)]
+    if pt.size == 0:
+        return ""
+    pt = np.unique(np.round(pt).astype(np.int64))   # sorted + de-duped whole-second stamps
+    return hashlib.sha1(pt.tobytes()).hexdigest()[:12]
+
+
+def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
     """Cache path for one recording's PSD rows. Keyed by uid + a short slice of the stored hash, so
     re-uploading the same data (new uid) or a content change (new hash) both miss and recompute.
     The Welch epoch length is also in the key: changing it produces different spectra, so the file
@@ -600,7 +716,14 @@ def _recording_psd_cache_path(rec_uid, rec_hash):
     w = str(_sp.WELCH_MAX_SECONDS).replace(".", "p")
     # Channel-canon rule is in the key too: a Survey recording previously cached with ZERO kept rows
     # (ring names dropped) must miss and re-Welch under the ring-aware rule instead of serving empty.
-    return os.path.join(_psd_rows_cache_dir(), f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}.npz")
+    # `pro_sig` (non-empty ONLY for rating-centered TD recordings) makes the PRO set part of the key,
+    # so a TD recording's centered spectra are recomputed when the PROs change but a montage/survey
+    # recording (pro_sig="") keeps a stable, PRO-independent cache entry.
+    # `_TD_CENTERED_VERSION` rides along only for the rating-centered TD recordings (pro_sig set), so
+    # a change to the centering/fall-back rule invalidates exactly those entries, not montage/survey.
+    p = f"_p{pro_sig}_{_TD_CENTERED_VERSION}" if pro_sig else ""
+    return os.path.join(_psd_rows_cache_dir(),
+                        f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}{p}.npz")
 
 
 def _save_recording_psd_rows(path, rows):
@@ -668,7 +791,7 @@ def _recording_rows_for_psd(participant_uid):
     return out
 
 
-def _assemble_psd_rows_cached(participant_uid):
+def _assemble_psd_rows_cached(participant_uid, pro_times=None):
     """Assemble the full PSD-row list for a participant using the per-recording cache, decoding +
     Welch'ing ONLY the recordings whose spectra are not already on disk.
 
@@ -677,6 +800,11 @@ def _assemble_psd_rows_cached(participant_uid):
     participant pays only for the new files. The resulting rows are identical to
     `_assemble_psd_rows(td_list, psd_list)` because both go through `_welch_rows_into`.
 
+    `pro_times`: when provided, TD-streaming recordings emit RATING-CENTERED rows (one per
+    overlapping PRO, see `_welch_rows_into`); their cache entries are keyed by the PRO-set signature
+    so a PRO change recomputes only the TD spectra. Montage/survey/event rows are PRO-independent and
+    keep their stable cache entries.
+
     Returns (rows, n_cached, n_computed) — the row counts let callers log/verify the cache hit rate.
     """
     from .routines import streaming_psd as _sp
@@ -684,11 +812,20 @@ def _assemble_psd_rows_cached(participant_uid):
     if not entries:
         return [], 0, 0
 
+    pro_sig = _pro_set_signature(pro_times) if pro_times is not None else ""
+
+    def _key_for(e):
+        # Only TD-streaming recordings carry the PRO signature in their key (their spectra are
+        # rating-centered); montage/survey stay PRO-independent so their cache is never invalidated
+        # by a PRO edit.
+        sig = pro_sig if (pro_sig and e["source"] == "TD streaming") else ""
+        return _recording_psd_cache_path(e["uid"], e["hash"], sig)
+
     rows = []
     n_cached = 0
     missing = []   # entries needing a decode+Welch
     for e in entries:
-        path = _recording_psd_cache_path(e["uid"], e["hash"])
+        path = _key_for(e)
         cached = _load_recording_psd_rows(path) if os.path.exists(path) else None
         if cached is not None:
             rows.extend(cached)
@@ -716,12 +853,15 @@ def _assemble_psd_rows_cached(participant_uid):
             for e, dicts in pool.map(_decode, missing):
                 rec_rows = []
                 if dicts:
-                    _welch_rows_into(rec_rows, dicts, e["source"], _sp)
+                    # TD streaming gets rating-centered rows when pro_times is provided; other
+                    # sources ignore it (pass None so they keep the first-window behavior).
+                    _pt = pro_times if (pro_times is not None and e["source"] == "TD streaming") else None
+                    _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt)
                 rows.extend(rec_rows)
                 n_computed += 1
                 # Persist this recording's rows (even if empty) so it is never re-decoded.
                 try:
-                    _save_recording_psd_rows(_recording_psd_cache_path(e["uid"], e["hash"]), rec_rows)
+                    _save_recording_psd_rows(_key_for(e), rec_rows)
                 except Exception as ex:
                     _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
 
@@ -757,7 +897,7 @@ def _psd_matrix_signature(td_list, psd_list):
     return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16]
 
 
-def _psd_matrix_signature_orm(participant_uid):
+def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     """Content signature over the PSD-feeding recordings, computed from the DB rows ALONE (uid +
     hashed) — NO .bdat decode. Changes iff the set of recordings (or any one's content hash)
     changes, so the assembled-matrix cache is invalidated exactly when it must be, without paying
@@ -777,6 +917,13 @@ def _psd_matrix_signature_orm(participant_uid):
     # Channel-canonicalization rule is part of the matrix CONTENT (it decides which channels enter
     # and under what canonical name), so a rule change must invalidate the cache and force a re-Welch.
     parts.append(f"chan_canon:{_CHANNEL_CANON_VERSION}")
+    # Rating-centered TD spectra depend on the PRO set, so it is part of the matrix CONTENT: fold the
+    # PRO-set signature in (empty when pro_times is None -> the legacy first-window matrix key, fully
+    # back-compatible). A PRO add/remove/shift changes this and re-Welch's the TD rows; montage/event
+    # rows are PRO-independent and reused from their own per-recording cache regardless.
+    _pro_sig = _pro_set_signature(pro_times) if pro_times is not None else ""
+    if _pro_sig:
+        parts.append(f"pro_centered:{_pro_sig}:{_TD_CENTERED_VERSION}")
     # Patient-event PSDs also feed the pool, so their recordings must invalidate the matrix cache
     # too — otherwise a newly-ingested file that adds event markers would be silently missed. Hash
     # the event recordings' (uid, hash) the same way; no decode (the PSDs live on the row metadata).
@@ -792,7 +939,7 @@ def _psd_matrix_signature_orm(participant_uid):
     return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16], entries
 
 
-def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None):
+def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=None):
     """Load the per-channel PSD matrix for this participant from disk, or build it and persist it.
 
     Two-level cache:
@@ -803,22 +950,30 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None):
          file re-Welch's just that file (not all ~330), and the cold ~190 s load disappears once the
          per-recording cache is warm.
 
+    `pro_times`: when provided (UTC epoch s), TD-streaming PSDs are RATING-CENTERED on the PROs and
+    the cache keys fold in the PRO-set signature, so the matrix is recomputed iff the PROs change.
+    When None (default), the legacy first-window behavior and keys apply — fully back-compatible, so
+    callers that don't pass PROs (e.g. `warm_psd_cache` at ingestion) build the same matrix as before.
+
     `td_list`/`psd_list` are accepted for call-site back-compat but no longer needed (the assembly
     is keyed off the DB). Returns the `psd_rows_to_matrix` dict (or None if no PSDs).
     """
     from .routines import streaming_psd as _sp
-    sig, _entries = _psd_matrix_signature_orm(participant_uid)
+    sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
     path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
     if os.path.exists(path):
         try:
             z = np.load(path, allow_pickle=True)
-            return {"logX": z["logX"], "t": z["t"],
-                    "channel": z["channel"].astype(object), "source": z["source"].astype(object),
-                    "f_set": z["f_set"]}
+            out = {"logX": z["logX"], "t": z["t"],
+                   "channel": z["channel"].astype(object), "source": z["source"].astype(object),
+                   "f_set": z["f_set"]}
+            if "dur" in z.files:
+                out["dur"] = z["dur"]
+            return out
         except Exception as e:
             _log.warning("Biomarkers: PSD matrix cache read failed (%s); recomputing", e)
 
-    rows, n_cached, n_computed = _assemble_psd_rows_cached(participant_uid)
+    rows, n_cached, n_computed = _assemble_psd_rows_cached(participant_uid, pro_times=pro_times)
     if n_computed or n_cached:
         _log.info("Biomarkers: PSD rows assembled for %s — %d from per-recording cache, %d Welch'd",
                   participant_uid, n_cached, n_computed)
@@ -826,25 +981,92 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None):
     if mat is None:
         return None
     try:
-        np.savez(path, logX=mat["logX"], t=mat["t"],
-                 channel=np.asarray(mat["channel"], dtype=str),
-                 source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
+        _save = dict(logX=mat["logX"], t=mat["t"],
+                     channel=np.asarray(mat["channel"], dtype=str),
+                     source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
+        if mat.get("dur") is not None:
+            _save["dur"] = np.asarray(mat["dur"], dtype=float)
+        np.savez(path, **_save)
     except Exception as e:
         _log.warning("Biomarkers: PSD matrix cache write failed (%s)", e)
     return mat
 
 
-def warm_psd_cache(participant_uid):
+def warm_psd_cache(participant_uid, pro_times=None, decoded_td=None, decoded_psd=None):
     """Build/refresh the per-recording PSD cache (and the assembled matrix) for a participant.
 
     Safe to call off the request thread or from ingestion: decodes + Welch's only the recordings not
     already cached, persists each, and writes the assembled-matrix npz. Idempotent and non-fatal.
+
+    `pro_times`: when provided (the metric-agnostic `_all_pro_times` set), the warmed matrix is
+    RATING-CENTERED and keyed by that PRO set — so the eager warm and the later scan/validation
+    requests (which pass the SAME set) hit the identical cache entry. This is what keeps the
+    expensive decode+Welch off the request thread: the centered matrix is already on disk by the time
+    the user clicks "Start exploratory analysis". When None, the legacy first-window matrix is warmed.
+
+    `decoded_td`/`decoded_psd`: the recordings ALREADY decoded by the timeline request (lists of
+    dicts with "Data"). When supplied AND the matrix is not already cached, the centered matrix is
+    built straight from these in-memory signals — NO second decode pass. This is the fix for the
+    "90% CPU across all cores" stall: without it the warm re-decodes every .bdat from the DB through
+    its own 16-worker pool, duplicating the decode the timeline render just paid and starving the
+    foreground render. With it, the eager warm Welch's the already-decoded data and only writes caches.
     """
     try:
-        return _cached_psd_matrix(participant_uid)
+        if (decoded_td is not None or decoded_psd is not None) and pro_times is not None:
+            return _warm_centered_matrix_from_decoded(
+                participant_uid, decoded_td or [], decoded_psd or [], pro_times)
+        return _cached_psd_matrix(participant_uid, pro_times=pro_times)
     except Exception as e:
         _log.warning("Biomarkers: warm_psd_cache failed for %s (%s)", participant_uid, e)
         return None
+
+
+def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_times):
+    """Build + persist the rating-centered PSD matrix from ALREADY-DECODED recordings — no ORM decode.
+
+    Mirrors `_cached_psd_matrix`'s matrix-cache contract (same signature key, same npz schema incl.
+    `dur`), but assembles rows from the in-memory `td_list`/`psd_list` the timeline request already
+    decoded, so the expensive .bdat decode is paid exactly once per page load instead of twice. If the
+    matrix is already cached (warm), it is loaded and returned without re-Welch'ing. The per-recording
+    row cache is intentionally NOT written here (that path serves incremental ingestion, keyed off the
+    DB); the matrix cache is what the scan/validation requests read.
+    """
+    from .routines import streaming_psd as _sp
+    sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
+    path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
+    if os.path.exists(path):
+        try:
+            z = np.load(path, allow_pickle=True)
+            out = {"logX": z["logX"], "t": z["t"],
+                   "channel": z["channel"].astype(object), "source": z["source"].astype(object),
+                   "f_set": z["f_set"]}
+            if "dur" in z.files:
+                out["dur"] = z["dur"]
+            return out
+        except Exception as e:
+            _log.warning("Biomarkers: PSD matrix cache read failed (%s); rebuilding from decoded", e)
+
+    rows = []
+    # TD streaming -> rating-centered rows; montage/survey -> first-window rows (PRO-agnostic).
+    _welch_rows_into(rows, td_list, "TD streaming", _sp, pro_times=pro_times)
+    _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
+    try:
+        rows.extend(_event_psd_rows(participant_uid))   # ORM metadata only, no decode
+    except Exception:
+        pass
+    mat = _sp.psd_rows_to_matrix(rows)
+    if mat is None:
+        return None
+    try:
+        _save = dict(logX=mat["logX"], t=mat["t"],
+                     channel=np.asarray(mat["channel"], dtype=str),
+                     source=np.asarray(mat["source"], dtype=str), f_set=mat["f_set"])
+        if mat.get("dur") is not None:
+            _save["dur"] = np.asarray(mat["dur"], dtype=float)
+        np.savez(path, **_save)
+    except Exception as e:
+        _log.warning("Biomarkers: PSD matrix cache write (from decoded) failed (%s)", e)
+    return mat
 
 
 def _derive_chan_order(td_recordings):
@@ -1589,6 +1811,27 @@ def _pro_match_arrays(pro_df, label_metric):
     return t_ep, val[ok].to_numpy(dtype=float)
 
 
+def _all_pro_times(pro_df):
+    """Every parseable PRO timestamp (UTC epoch s), INDEPENDENT of any metric — sorted, de-duped.
+
+    This is the PRO set the rating-centered TD matrix is built on. It is deliberately metric-agnostic
+    so the matrix cache key is STABLE when the user switches the displayed metric (vas <-> mpq <-> ...):
+    a TD window centered on a PRO timestamp is the same regardless of which metric that PRO carries,
+    and the per-metric matching (which drops PROs lacking a finite value for the chosen metric) stays
+    downstream in `build_pooled_detail_from_matrix`. Using the metric-FILTERED set here instead would
+    re-key — and thus re-Welch — the whole matrix on every metric switch. Returns None if unavailable.
+    """
+    if pro_df is None or len(pro_df) == 0 \
+            or (_PRO_TIME_COL not in pro_df.columns and _PRO_TIME_UTC_COL not in pro_df.columns):
+        return None
+    ts = _pro_times_utc_series(pro_df)
+    ts = ts[ts.notna()]
+    if ts.empty:
+        return None
+    t_ep = ts.view("int64").to_numpy() / 1e9
+    return np.unique(t_ep)   # sorted + de-duped
+
+
 # Default PRO<->PSD match window (minutes) when the request does not specify one. Exploratory:
 # a daily PRO is matched to the nearest streaming/PSD session whose timestamp falls within this
 # many minutes. The frontend slider sends `MatchToleranceMin`; None disables time-matching and
@@ -1654,7 +1897,7 @@ def _window_params_body(request_data, sliding):
 
 
 def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_list,
-                        pro_df, label_metric, region_map):
+                        pro_df, label_metric, region_map, warm=False):
     """Assemble the data-availability-timeline payload for the new BiomarkerDataTimeline component.
 
     Reuses recordings already loaded for the decoder (td/chronic/powerdomain) and additionally loads
@@ -1741,7 +1984,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # Scan-sample index: the (t, channel, source) of every full-spectrum PSD the exploratory
         # scan pools (same `_MAIN_BIPOLAR` filter as `_assemble_psd_rows`), so the frontend can
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
-        psd_scan_index = _psd_sample_index(td_all, psd_all)
+        # PRO times (pain["t"], the finite-metric+time set, == the matrix's pm[0]) are passed so the
+        # TD-streaming index entries are RATING-CENTERED — one per PRO inside a session's coverage,
+        # stamped at the PRO's time — making the live count IDENTICAL to the rating-centered backend
+        # pool (a TD PRO inside coverage matches at offset 0 instead of "no neural match").
+        _pro_t_idx = np.asarray(pain.get("t") or [], dtype=float) if isinstance(pain, dict) else None
+        psd_scan_index = _psd_sample_index(td_all, psd_all,
+                                           pro_times=(_pro_t_idx if _pro_t_idx is not None
+                                                      and _pro_t_idx.size else None))
         # Patient-event PSDs (incl. 'Streaming') are imported into the per-channel pool, so index
         # them here too — they render as ticks on their contact lanes and the live binarization
         # preview counts them, matching the backend pool (TD + montage + Patient event).
@@ -1749,6 +1999,24 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             psd_scan_index = psd_scan_index + _event_psd_index(participant_uid)
         except Exception as e:
             _log.warning("Biomarkers: event PSD index failed (%s)", e)
+
+        # Eagerly warm the rating-centered PSD matrix on the background pool, reusing the recordings
+        # already decoded here (td_all/psd_all carry "Data") so NO second .bdat decode happens — the
+        # fix for the "90% CPU across all cores / 45 s blank timeline" stall, where the warm used to
+        # re-decode every recording from the DB through its own 16-worker pool, duplicating this
+        # request's decode and starving the foreground render. Centered on the metric-agnostic PRO set
+        # (stable across metric switches) so the later scan/validation requests hit this exact entry.
+        # Only fired on the timeline (availability) path (warm=True); the full-run path skips it to
+        # avoid racing the scan that writes the same npz.
+        if warm:
+            try:
+                _warm_pro_t = _all_pro_times(pro_df)
+                if _warm_pro_t is not None and _warm_pro_t.size:
+                    _PSD_WARM_POOL.submit(warm_psd_cache, participant_uid, pro_times=_warm_pro_t,
+                                          decoded_td=list(td_all), decoded_psd=list(psd_all))
+            except Exception as e:
+                _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
+
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
                 "events": events, "montage_events": montage_events,
@@ -1807,19 +2075,14 @@ def availability_for_participant(request_data):
     recorded_powers = _recorded_powers(powerdomain_list)
     region_map = _region_map(Participant, list(chan_order) + [p["raw"] for p in recorded_powers])
 
+    # warm=True: _build_availability dispatches the eager rating-centered matrix warm from the
+    # recordings IT already decoded (td_all/psd_all carry "Data"), on the background pool, so the
+    # expensive Welch is on disk by the time the user clicks "Start exploratory analysis" and the
+    # request thread never re-decodes. Only the timeline path warms; the full-run path does not (it
+    # would race the scan writing the same matrix npz).
     av = _build_availability(
         participant_uid, chronic_list=chronic_list, powerdomain_list=powerdomain_list,
-        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map)
-
-    # Eagerly warm the per-channel PSD matrix WHILE the user reviews the just-loaded availability
-    # timeline, so the expensive transform is already on disk by the time they click "Start
-    # exploratory analysis". `warm_psd_cache` consults the per-recording cache and decodes + Welch's
-    # ONLY the recordings not already cached (the DB-keyed assembly needs no preloaded lists). Runs
-    # in a background thread; failure is non-fatal (the compute path rebuilds if the cache is absent).
-    try:
-        _PSD_WARM_POOL.submit(warm_psd_cache, participant_uid)
-    except Exception as e:
-        _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
+        td_list=td, pro_df=pro_df, label_metric=label_metric, region_map=region_map, warm=True)
 
     msg = None
     if not av.get("records"):
@@ -1935,8 +2198,14 @@ def run_for_participant(request_data):
     # Welch is computed once (eagerly, when the availability timeline loaded) and reused here. The
     # DB-keyed cache decodes only recordings not already Welch'd, so no full reload is needed here.
     # The cheap match-to-PRO + scan reruns per compute with the chosen tolerance.
-    psd_matrix = _cached_psd_matrix(participant_uid)
+    # TD-streaming PSDs are rating-centered (one centered window per PRO inside a session's coverage)
+    # instead of a single first-30 s spectrum stamped at the session start — this is what lets a
+    # rating in the middle of a long stream match. Use the METRIC-AGNOSTIC PRO set (all timestamps),
+    # which is the SAME set `warm_psd_cache` built the matrix on, so this request hits the warm cache
+    # instead of re-decoding on the request thread. Per-metric PRO filtering stays downstream in the
+    # match step (build_pooled_detail_from_matrix / pro_match).
     pro_match = _pro_match_arrays(pro_df, label_metric)
+    psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
 
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
@@ -2402,7 +2671,11 @@ def _validate_band_core(request_data):
     # The assembled matrix is {logX (N,F), t (N,), channel (N,), source (N,), f_set (F,)} — there
     # is no "rows" key (that was the pre-matrix row-list representation). Gate on the actual sample
     # count instead, or this bails "no PSD samples" on a perfectly valid cached matrix.
-    mat = _cached_psd_matrix(participant_uid)
+    # Pass the METRIC-AGNOSTIC PRO set so TD PSDs are rating-centered identically to the scan path AND
+    # the warm cache (band validation must see the SAME pooled features the scan does, or a validated
+    # band wouldn't match its scan r; using pm[0] here would re-key the matrix per metric and miss the
+    # warm entry). Per-metric filtering stays in the match step below (pm feeds the matcher).
+    mat = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
     if mat is None or np.asarray(mat.get("t")).size == 0 \
             or np.asarray(mat.get("logX")).size == 0:
         return {"available": False, "reason": "no PSD samples for this participant"}

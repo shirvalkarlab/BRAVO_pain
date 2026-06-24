@@ -334,6 +334,141 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     return psd
 
 
+# Rating-centered TD-streaming Welch
+# ============================================================================
+# PROBLEM this solves: `welch_psd_for_instance` Welch's only the FIRST `max_seconds` of each
+# streaming session and stamps the resulting PSD at the session START time. A long IndefiniteStream
+# (hours -> days) therefore contributes a single spectrum from its opening 30 s, timestamped at t0.
+# A pain rating sitting in the MIDDLE of that coverage is hours away from t0, so timestamp matching
+# reports "no neural match" even though raw time-domain data blankets the rating. (See the Jan-6
+# VAS-47 case: TD coverage present, PSD un-matchable.)
+#
+# FIX: for each rating that falls inside a session's [t0, t0+dur] coverage, cut a `win_s`-long
+# window CENTERED on the rating, Welch THAT, and stamp the PSD at the rating's own timestamp (so the
+# match offset is ~0 and survives any tolerance window). The window is CLIPPED to the session
+# boundary and never slid across it: a rating 5 s before a session end yields an asymmetric
+# [rating-15 s, rating+5 s] = 20 s window, not a 30 s window padded from a gap or a different
+# session. Welch returns a per-Hz power DENSITY averaged over segments, so a 20 s and a 30 s window
+# estimate the SAME spectrum (the shorter one is merely noisier — fewer averaging segments), which
+# is why heterogeneous-duration windows pool cleanly after the downstream per-(channel,source)
+# z-score. Windows whose clipped duration is below `min_s` are DROPPED (too few Welch segments to
+# trust); that rating then matches a montage/event PSD if one is in window, else stays unmatched.
+WELCH_CENTERED_MIN_SECONDS = 10.0   # floor: clipped windows shorter than this are not emitted
+
+
+def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s, *,
+                          f_set=F_SET, win_s=WELCH_MAX_SECONDS,
+                          min_s=WELCH_CENTERED_MIN_SECONDS):
+    """Welch one rating-centered window per entry in `centers_s`, for ONE streaming recording.
+
+    Parameters
+    ----------
+    channel_data : array-like
+        2-D (n_ch, n_samples) or list of 1-D per-channel arrays for one streaming session.
+    channel_names : list[str]
+        Channel names aligned to the rows of `channel_data`.
+    fs : float
+        Sampling rate (Hz).
+    chan_order : list[str]
+        Canonical channel ordering; output frequency rows are placed at chan_order.index(name).
+    centers_s : array-like of float
+        Rating offsets, in SECONDS FROM THE SESSION START (i.e. t_rating - t0), one per rating that
+        overlaps this session's coverage. May be empty.
+    f_set : ndarray
+        Frequency grid to interpolate onto (default F_SET).
+    win_s : float
+        Centered window length (s); default WELCH_MAX_SECONDS (30 s) to match the onboard PSDs.
+    min_s : float
+        Minimum CLIPPED window length (s). Windows shorter than this (rating near a session edge
+        with little coverage on one side) are dropped. Default WELCH_CENTERED_MIN_SECONDS.
+
+    Returns
+    -------
+    psd : ndarray (K, len(chan_order), len(f_set))
+        One PSD per KEPT center, in the same channel layout as `welch_psd_for_instance`.
+    used_dur_s : ndarray (K,)
+        Actual clipped window length (s) Welch'd for each kept PSD (== win_s for full windows,
+        shorter for edge-clipped ones). Carried so the report's TD-epoch stat stays honest.
+    kept_mask : ndarray (len(centers_s),) bool
+        True where a center produced a PSD (>= min_s of coverage), False where it was dropped.
+        Lets the caller map kept PSDs back to the originating ratings.
+
+    Signal processing is IDENTICAL to `welch_psd_for_instance` (4th-order Butterworth high-pass at
+    Wn=1/nyq, Welch nperseg<=1024, linear interp onto f_set, NO 60 Hz notch), so a centered TD PSD
+    and a first-30 s TD PSD are directly comparable and pool under the same "TD streaming" source.
+    """
+    fs = float(fs)
+    nyq = fs / 2.0
+    b, a = butter(4, 1 / nyq, btype='high', analog=False, output='ba')
+
+    data = np.atleast_2d(np.asarray(channel_data, dtype=float))  # (n_ch, N)
+    N = data.shape[-1]
+    n_ch = len(chan_order)
+    f_set = np.asarray(f_set, dtype=float)
+
+    centers = np.asarray(centers_s, dtype=float)
+    half = int(round(win_s * fs / 2.0))
+    win_n = 2 * half
+    min_n = int(round(min_s * fs))
+
+    ci = np.round(centers * fs).astype(int)
+    lo = np.clip(ci - half, 0, N)
+    hi = np.clip(ci + half, 0, N)
+    dur_n = hi - lo
+    kept_mask = dur_n >= min_n
+    kept_idx = np.nonzero(kept_mask)[0]
+    if kept_idx.size == 0:
+        return (np.zeros((0, n_ch, len(f_set))), np.zeros((0,)), kept_mask)
+
+    # Precompute the welch->f_set interpolation matrix ONCE on the full-window f-grid, so the
+    # full-length windows (the common case) interpolate via a single matmul instead of a per-(row,
+    # channel) np.interp loop. Edge-clipped windows have a shorter f-grid and interp individually.
+    f_full, _ = welch(np.zeros((1, win_n)), fs=fs, nperseg=min(1024, win_n), axis=-1)
+    idx = np.clip(np.searchsorted(f_full, f_set), 1, f_full.size - 1)
+    x0 = f_full[idx - 1]; x1 = f_full[idx]
+    w = (f_set - x0) / (x1 - x0 + 1e-12)
+    interp_M = np.zeros((f_set.size, f_full.size))
+    interp_M[np.arange(f_set.size), idx - 1] = 1.0 - w
+    interp_M[np.arange(f_set.size), idx] = w
+
+    psd = np.zeros((kept_idx.size, n_ch, len(f_set)))
+    used = np.zeros(kept_idx.size)
+    row_of = {int(gi): k for k, gi in enumerate(kept_idx)}
+
+    # Channel local-row -> global chan_order slot, computed once.
+    slot = [(li, chan_order.index(nm)) for li, nm in enumerate(channel_names) if nm in chan_order]
+
+    # Full-length, in-bounds windows -> one batched Welch + one interp matmul.
+    full = kept_mask & (ci - half >= 0) & (ci + half <= N)
+    full_idx = np.nonzero(full)[0]
+    if full_idx.size:
+        starts = ci[full_idx] - half
+        gather = starts[:, None] + np.arange(win_n)[None, :]        # (B, win_n)
+        batch = data[:, gather]                                     # (n_raw_ch, B, win_n)
+        batch = np.moveaxis(batch, 0, 1)                            # (B, n_raw_ch, win_n)
+        batch = filtfilt(b, a, batch, axis=-1)
+        _, P = welch(batch, fs=fs, nperseg=min(1024, win_n), axis=-1)  # (B, n_raw_ch, F_welch)
+        Pi = P @ interp_M.T                                        # (B, n_raw_ch, len(f_set))
+        for bk, gi in enumerate(full_idx):
+            for li, gslot in slot:
+                psd[row_of[int(gi)], gslot, :] = Pi[bk, li, :]
+            used[row_of[int(gi)]] = win_n / fs
+
+    # Edge-clipped windows (asymmetric, shorter than win_s) -> individual Welch.
+    for gi in kept_idx:
+        if full[gi]:
+            continue
+        seg = data[:, lo[gi]:hi[gi]]
+        seg = filtfilt(b, a, seg, axis=-1)
+        nper = int(min(1024, seg.shape[-1]))
+        f, P = welch(seg, fs=fs, nperseg=max(nper, 8), axis=-1)
+        for li, gslot in slot:
+            psd[row_of[int(gi)], gslot, :] = np.interp(f_set, f, P[li, :])
+        used[row_of[int(gi)]] = seg.shape[-1] / fs
+
+    return psd, used, kept_mask
+
+
 def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="nearest",
                   channels=None, max_per_rating=None):
     """Match each PSD timestamp to a PRO report within the window.
