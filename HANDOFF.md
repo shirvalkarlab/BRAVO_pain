@@ -2,7 +2,7 @@
 
 > Single source of truth for continuing this work. Live as of commit `5b20c48` on branch
 > `PS_biomarker_module` (`github.com/shirvalkarlab/BRAVO_pain`). Latest biomarker bundle
-> `main.6f376b10.js`. Migrations through `0009_sourcefile_device_institute`.
+> `main.495db98c.js`. Migrations through `0009_sourcefile_device_institute`.
 > **§NOW (below) is the current state and supersedes §4–§9** where they disagree — those older
 > sections (commit `f57e9c0` era) are kept as historical context for the science and architecture.
 
@@ -10,10 +10,71 @@
 
 ## NOW — current state (most recent sessions)
 
+### Biomarker Data Timeline — REAL inline LSB + performance compaction (2026-06-22, latest)
+
+The `BiomarkerDataTimeline` component (the availability timeline that replaced `BiomarkerTimeline`)
+now draws the **real** band-power LSB and is render-cheap at calendar scale. Three commits this span:
+`7275fb8` (v9 redesign + always-on `/api/queryDataAvailability` endpoint), `31e0e8b` (real inline
+LSB + per-metric pain axis + dynamic gridlines + boxed legend), and the **performance compaction**
+commit below.
+
+**Backend (`BRAVO/modules/Biomarkers/routines/availability.py`):**
+- `lsb_series(chronic_recordings, powerdomain_recordings, region_map=None)` — emits the REAL
+  per-sample band power per channel: `{channel: {t:[epoch_s], y:[lsb], center_hz:[hz|None],
+  source:["streaming"|"chronic"]}}`. Power-domain `<contact> Power` columns → streaming series at
+  ~2 Hz (center from `Descriptor.Therapy`); chronic `Data[:,0]` LFP → ~10-min series. Drops the
+  device sentinel `2**31-1`, negatives, non-finite. **Chronic→contact remap:** chronic logs named by
+  hemisphere (`LeftHemisphere LFP`) are keyed onto the configured sensing CONTACT for that side
+  (built from the power-domain channel keys) so streaming + chronic for one physical channel pool
+  into ONE lane. Verified end-to-end by decoding raw RCS08 JSONs (`BrainSenseLfp` + `LFPTrendLogs`):
+  exact device values (535/596 L, 96/113 R), correct timestamps, correct center freqs.
+- `lsb_overview(lsb, *, session_gap_s=1800, chronic_max_points=1500)` — **performance layer.** The
+  raw 2 Hz cloud (tens of thousands of WebGL points) made the page lag on zoom, so this compacts the
+  per-sample series into render-cheap geometry that carries the same information:
+  - chronic → one **decimated grey LINE** of the real ~10-min trend.
+  - streaming → one **BLOCK per session** (contiguous run split on a >`session_gap_s` time gap OR a
+    sensing-frequency change): `{t0,t1,med,lo,hi,center_hz,n}` (median LSB, 10-90 pct band, sample
+    count, snapped center). Returns `{channel: {chronic, sessions, y_lo, y_hi}}`; `y_lo/y_hi` =
+    robust 2-98 pct window across both layers so the lane scales once.
+- `_build_availability` (in `bravo_service.py`) now calls both and ships **`lsb_overview`** in the
+  payload (the heavy per-sample `lsb` is NOT shipped — frontend renders from the overview). Return
+  key is `availability["lsb_overview"]`.
+
+**Frontend (`Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js`):**
+- Reads `av.lsb_overview` via `lsbFor(ch)` (collapses raw keys to the normalized pair). Band-power
+  lanes draw: grey chronic polyline + per-session thick colored bars (color = sensing Hz) with a
+  thin 10-90 whisker and an invisible hover-anchor per session (median/range/n/freq) — ~13
+  frequency-grouped traces + one chronic line per lane instead of 50k points. This keeps the
+  **grey-chronic / colored-streaming** look the user explicitly liked.
+- Three other fixes in `31e0e8b`: (1) **pain y-axis by metric** via `painAxis(metric, yvals)` — NRS
+  0-10, MPQ 0-50, VAS family 0-100, composite/unknown spans its own range; ticks + label update live
+  with the picker. (2) **Dynamic time gridlines** — the x-axis draws them (no fixed `dtick`), so they
+  auto-densify on zoom (month→week→day→hour) and span all rows (neural + pain + stim); darker
+  `rgba(0,0,0,0.18)` + a cursor spike line across all plots. (3) **Glyph legend** vertical-stacked in
+  a black-bordered box anchored high (margin top bumped to 170) so it never overlaps PSD ticks.
+
+**Tests:** `BRAVO/modules/Biomarkers/tests/test_availability.py` — 13 tests (added `lsb_series`
+real-values/sentinel + chronic-remap, and `lsb_overview` chronic-line/session-blocks +
+freq-change-split). **Full Biomarkers suite: 84 passed**, zero regressions.
+
+**STILL NEEDS LIVE VERIFICATION (the one open item):** the HTTP round-trip + browser render against
+the running server. The agent sandbox cannot reach the live stack (Docker socket = permission
+denied; `localhost`/`docker.internal` = hard private-IP refusal that `request_network_access` cannot
+grant). To make this self-serve for the agent, expose the backend on a public hostname — e.g.
+`cloudflared tunnel --url http://localhost:27286` or `ngrok http 27286` — then the agent can request
+allowlist access to that domain and hit `/api/queryDataAvailability` directly. Until then: after
+pulling, `docker compose restart bravo-server` + hard refresh (Cmd+Shift+R) and confirm the timeline
+renders the compact LSB (grey chronic line + colored session bars) and stays smooth on zoom.
+
+Latest preview render: `timeline_v11_preview.png` (artifact). It used real-style stand-in LSB values
+because that render only loaded the 3 top-level raw JSONs — but the **full ~500-file dataset is
+available in the `Stage 1/` subfolder** (see §1 data paths), so a future render/verification can use
+real values across the whole record by globbing `Stage 1/*.json`.
+
 ### Latest first: what to know before editing
 - **Branch/commit:** `PS_biomarker_module` (latest = the biomarker-UI-enhancement commit below; the prior
   clean checkpoint was `f5f1794`), working tree committed (not yet pushed — `git push origin
-  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.6f376b10.js`
+  PS_biomarker_module` when ready). Latest biomarker bundle `Client/build/static/js/main.495db98c.js`
   (was `main.3eec6e4f.js`).
 - **Migrations:** leaf is `0009_sourcefile_device_institute`. `0007` (SourceFile.unique_hashed),
   `0008` (Recording.content_fingerprint), `0009` (SourceFile.device + SourceFile.institute) all apply
@@ -25,6 +86,65 @@
   `Prasad Shirvalkar <prasad.shirvalkar@ucsf.edu>` + trailer `Co-Authored-By: Claude (Operon)
   <noreply@anthropic.com>`. NEVER write global git config (`~/.config/git/ignore` "Operation not
   permitted" warnings on every git call are benign — ignore them).
+
+### REDCap CSV / DataFrame ingest into SurveyForms (NEW — offline Form Records)
+The Surveys & Questionnaires / Form Records module can now ingest the **current pipeline's REDCap
+export** offline (no live REDCap token needed) and store it in the platform's native tables, so the
+PROs render in Form Records and are available to customized analysis. This implements the offline
+half of §7-B (live field-map wiring is still open; see TODO).
+
+- **Source of truth:** the pipeline's tidy daily-PRO export
+  `BRAVO/_pro_dump/<pt>_chronic_pro_df.csv` (produced by
+  `redcap_client.process_redcap(pull_redcap(), field_map)`) — **not** the Stage-0 `*_tidy_long_v*`
+  files. RCS08 = 678 daily reports × 10 metrics, 2025-07-20 → 2026-06-16.
+- **New code:**
+  - `modules/SurveyForms/RedcapImport.py` — pure pandas, no Django. `parse_export(source, layout=
+    "auto"|"wide"|"long")` → list of instruments, each `{FieldMapping, records, metrics, skipped}`.
+    Wide = chronic_pro_df (one instrument, one score question per metric + a hidden "Time" marker,
+    canonical labels/ranges, NaN→None, date-sorted). Long = tidy-long (one instrument per group).
+  - `modules/SurveyForms/RedcapImportService.py` — Django persistence: `import_export(participant,
+    institute, source, …)` writes `ScaleForms` (record_type **`"Redcap CSV Import"`**) +
+    `ParticipantLinkRel` + one `ScaleRecord` per report. **Idempotent** re-import (replaces that
+    participant's prior records for the form). **No DB migration** — reuses existing tables.
+  - `Server/APIs/EventAnnotationHandler.py`:
+    - `ImportRedcapCSV` (route **`/api/importRedcapCSV`**, `IsAuthenticated`, Upload/Edit perm).
+      Accepts multipart `File`, inline JSON `Rows`, or a confined `ServerPath` (basename-only,
+      restricted to `_pro_dump/`; traversal → 400). `RequestType:"ListServerExports"` returns
+      `{Exports:[{ServerPath, SizeBytes, MatchesParticipant}], Suggested, ParticipantName}` — lists
+      the PRO exports already on the server (the tidy `*_pro_df.csv`; excludes the big `cv_df_*`
+      feature tables + the manifest) and flags the one whose filename prefix matches the
+      participant name. `RequestType:"AutoImport"` imports **every** matching server export for the
+      participant in one call, **content-aware** (`skip_if_unchanged`): a no-op when the stored
+      records already fingerprint-match the export, and a full re-import when the upstream REDCap
+      export was refreshed with new reports. The **Form Records view calls AutoImport silently on
+      mount** (before loading the form list), so a clinician opening a patient sees up-to-date PROs
+      with **zero clicks**; the "Import REDCap CSV" button remains only for loading other/extra
+      files. Fingerprinting is order-independent SHA-256 over (rounded-epoch, sorted-Result) — see
+      `RedcapImportService._records_fingerprint` / `_stored_fingerprint`; unchanged imports do not
+      bump `record_version` or duplicate `ScaleRecord` rows.
+    - `QuerySurveyForms` new RequestType **`RequestAvailabilityMatrix`** → `{Instruments,
+      Participants:[{ParticipantId, ParticipantName, Instruments:[{Instrument, RecordType, Count,
+      Fields, Version}]}]}` — powers the per-patient score-availability table.
+  - `modules/DataAnalysis.py` `getChronicTimeline`: the previously-stubbed non-Redcap-linked `else`
+    branch now populates a `CustomizedSurveyData` Activity (Time + one channel per score question,
+    `[REDCap CSV] ` / `[Survey] ` prefixed) — imported PROs become outcome channels.
+  - `Client/src/views/Survey/FormList/index.js`: "Import REDCap CSV" button + dialog (participant
+    picker + FilePond uploader, CSRF null-guard) and a "Score Availability by Patient" summary table
+    (patient × instrument; chips show count + field count; tooltip lists fields; patient name links to
+    `/form-records/:uid`). **No change** needed to `RecordScoreTimeline` / the Form Records tab — the
+    imported FieldMapping + Result shape matches what the existing renderer expects.
+- **Tests:** `modules/SurveyForms/tests/test_redcap_import.py` (9 pure-pandas pytest cases — run in
+  `bravo_app`: `PYTHONPATH=$PWD python -m pytest modules/SurveyForms/tests/test_redcap_import.py -q`)
+  and `modules/SurveyForms/tests/harness_redcap_ingest.py` (Django-harness integration through the
+  real DRF views — import paths, traversal rejection, idempotency, RequestAll Count, RequestRecords,
+  availability matrix, customized-analysis channels; run via the harness env block below). React SPA
+  `npm run build` succeeds with the new UI.
+- **Scope note:** this pass is **ingest + Form Records views + availability summary** only. The
+  Survey module gets the import controls and the **score-availability summary table only** — no
+  timeline plots there (per-metric score time-series live in the existing **Pain Score
+  Visualization** report, renamed this pass from "Pain Scores"; route `/pain-scores/:uid` and key
+  `PainScores` are unchanged). Wiring PROs into Predict-Therapy contact selection (that module is
+  LFP-montage based today, not PRO-based) was explicitly deferred by the user.
 
 ### The Django app harness (KEY TOOL — the sandbox cannot reach Docker)
 This sandbox **cannot reach the Docker socket** (orbstack socket → "permission denied"; container ops
@@ -47,8 +167,13 @@ a **Django app harness** running the real models/migrations against throwaway SQ
   $PY /tmp/bravo_harness/repro_handler.py   # or repro.py
   ```
   Real RCS08 JSONs (granted, read-only): `~/Library/CloudStorage/OneDrive-UCSF/Desktop/PNL/RCS008 jsons/`
-  (11.5 MB `Report_JI Pacu_…20250716T222813.json`, 23 MB `…20250716T182401.json`, 66 MB
-  `RCS08 - …20250904T142449.json`). NOTE: the harness measures SQLite timings; it proves
+  — only **3 files sit at the top level** (11.5 MB `Report_JI Pacu_…20250716T222813.json`, 23 MB
+  `…20250716T182401.json`, 66 MB `RCS08 - …20250904T142449.json`). **The other ~497 Percept
+  session-report JSONs live in the `Stage 1/` SUBFOLDER** (`…/RCS008 jsons/Stage 1/`, ~500 total,
+  same `Report_Json_Session_Report_*.json` format, sizes 60 KB–130 MB, prefixes `RCS08 - `, `JI - `,
+  `JILLIAN IMRIE - `). To exercise the timeline/LSB code against the full dataset, glob
+  `Stage 1/*.json`, not just the top level — earlier in-sandbox runs that "only saw 3 JSONs" were
+  missing the subfolder. NOTE: the harness measures SQLite timings; it proves
   correctness/dedup/query-shape but NOT absolute MySQL latency. **Biomarker unit tests run in the
   `rcs_v14_analysis` env** (see §2 below for the container path).
 
@@ -146,7 +271,7 @@ BiomarkerAnalytics}.js`; backend = `modules/Biomarkers/routines/analytics.py` + 
   `sensing_config_changes` diff logic lives in the Django-coupled `bravo_service` and was not exercised
   on the live container (sandbox can't reach Docker) — verify on a real RCS08 run after a restart.
 
-**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.6f376b10.js`):** acted on the user's
+**Biomarker rigor + ROC/bar-plot follow-up (DONE — bundle `main.495db98c.js`):** acted on the user's
 second review of the same card. Same files + `routines/stats_utils.py`.
 - **Permutation-null AUC on the bar plot (rigor ask):** the "Honest performance" bar plot's chance line
   was the ANALYTIC 0.5 (correct, but no empirical test). Added `stats_utils.auc_block_perm_null(score,
@@ -623,3 +748,17 @@ curl -s -c $J -b $J -X POST -H 'Content-Type: application/json' \
   uid `e30b54dc17d3488dbe1945bb911f5549` — any participant with that MRN returns synthetic demo data.
 - **REDCap env:** set `REDCAP_API_URL` / `REDCAP_API_TOKEN` on the `bravo-server` service (compose) for
   live PRO pulls; otherwise only demo data flows.
+
+## Plotly → PNG render recipe (agent sandbox, env `bravo_app`) — proven 2026-06-22
+The macOS app Chrome (`/Applications/Google Chrome.app`) aborts instantly under the agent
+sandbox (SIGABRT/exit 134); kaleido 1.x cannot fetch Chrome-for-Testing (host denylisted).
+What works — pin **kaleido==0.2.1** (bundles its own chromium, honors `chromium_args`):
+```python
+import os, plotly.io as pio
+os.environ["HOME"] = "/tmp/choreo_home"   # writable profile dir (mkdir -p first)
+pio.kaleido.scope.chromium_args = ('--single-process','--no-zygote','--no-sandbox',
+                                   '--disable-gpu','--disable-dev-shm-usage')
+pio.write_image(fig, "out.png", width=1500, height=820)
+```
+`--no-zygote` + `--single-process` are load-bearing. kaleido 1.3.0 removed `pio.kaleido.scope.*`,
+so the 0.2.1 pin is required. `bravo_app` already has kaleido==0.2.1.

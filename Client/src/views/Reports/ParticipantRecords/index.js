@@ -24,6 +24,9 @@ import {
   Grid,
 } from "@mui/material";
 
+import { FilePond } from 'react-filepond';
+import 'filepond/dist/filepond.min.css';
+
 import moment from "moment";
 import { AdapterMoment } from '@mui/x-date-pickers/AdapterMoment';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -42,6 +45,7 @@ import LoadingProgress from "components/LoadingProgress";
 
 // core components
 import RecordScoreTimeline from "./RecordScoreTimeline";
+import RecordCountBars from "./RecordCountBars";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -59,20 +63,15 @@ function ParticipantSurveyRecords() {
   const [availableForms, setAvailableForms] = useState({active: {}, options: [], forms: []});
   const [newLinkDialog, setNewLinkDialog] = useState({show: false, form: "", options: []});
   const [newRecordDialog, setNewRecordDialog] = useState({show: false, date: moment(new Date()), time: moment(new Date())});
+  const [csvImportDialog, setCsvImportDialog] = useState({show: false, files: [], instrumentName: "", serverExports: [], suggested: null});
   
   const [data, setData] = useState(false);
 
   const [alert, setAlert] = useState(null);
 
-  useEffect(() => {
-    if (!participant_uid) {
-      navigate("/database", {replace: false});
-      return;
-    }
-    setContextState(dispatch, "report", "SurveyReports");
-
+  const loadForms = (preferFormId) => {
     setAlert(<LoadingProgress/>);
-    SessionController.query("/api/queryParticipantSurveyRecords", {
+    return SessionController.query("/api/queryParticipantSurveyRecords", {
       RequestType: "RequestAll",
       ParticipantId: participant_uid
     }).then((response) => {
@@ -100,13 +99,111 @@ function ParticipantSurveyRecords() {
           }
         }
 
-        return {active: options.length > 0 ? options[0] : {}, options, forms: response.data.Forms}
+        const preferred = preferFormId ? options.find((a) => a.Id == preferFormId) : null;
+        return {active: preferred ? preferred : (options.length > 0 ? options[0] : {}), options, forms: response.data.Forms}
       })
       setAlert(null);
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
+  };
+
+  useEffect(() => {
+    if (!participant_uid) {
+      navigate("/database", {replace: false});
+      return;
+    }
+    setContextState(dispatch, "report", "SurveyReports");
+    // Silently auto-import every server-side REDCap export that matches this participant, THEN load
+    // the form list. The import is content-aware server-side: a no-op when nothing changed, and a
+    // re-import when the upstream export was refreshed with new reports -- so the user never has to
+    // click anything to see up-to-date PROs. Failures are non-fatal; we still load whatever exists.
+    SessionController.query("/api/importRedcapCSV", {
+      RequestType: "AutoImport",
+      ParticipantId: participant_uid
+    }).then(() => {
+      loadForms();
+    }).catch(() => {
+      loadForms();
+    });
   }, [participant_uid]);
+
+  // Multipart CSV upload for the offline REDCap import, scoped to THIS participant (XHR mirrors
+  // ExternalCSVUploader's CSRF null-guard — the SPA doesn't render the csrfmiddlewaretoken input).
+  const handleCsvUpload = (fieldName, file, upload_metadata, load, error, progress, abort) => {
+    const formData = new FormData();
+    formData.append("File", file, file.name);
+    formData.append("ParticipantId", participant_uid);
+    formData.append("InstrumentName", csvImportDialog.instrumentName || "");
+
+    const request = new XMLHttpRequest();
+    request.open('POST', "/api/importRedcapCSV");
+    let csrftoken = "";
+    if (document.querySelector('[name=csrfmiddlewaretoken]')) {
+      csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+    request.setRequestHeader("X-CSRFToken", csrftoken);
+    request.upload.onprogress = (e) => { progress(e.lengthComputable, e.loaded, e.total); };
+    request.onload = function () {
+      if (request.status >= 200 && request.status < 300) {
+        load(request.responseText);
+        let importedFormId = null;
+        try {
+          const resp = JSON.parse(request.responseText);
+          if (resp.Instruments && resp.Instruments.length > 0) importedFormId = resp.Instruments[0].FormId;
+          setAlert(
+            <MuiAlertDialog title={"Import Complete"}
+              message={`Imported ${resp.TotalRecords} record(s) across ${resp.Instruments.length} instrument(s) for this participant.`}
+              handleClose={() => setAlert(null)} handleConfirm={() => setAlert(null)}/>);
+        } catch (e) { /* ignore parse */ }
+        setCsvImportDialog({show: false, files: [], instrumentName: ""});
+        loadForms(importedFormId);
+      } else {
+        let msg = "Unknown Error Code: " + request.status.toFixed(0);
+        if (request.status == 403) {
+          msg = "Permission Denied";
+        } else if (request.status == 400) {
+          try { msg = JSON.parse(request.response).message; } catch (e) { msg = "Bad Request"; }
+        }
+        error(msg);
+      }
+    };
+    request.send(formData);
+    return { abort: () => { request.abort(); abort(); } };
+  };
+
+  // Ask the server which PRO exports already exist for this participant, so the dialog can offer a
+  // one-click import instead of forcing a manual file pick.
+  const openImportDialog = () => {
+    setCsvImportDialog({show: true, files: [], instrumentName: "", serverExports: [], suggested: null});
+    SessionController.query("/api/importRedcapCSV", {
+      RequestType: "ListServerExports",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setCsvImportDialog((d) => ({...d, serverExports: response.data.Exports || [], suggested: response.data.Suggested || null}));
+    }).catch(() => {
+      // non-fatal: the manual uploader is always available
+    });
+  };
+
+  const importFromServer = (serverPath) => {
+    setAlert(<LoadingProgress/>);
+    SessionController.query("/api/importRedcapCSV", {
+      ParticipantId: participant_uid,
+      ServerPath: serverPath,
+      InstrumentName: csvImportDialog.instrumentName || ""
+    }).then((response) => {
+      const importedFormId = (response.data.Instruments && response.data.Instruments.length > 0) ? response.data.Instruments[0].FormId : null;
+      setCsvImportDialog({show: false, files: [], instrumentName: "", serverExports: [], suggested: null});
+      setAlert(
+        <MuiAlertDialog title={"Import Complete"}
+          message={`Imported ${response.data.TotalRecords} record(s) from ${serverPath}.`}
+          handleClose={() => setAlert(null)} handleConfirm={() => setAlert(null)}/>);
+      loadForms(importedFormId);
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  };
 
   const addNewFormLink = () => {
     if (!newLinkDialog.form) return;
@@ -196,11 +293,16 @@ function ParticipantSurveyRecords() {
             fullWidth
             disableClearable
           />
-          <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
-            return {active: {}, options: availableForms.forms, show: true}
-          })}>
-            {"Link New Form"} 
-          </MDButton>
+          <MDBox display="flex" flexDirection="row">
+            <MDButton variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => openImportDialog()}>
+              {"Import REDCap CSV"}
+            </MDButton>
+            <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
+              return {active: {}, options: availableForms.forms, show: true}
+            })}>
+              {"Link New Form"} 
+            </MDButton>
+          </MDBox>
         </MDBox>
 
         <Dialog open={newLinkDialog.show} onClose={() => setNewLinkDialog({...newLinkDialog, show: false})}>
@@ -300,9 +402,14 @@ function ParticipantSurveyRecords() {
                     </MDBox>
                   </Grid>
                   {data.length > 0 ? (
+                    <>
+                    <Grid item xs={12}>
+                      <RecordCountBars dataToRender={data} form={availableForms.active.Record}/>
+                    </Grid>
                     <Grid item xs={12}>
                       <RecordScoreTimeline dataToRender={data} form={availableForms.active.Record} figureTitle={"RecordScoreTimeline"}/>
                     </Grid>
+                    </>
                   ) : (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={2}>
@@ -363,7 +470,75 @@ function ParticipantSurveyRecords() {
             }}>Create</MDButton>
           </DialogActions>
         </Dialog>
-        
+
+        <Dialog open={csvImportDialog.show} onClose={() => setCsvImportDialog({...csvImportDialog, show: false})}>
+          <MDBox px={2} pt={2} style={{minWidth: 520}}>
+            <MDTypography variant="h5">
+              {"Import REDCap CSV"}
+            </MDTypography>
+            <MDTypography variant="body2" color="text" fontSize={14} mt={1}>
+              {"Upload a tidy REDCap export (the pipeline's chronic_pro_df, or a tidy-long export) for this participant. "}
+              {"Each instrument is stored as a form; each report becomes a record shown in the timeline below. Re-importing the same instrument replaces its prior records."}
+            </MDTypography>
+          </MDBox>
+          <DialogContent>
+            <MDBox px={1} pt={1}>
+              <TextField
+                variant="standard" margin="dense"
+                value={csvImportDialog.instrumentName || ""}
+                onChange={(event) => setCsvImportDialog({...csvImportDialog, instrumentName: event.target.value})}
+                label={"Instrument / Form Name (optional)"} type="text" fullWidth
+                helperText={"Used for a wide export (one instrument). Long exports are auto-split per instrument."}
+              />
+            </MDBox>
+            {csvImportDialog.serverExports && csvImportDialog.serverExports.length > 0 ? (
+              <MDBox px={1} pt={2}>
+                <MDTypography variant="button" fontWeight="medium" color="text">
+                  {"Found on server"}
+                </MDTypography>
+                {csvImportDialog.serverExports.map((exp) => (
+                  <MDBox key={exp.ServerPath} mt={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center"
+                    sx={{border: "1px solid #e0e0e0", borderRadius: 1, p: 1}}>
+                    <MDBox>
+                      <MDTypography variant="button" fontWeight={exp.MatchesParticipant ? "bold" : "regular"}>
+                        {exp.ServerPath}
+                      </MDTypography>
+                      {exp.MatchesParticipant ? (
+                        <MDBadge badgeContent={"matches this patient"} color="success" variant="gradient" size="xs" container sx={{ml: 1}}/>
+                      ) : null}
+                      <MDTypography variant="caption" color="text" display="block">
+                        {exp.SizeBytes ? (exp.SizeBytes/1024).toFixed(0) + " KB" : ""}
+                      </MDTypography>
+                    </MDBox>
+                    <MDButton variant={exp.MatchesParticipant ? "contained" : "outlined"} color="success" size="small"
+                      onClick={() => importFromServer(exp.ServerPath)}>
+                      {"Import"}
+                    </MDButton>
+                  </MDBox>
+                ))}
+                <MDTypography variant="caption" color="text" display="block" mt={2}>
+                  {"\u2014 or upload a file manually \u2014"}
+                </MDTypography>
+              </MDBox>
+            ) : null}
+            <MDBox px={1} pt={2}>
+              <FilePond
+                files={csvImportDialog.files}
+                onupdatefiles={(fileItems) => setCsvImportDialog({...csvImportDialog, files: fileItems.map((f) => f.file)})}
+                allowMultiple={false}
+                maxFiles={1}
+                acceptedFileTypes={["text/csv", "application/vnd.ms-excel", ".csv"]}
+                server={{ process: handleCsvUpload }}
+                name="File"
+                labelIdle={'Drag & drop a REDCap CSV or <span class="filepond--label-action">Browse</span>'}
+              />
+            </MDBox>
+          </DialogContent>
+          <DialogActions>
+            <MDButton color="secondary" onClick={() => setCsvImportDialog({...csvImportDialog, show: false})}>Close</MDButton>
+          </DialogActions>
+        </Dialog>
+
       </MDBox>
     </DatabaseLayout>
   );

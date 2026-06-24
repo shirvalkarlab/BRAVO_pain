@@ -78,6 +78,136 @@ def _chronic_center_freqs(groups):
     return freqs
 
 
+# Percept bipolar sensing-channel config -> compact contact label (e.g. "0-3").
+_CONTACT_LABELS = {
+    "ZERO_AND_THREE": "0-3", "ONE_AND_THREE": "1-3", "ZERO_AND_TWO": "0-2",
+    "ZERO_AND_ONE": "0-1", "TWO_AND_THREE": "2-3", "ONE_AND_TWO": "1-2",
+}
+
+
+def _chronic_contacts(groups):
+    """Per-hemisphere chronic-trend sensing CONTACT (e.g. '0-3') from the GROUP-level config:
+    Groups.Final[].ProgramSettings.SensingChannel[].Channel, keyed by HemisphereLocation. Returns
+    {'LeftHemisphere': '0-3', 'RightHemisphere': '0-2'} (keys matching the chronic recording's
+    ChannelNames tokens); active group wins, else last seen. Fully defensive: any malformed/absent
+    structure yields {}. Mirrors _chronic_center_freqs but reads the Channel (contact pair) rather
+    than the frequency — the programmed sensing CONTACT also changes over time, so the chronic LFP
+    is a sequence of (contact, frequency) configs, not one fixed channel.
+    """
+    if isinstance(groups, dict):
+        group_list = groups.get("Final") or groups.get("Initial") or []
+    elif isinstance(groups, list):
+        group_list = groups
+    else:
+        return {}
+    out = {}
+    for grp in group_list:
+        if not isinstance(grp, dict):
+            continue
+        active = bool(grp.get("ActiveGroup"))
+        ps = grp.get("ProgramSettings")
+        if not isinstance(ps, dict):
+            continue
+        for ch in ps.get("SensingChannel", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            hemi_raw = str(ch.get("HemisphereLocation") or ch.get("Hemisphere") or "")
+            if "Left" in hemi_raw:
+                hemi = "LeftHemisphere"
+            elif "Right" in hemi_raw:
+                hemi = "RightHemisphere"
+            else:
+                continue
+            raw = str(ch.get("Channel", "")).replace("SensingElectrodeConfigDef.", "")
+            contact = _CONTACT_LABELS.get(raw)
+            if contact is None:
+                continue
+            if out.get(hemi) is None or active:
+                out[hemi] = contact
+    return out
+
+
+def _chronic_contact_schedule(JSON):
+    """Per-hemisphere DATED sensing-CONTACT schedule from GroupHistory.
+
+    Parallel to _chronic_freq_schedule but for the bipolar contact (the recording electrode pair),
+    which is reprogrammed over time just like the frequency. GroupHistory's dated snapshots record
+    WHEN the contact changed. Returns {hemi_token: [[epoch_seconds, "0-3"], ...]} sorted by time
+    with consecutive same-contact points collapsed to change-points. The union across all ingested
+    sessions reconstructs the full contact-over-time history, which the report segments against each
+    trend's span so each chronic point lands in the row of the contact it was actually recorded from.
+    Fully defensive: returns {} on any malformed structure so decode never fails.
+    """
+    from datetime import datetime
+    out = {}
+    gh = JSON.get("GroupHistory")
+    if not isinstance(gh, list):
+        return out
+    for entry in gh:
+        if not isinstance(entry, dict):
+            continue
+        sd = entry.get("SessionDate")
+        if not sd:
+            continue
+        try:
+            t = datetime.fromisoformat(str(sd).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        cmap = _chronic_contacts(entry.get("Groups"))
+        for hemi_token, contact in cmap.items():
+            out.setdefault(hemi_token, []).append([t, contact])
+    for hemi_token, pts in out.items():
+        pts.sort(key=lambda p: p[0])
+        cps = []
+        for tp, contact in pts:
+            if not cps or cps[-1][1] != contact:
+                cps.append([tp, contact])
+        out[hemi_token] = cps
+    return out
+
+
+def _chronic_freq_schedule(JSON):
+    """Per-hemisphere DATED sensing-frequency schedule from GroupHistory.
+
+    A single session stamps ONE current sensing frequency, but the programmed band changes over
+    time. GroupHistory is a list of dated snapshots ({SessionDate, Groups}) of the full group config,
+    so it records WHEN the sensing frequency changed. We turn it into a step-function schedule per
+    hemisphere: {hemi_token: [[epoch_seconds, hz], ...]} sorted by time with consecutive same-Hz
+    points collapsed to change-points. The union of these schedules across every ingested session
+    reconstructs the full frequency-over-time history, which the report segments against each trend's
+    own time span to draw an accurate frequency ribbon. Fully defensive: returns {} on any malformed
+    structure so decode never fails.
+    """
+    from datetime import datetime
+    out = {}
+    gh = JSON.get("GroupHistory")
+    if not isinstance(gh, list):
+        return out
+    for entry in gh:
+        if not isinstance(entry, dict):
+            continue
+        sd = entry.get("SessionDate")
+        if not sd:
+            continue
+        try:
+            t = datetime.fromisoformat(str(sd).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        # Reuse the active-group frequency extractor on this snapshot's Groups list.
+        hz_map = _chronic_center_freqs(entry.get("Groups"))
+        for hemi_token, hz in hz_map.items():
+            out.setdefault(hemi_token, []).append([t, hz])
+    # Sort by time and collapse to change-points (drop a snapshot whose Hz equals the previous one).
+    for hemi_token, pts in out.items():
+        pts.sort(key=lambda p: p[0])
+        cps = []
+        for tp, hz in pts:
+            if not cps or cps[-1][1] != hz:
+                cps.append([tp, hz])
+        out[hemi_token] = cps
+    return out
+
+
 def extractPatientInformation(JSON):
     PatientOverview = {}
     PatientOverview["SessionTimestamp"] = Percept.estimateSessionDateTime(JSON)
@@ -324,6 +454,15 @@ def decodeMedtronicJSON(JSON):
         # at report time. _chronic_center_freqs is local & defensive (returns {} on any malformed
         # structure), so decode never fails on a missing/odd Groups block.
         _chronic_hz = _chronic_center_freqs(JSON.get("Groups"))
+        # DATED frequency schedule from GroupHistory (records WHEN the band changed, which a single
+        # current value cannot). Stamped per recording so the report can segment each trend's span
+        # against the real change-points instead of collapsing it to one frequency.
+        _freq_sched = _chronic_freq_schedule(JSON)
+        # DATED contact schedule from GroupHistory (records WHEN the recording contact pair changed).
+        # The programmed sensing CONTACT is reprogrammed over time just like the frequency, so the
+        # chronic LFP is a sequence of (contact, frequency) configs; stamping this lets the report
+        # split each hemisphere's trend into the contact rows the signal was actually recorded from.
+        _contact_sched = _chronic_contact_schedule(JSON)
         for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"]):
             chans = Recording["ChannelNames"]
             # ChannelNames[0] is like "RightHemisphere LFP" -> token "RightHemisphere".
@@ -331,6 +470,12 @@ def decodeMedtronicJSON(JSON):
             md = {"ChannelNames": chans}
             if hemi_token in _chronic_hz:
                 md["CenterFrequencyHz"] = _chronic_hz[hemi_token]
+            if hemi_token in _freq_sched and _freq_sched[hemi_token]:
+                # [[epoch_seconds, hz], ...] change-points for this hemisphere.
+                md["FreqScheduleHz"] = _freq_sched[hemi_token]
+            if hemi_token in _contact_sched and _contact_sched[hemi_token]:
+                # [[epoch_seconds, "0-3"], ...] contact change-points for this hemisphere.
+                md["ContactSchedule"] = _contact_sched[hemi_token]
             ChronicRecordings.append({
                 "name": "",
                 "type": "MedtronicChronicBrainSense",

@@ -10,9 +10,13 @@
 import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup } from "@mui/material";
+import { Card, Grid, Slider, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
+import BinarizationPreview from "./BinarizationPreview";
+import { SessionController } from "database/session-control";
+import { commitBandCandidate, downloadBandCandidate } from "../ClosedLoopSim/bandCandidateStore";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -70,6 +74,574 @@ function Panel({ title, children, lg = 6 }) {
         <MDBox p={2}>
           <MDTypography variant="h6" fontSize={17} mb={0.5}>{title}</MDTypography>
           {children}
+        </MDBox>
+      </Card>
+    </Grid>
+  );
+}
+
+// DESIGN §8b — the exploratory spectral feature-importance scan, the centerpiece TD panel.
+// One dual-axis curve per main bipolar channel: Pearson r vs the CONTINUOUS PRO (left axis) and
+// cross-validated logistic AUC vs the BINARIZED PRO (right axis), both over the same 5 Hz sliding
+// band-center x-axis, so the two complementary views of "which band tracks pain" overlay. The
+// 8–30 Hz Percept-RC adaptive-valid range is shaded (that's the band the device can actually act
+// on). CLICK any band on a curve to drop a scatter of that band's power vs the PRO below it.
+// Click-validate readout — renders the mixed-effects OR + 95% CI, the stim-stability badge, and
+// the per-era ORs from /queryBandValidation. Stays compact (three lines + one badge) so it tucks
+// under the violin without pushing the layout. Empty-state and in-flight handled.
+function ValidationReadout({ validation, validating, emitContext }) {
+  // Commit-to-band: when the clicked band is VALIDATED, the user can export it as a §6
+  // BandCandidate into the threshold-deployment (Closed-Loop Sim) view. We POST the IDENTICAL
+  // band-feature envelope the validation used (emitContext), so the committed candidate is
+  // byte-identical to what the readout shows.
+  const [committing, setCommitting] = useState(false);
+  const [committed, setCommitted] = useState(null);   // {ok, msg} after a commit attempt
+  if (validating) {
+    return (
+      <MDTypography variant="caption" color="text" display="block" mt={0.5}
+        sx={{ fontStyle: "italic", fontSize: 11 }}>
+        Running mixed-effects validation (mixed-effects logistic fit + stim-era likelihood-ratio test)…
+      </MDTypography>
+    );
+  }
+  if (!validation || !validation.available) {
+    if (validation && validation.reason) {
+      return (
+        <MDTypography variant="caption" color="text" display="block" mt={0.5}
+          sx={{ fontStyle: "italic", fontSize: 11 }}>
+          {`Click-validate: ${validation.reason}.`}
+        </MDTypography>
+      );
+    }
+    return null;
+  }
+  const g = validation.glmer || {};
+  const s = validation.stim || {};
+  const verdict = validation.verdict || "—";
+  // Badge color: green for validated, amber for stim-dependent, grey for n.s./degenerate.
+  const badgeColor =
+    /VALIDATED \(stim-stable\)/.test(verdict) ? "#0a7f3f"
+    : /VALIDATED \(stim-dependent\)/.test(verdict) ? "#B17500"
+    : /failed/.test(verdict) ? "#9A3324"
+    : "#6c757d";
+  const fmt = (v, d = 2) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
+  const fmtP = (p) => (p == null || !Number.isFinite(p) ? "—"
+    : p < 0.001 ? p.toExponential(1) : p.toFixed(3));
+  // Effect direction in plain language for the headline.
+  const direction = g.odds_ratio != null && Number.isFinite(g.odds_ratio)
+    ? (g.odds_ratio < 1 ? "lower" : "higher") : null;
+  const dirLine = direction
+    ? `Higher band power → ${direction} odds of high pain.`
+    : null;
+  const erasArr = s.or_by_era ? ["OFF", "LOW", "HIGH"]
+    .map((tag) => `${tag} (${(s.era_counts && s.era_counts[tag]) || 0}): ${fmt(s.or_by_era[tag])}`)
+    .join("  ·  ") : null;
+  return (
+    <MDBox mt={1}>
+      <MDBox display="flex" alignItems="center" gap={1} mb={0.5}>
+        <MDBox px={1.2} py={0.3} sx={{ backgroundColor: badgeColor, color: "white",
+          borderRadius: "10px", fontSize: 10.5, fontWeight: "bold", letterSpacing: 0.2 }}>
+          {verdict}
+        </MDBox>
+        {dirLine ? (
+          <MDTypography variant="caption" color="text" sx={{ fontSize: 11 }}>{dirLine}</MDTypography>
+        ) : null}
+      </MDBox>
+      {g.available !== false ? (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era): `
+           + `odds ratio per 1 SD increase in band power = ${fmt(g.odds_ratio)}`
+           + (g.or_lo != null && g.or_hi != null
+              ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
+           + `p = ${fmtP(g.p)}, n = ${g.n} samples across ${g.n_clusters} weekly eras.`}
+        </MDTypography>
+      ) : (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
+        </MDTypography>
+      )}
+      {s.available !== false ? (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Band × stim-era interaction (likelihood-ratio test): `
+           + `χ² = ${fmt(s.chisq)}, p = ${fmtP(s.lrt_p)} `
+           + `(${s.stim_stable ? "stim-stable" : "stim-dependent"}). `
+           + `Per-era odds ratio (n samples): ${erasArr}. `
+           + `Stim eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
+           + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
+        </MDTypography>
+      ) : (
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+          {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
+        </MDTypography>
+      )}
+      {/* Commit-to-band: only offered for a VALIDATED verdict and when the parent supplied the
+          emit envelope. POSTs /api/emitBandCandidate with the SAME band feature the readout used,
+          stashes the returned §6 BandCandidate for the threshold-deployment view, and offers a
+          JSON download as the persistence escape hatch. */}
+      {emitContext && /VALIDATED/.test(verdict) ? (
+        <MDBox mt={1.2} display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <MDButton
+            size="small" color="info" variant="gradient"
+            disabled={committing}
+            onClick={() => {
+              setCommitting(true); setCommitted(null);
+              SessionController.query("/api/emitBandCandidate", {
+                ParticipantId: emitContext.participantUid,
+                Channel: emitContext.channelRaw,
+                CenterHz: Number(emitContext.centerHz),
+                BandWidthHz: emitContext.bandWidthHz,
+                ...emitContext.requestParams,
+              }).then((response) => {
+                const data = response && response.data;
+                if (data && data.available && data.band_candidate) {
+                  commitBandCandidate(emitContext.participantUid, data.band_candidate);
+                  downloadBandCandidate(emitContext.participantUid, data.band_candidate);
+                  setCommitted({ ok: true, msg: "Committed → Closed-Loop Sim (JSON downloaded)." });
+                } else {
+                  setCommitted({ ok: false, msg: (data && data.reason) || "emit failed" });
+                }
+                setCommitting(false);
+              }).catch(() => {
+                setCommitted({ ok: false, msg: "emit request failed" });
+                setCommitting(false);
+              });
+            }}
+          >
+            {committing ? "Committing…" : "Commit this band →"}
+          </MDButton>
+          {committed ? (
+            <MDTypography variant="caption" sx={{ fontSize: 11,
+              color: committed.ok ? "#0a7f3f" : "#9A3324" }}>
+              {committed.msg}
+            </MDTypography>
+          ) : (
+            <MDTypography variant="caption" color="text" sx={{ fontSize: 10.5, fontStyle: "italic" }}>
+              Export this validated band as a deployment BandCandidate.
+            </MDTypography>
+          )}
+        </MDBox>
+      ) : null}
+    </MDBox>
+  );
+}
+
+
+function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams }) {
+  const ref = useRef(null);
+  const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
+  // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
+  // /queryBandValidation endpoint. Re-fetched whenever the user clicks a new band so the readout
+  // matches the band the violin is showing. `validating` flags the in-flight state for the spinner.
+  const [validation, setValidation] = useState(null);
+  const [validating, setValidating] = useState(false);
+  const channels = (scan && scan.channels) || [];
+  const centers = (scan && scan.centers) || [];
+  const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
+  const fmax = (scan && scan.fmax) || 100;
+
+  // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
+  const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
+
+  // Click-triggered VALIDATION fetch (mixed-effects logistic + band x stim-era LRT). Fires only
+  // when the user has clicked a band AND we have the request envelope from the parent (carries
+  // LabelMetric / binarization / match knobs so the band feature is defined identically to the
+  // clicked scan dot). selChannelRaw/selCenterHz are the two coordinates the endpoint keys on.
+  const selChannel = sel && channels[sel.ci];
+  const selChannelRaw = selChannel ? (selChannel.raw || selChannel.short) : null;
+  const selCenterHz = sel != null ? centers[sel.bi] : null;
+  useEffect(() => {
+    if (!participantUid || !requestParams || sel == null || selChannelRaw == null
+        || selCenterHz == null) {
+      setValidation(null); return undefined;
+    }
+    let cancelled = false;
+    setValidating(true);
+    setValidation(null);
+    SessionController.query("/api/queryBandValidation", {
+      ParticipantId: participantUid,
+      Channel: selChannelRaw,
+      CenterHz: Number(selCenterHz),
+      BandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
+      ...requestParams,
+    }).then((response) => {
+      if (cancelled) return;
+      setValidation(response && response.data ? response.data : null);
+      setValidating(false);
+    }).catch(() => {
+      if (cancelled) return;
+      // Network/API failure -> empty-state caption; never block the rest of the panel.
+      setValidation({ available: false, reason: "validation request failed" });
+      setValidating(false);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantUid, requestParams, selChannelRaw, selCenterHz]);
+
+  useEffect(() => {
+    if (!ref.current || !channels.length || !centers.length) return;
+    const traces = [];
+    // Legend order: all LEFT-hemisphere contacts first, then all RIGHT, each block alphabetized,
+    // so the key reads as two tidy hemisphere groups. Keep the ORIGINAL channel index (ci) for the
+    // band-click customdata so selection still maps to the right channel after reordering.
+    const orderedChannels = channels
+      .map((ch, ci) => ({ ch, ci }))
+      .sort((a, b) => {
+        const ha = hemiOf(a.ch), hb = hemiOf(b.ch);
+        if (ha !== hb) return ha === "Left" ? -1 : 1;
+        return String(a.ch.short || "").localeCompare(String(b.ch.short || ""));
+      });
+    orderedChannels.forEach(({ ch, ci }) => {
+      const color = hemiOf(ch) === "Right" ? HI : LO;
+      // Per-channel matched-sample ceiling: the pooled matched count splits across the bipolar
+      // montages (one montage per recording), so each channel's curve uses only its own PSDs.
+      const nch = (ch.n_channel != null) ? ` (n=${ch.n_channel})` : "";
+      // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
+      traces.push({ x: centers, y: ch.r, name: `${ch.short}${nch} · r`, type: "scattergl", mode: "lines",
+        line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
+        customdata: centers.map((c, bi) => [ci, bi]),
+        hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
+      traces.push({ x: centers, y: ch.auc, name: `${ch.short}${nch} · AUC`, type: "scattergl", mode: "lines",
+        line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
+        customdata: centers.map((c, bi) => [ci, bi]),
+        hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
+      // Rigor-pass overlay: solid black-outlined markers at every band whose rating-clustered
+      // logit p survives BH-FDR over the band x channel grid (`is_fdr_sig` from the backend).
+      // The markers sit on the r curve (left axis) — same color as the channel, with a black ring
+      // so they read as "validated under proper clustered inference" against the unstyled
+      // pooled-by-default points the line implies. legendgroup ties them to the channel toggle so
+      // hiding a channel hides its FDR markers too. showlegend=false (channel curve already
+      // identifies the channel; a separate "FDR" entry is in the style legend up top).
+      const fdrMask = ch.is_fdr_sig || [];
+      const fdrCenters = [], fdrRs = [], fdrCustom = [], fdrHover = [];
+      for (let bi = 0; bi < centers.length; bi += 1) {
+        if (fdrMask[bi] && ch.r && ch.r[bi] != null) {
+          fdrCenters.push(centers[bi]); fdrRs.push(ch.r[bi]);
+          fdrCustom.push([ci, bi]);
+          const q = ch.q && ch.q[bi];
+          fdrHover.push(`${centers[bi].toFixed(1)} Hz · r=${ch.r[bi].toFixed(2)} · q=${q != null ? q.toFixed(3) : "—"}`);
+        }
+      }
+      if (fdrCenters.length) {
+        traces.push({ x: fdrCenters, y: fdrRs, name: `${ch.short} · FDR`, type: "scattergl", mode: "markers",
+          marker: { size: 9, color, line: { width: 1.2, color: "#000" } },
+          legendgroup: ch.short, yaxis: "y", showlegend: false,
+          customdata: fdrCustom,
+          hovertext: fdrHover, hoverinfo: "text" });
+      }
+    });
+    // Single dedicated legend entry explaining the FDR-marker style — drawn invisibly off-axis
+    // with `visible: 'legendonly'` so it never plots data, just adds a labeled swatch to the
+    // legend. Placed at the end of `traces` so it appears as the last legend item.
+    traces.push({
+      x: [null], y: [null], type: "scattergl", mode: "markers",
+      name: "● False Discovery Rate-significant (q<0.05, rating-clustered logistic)",
+      marker: { size: 9, color: "#777", line: { width: 1.2, color: "#000" } },
+      showlegend: true, hoverinfo: "skip",
+    });
+    // Marker for the currently-selected band (vertical guide).
+    const shapes = [];
+    if (adaptive && adaptive.length === 2) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
+        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
+    }
+    // The selected-band vertical guide is NOT drawn here. It is applied by a separate
+    // Plotly.relayout effect keyed on `sel` (below), so that clicking a band never rebuilds the
+    // traces — a rebuild is what used to wipe the user's legend on/off state (the cleanup purge
+    // emptied gd.data before the visibility carry-over could read it). This effect omits `sel`.
+
+    const layout = {
+      ...FIG_BASE, autosize: true, height: 460,
+      margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
+      xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" }, range: [0, fmax] },
+      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
+        range: [-1.05, 1.05], zeroline: true },
+      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
+        overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
+      legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
+                // Single-click toggles a group on/off; that's the only legend gesture that changes
+                // visibility. Double-click-to-isolate is disabled — without this, a double-click
+                // isolates one item (hides all others) and a second restores everything, which
+                // surprises users who expect their hidden curves to STAY hidden. To restore
+                // everything the user uses the modebar Reset Axes button (an explicit gesture).
+                itemclick: "toggle",
+                itemdoubleclick: false,
+                font: { size: 13 }, tracegroupgap: 14 },
+      // Larger, higher-contrast hover tooltip on the scan curves (the per-band r=… / AUC=… readout):
+      // 14 px dark text on a near-opaque white card with a darker (less washed-out) gray border, so
+      // the label reads clearly even where it sits near the cursor.
+      hoverlabel: { bgcolor: "rgba(255,255,255,0.97)", bordercolor: "#5A6470",
+                    font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 14, color: "#1A1A1A" } },
+      shapes,
+      // Plotly preserves user UI state (legend visibility, zoom, axis ranges, selections) across
+      // Plotly.react calls whenever `uirevision` is unchanged. We use a constant string here so
+      // every re-render of this effect (e.g. a band click that re-builds traces with new
+      // customdata) keeps whichever channels the user has toggled off in the legend. The toolbar
+      // "Reset axes" button still works — it's a user action, not a react call.
+      uirevision: "biomarker-scan",
+      // Legend group selection follows the same rule — explicit so a band click doesn't reset it.
+      legend_uirevision: "biomarker-scan-legend",
+      annotations: (adaptive ? [{ x: (adaptive[0] + adaptive[1]) / 2, yref: "paper", y: 1.02,
+        yanchor: "bottom", xanchor: "center", text: "Percept-RC adaptive band (8–30 Hz)",
+        showarrow: false, font: { size: 10, color: "#1B7837" } }] : []),
+    };
+    // Preserve per-trace legend on/off state across renders. Two layers:
+    //  (a) layout.uirevision (set below) — Plotly's canonical mechanism; when the revision string
+    //      is unchanged, plotly preserves user UI state (legend visibility, zoom, axis ranges)
+    //      across Plotly.react calls.
+    //  (b) explicit visibility carry-over keyed by trace `name` — belt-and-suspenders for cases
+    //      where plotly's uirevision doesn't catch (older versions; trace insertions/deletions
+    //      that shift indices). We DO NOT gate on prevData.length === traces.length because the
+    //      FDR-marker overlay traces flip on per-channel based on backend output, so the count
+    //      changes between renders. Keying purely by `name` survives that: matched names get
+    //      their previous visibility; new traces get plotly's default (visible).
+    //
+    // We treat anything that's NOT explicitly `true` as a hide signal — that catches
+    // "legendonly" (the value plotly sets on legend click) and any other non-true sentinel.
+    const prevData = ref.current.data;
+    if (prevData && prevData.length) {
+      const visByName = {};
+      prevData.forEach((t) => { if (t && t.name != null) visByName[t.name] = t.visible; });
+      traces.forEach((t) => {
+        if (Object.prototype.hasOwnProperty.call(visByName, t.name)) {
+          const prev = visByName[t.name];
+          if (prev !== undefined && prev !== true) t.visible = prev;
+        }
+      });
+    }
+    Plotly.react(ref.current, traces, layout, {
+      responsive: true, displaylogo: false,
+      modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
+    });
+    const gd = ref.current;
+    const onClick = (ev) => {
+      const pt = ev && ev.points && ev.points[0];
+      if (pt && pt.customdata) setSel({ ci: pt.customdata[0], bi: pt.customdata[1] });
+    };
+    gd.on("plotly_click", onClick);
+    return () => { if (gd) { gd.removeAllListeners && gd.removeAllListeners("plotly_click"); Plotly.purge(gd); } };
+    // NOTE: `sel` is intentionally NOT in this dependency list. A band click only updates `sel`,
+    // and the selected-band guide line is applied by the relayout effect below — so a click never
+    // re-runs this effect, never triggers the cleanup purge, and therefore never resets the user's
+    // legend visibility toggles. (That purge-on-every-click was the cause of hidden curves coming
+    // back when isolating a single curve.)
+  }, [scan, pain, HI, LO]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Selected-band vertical guide — applied without rebuilding traces, so legend on/off state set by
+  // the user survives every band click. Re-applies the adaptive-band shaded rect alongside it
+  // (Plotly.relayout replaces the whole `shapes` array, so both must be specified together).
+  useEffect(() => {
+    const gd = ref.current;
+    if (!gd || !gd.data || !centers.length) return;
+    const shapes = [];
+    if (adaptive && adaptive.length === 2) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
+        y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
+    }
+    if (sel && centers[sel.bi] != null) {
+      shapes.push({ type: "line", xref: "x", yref: "paper", x0: centers[sel.bi], x1: centers[sel.bi],
+        y0: 0, y1: 1, line: { color: "#444", width: 1.5, dash: "dash" } });
+    }
+    Plotly.relayout(gd, { shapes });
+    // Depends on `scan` too so that after the draw effect rebuilds the plot (scan/pain change), the
+    // current selected-band guide is re-applied on top. relayout never touches trace visibility, so
+    // the user's legend toggles are unaffected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, scan]);
+
+  // Scatter for the selected (channel, band): band power vs continuous PRO.
+  let scatterNode = null;
+  if (sel && channels[sel.ci]) {
+    const ch = channels[sel.ci];
+    const sc = ch.scatter && ch.scatter[sel.bi];
+    const center = centers[sel.bi];
+    const r = ch.r && ch.r[sel.bi];
+    const pBand = ch.p && ch.p[sel.bi];       // rating-clustered logistic Wald p (AUC's inference twin)
+    const pPearson = ch.p_pearson && ch.p_pearson[sel.bi];   // Pearson r's own p-value (independence-assuming)
+    if (sc && sc.x && sc.x.length) {
+      const color = hemiOf(ch) === "Right" ? HI : LO;
+      // Fixed pain-group identity colors (DESIGN §8d/§8e idiom): high = vermillion, low = blue,
+      // excluded-middle = grey. Shared by the scatter point colors and the violin fills.
+      const GRP = { high: "#D55E00", low: "#0072B2", mid: "#9AA0A6" };
+      const gArr = sc.g || [];
+      const ptColors = gArr.length ? gArr.map((g) => GRP[g] || color) : color;
+
+      // LEFT — band power vs continuous PRO, points colored by pain group (keeps the original view).
+      const scTraces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
+        marker: { color: ptColors, size: 6, opacity: 0.72 }, text: sc.dates || [],
+        hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
+
+      // RIGHT — violin of THIS band's power split by pain group, with jittered raw points + box +
+      // median, so you SEE how low vs high segregate (the comparison the scatter only implies).
+      // One violin trace per group; excluded-middle drawn last in grey so it never dominates.
+      const order = ["low", "high", "mid"];
+      const glabel = { low: "Low pain", high: "High pain", mid: "Excluded (middle)" };
+      const vioTraces = order
+        .map((g) => {
+          const ys = sc.x.filter((_, i) => gArr[i] === g);
+          if (!ys.length) return null;
+          // Darker shade of the group color for the jittered dots so they pop against the fill
+          // (which is the same hue at low opacity). White outline draws the eye to individual
+          // observations without competing with the violin silhouette.
+          const dotColor = { low: "#053D6E", high: "#7A2C00", mid: "#3C3F45" }[g] || GRP[g];
+          return {
+            type: "violin", y: ys, x: ys.map(() => glabel[g]), name: glabel[g],
+            legendgroup: g, scalemode: "width", width: 0.85, spanmode: "soft",
+            points: "all", jitter: 0.5, pointpos: 0,
+            marker: { color: dotColor, size: 6, opacity: 0.85,
+                      line: { color: "#fff", width: 0.8 } },
+            line: { color: GRP[g], width: 1.4 }, fillcolor: GRP[g], opacity: g === "mid" ? 0.28 : 0.42,
+            box: { visible: true, width: 0.18 }, meanline: { visible: false },
+            hovertemplate: `${glabel[g]}<br>std log power=%{y:.2f}<extra></extra>` };
+        })
+        .filter(Boolean);
+
+      // Effect-size annotation (computed server-side on this band's matched samples): Cohen's d
+      // (pooled-SD standardized mean diff, high−low), median delta in SD units, and the
+      // rating-clustered logistic p already in the payload. The headline of the right panel.
+      const cd = sc.cohens_d, md = sc.median_delta;
+      const nlo = (sc.n_grp && sc.n_grp.low) || 0, nhi = (sc.n_grp && sc.n_grp.high) || 0;
+      const nmid = (sc.n_grp && sc.n_grp.mid) || 0;
+      const dMag = cd == null ? "" : (Math.abs(cd) >= 0.8 ? " (large)"
+        : Math.abs(cd) >= 0.5 ? " (medium)" : Math.abs(cd) >= 0.2 ? " (small)" : " (negligible)");
+      const effLine = `Low vs high band power:  Cohen's d = ${cd != null ? cd.toFixed(2) : "—"}${dMag}`
+        + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
+        + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
+
+      // Number of samples actually drawn in the left scatter (the dot count = all matched
+      // continuous samples for this channel+band). Use the plotted length so the title's n always
+      // matches what the eye sees, not a separately-tracked count.
+      const nShown = sc.x.length;
+      scatterNode = (
+        <MDBox mt={1}>
+          {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
+              it reads as the heading for the whole selected-band readout below it. Line 1: contact
+              + samples shown. Line 2: center frequency + Pearson r (with its p-value when available). */}
+          {/* pt gives the first line room so its ascenders aren't clipped by the panel edge; the
+              generous lineHeight (1.45) keeps each line's glyph box taller than the bumped-up
+              fontSize so neither line is cut at the top (the MUI variant's default line-height is
+              tighter than these sizes, which was clipping the second line). */}
+          <MDBox sx={{ textAlign: "center", mb: 1, pt: 1 }}>
+            <MDTypography fontWeight="bold" color="dark"
+              sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
+              {`${ch.short} (n=${nShown})`}
+            </MDTypography>
+            <MDTypography fontWeight="bold" color="dark"
+              sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
+              {`${center.toFixed(1)} Hz · Pearson r = ${r != null ? r.toFixed(2) : "—"}`
+               + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
+            </MDTypography>
+          </MDBox>
+          <Grid container spacing={2} mt={0}>
+            <Grid item xs={12} lg={6}>
+              <Fig height={300} traces={scTraces} layout={{
+                xaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                yaxis: { title: pain }, showlegend: false }} />
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <Fig height={300} traces={vioTraces} layout={{
+                xaxis: { title: "" },
+                yaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                showlegend: false, violingap: 0.25, violinmode: "group" }} />
+              <MDTypography variant="caption" display="block" mt={0.5}
+                sx={{ color: "#344767", fontWeight: "bold", fontSize: 12.5 }}>
+                {effLine}
+              </MDTypography>
+              <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
+                {`Groups: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
+                 + "Power is z-scored within channel/source, so Δ is in SD units; "
+                 + "d>0 means the band is higher when pain is high."}
+              </MDTypography>
+              <ValidationReadout validation={validation} validating={validating}
+                emitContext={(participantUid && requestParams && selChannelRaw != null
+                              && selCenterHz != null) ? {
+                  participantUid,
+                  channelRaw: selChannelRaw,
+                  centerHz: Number(selCenterHz),
+                  bandWidthHz: scan && scan.band_width_hz ? Number(scan.band_width_hz) : 5.0,
+                  requestParams,
+                } : null} />
+            </Grid>
+          </Grid>
+        </MDBox>
+      );
+    } else {
+      scatterNode = (
+        <MDTypography variant="caption" color="text" mt={1} display="block">
+          {`No scatter for ${ch.short} @ ${center.toFixed(1)} Hz (fewer than 3 matched samples in this band).`}
+        </MDTypography>
+      );
+    }
+  }
+
+  if (!channels.length) return null;
+  return (
+    <Grid item xs={12}>
+      <Card sx={{ width: "100%", scrollMarginTop: "96px" }}>
+        <MDBox p={2}>
+          <MDTypography variant="h6" fontSize={17} mb={0.25}>
+            {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
+          </MDTypography>
+          <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+            {scan && scan.note}
+          </MDTypography>
+          {/* Matching policy — one concise line stating exactly how PSDs were paired to ratings. */}
+          {scan && scan.max_per_rating != null && (
+            <MDTypography variant="caption" display="block" mb={0.5}
+              sx={{ color: "#2C5282", fontWeight: "bold" }}>
+              {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
+               + `${scan.max_per_rating > 1 ? "s" : ""} per channel `
+               + (scan.match_direction === "nearest"
+                  ? "closest in time (either direction), within the match window"
+                  : "recorded just BEFORE it (forecasting), within the match window")
+               + (scan.max_per_rating > 1 && scan.refractory_min
+                  ? `, no two closer than ${scan.refractory_min} min` : "")
+               + (scan.n_capped_dropped ? ` — ${scan.n_capped_dropped} extra PSDs dropped by the cap.` : ".")
+               + (scan.max_per_rating > 1
+                  ? " AUC is cross-validated with folds grouped by rating, so its n is the count of independent ratings; a band's scatter p is the rating-clustered logistic Wald p."
+                  : " Every sample is an independent (channel, rating) pair; a band's scatter p is the logistic Wald p.")}
+            </MDTypography>
+          )}
+          {/* Survey usage — the rating-centric view the clinician asked for. */}
+          {scan && scan.survey_usage && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+              {`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} available `
+               + `(${scan.survey_usage.pct_pro_used}%); ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
+            </MDTypography>
+          )}
+          {scan && scan.n_pooled != null && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
+              {`${scan.n_pooled} PSDs matched a rating across all channels. Each channel's curve uses only the PSDs `
+               + `recorded on that montage (the per-channel n in the legend), so any single curve draws on a fraction of that total.`}
+            </MDTypography>
+          )}
+          {scan && scan.binarization && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
+               + (scan.binarization.n_excluded_middle > 0
+                  ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
+                  : ` (no middle excluded — discrete ratings collapse the ${scan.binarization.strategy} cut). `)
+               + `Pearson r uses all matched samples.`
+               + (scan.td_welch_duration
+                  ? ` TD epochs Welch'd over ${scan.td_welch_duration.mean_s}±${scan.td_welch_duration.sd_s} s `
+                    + `(n=${scan.td_welch_duration.n}), matching the ~30 s onboard event/montage PSDs.`
+                  : "")}
+            </MDTypography>
+          )}
+          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
+            <MDTypography variant="caption" display="block" mb={0.5}
+              sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
+                    fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
+              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
+               + `map to only ${scan.pro_independence.n_unique_pro} unique pain scores `
+               + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
+               + `${scan.pro_independence.max_reuse}×). `
+               + (scan.auc_mode === "rating_grouped"
+                  ? "The AUC already corrects for this (folds grouped by rating); the Pearson r still pools all matched samples, so treat r as exploratory."
+                  : "Effective sample size is well below the matched n — treat r/AUC as exploratory, not as independent observations.")}
+            </MDTypography>
+          )}
+          <div ref={ref} style={{ width: "100%", height: 420 }} />
+          {scatterNode}
         </MDBox>
       </Card>
     </Grid>
@@ -138,7 +710,10 @@ const FEATURE_LABELS = {
 };
 const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers }) {
+export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
+  binStrategy: previewStrategy, binMetricKey: previewMetricKey,
+  binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
+  participantUid, requestParams }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -159,26 +734,84 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     if (s && s.kind) return s.kind;
     return /hemisphere/i.test(k) ? "aggregate" : "contact";
   };
-  // Bipolar sensing contacts only (exclude the pooled "Hemisphere LFP" aggregates), grouped by
-  // hemisphere and ordered LEFT first, then RIGHT — so every plot's legend reads Left group then
-  // Right group rather than interleaved (anatomical grouping aids interpretation; do not mix the
-  // two stimulation targets — Left GPi vs Right VIM — into one mean).
-  const leftContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Left").sort();
-  const rightContacts = channelKeys.filter((k) => kindOf(k) === "contact" && hemiOf(k) === "Right").sort();
+  // Source modality of each per_channel entry — the RELIABLE discriminator between the two
+  // physically distinct recordings (more robust than the kind/name parse):
+  //   "chronic"     = BrainSense Timeline ~10-min around-the-clock LFP power (one stream per
+  //                   hemisphere — the most critical biomarker series, sampled 24/7).
+  //   "powerdomain" = per-session BrainSense streaming band power (bipolar sensing contacts).
+  const srcModOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    return (s && s.source_modality) || null;
+  };
+  const isChronicKey = (k) => srcModOf(k) === "chronic";
+  // A STREAMING bipolar contact: powerdomain source + contact kind (or, for legacy runs with no
+  // source tag, just contact kind). These are the curves the per-hemisphere mean ROC averages over.
+  const isStreamContactKey = (k) =>
+    (srcModOf(k) === "powerdomain" && kindOf(k) === "contact") ||
+    (srcModOf(k) == null && kindOf(k) === "contact");
+  // Both modalities are individually implementable and BOTH must be analyzable (ROC, threshold,
+  // distribution, sliding window). Grouped LEFT first then RIGHT; never mix the two stimulation
+  // targets (Left GPi vs Right VIM) into one mean.
+  const leftContacts = channelKeys.filter((k) => isStreamContactKey(k) && hemiOf(k) === "Left").sort();
+  const rightContacts = channelKeys.filter((k) => isStreamContactKey(k) && hemiOf(k) === "Right").sort();
+  const leftChronic = channelKeys.filter((k) => isChronicKey(k) && hemiOf(k) === "Left").sort();
+  const rightChronic = channelKeys.filter((k) => isChronicKey(k) && hemiOf(k) === "Right").sort();
   const orderedContacts = [...leftContacts, ...rightContacts];
+  // Every individually-selectable channel: chronic streams AND streaming contacts (chronic listed
+  // first per hemisphere since it is the around-the-clock biomarker). A true powerdomain pool
+  // (source=powerdomain, kind=aggregate) is intentionally NOT selectable.
+  const selectableKeys = [...leftChronic, ...leftContacts, ...rightChronic, ...rightContacts];
+  const isSelectableKey = (k) => selectableKeys.indexOf(k) !== -1;
   const hasLeft = leftContacts.length > 0;
   const hasRight = rightContacts.length > 0;
-  // Aggregate (pooled chronic-trend) key for a hemisphere, if the backend emitted one — used to
-  // bind the histogram / sliding-window / honest-perf panels when a hemisphere is selected.
-  const aggKeyFor = (h) => channelKeys.find((k) => kindOf(k) === "aggregate" && hemiOf(k) === h) || null;
+  // Aggregate (pooled powerdomain) key for a hemisphere, if any — used to bind the histogram /
+  // sliding-window panels when a hemisphere MEAN is selected. Chronic streams are NOT aggregates.
+  const aggKeyFor = (h) => channelKeys.find(
+    (k) => kindOf(k) === "aggregate" && !isChronicKey(k) && hemiOf(k) === h) || null;
 
-  const [chSel, setChSel] = useState("pooled");
+  // Default to a single IMPLEMENTABLE contact — the one with the highest in-sample AUC (best
+  // discrimination), since you program one bipolar contact at a time on the Percept RC. We never
+  // default to a cross-channel pool. If no per-contact split exists (legacy single-detector run),
+  // fall back to "pooled" — which in that case IS the only channel, not a cross-channel average.
+  const aucOf = (k) => {
+    const s = perChannel[k] && perChannel[k].summary;
+    const a = s && (s.auc_in_sample != null ? s.auc_in_sample : s.auc);
+    return typeof a === "number" && Number.isFinite(a) ? a : -Infinity;
+  };
+  // Default to the single most DISCRIMINATIVE implementable channel — highest in-sample AUC across
+  // BOTH chronic streams and streaming contacts (we never default to a cross-channel pool). This
+  // lets the around-the-clock chronic biomarker be the default when it separates pain best.
+  const bestContact = selectableKeys.length
+    ? selectableKeys.reduce((best, k) => (aucOf(k) > aucOf(best) ? k : best), selectableKeys[0])
+    : null;
+  const defaultSel = bestContact || (hasLeft ? "hemi:Left" : (hasRight ? "hemi:Right" : "pooled"));
+
+  // null = "user hasn't picked yet" → fall through to defaultSel. Using a sentinel (rather than
+  // seeding useState with defaultSel) means the default tracks the data once `analytics` loads after
+  // mount, instead of locking in the empty-data fallback captured on the first render.
+  const [chSelRaw, setChSel] = useState(null);
+  const chSel = chSelRaw == null ? defaultSel : chSelRaw;
+  // Cost-sensitive ROC operating-point control. The optimal threshold under (FP, FN) costs (cFP, cFN)
+  // and disease prevalence p is the ROC point where the tangent slope equals m = (cFP/cFN)·((1-p)/p);
+  // the picker maximizes TPR - m·FPR. The slider exposes log2(cFP/cFN), so the midpoint (0 ⇒ cFP/cFN=1)
+  // reproduces the cost-symmetric Youden default. Negative log2 ⇒ false negatives cost more
+  // (high-sensitivity regime: don't miss real pain); positive ⇒ false positives cost more
+  // (high-specificity regime: don't stimulate when pain is actually low).
+  const [logCostRatio, setLogCostRatio] = useState(0);
+  // Frequency sub-selection within the chosen channel. The analysis unit is (channel, frequency):
+  // a contact sensed at 7.8 Hz and the SAME contact at 22.5 Hz are different biomarkers and are
+  // decoded separately (chronic + streaming pooled only WITHIN a band). null = "all bands of this
+  // channel" (the legacy whole-channel ROC/threshold over every sample regardless of band).
+  const [freqSelRaw, setFreqSel] = useState(null);
   const isHemiSel = typeof chSel === "string" && chSel.startsWith("hemi:");
   const selHemi = isHemiSel ? chSel.slice(5) : null;
-  const isContactSel = !!perChannel[chSel] && kindOf(chSel) === "contact";
+  // A single-channel selection: any individually-selectable channel (a streaming contact OR a
+  // chronic around-the-clock stream). Both drive the single-curve ROC / single-channel panels.
+  const isContactSel = !!perChannel[chSel] && isSelectableKey(chSel);
   const validSel = chSel === "pooled" || isContactSel ||
     (isHemiSel && ((selHemi === "Left" && hasLeft) || (selHemi === "Right" && hasRight)));
-  const safeChSel = validSel ? chSel : "pooled";
+  // Fall back to the default single channel (never the cross-hemisphere pool) on an invalid selection.
+  const safeChSel = validSel ? chSel : defaultSel;
   // Which underlying per_channel entry drives the single-summary panels: the contact itself for a
   // contact selection, the hemisphere aggregate for a hemisphere selection, else pooled (null).
   // Plain derivations (cheap, recomputed each render) — kept as plain consts so they sit cleanly
@@ -187,12 +820,42 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const chronic = boundKey && perChannel[boundKey]
     ? { ...pdRoot, ...perChannel[boundKey] } : pdRoot;
 
+  // Per-(channel, frequency) decoding. The frequency sub-selector is meaningful ONLY for a single
+  // implementable channel (a streaming contact or a chronic 24/7 stream) — not the hemisphere mean
+  // or the legacy pool, which span multiple contacts/bands. `availFreqs` lists the bands present in
+  // this channel (chronic + streaming pooled) with their sample/day counts; `freqDecode` is the
+  // backend's per-band ROC/Otsu/binarization map keyed by the snapped Hz string.
+  const boundEntry = boundKey ? perChannel[boundKey] : null;
+  const freqSelectable = isContactSel && !isHemiSel && safeChSel !== "pooled";
+  const availFreqs = (freqSelectable && boundEntry && boundEntry.summary
+                      && Array.isArray(boundEntry.summary.available_frequencies))
+    ? boundEntry.summary.available_frequencies : [];
+  const freqDecode = (freqSelectable && boundEntry && boundEntry.frequency_decode
+                      && typeof boundEntry.frequency_decode === "object")
+    ? boundEntry.frequency_decode : {};
+  // Key helper: the backend keys freqDecode by `${hz:g}` (e.g. "7.8", "10"). Match a selected numeric
+  // Hz to that string form so 10.0 -> "10" and 7.8 -> "7.8".
+  const freqKey = (hz) => (hz == null ? null : (Number.isInteger(hz) ? String(hz) : String(Number(hz))));
+  // Valid frequency selection only when it exists in this channel's decode map; else null = all bands.
+  const freqSel = (freqSelRaw != null && freqDecode[freqKey(freqSelRaw)]) ? freqSelRaw : null;
+  const selFreqDecode = freqSel != null ? freqDecode[freqKey(freqSel)] : null;
+  // Device's CURRENTLY-PROGRAMMED adaptive trigger for the selected channel's hemisphere — present
+  // ONLY when closed-loop stim is active there (backend gates this; {} otherwise). Used to overlay
+  // "what's set on the device now" on the ROC operating point and the band-power distribution, in
+  // the same LFP-power units as the recommendation. null when no active program or no hemisphere.
+  const progAll = (programmedThresholds && typeof programmedThresholds === "object") ? programmedThresholds : {};
+  const selHemiForProg = isHemiSel ? selHemi : hemiOf(safeChSel);
+  const progThr = (selHemiForProg && progAll[selHemiForProg]
+                   && progAll[selHemiForProg].lower != null
+                   && isFinite(progAll[selHemiForProg].lower))
+    ? progAll[selHemiForProg] : null;
+  const PROG_COLOR = "#6E0F8A";   // muted purple — the device's programmed trigger (matches timeline)
+
   if (!analytics) return null;
 
   // Human-readable pain score these correlations / AUCs are computed against (biological best
   // practice: every correlation/AUC panel should say what it is correlated WITH). Falls back gracefully.
   const pain = metricLabel || "pain";
-  const tdSum = (summary && summary.timedomain) || {};
   const pdSum = (summary && summary.powerdomain) || {};
   // When a per-channel view is active, overlay its summary on the pooled one so the honest-perf
   // bar reflects the selected channel's AUC. IMPORTANT: per-channel/aggregate summaries carry
@@ -253,7 +916,11 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   const recHzFor = (k) => {
     if (k == null) return null;
     const key = String(k).trim();
-    return recHzByContact[key] != null ? recHzByContact[key] : null;
+    if (recHzByContact[key] != null) return recHzByContact[key];
+    // Fall back to the channel's own recorded center frequency from the per_channel summary — this
+    // is how the chronic 24/7 stream (absent from recordedPowers) reports its sensing frequency.
+    const s = perChannel[k] && perChannel[k].summary;
+    return s && s.center_hz != null ? s.center_hz : null;
   };
   // Distinct recorded frequencies across a set of contacts, formatted "23.4 / 26.4 Hz" (or a single
   // value). Returns null if none of the contacts carried a recorded frequency.
@@ -291,243 +958,30 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     text: `Source: ${powerProvenance}`, showarrow: false,
     font: { size: 11, color: "#344767" },
   }] : [];
+  // Panels that POOL every contact's samples (distribution, power-vs-pain scatter) list all recorded
+  // contacts — unlike the ROC, which shows per-contact curves and drops single-class contacts. Make
+  // that explicit so the two source lines don't read as a contradiction, and so the pooled scatter's
+  // r isn't mistaken for a single-contact correlation when it actually mixes targets/frequencies.
+  const pooledContactN = leftContacts.length + rightContacts.length;
+  const poolSuffix = safeChSel === "pooled" && pooledContactN > 1
+    ? ` · pooled across ${pooledContactN} contacts` : "";
+  const pooledProvAnn = powerProvenance ? [{
+    xref: "paper", yref: "paper", x: 0.0, y: 1.06, xanchor: "left", yanchor: "bottom",
+    text: `Source: ${powerProvenance}${poolSuffix}`, showarrow: false,
+    font: { size: 11, color: "#344767" },
+  }] : [];
 
   // ---------------- TIME-DOMAIN ----------------
   const tdPanels = [];
-  const spectrum = td.corr_spectrum || null;
-  if (spectrum && spectrum.channels && spectrum.channels.length) {
-    const f = spectrum.freqs;
-    const traces = [];
-    // Order the spectrum channels by hemisphere — LEFT group first, then RIGHT — and color each
-    // by its hemisphere family (blue = Left, orange = Right), so the legend reads anatomically
-    // grouped rather than interleaved (same principle as the power-domain ROC panel). Hemisphere
-    // from the channel's short label (leading L/R); anything else falls to an "Other" group last.
-    const specHemi = (ch) => {
-      const s = (ch.short || ch.name || "").trim();
-      return s[0] === "L" ? "Left" : (s[0] === "R" ? "Right" : "Other");
-    };
-    const OTHER_SHADES = ["#009E73", "#CC79A7", "#7E8794"];
-    const specShades = (h) => (h === "Left" ? LEFT_SHADES : h === "Right" ? RIGHT_SHADES : OTHER_SHADES);
-    const ordered = [];
-    ["Left", "Right", "Other"].forEach((h) => {
-      spectrum.channels.forEach((ch) => { if (specHemi(ch) === h) ordered.push({ ch, h }); });
-    });
-    const idxInHemi = {};
-    ordered.forEach(({ ch, h }, oi) => {
-      idxInHemi[h] = (idxInHemi[h] ?? -1) + 1;
-      const shades = specShades(h);
-      const color = shades[idxInHemi[h] % shades.length];
-      const isFirstInHemi = ordered.findIndex((o) => o.h === h) === oi;
-      // Hover (not fixed labels) gives the value on demand. The curve and its peaks share a color +
-      // legendgroup, so toggling the curve in the legend also hides its stars. Legend grouped by
-      // hemisphere (Left group, then Right) with a per-group title on the first member.
-      traces.push({ x: f, y: ch.r, name: ch.name, type: "scatter", mode: "lines",
-        line: { width: 2, color }, connectgaps: false, legendgroup: h,
-        legendgrouptitle: isFirstInHemi ? { text: `${h} hemisphere` } : undefined,
-        hovertemplate: "%{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      if (ch.peaks && ch.peaks.length) {
-        // Stars MARK the peaks (the strongest |R| local maxima — positive OR negative — so a strong
-        // negative correlation is starred too); the value is read by hovering.
-        traces.push({ x: ch.peaks.map((p) => p.freq), y: ch.peaks.map((p) => p.r),
-          type: "scatter", mode: "markers", legendgroup: h, showlegend: false,
-          marker: { symbol: "star", size: 12, color, line: { width: 1, color: "#fff" } },
-          name: `${ch.name} peak`,
-          hovertemplate: "peak · %{x:.1f} Hz · R=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      }
-    });
-    // Biomarker frequency cap: the band selection and peak picking are restricted to < 50 Hz
-    // (the validated theta/alpha/beta/low-gamma sensing range). Shade ≥ 50 Hz so the limit is
-    // visible; the spectrum curve is still drawn full-range for context.
-    const FCAP = 50;
-    const fMax = (spectrum.freqs && spectrum.freqs.length) ? spectrum.freqs[spectrum.freqs.length - 1] : 100;
+  // DESIGN §8b: the three former TD panels (Pearson-R spectrum, permutation-null + per-session
+  // scatter, and mean-PSD-by-pain-state) are replaced by ONE exploratory scan over ALL pooled
+  // full-spectrum PSDs (TD streaming + montage/survey) per channel — r vs continuous PRO and CV
+  // logistic AUC vs binarized PRO over a 5 Hz sliding band, click-to-scatter.
+  const scan = td.spectral_feature_importance || null;
+  if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
-      <Panel key="spec" title={`PSD correlation with ${pain} (Pearson R vs frequency) — peaks marked with ★ (significance FDR-corrected)`} lg={12}>
-        <Fig traces={traces} height={380} layout={{ xaxis: { title: "Frequency (Hz)" },
-          yaxis: { title: `Correlation with ${pain} (R)`, range: [-1.05, 1.05], zeroline: true },
-          legend: { orientation: "h", y: -0.22, groupclick: "togglegroup" },
-          shapes: fMax > FCAP ? [{ type: "rect", xref: "x", yref: "paper", x0: FCAP, x1: fMax,
-            y0: 0, y1: 1, fillcolor: "#9E9E9E", opacity: 0.12, line: { width: 0 } },
-            { type: "line", xref: "x", yref: "paper", x0: FCAP, x1: FCAP, y0: 0, y1: 1,
-              line: { color: "#7E8794", width: 1.5, dash: "dot" } }] : [],
-          annotations: fMax > FCAP ? [{ x: FCAP, yref: "paper", y: 1.0, yanchor: "bottom",
-            xanchor: "left", text: " ≥50 Hz excluded from biomarker selection", showarrow: false,
-            font: { size: 10, color: "#7E8794" } }] : [] }} />
-      </Panel>
-    );
-  }
-
-  // Permutation null + per-session scatter — one row per hemisphere (Left, then Right).
-  // Each row: LEFT panel = perm-null histogram with THIS channel's observed |R| marked;
-  //           RIGHT panel = scatter of per-session log-power at peak freq vs pain label.
-  // The "observed" line uses the channel's own max-|R| peak (argmax |R| for that electrode),
-  // NOT the family-max perm_obs — so the title correctly shows e.g. "R Med. Thal @ 27.7 Hz".
-  // The global perm_null (family-max under block-permuted labels) is still the background null;
-  // a channel-specific |R| that exceeds the family-max null is very conservative and fair.
-  if (tdSum.perm_null && tdSum.perm_null.length && spectrum && spectrum.channels) {
-    const pStr = tdSum.perm_p == null ? "—" : fmtP(tdSum.perm_p);
-    const nCells = spectrum.channels.length * (spectrum.freqs ? spectrum.freqs.length : 0);
-
-    // Group channels by hemisphere so Left and Right each get their own row.
-    const hemiOrder = ["Left", "Right"];
-    const byHemi = {};
-    spectrum.channels.forEach((ch) => {
-      const h = ch.short && ch.short.startsWith("L") ? "Left"
-              : ch.short && ch.short.startsWith("R") ? "Right" : "Other";
-      if (!byHemi[h]) byHemi[h] = [];
-      byHemi[h].push(ch);
-    });
-
-    hemiOrder.forEach((hemi) => {
-      const hChans = byHemi[hemi] || [];
-      if (!hChans.length) return;
-      // Best channel for this hemisphere = highest |peak_r| (or highest |r| anywhere).
-      const best = hChans.reduce((a, b) => {
-        const ar = a.peak_scatter ? Math.abs(a.peak_scatter.peak_r || 0)
-                                   : Math.max(...(a.r || [0]).map(Math.abs));
-        const br = b.peak_scatter ? Math.abs(b.peak_scatter.peak_r || 0)
-                                   : Math.max(...(b.r || [0]).map(Math.abs));
-        return br > ar ? b : a;
-      });
-      const ps = best.peak_scatter;
-      const peakFreq = ps ? ps.peak_freq : null;
-      const peakR    = ps ? ps.peak_r    : null;
-      const obsR     = peakR != null ? Math.abs(peakR) : tdSum.perm_obs;
-      const chLabel  = best.region ? `${best.short} (${best.region})` : best.short;
-      const freqLabel = peakFreq != null ? ` @ ${peakFreq.toFixed(1)} Hz` : "";
-      const permColor = hemi === "Left" ? LO : HI;
-
-      // Perm-null panel (left half of row).
-      tdPanels.push(
-        <Panel key={`perm_${hemi}`} lg={6}
-          title={`${hemi} — perm. null vs observed: ${chLabel}${freqLabel} (p=${pStr})`}>
-          <Fig height={300} traces={[
-            { x: tdSum.perm_null, type: "histogram", name: "null (shuffled labels)",
-              marker: { color: "#90A4AE" }, opacity: 0.82, nbinsx: 40,
-              hovertemplate: "max|R|≈%{x:.2f} · %{y} shuffles<extra></extra>" },
-          ]} layout={{
-            xaxis: { title: "Family-max |R| (all contacts × freqs)", range: [0, 1] },
-            yaxis: { title: "Permutations" }, bargap: 0.02, showlegend: false,
-            shapes: obsR != null ? [{ type: "line", x0: obsR, x1: obsR,
-              yref: "paper", y0: 0, y1: 1, line: { color: permColor, width: 2.5 } }] : [],
-            annotations: obsR != null ? [{ x: obsR, yref: "paper", y: 1.04,
-              yanchor: "bottom", xanchor: "center",
-              text: `|R|=${obsR.toFixed(2)}${freqLabel}`,
-              showarrow: false, font: { color: permColor, size: 10 } }] : [],
-          }} />
-          <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
-            {obsR != null
-              ? `${chLabel}${freqLabel}: |R|=${obsR.toFixed(2)}, perm p=${pStr} ` +
-                `(${tdSum.perm_n || tdSum.perm_null.length} block-shuffles, ~${nCells}-cell search).`
-              : `Permutation null (${tdSum.perm_null.length} shuffles, perm p=${pStr}).`}
-          </MDTypography>
-        </Panel>
-      );
-
-      // Scatter panel (right half of row) — per-session log-power at peak freq vs pain.
-      // Require a finite peakFreq too: the title/axis format it with .toFixed and would throw on null.
-      if (ps && ps.x && ps.x.length && peakFreq != null && Number.isFinite(peakFreq)) {
-        const trendLine = (() => {
-          // Filter x/y JOINTLY: independent .filter() calls misalign the pair when a null sits at
-          // different indices in x vs y (and make the two arrays different lengths), corrupting the
-          // slope. Keep only sessions where BOTH coordinates are finite.
-          const xs = [], ys = [];
-          (ps.x || []).forEach((vx, i) => {
-            const vy = ps.y ? ps.y[i] : null;
-            if (vx != null && Number.isFinite(vx) && vy != null && Number.isFinite(vy)) { xs.push(vx); ys.push(vy); }
-          });
-          if (xs.length < 3) return null;
-          const n = xs.length;
-          const mx = xs.reduce((s, v) => s + v, 0) / n;
-          const my = ys.reduce((s, v) => s + v, 0) / n;
-          const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
-          const den = xs.reduce((s, v) => s + (v - mx) ** 2, 0);
-          if (den === 0) return null;
-          const slope = num / den, int = my - slope * mx;
-          const xmin = Math.min(...xs), xmax = Math.max(...xs);
-          return { x: [xmin, xmax], y: [xmin * slope + int, xmax * slope + int] };
-        })();
-        const scatterTraces = [
-          { x: ps.x, y: ps.y, type: "scatter", mode: "markers", name: "sessions",
-            marker: { color: permColor, size: 6, opacity: 0.7 },
-            text: ps.dates || [],
-            hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}%{text}<extra></extra>` },
-        ];
-        if (trendLine) scatterTraces.push({
-          x: trendLine.x, y: trendLine.y, type: "scatter", mode: "lines",
-          name: "linear fit", line: { color: permColor, width: 1.5, dash: "dot" },
-          hoverinfo: "skip", showlegend: false,
-        });
-        tdPanels.push(
-          <Panel key={`scatter_${hemi}`} lg={6}
-            title={`${hemi} — log power at ${peakFreq.toFixed(1)} Hz vs ${pain}: ${chLabel}`}>
-            <Fig height={300} traces={scatterTraces} layout={{
-              xaxis: { title: `Log PSD at ${peakFreq.toFixed(1)} Hz` },
-              yaxis: { title: pain },
-              legend: { orientation: "h", y: -0.2 },
-            }} />
-            <MDTypography variant="caption" color="dark" display="block" mt={0.5}>
-              {`Each dot = one recording session. R=${(peakR || 0).toFixed(2)} at the peak frequency.`}
-            </MDTypography>
-          </Panel>
-        );
-      }
-    });
-  }
-
-  // Mean PSD by pain state, per contact — grouped into a LEFT-hemisphere column and a
-  // RIGHT-hemisphere column, each wrapped in a thick black border (so the three left contacts
-  // and three right contacts read as two anatomical blocks). yaxis autorange + a small headroom
-  // pad fixes the previous top-of-curve clipping.
-  const spectra = td.psd_spectra || null;
-  if (spectra && spectra.channels) {
-    const oneSpectrum = (ch, i) => {
-      const traces = [
-        { x: spectra.freqs, y: ch.high, name: `High ${pain}`, type: "scatter", mode: "lines", line: { color: HI, width: 2 }, connectgaps: false },
-        { x: spectra.freqs, y: ch.low, name: `Low ${pain}`, type: "scatter", mode: "lines", line: { color: LO, width: 2 }, connectgaps: false },
-      ];
-      return (
-        <MDBox key={"psd" + i} mb={1.5}>
-          <MDTypography variant="h6" fontSize={15} mb={0.25}>
-            {`${ch.short}${ch.region ? ` · ${ch.region}` : ""}`}
-          </MDTypography>
-          <Fig height={260} traces={traces} layout={{
-            xaxis: { title: "Frequency (Hz)" },
-            yaxis: { title: `Power (${spectra.unit})`, autorange: true, rangemode: "normal", automargin: true },
-            margin: { l: 64, r: 20, t: 16, b: 44 },
-            legend: { orientation: "h", y: -0.28 } }} />
-        </MDBox>
-      );
-    };
-    const leftCh = [], rightCh = [], otherCh = [];
-    spectra.channels.forEach((ch, i) => {
-      const s = ch.short || "";
-      (s.startsWith("L") ? leftCh : s.startsWith("R") ? rightCh : otherCh).push(oneSpectrum(ch, i));
-    });
-    const hemiColumn = (figs, label, key) => figs.length ? (
-      <Grid item xs={12} lg={6} key={key}>
-        <Card sx={{ width: "100%", height: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-          <MDBox p={2}>
-            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">
-              {`Mean PSD by ${pain} — ${label}`}
-            </MDTypography>
-            {figs}
-          </MDBox>
-        </Card>
-      </Grid>
-    ) : null;
-    const lcol = hemiColumn(leftCh, "Left hemisphere", "psd-left");
-    const rcol = hemiColumn(rightCh, "Right hemisphere", "psd-right");
-    if (lcol) tdPanels.push(lcol);
-    if (rcol) tdPanels.push(rcol);
-    if (otherCh.length) tdPanels.push(
-      <Grid item xs={12} key="psd-other">
-        <Card sx={{ width: "100%", border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-          <MDBox p={2}>
-            <MDTypography variant="h6" fontSize={17} mb={1} fontWeight="bold">{`Mean PSD by ${pain}`}</MDTypography>
-            {otherCh}
-          </MDBox>
-        </Card>
-      </Grid>
+      <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
+        participantUid={participantUid} requestParams={requestParams} />
     );
   }
 
@@ -738,11 +1192,120 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   //     Left GPi vs Right VIM).
   //   CONTACT view: just the selected contact's ROC (filled).
   //   In BOTH, when a sliding window is active, overlay each window's ROC as a faint orange line.
-  const roc = chronic.roc || null;
+  // When a single sensing band is selected, the ROC is the per-(channel,frequency) decode (chronic +
+  // streaming pooled AT THAT BAND); otherwise the whole-channel ROC over all bands.
+  const roc = (selFreqDecode && selFreqDecode.roc) ? selFreqDecode.roc : (chronic.roc || null);
   const rocTraces = [];
   const rocFor = (k) => (perChannel[k] && perChannel[k].roc) || null;
   const meanAucLabels = []; // for the caption: per-hemisphere mean AUCs
   const drawnByHemi = {};   // hemisphere -> [contact keys actually plotted] (for honest provenance)
+  // Optimal operating points — picked LIVE from each curve at the slope set by the cost slider, so
+  // dragging the slider re-picks every dot without a backend roundtrip. The picker maximizes
+  // TPR - m·FPR over the curve vertices, where m = (cFP/cFN)·((1-p)/p). When the backend payload
+  // includes thr+prevalence we use them; otherwise we fall back to the backend's pre-computed
+  // Youden operating_point (old payload shape).
+  const costRatio = Math.pow(2, logCostRatio);             // cFP / cFN (≥ 0)
+  const pickOp = (rocLike) => {
+    if (!rocLike || !rocLike.fpr || !rocLike.tpr) return null;
+    const fprA = rocLike.fpr, tprA = rocLike.tpr, thrA = rocLike.thr;
+    const p = rocLike.prevalence;
+    // Falls back to the backend's symmetric Youden point when the payload predates the cost-aware
+    // payload (no thr/prevalence) — preserves the dot in that case.
+    if (!Array.isArray(thrA) || !Number.isFinite(p) || p <= 0 || p >= 1) {
+      const op = rocLike.operating_point;
+      return op && Number.isFinite(op.fpr) ? op : null;
+    }
+    const slope = costRatio * (1 - p) / p;
+    let bestK = -1, bestU = -Infinity;
+    for (let i = 0; i < fprA.length; i += 1) {
+      if (thrA[i] == null) continue;                       // skip the +inf sentinel vertex at (0,0)
+      const u = tprA[i] - slope * fprA[i];
+      if (u > bestU) { bestU = u; bestK = i; }
+    }
+    if (bestK < 0) return null;
+    return { fpr: fprA[bestK], tpr: tprA[bestK], threshold: thrA[bestK],
+             sensitivity: tprA[bestK], specificity: 1 - fprA[bestK],
+             slope, direction: "ge" };
+  };
+  const opMarkers = [];      // marker traces, drawn LAST so the dots sit on top of every curve
+  const opLabels = [];       // caption strings: "<curve>: threshold = X (sens, spec)"
+  const opAnnotations = [];  // on-dot callout pills showing the device threshold to PROGRAM
+  const pushOp = (rocLike, color, label, big) => {
+    const op = pickOp(rocLike);
+    if (!op || !Number.isFinite(op.fpr) || !Number.isFinite(op.tpr)) return;
+    // Each operating point is its OWN legend entry, colored to its curve, with the device-unit
+    // threshold to PROGRAM shown bold + underlined right in the legend label (Plotly rich text).
+    const thrLabel = op.threshold != null
+      ? `${label}: <b><u>power \u2265 ${op.threshold.toFixed(1)}</u></b> (sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`
+      : `${label}: optimal threshold`;
+    opMarkers.push({
+      x: [op.fpr], y: [op.tpr], type: "scatter", mode: "markers",
+      name: thrLabel, legendgroup: "oppoint",
+      legendgrouptitle: opMarkers.length === 0 ? { text: "Optimal thresholds to program (device units)" } : undefined,
+      showlegend: true,
+      marker: { color, size: big ? 12 : 8, symbol: "circle",
+                line: { color: "#FFFFFF", width: big ? 2 : 1.5 } },
+      hovertemplate: `${label} — PROGRAM THIS THRESHOLD<br>power \u2265 ${op.threshold != null ? op.threshold.toFixed(1) : "\u2014"} device units` +
+                     `<br>sensitivity=${(op.sensitivity ?? op.tpr).toFixed(2)} · specificity=${(op.specificity ?? (1 - op.fpr)).toFixed(2)}<extra></extra>`,
+    });
+    // Callout pill anchored to the dot: the device-unit threshold is the number the clinician types
+    // into the Percept RC, so it is annotated DIRECTLY on the operating point (not just in the
+    // caption/hover). The primary curve (big) gets a filled, prominent pill; per-contact dots get a
+    // smaller matching-color pill so a multi-contact plot stays legible.
+    if (op.threshold != null) {
+      opAnnotations.push({
+        x: op.fpr, y: op.tpr, xref: "x", yref: "y",
+        text: big ? `<b>Set power \u2265 ${op.threshold.toFixed(1)}</b>` : `<b>\u2265 ${op.threshold.toFixed(1)}</b>`,
+        showarrow: true, arrowhead: 0, arrowwidth: 1.2, arrowcolor: color,
+        ax: 26, ay: big ? 30 : 22,                 // offset down-right of the dot so it clears the curve
+        font: { size: big ? 12.5 : 10.5, color: big ? "#FFFFFF" : color },
+        bgcolor: big ? color : "rgba(255,255,255,0.92)",
+        bordercolor: color, borderwidth: 1.2, borderpad: big ? 4 : 2.5, opacity: 0.97,
+        xanchor: "left", yanchor: "top",
+      });
+      opLabels.push(`${label}: power \u2265 ${op.threshold.toFixed(1)} device units ` +
+        `(sens ${(op.sensitivity ?? op.tpr).toFixed(2)}, spec ${(op.specificity ?? (1 - op.fpr)).toFixed(2)})`);
+    }
+  };
+  // Device's CURRENTLY-PROGRAMMED operating point — where the threshold ALREADY set on the device
+  // lands on this ROC curve. Drawn as a HOLLOW marker (vs the filled recommendation dot) in the
+  // programmed-trigger purple, so the clinician reads current-vs-recommended at a glance. Only when
+  // closed loop is active on this hemisphere (progThr non-null) and the curve carries aligned thr.
+  let progMarkerAdded = false;
+  const pushProgrammed = (rocLike, label) => {
+    if (!progThr || !rocLike || !Array.isArray(rocLike.thr) || !rocLike.fpr) return;
+    const thrA = rocLike.thr, fprA = rocLike.fpr, tprA = rocLike.tpr;
+    // Find the curve vertex whose threshold is closest to the programmed lower trigger.
+    let bestK = -1, bestD = Infinity;
+    for (let i = 0; i < thrA.length; i += 1) {
+      if (thrA[i] == null || !Number.isFinite(thrA[i])) continue;
+      const d = Math.abs(thrA[i] - progThr.lower);
+      if (d < bestD) { bestD = d; bestK = i; }
+    }
+    if (bestK < 0) return;
+    const fpr = fprA[bestK], tpr = tprA[bestK];
+    opMarkers.push({
+      x: [fpr], y: [tpr], type: "scatter", mode: "markers",
+      name: `${label}: <b>currently programmed</b> power \u2265 ${progThr.lower.toFixed(1)} (sens ${tpr.toFixed(2)}, spec ${(1 - fpr).toFixed(2)})`,
+      legendgroup: "progpoint",
+      legendgrouptitle: !progMarkerAdded ? { text: "Currently programmed on device (closed-loop active)" } : undefined,
+      showlegend: true,
+      marker: { color: "rgba(0,0,0,0)", size: 13, symbol: "circle-open",
+                line: { color: PROG_COLOR, width: 2.5 } },
+      hovertemplate: `${label} \u2014 CURRENTLY PROGRAMMED on the device<br>power \u2265 ${progThr.lower.toFixed(1)} device units` +
+                     `<br>achieves sensitivity=${tpr.toFixed(2)} \u00b7 specificity=${(1 - fpr).toFixed(2)}<extra></extra>`,
+    });
+    opAnnotations.push({
+      x: fpr, y: tpr, xref: "x", yref: "y",
+      text: `currently set: \u2265 ${progThr.lower.toFixed(1)}`,
+      showarrow: true, arrowhead: 0, arrowwidth: 1.2, arrowcolor: PROG_COLOR,
+      ax: -28, ay: -26,                 // offset up-left so it sits opposite the recommendation pill
+      font: { size: 10.5, color: PROG_COLOR },
+      bgcolor: "rgba(255,255,255,0.92)", bordercolor: PROG_COLOR, borderwidth: 1.2,
+      borderpad: 2.5, opacity: 0.97, xanchor: "right", yanchor: "bottom",
+    });
+    progMarkerAdded = true;
+  };
   if (!isContactView && groupHemis.length) {
     groupHemis.forEach((h) => {
       const shades = shadesFor(h);
@@ -758,6 +1321,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           line: { width: 1.5, color: shades[i % shades.length], dash: "solid" }, opacity: 0.6,
           legendgroup: h, legendgrouptitle: i === 0 ? { text: `${h} hemisphere` } : undefined,
           hovertemplate: `${c.k}<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
+        // Optimal operating point for this contact's own ROC, colored to match the curve. Picked
+        // LIVE from the curve at the slope set by the cost slider.
+        pushOp(c.r, shades[i % shades.length], c.k, false);
       });
       // (b) Bold MEAN ROC over this hemisphere's contacts (vertical average; AUC = mean of contact AUCs).
       if (curves.length >= 2) {
@@ -770,6 +1336,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
             legendgroup: h,
             hovertemplate: `${h} mean ROC<br>FPR=%{x:.2f} · TPR=%{y:.2f}<extra></extra>` });
           meanAucLabels.push(`${h} ${meanAuc.toFixed(3)}`);
+          // If closed loop is active on THIS hemisphere, show where the programmed trigger lands on
+          // its mean curve (progThr is already scoped to the selected hemisphere when isHemiSel).
+          if (progThr && selHemiForProg === h) pushProgrammed(mean, `${h} mean`);
         }
       }
     });
@@ -781,6 +1350,12 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       line: { width: 3, color: meanColorFor(hemiOf(safeChSel) || "Left") },
       fill: "tozeroy", fillcolor: "rgba(0,114,178,0.12)",
       hovertemplate: "FPR=%{x:.2f}<br>TPR=%{y:.2f}<extra></extra>" });
+    // Optimal operating point for the displayed curve — a prominent dot, picked live from the curve
+    // at the cost slider's slope (defaults to the cost-symmetric Youden point at the slider midpoint).
+    pushOp(roc, meanColorFor(hemiOf(safeChSel) || "Left"),
+           isContactView ? safeChSel : "All contacts", true);
+    // Where the device's CURRENT programmed trigger lands on this curve (only if closed loop active).
+    pushProgrammed(roc, isContactView ? safeChSel : "All contacts");
   }
   // Per-window curves (only for a genuine sliding run). Drawn faint; first one labeled, rest grouped.
   // Exclude the all-data window (sliding OFF) — its single ROC is already the main curve, and
@@ -803,6 +1378,13 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   if (rocTraces.length) {
     rocTraces.push({ x: [0, 1], y: [0, 1], name: "chance", type: "scatter", mode: "lines",
       line: { width: 1, color: "#7E8794", dash: "dash" }, hoverinfo: "skip" });
+    // Operating-point dots LAST so they sit on top of every curve. One shared legend entry (a black
+    // ringed marker) explains what the dots are without cluttering the legend with one per contact.
+    // Each operating-point dot carries its OWN legend entry (curve label + bold/underlined device
+    // threshold), grouped under one "Optimal thresholds to program" title. No separate shared entry.
+    if (opMarkers.length) {
+      rocTraces.push(...opMarkers);
+    }
     const isMeanView = meanAucLabels.length > 0;
     const titleNote = isMeanView ? ` · mean ${meanAucLabels.join(", ")}` : "";
     const perWinNote = windowRocs.length ? ` · ${windowRocs.length} per-window curves` : "";
@@ -824,13 +1406,51 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     const rocProvAnn = rocProvenance ? [{ xref: "paper", yref: "paper", x: 0.0, y: 1.06,
       xanchor: "left", yanchor: "bottom", text: `Source: ${rocProvenance}`, showarrow: false,
       font: { size: 11, color: "#344767" } }] : [];
+    // Cost slider for the operating point. log2(cFP/cFN) on [-3, 3] => cost ratios 1:8 .. 8:1.
+    // Midpoint (0) reproduces the cost-symmetric Youden default. Labeled with three reference marks.
+    const costMarks = [
+      { value: -3, label: "1 : 8\u00A0FP:FN" },
+      { value: 0, label: "1 : 1" },
+      { value: 3, label: "8 : 1\u00A0FP:FN" },
+    ];
+    const costPrettyRatio = costRatio < 1
+      ? `1 : ${(1 / costRatio).toFixed(2)} (FP : FN) — high-sensitivity regime (don't miss real pain)`
+      : costRatio > 1
+        ? `${costRatio.toFixed(2)} : 1 (FP : FN) — high-specificity regime (don't stimulate when pain is low)`
+        : `1 : 1 (cost-symmetric — Youden's J)`;
+    // Provenance for the prevalence/slope readout. Use the pooled or selected curve's prevalence if
+    // exposed by the backend (the backend includes it on every roc payload from this fix onward).
+    const prevForRead = (roc && Number.isFinite(roc.prevalence)) ? roc.prevalence : null;
+    const slopeForRead = prevForRead != null ? costRatio * (1 - prevForRead) / prevForRead : null;
     chPanels.push(
       <Panel key="roc" title={`ROC curve — power vs ${pain}${chSuffix} (in-sample)${titleNote}${perWinNote}`}>
+        {/* Cost-sensitive operating-point control. The dots on the curves below re-pick live as the
+            slider moves — no backend roundtrip — by maximizing TPR - m·FPR over each curve's vertices
+            at the cost slope m = (cFP/cFN)·((1-p)/p). */}
+        <MDBox px={1} pt={0.5} pb={0.5}>
+          <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={2} flexWrap="wrap" mb={0.25}>
+            <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 12.5 }}>
+              {"Clinical cost ratio (false positive : false negative)"}
+            </MDTypography>
+            <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>
+              {`Now: ${costPrettyRatio}` +
+                (prevForRead != null
+                  ? ` · prevalence = ${(prevForRead * 100).toFixed(1)}% high-pain · ROC tangent slope m = ${slopeForRead.toFixed(2)}`
+                  : "")}
+            </MDTypography>
+          </MDBox>
+          <MDBox px={1.5}>
+            <Slider value={logCostRatio} min={-3} max={3} step={0.25} marks={costMarks}
+              onChange={(_, v) => setLogCostRatio(Array.isArray(v) ? v[0] : v)}
+              valueLabelDisplay="off" size="small"
+              sx={{ "& .MuiSlider-markLabel": { fontSize: 10.5 } }} />
+          </MDBox>
+        </MDBox>
         <Fig height={380} traces={rocTraces} layout={{
           xaxis: { title: "False positive rate", range: [-0.02, 1.02], scaleanchor: "y", scaleratio: 1 },
           yaxis: { title: "True positive rate", range: [-0.02, 1.02] },
           legend: { orientation: "h", y: -0.22, groupclick: "toggleitem" },
-          annotations: rocProvAnn }} />
+          annotations: [...rocProvAnn, ...opAnnotations] }} />
         {rocProvenance ? (
           <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
             {`Power signal from ${rocProvenance}.` +
@@ -838,6 +1458,21 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                ? " Bold line = per-hemisphere mean ROC (vertical average of that hemisphere's plotted bipolar contacts); thin lines behind it are the individual contacts (blue = Left, orange = Right). Contacts with only one pain class (no ROC) are omitted. The two hemispheres are never averaged together (separate stimulation targets)."
                : "") +
              (windowRocs.length ? " Faint orange curves are individual sliding-window ROCs." : "")}
+          </MDTypography>
+        ) : null}
+        {opLabels.length ? (
+          <MDTypography variant="caption" color="dark" display="block" mt={0.5} fontWeight="medium" sx={{ fontSize: 11.5 }}>
+            {(Math.abs(logCostRatio) < 1e-6
+              ? `Optimal device threshold at the COST-SYMMETRIC operating point (Youden's J — equal cost for false positives and false negatives): `
+              : `Optimal device threshold at the SELECTED cost ratio ${costPrettyRatio.split(" — ")[0]} — the ROC point where the curve's tangent slope equals m = (cFP/cFN)·((1-p)/p)` +
+                (slopeForRead != null ? ` = ${slopeForRead.toFixed(2)}` : "") + `: `) +
+             opLabels.join(" · ") +
+             `. Classify pain-high when band power \u2265 this value on the Percept RC.`}
+          </MDTypography>
+        ) : null}
+        {progThr ? (
+          <MDTypography variant="caption" display="block" mt={0.5} sx={{ fontSize: 11.5, color: PROG_COLOR }}>
+            {`Hollow purple marker = the threshold CURRENTLY programmed on the device (closed-loop active on ${selHemiForProg}): power \u2265 ${progThr.lower.toFixed(1)} device units. Compare its sensitivity/specificity against the filled recommendation dot to decide whether to re-program.`}
           </MDTypography>
         ) : null}
       </Panel>
@@ -874,7 +1509,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           xaxis: { title: "Band power (device units, a.u.)" },
           yaxis: { title: `${pain}` },
           showlegend: false,
-          annotations: [...provenanceAnn, {
+          annotations: [...pooledProvAnn, {
             xref: "paper", yref: "paper", x: 0.98, y: 0.04, xanchor: "right", yanchor: "bottom",
             text: `Pearson r = ${rTxt} · p = ${pTxt} · n = ${pps.n}`,
             showarrow: false, font: { size: 12, color: "#344767" },
@@ -886,17 +1521,39 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
            (pps.n_clipped ? `; ${pps.n_clipped} power outlier(s) excluded` : "") +
            `). Pain is kept CONTINUOUS here (the ROC/Otsu panels binarize it); p is the ordinary ` +
            `Pearson p, not corrected for the band search — the headline inference is the ` +
-           `permutation test on the AUC.`}
+           `permutation test on the AUC. ` +
+           (poolSuffix
+             ? `This pooled view mixes all ${pooledContactN} contacts (two stimulation targets at ` +
+               `different sensing frequencies), so the pooled r is a blend, not one electrode's ` +
+               `correlation; the large n makes even a near-zero r look "significant" (r is the effect ` +
+               `size — select a single contact to read a meaningful association). `
+             : "")}
         </MDTypography>
       </Panel>
     );
   }
-  const dist = chronic.lfp_distribution || null;
+  // Band-scoped distribution when a sensing band is selected, else the whole-channel histogram.
+  const dist = (selFreqDecode && selFreqDecode.distribution)
+    ? selFreqDecode.distribution : (chronic.lfp_distribution || null);
   // Need one more edge than counts to form bin centers; without it every center is NaN.
   if (dist && dist.counts && dist.counts.length
       && Array.isArray(dist.bin_edges) && dist.bin_edges.length >= dist.counts.length + 1) {
     const edges = dist.bin_edges;
     const centers = dist.counts.map((_, i) => (edges[i] + edges[i + 1]) / 2);
+    // The ROC-optimal threshold is the value actually programmed on the device; overlay it on the
+    // same band-power axis as a second reference line so the clinician can compare the unsupervised
+    // Otsu split (ignores the pain label) against the supervised, label-driven optimum. This pulls
+    // from the LIVE cost-sensitive picker so it tracks the cost slider above (defaults to the
+    // cost-symmetric Youden point when the slider sits at 1:1).
+    const distOp = roc ? pickOp(roc) : null;
+    const distOpThr = distOp && Number.isFinite(distOp.threshold) ? distOp.threshold : null;
+    // Only show it if it lands within the displayed (inlier) range, else the line floats off-axis.
+    const distOpInRange = distOpThr != null && distOpThr >= edges[0] && distOpThr <= edges[edges.length - 1];
+    // Device's currently-programmed adaptive trigger (only when closed loop is active on this
+    // hemisphere) — a third, lighter reference so the clinician sees where the CURRENT device
+    // setting sits relative to the recommended optimum and the unsupervised Otsu valley.
+    const progThrVal = progThr ? progThr.lower : null;
+    const progInRange = progThrVal != null && progThrVal >= edges[0] && progThrVal <= edges[edges.length - 1];
     chPanels.push(
       <Panel key="dist" title={`Power band-power distribution + Otsu split${chSuffix}`}>
         <Fig height={340} traces={[{
@@ -905,21 +1562,74 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           hovertemplate: "band power=%{x:.1f}<br>%{y:,} samples<extra></extra>",
         }]}
           layout={{
-            xaxis: { title: "Power band power (device units, 1st–99th pct display range)" },
+            xaxis: { title: "Power band power (device units, outlier-free 1st–99th pct range)" },
             yaxis: { title: "Sample count" }, bargap: 0.04,
-            shapes: dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
-              y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : [],
+            shapes: [
+              ...(dist.otsu != null ? [{ type: "line", x0: dist.otsu, x1: dist.otsu, yref: "paper",
+                y0: 0, y1: 1, line: { color: PALETTE[1], width: 2.5, dash: "dash" } }] : []),
+              ...(distOpInRange ? [{ type: "line", x0: distOpThr, x1: distOpThr, yref: "paper",
+                y0: 0, y1: 1, line: { color: "#117733", width: 2.5, dash: "dot" } }] : []),
+              ...(progInRange ? [{ type: "line", x0: progThrVal, x1: progThrVal, yref: "paper",
+                y0: 0, y1: 1, line: { color: PROG_COLOR, width: 1.5, dash: "solid" }, opacity: 0.6 }] : []),
+            ],
             annotations: [
               ...(dist.otsu != null ? [{ x: dist.otsu, yref: "paper", y: 1.02,
                 text: `Otsu = ${dist.otsu.toFixed(1)}`, showarrow: false,
                 font: { color: PALETTE[1], size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
-              ...provenanceAnn,
+              ...(distOpInRange ? [{ x: distOpThr, yref: "paper", y: 1.10,
+                text: `ROC optimum = ${distOpThr.toFixed(1)}`, showarrow: false,
+                font: { color: "#117733", size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
+              ...(progInRange ? [{ x: progThrVal, yref: "paper", y: 1.18,
+                text: `Programmed = ${progThrVal.toFixed(1)} (active)`, showarrow: false,
+                font: { color: PROG_COLOR, size: 11 }, xanchor: "left", yanchor: "bottom" }] : []),
+              ...pooledProvAnn,
             ] }} />
         <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
           {(powerProvenance ? `Power signal from ${powerProvenance}. ` : "") +
-           `${(dist.n_total || 0).toLocaleString()} samples; histogram is plotted over the robust ` +
-           `1st–99th percentile so the bulk is visible. ` +
-           (dist.n_clipped ? `${dist.n_clipped.toLocaleString()} extreme outlier sample(s) sit off-range (Otsu still computed on all data).` : "")}
+           `${(dist.n_total || 0).toLocaleString()} samples total. ` +
+           (dist.n_clipped
+             ? `${dist.n_clipped.toLocaleString()} extreme outlier sample(s) (\u22653 MADs from the median) ` +
+               `are excluded from BOTH the histogram and the Otsu threshold, so the bars and the split ` +
+               `describe the same outlier-free distribution. `
+             : `No outliers were excluded (all samples within 3 MADs of the median). `) +
+           `Bars are trimmed to the inlier 1st\u201399th percentile for display. ` +
+           `Orange dashed line = Otsu split (unsupervised, label-free — minimizes within-class variance of the power distribution). ` +
+           (distOpInRange
+             ? `Green dotted line = ROC-optimal (Youden) threshold = ${distOpThr.toFixed(1)} device units, the supervised cut that jointly maximizes true positives and minimizes false positives against the pain label — this is the value to program for closed loop.`
+             : `The ROC-optimal (Youden) threshold for closed-loop programming is shown on the ROC panel above.`)}
+        </MDTypography>
+      </Panel>
+    );
+  }
+
+  // PER-(CHANNEL, FREQUENCY) BINARIZATION PREVIEW. When a single sensing band is selected, show what
+  // pain-score data is present for THAT (channel, frequency) and how the high/low split falls — the
+  // same histogram + cut markers + day/sample class counts as the report-level BinarizationPreview,
+  // but scoped to the band's decoding set (chronic + streaming pooled at this band only). The daily
+  // means come pre-aggregated from the backend decode so heavy chronic bands stay light on the wire.
+  if (selFreqDecode && selFreqDecode.binarization
+      && Array.isArray(selFreqDecode.binarization.daily) && selFreqDecode.binarization.daily.length) {
+    const bz = selFreqDecode.binarization;
+    chPanels.push(
+      <Panel key="freq-binarization"
+             title={`Pain binarization @ ${Number(freqSel).toFixed(1)} Hz${chSuffix}`}>
+        <BinarizationPreview
+          dailyAgg={bz.daily}
+          strategy={previewStrategy || "median"}
+          percentileLow={previewPctLow}
+          percentileHigh={previewPctHigh}
+          metricLabel={metricLabel}
+          metricKey={previewMetricKey}
+          loading={false}
+        />
+        <MDTypography variant="caption" color="dark" display="block" mt={1} sx={{ fontSize: 11 }}>
+          {`Pain-score days available for ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz: ` +
+           `${bz.n_days_labeled.toLocaleString()} labeled day(s) across ` +
+           `${selFreqDecode.n_labeled.toLocaleString()} band-power samples (chronic + streaming combined at this band). ` +
+           `Decode-time split: ${bz.n_pos_days.toLocaleString()} high-pain / ${bz.n_neg_days.toLocaleString()} low-pain days ` +
+           `(${bz.n_pos_samples.toLocaleString()} / ${bz.n_neg_samples.toLocaleString()} samples). ` +
+           `The histogram and cut lines above recompute live from the binarization controls at the top of the report; ` +
+           `the high/low day and sample counts are the data this (channel, frequency) detector is trained on.`}
         </MDTypography>
       </Panel>
     );
@@ -1024,32 +1734,91 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
           {"Sensing contact (bipolar):"}
         </MDTypography>
         <ToggleButtonGroup value={safeChSel} exclusive size="small"
-          onChange={(_, v) => { if (v) setChSel(v); }}>
-          <ToggleButton value="pooled">All contacts</ToggleButton>
-          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere</ToggleButton> : null}
+          onChange={(_, v) => { if (v) { setChSel(v); setFreqSel(null); } }}>
+          {/* No cross-hemisphere "All contacts" pool — you program one contact at a time, and Left
+              (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
+              per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
+              single "pooled" button appears only when there is no per-contact split at all. */}
+          {selectableKeys.length === 0
+            ? <ToggleButton value="pooled">All data</ToggleButton> : null}
+          {/* Chronic around-the-clock streams first per hemisphere (the 24/7 biomarker), then the
+              per-hemisphere streaming mean, then each streaming contact. */}
+          {leftChronic.map((k) => (
+            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
+          ))}
+          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere (mean)</ToggleButton> : null}
           {leftContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
-          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere</ToggleButton> : null}
+          {rightChronic.map((k) => (
+            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
+          ))}
+          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere (mean)</ToggleButton> : null}
           {rightContacts.map((k) => (
             <ToggleButton key={k} value={k}>{k}</ToggleButton>
           ))}
         </ToggleButtonGroup>
         <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
           {safeChSel === "pooled"
-            ? "All bipolar contacts, grouped by hemisphere — per-hemisphere mean ROC over each side's contacts (Left and Right shown separately, never averaged together)."
+            ? "Single combined series (no per-channel split available for this run)."
             : isHemiSel
-              ? `${selHemi} hemisphere — mean over its bipolar contacts, with the individual contacts behind it.`
-              : `Showing only contact ${safeChSel} — independent threshold, AUC, and sliding-window curve for that bipolar pair.`}
+              ? `${selHemi} hemisphere — mean over its streaming bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together). The chronic 24/7 stream is analyzed separately on its own.`
+              : isChronicKey(safeChSel)
+                ? `Showing only ${safeChSel} — the BrainSense Timeline ~10-min around-the-clock LFP-power stream${bestContact === safeChSel ? " (most discriminative channel, shown by default)" : ""}. ROC, optimal threshold, distribution, and sliding-window are all computed on this 24/7 series. Program its threshold on the Percept RC.`
+                : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC channel, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
         </MDTypography>
       </MDBox>
+      {/* FREQUENCY sub-selector — only for a single implementable channel with >1 sensing band. The
+          analysis unit is (channel, frequency): selecting a band restricts ROC / threshold /
+          distribution / binarization to chronic + streaming samples recorded AT THAT BAND, never
+          pooling 7.8 Hz with 22.5 Hz. "All bands" = the legacy whole-channel decode. */}
+      {freqSelectable && availFreqs.length > 0 ? (
+        <MDBox mt={1} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+          <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+            {"Sensing frequency:"}
+          </MDTypography>
+          <ToggleButtonGroup value={freqSel == null ? "all" : freqKey(freqSel)} exclusive size="small"
+            onChange={(_, v) => { if (v) setFreqSel(v === "all" ? null : Number(v)); }}>
+            <ToggleButton value="all">All bands</ToggleButton>
+            {availFreqs.map((a) => {
+              const k = freqKey(a.frequency_hz);
+              return (
+                <ToggleButton key={k} value={k}>
+                  {`${Number(a.frequency_hz).toFixed(1)} Hz`}
+                  <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>
+                    {`(${a.n_labeled}/${a.n_samples} samp · ${a.n_days_labeled}/${a.n_days} d)`}
+                  </span>
+                </ToggleButton>
+              );
+            })}
+          </ToggleButtonGroup>
+          <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+            {freqSel == null
+              ? `All sensing bands of ${safeChSel} pooled — counts above show labeled/total samples and labeled/total days per band. Pick a band to decode it alone.`
+              : (selFreqDecode
+                  ? `Decoding ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz only — ${selFreqDecode.n_labeled} labeled samples across ${selFreqDecode.binarization.n_days_labeled} days (chronic + streaming combined at this band). ROC, threshold, distribution, and the binarization split below are computed on this band alone.`
+                  : `No decode available for ${Number(freqSel).toFixed(1)} Hz.`)}
+          </MDTypography>
+        </MDBox>
+      ) : null}
     </Grid>
   ) : null;
 
+  // Rigor-pass annotation: if the backend supplied a band x channel BH-FDR summary, append the
+  // naive-vs-rigorous count contrast to the subtitle. This is the headline pseudoreplication
+  // honesty number — naive Pearson over-reports significance because every PSD is treated as
+  // independent, while the rating-clustered logistic q accounts for the ~7-8 PSDs that share each
+  // pain report. Reads as e.g. "[N bands FDR-significant by rating-clustered logistic vs M by
+  // naive Pearson over a 558-cell grid; ringed dots above mark the validated bands]".
+  const fdrSummary = scan && scan.fdr_summary;
+  const rigorAnnotation = fdrSummary
+    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive naive Pearson FDR (treats every PSD as independent — over-reports because of pseudoreplication). Ringed dots above mark the rigorous-FDR survivors.`
+    : "";
+
   return (
     <>
-      <Section title="Time-domain analysis (250 Hz streaming PSD)"
-               subtitle="Pearson-R spectrum, permutation null + per-session scatter, and mean PSD by pain state per contact pair."
+      <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
+               subtitle={"Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter." + rigorAnnotation}
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle={(slidingActive

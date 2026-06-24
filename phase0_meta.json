@@ -1,0 +1,39 @@
+{
+  "N": 4722,
+  "C": 6,
+  "F": 101,
+  "chan_order": [
+    "ONE_THREE_LEFT",
+    "ONE_THREE_RIGHT",
+    "ZERO_THREE_LEFT",
+    "ZERO_THREE_RIGHT",
+    "ZERO_TWO_LEFT",
+    "ZERO_TWO_RIGHT"
+  ],
+  "f_range": [
+    0.95,
+    100.0
+  ],
+  "sources": {
+    "Montage/survey": 1149,
+    "Patient event": 2625,
+    "TD streaming": 948
+  },
+  "stim_series_keys": [
+    "t",
+    "y"
+  ],
+  "stim_mA_finite": 4722,
+  "week_span": [
+    0,
+    52
+  ],
+  "metrics": {
+    "nrs": 517,
+    "vas": 517,
+    "left_leg_vas": 384,
+    "back_vas": 384,
+    "mpq_sum": 517,
+    "composite_mpq_leftleg": 517
+  }
+}

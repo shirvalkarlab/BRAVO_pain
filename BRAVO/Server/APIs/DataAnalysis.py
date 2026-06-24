@@ -638,6 +638,248 @@ class QueryBiomarkerAnalysis(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryBandValidation(RestViews.APIView):
+    """
+    API View for the click-triggered VALIDATION bundle on one spectral band.
+
+    **URL:** ``/queryBandValidation``  **Methods:** POST
+
+    For a single (channel, center_hz), runs:
+      * mixed-effects logistic regression (glmer) on pain_high ~ band_power + (1|weekly_era),
+        emitting OR, 95% CI, p, plus separation/singular guards;
+      * band x stim-era LRT (m0 reduced vs m1 with the interaction), emitting chisq, p,
+        per-era ORs, and a `stim_stable` boolean -- the closed-loop-defensibility flag.
+
+    Frontend wires this to the click-panel "validate this band" action; the existing scan call
+    already does the band x channel FDR pass.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param Channel: raw or short channel name from the scan (required)
+    :param CenterHz: band center in Hz (required) -- band is [CenterHz - W/2, CenterHz + W/2]
+    :param BandWidthHz: band full width in Hz (default 5.0)
+    :param LabelMetric / BinarizationStrategy / LowPct / HighPct / MatchToleranceMin /
+        MaxPerRating / RefractoryMin / MatchDirection: same as the scan endpoint -- the band
+        feature is defined identically to the scan dot the user clicked.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.validate_band_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the click panel; surface a friendly empty-state.
+            return Response(status=200, data={
+                "available": False, "reason": "validation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class EmitBandCandidate(RestViews.APIView):
+    """
+    API View that exports ONE validated spectral band as a serializable BandCandidate object --
+    the contract (DESIGN_biomarker_pipeline_v2 sec.6) handed from the discovery/Biomarkers view to
+    the Closed-Loop Simulation / threshold-deployment view.
+
+    **URL:** ``/emitBandCandidate``  **Methods:** POST
+
+    Runs the same pooled-detail + glmer + stim-stability machinery as ``/queryBandValidation``
+    (so the committed band is byte-identical to the scan dot the user clicked), then assembles the
+    full BandCandidate: identity (hemisphere, contact, FFT-bin-snapped center freq), REDCap-PRO
+    label provenance + binarization, Percept device-control mapping (8-30 Hz adaptive-valid gate,
+    polarity, suggested mode), cluster-robust mixed-effects evidence (OR + CI + credible-CI flag +
+    per-era ORs + stim-stability), and pool-bias provenance. The threshold (``threshold_lsb``), the
+    LSB-uV2 conversion FYI (``conversion_check``), and the labeled time-series handoff
+    (``timeseries_ref``) ship as nulls/stubs filled by the deployment view in later phases.
+
+    **Request Parameters:** identical to ``/queryBandValidation``.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.build_band_candidate(request.data)
+        except Exception as e:
+            return Response(status=200, data={
+                "available": False, "reason": "emit error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDeploymentROC(RestViews.APIView):
+    """
+    API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed
+    band (DESIGN_biomarker_pipeline_v2 Phase B). Same band feature as /emitBandCandidate; the AUC
+    bootstrap CI resamples whole rating clusters (not raw samples), and the match direction defaults
+    to causal prior/forecasting (toggle to pro_first via MatchDirection).
+
+    **URL:** ``/queryDeploymentROC``  **Methods:** POST
+
+    **Request Parameters:** same as /emitBandCandidate, plus optional NBoot (default 500).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_deployment_roc(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "roc error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryLsbPower(RestViews.APIView):
+    """
+    API View that anchors a Phase-B cut-point to deployable device LSB units (percentile-anchored on
+    the device Timeline), reports the empirical µV²/LSB ratio (FYI cross-check), and the AUC power /
+    sample-size on the count of independent ratings (DESIGN_biomarker_pipeline_v2 Phase C).
+
+    **URL:** ``/queryLsbPower``  **Methods:** POST
+
+    **Request Parameters:** same as /queryDeploymentROC, plus Cutpoint (the oriented log-power
+    threshold chosen in Phase B).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_lsb_and_power(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "lsb/power error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDeploymentRocByEra(RestViews.APIView):
+    """
+    API View that refits the deployment ROC + Youden cut-point WITHIN each stimulation era
+    (OFF / LOW / HIGH) for one committed band, so a band whose threshold swings across stim states
+    is flagged as a fragile controller anchor (DESIGN_biomarker_pipeline_v2 Phase D).
+
+    **URL:** ``/queryDeploymentRocByEra``  **Methods:** POST
+
+    **Request Parameters:** same as /queryDeploymentROC.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_deployment_roc_by_era(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "era-roc error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDeploymentSummary(RestViews.APIView):
+    """
+    API View that assembles the one authoritative Deploy-to-Percept review payload for a committed
+    band: identity, device-control mapping, evidence (AUC/OR with CI), the percentile-anchored LSB
+    threshold, power/sample-size, per-era portability, and the explicit GATES + CAVEATS a clinician
+    signs against (DESIGN_biomarker_pipeline_v2 Phase E).
+
+    **URL:** ``/queryDeploymentSummary``  **Methods:** POST
+
+    **Request Parameters:** same as /queryLsbPower (Channel, CenterHz, Cutpoint, ...).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.deployment_summary(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "summary error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryPainScores(RestViews.APIView):
     """
     API View for patient-reported pain-score reports (Surveys & Questionnaires).
@@ -667,6 +909,53 @@ class QueryPainScores(RestViews.APIView):
         except Exception as e:
             return Response(status=200, data={"metrics": [], "n_reports": 0,
                                               "message": "Pain-score error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDataAvailability(RestViews.APIView):
+    """
+    API View for the always-on DATA-AVAILABILITY timeline (Shirvalkar Lab Biomarkers module).
+
+    **URL:** ``/queryDataAvailability``  **Methods:** POST
+
+    Returns the lightweight per-channel data-availability payload (what neural data exists, when,
+    and its inline values) plus the patient-reported pain series and chronic stim series on the
+    shared calendar axis. This is for VISUALIZATION and EXPLORATION -- it does NOT run the biomarker
+    detector, so the timeline can render the moment the page opens, before "Compute biomarker now".
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param LabelMetric: pain metric for the pain row (default nrs); the row also updates client-side
+        from the lightweight pain-scores endpoint, so this only seeds the initial render.
+    :param ProcessedPRO: optional list of PRO record dicts (else REDCap env vars are used)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.availability_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface an empty payload it can render as an empty-state.
+            return Response(status=200, data={
+                "availability": {"records": [], "pain": {"t": [], "y": []},
+                                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": []},
+                "message": "Data-availability error: " + str(e),
+            })
 
         Analysis = json_compliant_handler(Analysis)
         return Response(status=200, data=Analysis)

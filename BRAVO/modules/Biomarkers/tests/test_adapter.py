@@ -164,13 +164,38 @@ def _make_chronic_trend(days=14, step_hours=2):
 def test_bravo_chronic_to_lfp_df_shape():
     chronic, pro = _make_chronic_trend()
     cv = adapter.bravo_chronic_to_lfp_df(chronic, pro, label_metric="nrs")
-    # `source` is carried (defaults to "chronic") for the two-source batch-confound diagnostic.
-    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs", "source"]
+    # `source` is carried (defaults to "chronic") for the two-source batch-confound diagnostic, and
+    # `frequency_hz` is carried per-sample for the per-(channel,frequency) decoding path (NaN here
+    # because the synthetic trend recordings have no CenterFrequencyHz).
+    assert list(cv.columns) == ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", "nrs", "source", "frequency_hz"]
     assert set(cv["source"].unique()) == {"chronic"}
+    assert cv["frequency_hz"].isna().all()
     levels = set(cv["pain_level"].dropna().unique())
     assert levels <= {0.0, 1.0} and len(levels) == 2  # both classes present
     # High-pain (even) days should be labeled 1.
     assert cv.loc[cv["nrs"] == 8, "pain_level"].eq(1.0).all()
+
+
+def test_bravo_chronic_to_lfp_df_frequency_attribution():
+    """Each sample carries the sensing frequency of the recording it came from, snapped to the
+    Percept FFT bin — so the decoding path can filter to one (channel, frequency) combo."""
+    chronic, pro = _make_chronic_trend()
+    # Split the single trend into two recordings programmed at different sensing bands. 7.81 and
+    # 22.46 snap to 7.8 and 22.5 (250/256 grid). The samples keep their per-recording frequency.
+    t = np.asarray(chronic["Time"], dtype=float)
+    d = np.asarray(chronic["Data"], dtype=float)
+    mid = len(t) // 2
+    rec_a = {"SamplingRate": -1, "Time": t[:mid], "Data": d[:mid],
+             "ChannelNames": ["L LFP", "L Amplitude"], "CenterFrequencyHz": 7.81}
+    rec_b = {"SamplingRate": -1, "Time": t[mid:], "Data": d[mid:],
+             "ChannelNames": ["L LFP", "L Amplitude"], "CenterFrequencyHz": 22.46}
+    cv = adapter.bravo_chronic_to_lfp_df([rec_a, rec_b], pro, label_metric="nrs")
+    assert "frequency_hz" in cv.columns
+    freqs = set(cv["frequency_hz"].dropna().round(1).unique())
+    assert freqs == {7.8, 22.5}
+    # Filtering to one frequency yields a non-empty, single-band decoding slice.
+    sub = cv[cv["frequency_hz"].round(1) == 7.8]
+    assert len(sub) > 0 and set(sub["frequency_hz"].round(1).unique()) == {7.8}
 
 
 def test_bravo_chronic_accepts_list_of_recordings():
@@ -277,7 +302,7 @@ def test_td_sliding_corr_spectrum_matches_scipy():
     assert len(chans) == C
     starts = chans[0]["window_starts"]
     assert len(starts) >= 2
-    assert chans[0]["channel"] == "L 0⁻-2⁺"   # numeric contact label, not word form
+    assert chans[0]["channel"] == "L 0⁻2⁺"   # numeric contact label, not word form
 
     tv = np.array([t.value for t in times], dtype=float)  # ns since epoch (tz-naive)
     w_ns = 10 * 86_400 * 1e9
@@ -654,7 +679,7 @@ def test_bravo_powerdomain_to_chronic_like():
     out = adapter.bravo_powerdomain_to_chronic_like([rec])
     assert len(out) == 2, "one chronic-shaped series per Power channel"
     # ChannelNames are now real bipolar-contact labels decoded from the power column name
-    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻-3⁺"), not the generic "Left LFP".
+    # (e.g. "ZERO_THREE_LEFT Power" -> "L 0⁻3⁺"), not the generic "Left LFP".
     left = next(o for o in out if o["ChannelNames"][0].startswith("L"))
     right = next(o for o in out if o["ChannelNames"][0].startswith("R"))
     assert "0" in left["ChannelNames"][0] and "3" in left["ChannelNames"][0], \

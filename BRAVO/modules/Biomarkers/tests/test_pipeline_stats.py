@@ -149,6 +149,67 @@ def test_band_inference_mad_rejection_and_50hz_perm_family():
         f"perm family included the >=50 Hz cell (perm_obs={inf2['perm_obs']})"
 
 
+def test_available_frequencies_counts_and_split():
+    """_available_frequencies reports per-band sample/day/label counts pooling chronic+streaming,
+    and never mixes bands."""
+    import pandas as pd
+    base = pd.Timestamp("2025-09-01")
+    rows = []
+    # 7.8 Hz band: 3 days, mixed labels (chronic + streaming pooled — source is irrelevant here).
+    for d in range(3):
+        for k in range(4):
+            rows.append({"timestamp": base + pd.Timedelta(days=d, hours=k), "frequency_hz": 7.8,
+                         "pain_level": float(d % 2)})              # day0=0, day1=1, day2=0
+    # 22.5 Hz band: 2 days, one fully unlabeled (pain_level NaN) -> counts as samples/days but not labeled.
+    for d in range(2):
+        for k in range(3):
+            rows.append({"timestamp": base + pd.Timedelta(days=10 + d, hours=k), "frequency_hz": 22.5,
+                         "pain_level": (1.0 if d == 0 else np.nan)})
+    cv = pd.DataFrame(rows)
+    av = pipeline._available_frequencies(cv)
+    by = {round(a["frequency_hz"], 1): a for a in av}
+    assert set(by) == {7.8, 22.5}
+    assert by[7.8]["n_samples"] == 12 and by[7.8]["n_days"] == 3
+    assert by[7.8]["n_labeled"] == 12 and by[7.8]["n_pos"] == 4 and by[7.8]["n_neg"] == 8
+    assert by[22.5]["n_samples"] == 6 and by[22.5]["n_days"] == 2
+    assert by[22.5]["n_labeled"] == 3 and by[22.5]["n_days_labeled"] == 1
+    # No frequency column -> empty (legacy data).
+    assert pipeline._available_frequencies(cv.drop(columns=["frequency_hz"])) == []
+
+
+def test_decode_by_frequency_never_pools_bands():
+    """_decode_by_frequency slices the frame per sensing band and computes ROC/Otsu/binarization on
+    that band ALONE — a contact's 7.8 Hz and 22.5 Hz samples never mix, and a band with too few
+    labeled samples reports counts but no AUC."""
+    import pandas as pd
+    base = pd.Timestamp("2025-09-01")
+    rows = []
+    # 7.8 Hz: 12 labeled days, power separates the classes (decodable).
+    for d in range(12):
+        hi = (d % 2 == 0)
+        for k in range(5):
+            rows.append({"timestamp": base + pd.Timedelta(days=d, hours=k),
+                         "frequency_hz": 7.8, "LFP_smoothed": (150.0 if hi else 110.0),
+                         "pain_level": (1.0 if hi else 0.0), "nrs": (8.0 if hi else 2.0)})
+    # 22.5 Hz: a single day, one class -> too little to fit a detector.
+    for k in range(4):
+        rows.append({"timestamp": base + pd.Timedelta(days=40, hours=k),
+                     "frequency_hz": 22.5, "LFP_smoothed": 130.0, "pain_level": 1.0, "nrs": 7.0})
+    cv = pd.DataFrame(rows)
+    fd = pipeline._decode_by_frequency(cv, "nrs")
+    assert set(fd) == {"7.8", "22.5"}
+    # 7.8 band: decodable, perfectly separable -> AUC == 1.0, Otsu between the two power levels.
+    assert fd["7.8"]["n_samples"] == 60 and fd["7.8"]["n_days"] == 12
+    assert fd["7.8"]["roc"]["auc"] == 1.0
+    assert 110.0 < fd["7.8"]["distribution"]["otsu"] < 150.0
+    assert fd["7.8"]["binarization"]["n_pos_days"] == 6 and fd["7.8"]["binarization"]["n_neg_days"] == 6
+    assert len(fd["7.8"]["binarization"]["daily"]) == 12
+    # 22.5 band: insufficient -> no AUC, but counts still reported.
+    assert fd["22.5"]["roc"]["auc"] is None and fd["22.5"]["n_samples"] == 4
+    # No frequency column -> empty.
+    assert pipeline._decode_by_frequency(cv.drop(columns=["frequency_hz"]), "nrs") == {}
+
+
 if __name__ == "__main__":
     test_maxabs_corr_pairwise_nan()
     test_maxabs_corr_degenerate()

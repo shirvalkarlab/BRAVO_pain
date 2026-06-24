@@ -46,6 +46,373 @@ from . import adapter
 STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
 
+
+# Percept sensing-frequency bin width (FFT bin spacing ~250/256 Hz). The programmed center frequency
+# is reported at slightly different sub-bin values across files (e.g. 8.78 vs 8.79), so we snap to a
+# clean bin so the same physical band gets ONE color/label in the frequency ribbon.
+_PERCEPT_FREQ_BIN_HZ = 250.0 / 256.0
+
+
+def _snap_freq(hz):
+    """Snap a reported center frequency to the nearest Percept FFT bin (1 decimal)."""
+    if hz is None:
+        return None
+    try:
+        hz = float(hz)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(hz):
+        return None
+    return round(round(hz / _PERCEPT_FREQ_BIN_HZ) * _PERCEPT_FREQ_BIN_HZ, 1)
+
+
+def _parse_time_ms(t):
+    """Parse a recording's Time array to a UTC DatetimeIndex, handling BOTH encodings.
+
+    Chronic Time is epoch SECONDS as float (ChronicBrainSense stamps t.timestamp()); power-domain
+    synthesizes float seconds too. But pd.to_datetime on a float Series defaults to NANOSECONDS,
+    which maps ~1.7e9 -> 1970. Detect the numeric case and pass unit='s'; otherwise parse as ISO/strings.
+    """
+    try:
+        s = pd.Series(t)
+    except Exception:
+        return None
+    if len(s) == 0:
+        return None
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_datetime(s, unit="s", utc=True, errors="coerce").dropna()
+    return pd.to_datetime(s, utc=True, errors="coerce").dropna()
+
+
+def _channel_time_extent_ms(ch_list):
+    """[min_ms, max_ms] over every recording's Time array in ch_list, or None if no parseable time."""
+    lo = hi = None
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        tarr = _parse_time_ms(c.get("Time"))
+        if tarr is None or len(tarr) == 0:
+            continue
+        t0 = int(tarr.min().value // 1_000_000)
+        t1 = int(tarr.max().value // 1_000_000)
+        lo = t0 if lo is None else min(lo, t0)
+        hi = t1 if hi is None else max(hi, t1)
+    if lo is None:
+        return None
+    return [lo, hi]
+
+
+def _collect_freq_schedule_ms(ch_list):
+    """Union of every recording's stamped FreqScheduleHz into one sorted change-point list.
+
+    FreqScheduleHz is [[epoch_SECONDS, hz], ...] derived from GroupHistory at decode time. Across the
+    recordings of one channel we merge all change-points (different sessions stamp different windows
+    of the same underlying history), dedup, snap Hz to the Percept bin, and collapse consecutive
+    same-Hz points. Returns [[epoch_MS, snapped_hz], ...] sorted by time, or [] if none stamped.
+    """
+    pts = []
+    seen = set()
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        sched = c.get("FreqScheduleHz")
+        if not isinstance(sched, (list, tuple)):
+            continue
+        for item in sched:
+            try:
+                ts, hz = float(item[0]), _snap_freq(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if hz is None:
+                continue
+            ms = int(ts * 1000)
+            key = (ms, hz)
+            if key in seen:
+                continue
+            seen.add(key)
+            pts.append([ms, hz])
+    if not pts:
+        return []
+    pts.sort(key=lambda p: p[0])
+    collapsed = []
+    for ms, hz in pts:
+        if not collapsed or collapsed[-1][1] != hz:
+            collapsed.append([ms, hz])
+    return collapsed
+
+
+def _collect_contact_schedule_ms(ch_list):
+    """Union of every recording's stamped ContactSchedule into one sorted change-point list.
+
+    ContactSchedule is [[epoch_SECONDS, "0-3"], ...] derived from GroupHistory at decode time —
+    parallel to FreqScheduleHz but for the bipolar recording contact, which is reprogrammed over time
+    just like the frequency. Merge change-points across the channel's recordings, dedup, collapse
+    consecutive same-contact points. Returns [[epoch_MS, contact], ...] sorted by time, or [].
+    """
+    pts = []
+    seen = set()
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        sched = c.get("ContactSchedule")
+        if not isinstance(sched, (list, tuple)):
+            continue
+        for item in sched:
+            try:
+                ts, contact = float(item[0]), str(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not contact:
+                continue
+            ms = int(ts * 1000)
+            key = (ms, contact)
+            if key in seen:
+                continue
+            seen.add(key)
+            pts.append([ms, contact])
+    if not pts:
+        return []
+    pts.sort(key=lambda p: p[0])
+    collapsed = []
+    for ms, contact in pts:
+        if not collapsed or collapsed[-1][1] != contact:
+            collapsed.append([ms, contact])
+    return collapsed
+
+
+def _available_frequencies(cv_ch):
+    """Per-frequency data availability for one channel's decoding frame (cv_ch).
+
+    For each unique sensing frequency present in the channel's samples (the `frequency_hz` column),
+    report how much decodable data exists AT THAT BAND: total samples, distinct calendar days, and
+    how many samples / days carry a usable pain label (pain_level in {0,1}) split by class. This is
+    what the frequency sub-selector lists and what the per-(channel,frequency) binarization preview
+    needs to state data sufficiency. Combines chronic + streaming implicitly — cv_ch already merges
+    both sources, so a frequency's counts pool every sample at that band regardless of modality.
+
+    Returns a list of dicts sorted by frequency (ascending), e.g.
+        [{"frequency_hz": 7.8, "n_samples": 412, "n_days": 23, "n_labeled": 388,
+          "n_pos": 190, "n_neg": 198, "n_days_labeled": 21}, ...]
+    Empty list when the frame has no frequency_hz column (legacy data with no center frequency).
+    """
+    if cv_ch is None or "frequency_hz" not in getattr(cv_ch, "columns", []):
+        return []
+    df = cv_ch
+    fhz = df["frequency_hz"].to_numpy(dtype=float)
+    finite = np.isfinite(fhz)
+    if not finite.any():
+        return []
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    day = ts.dt.floor("D")
+    pl = df["pain_level"].to_numpy(dtype=float) if "pain_level" in df.columns else np.full(len(df), np.nan)
+    out = []
+    for hz in sorted(set(np.round(fhz[finite], 1))):
+        m = finite & (np.round(fhz, 1) == hz)
+        if not m.any():
+            continue
+        labeled = m & np.isin(pl, (0.0, 1.0))
+        days_all = day[m].dropna()
+        days_lab = day[labeled].dropna()
+        out.append({
+            "frequency_hz": float(hz),
+            "n_samples": int(m.sum()),
+            "n_days": int(days_all.nunique()),
+            "n_labeled": int(labeled.sum()),
+            "n_pos": int(np.nansum(pl[labeled] == 1.0)),
+            "n_neg": int(np.nansum(pl[labeled] == 0.0)),
+            "n_days_labeled": int(days_lab.nunique()),
+        })
+    return out
+
+
+def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
+    """Per-(channel, frequency) decoding payload for one channel's frame.
+
+    The analysis unit is (channel, frequency): a contact sensed at 7.8 Hz and the SAME contact sensed
+    at 22.5 Hz are physiologically different biomarkers and must never be pooled. For each sensing
+    band present in `cv_ch` (the `frequency_hz` column, which already merges chronic + streaming for
+    this contact), we slice the frame to that band and compute, on that slice ALONE:
+      * decoding  : ROC (FPR/TPR/AUC) + LFP Otsu histogram on LFP_smoothed vs pain_level
+      * binarization: a COMPACT daily pain aggregation [{day, mean, n_samples}] for the band's
+        samples, plus the high/low day/sample split — the inputs the top BinarizationPreview shows,
+        scoped to this band. Daily (not per-sample) so a chronic band with 10k+ samples stays small.
+      * counts    : n_samples / n_days / n_labeled for the band.
+
+    Returns {"<hz>": {...}} keyed by the snapped frequency as a string (e.g. "7.8"). A band with
+    fewer than `min_labeled` labeled samples still reports counts + binarization but sets
+    decoding.auc = None (too little to fit a stable detector) so the UI can flag insufficiency.
+    """
+    from .routines import analytics
+    if cv_ch is None or "frequency_hz" not in getattr(cv_ch, "columns", []):
+        return {}
+    fhz = cv_ch["frequency_hz"].to_numpy(dtype=float)
+    finite = np.isfinite(fhz)
+    if not finite.any():
+        return {}
+    out = {}
+    for hz in sorted(set(np.round(fhz[finite], 1))):
+        sub = cv_ch[np.round(fhz, 1) == hz]
+        if len(sub) == 0:
+            continue
+        # Daily pain aggregation for the binarization preview (one row per calendar day at this band).
+        ts = pd.to_datetime(sub["timestamp"], errors="coerce")
+        day = ts.dt.floor("D")
+        pain = sub[label_metric].to_numpy(dtype=float) if label_metric in sub.columns else np.full(len(sub), np.nan)
+        pl = sub["pain_level"].to_numpy(dtype=float) if "pain_level" in sub.columns else np.full(len(sub), np.nan)
+        daily = []
+        dser = pd.Series(pain, index=day)
+        for d, grp in dser.groupby(level=0):
+            if d is None or (isinstance(d, float) and not np.isfinite(d)):
+                continue
+            vals = grp.to_numpy(dtype=float)
+            vals = vals[np.isfinite(vals)]
+            if vals.size == 0:
+                continue
+            daily.append({"day": pd.Timestamp(d).strftime("%Y-%m-%d"),
+                          "mean": float(np.mean(vals)), "n_samples": int(len(grp))})
+        labeled_mask = np.isin(pl, (0.0, 1.0))
+        n_labeled = int(labeled_mask.sum())
+        # Class split on the broadcast per-sample label (pain_level already reflects the active
+        # strategy's daily cut). Day counts use the labeled days; sample counts the labeled samples.
+        lab_days = day[labeled_mask].dropna()
+        pos_days = day[labeled_mask & (pl == 1.0)].dropna()
+        neg_days = day[labeled_mask & (pl == 0.0)].dropna()
+        binar = {
+            "daily": daily,
+            "n_pos_samples": int(np.nansum(pl[labeled_mask] == 1.0)),
+            "n_neg_samples": int(np.nansum(pl[labeled_mask] == 0.0)),
+            "n_pos_days": int(pos_days.nunique()),
+            "n_neg_days": int(neg_days.nunique()),
+            "n_days_labeled": int(lab_days.nunique()),
+        }
+        # LFP decoding on this band alone. roc/lfp_distribution are pure functions of the slice.
+        if n_labeled >= min_labeled and len(np.unique(pl[labeled_mask])) >= 2:
+            roc = analytics.roc_analysis(sub)
+            dist = analytics.lfp_distribution(sub)
+        else:
+            roc = {"fpr": [], "tpr": [], "auc": None}
+            dist = {"bin_edges": [], "counts": [], "otsu": None, "n_clipped": 0, "n_total": int(len(sub))}
+        out[f"{hz:g}"] = {
+            "frequency_hz": float(hz),
+            "n_samples": int(len(sub)),
+            "n_days": int(day.dropna().nunique()),
+            "n_labeled": n_labeled,
+            "roc": roc,
+            "distribution": dist,
+            "binarization": binar,
+        }
+    return out
+
+
+def _build_contact_epochs(ch_list):
+    """Time-segmented recording-CONTACT epochs for one hemisphere channel.
+
+    Parallel to _build_freq_epochs but for the bipolar contact. Segments the channel's actual data
+    extent at each contact change-point from the dated GroupHistory schedule, so a long chronic trend
+    yields one epoch per contact the signal was actually recorded from. The contact in force at the
+    span start is carried from the last change-point at or before it. Returns
+    [{"t0": ms, "t1": ms, "contact": str}, ...] (epoch-ms) or [] when no schedule is available.
+    """
+    extent = _channel_time_extent_ms(ch_list)
+    schedule = _collect_contact_schedule_ms(ch_list)
+    if extent is None or not schedule:
+        return []
+    lo, hi = extent
+    bounds = sorted({lo, hi} | {ms for ms, _c in schedule if lo < ms < hi})
+
+    def contact_at(ms):
+        cur = None
+        for cms, cc in schedule:
+            if cms <= ms:
+                cur = cc
+            else:
+                break
+        return cur if cur is not None else schedule[0][1]
+
+    epochs = []
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        contact = contact_at(a)
+        if not contact:
+            continue
+        if epochs and epochs[-1]["contact"] == contact and a <= epochs[-1]["t1"] + 1:
+            epochs[-1]["t1"] = max(epochs[-1]["t1"], b)
+        else:
+            epochs.append({"t0": a, "t1": b, "contact": contact})
+    return epochs
+
+
+def _build_freq_epochs(ch_list):
+    """Time-segmented center-frequency epochs for one sensing channel.
+
+    The programmed sensing band changes over time, and a single 24/7 trend recording can span MANY
+    such changes — so stamping one CenterFrequencyHz per recording collapses that history to a single
+    value. The accurate source is the dated GroupHistory schedule (FreqScheduleHz: when the band
+    changed), which we intersect against the channel's actual data extent:
+
+      1. If a frequency SCHEDULE is present, segment the channel's [first, last] sample span at each
+         change-point that falls inside it, so one long recording yields multiple epochs reflecting
+         the real switches. The frequency in force at the span start is carried from the last
+         change-point at or before it.
+      2. Otherwise fall back to the legacy per-recording behavior (one snapped CenterFrequencyHz per
+         recording's own span, merging consecutive same-frequency spans).
+
+    Returns [{"t0": ms, "t1": ms, "hz": float}, ...] (epoch-ms, JSON-friendly) or [].
+    """
+    extent = _channel_time_extent_ms(ch_list)
+    schedule = _collect_freq_schedule_ms(ch_list)
+
+    if extent is not None and schedule:
+        lo, hi = extent
+        # Boundaries inside the data extent = change-points strictly within (lo, hi].
+        bounds = sorted({lo, hi} | {ms for ms, _hz in schedule if lo < ms < hi})
+        # Frequency in force at a given time = the last change-point at or before it.
+        def hz_at(ms):
+            cur = None
+            for cms, chz in schedule:
+                if cms <= ms:
+                    cur = chz
+                else:
+                    break
+            # If the data starts before the first change-point, use the first known freq.
+            return cur if cur is not None else schedule[0][1]
+        epochs = []
+        for a, b in zip(bounds[:-1], bounds[1:]):
+            hz = hz_at(a)
+            if hz is None:
+                continue
+            if epochs and epochs[-1]["hz"] == hz and a <= epochs[-1]["t1"] + 1:
+                epochs[-1]["t1"] = max(epochs[-1]["t1"], b)
+            else:
+                epochs.append({"t0": a, "t1": b, "hz": hz})
+        if epochs:
+            return epochs
+
+    # Legacy fallback: one frequency per recording span (no dated schedule available).
+    spans = []
+    for c in ch_list:
+        if not isinstance(c, dict):
+            continue
+        hz = _snap_freq(c.get("CenterFrequencyHz"))
+        if hz is None:
+            continue
+        tarr = _parse_time_ms(c.get("Time"))
+        if tarr is None or len(tarr) == 0:
+            continue
+        t0 = int(tarr.min().value // 1_000_000)  # ns -> ms
+        t1 = int(tarr.max().value // 1_000_000)
+        spans.append((t0, t1, hz))
+    if not spans:
+        return []
+    spans.sort(key=lambda s: s[0])
+    merged = [list(spans[0])]
+    for t0, t1, hz in spans[1:]:
+        last = merged[-1]
+        if hz == last[2] and t0 <= last[1] + 1:  # same freq, contiguous/overlapping -> extend
+            last[1] = max(last[1], t1)
+        else:
+            merged.append([t0, t1, hz])
+    return [{"t0": m[0], "t1": m[1], "hz": m[2]} for m in merged]
+
 # Upper frequency bound for biomarker band SELECTION and the permutation family. The Percept RC
 # senses physiologically-relevant LFP rhythms (theta ~4–8, alpha ~8–12, beta ~13–30, low-gamma
 # ~30–50 Hz); the at-home chronic biomarker is a 5 Hz band picked from those. Bands at/above this
@@ -156,7 +523,8 @@ def select_biomarker_band(result, q_threshold=0.05, ignore_band=None):
 # ---------------------------------------------------------------------------
 def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
                           label_metric="nrs", label_reduce="min",
-                          transform="log", stim_amplitudes=None):
+                          transform="log", stim_amplitudes=None,
+                          match_tolerance_min=None):
     """Time-domain (250 Hz streaming) PSD<->pain branch -> SourceRun with a td_* timeline.
 
     `align` is accepted for signature back-compat but no longer changes the timeline: the
@@ -176,6 +544,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     session_df = adapter.align_pros(
         pro_df, target="session", recordings=recordings,
         metrics=metrics, stim_amplitudes=stim_amplitudes,
+        match_tolerance_min=match_tolerance_min,
     )
     label_col = f"{label_metric}_{label_reduce}"
     labels = session_df[label_col].to_numpy(dtype=float)
@@ -190,7 +559,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     if band is not None:
         c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig = band
         timeline["td_biomarker_value"] = result["psd"][:, c_idx, f_idx]
-        # Numeric contact-pair label (e.g. "R 0⁻-2⁺"), never the raw word form ("ZERO_TWO_RIGHT").
+        # Numeric contact-pair label (e.g. "R 0⁻2⁺"), never the raw word form ("ZERO_TWO_RIGHT").
         timeline["td_biomarker_channel"] = format_channel(result["chan_order"][c_idx])["short"]
         timeline["td_biomarker_freq_hz"] = f_hz
         timeline["td_biomarker_r"] = r
@@ -198,6 +567,13 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     else:
         timeline["td_biomarker_value"] = np.nan
     timeline["td_stim_amplitude"] = session_df.get("stim_amplitude", np.nan)
+    # Carry the PRO<->PSD match bookkeeping so the analytics step can count matched neural samples
+    # (and how far off, in minutes) without re-running the match. Present for both the time-window
+    # and the legacy same-day path (matched=True there means the session had a same-day PRO).
+    if "matched" in session_df.columns:
+        timeline["td_matched"] = session_df["matched"].to_numpy()
+    if "match_dt_min" in session_df.columns:
+        timeline["td_match_dt_min"] = session_df["match_dt_min"].to_numpy()
     for m in metrics:
         for red in ("mean", "min"):
             col = f"{m}_{red}"
@@ -613,10 +989,43 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
                         ch_kind = "contact"
                         first = lbl.strip()[:1].upper()
                         ch_hemi = "Left" if first == "L" else ("Right" if first == "R" else None)
+                    # Source modality of this channel group: "chronic" = the BrainSense Timeline
+                    # ~10-min around-the-clock LFP power log; "powerdomain" = per-session BrainSense
+                    # streaming band power. Read from the recordings' per-dict Source tag (set in
+                    # bravo_service / bravo_powerdomain_to_chronic_like). Lets the frontend plot the
+                    # around-the-clock chronic stream on its own row alongside the streaming contacts.
+                    srcs = {str(c.get("Source", "chronic")) for c in ch_list if isinstance(c, dict)}
+                    ch_source = "chronic" if srcs == {"chronic"} else (
+                        "powerdomain" if srcs == {"powerdomain"} else "mixed")
+                    # Sensing center frequency for this group (latest non-null), so the frontend can
+                    # label the row. Chronic dicts carry CenterFrequencyHz; powerdomain dicts may too.
+                    ch_hz = None
+                    for c in ch_list:
+                        if isinstance(c, dict) and c.get("CenterFrequencyHz") is not None:
+                            ch_hz = float(c["CenterFrequencyHz"])
+                    # Center-frequency EPOCHS over time: the programmed sensing band can change between
+                    # sessions, so the most-recent value alone hides that history. Build time-segmented
+                    # epochs [{t0, t1, hz}] by taking each recording's own time span + its
+                    # CenterFrequencyHz and merging consecutive same-frequency spans. The frontend
+                    # paints these as a colored frequency ribbon under the power row.
+                    ch_freq_epochs = _build_freq_epochs(ch_list)
+                    # Recording-CONTACT epochs over time (parallel to freq_epochs): the programmed
+                    # bipolar contact is reprogrammed between sessions, so this hemisphere channel is
+                    # actually a sequence of contacts. The serializer uses these to split the chronic
+                    # series into per-contact display rows (the signal belongs in the row of the
+                    # contact it was recorded from).
+                    ch_contact_epochs = _build_contact_epochs(ch_list)
                     ch_summary = {
                         "channel": ch_label,
                         "hemisphere": ch_hemi,
                         "kind": ch_kind,
+                        "source_modality": ch_source,
+                        "center_hz": ch_hz,
+                        "freq_epochs": ch_freq_epochs,
+                        "contact_epochs": ch_contact_epochs,
+                        # Per-frequency availability (chronic + streaming pooled at each band): drives
+                        # the frequency sub-selector and the per-(channel,frequency) binarization view.
+                        "available_frequencies": _available_frequencies(cv_ch),
                         "best_threshold": ch_detail.get("mean_thr_sens", np.nan),
                         "sens": sens_ch, "spec": spec_ch,
                         "acc": ch_detail.get("mean_test_acc_sens", np.nan),
@@ -654,7 +1063,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
-                  stim_amplitudes=None, sliding=True):
+                  stim_amplitudes=None, sliding=True, match_tolerance_min=None):
     """
     Run biomarker identification with a selectable data source.
 
@@ -677,7 +1086,8 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
     def _td():
         return run_timedomain_branch(recordings, pro_df, chan_order, align=align,
                                      label_metric=label_metric, label_reduce=label_reduce,
-                                     transform=transform, stim_amplitudes=stim_amplitudes)
+                                     transform=transform, stim_amplitudes=stim_amplitudes,
+                                     match_tolerance_min=match_tolerance_min)
 
     def _power():
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,

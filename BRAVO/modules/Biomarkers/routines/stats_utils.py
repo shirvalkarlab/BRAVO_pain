@@ -248,11 +248,30 @@ def auc_block_perm_null(score, labels, n_perm=1000, block=None, seed=0):
         block = block_length_for(labels, n)
     rng = np.random.default_rng(seed)
     P = int(n_perm)
-    perm_idx = circular_block_perm_matrix(n, block, P, rng)   # (P, n)
-    perm_labels = labels[perm_idx]                            # (P, n) permuted label rows
-    perm_pos = (perm_labels == 1)
-    r_pos_perm = (ranks[None, :] * perm_pos).sum(axis=1)      # (P,)
-    a_perm = (r_pos_perm - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+    # MEMORY-BOUNDED permutation null. A single (P, n) materialization is O(P*n): for a long
+    # power-domain series (n ~ 3e5) at P=1000 the intermediates — perm_idx (int64), perm_labels
+    # (float64), and ranks[None,:]*perm_pos (float64) — are ~2.4 GB EACH, ~7 GB transiently, which
+    # OOM-kills the worker. The statistic per permutation is just a sum of positive-class ranks, so
+    # we stream the permutations in chunks: peak memory is O(chunk*n) instead of O(P*n), with
+    # identical results (same rng sequence, drawn progressively). The accumulated null is only (P,).
+    # Chunk so each transient (chunk, n) array stays ~64 MB regardless of series length.
+    CHUNK_ELEMS = 8_000_000
+    chunk = max(1, min(P, CHUNK_ELEMS // max(1, n)))
+    fixed_ranks = ranks.astype(float)                         # (n,) rank at each FIXED position
+    a_parts = []
+    done = 0
+    while done < P:
+        c = min(chunk, P - done)
+        perm_idx = circular_block_perm_matrix(n, block, c, rng)   # (c, n)
+        # Per permuted row i: R_pos = sum_j fixed_ranks[j] * (labels[perm_idx[i,j]] == 1). The RANKS
+        # stay at their fixed positions (column j); only the label assignment is permuted. Identical
+        # to the original (ranks[None,:] * perm_pos).sum(axis=1), just one chunk of rows at a time.
+        perm_pos = (labels[perm_idx] == 1)                        # (c, n)
+        r_pos_perm = (fixed_ranks[None, :] * perm_pos).sum(axis=1)  # (c,)
+        a_parts.append((r_pos_perm - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+        del perm_idx, perm_pos, r_pos_perm
+        done += c
+    a_perm = np.concatenate(a_parts) if a_parts else np.empty(0)
     null_auc = np.maximum(a_perm, 1.0 - a_perm)
     null_auc = null_auc[np.isfinite(null_auc)]
     used = int(null_auc.size)

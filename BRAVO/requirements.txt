@@ -9,6 +9,13 @@ blosc2==3.3.3
 numpy==2.1.3
 scipy==1.14.1
 scikit-learn==1.5.2
+statsmodels==0.14.6
+# Logistic mixed-effects (glmer via R lme4) for the exploratory band inference. pymer4 0.8.2 is
+# the lightweight branch (needs only lme4/lmerTest/emmeans + seaborn; NOT the 0.9 easystats/report
+# stack). rpy2 must come from the system package (apt python3-rpy2) — the PyPI sdist fails to link
+# its C extension in this image. R + r-cran-lme4/lmertest/emmeans are installed at the OS level.
+pymer4==0.8.2
+seaborn==0.13.2
 pandas==2.2.3
 spectrum==0.8.1
 specparam==2.0.0rc2

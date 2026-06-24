@@ -6,19 +6,22 @@
 * power-domain ~10-min LFP threshold detector) returned by /api/queryBiomarkerAnalysis.
 */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, ToggleButton, ToggleButtonGroup, Select, MenuItem, FormControl,
-  Switch, Slider, TextField, FormControlLabel, Divider, LinearProgress, CircularProgress } from "@mui/material";
+import { Card, Grid, Select, MenuItem, FormControl,
+  Slider, LinearProgress, CircularProgress,
+  ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
+import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+import { computeMatchedScanModel } from "./binarizationModel";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -44,6 +47,7 @@ const DEFAULT_METRIC_OPTIONS = [
 // See docs/binarization_recommendation_RCS08.md.
 const DEFAULT_STRATEGY_OPTIONS = [
   { key: "tertile", label: "Tertile (low/high, drop middle)" },
+  { key: "percentile", label: "Percentile (adjustable cuts)" },
   { key: "median", label: "Median split" },
   { key: "kmeans", label: "KMeans (legacy)" },
 ];
@@ -55,16 +59,45 @@ function Biomarkers() {
   const { participant_uid } = useParams();
 
   const [data, setData] = useState(false);
-  const [source, setSource] = useState("both");
+  // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
+  // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
+  const source = "both";
   const [metric, setMetric] = useState("nrs");
   const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
   const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
   const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
-  const [slidingWindow, setSlidingWindow] = useState(false);
-  const [windowMonths, setWindowMonths] = useState(1);   // committed window (training) length
-  const [monthsDraft, setMonthsDraft] = useState(1);     // live slider/field value (commit on release)
-  const [windowStep, setWindowStep] = useState(0.5);     // committed window step (months)
-  const [stepDraft, setStepDraft] = useState(0.5);       // live step value
+  // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
+  // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
+  // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
+  // view dirty (a recompute re-matches). Exploratory — default 15 min.
+  // Match window for PSD<->PRO pairing. Bumped from 15 to 60 min after the matching audit on RCS08:
+  // pain reports anchor neural data on a minutes-to-hours timescale, and the 15-min window dropped
+  // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
+  // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
+  // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
+  const [matchTolerance, setMatchTolerance] = useState(60);
+  // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
+  // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
+  // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
+  //   maxPerRating = 1  -> one PSD per rating (the old "one per rating": maximally independent)
+  //   maxPerRating > 1  -> up to N nearest-prior PSDs per rating; AUC stays rating-grouped on top.
+  // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
+  const [maxPerRating, setMaxPerRating] = useState(3);
+  const [refractoryMin, setRefractoryMin] = useState(2);
+  // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
+  // tolerance; pairs the closest PSD in either time direction). Default "prior".
+  // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
+  // PSDs per channel each within tolerance, maximizing PRO coverage (each PRO is an independent
+  // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
+  // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
+  // view where causal direction is the right semantics.
+  const [matchDirection, setMatchDirection] = useState("pro_first");
+  // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
+  // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
+  // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
+  // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
+  const [timelineColorMode, setTimelineColorMode] = useState("multimodal");
+  const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
   // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
@@ -79,17 +112,22 @@ function Biomarkers() {
   const [painScores, setPainScores] = useState(null);
   const [painLoading, setPainLoading] = useState(false);
 
-  // Window/step now drive BOTH the time-domain sliding correlation heatmap and the power-domain
-  // detector/performance, so show them for every source. The sliding ON/OFF switch is
-  // power-domain-specific (all-data vs sliding), so it's hidden on the time-domain-only tab.
-  const showWindowControls = true;
-  const showSlidingSwitch = source !== "timedomain";
+  // ALWAYS-ON data-availability timeline. This is for visualization/exploration and must show on
+  // page load WITHOUT requiring "Compute biomarker now" — so it has its own lightweight endpoint
+  // (/queryDataAvailability assembles records/pain/stim/freq_bands with NO biomarker computation),
+  // fetched once per participant. The heavy compute still returns its own availability payload;
+  // we prefer the live one here so the timeline is populated before (and independent of) compute.
+  const [availData, setAvailData] = useState(null);
+  const [availLoading, setAvailLoading] = useState(false);
 
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
     PercentileLow: percentileLow, PercentileHigh: percentileHigh,
+    MatchToleranceMin: matchTolerance,
+    MaxPerRating: maxPerRating,
+    RefractoryMin: refractoryMin,
+    MatchDirection: matchDirection,
     SlidingWindow: slidingWindow,
-    WindowMonths: windowMonths, WindowStep: windowStep,
   });
   const compute = () => setRequestParams(snapshot());
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
@@ -133,6 +171,26 @@ function Biomarkers() {
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
   }, [participant_uid]);
 
+  // Fetch the data-availability payload ONCE per participant (lightweight, no biomarker compute),
+  // so the timeline renders immediately on page load.
+  useEffect(() => {
+    if (!participant_uid) return;
+    setAvailLoading(true);
+    SessionController.query("/api/queryDataAvailability", { ParticipantId: participant_uid })
+      .then((response) => {
+        setAvailData(response.data);
+        setAvailLoading(false);
+      })
+      .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
+  }, [participant_uid]);
+
+  // The object handed to the timeline: prefer the live availability payload; fall back to the
+  // availability embedded in a heavy compute result if the live fetch is unavailable.
+  const timelineData = (availData && availData.availability && availData.availability.records
+    && availData.availability.records.length > 0)
+    ? availData
+    : data;
+
   // The points array for the currently-selected pain metric, fed straight into the preview card.
   // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
   // /queryPainScores; it is synthesized here exactly as the backend does — the per-day average of
@@ -161,14 +219,19 @@ function Biomarkers() {
         pts.forEach((p) => {
           if (p.v == null || !Number.isFinite(p.v)) return;
           const key = String(p.t);
-          (zByT[key] = zByT[key] || {})[slot] = (p.v - st.mu) / st.sd;
+          const e = (zByT[key] = zByT[key] || {});
+          e[slot] = (p.v - st.mu) / st.sd;
+          // Preserve the numeric epoch so the composite series matches in UTC like the raw metrics.
+          if (Number.isFinite(p.t_epoch)) e.t_epoch = p.t_epoch;
         });
       };
       add(mpq, sM, "m"); add(leg, sL, "l");
       return Object.keys(zByT).sort().map((t) => {
         const z = zByT[t];
         const parts = [z.m, z.l].filter((v) => v != null && Number.isFinite(v));
-        return parts.length ? { t, v: parts.reduce((s, v) => s + v, 0) / parts.length } : null;
+        return parts.length
+          ? { t, t_epoch: z.t_epoch, v: parts.reduce((s, v) => s + v, 0) / parts.length }
+          : null;
       }).filter(Boolean);
     }
     const m = painScores.metrics.find((x) => x.key === metric);
@@ -176,6 +239,47 @@ function Biomarkers() {
   })();
   const previewMetricLabel = (((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
     .find((m) => m.key === metric) || {}).label || metric;
+
+  // Live pain series for the timeline's pain row, in the {metric, t:[epoch_s], y:[]} shape the
+  // BiomarkerDataTimeline expects. Built from the lightweight previewPoints (fetched once per
+  // participant) so changing the metric updates the pain plot INSTANTLY — no recompute. previewPoints
+  // carry `t` as a timestamp string and `v` as the value; convert to epoch seconds.
+  // Memoized so its object identity is STABLE across re-renders that don't touch its inputs (e.g.
+  // dragging the tertile sliders, which changes binarization but not the pain row). A new identity
+  // would re-run the timeline's Plotly effect and reset the page scroll, so only recompute when the
+  // metric or the underlying preview points actually change.
+  const painSeriesLive = useMemo(() => {
+    if (!previewPoints || !previewPoints.length) return null;
+    // Use the backend's numeric `t_epoch` (UTC seconds) when present — NOT Date.parse(p.t). The
+    // backend pain timestamps are tz-naive UTC strings; Date.parse re-reads them in the BROWSER's
+    // local zone, shifting every rating 7-8 h and dropping ~3/4 of the otherwise-matchable PROs off
+    // the PSDs (the "61/682 instead of 290/682" symptom). t_epoch is zone-independent. Fall back to
+    // Date.parse only for older payloads that predate t_epoch.
+    const epochOf = (p) => (Number.isFinite(p.t_epoch) ? p.t_epoch : Date.parse(p.t) / 1000);
+    const pairs = previewPoints
+      .map((p) => [epochOf(p), p.v])
+      .filter(([t, v]) => Number.isFinite(t) && v != null && Number.isFinite(v))
+      .sort((a, b) => a[0] - b[0]);
+    return { metric, t: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
+  }, [previewPoints, metric]);
+
+  // LIVE matched-scan model: replicate the backend's nearest-PRO match + binarization over the
+  // PSDs the exploratory scan pools (availability.psd_scan_index), at the CURRENT match window /
+  // metric / strategy — no recompute. This single object feeds BOTH the binarization-preview
+  // histogram (which neural data is available to binarize, updating as the slider moves) AND the
+  // timeline's binarization color overlay. Counts are verified identical to the backend
+  // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
+  const scanIndex = (timelineData && timelineData.availability && timelineData.availability.psd_scan_index)
+    || (data && data.availability && data.availability.psd_scan_index) || null;
+  const scanModel = useMemo(() => {
+    if (!scanIndex || !painSeriesLive) return null;
+    return computeMatchedScanModel({
+      scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance,
+      strategy, percentileLow, percentileHigh,
+      maxPerRating, refractoryMin, matchDirection,
+    });
+  }, [scanIndex, painSeriesLive, matchTolerance, strategy, percentileLow, percentileHigh,
+      maxPerRating, refractoryMin, matchDirection]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
@@ -223,7 +327,7 @@ function Biomarkers() {
     if (s.band !== undefined || s.freq_hz !== undefined) {
       const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
       const ciTxt = ci && ci[0] != null && ci[1] != null ? `  95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
-      const fdrTxt = s.fdr_q != null ? `  FDR q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
+      const fdrTxt = s.fdr_q != null ? `  False Discovery Rate q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
       // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
       // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
       const permTxt = s.perm_p != null ? `  perm p=${fmtP(s.perm_p)}` : `  p=${fmtP(s.p)}`;
@@ -269,62 +373,89 @@ function Biomarkers() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <Grid container>
-                  {/* Big red COMPUTE button at the top — biomarkers (re)compute ONLY when clicked,
-                      so the user can set source / metric / window freely before running. */}
+                  {/* Title row (source tabs removed — analysis is always unified time + power) */}
                   <Grid item xs={12}>
-                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                      <MDButton
-                        variant="contained" color="error" size="large"
-                        onClick={compute} disabled={computing}
-                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
-                              backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" },
-                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
-                      >
-                        {computing ? (
-                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
-                        ) : (data ? "↻ Recompute biomarker now" : "▶ Compute biomarker now")}
-                      </MDButton>
-                      {!computing && dirty && data ? (
-                        <MDTypography variant="button" color="error" fontWeight="medium">
-                          {"Settings changed — click to recompute."}
-                        </MDTypography>
-                      ) : null}
-                      {data && data.timeline_points_full ? (
-                        <MDTypography variant="caption" color="dark">
-                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
-                        </MDTypography>
-                      ) : null}
+                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
+                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
+                        {"Pain Biomarker Exploration"}
+                      </MDTypography>
                     </MDBox>
                   </Grid>
+
+                  {/* ── DATA-AVAILABILITY TIMELINE up front (ALWAYS shown) ────────────────────
+                      For visualization/exploration: rendered on page load from the lightweight
+                      /queryDataAvailability payload (timelineData), with NO "Compute biomarker
+                      now" required. The pain row is driven LIVE by the selected metric
+                      (painSeriesLive) so it updates instantly when the metric picker below
+                      changes. Falls back to the legacy timeline only if no availability payload
+                      is available at all. The Compute button lives BELOW this. */}
+                  {timelineData && timelineData.availability && timelineData.availability.records
+                        && timelineData.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
+                        scanModel={scanModel} colorMode={timelineColorMode}
+                        setColorMode={setTimelineColorMode} />
+                    </Grid>
+                  ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
+                    <Grid item xs={12}>
+                      <BiomarkerTimeline data={timelineData} figureTitle={"BiomarkerTimeline"} />
+                    </Grid>
+                  ) : (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1.5}>
+                        <MDTypography variant="button" color="text" fontStyle="italic">
+                          {availLoading ? "Loading data-availability timeline…"
+                                        : "No decoded Percept recordings available for this participant yet."}
+                        </MDTypography>
+                      </MDBox>
+                    </Grid>
+                  ))}
+
+                  {/* Pain-metric picker DIRECTLY BELOW the timeline — drives the pain row live. */}
+                  {timelineData && timelineData.availability && timelineData.availability.records
+                        && timelineData.availability.records.length > 0 ? (
+                    <Grid item xs={12}>
+                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
+                             gap={2} flexWrap="wrap" justifyContent="center">
+                        <MDTypography variant="button" fontWeight="bold"
+                                      sx={{ fontSize: 18, color: "#D32F2F !important" }}>
+                          {"Pain metric (drives exploratory analysis):"}
+                        </MDTypography>
+                        <FormControl size="small" sx={{ minWidth: 420 }}>
+                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                                  sx={{
+                                    // Enlarge ONLY the closed / displayed selected value. A plain
+                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
+                                    // resize the rendered value — that text is the inner
+                                    // .MuiSelect-select slot, so target it directly. !important beats
+                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
+                                    "& .MuiSelect-select": {
+                                      fontSize: "18px !important",  // matches the open-menu items
+                                      fontWeight: 700,
+                                      lineHeight: 1.2,
+                                      color: "#D32F2F !important",  // red, to stand out
+                                    },
+                                  }}>
+                            {((timelineData && timelineData.available_metrics)
+                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18, color: "#D32F2F" }}>{m.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </MDBox>
+                    </Grid>
+                  ) : null}
 
                   {computing ? (
                     <Grid item xs={12}>
                       <MDBox px={2} pb={1}>
                         <MDTypography variant="button" fontWeight="medium" color="dark" display="block" mb={0.5}>
-                          {`Computing ${source === "both" ? "time-domain + power-domain" : source === "timedomain" ? "time-domain" : "power-domain"} biomarker on full-resolution data — this can take ~10–40 s…`}
+                          {"Computing time-domain + power-domain biomarker on full-resolution data — this can take ~10–40 s…"}
                         </MDTypography>
                         <LinearProgress color="error" />
                       </MDBox>
                     </Grid>
                   ) : null}
-
-                  {/* Title + source toggle row */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
-                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
-                        {"Pain Biomarkers"}
-                      </MDTypography>
-                      <ToggleButtonGroup
-                        value={source} exclusive size="medium"
-                        onChange={(e, v) => { if (v) setSource(v); }}
-                      >
-                        <ToggleButton value="timedomain">Time-domain</ToggleButton>
-                        <ToggleButton value="powerdomain">Power-domain</ToggleButton>
-                        <ToggleButton value="both">Both</ToggleButton>
-                      </ToggleButtonGroup>
-                    </MDBox>
-                  </Grid>
 
                   {/* Controls row: LEFT box = pain metric + binarization selector + sliders
                                    RIGHT box = live binarization preview histogram
@@ -338,23 +469,6 @@ function Biomarkers() {
                           <Grid item xs={12} md={5}
                             sx={{ borderRight: { md: "1.5px solid #1A1A1A" }, borderBottom: { xs: "1.5px solid #1A1A1A", md: "none" } }}>
                             <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
-                              <MDBox>
-                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
-                                  {"Pain metric (biomarker target)"}
-                                </MDTypography>
-                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
-                                  <Select
-                                    value={metric}
-                                    onChange={(e) => setMetric(e.target.value)}
-                                    sx={{ fontSize: 16, fontWeight: 500 }}
-                                  >
-                                    {((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                                      <MenuItem key={m.key} value={m.key} sx={{ fontSize: 16 }}>{m.label}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </MDBox>
-                              <Divider />
                               <MDBox>
                                 <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
                                   {"Binarization (high vs low pain label)"}
@@ -380,7 +494,14 @@ function Biomarkers() {
                                     <Slider
                                       value={percentileLow} min={5} max={50} step={1}
                                       valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => { const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo); }}
+                                      onChange={(e, v) => {
+                                        // Tertile is the FIXED 33.3/66.7 preset (ignores these cuts, by
+                                        // design — matches the backend). Dragging a slider means the user
+                                        // wants an adjustable cut, so promote to "percentile" (which both
+                                        // the live preview AND the backend honor) so the cut actually moves.
+                                        if (strategy === "tertile") setStrategy("percentile");
+                                        const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo);
+                                      }}
                                     />
                                   </MDBox>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
@@ -390,18 +511,89 @@ function Biomarkers() {
                                     <Slider
                                       value={percentileHigh} min={50} max={95} step={1}
                                       valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => { const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi); }}
+                                      onChange={(e, v) => {
+                                        if (strategy === "tertile") setStrategy("percentile");
+                                        const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi);
+                                      }}
                                     />
                                   </MDBox>
                                 </MDBox>
                               ) : null}
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
-                                {strategy === "tertile" || strategy === "percentile"
-                                  ? "Days between the cuts are excluded from training."
-                                  : strategy === "median"
-                                    ? "Every day is labeled at the median split (~50/50)."
-                                    : "Legacy 2-cluster KMeans labeler."}
+                                {strategy === "tertile"
+                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a slider to switch to adjustable percentile cuts."
+                                  : strategy === "percentile"
+                                    ? "Samples between the cuts are excluded from training."
+                                    : strategy === "median"
+                                      ? "Every sample is labeled at the median split (~50/50)."
+                                      : "Legacy 2-cluster KMeans labeler."}
                               </MDTypography>
+
+                              {/* Match direction: pro_first (PRO-anchored, default) vs nearest (PSD-first
+                                  symmetric) vs prior (PSD-first forecasting). */}
+                              <MDBox mt={1.5}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  Match direction
+                                </MDTypography>
+                                <ToggleButtonGroup
+                                  value={matchDirection} exclusive size="small"
+                                  onChange={(e, v) => { if (v) setMatchDirection(v); }}
+                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
+                                >
+                                  <ToggleButton value="pro_first">PRO-first (discovery)</ToggleButton>
+                                  <ToggleButton value="nearest">Nearest (±)</ToggleButton>
+                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
+                                </ToggleButtonGroup>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {matchDirection === "pro_first"
+                                    ? "Walks pain ratings (the unit of independence) and claims up to N closest PSDs PER CHANNEL each, within the window. Maximizes the number of ratings that contribute to discovery — the right framing when 'does this band track pain?' is the question."
+                                    : matchDirection === "nearest"
+                                    ? "Each PSD is paired with the closest pain rating in EITHER time direction (symmetric ± window). Cross-sectional association, not forecasting."
+                                    : "Each PSD is paired only with pain ratings recorded AFTER it within the window (causal/forecasting direction). Use for closed-loop deployment."}
+                                </MDTypography>
+                              </MDBox>
+
+                              {/* Per-rating CAP (replaces the old all / one-per-rating toggle). */}
+                              <MDBox mt={1.5}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  {`PSDs per rating (max ${maxPerRating})`}
+                                </MDTypography>
+                                <MDBox px={0.5}>
+                                  <Slider
+                                    value={maxPerRating} min={1} max={10} step={1}
+                                    marks valueLabelDisplay="auto" size="small"
+                                    onChange={(e, v) => setMaxPerRating(v)} />
+                                </MDBox>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
+                                  {`Refractory gap (${refractoryMin} min)`}
+                                </MDTypography>
+                                <MDBox px={0.5}>
+                                  <Slider
+                                    value={refractoryMin} min={0} max={30} step={1}
+                                    valueLabelDisplay="auto" size="small"
+                                    disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
+                                    onChange={(e, v) => setRefractoryMin(v)} />
+                                </MDBox>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {matchDirection === "pro_first"
+                                    ? "Refractory gap does not apply in PRO-first matching: each PSD is claimed by at most one rating, so a streaming burst can't double-count regardless of the gap. Switch to Nearest or Prior to enforce a minimum spacing between kept PSDs."
+                                    : (`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
+                                   + (matchDirection === "prior"
+                                      ? "the ones recorded closest in time BEFORE the rating (forecasting direction)"
+                                      : "the ones closest in time to the rating (either direction)")
+                                   + (maxPerRating > 1
+                                      ? `, and no two kept PSDs within ${refractoryMin} min of each other, so a streaming burst around one survey can't dominate. `
+                                      : " — i.e. one independent sample per rating. ")
+                                   + (maxPerRating > 1
+                                      ? "The binary-classification AUC is still cross-validated with folds grouped by rating, so reused ratings can't inflate it; the AUC n is the count of independent ratings."
+                                      : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
+                                </MDTypography>
+                              </MDBox>
                             </MDBox>
                           </Grid>
 
@@ -414,7 +606,13 @@ function Biomarkers() {
                                 percentileLow={percentileLow}
                                 percentileHigh={percentileHigh}
                                 metricLabel={previewMetricLabel}
+                                metricKey={metric}
                                 loading={painLoading}
+                                matchTolerance={matchTolerance}
+                                setMatchTolerance={setMatchTolerance}
+                                scanModel={scanModel}
+                                matchedLoading={availLoading}
+                                matchDirty={dirty}
                               />
                             </MDBox>
                           </Grid>
@@ -424,68 +622,44 @@ function Biomarkers() {
                     </MDBox>
                   </Grid>
 
-                  {showWindowControls ? (
-                    <Grid item xs={12}>
-                      <Divider sx={{ my: 0 }} />
-                      <MDBox px={2} py={1.5} display="flex" flexDirection="column" gap={1.5}>
-                        {showSlidingSwitch ? (
-                          <FormControlLabel
-                            control={<Switch checked={slidingWindow} onChange={(e) => setSlidingWindow(e.target.checked)} />}
-                            label={<MDTypography variant="button" fontWeight="medium">{"Sliding window (power-domain detector & performance)"}</MDTypography>}
-                          />
-                        ) : null}
-                        {(source !== "powerdomain" || slidingWindow) ? (
-                          <MDBox display="flex" flexDirection="column" gap={1.5}>
-                            {[
-                              { lbl: "Window (months)", draft: monthsDraft, setDraft: setMonthsDraft, setVal: setWindowMonths,
-                                commit: commitMonths, min: 0.25, max: 12, step: 0.25,
-                                marks: [{ value: 1, label: "1" }, { value: 3, label: "3" }, { value: 6, label: "6" }, { value: 9, label: "9" }, { value: 12, label: "12" }] },
-                              { lbl: "Step (months)", draft: stepDraft, setDraft: setStepDraft, setVal: setWindowStep,
-                                commit: commitStep, min: 0.1, max: 6, step: 0.1,
-                                marks: [{ value: 0.25, label: "0.25" }, { value: 1, label: "1" }, { value: 3, label: "3" }, { value: 6, label: "6" }] },
-                            ].map((c) => (
-                              <MDBox key={c.lbl} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                                <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ whiteSpace: "nowrap", minWidth: 150, fontSize: 15 }}>
-                                  {c.lbl}
-                                </MDTypography>
-                                <Slider
-                                  value={typeof c.draft === "number" ? c.draft : c.min}
-                                  min={c.min} max={c.max} step={c.step} valueLabelDisplay="auto" marks={c.marks}
-                                  onChange={(e, v) => c.setDraft(v)}
-                                  onChangeCommitted={(e, v) => c.setVal(v)}
-                                  sx={{ flex: 1, minWidth: 200, maxWidth: 420 }}
-                                />
-                                <TextField
-                                  type="number" size="small" value={c.draft}
-                                  inputProps={{ min: c.min, max: c.max, step: c.step, style: { width: 64 } }}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === "") { c.setDraft(""); return; }
-                                    const n = Number(raw);
-                                    if (!Number.isNaN(n)) c.setDraft(n);
-                                  }}
-                                  onBlur={() => { const v = c.commit(c.draft); c.setDraft(v); c.setVal(v); }}
-                                  onKeyDown={(e) => { if (e.key === "Enter") { const v = c.commit(c.draft); c.setDraft(v); c.setVal(v); } }}
-                                />
-                              </MDBox>
-                            ))}
-                          </MDBox>
-                        ) : null}
-                        {(showSlidingSwitch && !slidingWindow) ? (
-                          <MDTypography variant="button" fontWeight="medium" color="dark">
-                            {"Power-domain: using all data (one threshold, no sliding window)."}
-                          </MDTypography>
-                        ) : null}
-                      </MDBox>
-                    </Grid>
-                  ) : null}
+                  {/* ── Exploratory analysis trigger, DIRECTLY BENEATH the Pain Biomarkers box ──
+                      The timeline + preview above are live (no compute). The full-spectrum
+                      exploration (5 Hz sliding-band r + AUC over the matched PSDs) is EXPENSIVE
+                      and runs ONLY on click, using the metric / binarization / match-window chosen
+                      in the box above. */}
+                  <Grid item xs={12}>
+                    <MDBox px={2} pt={0.5} pb={1.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+                      <MDButton
+                        variant="contained" color="error" size="large"
+                        onClick={compute} disabled={computing}
+                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
+                              backgroundColor: "#d32f2f", color: "#ffffff",
+                              "&:hover": { backgroundColor: "#b71c1c" },
+                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
+                      >
+                        {computing ? (
+                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
+                        ) : (data ? "↻ Recompute full-spectrum exploration" : "▶ Start exploratory analysis")}
+                      </MDButton>
+                      {!computing && dirty && data ? (
+                        <MDTypography variant="button" color="error" fontWeight="medium">
+                          {"Settings changed — click to recompute."}
+                        </MDTypography>
+                      ) : null}
+                      {data && data.timeline_points_full ? (
+                        <MDTypography variant="caption" color="dark">
+                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
+                        </MDTypography>
+                      ) : null}
+                    </MDBox>
+                  </Grid>
 
                   {!data && !alert ? (
                     <Grid item xs={12}>
                       <MDBox p={2}>
                         <MDTypography variant="button" color="dark">
-                          {"Choose a source, pain metric, and (for Power-domain) the window above, then click "}
-                          <strong>Compute biomarker now</strong>{" to run the analysis."}
+                          {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
+                          <strong>▶ Start exploratory analysis</strong>{" to run the full-spectrum scan."}
                         </MDTypography>
                       </MDBox>
                     </Grid>
@@ -592,11 +766,6 @@ function Biomarkers() {
                     </Grid>
                   ) : null}
 
-                  {data && data.timeline && data.timeline.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
-                    </Grid>
-                  ) : null}
                 </Grid>
               </Card>
             </Grid>
@@ -604,6 +773,11 @@ function Biomarkers() {
             {data && data.analytics ? (
               <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
                 recordedPowers={data.recorded_powers}
+                programmedThresholds={data.programmed_thresholds}
+                binStrategy={strategy} binMetricKey={metric}
+                binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
+                participantUid={participant_uid}
+                requestParams={requestParams}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
@@ -612,20 +786,6 @@ function Biomarkers() {
       </DatabaseLayout>
     </>
   );
-}
-
-// Clamp a typed month value to the slider's range [0.25, 12]; fall back to 1 on invalid input.
-function commitMonths(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 1;
-  return Math.min(12, Math.max(0.25, n));
-}
-
-// Clamp the window step to [0.1, 6] months; fall back to 0.5 on invalid input.
-function commitStep(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0.5;
-  return Math.min(6, Math.max(0.1, n));
 }
 
 function fmt(x) {

@@ -24,15 +24,6 @@ import { usePlatformContext, setContextState } from "context.js";
 const PALETTE = ["#E53935", "#1A73E8", "#00897B", "#FB8C00", "#8E24AA",
   "#3949AB", "#43A047", "#F4511E", "#6D4C41", "#00ACC1"];
 
-function movingAverage(y, w = 3) {
-  return y.map((_, i) => {
-    const lo = Math.max(0, i - Math.floor(w / 2));
-    const hi = Math.min(y.length, i + Math.ceil(w / 2));
-    const seg = y.slice(lo, hi).filter((v) => v != null);
-    return seg.length ? seg.reduce((a, b) => a + b, 0) / seg.length : null;
-  });
-}
-
 // --- Stage helpers (trial stages: pre-op / Stage 0 / 1 / 2) -----------------------------------
 function hexA(hex, a) {
   const h = hex.replace("#", "");
@@ -68,11 +59,13 @@ function MetricChart({ metric, color, stages, stageActive }) {
     const pts = metric.points.filter((p) => inActiveStage(p.t, stages, stageActive));
     const x = pts.map((p) => new Date(p.t));
     const y = pts.map((p) => p.v);
+    // Connected dots-and-lines, matching the Record Timeline look: the actual reported values are
+    // shown directly (markers) joined by straight segments (line) — no moving-average smoothing,
+    // which previously distorted the trajectory. connectgaps:false leaves real gaps unbridged.
     const traces = [
-      { x, y, name: "report", type: "scatter", mode: "lines+markers",
-        line: { color, width: 1.5 }, marker: { size: 5, color }, opacity: 0.55 },
-      { x, y: movingAverage(y, 3), name: "3-pt avg", type: "scatter", mode: "lines",
-        line: { color, width: 3 }, hoverinfo: "skip" },
+      { x, y, name: metric.label, type: "scatter", mode: "lines+markers",
+        line: { color, width: 2 }, marker: { size: 5, color }, connectgaps: false,
+        hovertemplate: `${metric.label}: %{y:.2f}<extra></extra>` },
     ];
     Plotly.react(ref.current, traces, {
       height: 240, margin: { l: 46, r: 14, t: 12, b: 34 }, showlegend: false,
@@ -100,7 +93,8 @@ function NormalizedOverlay({ metrics, active, stages, stageActive }) {
         x: pts.map((p) => new Date(p.t)),
         y: pts.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
         name: m.label, type: "scatter", mode: "lines+markers",
-        line: { color, width: 2 }, marker: { size: 3, color }, connectgaps: false,
+        line: { color, width: 2 }, marker: { size: 5, color }, connectgaps: false,
+        hovertemplate: `${m.label}: %{y:.2f}<extra></extra>`,
       });
     });
     Plotly.react(ref.current, traces, {
@@ -190,7 +184,7 @@ function PainScores() {
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center">
-                  <MDTypography variant="h6" fontSize={22}>Pain Score Reports</MDTypography>
+                  <MDTypography variant="h6" fontSize={22}>Pain Score Visualization</MDTypography>
                   {data ? (
                     <MDTypography variant="button" color="text">
                       {`${data.n_reports || 0} reports · ${metrics.length} metrics`}

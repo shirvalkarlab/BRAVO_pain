@@ -70,7 +70,13 @@ def _to_datetime(value):
     if value is None:
         return pd.NaT
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        # Heuristic: values > 1e6 are unix seconds; smaller are unusable.
+        # Heuristic: a real Percept Unix timestamp is ~1.6e9 (year 2020+). A missing/zero/relative
+        # StartTime (e.g. 0, or a few seconds of session offset) is NOT an absolute time — mapping it
+        # through utcfromtimestamp yields 1969/1970, which then stretches the timeline back five
+        # decades. Treat anything below this floor as unusable rather than fabricating a 1969 date.
+        # 1e9 s = 2001-09-09; no Percept device predates that, so it is a safe lower bound.
+        if float(value) < 1e9:
+            return pd.NaT
         try:
             return pd.Timestamp(datetime.datetime.utcfromtimestamp(float(value)))
         except (OverflowError, OSError, ValueError):
@@ -84,7 +90,7 @@ def _to_datetime(value):
 def align_pros(pro_df, *, target, recordings=None, chronic=None,
                metrics=("nrs", "vas", "mpq_sum"),
                timestamp_col="date_time_s1_daily",
-               stim_amplitudes=None):
+               stim_amplitudes=None, match_tolerance_min=None):
     """
     Align REDCap PRO rows to the decoded timeline.
 
@@ -109,24 +115,90 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     stim_amplitudes : list[float] | None
         Optional per-session stim amplitude (mA) for target="session", aligned to
         `recordings`. For target="chronic" the amplitude comes from `chronic["Data"][:,1]`.
+    match_tolerance_min : float | None
+        Time-window matching for target="session" (the EXPLORATORY pain<->PSD match). When set,
+        each session is matched to the SINGLE NEAREST PRO report whose full timestamp falls within
+        +/- this many minutes of the session start, instead of averaging that calendar day's reports.
+        The daily PROs carry real clock times (median ~2/day), so a tight window (e.g. 15 min) is a
+        far finer match than the legacy same-day mean. `*_mean` and `*_min` are both set to that one
+        matched report's value (a single report has no spread); sessions with no PRO inside the window
+        get NaN metrics and `matched=False`. When None, the legacy same-calendar-day mean/min is used.
+        Every session row carries `matched` (bool) and `match_dt_min` (signed minutes PRO-minus-session,
+        NaN when unmatched) so the caller can count matched neural samples and surface sparsity.
 
     Returns
     -------
     pandas.DataFrame  (the combined aligned timeline)
     """
     df = pro_df.copy()
-    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
+    # PRO TIMES: prefer the canonical `_pro_time_utc` column that bravo_service._load_pros adds at
+    # ingestion (DST-aware CA-local -> tz-naive UTC). Parsing the raw `timestamp_col` naively here
+    # left the legacy chronic-detector / same-day matching path 7-8 h early vs the device's UTC
+    # session times (PARITY audit §2). Fall back to the raw column for DataFrames built outside
+    # _load_pros. Either way `timestamp_col` is overwritten with the correct instant from here on.
+    if "_pro_time_utc" in df.columns:
+        df[timestamp_col] = pd.to_datetime(df["_pro_time_utc"], errors="coerce")
+    else:
+        df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
     df["_date"] = df[timestamp_col].dt.date
 
     if target == "session":
         if recordings is None:
             raise ValueError('target="session" requires `recordings`.')
+
+        # Time-window matching path: pre-sort PRO reports by timestamp once, then for each session
+        # take the nearest report within tolerance. Vectorized via searchsorted on the sorted times.
+        tol = None if match_tolerance_min is None else float(match_tolerance_min)
+        if tol is not None and tol > 0:
+            valid = df[pd.notna(df[timestamp_col])].sort_values(timestamp_col).reset_index(drop=True)
+            pro_times = valid[timestamp_col].to_numpy("datetime64[ns]")
+            tol_ns = np.timedelta64(int(round(tol * 60.0 * 1e9)), "ns")
+            rows = []
+            for i, rec in enumerate(recordings):
+                ts = _to_datetime(rec.get("StartTime"))
+                row = {"session_index": i, "session_start": ts,
+                       "session_date": (ts.date() if not pd.isna(ts) else None),
+                       "matched": False, "match_dt_min": np.nan}
+                j = -1
+                if not pd.isna(ts) and len(pro_times):
+                    ts64 = np.datetime64(ts.to_datetime64())
+                    pos = int(np.searchsorted(pro_times, ts64))
+                    # Nearest of the two neighbours straddling ts (searchsorted gives the right one).
+                    best, best_d = -1, None
+                    for k in (pos - 1, pos):
+                        if 0 <= k < len(pro_times):
+                            d = abs(pro_times[k] - ts64)
+                            if d <= tol_ns and (best_d is None or d < best_d):
+                                best, best_d = k, d
+                    j = best
+                if j >= 0:
+                    rr = valid.iloc[j]
+                    dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
+                    row["matched"] = True
+                    row["match_dt_min"] = float(dt_min)
+                    for m in metrics:
+                        v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
+                        row[f"{m}_mean"] = v
+                        row[f"{m}_min"] = v
+                else:
+                    for m in metrics:
+                        row[f"{m}_mean"] = np.nan
+                        row[f"{m}_min"] = np.nan
+                if stim_amplitudes is not None and i < len(stim_amplitudes):
+                    row["stim_amplitude"] = stim_amplitudes[i]
+                else:
+                    row["stim_amplitude"] = _session_stim_amplitude(rec)
+                rows.append(row)
+            return pd.DataFrame(rows)
+
+        # Legacy same-calendar-day mean/min (match_tolerance_min is None).
         rows = []
         for i, rec in enumerate(recordings):
             ts = _to_datetime(rec.get("StartTime"))
             sess_date = ts.date() if not pd.isna(ts) else None
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
-            row = {"session_index": i, "session_start": ts, "session_date": sess_date}
+            row = {"session_index": i, "session_start": ts, "session_date": sess_date,
+                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan}
             for m in metrics:
                 if m in same_day.columns and len(same_day) > 0:
                     row[f"{m}_mean"] = same_day[m].mean()
@@ -216,13 +288,19 @@ def _concat_chronic(chronic, mad_k=3.0):
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
-    times_list, datas_list, src_list = [], [], []
+    times_list, datas_list, src_list, freq_list = [], [], [], []
     for c in chronic:
         t = np.asarray(c["Time"], dtype=float)
         d = np.asarray(c["Data"], dtype=float)
         # Sensing-modality tag per recording, repeated per sample so it survives the merge+sort and
         # downstream can diagnose the two-source batch/scale confound. Default "chronic".
         src = str(c.get("Source", "chronic"))
+        # Sensing CENTER FREQUENCY (Hz) of THIS recording, repeated per sample (parallel to Source).
+        # The programmed band can change between recordings of the same contact, so the frequency is
+        # a per-recording property — carrying it per sample lets the decoding path filter to one
+        # (channel, frequency) combo without a separate timestamp-to-schedule join. Snapped to the
+        # Percept FFT bin (~250/256 Hz); NaN when the recording carries no CenterFrequencyHz.
+        fhz = _snap_freq_local(c.get("CenterFrequencyHz"))
         if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
             keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
@@ -230,19 +308,38 @@ def _concat_chronic(chronic, mad_k=3.0):
             times_list.append(t)
             datas_list.append(d)
             src_list.append(np.full(t.shape[0], src, dtype=object))
+            freq_list.append(np.full(t.shape[0], fhz, dtype=float))
     if not times_list:
         raise ValueError("no chronic samples survived outlier rejection.")
     times = np.concatenate(times_list)
     datas = np.concatenate(datas_list, axis=0)
     sources = np.concatenate(src_list)
+    freqs = np.concatenate(freq_list)
     order = np.argsort(times)
     return {
         "SamplingRate": -1,
         "Time": times[order],
         "Data": datas[order],
         "Source": sources[order],
+        "FrequencyHz": freqs[order],
         "ChannelNames": chronic[0].get("ChannelNames"),
     }
+
+
+# Percept sensing-frequency bin width (FFT bin spacing ~250/256 Hz). Defined locally in adapter to
+# avoid a circular import with pipeline (which imports adapter); mirrors pipeline._snap_freq.
+_PERCEPT_FREQ_BIN_HZ = 250.0 / 256.0
+
+
+def _snap_freq_local(hz):
+    """Snap a programmed center frequency to the nearest Percept FFT bin; NaN when missing/invalid."""
+    try:
+        v = float(hz)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(v) or v <= 0:
+        return float("nan")
+    return round(round(v / _PERCEPT_FREQ_BIN_HZ) * _PERCEPT_FREQ_BIN_HZ, 1)
 
 
 # Medtronic power-domain packets flag a missing sample with a ~2^32 sentinel (uint32 max).
@@ -278,7 +375,12 @@ def bravo_powerdomain_to_chronic_like(recordings):
             continue
         n = data.shape[0]
         fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        # StartTime must be a real absolute Unix time (~1.6e9). A missing/zero StartTime would make
+        # `time` start at epoch 0 (1970) and the whole series would plot back in 1969/1970 — skip the
+        # recording instead of fabricating a 1969 timeline (1e9 s = 2001; no Percept predates that).
         start = float(r.get("StartTime") or 0.0)
+        if start < 1e9:
+            continue
         time = start + np.arange(n) / fs
         missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
         if missing.shape != data.shape:
@@ -303,7 +405,7 @@ def bravo_powerdomain_to_chronic_like(recordings):
             valid = np.isfinite(pw)
             if not valid.any():
                 continue
-            # Build a real bipolar-contact label (e.g. "L 0⁻-3⁺") from the power column name
+            # Build a real bipolar-contact label (e.g. "L 0⁻3⁺") from the power column name
             # instead of the uninformative "Left LFP" / "Right LFP". The Medtronic export names
             # the column "<CONTACT> Power" (e.g. "ZERO_THREE_LEFT Power"); strip " Power" and let
             # format_channel decode it. Fall back to the hemisphere when no contact is encoded.
@@ -315,8 +417,8 @@ def bravo_powerdomain_to_chronic_like(recordings):
                     break
             fmt = format_channel(contact_raw, region="")
             short = fmt.get("short") or ""
-            # format_channel returns a decoded bipolar label like "L 0⁻-3⁺" when the column name
-            # encodes a contact (digits appear in the formatted short, e.g. "0⁻-3⁺"). If it could
+            # format_channel returns a decoded bipolar label like "L 0⁻3⁺" when the column name
+            # encodes a contact (digits appear in the formatted short, e.g. "0⁻3⁺"). If it could
             # not decode one, fall back to a clean "<L/R> LFP" rather than a raw token.
             if any(ch.isdigit() for ch in short):
                 label = short
@@ -331,6 +433,9 @@ def bravo_powerdomain_to_chronic_like(recordings):
                 # Sensing-modality tag so the merged-series batch/scale confound can be diagnosed
                 # downstream (per-session Power-Domain band power vs the ~10-min Chronic LFP power).
                 "Source": "powerdomain",
+                # Sensing center frequency of this streaming session (carried per sample by
+                # _concat_chronic), so the decoding path can filter to one (channel, frequency).
+                "CenterFrequencyHz": r.get("CenterFrequencyHz"),
             })
     return out
 
@@ -451,6 +556,12 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     src = chronic.get("Source")
     if src is not None and len(src) == len(df):
         df["source"] = np.asarray(src, dtype=object)
+    # Per-sample sensing frequency (Hz), parallel to source: lets the decoding path filter the cv_df
+    # to a single (channel, frequency) combo so chronic + streaming at the SAME band are pooled but
+    # different bands are never mixed. NaN where the recording carried no CenterFrequencyHz.
+    fhz = chronic.get("FrequencyHz")
+    if fhz is not None and len(fhz) == len(df):
+        df["frequency_hz"] = np.asarray(fhz, dtype=float)
 
     lfp = df["LFP"].to_numpy(dtype=float)
     n = len(lfp)
@@ -493,6 +604,8 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
     out_cols = ["timestamp", "LFP", "LFP_smoothed", "stim_amplitude", "pain_level", label_metric]
     if "source" in df.columns:
         out_cols.append("source")
+    if "frequency_hz" in df.columns:
+        out_cols.append("frequency_hz")
     for f in kmeans_features:
         if f in df.columns and f not in out_cols:
             out_cols.append(f)

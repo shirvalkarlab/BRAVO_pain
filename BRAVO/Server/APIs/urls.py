@@ -50,6 +50,7 @@ urlpatterns = [
     path('deleteSurveyForms', EventAnnotationHandler.DeleteSurveyForms.as_view()),
     path('setSurveyForms', EventAnnotationHandler.SetSurveyForms.as_view()),
     path('queryParticipantSurveyRecords', EventAnnotationHandler.QueryParticipantSurveyRecords.as_view()),
+    path('importRedcapCSV', EventAnnotationHandler.ImportRedcapCSV.as_view()),
     
     path('downloadParticipantExport', Participants.ExportParticipant.as_view()),
     path('queryParticipantEvents', EventAnnotationHandler.QueryEventHandler.as_view()),
@@ -79,7 +80,14 @@ urlpatterns = [
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),
     path('queryChronicTimeline', DataAnalysis.QueryChronicTimeline.as_view()),
     path('queryBiomarkerAnalysis', DataAnalysis.QueryBiomarkerAnalysis.as_view()),
+    path('queryBandValidation', DataAnalysis.QueryBandValidation.as_view()),
+    path('emitBandCandidate', DataAnalysis.EmitBandCandidate.as_view()),
+    path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
+    path('queryLsbPower', DataAnalysis.QueryLsbPower.as_view()),
+    path('queryDeploymentRocByEra', DataAnalysis.QueryDeploymentRocByEra.as_view()),
+    path('queryDeploymentSummary', DataAnalysis.QueryDeploymentSummary.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
+    path('queryDataAvailability', DataAnalysis.QueryDataAvailability.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
     path('queryBurstAnalysis', DataAnalysis.QueryBurstAnalysis.as_view()),
 

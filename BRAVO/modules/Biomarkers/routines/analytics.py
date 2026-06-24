@@ -8,6 +8,8 @@ card plots. They build on the verbatim science in `threshold_biomarker.py` / `st
 scatter, and the Pearson-R-vs-frequency correlation spectrum).
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -43,7 +45,7 @@ def format_channel(name, region=None):
     toks = [t for t in up.replace("-", "_").split("_") if t in _WORD2DIGIT or t.isdigit()]
     digits = [(_WORD2DIGIT[t] if t in _WORD2DIGIT else t) for t in toks]
     if len(digits) >= 2:
-        contacts = f"{digits[0]}⁻-{digits[1]}⁺"   # e.g. 0⁻-2⁺  (cathode/anode)
+        contacts = f"{digits[0]}⁻{digits[1]}⁺"   # e.g. 0⁻2⁺  (cathode/anode, no separator)
     elif len(digits) == 1:
         contacts = digits[0]
     else:
@@ -187,32 +189,42 @@ def _f(x):
     return None if not np.isfinite(x) else x
 
 
-def _otsu_threshold(values, nbins=128):
-    """Standard between-class-variance Otsu threshold on a 1-D value array."""
+def _otsu_threshold(values, nbins=256):
+    """Between-class-variance Otsu threshold on a 1-D value array.
+
+    Canonical formulation, verified to match skimage.filters.threshold_otsu bit-for-bit on the
+    histogram grid. The previous implementation had two defects that biased the cut high:
+      (1) it weighted the background by bins [0..i-1] but REPORTED centers[i] (the first foreground
+          bin) — an off-by-one that shifted the threshold up by ~0.5–1 bin width; and
+      (2) it used only 128 bins, coarsening the grid further.
+    Here the candidate split sits BETWEEN bin i and bin i+1: the background class is bins [0..i]
+    (weight w1, mean m1) and the foreground class is bins [i+1..] (weight w2, mean m2), and the
+    returned threshold is centers[argmax(w1*w2*(m1-m2)^2)] — the standard convention where
+    `value > threshold` is the high (foreground) class. nbins defaults to 256 (skimage's default)
+    for a finer grid.
+    """
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return None
     counts, edges = np.histogram(values, bins=nbins)
     centers = (edges[:-1] + edges[1:]) / 2.0
-    total = counts.sum()
-    if total == 0:
+    counts = counts.astype(float)
+    if counts.sum() == 0:
         return float(np.median(values))
-    wB = np.cumsum(counts).astype(float)
-    sumv = np.cumsum(counts * centers)
-    grand = sumv[-1]
-    best_var, best_t = -1.0, centers[0]
-    for i in range(1, nbins):
-        wb = wB[i - 1]
-        wf = total - wb
-        if wb == 0 or wf == 0:
-            continue
-        muB = sumv[i - 1] / wb
-        muF = (grand - sumv[i - 1]) / wf
-        var = wb * wf * (muB - muF) ** 2
-        if var > best_var:
-            best_var, best_t = var, centers[i]
-    return float(best_t)
+    # Cumulative class weights/means from the left (background) and right (foreground).
+    w1 = np.cumsum(counts)                                  # weight of bins [0..i]
+    w2 = np.cumsum(counts[::-1])[::-1]                      # weight of bins [i..]
+    # Class means (guard the empty-class divisions; those bins are excluded from bcv below anyway).
+    with np.errstate(invalid="ignore", divide="ignore"):
+        m1 = np.cumsum(counts * centers) / w1
+        m2 = (np.cumsum((counts * centers)[::-1]) / w2[::-1])[::-1]
+    # Between-class variance for the split between bin i and bin i+1 (i = 0..nbins-2).
+    bcv = w1[:-1] * w2[1:] * (m1[:-1] - m2[1:]) ** 2
+    bcv = np.where(np.isfinite(bcv), bcv, -1.0)
+    if not np.any(bcv > 0):
+        return float(np.median(values))
+    return float(centers[int(np.argmax(bcv))])
 
 
 def _all_data_window(df, thresholds):
@@ -449,13 +461,51 @@ def roc_analysis(cv_df, max_points=400):
 
     raw_auc = metrics.roc_auc_score(y, score)
     # Orient so the LFP-high = pain-high direction gives AUC >= 0.5 (matches the notebook's max(auc,1-auc)).
-    use_score = score if raw_auc >= 0.5 else -score
-    fpr, tpr, _ = metrics.roc_curve(y, use_score)
-    if max_points and len(fpr) > max_points:                  # thin for plotting only (keep endpoints)
-        idx = np.unique(np.linspace(0, len(fpr) - 1, int(max_points)).astype(int))
-        fpr, tpr = fpr[idx], tpr[idx]
-    return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr],
-            "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df))}
+    flip = raw_auc < 0.5
+    use_score = -score if flip else score
+    fpr, tpr, thr = metrics.roc_curve(y, use_score)
+    # Map decision thresholds back to the device-unit band-power scale. With the high-pain = high-power
+    # convention the rule is `power >= thr_device`; when the AUC had to be flipped (so the score was
+    # negated) the device threshold is -thr. Aligned with fpr/tpr index-for-index.
+    thr_device_full = (-thr if flip else thr).astype(float)
+
+    # Default (cost-symmetric) operating point = Youden's J statistic: the threshold maximizing
+    # (TPR - FPR), i.e. the ROC point furthest above the chance diagonal. The frontend exposes a cost
+    # slider that re-solves the operating point live; this default is what shows when the slider sits
+    # at 1:1 (false-positive cost == false-negative cost). Skip the sentinel first vertex (thr=+inf).
+    op = None
+    if len(thr) > 1:
+        j = tpr - fpr
+        j_valid = j.copy()
+        j_valid[~np.isfinite(thr)] = -np.inf
+        k = int(np.argmax(j_valid))
+        op = {
+            "fpr": float(fpr[k]), "tpr": float(tpr[k]),
+            "threshold": float(thr_device_full[k]),
+            "sensitivity": float(tpr[k]),
+            "specificity": float(1.0 - fpr[k]),
+            "youden_j": float(j_valid[k]),
+            "direction": "ge",
+        }
+
+    # Prevalence on the SAME data the curve was built on (the pain-high rate). Used by the frontend
+    # cost-sensitive picker: the optimal ROC tangent slope under (FP, FN) cost (cFP, cFN) and
+    # prevalence p is m = (cFP/cFN) * ((1-p)/p), and the optimal point maximizes TPR - m * FPR.
+    n_pos = int(np.sum(y == 1))
+    n_neg = int(np.sum(y == 0))
+    prevalence = float(n_pos) / float(n_pos + n_neg) if (n_pos + n_neg) > 0 else None
+
+    # Downsample fpr/tpr/thr TOGETHER so the frontend picker sees a parallel, oriented set of vertices.
+    fpr_out, tpr_out, thr_out = fpr, tpr, thr_device_full
+    if max_points and len(fpr_out) > max_points:
+        idx = np.unique(np.linspace(0, len(fpr_out) - 1, int(max_points)).astype(int))
+        fpr_out, tpr_out, thr_out = fpr_out[idx], tpr_out[idx], thr_out[idx]
+    return {"fpr": [float(x) for x in fpr_out], "tpr": [float(x) for x in tpr_out],
+            # thresholds parallel to fpr/tpr; +inf sentinel at the (0,0) vertex stays as null in JSON.
+            "thr": [None if not np.isfinite(t) else float(t) for t in thr_out],
+            "auc": float(max(raw_auc, 1 - raw_auc)), "n_points_full": int(len(df)),
+            "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
+            "operating_point": op}
 
 
 def lfp_distribution(cv_df, bins=40):
@@ -852,6 +902,1296 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
             "transform": td_detail.get("transform", "log"),
             "p_significant": p_significant, "q_significant": q_significant,
             "significance_method": "BH-FDR over displayed channel x freq family"}
+
+
+# --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
+def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                     pain_cutoff=None, finite_mask=None):
+    """Binary 0/1 label (NaN for the excluded middle) from a 1-D continuous PRO array.
+
+    Mirrors adapter._threshold_pain_level but operates on a flat array (one value per matched
+    neural sample, NOT daily-broadcast — the matching already gave us one PRO per session). The cut
+    is computed on the FINITE values present:
+      * "tertile"/"percentile": <= low_pct quantile -> 0, >= high_pct quantile -> 1, middle -> NaN
+      * "median": >= median -> 1 else 0
+      * "cutoff": >= pain_cutoff (default = median) -> 1 else 0
+      * "kmeans": 2-cluster split on the 1-D values (>= cluster midpoint -> 1)
+
+    `finite_mask` (optional bool array, same shape) restricts BOTH the cut reference and the output
+    to a subset of rows — used by the glmer/stim-stability click-validate path to binarize on a
+    single channel's own labels (PARITY audit §6b), reproducing the offline per-channel cut. Rows
+    outside the mask stay NaN. When None, the cut is global over all finite values (scan behaviour).
+    """
+    v = np.asarray(values, dtype=float)
+    out = np.full(v.shape, np.nan)
+    fin = np.isfinite(v)
+    if finite_mask is not None:
+        fin = fin & np.asarray(finite_mask, dtype=bool)
+    ref = v[fin]
+    if ref.size == 0:
+        return out
+    if strategy in ("tertile", "percentile"):
+        lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
+        hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
+        lo = float(np.percentile(ref, lo_q))
+        hi = float(np.percentile(ref, hi_q))
+        out[fin & (v <= lo)] = 0.0
+        out[fin & (v >= hi)] = 1.0
+        # values strictly between lo and hi stay NaN (excluded middle)
+    elif strategy == "kmeans":
+        s = np.sort(ref)
+        # 1-D 2-means via the largest gap is unstable; use the midpoint of the two cluster means
+        # from a single Lloyd step seeded at the tertiles — adequate for an exploratory split.
+        c0, c1 = float(np.percentile(ref, 25)), float(np.percentile(ref, 75))
+        for _ in range(25):
+            a = ref[np.abs(ref - c0) <= np.abs(ref - c1)]
+            b = ref[np.abs(ref - c0) > np.abs(ref - c1)]
+            nc0 = float(a.mean()) if a.size else c0
+            nc1 = float(b.mean()) if b.size else c1
+            if abs(nc0 - c0) < 1e-9 and abs(nc1 - c1) < 1e-9:
+                break
+            c0, c1 = nc0, nc1
+        mid = (c0 + c1) / 2.0
+        out[fin] = (v[fin] >= mid).astype(float)
+    else:  # "median" / "cutoff"
+        cut = float(pain_cutoff) if (strategy == "cutoff" and pain_cutoff is not None) \
+            else float(np.median(ref))
+        out[fin] = (v[fin] >= cut).astype(float)
+    return out
+
+
+def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                          pain_cutoff=None, match_dt_min=None, tolerance_min=None):
+    """Count, ON THE PSD/NEURAL SAMPLES, how many carry a matched pain label and how that label
+    binarizes into high/low (+ excluded middle).
+
+    `labels` is the per-session continuous PRO already matched within the tolerance window (NaN
+    where no PRO fell inside the window). This is the count the binarization histogram must report:
+    distinct matched neural samples, not raw daily pain surveys. `match_dt_min` (signed minutes,
+    optional) lets us report the median |offset| of the matches so the user sees how tight the
+    window actually bit.
+    """
+    y = np.asarray(labels, dtype=float)
+    n_sessions = int(y.size)
+    matched = np.isfinite(y)
+    n_matched = int(matched.sum())
+    pl = _binarize_labels(y, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                          pain_cutoff=pain_cutoff)
+    n_high = int(np.nansum(pl == 1.0))
+    n_low = int(np.nansum(pl == 0.0))
+    # Excluded middle only exists for the tertile/percentile labelers.
+    n_excluded = int(n_matched - n_high - n_low) if strategy in ("tertile", "percentile") else 0
+    out = {
+        "n_sessions": n_sessions,          # total streaming/PSD sessions
+        "n_matched": n_matched,            # sessions with a pain report inside the window
+        "n_unmatched": int(n_sessions - n_matched),
+        "n_high": n_high,
+        "n_low": n_low,
+        "n_excluded_middle": max(n_excluded, 0),
+        "strategy": strategy,
+        "tolerance_min": (None if tolerance_min is None else float(tolerance_min)),
+    }
+    if match_dt_min is not None:
+        d = np.asarray(match_dt_min, dtype=float)
+        d = d[np.isfinite(d)]
+        if d.size:
+            out["median_abs_offset_min"] = float(np.median(np.abs(d)))
+            out["max_abs_offset_min"] = float(np.max(np.abs(d)))
+    return out
+
+
+def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
+    """Cross-validated logistic-regression AUC for a SINGLE feature `x` against binary `y`.
+
+    Out-of-fold predicted probabilities -> one ROC-AUC over all held-out samples (so each sample is
+    scored by a model that did not see it). Oriented to >= 0.5 (max(auc, 1-auc)) because the
+    feature's sign vs pain is itself part of the exploration. Returns (auc, n_used). NaN when a
+    class is missing or too few samples to split.
+
+    `groups` (optional, same length as x/y): a per-sample cluster id (the matched PRO/rating). When
+    given, folds are split with StratifiedGroupKFold so all samples sharing a rating stay on the
+    same side of every train/test split — the predictive analog of a per-rating random intercept.
+    This removes the optimism that double-dipping injects when many neural samples share one rating
+    (a plain StratifiedKFold would leak a rating's near-duplicate samples across folds and inflate
+    the AUC). `n_used` is then reported as the number of independent groups, not raw samples."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold
+    from sklearn.metrics import roc_auc_score
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    g = np.asarray(groups) if groups is not None else None
+    m = np.isfinite(x) & np.isfinite(y)
+    if g is not None:
+        m = m & (g >= 0)
+    x, y = x[m], y[m]
+    g = g[m] if g is not None else None
+    n = x.size
+    if n < 8 or len(np.unique(y)) < 2:
+        return np.nan, int(n)
+    pos, neg = int((y == 1).sum()), int((y == 0).sum())
+    # n_used reported as independent units: groups when grouping, else samples.
+    n_units = int(np.unique(g).size) if g is not None else n
+    X = x.reshape(-1, 1)
+    oof = np.full(n, np.nan)
+    if g is not None:
+        # Need >=2 groups per class to form grouped folds without a rating crossing the split.
+        n_grp = int(np.unique(g).size)
+        # groups-per-class count
+        gpos = int(np.unique(g[y == 1]).size); gneg = int(np.unique(g[y == 0]).size)
+        k = int(min(n_splits, gpos, gneg))
+        if k < 2:
+            return np.nan, n_units
+        splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+        split_iter = splitter.split(X, y, groups=g)
+    else:
+        k = int(min(n_splits, pos, neg))
+        if k < 2:
+            return np.nan, int(n)
+        splitter = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+        split_iter = splitter.split(X, y)
+    for tr, te in split_iter:
+        if len(np.unique(y[tr])) < 2:
+            continue
+        clf = LogisticRegression(max_iter=200)
+        clf.fit(X[tr], y[tr])
+        oof[te] = clf.predict_proba(X[te])[:, 1]
+    ok = np.isfinite(oof)
+    if ok.sum() < 4 or len(np.unique(y[ok])) < 2:
+        return np.nan, n_units
+    auc = float(roc_auc_score(y[ok], oof[ok]))
+    return max(auc, 1.0 - auc), n_units
+
+
+def _cluster_robust_logit_p(x, y, groups=None):
+    """Two-sided Wald p-value for the band-power coefficient in a single-feature logistic fit.
+
+    When `groups` is given (the matched pain rating per sample), the standard error is cluster-robust
+    (sandwich estimator clustered on rating) — the inference companion to the rating-grouped AUC: it
+    models each rating as a cluster so repeated PSDs sharing one rating don't shrink the SE and
+    fabricate significance. This is the rating-as-random-effect p the binary classification reports.
+    Without groups it's the ordinary logistic Wald p. Returns (p, n_used, n_clusters) — NaN p when
+    the fit can't run (a class missing, separation, or too few samples)."""
+    import numpy as _np
+    x = _np.asarray(x, dtype=float); y = _np.asarray(y, dtype=float)
+    g = _np.asarray(groups) if groups is not None else None
+    m = _np.isfinite(x) & _np.isfinite(y)
+    if g is not None:
+        m = m & (g >= 0)
+    x, y = x[m], y[m]
+    g = g[m] if g is not None else None
+    n = x.size
+    if n < 8 or len(_np.unique(y)) < 2:
+        return _np.nan, int(n), 0
+    if _np.nanstd(x) <= 0:
+        return _np.nan, int(n), (int(_np.unique(g).size) if g is not None else 0)
+    n_clusters = int(_np.unique(g).size) if g is not None else 0
+    try:
+        import statsmodels.api as sm
+        X = sm.add_constant(x)
+        if g is not None and n_clusters >= 2:
+            res = sm.GLM(y, X, family=sm.families.Binomial()).fit(
+                cov_type="cluster", cov_kwds={"groups": g})
+        else:
+            res = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+        p = float(res.pvalues[1])
+        if not _np.isfinite(p):
+            return _np.nan, int(n), n_clusters
+        return p, int(n), n_clusters
+    except Exception:
+        return _np.nan, int(n), n_clusters
+
+
+def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.3333,
+                                high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
+                                step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
+                                region_map=None, n_peaks=6, max_scatter=400,
+                                rating_aware_auc=None):
+    """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
+
+    Slides a `band_width_hz`-wide window in `step_hz` increments across 0..`fmax`. For each
+    (channel, band):
+      * band power per epoch = mean LINEAR PSD over the band, then 10*log10 (one feature/session)
+      * Pearson r vs the CONTINUOUS pain label (the exploratory signal, no binarization)
+      * ROC-AUC of the BINARIZED label via cross-validated single-feature logistic regression
+
+    The two curves are returned per channel for the same band-center x-axis so the UI can overlay
+    them. `adaptive_band` (8-30 Hz on the Percept RC) is flagged per band so the UI can shade the
+    device-valid region. Per band we also return a compact scatter (band power vs continuous label,
+    with dates) so a click on any band shows the underlying relationship. NOTHING here is a
+    validated biomarker — this is a discovery view.
+    """
+    if not td_detail:
+        return None
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)          # (E, C, F) power (linear or prelog)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)    # (E,) continuous PRO
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    # `prelog`: the stored feature is ALREADY 10*log10 (and possibly within-source z-scored), as the
+    # pooled-PSD builder emits. Then band power = mean over the band directly (no second log10).
+    prelog = bool(td_detail.get("prelog", False))
+    if f.size == 0 or psd.ndim != 3 or labels.size == 0:
+        return None
+
+    # Rating-aware AUC: in "all" mode many epochs share one pain rating (double-dipping), so the
+    # binary classifier's cross-validation should keep each rating wholly within a fold (grouped CV)
+    # — the predictive analog of a per-rating random intercept. Auto-on when the detail is the "all"
+    # pool AND carries a rating_group; off for one_per_rating (already independent). Caller can force
+    # with `rating_aware_auc=True/False`.
+    rating_group = td_detail.get("rating_group")
+    rg = np.asarray(rating_group) if rating_group is not None else None
+    agg_mode = td_detail.get("aggregate", "all")
+    if rating_aware_auc is None:
+        rating_aware_auc = (agg_mode == "all" and rg is not None and rg.size == labels.size)
+    auc_groups = rg if (rating_aware_auc and rg is not None and rg.size == labels.size) else None
+
+    fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
+    w = float(band_width_hz)
+    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax].
+    lo_c = w / 2.0
+    hi_c = fmax - w / 2.0
+    if hi_c <= lo_c:
+        return None
+    centers = np.arange(lo_c, hi_c + 1e-9, float(step_hz))
+    a_lo, a_hi = (None, None) if adaptive_band is None else (float(adaptive_band[0]), float(adaptive_band[1]))
+
+    # Binarize the continuous label ONCE (same split for every band).
+    y_bin = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+
+    band_meta = []
+    for c in centers:
+        b0, b1 = c - w / 2.0, c + w / 2.0
+        adaptive_valid = bool(a_lo is not None and b0 >= a_lo - 1e-9 and b1 <= a_hi + 1e-9)
+        band_meta.append({"center": float(c), "lo": float(b0), "hi": float(b1),
+                          "adaptive_valid": adaptive_valid})
+
+    out_channels = []
+    C = psd.shape[1]
+    label_fin_all = np.isfinite(labels)            # epochs with a matched PRO label
+    n_pooled = int(label_fin_all.sum())            # pooled matched PSDs across ALL channels
+    for ci in range(C):
+        raw = chans[ci] if ci < len(chans) else f"ch{ci}"
+        region = region_map.get(raw) if region_map else None
+        fmt = format_channel(raw, region=region)
+        # Per-channel sample CEILING: matched epochs that were actually recorded on THIS channel.
+        # The pooled matched count (`n_pooled`) splits across the C bipolar montages because each
+        # PSD recording captures one montage, so this is the max n any band on this channel's curve
+        # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
+        chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
+        n_channel = int(chan_fin.sum())
+        # `p_pearson_curve` is the independence-assuming Pearson p (treats every PSD as independent).
+        # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
+        # it only so the FDR pass below can quantify the pseudoreplication inflation (naive bands
+        # at FDR vs rigorous bands at FDR), which is the rigor-pass UI annotation.
+        r_curve, auc_curve, n_curve, n_r_curve, p_curve = [], [], [], [], []
+        p_pearson_curve = []
+        band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
+        for c in centers:
+            bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
+            if not bmask.any():
+                r_curve.append(None); auc_curve.append(None); n_curve.append(0)
+                n_r_curve.append(0); p_curve.append(None); p_pearson_curve.append(None)
+                band_power_by_center.append(None)
+                continue
+            sub = psd[:, ci, bmask]                         # (E, nbins) power in band
+            with np.errstate(invalid="ignore", divide="ignore"), \
+                 warnings.catch_warnings():
+                # All-NaN slices (epochs not recorded on this channel) are expected — nanmean's
+                # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                if prelog:
+                    # Already log (+ z-scored): the band feature is the mean over the band's bins.
+                    bp_log = np.nanmean(sub, axis=1)
+                else:
+                    bp = np.nanmean(sub, axis=1)            # (E,) mean linear power in band
+                    bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
+            band_power_by_center.append(bp_log)
+            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization). We also
+            # compute the naive two-sided Pearson p here so the rigor pass can quantify the
+            # pseudoreplication inflation (it is the independence-assuming p, not the inferential
+            # number to report — that's `p_curve`).
+            m = np.isfinite(bp_log) & np.isfinite(labels)
+            n_r_curve.append(int(m.sum()))
+            r = p_pearson = None
+            if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
+                from scipy.stats import pearsonr as _pr
+                _r, _p = _pr(bp_log[m], labels[m])
+                r = float(_r); p_pearson = float(_p)
+            r_curve.append(_f(r) if r is not None else None)
+            p_pearson_curve.append(_f(p_pearson) if (p_pearson is not None and np.isfinite(p_pearson)) else None)
+            # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
+            # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
+            # n_used here is generally < the Pearson n above. When rating-aware (default in "all"
+            # mode), folds are grouped by rating so no rating leaks across train/test and n_used is
+            # the count of INDEPENDENT ratings, not raw samples.
+            auc, n_used = _cv_logistic_auc(bp_log, y_bin, groups=auc_groups)
+            auc_curve.append(_f(auc) if np.isfinite(auc) else None)
+            n_curve.append(int(n_used))
+            # Inference companion to the AUC: cluster-robust (rating-clustered) logistic Wald p when
+            # rating-aware, else ordinary logistic Wald p. Same band feature, same high-vs-low split.
+            with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                p_band, _np_n, _np_g = _cluster_robust_logit_p(bp_log, y_bin, groups=auc_groups)
+            p_curve.append(_f(p_band) if np.isfinite(p_band) else None)
+
+        # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
+        from scipy.signal import find_peaks
+        absr = np.array([abs(x) if x is not None else 0.0 for x in r_curve], dtype=float)
+        pk, _ = find_peaks(absr, prominence=0.05)
+        pk = sorted(pk, key=lambda k: -absr[k])[:n_peaks]
+        peaks = [{"center": float(centers[k]), "r": r_curve[k], "auc": auc_curve[k]}
+                 for k in sorted(pk)]
+
+        out_channels.append({
+            "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
+            "r": r_curve,            # Pearson r vs continuous PRO, per band center
+            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
+            "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
+            "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
+            "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
+            # Per-band naive Pearson p (independence-assuming) — kept so the FDR pass below can
+            # quantify the pseudoreplication inflation vs the rating-clustered logit p.
+            "p_pearson": p_pearson_curve,
+            "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
+            "peaks": peaks,
+            # Keep the per-band log power around for click-to-scatter (server-side cache; the
+            # frontend reads scatter via the band index). Stored compact (one row per center).
+            "_band_power": band_power_by_center,
+        })
+
+    # Build click-scatter payloads: for each channel & band center, (band power, continuous label,
+    # date) for matched sessions. Done here (not in the loop) so we can cap the payload size.
+    label_fin = np.isfinite(labels)
+    for ch in out_channels:
+        bp_list = ch.pop("_band_power")
+        scat = []
+        for bp_log in bp_list:
+            if bp_log is None:
+                scat.append(None); continue
+            m = np.isfinite(bp_log) & label_fin
+            idx = np.where(m)[0]
+            if idx.size < 3:
+                scat.append(None); continue
+            if idx.size > max_scatter:
+                idx = idx[np.linspace(0, idx.size - 1, max_scatter).astype(int)]
+            # Per-sample binarization group from the SAME high/low/excluded split the AUC uses
+            # (y_bin: 1.0=high, 0.0=low, NaN=excluded middle), so the click panel's violin can
+            # color points by pain group without recomputing the cut client-side.
+            def _grp(i):
+                v = y_bin[i]
+                if v == 1.0:
+                    return "high"
+                if v == 0.0:
+                    return "low"
+                return "mid"
+            gs = [_grp(i) for i in idx]
+            xs = np.array([bp_log[i] for i in idx], dtype=float)
+            ga = np.array(gs)
+            # Effect size of the low-vs-high band-power separation (the click panel's headline):
+            #   * cohens_d  — pooled-SD standardized mean difference (high minus low). Positive => the
+            #     band is higher in high-pain samples. |d|: 0.2 small / 0.5 medium / 0.8 large.
+            #   * median_delta — median(high) - median(low). x is ALREADY standardized log band power
+            #     (z within channel/source), so this is expressed directly in standard-deviation units.
+            x_lo, x_hi = xs[ga == "low"], xs[ga == "high"]
+            cohens_d = median_delta = None
+            if x_lo.size >= 2 and x_hi.size >= 2:
+                s_lo, s_hi = np.nanstd(x_lo, ddof=1), np.nanstd(x_hi, ddof=1)
+                n_lo, n_hi = x_lo.size, x_hi.size
+                sp2 = ((n_lo - 1) * s_lo ** 2 + (n_hi - 1) * s_hi ** 2) / max(n_lo + n_hi - 2, 1)
+                if sp2 > 0:
+                    cohens_d = _f(float((np.nanmean(x_hi) - np.nanmean(x_lo)) / np.sqrt(sp2)))
+                median_delta = _f(float(np.nanmedian(x_hi) - np.nanmedian(x_lo)))
+            scat.append({
+                "x": [_f(bp_log[i]) for i in idx],          # log band power
+                "y": [_f(labels[i]) for i in idx],          # continuous PRO
+                "g": gs,                                    # pain group: high | low | mid (excluded)
+                "cohens_d": cohens_d,                       # standardized mean diff, high - low
+                "median_delta": median_delta,               # median(high) - median(low), in SD units
+                "n_grp": {"high": int((ga == "high").sum()), "low": int((ga == "low").sum()),
+                          "mid": int((ga == "mid").sum())},
+                "dates": ([str(times[i]) for i in idx] if times is not None else None),
+            })
+        ch["scatter"] = scat
+
+    # --------------------------------------------------------------------------------------------
+    # Rigor pass: BH-FDR over the full band x channel family, separately for the rating-clustered
+    # logit p (the inferential headline) and the naive Pearson p (a foil). We do TWO families
+    # because the user-facing annotation is a contrast: "naive Pearson reports N FDR-significant
+    # bands, rating-clustered logistic reports M" — typically M << N on rating-pseudoreplicated
+    # data. Each channel gets a per-band `q` (clustered-logit q, the deployment number) plus an
+    # `is_fdr_sig` boolean so the frontend can style dots without recomputing the cutoff.
+    #
+    # Implementation: flatten all channel p-curves into one vector per family, BH-correct, scatter
+    # back to per-channel arrays. nan-aware (None entries treated as missing, get q=None).
+    try:
+        from statsmodels.stats.multitest import multipletests
+    except Exception:
+        multipletests = None
+    fdr_summary = None
+    if multipletests is not None and out_channels:
+        def _bh_per_band_grid(p_field):
+            """Run BH over the union of channels' per-band p values; return list-of-lists q (per channel, per band)."""
+            flat, locator = [], []   # locator[k] = (chan_idx, band_idx) for flat[k]
+            for ci, ch in enumerate(out_channels):
+                arr = ch.get(p_field) or []
+                for bi, pv in enumerate(arr):
+                    if pv is not None and np.isfinite(pv):
+                        flat.append(float(pv)); locator.append((ci, bi))
+            if not flat:
+                return [[None] * len(centers) for _ in out_channels], 0
+            _, qvals, _, _ = multipletests(np.asarray(flat, dtype=float), alpha=0.05, method="fdr_bh")
+            qmat = [[None] * len(centers) for _ in out_channels]
+            n_sig = 0
+            for (ci, bi), q in zip(locator, qvals):
+                qmat[ci][bi] = float(q)
+                if q < 0.05:
+                    n_sig += 1
+            return qmat, n_sig
+
+        q_logit_mat, n_rigorous_fdr = _bh_per_band_grid("p")
+        q_pearson_mat, n_naive_fdr = _bh_per_band_grid("p_pearson")
+        for ci, ch in enumerate(out_channels):
+            ch["q"] = q_logit_mat[ci]                 # rating-clustered logit FDR q per band (the headline)
+            ch["q_pearson"] = q_pearson_mat[ci]       # naive Pearson FDR q per band (for the contrast)
+            ch["is_fdr_sig"] = [
+                (q is not None and q < 0.05) for q in q_logit_mat[ci]
+            ]
+        fdr_summary = {
+            "n_bands_total": int(sum(1 for ch in out_channels for q in (ch.get("q") or []) if q is not None)),
+            "n_rigorous_fdr": int(n_rigorous_fdr),    # bands surviving FDR under rating-clustered logit
+            "n_naive_fdr": int(n_naive_fdr),          # bands surviving FDR under naive Pearson (pseudoreplicated)
+            "alpha": 0.05,
+            "method": "BH-FDR",
+            "family": "band x channel (per metric)",
+        }
+    # --------------------------------------------------------------------------------------------
+
+    return {
+        "centers": [float(c) for c in centers],
+        "bands": band_meta,
+        "channels": out_channels,
+        "band_width_hz": w,
+        "step_hz": float(step_hz),
+        "fmax": fmax,
+        "adaptive_band": ([a_lo, a_hi] if a_lo is not None else None),
+        "strategy": strategy,
+        "transform": "log_bandpower",
+        # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
+        # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
+        # dict; this summary is the UI's pseudoreplication-contrast annotation source.
+        "fdr_summary": fdr_summary,
+        "n_pooled": n_pooled,        # matched PSDs pooled across ALL channels (the preview total)
+        # Aggregation + AUC mode so the UI can state what the numbers mean. aggregate: "all" (every
+        # matched PSD a sample) vs "one_per_rating" (each (channel,rating) collapsed to one). auc_mode:
+        # "rating_grouped" => folds split by rating so the AUC n is the count of INDEPENDENT ratings;
+        # "pooled" => plain stratified CV (used in one_per_rating, where samples are already independent).
+        "aggregate": agg_mode,
+        "auc_mode": ("rating_grouped" if auc_groups is not None else "pooled"),
+        # Finalized binarization actually used by the logistic AUC (high vs low; the excluded
+        # middle is dropped). Lets the UI show how many of the matched samples the AUC ran on.
+        "binarization": {
+            "strategy": strategy,
+            "n_low": int(np.nansum(y_bin == 0)),
+            "n_high": int(np.nansum(y_bin == 1)),
+            "n_excluded_middle": int(np.isfinite(labels).sum() - np.isfinite(y_bin).sum()),
+        },
+        # PRO-independence (double-dipping) audit, carried through from the pooled matcher so the
+        # UI can report how many neural samples share one pain score (effective n < matched n).
+        "pro_independence": (td_detail.get("pool_meta", {}) or {}).get("pro_independence"),
+        "pro_independence_per_channel": (td_detail.get("pool_meta", {}) or {}).get(
+            "pro_independence_per_channel"),
+        # Matching policy + usage, carried through so the UI can state it transparently: the per-rating
+        # cap, refractory gap, match direction, how many PSDs the cap dropped, the survey-usage view
+        # (PROs used / available / reused), and the TD Welch epoch length (mean +/- SD).
+        "match_direction": (td_detail.get("pool_meta", {}) or {}).get("match_direction"),
+        "max_per_rating": (td_detail.get("pool_meta", {}) or {}).get("max_per_rating"),
+        "refractory_min": (td_detail.get("pool_meta", {}) or {}).get("refractory_min"),
+        "n_capped_dropped": (td_detail.get("pool_meta", {}) or {}).get("n_capped_dropped"),
+        "survey_usage": (td_detail.get("pool_meta", {}) or {}).get("survey_usage"),
+        "td_welch_duration": (td_detail.get("pool_meta", {}) or {}).get("td_welch_duration"),
+        "note": ("Exploratory only. r is Pearson vs the continuous PRO (ALL matched samples); AUC "
+                 "is cross-validated single-feature logistic on the FINALIZED high-vs-low split "
+                 "(excluded-middle tertile dropped), so the AUC n (legend 'n') is generally < the "
+                 "Pearson n ('n_r'). Neither is a validated biomarker. Each curve/scatter uses only "
+                 "the PSDs recorded on THAT channel, so its n is a fraction of the pooled "
+                 "matched-sample count in the binarization preview (one montage per recording). "
+                 "PRO-independence is audited below: several neural samples can share one pain "
+                 "score, so the effective n is smaller than the matched n."),
+    }
+
+
+def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5.0):
+    """Extract the per-sample log band-power feature + matched labels + rating clusters + times for
+    ONE (channel, band) from a pooled td_detail — the SAME feature definition the glmer uses.
+
+    Returns (bp_log (N,), labels (N,), rating_group (N,), times (N,)) restricted to finite-feature
+    rows, or None on any structural failure (channel/band not found). Caller binarizes labels.
+    """
+    if not td_detail:
+        return None
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    rating_group = td_detail.get("rating_group")
+    times = td_detail.get("times")
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i
+            break
+    if ci is None:
+        return None
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    rg = (np.asarray(rating_group) if rating_group is not None
+          else np.arange(len(bp_log)))
+    tt = (np.asarray([str(t) for t in times]) if times is not None
+          else np.array([""] * len(bp_log)))
+    return bp_log, labels, rg, tt
+
+
+def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                   strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
+                   n_boot=500, max_points=300, seed=0):
+    """Deployment-grade ROC for ONE committed (channel, band), with a RATING-CLUSTERED bootstrap CI
+    on the AUC and a full operating-point table for the cut-point search panel.
+
+    Why clustered: many neural samples share a single PRO rating (the matched cluster). A naive
+    per-sample bootstrap treats those near-duplicate samples as independent and reports an
+    over-tight AUC CI — the same double-dipping the cross-validation guards against on the discovery
+    side. Here we resample WHOLE rating clusters with replacement (the deployment analog of the
+    per-rating random intercept), so the CI reflects the count of INDEPENDENT ratings, not raw
+    samples.
+
+    The band feature is z-scored-log power oriented so AUC >= 0.5; the threshold scale returned is
+    the same oriented log-power feature the device sees (Phase C converts it to LSB). The operating
+    point defaults to Youden's J; the frontend re-solves F1 / cost-sensitive / net-benefit live from
+    the returned (fpr, tpr, thr, prevalence).
+
+    Returns {available, auc, auc_lo, auc_hi, n_boot_ok, fpr[], tpr[], thr[], prevalence, n_pos,
+    n_neg, n_samples, n_clusters, operating_point{...}, flip, note} or {available: False, reason}.
+    """
+    from sklearn import metrics
+
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
+    bp_log, labels, rating_group, _times = feat
+    y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+    m = np.isfinite(bp_log) & np.isfinite(y_all)
+    if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
+        return {"available": False, "reason": "too few matched high/low samples for an ROC"}
+    x = bp_log[m].astype(float)
+    y = y_all[m].astype(int)
+    g = rating_group[m]
+
+    raw_auc = float(metrics.roc_auc_score(y, x))
+    flip = raw_auc < 0.5                       # orient so higher score = higher pain
+    use_score = -x if flip else x
+    auc = float(max(raw_auc, 1.0 - raw_auc))
+    fpr, tpr, thr = metrics.roc_curve(y, use_score)
+    # Map decision thresholds back to the ORIGINAL oriented log-power scale (rule: power >= thr).
+    thr_device = (-thr if flip else thr).astype(float)
+
+    n_pos = int(np.sum(y == 1)); n_neg = int(np.sum(y == 0))
+    prevalence = float(n_pos) / float(n_pos + n_neg) if (n_pos + n_neg) > 0 else None
+    n_clusters = int(len(np.unique(g)))
+
+    # ---- rating-clustered bootstrap CI on AUC ----
+    # Resample whole clusters with replacement; recompute AUC per replicate. Skip replicates that
+    # lose a class. CI = percentile 2.5 / 97.5 over the valid replicates.
+    rng = np.random.default_rng(seed)
+    uniq_clusters = np.unique(g)
+    # Precompute per-cluster row indices once.
+    cluster_rows = {c: np.where(g == c)[0] for c in uniq_clusters}
+    boot_aucs = []
+    n_cl = len(uniq_clusters)
+    for _b in range(int(n_boot)):
+        pick = rng.choice(uniq_clusters, size=n_cl, replace=True)
+        idx = np.concatenate([cluster_rows[c] for c in pick])
+        yb = y[idx]
+        if len(np.unique(yb)) < 2:
+            continue
+        try:
+            ab = metrics.roc_auc_score(yb, use_score[idx])
+            boot_aucs.append(max(ab, 1.0 - ab))
+        except ValueError:
+            continue
+    if len(boot_aucs) >= 20:
+        auc_lo = float(np.percentile(boot_aucs, 2.5))
+        auc_hi = float(np.percentile(boot_aucs, 97.5))
+    else:
+        auc_lo = auc_hi = None
+
+    # ---- default operating point: Youden's J ----
+    op = None
+    if len(thr) > 1:
+        j = tpr - fpr
+        j[~np.isfinite(thr)] = -np.inf
+        k = int(np.argmax(j))
+        op = {
+            "fpr": float(fpr[k]), "tpr": float(tpr[k]),
+            "threshold": float(thr_device[k]),
+            "sensitivity": float(tpr[k]),
+            "specificity": float(1.0 - fpr[k]),
+            "youden_j": float(tpr[k] - fpr[k]),
+            "direction": "ge",
+            "rule": "youden",
+        }
+
+    # ---- downsample the curve (keep thr parallel) ----
+    fpr_o, tpr_o, thr_o = fpr, tpr, thr_device
+    if max_points and len(fpr_o) > max_points:
+        sel = np.unique(np.linspace(0, len(fpr_o) - 1, int(max_points)).astype(int))
+        fpr_o, tpr_o, thr_o = fpr_o[sel], tpr_o[sel], thr_o[sel]
+
+    return {
+        "available": True,
+        "auc": auc, "auc_lo": auc_lo, "auc_hi": auc_hi,
+        "n_boot_ok": len(boot_aucs),
+        "fpr": [float(v) for v in fpr_o], "tpr": [float(v) for v in tpr_o],
+        "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
+        "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
+        "n_samples": int(m.sum()), "n_clusters": n_clusters,
+        "operating_point": op, "flip": bool(flip),
+        "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
+        "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
+                 f"{n_clusters} independent ratings). AUC oriented >= 0.5."),
+    }
+
+
+def _elapsed_week_cluster(times, n):
+    """Integer elapsed-week index from the first sample, as the offline validation (phase2) derives
+    its random-intercept cluster: ((t_epoch - t0) / (7*86400)).astype(int). PARITY audit §6a — the
+    live path previously used the ISO-calendar-week STRING, which splits elapsed-week buckets across
+    Monday boundaries and gives a different random-effect structure (hence different SE/p/OR-CI).
+
+    Returns an int array length n. Unparseable-time rows get cluster -1 (they are dropped by the
+    finite-time mask in the caller). Times parsed with explicit ISO8601 (mixed microsecond forms).
+    """
+    if times is None or len(times) != n:
+        return np.zeros(n, dtype=int)
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    te = (t_dt.view("int64").to_numpy() / 1e9)
+    nat = t_dt.isna().to_numpy()
+    if (~nat).sum() == 0:
+        return np.zeros(n, dtype=int)
+    t0 = np.nanmin(np.where(nat, np.nan, te))
+    wk = np.where(nat, -1, ((te - t0) / (7.0 * 86400.0)))
+    return np.where(nat, -1, wk.astype(int)).astype(int)
+
+
+def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
+    """Map per-sample times to a stim era (OFF/LOW/HIGH) by carrying the stim trajectory forward
+    (LOCF) onto each sample. Returns an object-array of era tags aligned to `times`, or None when
+    no usable stim series is available. Shared by band_stim_stability and deployment_roc_by_era so
+    the era boundaries are identical across the stability LRT and the per-era refit.
+
+    LOCF (last-observation-carried-forward) is the physically correct semantics: a PSD sample's stim
+    context is the amplitude *in effect at or before* it was recorded, NOT the next programmed change.
+    `searchsorted(side='right') - 1` gives the index of the latest stim reading at-or-before each
+    sample time; clipped to >=0 so a sample preceding the first reading carries that first value.
+    (The prior next-sample/NOCB form mislabeled ~17% of samples' era and biased the stim-stability
+    LRT that selects closed-loop anchors — see PARITY_audit §7.)"""
+    if not stim_series or not stim_series.get("t") or not stim_series.get("y"):
+        return None
+    if times is None:
+        return None
+    # NOTE: parse with an explicit ISO8601 format. The sample-time strings are a mix of values WITH
+    # fractional seconds ("...:28.850000") and WITHOUT ("...:20:05"); pandas 2.x infers ONE format
+    # from the first element and coerces every non-matching string to NaT — which here silently
+    # NaT'd ~83% of rows, clipping them to the first stim reading and ballooning the HIGH era. The
+    # NaT mask drives the None-era guard below.
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    nat = t_dt.isna().to_numpy()
+    t_epoch = (t_dt.view("int64").to_numpy() / 1e9)
+    stim_t = np.asarray(stim_series["t"], dtype=float)
+    stim_y = np.asarray(stim_series["y"], dtype=float)
+    if len(stim_t) < 2:
+        return None
+    order = np.argsort(stim_t)
+    stim_t = stim_t[order]; stim_y = stim_y[order]
+    # LOCF: latest stim reading at or before each sample. Look the NaT rows up at the first reading
+    # (harmless — they are masked out to None immediately after) so searchsorted sees no NaN.
+    lookup = np.where(nat, stim_t[0], t_epoch)
+    idx = (np.searchsorted(stim_t, lookup, side="right") - 1).clip(0, len(stim_t) - 1)
+    stim_mA = stim_y[idx]
+    era = np.where(stim_mA < off_max, "OFF", np.where(stim_mA <= low_max, "LOW", "HIGH"))
+    era = np.where(nat, None, era)
+    return era
+
+
+def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, band_width_hz=5.0,
+                          strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
+                          n_boot=300, off_max=0.1, low_max=1.5, seed=0):
+    """Refit the deployment ROC + cut-point WITHIN each stimulation era (OFF / LOW / HIGH).
+
+    The pooled `deployment_roc` answers "how well does this band predict pain overall?"; this answers
+    the closed-loop-critical follow-up "does the SAME threshold hold once stim is actually on?" — a
+    band whose AUC or Youden cut-point swings across eras is a fragile controller anchor even if its
+    pooled AUC looks good. Eras are assigned with the SAME nearest-time stim interpolation +
+    bucketing as band_stim_stability, so the per-era refit and the stability LRT agree on boundaries.
+
+    Returns {available, eras:{OFF:{...roc}, LOW:{...}, HIGH:{...}}, pooled:{...roc}, cutpoint_spread,
+             era_counts, thresholds_mA, note} or {available: False, reason}.
+    """
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found"}
+    bp_log, labels, rating_group, times = feat
+    era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
+    if era is None:
+        return {"available": False, "reason": "no usable stim series for era assignment"}
+
+    from sklearn import metrics
+
+    def _roc_for(mask):
+        """Compact ROC + Youden cut-point + clustered bootstrap CI over a boolean sample mask."""
+        x = bp_log[mask]; yv = labels[mask]; gv = rating_group[mask]
+        y = _binarize_labels(yv, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+        ok = np.isfinite(x) & np.isfinite(y)
+        x = x[ok].astype(float); y = y[ok].astype(int); gv = gv[ok]
+        if x.size < 12 or len(np.unique(y)) < 2:
+            return {"available": False, "reason": "too few high/low samples in this era",
+                    "n_samples": int(x.size)}
+        raw = float(metrics.roc_auc_score(y, x))
+        flip = raw < 0.5
+        use = -x if flip else x
+        auc = float(max(raw, 1.0 - raw))
+        fpr, tpr, thr = metrics.roc_curve(y, use)
+        thr_dev = (-thr if flip else thr).astype(float)
+        # Youden cut-point
+        op = None
+        if len(thr) > 1:
+            j = tpr - fpr
+            j[~np.isfinite(thr)] = -np.inf
+            k = int(np.argmax(j))
+            op = {"threshold": float(thr_dev[k]), "sensitivity": float(tpr[k]),
+                  "specificity": float(1.0 - fpr[k]), "fpr": float(fpr[k]), "tpr": float(tpr[k])}
+        # clustered bootstrap CI
+        rng = np.random.default_rng(seed)
+        uc = np.unique(gv); rows = {c: np.where(gv == c)[0] for c in uc}
+        baucs = []
+        for _b in range(int(n_boot)):
+            pick = rng.choice(uc, size=len(uc), replace=True)
+            ii = np.concatenate([rows[c] for c in pick])
+            if len(np.unique(y[ii])) < 2:
+                continue
+            try:
+                ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(max(ab, 1.0 - ab))
+            except ValueError:
+                continue
+        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
+        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
+        return {"available": True, "auc": auc, "auc_lo": lo, "auc_hi": hi,
+                "n_samples": int(x.size), "n_clusters": int(len(uc)),
+                "n_pos": int(np.sum(y == 1)), "n_neg": int(np.sum(y == 0)),
+                "operating_point": op, "flip": bool(flip),
+                "prevalence": float(np.mean(y == 1))}
+
+    eras_out = {}
+    for tag in ["OFF", "LOW", "HIGH"]:
+        eras_out[tag] = _roc_for(era == tag)
+    pooled = _roc_for(np.ones(len(bp_log), dtype=bool))
+
+    # Cut-point portability: spread of the per-era Youden thresholds that are actually estimable.
+    era_thr = [eras_out[t]["operating_point"]["threshold"] for t in ["OFF", "LOW", "HIGH"]
+               if eras_out[t].get("available") and eras_out[t].get("operating_point")]
+    cutpoint_spread = (float(np.max(era_thr) - np.min(era_thr)) if len(era_thr) >= 2 else None)
+    era_aucs = [eras_out[t]["auc"] for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available")]
+    auc_spread = (float(np.max(era_aucs) - np.min(era_aucs)) if len(era_aucs) >= 2 else None)
+
+    return {
+        "available": True,
+        "eras": eras_out, "pooled": pooled,
+        "cutpoint_spread": cutpoint_spread, "auc_spread": auc_spread,
+        "era_counts": {t: int(np.sum(era == t)) for t in ["OFF", "LOW", "HIGH"]},
+        "thresholds_mA": {"off_max": off_max, "low_max": low_max},
+        "n_eras_estimable": int(sum(1 for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available"))),
+        "note": ("Per-era refit of the deployment ROC + Youden cut-point. A band whose AUC or "
+                 "threshold swings across OFF/LOW/HIGH is a fragile controller anchor even with a "
+                 "strong pooled AUC. Eras share band_stim_stability's boundaries."),
+    }
+
+
+ADC_NV_PER_LSB = 146.0   # Percept time-domain ADC scale (nV per LSB), exact per Medtronic.
+
+
+def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
+                        band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
+    """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device
+    PowerDomain LSB (DESIGN §4). For each BrainSense TD streaming session paired (within pair_tol_s)
+    to a PowerDomain session, compute the band-power in µV² from the raw 250 Hz TD (Welch, integrated
+    over the device's sensing band) and the median device LSB over the same window/channel at near-
+    zero stim, then take µV²/LSB per (session, channel).
+
+    This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold: the absolute conversion
+    is normalization-dependent and trustworthy to no better than ~3× (and on RCS08 diverges far more
+    from the 0.01 rule of thumb). The deployable threshold is percentile-anchored on the device's own
+    Timeline LSB instead (see the service layer). `sensing_hz_for_pd(pd_rec, contact)` resolves a
+    PowerDomain recording's sensing center frequency for a contact (the TD recording itself carries
+    no Therapy snapshot).
+
+    Returns {available, n, median, iqr_lo, iqr_hi, cv, p10, p90, fold_off_rule, rule_of_thumb,
+             confidence, note} or {available: False, reason}.
+    """
+    try:
+        from scipy import signal as _sig
+    except Exception as e:
+        return {"available": False, "reason": f"scipy unavailable: {e}"}
+
+    def _epoch(r):
+        st = r.get("StartTime")
+        try:
+            return float(st)
+        except (TypeError, ValueError):
+            return None
+
+    pd_idx = {}
+    for r in pd_recs or []:
+        s = _epoch(r)
+        if s is not None:
+            pd_idx.setdefault(round(s), []).append(r)
+
+    def _find_pd(s):
+        base = round(s)
+        for d in range(-int(pair_tol_s), int(pair_tol_s) + 1):
+            if base + d in pd_idx:
+                return pd_idx[base + d]
+        return []
+
+    ratios = []
+    for tr in td_recs or []:
+        s = _epoch(tr)
+        if s is None:
+            continue
+        pds = _find_pd(s)
+        if not pds:
+            continue
+        chans = tr.get("ChannelNames") or []
+        data = np.asarray(tr.get("Data"), dtype=float)
+        fs = float(tr.get("SamplingRate") or 250.0)
+        if data.ndim != 2:
+            continue
+        for ci, ch in enumerate(chans):
+            if ci >= data.shape[1]:
+                continue
+            hz = None
+            for pr in pds:
+                hz = sensing_hz_for_pd(pr, ch)
+                if hz is not None:
+                    break
+            if hz is None:
+                continue
+            x = data[:, ci] * adc_nv_per_lsb / 1000.0    # device counts -> µV (nV/1000)
+            x = x[np.isfinite(x)]
+            if len(x) < fs * min_secs:
+                continue
+            f, P = _sig.welch(x, fs=fs, nperseg=int(fs))   # µV²/Hz
+            bmask = (f >= hz - band_half_hz) & (f < hz + band_half_hz)
+            if not bmask.any():
+                continue
+            uV2 = float(np.trapz(P[bmask], f[bmask]))      # µV² in band
+            for pr in pds:
+                pnames = pr.get("ChannelNames") or []
+                pdata = np.asarray(pr.get("Data"), dtype=float)
+                if pdata.ndim != 2:
+                    continue
+                pcol = scol = None
+                cu = ch.upper()
+                for pi, nm in enumerate(pnames):
+                    u = str(nm).upper()
+                    if cu in u and "POWER" in u:
+                        pcol = pi
+                    if cu in u and "STIM" in u:
+                        scol = pi
+                if pcol is None or pcol >= pdata.shape[1]:
+                    continue
+                lsb = pdata[:, pcol]
+                mA = (pdata[:, scol] if (scol is not None and scol < pdata.shape[1])
+                      else np.zeros_like(lsb))
+                off = (mA < stim_off_mA) & np.isfinite(lsb) & (lsb > 0)
+                if off.sum() < 3:
+                    continue
+                med_lsb = float(np.median(lsb[off]))
+                if med_lsb <= 0:
+                    continue
+                ratio = uV2 / med_lsb
+                if np.isfinite(ratio) and ratio > 0:
+                    ratios.append(ratio)
+                break
+
+    if len(ratios) < 5:
+        return {"available": False, "reason": f"only {len(ratios)} paired TD/LSB sessions (need >= 5)"}
+    a = np.asarray(ratios, dtype=float)
+    med = float(np.median(a))
+    cv = float(np.std(a) / np.mean(a)) if np.mean(a) > 0 else None
+    fold = med / 0.01 if med > 0 else None
+    # Confidence: the §4 ceiling is ~3×; flag low whenever the spread or the rule-of-thumb
+    # divergence exceeds that, which on RCS08 it does (so this is honestly "low").
+    conf = "moderate"
+    if (cv is not None and cv > 0.5) or (fold is not None and (fold > 3.0 or fold < 1.0 / 3.0)):
+        conf = "low"
+    return {
+        "available": True, "n": int(len(a)),
+        "median": med, "iqr_lo": float(np.percentile(a, 25)), "iqr_hi": float(np.percentile(a, 75)),
+        "cv": cv, "p10": float(np.percentile(a, 10)), "p90": float(np.percentile(a, 90)),
+        "fold_off_rule": fold, "rule_of_thumb": 0.01, "confidence": conf,
+        "note": ("Empirical µV²/LSB from concurrent on-demand TD + device LSB at ~0 mA. FYI cross-"
+                 "check only — the deployable threshold is percentile-anchored on the device Timeline, "
+                 "not via this absolute conversion (normalization-dependent, trust to ~3×)."),
+    }
+
+
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
+    """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
+    clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
+
+    Reports the current power to reject AUC=0.5 at the given alpha, and the number of independent
+    ratings (at the observed prevalence) needed for `target_power`. The honest 'do we have enough
+    pain ratings to trust this cut-point yet?' number — pairs with the bootstrap CI from the ROC.
+
+    Returns {available, auc, power_current, n_ratings_current, n_ratings_needed, more_data_needed,
+             se_auc, alpha, target_power} or {available: False, reason}.
+    """
+    try:
+        from scipy import stats as _st
+    except Exception as e:
+        return {"available": False, "reason": f"scipy unavailable: {e}"}
+    auc = float(max(auc, 1.0 - auc))
+    n_pos = int(n_pos); n_neg = int(n_neg)
+    if n_pos < 2 or n_neg < 2:
+        return {"available": False, "reason": "too few independent ratings for a power estimate"}
+    if auc <= 0.5:
+        return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
+                "n_ratings_current": n_pos + n_neg, "n_ratings_needed": None,
+                "more_data_needed": True, "alpha": alpha, "target_power": target_power,
+                "note": "AUC at or below chance — no power to detect a real effect."}
+    Q1 = auc / (2.0 - auc)
+    Q2 = 2.0 * auc * auc / (1.0 + auc)
+    var = (auc * (1 - auc) + (n_pos - 1) * (Q1 - auc * auc)
+           + (n_neg - 1) * (Q2 - auc * auc)) / (n_pos * n_neg)
+    se = float(np.sqrt(max(var, 1e-12)))
+    var0 = (0.25 + (n_pos - 1) * (1.0 / 3 - 0.25) + (n_neg - 1) * (1.0 / 3 - 0.25)) / (n_pos * n_neg)
+    se0 = float(np.sqrt(max(var0, 1e-12)))
+    za = float(_st.norm.ppf(1 - alpha / 2.0))
+    zb = float(_st.norm.ppf(target_power))
+    power = float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
+    N0 = n_pos + n_neg
+    # SE^2 * N is ~constant in N; solve (auc-0.5)*sqrt(N) = za*sqrt(se0^2 N0) + zb*sqrt(se^2 N0).
+    rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
+    n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    return {
+        "available": True, "auc": auc, "n_pos": n_pos, "n_neg": n_neg, "se_auc": se,
+        "power_current": power, "n_ratings_current": int(N0), "n_ratings_needed": n_need,
+        "more_data_needed": bool(n_need > N0), "alpha": alpha, "target_power": target_power,
+        "note": ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
+                 "effective n). Power to reject AUC = 0.5."),
+    }
+
+
+def _rpy2_converter_ctx():
+    """Activate a NON-EMPTY rpy2 conversion context on the CURRENT thread for a pymer4 fit.
+
+    rpy2 >= 3.5 stores the active conversion rules in a `contextvars.ContextVar`. pymer4 calls
+    `pandas2ri.activate()` once at import (on the main/import thread), but a ContextVar set on one
+    thread does NOT propagate to others — Django serves each request on a worker thread (and the
+    PSD/validation machinery also uses ThreadPoolExecutor). On that worker the converter is empty,
+    so pymer4's R calls raise:
+        "Conversion rules for `rpy2.robjects` appear to be missing. Those rules are in a Python
+         contextvars.ContextVar. This could be caused by multithreading code not passing context
+         to the thread."
+    Entering this context manager around every Lmer construction + .fit() re-establishes a
+    non-empty converter for the duration of the fit, so the call works regardless of which thread
+    runs it.
+
+    IMPORTANT — use the PLAIN default_converter here, NOT (default_converter + pandas2ri.converter).
+    We only need *some* non-empty converter active to silence the "rules missing" error above;
+    pymer4 0.8.2 performs its OWN pandas<->R DataFrame conversion internally (pymer4.bridge.pandas2R
+    and R2pandas each open their own localconverter(default + pandas2ri)), so the outer context does
+    not need pandas2ri — and must NOT add it. With pandas2ri's rpy2py rules active in the outer
+    context, the R control object that pymer4 builds via `robjects.r("glmerControl(...)")` /
+    `lmerControl(...)` is eagerly converted to a Python `rpy2.rlike.container.OrdDict` and loses its
+    R class. rpy2 3.5.15 then has no `py2rpy` rule for OrdDict when pymer4 passes it back into
+    `lme4::glmer(control=...)` ("Conversion 'py2rpy' not defined for ... OrdDict"); and even a
+    hand-registered OrdDict->ListVector converter yields a plain R list that glmer rejects ("unused
+    arguments checkControl/checkConv"), because the nested glmer.control structure/class is gone.
+    default_converter alone leaves the control object as a native R ListVector, and the fit (plus
+    coef/CI/OR extraction) succeeds. Verified in-container against rpy2 3.5.15 / pymer4 0.8.2.
+
+    Returns a no-op nullcontext when rpy2 isn't importable (the caller already guards pymer4
+    availability separately and degrades to {available: False}).
+    """
+    try:
+        import rpy2.robjects as ro
+        from rpy2.robjects.conversion import localconverter
+        return localconverter(ro.default_converter)
+    except Exception:
+        from contextlib import nullcontext
+        return nullcontext()
+
+
+def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                              strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                              pain_cutoff=None, cluster="era"):
+    """Cluster-robust inference for ONE selected (channel, band) via a logistic MIXED-EFFECTS model
+    (pymer4 -> R lme4 glmer): pain_high ~ band_power + (1 | session_cluster).
+
+    Run ONLY on the band the user clicks (one glmer fit), not across the sweep. Returns the fixed
+    effect of band power (coef, OR, z, p) with the within-cluster correlation modelled explicitly —
+    the honest 'is this band real?' number for clustered repeated measures. Degrades to
+    {available: False, reason: ...} when pymer4/R is unavailable, so the sweep still works without R.
+    """
+    try:
+        from pymer4.models import Lmer
+    except Exception as e:        # pymer4 or its R backend not installed
+        return {"available": False, "reason": f"pymer4 unavailable: {e}"}
+    if not td_detail:
+        return {"available": False, "reason": "no detail"}
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    # Resolve the channel index from the raw name (or the formatted short).
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i
+            break
+    if ci is None:
+        return {"available": False, "reason": f"channel {channel_raw} not found"}
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return {"available": False, "reason": "empty band"}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    # PARITY (audit §6b): binarize on THIS CHANNEL's own labels, not the global pooled cut. The
+    # offline validated set (phase2) cuts the tertile on labels restricted to the rows where this
+    # channel's band power is finite; a global cut flips borderline samples high/low between the two
+    # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
+    chan_finite = np.isfinite(bp_log)
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                         pain_cutoff=pain_cutoff, finite_mask=chan_finite)
+    # PARITY (audit §6a): cluster = integer ELAPSED-week index from the first sample (phase2),
+    # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
+    # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
+    cl = _elapsed_week_cluster(times, len(bp_log))
+    m = np.isfinite(bp_log) & np.isfinite(y)
+    if m.sum() < 12 or len(np.unique(y[m])) < 2:
+        return {"available": False, "reason": "too few matched samples for a mixed model"}
+    # PARITY (audit §6 minor): z-score with ddof=1 (phase2), matching the offline sample SD.
+    _bpm = bp_log[m]
+    _sd = np.nanstd(_bpm, ddof=1)
+    df = pd.DataFrame({"pain_high": y[m].astype(int),
+                       "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),
+                       "cluster": cl[m]})
+    n_clusters = int(df["cluster"].nunique())
+    formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
+    try:
+        # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in
+        # THIS thread (see _rpy2_converter_ctx). pymer4 populates .coefs/.ranef_var as plain pandas
+        # during fit, so only the construction + fit need the context.
+        with _rpy2_converter_ctx():
+            mod = Lmer(formula, data=df, family="binomial")
+            mod.fit(summarize=False)
+        coefs = mod.coefs
+        row = coefs.loc["band_power"]
+        est = float(row.get("Estimate"))
+        # pymer4 exposes OR / P-val / Z-stat directly for a binomial fit; fall back to exp(coef)
+        # and the alternate p-value column name across pymer4 versions.
+        p = float(row["P-val"]) if "P-val" in row else (float(row["Pr(>|z|)"]) if "Pr(>|z|)" in row else np.nan)
+        z = float(row["Z-stat"]) if "Z-stat" in row else np.nan
+        odds = float(row["OR"]) if "OR" in row else float(np.exp(est))
+        # OR confidence interval — pymer4 reports the Wald CI on the linear predictor scale as
+        # '2.5_ci' / '97.5_ci'; exponentiate to OR space. Falls back to None if columns missing
+        # (older pymer4) so the caller never crashes when the bounds aren't available.
+        def _ci_or(col):
+            try:
+                v = float(row[col]); return float(np.exp(v)) if np.isfinite(v) else None
+            except (KeyError, TypeError, ValueError):
+                return None
+        or_lo = _ci_or("2.5_ci"); or_hi = _ci_or("97.5_ci")
+        # Complete/quasi-complete separation: the predictor (z-scored) drives an implausibly large
+        # coefficient and the SE/p-value explode (Hessian singular). Report it as unreliable rather
+        # than a spurious OR ~ 1e90. PARITY (audit §6 minor): phase2 flags |beta| > 50 — use the
+        # same threshold so a band the validated set kept isn't dropped here as "separated".
+        if not np.isfinite(est) or abs(est) > 50.0:
+            return {
+                "available": True, "model": "glmer logistic (lme4 via pymer4)",
+                "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                "coef": _f(est), "odds_ratio": None,
+                "or_lo": None, "or_hi": None,
+                "z": None, "p": None,
+                "separation": True, "singular": False,
+                "note": ("Complete/quasi-complete separation — band power separates high/low "
+                         "pain perfectly at this window, so the logistic estimate is degenerate. "
+                         "Widen the match window or loosen the binarization to get a stable fit."),
+            }
+        # Singular random-effect variance: lme4 returns a fit but the era-level variance has
+        # collapsed to ~0, meaning the random intercept added nothing (effectively pooled OLS).
+        # We still report the fit but flag it so the UI can downgrade confidence.
+        singular = False
+        try:
+            # ranef_var can lazily pull from the fitted R object, so read it under the converter
+            # context too (the try/except already keeps a conversion hiccup from crashing the fit).
+            with _rpy2_converter_ctx():
+                ranef = mod.ranef_var
+            if "Var" in ranef.columns and len(ranef):
+                singular = bool(float(ranef["Var"].iloc[0]) < 1e-6)
+        except Exception:
+            pass
+        return {
+            "available": True, "model": "glmer logistic (lme4 via pymer4)",
+            "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+            "coef": _f(est), "odds_ratio": _f(odds),
+            "or_lo": _f(or_lo) if or_lo is not None else None,
+            "or_hi": _f(or_hi) if or_hi is not None else None,
+            "z": _f(z), "p": _f(p), "separation": False, "singular": singular,
+            "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
+        }
+    except Exception as e:
+        return {"available": False, "reason": f"glmer fit failed: {e}"}
+
+
+def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
+                        band_width_hz=5.0, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                        off_max=0.1, low_max=1.5):
+    """Test whether one (channel, band)'s pain-prediction holds across stim states (band x stim-era
+    LRT). Compares pain_high ~ band_power + stim_era + (1|era)  (m0, reduced) against
+    pain_high ~ band_power * stim_era + (1|era)  (m1, full). The LRT p answers
+    "does the band's effect depend on stim?" — small p means the biomarker is stim-state-dependent
+    (i.e. a poor closed-loop threshold anchor); large p means the biomarker is stim-stable.
+
+    Per-era ORs are computed via separate per-era GLM fits (slope on band_power) so the UI can show
+    OFF / LOW / HIGH OR side-by-side.
+
+    `stim_series` is the chronic stim trajectory {t:[epoch_s], y:[mA]} from bravo_service. We
+    nearest-time-interpolate sample-level stim_mA from the td_detail times and bin into eras:
+      OFF   stim_mA < off_max  (default <0.1 mA)
+      LOW   off_max <= stim_mA <= low_max
+      HIGH  stim_mA > low_max
+    Returns {available: False, reason: ...} on failure (no R, no stim, fit fails, only 1 era).
+    """
+    try:
+        from pymer4.models import Lmer
+        import rpy2.robjects as ro
+    except Exception as e:
+        return {"available": False, "reason": f"pymer4/rpy2 unavailable: {e}"}
+    if not td_detail or not stim_series or not stim_series.get("t") or not stim_series.get("y"):
+        return {"available": False, "reason": "no stim series"}
+    f = np.asarray(td_detail.get("f_set"), dtype=float)
+    psd = np.asarray(td_detail.get("psd"), dtype=float)
+    labels = np.asarray(td_detail.get("labels"), dtype=float)
+    chans = td_detail.get("chan_order", [])
+    times = td_detail.get("times")
+    if times is None or len(times) != len(labels):
+        return {"available": False, "reason": "missing sample times"}
+    # Resolve channel
+    ci = None
+    for i, raw in enumerate(chans):
+        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
+            ci = i; break
+    if ci is None:
+        return {"available": False, "reason": f"channel {channel_raw} not found"}
+    w = float(band_width_hz)
+    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
+    if not bmask.any():
+        return {"available": False, "reason": "empty band"}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sub = np.nanmean(psd[:, ci, bmask], axis=1)
+        bp_log = sub if td_detail.get("prelog", False) else 10.0 * np.log10(np.where(sub > 0, sub, np.nan))
+    # PARITY (audit §6b): per-channel binarization (cut on this channel's own labels), matching the
+    # offline phase2b stim-stability LRT. Shares the same basis as band_mixedmodel_inference.
+    chan_finite = np.isfinite(bp_log)
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                         finite_mask=chan_finite)
+    # Sample-time -> era via the SHARED nearest-time interpolation + bucketing (identical boundaries
+    # to deployment_roc_by_era so the stability LRT and the per-era refit agree).
+    era = _assign_stim_eras(times, stim_series, off_max=off_max, low_max=low_max)
+    if era is None:
+        return {"available": False, "reason": "stim series too short"}
+    era_none = np.array([e is None for e in era])
+    # PARITY (audit §6a): random-intercept cluster = integer ELAPSED-week index (phase2b), not the
+    # ISO-calendar-week string. -1 marks unparseable-time rows (dropped by the mask below).
+    cl = _elapsed_week_cluster(times, len(bp_log))
+    t_finite = cl >= 0
+    # Drop unparseable-time / no-era rows from the LRT (do NOT relabel them OFF).
+    m = np.isfinite(bp_log) & np.isfinite(y) & t_finite & (~era_none)
+    if m.sum() < 20 or len(np.unique(y[m])) < 2 or len(np.unique(era[m])) < 2:
+        return {"available": False, "reason": "too few samples / eras for an interaction test"}
+    # PARITY (audit §6 minor): ddof=1 z-score (phase2b).
+    _bpm = bp_log[m]; _sd = np.nanstd(_bpm, ddof=1)
+    df = pd.DataFrame({
+        "pain_high": y[m].astype(int),
+        "band_power": (_bpm - np.nanmean(_bpm)) / (_sd if _sd and np.isfinite(_sd) else 1.0),
+        "stim_era": pd.Categorical(era[m], categories=["OFF", "LOW", "HIGH"]),
+        "cluster": cl[m],
+    })
+    n_clusters = int(df["cluster"].nunique())
+    re_term = "+ (1|cluster)" if n_clusters > 1 else ""
+    formula_red = f"pain_high ~ band_power + stim_era {re_term}"
+    formula_full = f"pain_high ~ band_power * stim_era {re_term}"
+    n_eras_present = int(df["stim_era"].cat.remove_unused_categories().nunique())
+    try:
+        # Both fits + their pandas<->R conversions must run with rpy2's converter active in THIS
+        # thread (see _rpy2_converter_ctx) — otherwise the worker thread raises the "conversion rules
+        # ... missing" ContextVar error. logLike is a cached float after fit, read outside the ctx.
+        with _rpy2_converter_ctx():
+            m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
+            m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
+        # PARITY (audit §6): compute the LRT exactly as offline phase2b — chi2 = 2*(ll_full -
+        # ll_reduced), p from chi2 with df = number of interaction terms added = (n_eras - 1). The
+        # previous live path used R's anova(m0, m1), whose df accounting for the lme4 nested fit
+        # differed (df=1 vs the 2 interaction terms a 3-era model adds), shifting borderline p's
+        # across 0.05 (e.g. vas@61.5 ZERO_TWO_LEFT: anova p=0.048 -> dependent, but the validated
+        # report's 2-df LRT p=0.127 -> stable).
+        ll0 = float(m0.logLike); ll1 = float(m1.logLike)
+        chisq = 2.0 * (ll1 - ll0)
+        from scipy.stats import chi2 as _chi2dist
+        dof = max(n_eras_present - 1, 1)
+        p_lrt = float(1.0 - _chi2dist.cdf(chisq, df=dof))
+    except Exception as e:
+        return {"available": False, "reason": f"LRT failed: {e}"}
+    # Per-era ORs via simple per-era GLM (no random intercept — each era is one block already).
+    try:
+        import statsmodels.api as sm
+        or_by_era = {}
+        for tag in ["OFF", "LOW", "HIGH"]:
+            sub = df[df["stim_era"] == tag]
+            if len(sub) < 6 or sub["pain_high"].nunique() < 2:
+                or_by_era[tag] = None; continue
+            X = sm.add_constant(sub["band_power"].to_numpy())
+            try:
+                res = sm.GLM(sub["pain_high"].to_numpy(), X, family=sm.families.Binomial()).fit()
+                or_by_era[tag] = float(np.exp(res.params[1])) if np.isfinite(res.params[1]) else None
+            except Exception:
+                or_by_era[tag] = None
+    except Exception:
+        or_by_era = {"OFF": None, "LOW": None, "HIGH": None}
+    return {
+        "available": True, "model": "band x stim_era LRT (glmer logistic, lme4 via pymer4)",
+        "formula_reduced": formula_red, "formula_full": formula_full,
+        "n": int(m.sum()), "n_clusters": n_clusters,
+        "chisq": _f(chisq), "lrt_p": _f(p_lrt),
+        # The headline interpretation flag: stim-stable iff the interaction LRT is NOT significant.
+        # We carry the raw p here; the calling endpoint can FDR if it's running across many bands.
+        "stim_stable": (np.isfinite(p_lrt) and p_lrt >= 0.05),
+        "or_by_era": {k: (_f(v) if v is not None else None) for k, v in or_by_era.items()},
+        "era_counts": {tag: int((df["stim_era"] == tag).sum()) for tag in ["OFF", "LOW", "HIGH"]},
+        "thresholds_mA": {"off_max": off_max, "low_max": low_max},
+    }
 
 
 # --- Time-domain (streaming) analytics -------------------------------------------------------
