@@ -1857,7 +1857,9 @@ def _pro_match_arrays(pro_df, label_metric):
     ok = ts.notna() & val.notna()
     if ok.sum() == 0:
         return None
-    t_ep = (ts[ok].view("int64").to_numpy() / 1e9)
+    # Resolution-independent ns epoch (Series.view is deprecated/removed in pandas 3.0; a bare
+    # .astype("int64") would give microseconds under pandas 3.0's datetime64[us] default).
+    t_ep = (ts[ok].to_numpy().astype("datetime64[ns]").astype("int64") / 1e9)
     return t_ep, val[ok].to_numpy(dtype=float)
 
 
@@ -1878,7 +1880,8 @@ def _all_pro_times(pro_df):
     ts = ts[ts.notna()]
     if ts.empty:
         return None
-    t_ep = ts.view("int64").to_numpy() / 1e9
+    # Resolution-independent ns epoch (see _metric_pro_series above).
+    t_ep = ts.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9
     return np.unique(t_ep)   # sorted + de-duped
 
 
@@ -2896,6 +2899,66 @@ def _suggested_percept_mode(polarity, adaptive_valid):
                   "Threshold Inverse' — deploy via a custom/negated feature, not stock adaptive")
 
 
+def _ramp_guidance(polarity, adaptive_valid, suggested_mode, *, stim_stable=None,
+                   power_available=None):
+    """Advisory Percept adaptive RAMP guidance for the sign-off (audit C10).
+
+    The closed-loop tuning surface is band + threshold + RAMP — but the module previously stopped at
+    band + threshold, leaving the programmer to pick a transition rate with no advice. Percept adaptive
+    ramps stimulation between the lower and upper amplitude limits when the sensed LFP band-power
+    crosses the detection threshold(s); the RAMP RATE (mA/s, set per direction as up/down) controls how
+    abruptly that transition happens. This is ADVISORY ONLY — the safe rate is patient- and
+    side-effect-bound and must be titrated in clinic — but a sensible starting posture follows from the
+    biomarker's properties:
+
+      * Not deployable as stock adaptive (out-of-range band, or negative polarity needing the inverse
+        control law) -> no ramp guidance; fix the control mapping first.
+      * A biomarker that is NOT stim-stable (band x era reversal / significant LRT) argues for a
+        SLOWER, more conservative ramp: the feature-to-pain relationship shifts as stim changes, so a
+        fast transition risks chasing a moving target. Flagged conservative.
+      * Otherwise a MODERATE starting ramp, titrated to comfort, with asymmetric up/down as the usual
+        starting posture (ramp DOWN — reducing stim — can be a touch faster than ramp UP for comfort).
+
+    Returns {available, posture, ramp_up_hint, ramp_down_hint, transition_note, reason} — all advisory
+    strings, never device-set values. Defensive: returns available False on any unknown control mapping.
+    """
+    if not adaptive_valid or suggested_mode is None or polarity != "positive":
+        return {
+            "available": False,
+            "reason": ("ramp guidance applies only to an in-range, positive-direction biomarker "
+                       "deployable as stock Percept adaptive; resolve the control mapping first "
+                       "(custom/negated feature or in-range re-anchor) before setting a ramp rate"),
+        }
+    # Anything not CONFIRMED stable (False = stim-dependent, None = LRT did not converge) takes the
+    # conservative posture — the same abstain philosophy as the C8 stim-stability gate: absence of a
+    # stability result is not evidence of stability, so do not start with a fast ramp.
+    conservative = (stim_stable is not True)
+    posture = "conservative" if conservative else "moderate"
+    if conservative:
+        why = ("Biomarker is stim-dependent (the band->pain relationship shifts across stim eras)"
+               if stim_stable is False else
+               "stim-stability is UNCONFIRMED (the band×era LRT did not converge)")
+        transition_note = (f"{why} — start SLOW so a fast transition does not chase a moving target; "
+                           "re-evaluate stability before speeding the ramp up.")
+        ramp_up_hint = "start at the slow end of the clinic range, titrate up only if symptom control lags"
+        ramp_down_hint = "match or slightly faster than ramp-up, prioritizing comfort on stim reduction"
+    else:
+        transition_note = ("Biomarker is stim-stable — a moderate transition is a reasonable starting "
+                           "posture; titrate to the patient's comfort and side-effect threshold in clinic.")
+        ramp_up_hint = "moderate starting rate, titrate up to comfort"
+        ramp_down_hint = "moderate, may be set slightly faster than ramp-up for comfort on stim reduction"
+    return {
+        "available": True,
+        "posture": posture,
+        "ramp_up_hint": ramp_up_hint,
+        "ramp_down_hint": ramp_down_hint,
+        "transition_note": transition_note,
+        "reason": ("Advisory only — the deployable ramp rate is patient- and side-effect-bound and "
+                   "must be titrated in clinic. This is a starting posture from the biomarker's "
+                   "polarity, adaptive-range validity, and stim-stability."),
+    }
+
+
 def build_band_candidate(request_data):
     """Assemble a serializable BandCandidate object (DESIGN_biomarker_pipeline_v2 §6) for ONE
     validated (channel, band) — the contract handed from the discovery/Biomarkers view to the
@@ -3132,6 +3195,118 @@ def band_deployment_roc(request_data):
     }
 
 
+def band_psd_lsb_conversion(request_data):
+    """Derive a PSD→device-LSB conversion for ONE channel from time-matched chronic streams.
+
+    The device reports band power in "LSB" units; an offline Welch PSD reports physical µV²/Hz. This
+    pairs every offline PSD epoch on the channel with the device's own LSB Timeline samples recorded
+    within a time window (±MatchWindowH hours, default 1) and fits the proportional law LSB = k·µV²
+    (analytics.psd_lsb_conversion), integrating each PSD over the band the DEVICE was actually sensing
+    at that moment (each LSB sample carries its sensing center_hz) with the mains line-noise notched.
+
+    The user's design choice: pairs within 1–2 h are "good enough" because chronic band power is
+    slowly varying. The conversion is a cross-scale CALIBRATION (show a physical µV² target in the LSB
+    units the device programs), not a control law.
+
+    Request: ParticipantId, Channel; optional CenterHz (fixed band centre, else use each LSB sample's
+    own sensing center_hz), BandWidthHz (default 5.0), MatchWindowH (default 1.0), NBoot (default 2000).
+    Returns analytics.psd_lsb_conversion(...) enriched with channel, match_window_h, band_width_hz,
+    center_hz_mode, and a small scatter sample (≤400 points) for the panel, or {available: False,...}.
+    """
+    participant_uid = request_data.get("ParticipantId")
+    channel = request_data.get("Channel")
+    if not (participant_uid and channel):
+        return {"available": False, "reason": "ParticipantId and Channel required"}
+    try:
+        win_h = float(request_data.get("MatchWindowH", 1.0))
+    except (TypeError, ValueError):
+        win_h = 1.0
+    win_h = min(max(win_h, 0.25), 6.0)
+    half = float(request_data.get("BandWidthHz", 5.0)) / 2.0
+    fixed_center = request_data.get("CenterHz")
+    try:
+        fixed_center = float(fixed_center) if fixed_center is not None else None
+    except (TypeError, ValueError):
+        fixed_center = None
+    n_boot = _int_param(request_data, "NBoot", default=2000, lo=200, hi=5000)
+
+    Participant = models.Participant.find(uid=participant_uid)
+    if Participant is None:
+        return {"available": False, "reason": f"participant {participant_uid} not found"}
+
+    short = analytics.format_channel(channel)["short"]
+
+    # --- raw PSD rows for this channel (cached per-recording; {channel, source, t, freq, power}) ---
+    try:
+        rows, _nc, _ncomp = _assemble_psd_rows_cached(participant_uid)
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"PSD assembly failed: {e}"}
+    psds = []
+    for r in rows:
+        rc = r.get("channel")
+        if rc == channel or analytics.format_channel(rc)["short"] == short:
+            psds.append((float(r["t"]), r["freq"], r["power"]))
+    if len(psds) < 20:
+        return {"available": False, "reason": f"only {len(psds)} offline PSD epochs on {channel}",
+                "n_pairs": 0}
+    psds.sort(key=lambda x: x[0])
+
+    # --- device LSB Timeline for this channel (chronic + powerdomain streaming) ---
+    chronic = _load_recordings(participant_uid, CHRONIC_TYPES)
+    pdl = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+    from modules.Biomarkers.routines import availability as _av
+    lsb = _av.lsb_series(chronic, pdl)
+    L = lsb.get(channel) or lsb.get(short)
+    if not L:
+        return {"available": False, "reason": f"no device LSB Timeline for {channel}", "n_pairs": 0}
+    ly = np.asarray(L.get("y"), dtype=float)
+    lt = np.asarray(L.get("t"), dtype=float)
+    lc = np.asarray(L.get("center_hz"), dtype=float)
+    keep = np.isfinite(ly) & (ly > 0) & np.isfinite(lt)
+    ly, lt, lc = ly[keep], lt[keep], lc[keep]
+    if lt.size < 20:
+        return {"available": False, "reason": f"only {lt.size} usable device LSB samples on {channel}",
+                "n_pairs": 0}
+    order = np.argsort(lt); ly, lt, lc = ly[order], lt[order], lc[order]
+
+    # --- time-match each PSD epoch to the device LSB within ±win_h, integrate PSD over the sensed band ---
+    win_s = win_h * 3600.0
+    pair_P, pair_L, pair_t = [], [], []
+    for (tp, fr, pw) in psds:
+        a = int(np.searchsorted(lt, tp - win_s, side="left"))
+        b = int(np.searchsorted(lt, tp + win_s, side="right"))
+        if b - a < 1:
+            continue
+        if fixed_center is not None:
+            center = fixed_center
+        else:
+            cc = lc[a:b]; cc = cc[np.isfinite(cc)]
+            if cc.size == 0:
+                continue
+            center = float(np.median(cc))
+        bp = analytics._band_power_notched(fr, pw, center, half)
+        if not (np.isfinite(bp) and bp > 0):
+            continue
+        pair_P.append(bp); pair_L.append(float(np.median(ly[a:b]))); pair_t.append(tp)
+
+    fit = analytics.psd_lsb_conversion(np.asarray(pair_P), np.asarray(pair_L), n_boot=n_boot)
+    fit["channel"] = channel
+    fit["channel_label"] = analytics.format_channel(channel)["label"]
+    fit["match_window_h"] = win_h
+    fit["band_width_hz"] = half * 2.0
+    fit["center_hz_mode"] = ("fixed %.1f Hz" % fixed_center) if fixed_center is not None \
+        else "device sensing center (per-sample)"
+    # A decimated scatter for the panel (cap the payload).
+    if fit.get("available") and pair_P:
+        P = np.asarray(pair_P); Lv = np.asarray(pair_L)
+        idx = np.arange(P.size)
+        if P.size > 400:
+            idx = np.linspace(0, P.size - 1, 400).astype(int)
+        fit["scatter"] = {"psd_uv2": [float(x) for x in P[idx]],
+                          "lsb": [float(x) for x in Lv[idx]]}
+    return fit
+
+
 def _sensing_hz_for_pd(pd_rec, contact):
     """Resolve a PowerDomain recording's sensing center frequency for a contact, from its
     Descriptor.Therapy snapshot (the TD streaming recording carries no Therapy)."""
@@ -3227,6 +3402,49 @@ def band_lsb_and_power(request_data):
                      "this band."),
         }
 
+    # ---- 1b) recommended-vs-currently-programmed delta (audit C10) ----
+    # The task here is tuning an EXISTING device setting, so a recommended LSB number alone forces the
+    # programmer to context-switch to the device to know whether it is a small nudge or a large change.
+    # Surface the currently-programmed adaptive UPPER threshold for THIS channel's hemisphere (same LFP
+    # units as the recommendation, present only when closed loop is active on that hemisphere) and the
+    # signed delta. Defensive: any failure leaves recommended_vs_programmed unavailable, never raises.
+    recommended_vs_programmed = {"available": False,
+                                 "reason": "no active closed-loop program on this hemisphere"}
+    try:
+        Participant = models.Participant.find(uid=core["participant_uid"])
+        prog = _programmed_adaptive_thresholds(Participant) if Participant else {}
+        hemi = analytics.format_channel(channel).get("hemisphere")
+        ph = prog.get(hemi) if hemi else None
+        if ph and threshold_lsb.get("available") and threshold_lsb.get("upper_lsb") is not None:
+            rec = float(threshold_lsb["upper_lsb"])
+            prog_upper = ph.get("upper")
+            delta = (rec - float(prog_upper)) if prog_upper is not None else None
+            pct = ((delta / float(prog_upper) * 100.0) if (delta is not None and prog_upper) else None)
+            recommended_vs_programmed = {
+                "available": True,
+                "hemisphere": hemi,
+                "recommended_upper_lsb": round(rec, 1),
+                "programmed_upper_lsb": (round(float(prog_upper), 1) if prog_upper is not None else None),
+                "programmed_lower_lsb": (round(float(ph.get("lower")), 1) if ph.get("lower") is not None else None),
+                "delta_lsb": (round(delta, 1) if delta is not None else None),
+                "delta_pct": (round(pct, 1) if pct is not None else None),
+                "direction": (None if delta is None else
+                              ("raise" if delta > 0 else "lower" if delta < 0 else "unchanged")),
+                "programmed_status": ph.get("status"),
+                "programmed_date": ph.get("date"),
+                "note": ("Recommended threshold vs the value currently programmed on the device for this "
+                         "hemisphere (same device LFP-power units). Positive delta = raise the upper "
+                         "threshold (stim engages later); negative = lower it (stim engages sooner)."),
+            }
+        elif ph:
+            recommended_vs_programmed = {
+                "available": False, "hemisphere": hemi,
+                "programmed_upper_lsb": (round(float(ph.get("upper")), 1) if ph.get("upper") is not None else None),
+                "reason": "a closed-loop program is active but no deployable recommended LSB threshold to compare",
+            }
+    except Exception as _e:  # noqa: BLE001 — therapy metadata must never break the LSB report
+        recommended_vs_programmed = {"available": False, "reason": f"programmed-threshold lookup failed: {_e}"}
+
     # ---- 2) empirical µV²/LSB ratio (FYI) ----
     td_list = _load_recordings(core["participant_uid"], ["MedtronicBrainSenseTimeDomain"])
     lsb_ratio = analytics.empirical_lsb_ratio(td_list, pd_list, _sensing_hz_for_pd)
@@ -3256,6 +3474,7 @@ def band_lsb_and_power(request_data):
         "label_metric": core["label_metric"], "match_direction": core["match_direction"],
         "cutpoint_feature": _ff(cutpoint), "percentile": _ff(percentile), "n_matched_samples": n_feat,
         "threshold_lsb": threshold_lsb,
+        "recommended_vs_programmed": recommended_vs_programmed,
         "lsb_ratio": lsb_ratio,
         "power": power,
         "auc": _ff(roc.get("auc")) if roc.get("available") else None,
@@ -3470,6 +3689,13 @@ def deployment_summary(request_data):
         "device_control": {
             "adaptive_valid": adaptive_valid, "polarity": polarity,
             "suggested_mode": suggested_mode, "suggested_mode_reason": mode_reason,
+            # Advisory ramp-parameter guidance (audit C10): the closed-loop tuning surface is band +
+            # threshold + RAMP. stim_stable is the tri-state value (True/False/None) the C8 gate keys
+            # on — None (LRT did not converge) is treated as "not confirmed stable", i.e. conservative.
+            "ramp": _ramp_guidance(
+                polarity, adaptive_valid, suggested_mode,
+                stim_stable=(bool(st.get("stim_stable")) if st.get("available") else None),
+                power_available=bool(power.get("available"))),
         },
         "threshold": {
             "available": thr_lsb is not None, "upper_lsb": thr_lsb,

@@ -191,7 +191,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         range: [yLo, yHi], tickfont: { size: 10.5 }, automargin: true },
       annotations, showlegend: false,
     };
-    Plotly.react(ref.current, traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Purge on unmount only (keep the node across refits).

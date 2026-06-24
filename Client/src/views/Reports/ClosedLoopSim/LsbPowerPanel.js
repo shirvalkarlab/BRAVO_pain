@@ -61,6 +61,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
   const tl = data && data.threshold_lsb;
   const pw = data && data.power;
   const lr = data && data.lsb_ratio;
+  const rvp = data && data.recommended_vs_programmed;   // audit C10: recommended-vs-programmed Δ
 
   // Draw the POWER-vs-N sufficiency curve once per payload: power to reject AUC=0.5 as the count of
   // independent ratings grows, with the 80% target line, and markers at the current N and the N
@@ -137,7 +138,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
       ],
       annotations,
     };
-    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => { if (pwRef.current) Plotly.purge(pwRef.current); }, []);
@@ -208,6 +209,42 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                 </MDTypography>
               </MDBox>
             )}
+
+            {/* 1b) RECOMMENDED vs CURRENTLY-PROGRAMMED Δ (audit C10). Renders only when a closed-loop
+                program is active on this hemisphere — the recommended number alone forces a programmer
+                context-switch to know whether it is a small nudge or a large change. */}
+            {rvp && rvp.available ? (
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12",
+                borderRadius: "6px", border: `1px solid ${PAL.neutralBorder || "#6C757D44"}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.neutral }}>
+                  {`RECOMMENDED vs PROGRAMMED · ${rvp.hemisphere || ""} hemisphere`}
+                </MDTypography>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 12, mt: 0.3 }}>
+                  {`recommended ${fmt(rvp.recommended_upper_lsb, 1)} LSB  ·  programmed `
+                    + `${fmt(rvp.programmed_upper_lsb, 1)} LSB`}
+                </MDTypography>
+                {rvp.delta_lsb != null ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 13, fontWeight: "bold", mt: 0.2,
+                    color: rvp.direction === "unchanged" ? PAL.pass : PAL.warnText }}>
+                    {`Δ ${rvp.delta_lsb > 0 ? "+" : ""}${fmt(rvp.delta_lsb, 1)} LSB`
+                      + `${rvp.delta_pct != null ? ` (${rvp.delta_pct > 0 ? "+" : ""}${fmt(rvp.delta_pct, 0)}%)` : ""}`
+                      + ` — ${rvp.direction === "raise" ? "raise the upper threshold (stim engages later)"
+                          : rvp.direction === "lower" ? "lower the upper threshold (stim engages sooner)"
+                          : "no change from the programmed value"}`}
+                  </MDTypography>
+                ) : null}
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
+                  {`Programmed ${rvp.programmed_status || "adaptive"}${rvp.programmed_date ? ` · ${String(rvp.programmed_date).slice(0, 10)}` : ""} · same device LFP-power units.`}
+                </MDTypography>
+              </MDBox>
+            ) : rvp && rvp.programmed_upper_lsb != null ? (
+              <MDBox p={1.0} mb={1.2} sx={{ backgroundColor: PAL.neutralFill || "#6C757D12", borderRadius: "6px" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10.5, color: PAL.neutral }}>
+                  {`Device currently programmed at ${fmt(rvp.programmed_upper_lsb, 1)} LSB `
+                    + `(${rvp.hemisphere || ""}); no deployable recommendation to compare yet.`}
+                </MDTypography>
+              </MDBox>
+            ) : null}
 
             {/* 2) POWER / SAMPLE-SIZE — a power-vs-N sufficiency curve instead of three numbers. */}
             {pw && pw.available ? (

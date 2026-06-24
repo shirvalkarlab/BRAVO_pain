@@ -224,6 +224,28 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   )}
                 </MDBox>
 
+                {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +
+                    threshold + RAMP. Renders only when the biomarker is deployable as stock adaptive. */}
+                {dc && dc.ramp && dc.ramp.available ? (
+                  <MDBox mt={1.2} p={1.0} sx={{ borderRadius: "6px",
+                    backgroundColor: dc.ramp.posture === "conservative" ? PAL.warnFill : PAL.passFill,
+                    border: `1px solid ${dc.ramp.posture === "conservative" ? PAL.warnBorder : (PAL.passBorder || "#009E7344")}` }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                      color: dc.ramp.posture === "conservative" ? PAL.warnText : PAL.pass }}>
+                      {`RAMP GUIDANCE — ${String(dc.ramp.posture).toUpperCase()} (advisory)`}
+                    </MDTypography>
+                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10.5, mt: 0.3 }}>
+                      {dc.ramp.transition_note}
+                    </MDTypography>
+                    <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                      {`Ramp up: ${dc.ramp.ramp_up_hint}. Ramp down: ${dc.ramp.ramp_down_hint}.`}
+                    </MDTypography>
+                    <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#777", mt: 0.3, fontStyle: "italic" }}>
+                      {dc.ramp.reason}
+                    </MDTypography>
+                  </MDBox>
+                ) : null}
+
                 <MDBox mt={1.2}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
                     EVIDENCE

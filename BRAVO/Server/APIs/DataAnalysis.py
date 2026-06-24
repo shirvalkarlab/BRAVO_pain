@@ -809,6 +809,45 @@ class QueryLsbPower(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryPsdLsbConversion(RestViews.APIView):
+    """
+    API View that derives a PSD->device-LSB conversion for one channel from time-matched chronic
+    streams: it pairs every offline Welch PSD epoch with the device's own LSB Timeline samples within
+    +/-MatchWindowH hours and fits the proportional law LSB = k*uV^2(band), integrating the PSD over
+    the band the device was actually sensing (mains line-noise notched). A cross-scale CALIBRATION so
+    the deployment view can show a physical uV^2 target in the LSB units the device programs.
+
+    **URL:** ``/queryPsdLsbConversion``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Channel; optional CenterHz (fix the band centre, else use
+    each LSB sample's own sensing center), BandWidthHz (default 5.0), MatchWindowH (default 1.0,
+    clamped 0.25-6.0), NBoot (default 2000).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_psd_lsb_conversion(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "psd/lsb conversion error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryDeploymentRocByEra(RestViews.APIView):
     """
     API View that refits the deployment ROC + Youden cut-point WITHIN each stimulation era
