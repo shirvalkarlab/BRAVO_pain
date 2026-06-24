@@ -299,3 +299,15 @@ key (BASE, unconditional — the first-window path serves montage/survey too) an
 - No regression: a real clean (0% missing) recording yields byte-identical rows pre/post fix.
 
 Gunicorn `--reload` picks up the edit. No image rebuild needed.
+
+### Correction to the concat→PRO-match audit (timezone)
+
+The first pass of AUDIT_concat_vs_PRO_matching_RCS08.md parsed the PRO timestamp column with
+`utc=True`, treating REDCap California-local wall-clock as if it were UTC — the exact 7-8 h smear that
+`bravo_service._pro_timestamps_utc` exists to prevent. Corrected to use the service's CA→UTC
+conversion. Impact: the matched-PRO pool grows from a spurious 2/678 to **67/678** (23 BrainSenseTD +
+51 IndefiniteStream; 16 fall inside a recording span). Re-ran the both-ways test against the full,
+correctly-timed pool: matched 67 vs 67, **0 lost / 0 gained / 0 status changes**, max match-distance
+change 0.00 min across the 8 files where merges fired. Also confirmed `MedtronicIndefiniteStream` is a
+TD-Welch source (`TIMEDOMAIN_TYPES`) but is NOT subject to FixBreaking (groups strictly by
+FirstPacketDateTime). Conclusion unchanged: matching is robust to concatenation; fix A stands.

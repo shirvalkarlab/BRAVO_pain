@@ -28,42 +28,55 @@ So the only way concatenation could *drop* a match is if it moved a recording's 
 min away from a PRO that was previously ≤60 min from a now-absorbed recording. The data show this
 never happens.
 
+## Timezone correction (important — first pass was wrong)
+
+The PRO timestamp column `date_time_s1_daily` is REDCap **California local wall-clock**, not UTC. The
+service localizes it to `America/Los_Angeles` then converts to UTC (`bravo_service._pro_timestamps_utc`,
+documented in FIXHANDOUT_pro_timezone_mismatch) — a +7 h (PDT) / +8 h (PST) shift. The device side
+(TD `StartTime`) is already UTC per the Medtronic white paper. A first pass here parsed the PRO
+column with `utc=True`, placing every pain score 7-8 h too early — exactly the historical bug the
+service guards against — which collapsed the apparent overlap to a spurious 2/678. **All numbers
+below use the service's own CA→UTC conversion.** The conclusion (matching robust to concat) is
+unchanged, but the match pool is an order of magnitude larger, so the test is far more meaningful.
+
 ## Evidence
 
-**The deployed cache:** 224 `MedtronicBrainSenseTimeDomain` recordings ingested from 499 source
-files, spanning 2025-07-17 → 2026-06-10. **678 PRO reports** (processed chronic table), spanning
-2025-07-20 → 2026-06-16. The "concatenate" checkbox was ON at ingest, so the live recordings are
-already in the concatenated state.
+**The deployed cache:** 224 `MedtronicBrainSenseTimeDomain` + 108 `MedtronicIndefiniteStream`
+recordings (BOTH are `TIMEDOMAIN_TYPES` → both feed the Welch matcher), from 499 source files.
+IndefiniteStreams are long (median 16 min, up to 90 min) and carry most matches. **678 PRO reports**,
+spanning 2025-07-20 → 2026-06-16. The "concatenate" checkbox was ON at ingest. **Only
+`MedtronicBrainSenseTimeDomain` is subject to FixBreaking concatenation** — IndefiniteStreams group
+strictly by `FirstPacketDateTime` (`saveIndefiniteStreams`), no cross-time merge, so their emissions
+are identical regardless of the flag.
 
-**Test 1 — re-decode every source file both ways, compare PRO matches.** Decoded all Medtronic
-source files with `FixBreaking=False` (no concat) and `=True` (concat), replicated the exact emission
-+ 60-min matcher against the 678 real PRO times:
-- 25 source files yield TD streams; concatenation merges occurred in 8 of them.
-- PROs matched within 60 min: **2 (no-concat) vs 2 (concat) — identical.**
-- PROs that LOSE a match due to concat: **0.** PROs that GAIN a spurious match: **0.**
-- PROs whose match status changed at all: **0.**
+**Match census (correct tz, both TD sources, live concatenated cache):**
+- **67 of 678 PROs** have a neural match within the 60-min tolerance (23 via BrainSenseTD, 51 via
+  IndefiniteStream; overlapping).
+- **16 of 678 PROs fall INSIDE a recording's `[t0, t0+dur]` span** → matched via the rating-centered
+  path, which is concat-immune by construction (concatenation only extends spans).
 
-**Test 2 — direct against the 224 live ingested recordings.** Only **2 of 678 PROs** fall within
-60 min of *any* ingested TD recording start at all:
-- PRO 2025-09-18 18:05:27 → nearest TD 18:08:31 (3.1 min)
-- PRO 2026-06-10 19:14:31 → nearest TD 20:01:14 (46.7 min)
-
-**Test 3 — mechanism of those 2 matches, both ways.** For each matched PRO, identified the matching
-recording and path under concat on/off:
-- 2025-09-18 PRO: matches via **nearest-fallback**, dist **3.07 min** under BOTH settings. Concat
-  changed the matched recording's duration (64 s → 952 s) but **not** the match distance or outcome.
-- 2026-06-10 PRO: matches via nearest-fallback, dist **46.73 min**, **identical** both ways (that
-  file had no qualifying merge).
+**Decisive test — re-decode the at-risk source (BrainSenseTD) both ways, match against the FULL pool
+(BrainSenseTD re-decoded + the fixed IndefiniteStream pool), correct tz:**
+- 25 source files yield BrainSenseTD streams; concatenation merges occurred in 8 of them.
+- PROs matched within 60 min: **67 (no-concat) vs 67 (concat) — identical.**
+- PROs that LOSE a match due to concat: **0.** PROs that GAIN a spurious match: **0.** Status
+  changes: **0.**
+- inside-span (rating-centered) PROs from BrainSenseTD: **3 vs 3, none lost from inside.**
+- Among all 67 matched-both PROs, **max match-distance change = 0.00 min** (BrainSenseTD-only
+  emission run gave a max of 0.88 min before adding the IndefiniteStream pool; with the full pool the
+  nearest match is unchanged to the second).
 
 ## Why the structural risk is real but the empirical risk is nil
 
 The structural failure mode you described is real in principle — the nearest-fallback layer keys on a
 single `StartTime`, and concatenation moves that point earlier. It does not bite **here** because:
-1. RCS08 streaming sessions and pain reports are almost entirely **disjoint in time** — only 2/678
-   PROs land within an hour of any TD recording. The patient rates pain on a daily-ish cadence;
-   BrainSense streaming happens in discrete clinic/research sessions. They rarely coincide.
-2. The 60-min tolerance dominates the ≤30 s merge gaps by two orders of magnitude.
-3. The rating-centered layer makes in-session PROs concat-immune by construction.
+1. The merges that fire are short (gaps ≤30 s) and the match tolerance is 60 min, so a `StartTime`
+   shift from concatenation (≤~20 min even for a fully chained merge) stays well inside the window —
+   the 60-min tolerance dominates the merge gaps by two orders of magnitude.
+2. Most matches (51/67) come from IndefiniteStream, which is **not** subject to FixBreaking at all.
+3. The rating-centered layer makes in-session PROs (16/678) concat-immune by construction.
+4. Empirically, across all 8 files where merges fired, not one of the 67 matched PROs changed status
+   and the nearest-match distance was unchanged.
 
 **Caveat / monitoring:** this is a property of the *current* RCS08 data, not a theorem. If a future
 protocol streams TD **continuously around pain ratings** (e.g. closed-loop sensing with frequent
