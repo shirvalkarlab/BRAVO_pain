@@ -1899,6 +1899,47 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     }
 
 
+def _rpy2_converter_ctx():
+    """Activate a NON-EMPTY rpy2 conversion context on the CURRENT thread for a pymer4 fit.
+
+    rpy2 >= 3.5 stores the active conversion rules in a `contextvars.ContextVar`. pymer4 calls
+    `pandas2ri.activate()` once at import (on the main/import thread), but a ContextVar set on one
+    thread does NOT propagate to others — Django serves each request on a worker thread (and the
+    PSD/validation machinery also uses ThreadPoolExecutor). On that worker the converter is empty,
+    so pymer4's R calls raise:
+        "Conversion rules for `rpy2.robjects` appear to be missing. Those rules are in a Python
+         contextvars.ContextVar. This could be caused by multithreading code not passing context
+         to the thread."
+    Entering this context manager around every Lmer construction + .fit() re-establishes a
+    non-empty converter for the duration of the fit, so the call works regardless of which thread
+    runs it.
+
+    IMPORTANT — use the PLAIN default_converter here, NOT (default_converter + pandas2ri.converter).
+    We only need *some* non-empty converter active to silence the "rules missing" error above;
+    pymer4 0.8.2 performs its OWN pandas<->R DataFrame conversion internally (pymer4.bridge.pandas2R
+    and R2pandas each open their own localconverter(default + pandas2ri)), so the outer context does
+    not need pandas2ri — and must NOT add it. With pandas2ri's rpy2py rules active in the outer
+    context, the R control object that pymer4 builds via `robjects.r("glmerControl(...)")` /
+    `lmerControl(...)` is eagerly converted to a Python `rpy2.rlike.container.OrdDict` and loses its
+    R class. rpy2 3.5.15 then has no `py2rpy` rule for OrdDict when pymer4 passes it back into
+    `lme4::glmer(control=...)` ("Conversion 'py2rpy' not defined for ... OrdDict"); and even a
+    hand-registered OrdDict->ListVector converter yields a plain R list that glmer rejects ("unused
+    arguments checkControl/checkConv"), because the nested glmer.control structure/class is gone.
+    default_converter alone leaves the control object as a native R ListVector, and the fit (plus
+    coef/CI/OR extraction) succeeds. Verified in-container against rpy2 3.5.15 / pymer4 0.8.2.
+
+    Returns a no-op nullcontext when rpy2 isn't importable (the caller already guards pymer4
+    availability separately and degrades to {available: False}).
+    """
+    try:
+        import rpy2.robjects as ro
+        from rpy2.robjects.conversion import localconverter
+        return localconverter(ro.default_converter)
+    except Exception:
+        from contextlib import nullcontext
+        return nullcontext()
+
+
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                               pain_cutoff=None, cluster="era"):
@@ -1959,8 +2000,12 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     n_clusters = int(df["cluster"].nunique())
     formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
     try:
-        mod = Lmer(formula, data=df, family="binomial")
-        mod.fit(summarize=False)
+        # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in
+        # THIS thread (see _rpy2_converter_ctx). pymer4 populates .coefs/.ranef_var as plain pandas
+        # during fit, so only the construction + fit need the context.
+        with _rpy2_converter_ctx():
+            mod = Lmer(formula, data=df, family="binomial")
+            mod.fit(summarize=False)
         coefs = mod.coefs
         row = coefs.loc["band_power"]
         est = float(row.get("Estimate"))
@@ -1999,7 +2044,10 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         # We still report the fit but flag it so the UI can downgrade confidence.
         singular = False
         try:
-            ranef = mod.ranef_var
+            # ranef_var can lazily pull from the fitted R object, so read it under the converter
+            # context too (the try/except already keeps a conversion hiccup from crashing the fit).
+            with _rpy2_converter_ctx():
+                ranef = mod.ranef_var
             if "Var" in ranef.columns and len(ranef):
                 singular = bool(float(ranef["Var"].iloc[0]) < 1e-6)
         except Exception:
@@ -2097,8 +2145,12 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
     formula_full = f"pain_high ~ band_power * stim_era {re_term}"
     n_eras_present = int(df["stim_era"].cat.remove_unused_categories().nunique())
     try:
-        m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
-        m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
+        # Both fits + their pandas<->R conversions must run with rpy2's converter active in THIS
+        # thread (see _rpy2_converter_ctx) — otherwise the worker thread raises the "conversion rules
+        # ... missing" ContextVar error. logLike is a cached float after fit, read outside the ctx.
+        with _rpy2_converter_ctx():
+            m0 = Lmer(formula_red, data=df, family="binomial"); m0.fit(summarize=False)
+            m1 = Lmer(formula_full, data=df, family="binomial"); m1.fit(summarize=False)
         # PARITY (audit §6): compute the LRT exactly as offline phase2b — chi2 = 2*(ll_full -
         # ll_reduced), p from chi2 with df = number of interaction terms added = (n_eras - 1). The
         # previous live path used R's anova(m0, m1), whose df accounting for the lme4 nested fit
