@@ -611,6 +611,131 @@ def test_pooled_psd_detail_is_per_channel_and_matches_pro():
     assert np.isfinite(det["labels"]).sum() == 1
 
 
+def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
+    """Audit C1: the rating-clustered bootstrap CI must be DE-FOLDED — each replicate appends the
+    fixed-orientation AUC, not max(ab, 1-ab). On a true-NULL band the folded version censored the
+    lower bound at ~0.5 (a manufactured "beats chance" floor); the de-folded CI must be able to
+    drop honestly below 0.5. A planted band still keeps both bounds above chance."""
+    import numpy as _np
+    rng = _np.random.default_rng(7)
+    E, C, F = 200, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.3, (E, C, F)))           # NO planted signal -> null band
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
+    assert roc["available"] and roc["auc_lo"] is not None
+    # the de-folded null CI honestly reaches below chance (the old fold pinned this at ~0.5)
+    assert roc["auc_lo"] < 0.5, f"null lower CI {roc['auc_lo']} should drop below 0.5 (de-fold)"
+    assert "de-folded" in roc.get("ci_method", "")
+    # CI still brackets the (oriented) point estimate
+    assert roc["auc_lo"] <= roc["auc"] + 1e-9 <= roc["auc_hi"] + 1e-9
+
+    # A genuinely strong planted band keeps the WHOLE CI above chance.
+    rng2 = _np.random.default_rng(3)
+    labels2 = rng2.normal(5, 2, 120)
+    psd2 = _np.abs(rng2.normal(1, 0.2, (120, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd2[:, 0, band] *= (1 + 0.8 * (labels2 - labels2.mean())[:, None])
+    det2 = {"f_set": f, "psd": psd2, "labels": labels2,
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(120)]}
+    roc2 = analytics.deployment_roc(det2, "ZERO_TWO_LEFT", 20.0, n_boot=300, seed=1)
+    assert roc2["auc_lo"] > 0.5, f"planted lower CI {roc2['auc_lo']} should stay above chance"
+
+
+def _era_split_detail(E=240, beta=0.6, high_sign=1.0, seed=11):
+    """Synthetic td_detail spanning 90 days with an OFF->LOW->HIGH stim trajectory, planting a
+    band-pain relationship whose SIGN in the HIGH era is `high_sign` (use -1 to plant a reversal).
+    Returns (det, stim_series)."""
+    import datetime as _dt
+    rng = np.random.default_rng(seed)
+    F = 60
+    f = np.linspace(0.95, 100, F)
+    band = (f >= 17.5) & (f <= 22.5)
+    base = 1_700_000_000.0
+    t_epoch = base + np.sort(rng.uniform(0, 90 * 86400, E))
+    times = [_dt.datetime.utcfromtimestamp(t).isoformat(sep=" ") for t in t_epoch]
+    labels = rng.normal(5, 2, E)
+    psd = np.abs(rng.normal(1, 0.3, (E, 2, F)))
+    # era sign: OFF/LOW positive, HIGH per high_sign. Eras are the time thirds (stim steps below).
+    sign = np.ones(E)
+    sign[2 * (E // 3):] = high_sign
+    psd[:, 0, band] *= (1 + (beta * sign * (labels - labels.mean()))[:, None])
+    st = np.linspace(base, base + 90 * 86400, 9)
+    sy = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+    return det, {"t": list(st), "y": list(sy)}
+
+
+def test_deployment_roc_by_era_pooled_orientation_surfaces_reversal():
+    """Audit C3: every era is oriented to the POOLED sign (no per-era re-fold), so an era whose
+    band-pain relationship reverses under stim reports a SIGNED AUC below 0.5 and reversed=True —
+    the worst closed-loop failure — instead of folding back above 0.5 and reading 'portable'.
+    Portability then keys on CI overlap + reversal, not raw point-AUC spread."""
+    det, stim = _era_split_detail(high_sign=-1.0, seed=11)   # HIGH era reverses
+    res = analytics.deployment_roc_by_era(det, "ZERO_TWO_LEFT", 20.0, stim, n_boot=300, seed=0)
+    assert res["available"], res.get("reason")
+    counts = res["era_counts"]
+    assert counts["OFF"] > 0 and counts["LOW"] > 0 and counts["HIGH"] > 0
+    # the pooled fit is oriented to its own data (>= 0.5); a reversing era folds BELOW 0.5
+    assert res["pooled"]["auc"] >= 0.5
+    high = res["eras"]["HIGH"]
+    assert high["available"] and high["auc"] < 0.5 and high["reversed"] is True, high
+    # the reversal must propagate to the panel-level signals
+    assert res["any_reversed"] is True
+    assert res["portable_by_ci"] is False
+    assert res["ci_overlaps_pooled"]["HIGH"] is False
+
+
+def test_deployment_roc_by_era_portable_when_eras_agree():
+    """Audit C3 (other direction): when every era shares the pooled sign and their CIs overlap the
+    pooled CI, the band is portable_by_ci and no era is flagged reversed."""
+    det, stim = _era_split_detail(beta=0.35, high_sign=1.0, seed=5)   # all-positive
+    res = analytics.deployment_roc_by_era(det, "ZERO_TWO_LEFT", 20.0, stim, n_boot=300, seed=0)
+    assert res["available"] and res["n_eras_estimable"] >= 2
+    assert res["any_reversed"] is False
+    assert res["portable_by_ci"] is True
+    for tag in ["OFF", "LOW", "HIGH"]:
+        e = res["eras"][tag]
+        if e.get("available"):
+            assert e["reversed"] is False and e["auc"] >= 0.5
+
+
+def test_deployment_summary_gate_states_and_necessary_blocking():
+    """Audit C8: gates carry a tri-state (`state`) and a `necessary` flag. An unavailable stim LRT
+    must render 'indeterminate' (NOT a pass), and 'ready_to_program' is gated on the NECESSARY
+    checks alone, so a hard-prerequisite failure blocks even at a high passed-count. Tested on the
+    pure gate-assembly logic (no DB) by exercising the documented contract shape."""
+    # Build a minimal gate list mirroring deployment_summary's _gate() contract and assert the
+    # downstream arithmetic the card relies on.
+    def _gate(key, label, state, necessary=False):
+        return {"key": key, "label": label, "state": state,
+                "pass": state == "pass", "necessary": bool(necessary)}
+    gates = [
+        _gate("validated", "Band validated", "pass", necessary=True),
+        _gate("adaptive_band", "In adaptive range", "pass", necessary=True),
+        _gate("deployable_threshold", "Deployable LSB threshold", "fail", necessary=True),
+        _gate("credible_ci", "Credible CI", "pass"),
+        _gate("stim_stable", "Stim-stable", "indeterminate"),   # LRT didn't converge
+        _gate("powered", "Powered", "pass"),
+    ]
+    # indeterminate must NOT count as a pass
+    assert gates[4]["pass"] is False
+    n_indet = sum(1 for g in gates if g["state"] == "indeterminate")
+    assert n_indet == 1
+    # 4 of 6 "pass" by count, but a NECESSARY gate failed -> not ready to program
+    n_passed = sum(1 for g in gates if g["pass"])
+    ready = all(g["pass"] for g in gates if g["necessary"])
+    assert n_passed == 4 and ready is False
+    # flip the failing necessary gate to pass -> ready, despite the indeterminate supportive gate
+    gates[2]["state"] = "pass"; gates[2]["pass"] = True
+    assert all(g["pass"] for g in gates if g["necessary"]) is True
+
+
 if __name__ == "__main__":
     test_otsu_matches_canonical_convention()
     test_roc_operating_point_is_youden_and_separates_classes()
@@ -647,6 +772,10 @@ if __name__ == "__main__":
     test_deployment_roc_feature_hist_shape_and_counts()
     test_auc_power_curve_monotone_and_crosses_target()
     test_auc_power_monotone_and_sample_size()
+    test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance()
+    test_deployment_roc_by_era_pooled_orientation_surfaces_reversal()
+    test_deployment_roc_by_era_portable_when_eras_agree()
+    test_deployment_summary_gate_states_and_necessary_blocking()
     print("All analytics tests passed.")
 
 

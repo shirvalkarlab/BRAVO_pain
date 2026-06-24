@@ -73,7 +73,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
     if (!gd || !curve || !Array.isArray(curve.n) || curve.n.length < 2) return;
     const tgt = pw.target_power != null ? pw.target_power : 0.80;
     const sufficient = !pw.more_data_needed;
-    const curColor = sufficient ? PAL.pass : PAL.warn;
+    const curColor = sufficient ? PAL.pass : PAL.warn;            // marker FILL (area) — orange OK
+    const curTextColor = sufficient ? PAL.pass : PAL.warnText;    // annotation TEXT — WCAG amber (C6)
+    const nMax = Math.max(...curve.n);
     const traces = [
       // power curve
       { x: curve.n, y: curve.power.map((p) => p * 100), type: "scatter", mode: "lines",
@@ -84,31 +86,56 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
         hovertemplate: `now: ${pw.n_ratings_current} ratings<br>power %{y:.0f}%<extra></extra>`,
         showlegend: false },
     ];
-    // needed-N marker (only when more data is needed and the number is known)
+    const annotations = [
+      { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
+        text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
+        font: { size: 9, color: PAL.pass } },
+      // Static "now" annotation so the current marker is self-identifying in a printout / grayscale
+      // (audit C7), not only on hover.
+      { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "top",
+        yshift: -6, text: `now: ${pw.n_ratings_current}`, showarrow: false,
+        font: { size: 8.5, color: curTextColor } },
+    ];
+    // needed-N marker (only when more data is needed and the number is known). Audit C5: place it at
+    // the CURVE's own power at n_need (linear-interpolate the existing curve array) — NOT on the 80%
+    // target line. The scalar n_ratings_needed comes from a closed-form SE²·N solve while the curve
+    // is exact Hanley–McNeil, so pinning the marker to tgt made it sit visibly OFF the curve and read
+    // as a glitch. Interpolating keeps marker and curve coincident.
     if (pw.more_data_needed && pw.n_ratings_needed != null) {
+      const nNeed = pw.n_ratings_needed;
+      const ns = curve.n; const ps = curve.power;
+      let yNeed;
+      if (nNeed <= ns[0]) {
+        yNeed = ps[0];
+      } else if (nNeed >= ns[ns.length - 1]) {
+        yNeed = ps[ps.length - 1];
+      } else {
+        let j = 1;
+        while (j < ns.length && ns[j] < nNeed) j += 1;
+        const x0 = ns[j - 1]; const x1 = ns[j]; const y0 = ps[j - 1]; const y1 = ps[j];
+        yNeed = x1 === x0 ? y1 : y0 + (y1 - y0) * ((nNeed - x0) / (x1 - x0));
+      }
       traces.push({
-        x: [pw.n_ratings_needed], y: [tgt * 100], type: "scatter", mode: "markers",
+        x: [nNeed], y: [yNeed * 100], type: "scatter", mode: "markers",
         marker: { color: PAL.neutral, size: 11, symbol: "circle-open", line: { width: 2 } },
-        hovertemplate: `need ${pw.n_ratings_needed} for ${(tgt * 100).toFixed(0)}% power<extra></extra>`,
+        hovertemplate: `need ${nNeed} for ${(tgt * 100).toFixed(0)}% power<extra></extra>`,
         showlegend: false });
+      annotations.push({ x: nNeed, y: yNeed * 100, xanchor: "center", yanchor: "bottom",
+        yshift: 6, text: `need: ${nNeed}`, showarrow: false,
+        font: { size: 8.5, color: PAL.neutral } });
     }
-    const nMax = Math.max(...curve.n);
     const layout = {
       margin: { l: 44, r: 12, t: 8, b: 36 }, height: 170,
       xaxis: { title: { text: "independent pain ratings (N)", font: { size: 10.5 } },
         zeroline: false, tickfont: { size: 9.5 }, range: [0, nMax * 1.02] },
-      yaxis: { title: { text: "power vs AUC 0.5 (%)", font: { size: 10 } },
+      yaxis: { title: { text: "Detection power for AUC > 0.5 (%)", font: { size: 10 } },
         range: [0, 102], zeroline: false, tickfont: { size: 9.5 }, dtick: 25 },
       shapes: [
         // 80% target line
         { type: "line", x0: 0, x1: nMax * 1.02, y0: tgt * 100, y1: tgt * 100,
           line: { color: PAL.pass, width: 1, dash: "dot" } },
       ],
-      annotations: [
-        { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
-          text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
-          font: { size: 9, color: PAL.pass } },
-      ],
+      annotations,
     };
     Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -141,8 +168,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                 presented as a confident device threshold. Warn before the big number. */}
             {cutDegenerate ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
-                border: `1px solid ` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warn }}>
+                border: `1px solid ${PAL.warnBorder}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: PAL.warnText }}>
                   ⚠ The selected ROC operating point is degenerate (near-zero sensitivity or
                   specificity). The threshold below is not clinically deployable — return to the ROC
                   panel and choose a balanced cut-point before programming.
@@ -172,7 +199,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
             ) : (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
                 border: `1px solid ${PAL.warnBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warn }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
                   NO DEPLOYABLE LSB THRESHOLD
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
@@ -187,7 +214,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
               <MDBox mb={1.2}>
                 <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#999", fontWeight: "bold" }}>
                   POWER vs SAMPLE SIZE
-                  <span style={{ fontWeight: "normal", color: pw.power_current >= 0.8 ? PAL.pass : PAL.warn }}>
+                  <span style={{ fontWeight: "normal", color: pw.power_current >= 0.8 ? PAL.pass : PAL.warnText }}>
                     {`  —  now ${fmt(pw.power_current * 100, 0)}% at ${pw.n_ratings_current} ratings`}
                   </span>
                 </MDTypography>
@@ -196,7 +223,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                   style={{ width: "100%", display: pw.curve ? "block" : "none" }} />
                 <MDTypography variant="caption" display="block" color="text"
                   sx={{ fontSize: 9.5, mt: 0.2, textAlign: "center",
-                    color: pw.more_data_needed ? PAL.warn : PAL.pass, fontWeight: "bold" }}>
+                    color: pw.more_data_needed ? PAL.warnText : PAL.pass, fontWeight: "bold" }}>
                   {pw.more_data_needed
                     ? `Underpowered: ~${(pw.n_ratings_needed - pw.n_ratings_current)} more independent pain ratings needed for 80% power.`
                     : "Adequately powered at the current rating count."}
@@ -216,7 +243,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
               {lr && lr.available ? (
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.2 }}>
                   {`median ${lr.median.toExponential(2)} µV²/LSB `}
-                  <span style={{ color: lr.confidence === "low" ? PAL.fail : PAL.warn, fontWeight: "bold" }}>
+                  <span style={{ color: lr.confidence === "low" ? PAL.fail
+                    : (lr.confidence === "high" ? PAL.pass : PAL.warnText), fontWeight: "bold" }}>
                     {`(confidence: ${lr.confidence})`}
                   </span>
                   {` · CV ${fmt(lr.cv)} · ${fmt(lr.fold_off_rule, 2)}× the 0.01 rule · n=${lr.n} paired sessions`}

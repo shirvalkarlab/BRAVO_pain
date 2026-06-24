@@ -57,6 +57,13 @@ function verdictColor(verdict) {
   return PAL.neutral;
 }
 
+// Audit C6: white text on the warn fill (#E69F00) is 2.25:1 — below WCAG. The badge text color must
+// adapt to its fill: near-black on the orange stim-dependent badge (7.7:1), white on pass/fail/
+// neutral (all ≥ 3.4:1 with white). Keyed on the same role the fill uses so the two never disagree.
+function verdictTextColor(verdict) {
+  return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
+}
+
 // A labeled key/value row used across the identity + evidence blocks.
 function KV({ label, children }) {
   return (
@@ -76,7 +83,8 @@ function BandCandidateIdentity({ bc, envelope }) {
     <Card sx={{ width: "100%" }}>
       <MDBox p={2}>
         <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
-          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict), color: "white",
+          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
+            color: verdictTextColor(bc.verdict),
             borderRadius: "10px", fontSize: 11, fontWeight: "bold" }}>
             {bc.verdict || "—"}
           </MDBox>
@@ -103,7 +111,7 @@ function BandCandidateIdentity({ bc, envelope }) {
               <KV label="Center → FFT-snap">{`${fmt(bc.center_freq_hz, 2)} → ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}</KV>
               <KV label="Polarity">{bc.polarity || "—"}</KV>
               <KV label="Suggested mode">
-                {bc.suggested_mode || <span style={{ color: PAL.warn }}>none — see note</span>}
+                {bc.suggested_mode || <span style={{ color: PAL.warnText }}>none — see note</span>}
               </KV>
             </MDBox>
           </Grid>
