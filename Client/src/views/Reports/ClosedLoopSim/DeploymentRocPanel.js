@@ -44,22 +44,31 @@ function solveCutpoint(roc, rule, costRatio) {
       }
     } else if (rule === "cost") {
       // Cost-sensitive tangent: maximize tpr - slope*fpr, slope = costRatio*(1-p)/p.
+      // NOTE: a "net benefit" rule that maximizes (tpr*p - fpr*(1-p)*costRatio) was removed because
+      // its objective is exactly prevalence times this one (u_nb = p * u_cost), so it selects the
+      // IDENTICAL operating point at every cost ratio — two device-threshold buttons that can never
+      // disagree, with floating-point ties occasionally flipping the winner and reading as a bug.
+      // True Vickers net benefit is a decision CURVE across threshold probabilities, not a single
+      // point-selection rule, and is tracked as a Phase-2 panel rather than a co-equal toggle here.
       if (!Number.isFinite(p) || p <= 0 || p >= 1) { u = tpr[i] - fpr[i]; }
       else { u = tpr[i] - (costRatio * (1 - p) / p) * fpr[i]; }
-    } else if (rule === "netbenefit") {
-      // Net benefit at threshold prob pt implied by the cost ratio: NB = TP/N - FP/N * (pt/(1-pt)).
-      // We use the cost ratio as the odds weight directly (pt/(1-pt) = costRatio).
-      if (!Number.isFinite(p) || p <= 0 || p >= 1) { u = tpr[i] - fpr[i]; }
-      else { u = tpr[i] * p - fpr[i] * (1 - p) * costRatio; }
     } else {
       u = tpr[i] - fpr[i];
     }
+    // Strictly-greater keeps the FIRST (lowest-index) maximizer deterministically; ties never flip.
     if (u > bestU) { bestU = u; bestK = i; }
   }
   if (bestK < 0) return null;
+  const sens = tpr[bestK];
+  const spec = 1 - fpr[bestK];
+  // A data-chosen tangent at an extreme cost ratio (or F1 at high prevalence) can land on a corner of
+  // the empirical ROC — "alarm almost always" (spec~0) or "alarm almost never" (sens~0). Such a point
+  // is mathematically a valid optimum but a clinically useless controller; flag it so the UI can warn
+  // and refuse to present it as a clean deployable threshold rather than silently lifting it to Phase C.
+  const degenerate = (spec < 0.10) || (sens < 0.30) || (fpr[bestK] > 0.95) || (fpr[bestK] < 0.02 && sens < 0.5);
   return {
     k: bestK, fpr: fpr[bestK], tpr: tpr[bestK], threshold: thr[bestK],
-    sensitivity: tpr[bestK], specificity: 1 - fpr[bestK], rule,
+    sensitivity: sens, specificity: spec, rule, degenerate,
   };
 }
 
@@ -107,37 +116,38 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   const rocAuc = roc ? roc.auc : null;
 
   // Lift the chosen cut-point to the parent for Phases C–E. Keyed on the stable primitives (not the
-  // freshly-rebuilt op object) so it fires only when the actual operating point changes.
+  // freshly-rebuilt op object) so it fires only when the actual operating point changes. DEBOUNCED:
+  // dragging the cost slider re-solves the operating point on every tick; without the delay each
+  // tick would push a new cut-point to the parent, re-rendering the LSB/era panels and re-firing the
+  // LSB fetch mid-drag. A 250 ms settle lets the drag finish before downstream panels recompute,
+  // while the on-curve marker (effect B) still tracks the slider live.
   useEffect(() => {
-    if (onCutpoint) {
-      onCutpoint(opThr != null ? { threshold: opThr, rule: opRule, matchDir, auc: rocAuc,
-        sensitivity: op && op.sensitivity, specificity: op && op.specificity,
-        fpr: op && op.fpr, tpr: op && op.tpr } : null);
-    }
+    if (!onCutpoint) return undefined;
+    const payload = opThr != null ? { threshold: opThr, rule: opRule, matchDir, auc: rocAuc,
+      sensitivity: op && op.sensitivity, specificity: op && op.specificity,
+      fpr: op && op.fpr, tpr: op && op.tpr, degenerate: op && op.degenerate } : null;
+    const t = setTimeout(() => onCutpoint(payload), 250);
+    return () => clearTimeout(t);
   }, [opThr, opRule, matchDir, rocAuc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Draw the ROC.
+  // (A) Draw the ROC BASE (chance line + curve + an empty cut-point trace) once per ROC dataset.
+  // The cut-point marker is trace index 2; it is updated in place by effect (B) so changing the rule
+  // or dragging the cost slider never rebuilds the curve and never discards the user's zoom/pan.
   useEffect(() => {
-    if (!ref.current) return undefined;
-    if (!roc) { Plotly.purge(ref.current); return undefined; }
+    if (!ref.current || !roc) return;
+    const ciTxt = (roc.auc_lo != null && roc.auc_hi != null)
+      ? ` (95% CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
     const traces = [
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",
         line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
       { x: roc.fpr, y: roc.tpr, type: "scatter", mode: "lines", name: "ROC",
         line: { color: "#1A73E8", width: 2.2 }, showlegend: false,
         hovertemplate: "FPR %{x:.2f} · TPR %{y:.2f}<extra></extra>" },
-    ];
-    if (op) {
-      traces.push({
-        x: [op.fpr], y: [op.tpr], type: "scatter", mode: "markers",
-        name: "cut-point", showlegend: false,
+      // cut-point marker placeholder — kept at a fixed trace index so restyle can move it.
+      { x: [], y: [], type: "scatter", mode: "markers", name: "cut-point", showlegend: false,
         marker: { color: "#0a7f3f", size: 12, line: { color: "#fff", width: 2 } },
-        hovertemplate: `cut-point (${op.rule})<br>power ≥ ${fmt(op.threshold)}<br>`
-          + `sens ${fmt(op.sensitivity)} · spec ${fmt(op.specificity)}<extra></extra>`,
-      });
-    }
-    const ciTxt = (roc.auc_lo != null && roc.auc_hi != null)
-      ? ` (95% CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
+        hovertemplate: "cut-point<extra></extra>" },
+    ];
     const layout = {
       title: { text: `AUC = ${fmt(roc.auc)}${ciTxt}`, font: { size: 13 } },
       margin: { l: 46, r: 12, t: 32, b: 42 }, height: 320,
@@ -145,34 +155,68 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         zeroline: false, tickfont: { size: 10 } },
       yaxis: { title: { text: "True positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
         zeroline: false, tickfont: { size: 10 } },
-      annotations: op ? [{
-        x: op.fpr, y: op.tpr, xref: "x", yref: "y",
-        text: `<b>power ≥ ${fmt(op.threshold)}</b>`, showarrow: true, arrowhead: 0,
-        arrowcolor: "#0a7f3f", ax: 28, ay: 26, font: { size: 11, color: "#fff" },
-        bgcolor: "#0a7f3f", bordercolor: "#0a7f3f", borderpad: 3, xanchor: "left", yanchor: "top",
-      }] : [],
+      annotations: [],
     };
     Plotly.react(ref.current, traces, layout, { displayModeBar: false, responsive: true });
+  }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // (B) Move ONLY the cut-point marker + its annotation when the operating point changes (rule or
+  // cost slider). Uses restyle/relayout on the existing graph — O(1), no curve redraw, zoom preserved.
+  useEffect(() => {
     const gd = ref.current;
-    return () => { if (gd) Plotly.purge(gd); };
-  }, [roc, opThr, opRule]);  // eslint-disable-line react-hooks/exhaustive-deps
+    if (!gd || !roc || !gd.data) return;
+    if (op) {
+      // Degenerate operating points get an amber marker so the warning box and the curve agree.
+      const mColor = op.degenerate ? "#B17500" : "#0a7f3f";
+      Plotly.restyle(gd, {
+        x: [[op.fpr]], y: [[op.tpr]],
+        "marker.color": [mColor],
+        hovertemplate: [`cut-point (${op.rule})<br>power ≥ ${fmt(op.threshold)}<br>`
+          + `sens ${fmt(op.sensitivity)} · spec ${fmt(op.specificity)}<extra></extra>`],
+      }, [2]);
+      // Flip the label offset toward the plot interior near the top/right edges so it never clips
+      // off-panel (F1 lands near (0.67,0.95); a low cost ratio pushes the point toward (0.94,1.0)).
+      const nearRight = op.fpr > 0.65;
+      const nearTop = op.tpr > 0.85;
+      const ax = nearRight ? -30 : 28;
+      const ay = nearTop ? 24 : -26;   // positive ay pushes the box DOWN (interior) when near the top
+      Plotly.relayout(gd, { annotations: [{
+        x: op.fpr, y: op.tpr, xref: "x", yref: "y",
+        text: `<b>power ≥ ${fmt(op.threshold)}</b>`, showarrow: true, arrowhead: 0,
+        arrowcolor: mColor, ax, ay, font: { size: 11, color: "#fff" },
+        bgcolor: mColor, bordercolor: mColor, borderpad: 3,
+        xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
+      }] });
+    } else {
+      Plotly.restyle(gd, { x: [[]], y: [[]] }, [2]);
+      Plotly.relayout(gd, { annotations: [] });
+    }
+  }, [roc, opThr, opRule, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Purge only on unmount (NOT on every roc/op change) so the figure node is reused across refits.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
 
   return (
     <Card sx={{ width: "100%" }}>
       <MDBox p={2}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1} flexWrap="wrap" gap={1}>
           <MDTypography variant="h6" sx={{ fontSize: 14 }}>Deployment ROC + cut-point</MDTypography>
+          {/* Match direction silently refits the ROC, the LSB threshold and the sign-off, so label it
+              in clinical terms (not the internal 'prior'/'pro_first' keys) and mark the deploy default. */}
           <ToggleButtonGroup size="small" exclusive value={matchDir}
-            onChange={(e, v) => { if (v) setMatchDir(v); }}>
+            onChange={(e, v) => { if (v) setMatchDir(v); }}
+            title="Forecasting predicts the NEXT rating from neural data recorded before it (the causal, deployable question). Concurrent pairs each rating with the same-window recording (exploratory). Switching refits the threshold.">
             <ToggleButton value="prior" sx={{ fontSize: 10, textTransform: "none", py: 0.2 }}>
-              prior (forecasting)
+              Forecasting (deploy default)
             </ToggleButton>
             <ToggleButton value="pro_first" sx={{ fontSize: 10, textTransform: "none", py: 0.2 }}>
-              pro_first (discovery)
+              Concurrent (exploratory)
             </ToggleButton>
           </ToggleButtonGroup>
         </MDBox>
 
+        {/* Status banner sits ABOVE the figure; the graph node below stays mounted across refits so
+            its zoom/pan and DOM are preserved (Plotly.react updates it in place). */}
         {loading ? (
           <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>
             Computing rating-clustered ROC (bootstrap CI)…
@@ -181,40 +225,70 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <MDTypography variant="caption" sx={{ fontSize: 11, color: "#9A3324" }}>
             {`ROC unavailable: ${err}.`}
           </MDTypography>
-        ) : (
+        ) : null}
+
+        {/* Always-mounted figure container. Hidden (not unmounted) when there's no ROC yet, so the
+            Plotly graph object survives loading/refit cycles instead of being torn down. */}
+        <div ref={ref} style={{ width: "100%", display: roc ? "block" : "none" }} />
+
+        {roc && !loading && !err ? (
           <>
-            <div ref={ref} style={{ width: "100%" }} />
             <Grid container spacing={1.5} alignItems="center" mt={0.2}>
               <Grid item xs={12} md={7}>
                 <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#999" }}>
                   CUT-POINT RULE
                 </MDTypography>
+                {/* 'net benefit' removed: its objective equals prevalence x the cost objective, so it
+                    always picked the same point as 'cost'. Each remaining rule carries a plain-language
+                    descriptor of what it optimizes clinically. */}
                 <ToggleButtonGroup size="small" exclusive value={rule} sx={{ ml: 1 }}
                   onChange={(e, v) => { if (v) setRule(v); }}>
-                  {[["youden", "Youden J"], ["f1", "max F1"], ["cost", "cost"],
-                    ["netbenefit", "net benefit"]].map(([k, lbl]) => (
-                    <ToggleButton key={k} value={k}
+                  {[["youden", "Balanced (Youden)", "balances sensitivity and specificity; prevalence-independent"],
+                    ["f1", "Favor detection (F1)", "rewards catching pain; shifts with prevalence, can allow many false triggers"],
+                    ["cost", "Cost-weighted", "tune the miss-vs-false-trigger trade-off with the slider"]].map(([k, lbl, tip]) => (
+                    <ToggleButton key={k} value={k} title={tip}
                       sx={{ fontSize: 9.5, textTransform: "none", py: 0.2, px: 0.8 }}>{lbl}</ToggleButton>
                   ))}
                 </ToggleButtonGroup>
               </Grid>
-              {(rule === "cost" || rule === "netbenefit") ? (
+              {rule === "cost" ? (
                 <Grid item xs={12} md={5}>
                   <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
                     {`FP:FN cost = ${costRatio.toFixed(2)} : 1`}
                   </MDTypography>
                   <Slider size="small" min={-3} max={3} step={0.25} value={logCost}
-                    onChange={(e, v) => setLogCost(v)} sx={{ mt: -0.5 }} />
+                    onChange={(e, v) => setLogCost(v)} sx={{ mt: -0.5 }}
+                    aria-label="false-trigger to missed-pain cost ratio" />
+                  <MDBox display="flex" justifyContent="space-between" sx={{ mt: -0.8 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: 8.5, color: "#999" }}>
+                      ← fewer false triggers
+                    </MDTypography>
+                    <MDTypography variant="caption" sx={{ fontSize: 8.5, color: "#999" }}>
+                      catch more pain →
+                    </MDTypography>
+                  </MDBox>
                 </Grid>
               ) : null}
             </Grid>
 
             {op ? (
-              <MDBox mt={1} p={1} sx={{ backgroundColor: "#f3f8f4", borderRadius: "6px" }}>
+              <MDBox mt={1} p={1} sx={{
+                backgroundColor: op.degenerate ? "#fff6e6" : "#f3f8f4", borderRadius: "6px",
+                border: op.degenerate ? "1px solid #f3d99b" : "none" }}>
+                {op.degenerate ? (
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11, fontWeight: "bold", color: "#B17500", mb: 0.3 }}>
+                    ⚠ Degenerate operating point — this cut alarms almost{op.sensitivity < 0.30 ? " never" : " always"} (sensitivity {fmt(op.sensitivity)} · specificity {fmt(op.specificity)}). Not a deployable threshold; move the cost slider toward balance.
+                  </MDTypography>
+                ) : null}
                 <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>
                   <b>Cut-point ({op.rule}):</b>{` power ≥ ${fmt(op.threshold, 3)} `}
-                  <span style={{ color: "#777" }}>(oriented log-power units — Phase C → LSB)</span>
-                  {` · sensitivity ${fmt(op.sensitivity)} · specificity ${fmt(op.specificity)}`}
+                  <span style={{ color: "#777" }}>(oriented log-power units → device LSB in the next panel)</span>
+                </MDTypography>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5, mt: 0.2 }}>
+                  <b>Sensitivity {fmt(op.sensitivity)}</b> (catches high-pain) · <b>Specificity {fmt(op.specificity)}</b> (avoids false triggers)
+                </MDTypography>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 9.5, mt: 0.3, fontStyle: "italic" }}>
+                  Operating point chosen on these data — sensitivity/specificity are optimistic; expect lower accuracy on new ratings.
                 </MDTypography>
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
                   {`${roc.n_samples} samples · ${roc.n_clusters} independent ratings · `
@@ -224,7 +298,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
               </MDBox>
             ) : null}
           </>
-        )}
+        ) : null}
       </MDBox>
     </Card>
   );

@@ -8,7 +8,7 @@
  * panels that later phases fill: ROC + cut-point (B), LSB conversion + power (C), per-era
  * cross-validation (D), and the Deploy-to-Percept sign-off card (E).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Chip, Grid } from "@mui/material";
@@ -172,6 +172,14 @@ function ClosedLoopSim() {
 
   const bc = envelope && envelope.band_candidate;
 
+  // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
+  // produced a fresh object identity on every parent re-render, which is listed in every panel's
+  // fetch-effect deps — so any child state change (e.g. the ROC cost slider lifting a new cut-point)
+  // re-created requestParams and re-fired EVERY panel's fetch, collapsing all figures into their
+  // loading state at once. Memoizing on the candidate's stable identity keeps the reference stable
+  // so panels only refetch when their own inputs actually change.
+  const requestParams = useMemo(() => requestParamsFromCandidate(bc), [bc]);
+
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -249,19 +257,19 @@ function ClosedLoopSim() {
 
               <Grid item xs={12} md={6}>
                 <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParamsFromCandidate(bc)} onCutpoint={setCutpoint} />
+                  requestParams={requestParams} onCutpoint={setCutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParamsFromCandidate(bc)} cutpoint={cutpoint} />
+                  requestParams={requestParams} cutpoint={cutpoint} />
               </Grid>
               <Grid item xs={12} md={6}>
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParamsFromCandidate(bc)} />
+                  requestParams={requestParams} />
               </Grid>
               <Grid item xs={12}>
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParamsFromCandidate(bc)} cutpoint={cutpoint} />
+                  requestParams={requestParams} cutpoint={cutpoint} />
               </Grid>
 
               <Grid item xs={12}>

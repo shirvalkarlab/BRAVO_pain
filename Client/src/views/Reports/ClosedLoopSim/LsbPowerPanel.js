@@ -47,6 +47,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
   const bandWidthHz = bc.bandwidth_hz || 5.0;
   const cutThr = cutpoint ? cutpoint.threshold : null;
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+  const cutDegenerate = !!(cutpoint && cutpoint.degenerate);
 
   useEffect(() => {
     if (!participantUid || channelRaw == null || centerHz == null || cutThr == null) {
@@ -96,6 +97,19 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
           </MDTypography>
         ) : data ? (
           <>
+            {/* Guard: a degenerate ROC operating point (alarm-always / alarm-never) must not be
+                presented as a confident device threshold. Warn before the big number. */}
+            {cutDegenerate ? (
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: "#fff6e6", borderRadius: "6px",
+                border: "1px solid #f3d99b" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", color: "#B17500" }}>
+                  ⚠ The selected ROC operating point is degenerate (near-zero sensitivity or
+                  specificity). The threshold below is not clinically deployable — return to the ROC
+                  panel and choose a balanced cut-point before programming.
+                </MDTypography>
+              </MDBox>
+            ) : null}
+
             {/* 1) THRESHOLD TO PROGRAM */}
             {tl && tl.available ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: "#eef5ff", borderRadius: "6px",

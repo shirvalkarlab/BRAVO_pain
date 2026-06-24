@@ -59,6 +59,17 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const bandWidthHz = bc.bandwidth_hz || 5.0;
   const cutThr = cutpoint ? cutpoint.threshold : null;
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+  // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
+  // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
+  // patient at different operating points with identical-looking sign-off sheets.
+  const RULE_LABEL = { youden: "Balanced (Youden J)", f1: "Favor detection (F1)", cost: "Cost-weighted" };
+  const opProvenance = cutpoint ? {
+    rule: cutpoint.rule || null,
+    rule_label: RULE_LABEL[cutpoint.rule] || cutpoint.rule || null,
+    sensitivity: cutpoint.sensitivity ?? null,
+    specificity: cutpoint.specificity ?? null,
+    degenerate: !!cutpoint.degenerate,
+  } : null;
 
   useEffect(() => {
     if (!participantUid || channelRaw == null || centerHz == null) return;
@@ -79,7 +90,8 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const exportJson = () => {
     if (!data) return;
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
-      generated_at: new Date().toISOString(), summary: data }, null, 2)], { type: "application/json" });
+      generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data }, null, 2)],
+      { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `DeploySignoff_${participantUid}_${channelRaw}_${centerHz}Hz.json`;
@@ -162,6 +174,14 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                       <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
                         {`p${fmt(th.percentile, 0)} of device Timeline LSB · ${th.n_timeline_samples} in-band samples`}
                       </MDTypography>
+                      {opProvenance && opProvenance.rule_label ? (
+                        <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.3 }}>
+                          {`Operating point: ${opProvenance.rule_label}`}
+                          {opProvenance.sensitivity != null
+                            ? ` · sens ${fmt(opProvenance.sensitivity)} / spec ${fmt(opProvenance.specificity)}` : ""}
+                          {opProvenance.degenerate ? " · ⚠ degenerate — not deployable" : ""}
+                        </MDTypography>
+                      ) : null}
                     </>
                   ) : (
                     <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
