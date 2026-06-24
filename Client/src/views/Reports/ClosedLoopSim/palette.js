@@ -71,8 +71,11 @@ export const PAL = {
   accentFill: "#0072B215",
   accentBorder: "#0072B255",
   passFill: "#009E7315",
+  passBorder: "#009E7344",
   warnFill: "#E69F0015",
   warnBorder: "#E69F0066",
+  neutralFill: "#6C757D12",       // audit C10: recommended-vs-programmed Δ panel (neutral, non-alarm)
+  neutralBorder: "#6C757D44",
 };
 
 // Per-era color for the stim-state forest plot + cards. Pooled = accent (it is the reference).
@@ -84,5 +87,23 @@ const ERA_COLORS = {
 };
 PAL.eraColor = (tag) => ERA_COLORS[tag] || OKABE_ITO.black;
 PAL.ERA_COLORS = ERA_COLORS;
+
+// Audit C7/C10: a MINIMAL Plotly modebar so each figure is self-contained and exportable (the
+// reviewer can save a PNG of the ROC / era forest / power curve to embed in the deployment record),
+// without the clutter of the full bar. Keeps ONLY PNG export + zoom/pan/reset; strips the lasso,
+// select, autoscale-duplicate, and the Plotly logo. `displayModeBar: "hover"` keeps it out of the way
+// until the cursor is over the plot. Shared so every panel enables the identical bar.
+//
+// This config touches ONLY the toolbar chrome — it does NOT change how a figure is drawn or updated,
+// so the imperative Plotly.react-once + restyle/relayout discipline (no rebuild on interaction) is
+// fully preserved.
+PAL.MODEBAR = {
+  responsive: true,
+  displaylogo: false,
+  displayModeBar: "hover",
+  modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toggleSpikelines",
+    "hoverClosestCartesian", "hoverCompareCartesian"],
+  toImageButtonOptions: { format: "png", scale: 2 },
+};
 
 export default PAL;

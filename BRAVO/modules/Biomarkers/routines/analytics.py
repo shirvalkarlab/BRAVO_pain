@@ -1620,7 +1620,10 @@ def _elapsed_week_cluster(times, n):
     if times is None or len(times) != n:
         return np.zeros(n, dtype=int)
     t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
-    te = (t_dt.view("int64").to_numpy() / 1e9)
+    # Resolution-independent ns epoch: Series.view is deprecated (removed in pandas 3.0) and, under
+    # pandas 3.0's datetime64[us] default, a bare .astype("int64") would silently yield microseconds.
+    # Pinning to datetime64[ns] first makes this identical on pandas 2.x ([ns]) and 3.x ([us]).
+    te = (t_dt.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9)
     nat = t_dt.isna().to_numpy()
     if (~nat).sum() == 0:
         return np.zeros(n, dtype=int)
@@ -1652,7 +1655,9 @@ def _assign_stim_eras(times, stim_series, off_max=0.1, low_max=1.5):
     # NaT mask drives the None-era guard below.
     t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
     nat = t_dt.isna().to_numpy()
-    t_epoch = (t_dt.view("int64").to_numpy() / 1e9)
+    # Resolution-independent ns epoch (see _elapsed_week_cluster): identical on pandas 2.x and 3.x,
+    # and free of the deprecated Series.view.
+    t_epoch = (t_dt.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9)
     stim_t = np.asarray(stim_series["t"], dtype=float)
     stim_y = np.asarray(stim_series["y"], dtype=float)
     if len(stim_t) < 2:
@@ -1888,7 +1893,7 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
             bmask = (f >= hz - band_half_hz) & (f < hz + band_half_hz)
             if not bmask.any():
                 continue
-            uV2 = float(np.trapz(P[bmask], f[bmask]))      # µV² in band
+            uV2 = float(np.trapezoid(P[bmask], f[bmask]))  # µV² in band (np.trapz removed in numpy 2.0)
             for pr in pds:
                 pnames = pr.get("ChannelNames") or []
                 pdata = np.asarray(pr.get("Data"), dtype=float)
@@ -1959,6 +1964,86 @@ def _hm_auc_power_at(auc, n_pos, n_neg, za):
     se0 = float(np.sqrt(max(var0, 1e-12)))
     from scipy import stats as _st
     return float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
+
+
+def _band_power_notched(freq, power, center_hz, half_hz, *, line_lo=58.5, line_hi=61.5):
+    """Integrate a raw PSD (µV²/Hz) over [center-half, center+half), interpolating across the mains
+    line-noise window so a 60 Hz spike (and DBS/stim harmonics that land on it) cannot dominate the
+    band-power estimate. Returns µV² (area), or NaN if the band has <2 usable bins.
+    """
+    freq = np.asarray(freq, dtype=float)
+    power = np.asarray(power, dtype=float).copy()
+    inb = (freq >= line_lo) & (freq <= line_hi)
+    if inb.any() and (~inb).sum() >= 2:
+        power[inb] = np.interp(freq[inb], freq[~inb], power[~inb])
+    m = (freq >= center_hz - half_hz) & (freq < center_hz + half_hz)
+    if int(np.count_nonzero(m)) < 2:
+        return float("nan")
+    return float(np.trapezoid(power[m], freq[m]))
+
+
+def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
+    """Derive a PSD→device-LSB conversion from TIME-MATCHED pairs of (offline PSD band power, device
+    LSB) on the same channel/band.
+
+    The Percept reports its on-board band power in device "LSB" units; an offline Welch PSD reports
+    physical µV²/Hz. The firmware's mapping is a linear gain (LSB is proportional to in-band power),
+    so the physically-meaningful model is the PROPORTIONAL law ``LSB = k · µV²`` (one constant, no
+    intercept). We ALSO fit the free log-log line ``log10(LSB) = a + b·log10(µV²)`` purely as a
+    falsification check: if the firmware really applies a linear gain, the free slope ``b`` must land
+    near 1.0. A slope far from 1 means the offline band and the device's sensed band are not the same
+    quantity (wrong channel/centre, aperiodic drift, or a non-linear on-device transform) and the
+    proportional constant should not be trusted.
+
+    Inputs are paired 1-D arrays (NaN/≤0 dropped pairwise). Returns a JSON-able dict:
+      available, n_pairs,
+      loglog_slope, loglog_slope_ci (95%), loglog_intercept, r2, spearman,
+      k_lsb_per_uv2 (+ 95% bootstrap CI), uv2_per_lsb,
+      resid_log_sigma (1σ multiplicative scatter, as a fold factor),
+      slope_consistent_with_unity (bool: does the 95% CI include 1.0?),
+      note.
+
+    This is a CROSS-SCALE CALIBRATION, not a clinical control law — it lets the deployment view show a
+    physical µV² target in the LSB units the device actually programs, with an honest scatter band.
+    """
+    P = np.asarray(psd_bandpower_uv2, dtype=float)
+    L = np.asarray(device_lsb, dtype=float)
+    m = np.isfinite(P) & np.isfinite(L) & (P > 0) & (L > 0)
+    P, L = P[m], L[m]
+    n = int(P.size)
+    if n < 20:
+        return {"available": False, "reason": f"only {n} usable matched pairs (need >=20)", "n_pairs": n}
+    logP, logL = np.log10(P), np.log10(L)
+    from scipy import stats as _st
+    b, a, r, p, se_b = _st.linregress(logP, logL)
+    tcrit = float(_st.t.ppf(0.975, n - 2))
+    slope_ci = [float(b - tcrit * se_b), float(b + tcrit * se_b)]
+    # Proportional constant k = median(L/P) == 10**median(logL - logP) (robust to outliers).
+    logk = float(np.median(logL - logP))
+    k = float(10.0 ** logk)
+    rng = np.random.default_rng(seed)
+    ks = np.array([10.0 ** np.median((logL - logP)[rng.integers(0, n, n)]) for _ in range(int(n_boot))])
+    k_ci = [float(np.percentile(ks, 2.5)), float(np.percentile(ks, 97.5))]
+    resid = logL - (logk + logP)                       # log10 ratio L / predicted
+    sigma_fold = float(10.0 ** np.percentile(np.abs(resid), 68))
+    return {
+        "available": True,
+        "n_pairs": n,
+        "loglog_slope": float(b),
+        "loglog_slope_ci": slope_ci,
+        "loglog_intercept": float(a),
+        "r2": float(r * r),
+        "spearman": float(_st.spearmanr(P, L).correlation),
+        "k_lsb_per_uv2": k,
+        "k_ci": k_ci,
+        "uv2_per_lsb": float(1.0 / k) if k > 0 else None,
+        "resid_log_sigma_fold": sigma_fold,
+        "slope_consistent_with_unity": bool(slope_ci[0] <= 1.0 <= slope_ci[1]),
+        "note": ("Proportional law LSB = k·µV²(band) from time-matched chronic streams. The free "
+                 "log-log slope is a falsification check — it must sit near 1.0 for a linear "
+                 "firmware gain; a slope far from 1 means the offline and on-device bands are not the "
+                 "same quantity and k is unreliable. Multiplicative scatter is the 1σ fold factor."),
+    }
 
 
 def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):

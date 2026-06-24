@@ -23,6 +23,13 @@ import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
+// Audit C9: the cut-point marker lives at a FIXED trace index so effect (B) can move it in place via
+// Plotly.restyle without rebuilding the curve (the no-reset discipline). That index was hardcoded as
+// a bare `[2]` in two restyle calls and described in two comments — a single source here keeps the
+// draw order (effect A) and the restyle target (effect B) from silently drifting apart. Order in the
+// base trace array MUST be: 0 = chance line, 1 = ROC curve, 2 = cut-point marker.
+const CUTPOINT_TRACE = 2;
+
 // Solve the operating point on the ROC for a given rule, in the browser, from the parallel
 // fpr/tpr/thr arrays + prevalence. Returns {k, fpr, tpr, threshold, sensitivity, specificity, ...}.
 function solveCutpoint(roc, rule, costRatio) {
@@ -133,7 +140,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   }, [opThr, opRule, matchDir, rocAuc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (A) Draw the ROC BASE (chance line + curve + an empty cut-point trace) once per ROC dataset.
-  // The cut-point marker is trace index 2; it is updated in place by effect (B) so changing the rule
+  // The cut-point marker is trace index CUTPOINT_TRACE; updated in place by effect (B) so changing rule
   // or dragging the cost slider never rebuilds the curve and never discards the user's zoom/pan.
   useEffect(() => {
     if (!ref.current || !roc) return;
@@ -147,7 +154,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       { x: roc.fpr, y: roc.tpr, type: "scatter", mode: "lines", name: "ROC",
         line: { color: PAL.accent, width: 2.2 }, showlegend: false,
         hovertemplate: "FPR %{x:.2f} · TPR %{y:.2f}<extra></extra>" },
-      // cut-point marker placeholder — kept at a fixed trace index so restyle can move it.
+      // cut-point marker placeholder at index CUTPOINT_TRACE (=2) — kept fixed so restyle can move it.
       { x: [], y: [], type: "scatter", mode: "markers", name: "cut-point", showlegend: false,
         marker: { color: PAL.cutpoint, size: 12, line: { color: "#fff", width: 2 } },
         hovertemplate: "cut-point<extra></extra>" },
@@ -161,7 +168,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         zeroline: false, tickfont: { size: 10 } },
       annotations: [],
     };
-    Plotly.react(ref.current, traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.react(ref.current, traces, layout, PAL.MODEBAR);
   }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (B) Move ONLY the cut-point marker + its annotation when the operating point changes (rule or
@@ -177,7 +184,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         "marker.color": [mColor],
         hovertemplate: [`cut-point (${op.rule})<br>power ≥ ${fmt(op.threshold)}<br>`
           + `sens ${fmt(op.sensitivity)} · spec ${fmt(op.specificity)}<extra></extra>`],
-      }, [2]);
+      }, [CUTPOINT_TRACE]);
       // Flip the label offset toward the plot interior near the top/right edges so it never clips
       // off-panel (F1 lands near (0.67,0.95); a low cost ratio pushes the point toward (0.94,1.0)).
       const nearRight = op.fpr > 0.65;
@@ -195,7 +202,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
       }] });
     } else {
-      Plotly.restyle(gd, { x: [[]], y: [[]] }, [2]);
+      Plotly.restyle(gd, { x: [[]], y: [[]] }, [CUTPOINT_TRACE]);
       Plotly.relayout(gd, { annotations: [] });
     }
   }, [roc, opThr, opRule, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -237,7 +244,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       legend: { orientation: "h", x: 0, y: 1.16, font: { size: 9.5 } },
       shapes: [], annotations: [],
     };
-    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [roc]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (D) Move ONLY the threshold line on the histogram when the operating point changes — a vertical

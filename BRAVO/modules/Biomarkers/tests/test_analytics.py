@@ -539,7 +539,7 @@ def test_band_stim_stability_shape_and_no_stim_degrades():
     # Stim trajectory: 3 distinct levels over the sample span, one per era
     n = det["psd"].shape[0]
     sample_times_iso = det["times"]
-    epoch_s = pd.to_datetime(pd.Series(sample_times_iso)).view("int64").to_numpy() / 1e9
+    epoch_s = pd.to_datetime(pd.Series(sample_times_iso)).to_numpy().astype("datetime64[ns]").astype("int64") / 1e9
     # Build a stim trajectory at the same epochs with three plateaus: OFF / LOW / HIGH
     third = n // 3
     stim_mA = np.r_[np.zeros(third), 0.7 * np.ones(third), 2.5 * np.ones(n - 2 * third)]
@@ -736,6 +736,61 @@ def test_deployment_summary_gate_states_and_necessary_blocking():
     assert all(g["pass"] for g in gates if g["necessary"]) is True
 
 
+def test_psd_lsb_conversion_recovers_planted_proportional_constant():
+    """A planted linear gain LSB = k0*P (with multiplicative noise) is recovered: the proportional
+    constant k lands near k0 and the free log-log slope's 95% CI includes 1.0 (audit C10 / PSD->LSB)."""
+    rng = np.random.default_rng(3)
+    n = 1200
+    # offline band power spanning ~3 decades, log-uniform
+    P = 10.0 ** rng.uniform(-1.0, 2.0, n)
+    k0 = 80.0
+    # device LSB = k0 * P * lognormal(sigma) — a linear gain with ~x2 multiplicative scatter
+    L = k0 * P * np.exp(rng.normal(0.0, np.log(2.0), n))
+    out = analytics.psd_lsb_conversion(P, L, n_boot=500, seed=0)
+    assert out["available"] is True
+    assert out["n_pairs"] == n
+    # constant within 25% of planted
+    assert 0.75 * k0 <= out["k_lsb_per_uv2"] <= 1.25 * k0, out["k_lsb_per_uv2"]
+    # free slope ~1 and CI includes unity (the linear-gain falsification check passes)
+    assert 0.9 <= out["loglog_slope"] <= 1.1, out["loglog_slope"]
+    assert out["slope_consistent_with_unity"] is True
+    assert out["k_ci"][0] <= out["k_lsb_per_uv2"] <= out["k_ci"][1]
+    # inverse is the reciprocal
+    assert abs(out["uv2_per_lsb"] - 1.0 / out["k_lsb_per_uv2"]) < 1e-9
+
+
+def test_psd_lsb_conversion_flags_nonlinear_slope():
+    """When the device value is NOT a linear gain on the offline band (here LSB ~ sqrt(P), slope 0.5),
+    the falsification check fails: the free log-log slope's CI excludes 1.0."""
+    rng = np.random.default_rng(7)
+    n = 800
+    P = 10.0 ** rng.uniform(-1.0, 2.0, n)
+    L = 50.0 * np.sqrt(P) * np.exp(rng.normal(0.0, 0.2, n))   # slope ~0.5, not proportional
+    out = analytics.psd_lsb_conversion(P, L, n_boot=300, seed=0)
+    assert out["available"] is True
+    assert out["loglog_slope"] < 0.8, out["loglog_slope"]
+    assert out["slope_consistent_with_unity"] is False
+
+
+def test_psd_lsb_conversion_guards_small_n():
+    """Fewer than 20 usable pairs -> not available, with the pair count surfaced."""
+    out = analytics.psd_lsb_conversion(np.array([1.0, 2.0, 3.0]), np.array([10.0, 20.0, 30.0]))
+    assert out["available"] is False
+    assert out["n_pairs"] == 3
+
+
+def test_band_power_notched_interpolates_mains_line():
+    """The 60 Hz line-noise spike is interpolated away before band integration so it cannot dominate a
+    band that straddles 60 Hz."""
+    freq = np.arange(40.0, 80.0, 1.0)
+    power = np.full_like(freq, 0.05)
+    power[np.argmin(np.abs(freq - 60.0))] = 100.0   # giant mains spike
+    bp_notched = analytics._band_power_notched(freq, power, 60.0, 5.0)
+    # a clean ~0.05/Hz over a 10 Hz band ~ 0.5; the spike (if not notched) would push it >>1
+    assert bp_notched < 1.0, bp_notched
+    assert bp_notched > 0.0
+
+
 if __name__ == "__main__":
     test_otsu_matches_canonical_convention()
     test_roc_operating_point_is_youden_and_separates_classes()
@@ -776,6 +831,10 @@ if __name__ == "__main__":
     test_deployment_roc_by_era_pooled_orientation_surfaces_reversal()
     test_deployment_roc_by_era_portable_when_eras_agree()
     test_deployment_summary_gate_states_and_necessary_blocking()
+    test_psd_lsb_conversion_recovers_planted_proportional_constant()
+    test_psd_lsb_conversion_flags_nonlinear_slope()
+    test_psd_lsb_conversion_guards_small_n()
+    test_band_power_notched_interpolates_mains_line()
     print("All analytics tests passed.")
 
 
@@ -1024,7 +1083,7 @@ def test_pain_series_epochs_match_pro_match_arrays():
         "pain_series epochs drift from _pro_match_arrays (timezone bug regressed)"
     # PDT row: 14:00 local -> 21:00 UTC; PST row: 14:00 local -> 22:00 UTC. Confirm the DST-correct
     # offset vs the naive-as-UTC interpretation (which would be 7-8 h earlier).
-    naive = pd.to_datetime(df["date_time_s1_daily"]).view("int64").to_numpy() / 1e9
+    naive = pd.to_datetime(df["date_time_s1_daily"]).to_numpy().astype("datetime64[ns]").astype("int64") / 1e9
     diff = np.sort(back_t) - np.sort(naive)
     assert set(np.round(diff).astype(int)) == {7 * 3600, 8 * 3600}, \
         f"expected +7h (PDT) and +8h (PST) corrections, got {diff}"

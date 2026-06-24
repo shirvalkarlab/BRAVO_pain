@@ -182,7 +182,7 @@ def pain_series(pro_df, metric, timestamp_col="date_time_s1_daily", utc_col="_pr
     bravo_service._load_pros; `metric` is the resolved LabelMetric (nrs/vas/.../composite).
 
     PRO TIMES: prefer the canonical `_pro_time_utc` column that bravo_service._load_pros adds at
-    ingestion (DST-aware CA-local -> tz-naive UTC). Epochs come from `.view("int64")/1e9` — the SAME
+    ingestion (DST-aware CA-local -> tz-naive UTC). Epochs come from `.to_numpy().astype("datetime64[ns]").astype("int64")/1e9` — the SAME
     convention bravo_service._pro_match_arrays uses — NOT Timestamp.timestamp(), which would re-apply
     a tz interpretation to the tz-naive UTC value and reintroduce the offset. This keeps the live
     pain row bit-identical to the offline match pool. Falls back to a localize-free naive parse of
@@ -204,7 +204,9 @@ def pain_series(pro_df, metric, timestamp_col="date_time_s1_daily", utc_col="_pr
     vals = pd.to_numeric(pro_df[metric], errors="coerce")
     keep = ts.notna() & vals.notna()
     ts_k = ts[keep]
-    ep = (ts_k.view("int64").to_numpy() / 1e9)
+    # Resolution-independent ns epoch (Series.view is deprecated/removed in pandas 3.0; bare
+    # .astype("int64") yields microseconds under pandas 3.0's datetime64[us] default).
+    ep = (ts_k.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9)
     vy = vals[keep].to_numpy(dtype=float)
     order = np.argsort(ep)
     return {"metric": metric,
