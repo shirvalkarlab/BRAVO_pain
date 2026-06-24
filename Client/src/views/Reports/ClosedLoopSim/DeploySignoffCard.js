@@ -15,20 +15,23 @@ import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import { SessionController } from "database/session-control";
+import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
 function GateRow({ gate }) {
   const ok = gate.pass;
+  // Pass/fail carry BOTH a CVD-safe color (bluish-green vs vermillion — never green/red) AND a
+  // distinct check/cancel icon, so the gate verdict is never color-only.
   return (
     <MDBox display="flex" alignItems="flex-start" py={0.4}
       sx={{ borderBottom: "1px solid #f0f0f0" }}>
-      <Icon sx={{ fontSize: "18px !important", color: ok ? "#0a7f3f" : "#9A3324", mr: 1, mt: 0.1 }}>
+      <Icon sx={{ fontSize: "18px !important", color: ok ? PAL.pass : PAL.fail, mr: 1, mt: 0.1 }}>
         {ok ? "check_circle" : "cancel"}
       </Icon>
       <MDBox flex={1}>
         <MDTypography variant="caption" sx={{ fontSize: 11.5, fontWeight: "bold",
-          color: ok ? "#0a7f3f" : "#9A3324" }}>
+          color: ok ? PAL.pass : PAL.fail }}>
           {gate.label}
         </MDTypography>
         <MDTypography variant="caption" display="block" sx={{ fontSize: 10, color: "#777" }}>
@@ -106,7 +109,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const allPass = data && data.n_gates_passed === data.n_gates;
 
   return (
-    <Card sx={{ width: "100%", border: data ? `2px solid ${allPass ? "#0a7f3f" : "#B17500"}` : undefined }}>
+    <Card sx={{ width: "100%", border: data ? `2px solid ${allPass ? PAL.pass : PAL.warn}` : undefined }}>
       <MDBox p={2.5}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
@@ -127,13 +130,13 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
             Assembling the deployment review…
           </MDTypography>
         ) : err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11, color: "#9A3324" }}>{`Unavailable: ${err}.`}</MDTypography>
+          <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>{`Unavailable: ${err}.`}</MDTypography>
         ) : data ? (
           <>
             {/* headline verdict */}
             <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
-              backgroundColor: allPass ? "#e9f7ef" : "#fff6e6" }}>
-              <MDTypography variant="h6" sx={{ fontSize: 14, color: allPass ? "#0a7f3f" : "#B17500" }}>
+              backgroundColor: allPass ? PAL.passFill : PAL.warnFill }}>
+              <MDTypography variant="h6" sx={{ fontSize: 14, color: allPass ? PAL.pass : PAL.warn }}>
                 {`${data.n_gates_passed} of ${data.n_gates} deployment gates passed`}
                 {allPass ? " — ready to program" : " — review caveats before programming"}
               </MDTypography>
@@ -160,15 +163,15 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                 ) : null}
 
                 <MDBox mt={1.2} p={1.2} sx={{ borderRadius: "6px",
-                  backgroundColor: th && th.available ? "#eef5ff" : "#fff6e6",
-                  border: `1px solid ${th && th.available ? "#cfe0fb" : "#f3d99b"}` }}>
+                  backgroundColor: th && th.available ? PAL.accentFill : PAL.warnFill,
+                  border: `1px solid ${th && th.available ? PAL.accentBorder : PAL.warnBorder}` }}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-                    color: th && th.available ? "#1A73E8" : "#B17500" }}>
+                    color: th && th.available ? PAL.accent : PAL.warn }}>
                     THRESHOLD TO PROGRAM
                   </MDTypography>
                   {th && th.available ? (
                     <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: "#1A73E8", lineHeight: 1.1 }}>
+                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.accent, lineHeight: 1.1 }}>
                         {`power ≥ ${fmt(th.upper_lsb, 1)} LSB`}
                       </MDTypography>
                       <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
@@ -217,7 +220,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   {(data.gates || []).map((g) => <GateRow key={g.key} gate={g} />)}
                 </MDBox>
 
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: "#B17500" }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warn }}>
                   CAVEATS
                 </MDTypography>
                 <MDBox component="ul" sx={{ pl: 2, mt: 0.5, mb: 0 }}>

@@ -642,6 +642,11 @@ if __name__ == "__main__":
     test_band_stim_stability_shape_and_no_stim_degrades()
     test_band_mixedmodel_inference_emits_or_ci()
     test_pooled_psd_detail_is_per_channel_and_matches_pro()
+    test_deployment_roc_recovers_planted_band()
+    test_deployment_roc_clustered_ci_wider_than_naive()
+    test_deployment_roc_feature_hist_shape_and_counts()
+    test_auc_power_curve_monotone_and_crosses_target()
+    test_auc_power_monotone_and_sample_size()
     print("All analytics tests passed.")
 
 
@@ -690,6 +695,51 @@ def test_deployment_roc_clustered_ci_wider_than_naive():
     # The clustered CI has real width (not the degenerate ~0 a per-sample bootstrap of duplicates
     # would give); just assert it is a positive-width interval over the independent ratings.
     assert roc["auc_hi"] - roc["auc_lo"] > 0.02
+
+
+def test_deployment_roc_feature_hist_shape_and_counts():
+    """deployment_roc.feature_hist: shared bin edges across both classes, per-class counts sum to
+    n_pos/n_neg, centers are interior to the edges, and the cut-point threshold lands within the
+    histogram's x-range (so the threshold line is drawable on the same scale)."""
+    det = _planted_detail(E=120, center=20.0, beta=0.8, seed=3)
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, band_width_hz=5.0,
+                                   strategy="tertile", n_boot=100, seed=1)
+    assert roc["available"] is True, roc.get("reason")
+    fh = roc["feature_hist"]
+    assert fh is not None
+    # shared edges; centers parallel to bins; one more edge than bins
+    assert len(fh["bin_edges"]) == len(fh["bin_centers"]) + 1
+    assert len(fh["counts_high"]) == len(fh["counts_low"]) == len(fh["bin_centers"])
+    # per-class counts sum to the class n (every in-range sample is binned)
+    assert sum(fh["counts_high"]) == fh["n_high"] == roc["n_pos"]
+    assert sum(fh["counts_low"]) == fh["n_low"] == roc["n_neg"]
+    # edges monotone increasing, centers strictly interior
+    assert all(b < a for a, b in zip(fh["bin_edges"][1:], fh["bin_edges"][:-1]))
+    assert fh["x_min"] <= fh["bin_centers"][0] and fh["bin_centers"][-1] <= fh["x_max"]
+    # the Youden threshold is on the SAME feature scale and lies within the feature range
+    op = roc["operating_point"]
+    assert fh["x_min"] - 1e-9 <= op["threshold"] <= fh["x_max"] + 1e-9
+
+
+def test_auc_power_curve_monotone_and_crosses_target():
+    """auc_power.curve: power is non-decreasing in N, brackets the target power, and the smallest N
+    on the curve at/above target_power agrees with the scalar n_ratings_needed (within grid spacing)."""
+    res = analytics.auc_power(0.70, 20, 20, target_power=0.80)
+    assert res["available"]
+    curve = res["curve"]
+    assert curve is not None and len(curve["n"]) >= 2
+    ns = curve["n"]; ps = curve["power"]
+    # N strictly increasing, power non-decreasing
+    assert all(b > a for a, b in zip(ns[:-1], ns[1:]))
+    assert all(p2 >= p1 - 1e-6 for p1, p2 in zip(ps[:-1], ps[1:]))
+    # curve brackets the 80% target (starts below, ends at/above)
+    assert ps[0] < 0.80 and ps[-1] >= 0.80
+    # first N reaching target on the curve is near the scalar requirement
+    n_cross = next(n for n, p in zip(ns, ps) if p >= 0.80)
+    step = ns[1] - ns[0]
+    assert abs(n_cross - res["n_ratings_needed"]) <= 2 * step + 1
+    # a chance-level AUC yields no informative curve
+    assert analytics.auc_power(0.50, 30, 30)["curve"] is None
 
 
 def test_auc_power_monotone_and_sample_size():

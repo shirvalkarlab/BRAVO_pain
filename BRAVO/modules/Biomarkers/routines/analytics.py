@@ -1553,6 +1553,31 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         sel = np.unique(np.linspace(0, len(fpr_o) - 1, int(max_points)).astype(int))
         fpr_o, tpr_o, thr_o = fpr_o[sel], tpr_o[sel], thr_o[sel]
 
+    # ---- feature-distribution histogram (pain-high vs pain-low) ----
+    # The single most direct view of WHY this band separates pain: the per-sample band-power feature
+    # split by the binarized label. Drawn beneath the ROC with the cut-point threshold line on top,
+    # it shows the clinician the overlap the AUC summarizes and where any threshold falls in it.
+    # Binned on `x` (= bp_log[m], the RAW oriented-log-power feature), the SAME scale the cut-point
+    # threshold (thr_device / operating_point.threshold) lives on, so the threshold line maps directly
+    # (Phase C percentile-anchors that same value to device LSB). Shared bin edges across both classes.
+    feature_hist = None
+    x_lo = float(np.min(x)); x_hi = float(np.max(x))
+    if np.isfinite(x_lo) and np.isfinite(x_hi) and x_hi > x_lo:
+        n_bins = int(min(30, max(8, round(np.sqrt(x.size)))))
+        edges = np.linspace(x_lo, x_hi, n_bins + 1)
+        c_hi, _ = np.histogram(x[y == 1], bins=edges)
+        c_lo, _ = np.histogram(x[y == 0], bins=edges)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        feature_hist = {
+            "bin_edges": [float(v) for v in edges],
+            "bin_centers": [float(v) for v in centers],
+            "counts_high": [int(v) for v in c_hi],
+            "counts_low": [int(v) for v in c_lo],
+            "n_high": int(np.sum(y == 1)), "n_low": int(np.sum(y == 0)),
+            "x_min": x_lo, "x_max": x_hi,
+            "feature_units": "oriented log10 band power (same scale as the cut-point threshold)",
+        }
+
     return {
         "available": True,
         "auc": auc, "auc_lo": auc_lo, "auc_hi": auc_hi,
@@ -1561,7 +1586,7 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
         "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
         "n_samples": int(m.sum()), "n_clusters": n_clusters,
-        "operating_point": op, "flip": bool(flip),
+        "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
         "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
                  f"{n_clusters} independent ratings). AUC oriented >= 0.5."),
@@ -1852,6 +1877,27 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
     }
 
 
+def _hm_auc_power_at(auc, n_pos, n_neg, za):
+    """Hanley–McNeil power to reject AUC=0.5 at a single (n_pos, n_neg), given the two-sided
+    critical z (za). Factored out of auc_power so the same formula drives both the scalar readout
+    and the power-vs-N curve. Returns a float power, or None when a class is too small."""
+    n_pos = int(n_pos); n_neg = int(n_neg)
+    if n_pos < 2 or n_neg < 2:
+        return None
+    auc = float(max(auc, 1.0 - auc))
+    if auc <= 0.5:
+        return None
+    Q1 = auc / (2.0 - auc)
+    Q2 = 2.0 * auc * auc / (1.0 + auc)
+    var = (auc * (1 - auc) + (n_pos - 1) * (Q1 - auc * auc)
+           + (n_neg - 1) * (Q2 - auc * auc)) / (n_pos * n_neg)
+    se = float(np.sqrt(max(var, 1e-12)))
+    var0 = (0.25 + (n_pos - 1) * (1.0 / 3 - 0.25) + (n_neg - 1) * (1.0 / 3 - 0.25)) / (n_pos * n_neg)
+    se0 = float(np.sqrt(max(var0, 1e-12)))
+    from scipy import stats as _st
+    return float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
+
+
 def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
     clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
@@ -1875,6 +1921,7 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
         return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
                 "n_ratings_current": n_pos + n_neg, "n_ratings_needed": None,
                 "more_data_needed": True, "alpha": alpha, "target_power": target_power,
+                "curve": None,
                 "note": "AUC at or below chance — no power to detect a real effect."}
     Q1 = auc / (2.0 - auc)
     Q2 = 2.0 * auc * auc / (1.0 + auc)
@@ -1890,10 +1937,30 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     # SE^2 * N is ~constant in N; solve (auc-0.5)*sqrt(N) = za*sqrt(se0^2 N0) + zb*sqrt(se^2 N0).
     rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
     n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+
+    # ---- power-vs-N curve (replaces the 3-number readout with a sufficiency curve) ----
+    # Sample total ratings N from a small floor up past whichever is larger of the current count and
+    # the 80%-power requirement, holding the observed prevalence fixed, and evaluate the SAME
+    # Hanley–McNeil power at each N. The frontend draws this as power rising with N, with the target
+    # line, the current-N marker and the needed-N marker on it. Prevalence is held at n_pos/N0 so
+    # n_pos(N) and n_neg(N) scale together the way more ratings would actually accrue.
+    prev = float(n_pos) / float(N0) if N0 > 0 else 0.5
+    n_top = int(max(N0, n_need) * 1.35) + 4
+    n_grid = np.unique(np.clip(np.linspace(4, n_top, 40).astype(int), 4, None))
+    curve_n, curve_p = [], []
+    for N in n_grid:
+        np_i = int(round(N * prev)); nn_i = int(N - np_i)
+        pw = _hm_auc_power_at(auc, np_i, nn_i, za)
+        if pw is not None:
+            curve_n.append(int(N)); curve_p.append(float(pw))
+    curve = ({"n": curve_n, "power": curve_p, "prevalence": prev}
+             if len(curve_n) >= 2 else None)
+
     return {
         "available": True, "auc": auc, "n_pos": n_pos, "n_neg": n_neg, "se_auc": se,
         "power_current": power, "n_ratings_current": int(N0), "n_ratings_needed": n_need,
         "more_data_needed": bool(n_need > N0), "alpha": alpha, "target_power": target_power,
+        "curve": curve,
         "note": ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
                  "effective n). Power to reject AUC = 0.5."),
     }
