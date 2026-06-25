@@ -1,0 +1,5 @@
+spec,n,clusters,c,p,note
+"full pooled, naive SE",2985,230,0.5288870402983139,7.72409539944786e-08,original 'significant' fit — pseudoreplicated
+"full pooled, cluster-robust SE",2985,230,0.5288870402983139,0.25929608958045847,corrects pseudoreplication -> n.s.
+full + time covariate,2985,230,0.8985568410554843,0.016358097527973296,Z corr time r=0.36; coef unstable
+"stable regime >=2026-03-01, cluster-robust",955,79,0.1721121860698578,0.37974562436532533,DEPLOYMENT regime -> n.s. p=0.38

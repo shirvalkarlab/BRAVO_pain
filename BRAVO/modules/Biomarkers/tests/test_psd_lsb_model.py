@@ -97,6 +97,32 @@ def test_8p8hz_cut_is_current_config_not_changepoint_date():
     assert 1.70 < b88["intercept_a"] < 1.85                  # stable-regime intercept, not the ~2.0 transient
 
 
+def test_no_impedance_gain_term_adopted():
+    """Pin the decision to REJECT the electrode-impedance gain covariate (c=1.02).
+
+    The term was significant only under naive OLS that pseudoreplicated 2985 epochs
+    sharing 230 session-level impedance measurements; cluster-robust SE -> n.s.
+    (p=0.26), the deployable >=2026-03-01 regime -> c=0.17 p=0.38, and the coefficient
+    was unstable across specifications. The frozen model therefore carries NO impedance
+    term, and the rejection is documented in the special block. If a future session
+    re-adds an impedance gain term, this test should make them justify it on
+    cluster-correct evidence.
+    """
+    m = plm.load_model(PART)
+    # the model must NOT have grown an impedance/gain-correction field on any band
+    for ch in m["channels"].values():
+        for bd in ch.get("bands", []):
+            assert not any("imped" in str(k).lower() for k in bd), \
+                "an impedance term leaked into a fitted band"
+    # the rejection must be documented in the special block, with the cluster-robust reason
+    special = m["pipeline"]["special"] or {}
+    note = special.get("no_impedance_gain_term", "")
+    assert note, "impedance-rejection rationale missing from special block"
+    assert any(w in note.lower() for w in ("pseudoreplicat", "cluster", "n.s.")), \
+        "rejection note must cite the pseudoreplication/cluster-robust evidence"
+    assert "1.02" in note                                   # the originally claimed coefficient is named
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

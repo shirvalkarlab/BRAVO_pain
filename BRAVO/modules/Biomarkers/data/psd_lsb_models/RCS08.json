@@ -10,7 +10,8 @@
     "min_n_per_band": 6,
     "special": {
       "ZERO_THREE_RIGHT_8.8Hz": "restricted to >=2026-03-01: chronic 0-3R sensing was reassigned off the 8.8 Hz band on 2025-12-05, then bounced across 28/24.4/26.4 Hz before settling. The 8.8 Hz gain falls through a settling transient over Dec-Feb (post-2025-12-05 within-regime trend -0.078 log10/month, p=0.039) and only reaches stationarity from ~2026-02-15 (p=0.72 -> 0.91 at 03-01). The 03-01 cut isolates the stable current-config regime (n=42, mean 1.69 log10(LSB/uV2), flat trend p=0.91); using the 2025-12-05 config-change date instead would inject the higher-gain declining transient and bias the deployable 8.8 Hz threshold.",
-      "ZERO_THREE_RIGHT_23.4Hz": "excluded (noisy, inconsistent with 24.4/26.4 Hz neighbors)"
+      "ZERO_THREE_RIGHT_23.4Hz": "excluded (noisy, inconsistent with 24.4/26.4 Hz neighbors)",
+      "no_impedance_gain_term": "An electrode-impedance covariate (+ c*log10(Z_0-3R)) was tested on the ZERO_THREE_RIGHT pairing data and REJECTED. Significant only under naive OLS (c=0.53, p=8e-8), which pseudoreplicates 2985 epochs sharing 230 session-level impedance measurements; impedance-cluster-robust SE -> n.s. (p=0.26). log10(Z) is collinear with calendar time (r=0.36) and the coefficient is unstable across specifications (0.53/0.90/0.17 vs the originally claimed 1.02). In the deployable >=2026-03-01 regime (full 2326-4712 ohm range) it is c=0.17, p=0.38. Most-generous threshold impact 1.22x across observed Z, below the model residual scatter (1.83x 1-sigma) and validated k uncertainty (1.26x). Original 8.8 Hz-drift motivation was retracted; it is a slow-time proxy, not a physical gain correction. Not adopted."
     }
   },
   "channels": {

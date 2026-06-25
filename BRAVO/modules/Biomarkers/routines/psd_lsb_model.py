@@ -27,6 +27,19 @@ dependence -- the device's on-board power gain falling as sensing frequency rise
 in a_f; a single slope b is shared across a channel's bands (the per-frequency slope difference is
 not statistically supported -- LR n.s., adjusted-R^2 does not improve).
 
+No electrode-impedance gain term. An impedance covariate (+ c*log10(Z_0-3R), Z from the 487
+device DeviceImpedance logs joined nearest-in-time onto the ZERO_THREE_RIGHT pairing epochs) was
+evaluated and REJECTED. It is significant only under naive OLS (c=0.53, p=8e-8), which treats
+the 2985 epochs as independent when they share just 230 distinct session-level impedance
+measurements -- pseudoreplication. With impedance-cluster-robust SE the term is n.s. (p=0.26);
+log10(Z) is collinear with calendar time (r=0.36) and its coefficient is unstable across
+specifications (0.53 / 0.90 / 0.17 / the originally claimed 1.02); and in the deployable
+>= 2026-03-01 regime -- with the full 2326-4712 ohm range present -- it is c=0.17, p=0.38. Even
+the most generous estimate moves the deployable LSB threshold only 1.22x across the observed Z
+range, smaller than the model's own residual scatter (1.83x, 1 sigma) and the validated k
+uncertainty (1.26x). The term's original motivation (8.8 Hz drift) was itself retracted; it is a
+slow-time proxy, not a physical gain correction, and is not adopted.
+
 Fallback tiers (every non-measured result carries tier + estimated=True):
     tier 1  measured   : caller had device-LSB Timeline samples -- not this module's job.
     tier 2  band       : exact (channel, frequency) intercept from the model.
