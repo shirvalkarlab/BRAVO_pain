@@ -2028,6 +2028,115 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
 ADC_NV_PER_LSB = 146.0   # Percept time-domain ADC scale (nV per LSB), exact per Medtronic.
 
 
+# Percept RC adaptive threshold modes — verified from Medtronic white paper UC202012929dEN (FY25),
+# Table 1, p.14, and cross-checked against DESIGN_biomarker_pipeline_v2.md §1. The FFT SIZE is the
+# load-bearing field for calibration: "LFP Power" is the sum of squared FFT magnitude over the sensed
+# band, so a different FFT size integrates a DIFFERENT set of frequency bins (bin width = fs / N_fft;
+# 250/256 ≈ 0.98 Hz for 256-pt vs 250/64 ≈ 3.91 Hz for 64-pt). The white paper (p.9) states outright
+# that "LFP Power values collected in differing threshold modes should not be directly compared." A
+# k (LSB-per-µV²) fit on 256-pt data is therefore INVALID for 64-pt Single Threshold data — the band
+# is not the same quantity. `averaging_ms` is (adaptive, sensing-only) — the controller uses the
+# adaptive value; our streaming calibration is recorded in the sensing-only value and adjusted.
+THRESHOLD_MODES = {
+    "Dual": {
+        "label": "Dual Threshold",
+        "fft_size": 256,
+        "fft_update_hz": (5.0, 2.0),       # (adaptive, sensing-only)
+        "averaging_ms": (1200.0, 3000.0),  # (adaptive, sensing-only)
+        "onset_ms": 1200.0,
+        "blanking_ms": 2000.0,
+        "adaptive": True,
+        "reaction": "minutes",
+        "adaptive_band_hz": (8.0, 30.0),
+    },
+    "Single": {
+        "label": "Single Threshold",
+        "fft_size": 64,                    # <-- DIFFERENT FFT size: NOT calibration-compatible with 256-pt
+        "fft_update_hz": (20.0, 2.0),
+        "averaging_ms": (100.0, 1000.0),
+        "onset_ms": 200.0,
+        "blanking_ms": 550.0,
+        "adaptive": True,
+        "reaction": "milliseconds",
+        "adaptive_band_hz": (8.0, 30.0),
+    },
+    "SingleInverse": {
+        "label": "Single Threshold Inverse",
+        "fft_size": 256,
+        "fft_update_hz": (2.0, 2.0),       # sensing-only mode (no adaptive actuation)
+        "averaging_ms": (3000.0, 3000.0),
+        "onset_ms": None,
+        "blanking_ms": None,
+        "adaptive": False,                 # Sensing Only — review against a threshold, no stim change
+        "reaction": "n/a",
+        "adaptive_band_hz": (1.0, 96.0),   # sensing range
+    },
+}
+# Calibration compatibility: our PSD/TD→LSB conversion is built from 256-pt-equivalent band integrals
+# (chronic Timeline + 3000 ms streaming both use 256-pt FFT). Modes that share fft_size==256 can use
+# that k directly; the 64-pt Single Threshold mode cannot and must be flagged as un-translatable.
+CONVERSION_FFT_SIZE = 256
+COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
+                                   if v["fft_size"] == CONVERSION_FFT_SIZE)  # ("Dual","SingleInverse")
+
+
+# Power-domain LSB <-> µV² calibration, VALIDATED on RCS08 ground truth (on-demand BrainSense
+# Streaming: BrainSenseLfp device LSB + BrainSenseTimeDomain 250 Hz TD on the SAME signal, 50 stim-off
+# paired blocks). Welch 256-pt PSD of the TD integrated over the sensed band, regressed on the device's
+# own LFP power: k = 269 LSB/µV² (1 LSB ≈ 0.0037 µV²), log-log slope 0.835, R² 0.94, 5-fold CV fold-
+# error 1.19×, 1σ multiplicative scatter 1.26×. This MATCHES the design-ledger empirical 0.0034 µV²/LSB
+# to within 9% and is 0.37× the Medtronic 0.01-µV²/LSB rule of thumb. It is far tighter than the older
+# empirical_lsb_ratio FYI (which was rated to ~3×) because TD and LSB come from the identical signal —
+# no time-matching slop. This is the time-domain ADC LSB's DISTINCT power-domain sibling: 146 nV/LSB
+# (ADC_NV_PER_LSB) is the exact time-domain count scale; the constant below is the firmware's band-
+# power LSB, which is normalization-dependent and remains a CONFIDENCE-RATED estimate (use the device's
+# own Timeline LSB percentile anchor for the actual deployed threshold; use this only to translate a
+# physical µV² target into LSB when the device never sensed the band).
+LSB_PER_UV2_VALIDATED = 269.0          # k, RCS08 stim-off paired-block fit
+UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
+LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
+LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
+
+
+def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
+    """Translate an offline band power in µV² to device power-domain LSB using the validated
+    proportional constant k (default = RCS08 stim-off fit, 269 LSB/µV²). Pass a participant-specific
+    k when one has been fitted. Returns float LSB, or NaN for non-positive/invalid input.
+
+    This is the DIRECT route the back-translation analysis confirmed is sufficient: device LFP Power is
+    the band integral of the PSD, and a band integral is phase-independent, so reconstructing a time
+    series from the PSD (PSD→TD→LSB) cannot add information — band power from a phase-randomized
+    reconstruction matched the direct integral to within 0.8% across 113 RCS08 blocks. Only the 256-pt
+    FFT modes (Dual, Single-Inverse) are valid targets; Single Threshold's 64-pt band is a different
+    quantity (see THRESHOLD_MODES / COMPATIBLE_THRESHOLD_MODES).
+
+    **Frequency coverage:** the default k (269) is validated on RCS08 paired blocks at 7.8–28.3 Hz
+    only (approximately band-flat within that range, 1.23× span excluding the anomalous 7.8 Hz n=4
+    point). Bands outside ~8–28 Hz have NO ground truth — k there is an untested extrapolation. This
+    is not clinically restrictive for the adaptive modes (firmware-limited to 8–30 Hz), but sensing-
+    only bands at higher frequencies (e.g. high-gamma) would need their own streaming calibration.
+    """
+    try:
+        x = float(uv2)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(x) or x <= 0:
+        return float("nan")
+    return float(k) * x
+
+
+def uv2_from_lsb(lsb, *, k=LSB_PER_UV2_VALIDATED):
+    """Inverse of lsb_from_uv2: device power-domain LSB → offline band power in µV². Returns NaN for
+    non-positive/invalid input."""
+    try:
+        x = float(lsb)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(x) or x <= 0 or k == 0:
+        return float("nan")
+    return float(x) / float(k)
+
+
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
                         band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
     """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device
@@ -2036,12 +2145,16 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
     over the device's sensing band) and the median device LSB over the same window/channel at near-
     zero stim, then take µV²/LSB per (session, channel).
 
-    This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold: the absolute conversion
-    is normalization-dependent and trustworthy to no better than ~3× (and on RCS08 diverges far more
-    from the 0.01 rule of thumb). The deployable threshold is percentile-anchored on the device's own
-    Timeline LSB instead (see the service layer). `sensing_hz_for_pd(pd_rec, contact)` resolves a
-    PowerDomain recording's sensing center frequency for a contact (the TD recording itself carries
-    no Therapy snapshot).
+    This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold. NOTE: a later paired-
+    block validation (BrainSenseLfp + BrainSenseTimeDomain on the SAME signal, 50 RCS08 stim-off
+    blocks) pinned this far more tightly than the "~3×" caveat once suggested — k = 269 LSB/µV²
+    (≈ 0.0037 µV²/LSB), R² 0.94, CV fold-error 1.19×, i.e. 0.37× the 0.01 rule of thumb (see
+    LSB_PER_UV2_VALIDATED / lsb_from_uv2). The absolute constant is still normalization-dependent, so
+    the deployable threshold remains percentile-anchored on the device's own Timeline LSB (see the
+    service layer); use the validated constant only to translate a physical µV² target into LSB when
+    the device never sensed the band. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
+    recording's sensing center frequency for a contact (the TD recording itself carries no Therapy
+    snapshot).
 
     Returns {available, n, median, iqr_lo, iqr_hi, cv, p10, p90, fold_off_rule, rule_of_thumb,
              confidence, note} or {available: False, reason}.
@@ -2175,16 +2288,25 @@ def _hm_auc_power_at(auc, n_pos, n_neg, za):
     return float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
 
 
-def _band_power_notched(freq, power, center_hz, half_hz, *, line_lo=58.5, line_hi=61.5):
-    """Integrate a raw PSD (µV²/Hz) over [center-half, center+half), interpolating across the mains
-    line-noise window so a 60 Hz spike (and DBS/stim harmonics that land on it) cannot dominate the
-    band-power estimate. Returns µV² (area), or NaN if the band has <2 usable bins.
+def _band_power_notched(freq, power, center_hz, half_hz, *, notch=False,
+                        line_lo=58.5, line_hi=61.5):
+    """Integrate a raw PSD (µV²/Hz) over [center-half, center+half). Returns µV² (area), or NaN if
+    the band has <2 usable bins.
+
+    Mains-notch is OFF by default. The Percept is an IMPLANTED, battery-powered neurostimulator with
+    no galvanic connection to building mains, so there is no 60 Hz line-noise component to remove —
+    blanking 58.5–61.5 Hz would delete real neural power from any band near 60 Hz (e.g. high-gamma).
+    The interpolation capability is retained behind ``notch=True`` for the rare case of a genuinely
+    mains-contaminated offline recording (e.g. a bench/tethered capture), but it must be requested
+    explicitly. (The name is kept for call-site compatibility; the default behaviour is now a plain
+    band integral.)
     """
     freq = np.asarray(freq, dtype=float)
     power = np.asarray(power, dtype=float).copy()
-    inb = (freq >= line_lo) & (freq <= line_hi)
-    if inb.any() and (~inb).sum() >= 2:
-        power[inb] = np.interp(freq[inb], freq[~inb], power[~inb])
+    if notch:
+        inb = (freq >= line_lo) & (freq <= line_hi)
+        if inb.any() and (~inb).sum() >= 2:
+            power[inb] = np.interp(freq[inb], freq[~inb], power[~inb])
     m = (freq >= center_hz - half_hz) & (freq < center_hz + half_hz)
     if int(np.count_nonzero(m)) < 2:
         return float("nan")

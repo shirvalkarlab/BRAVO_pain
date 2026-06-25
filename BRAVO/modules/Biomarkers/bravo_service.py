@@ -3147,6 +3147,99 @@ def build_band_candidate(request_data):
     }
 
 
+def _threshold_mode_block(request_data, center_hz, threshold_lsb):
+    """Resolve the requested Percept threshold mode and report, for THIS band, whether the
+    Timeline-anchored LSB threshold is valid/usable in that mode.
+
+    Reads request ThresholdMode in {Dual, Single, SingleInverse} (default Dual — the mode forced for
+    non-PD pain patients). Returns a JSON-able dict carrying, for the chosen mode and all three:
+      * fft_size / averaging_ms / update_hz / adaptive (from analytics.THRESHOLD_MODES);
+      * adaptive_band_ok: is center_hz inside the mode's adaptive sensing range (8–30 Hz for the two
+        adaptive modes)?;
+      * fft_convertible: does the mode share the 256-pt FFT this calibration/anchor is built on? (Single
+        Threshold's 64-pt FFT does NOT — its LFP Power is a different band integral);
+      * threshold_usable + a plain-language note steering the programmer.
+    The Timeline anchor is a 10-min average; the controller adapts at the mode's averaging window, so
+    the number is a STARTING POINT to be confirmed live in the operating mode.
+    """
+    raw = (request_data.get("ThresholdMode") or "Dual")
+    alias = {"dual": "Dual", "single": "Single", "singleinverse": "SingleInverse",
+             "single_inverse": "SingleInverse", "single-inverse": "SingleInverse",
+             "singlethreshold": "Single", "singlethresholdinverse": "SingleInverse"}
+    mode = alias.get(str(raw).strip().lower().replace(" ", ""), "Dual")
+    modes = analytics.THRESHOLD_MODES
+
+    def _one(m):
+        v = modes[m]
+        lo, hi = v["adaptive_band_hz"]
+        band_ok = (center_hz is not None and lo <= float(center_hz) <= hi)
+        convertible = (v["fft_size"] == analytics.CONVERSION_FFT_SIZE)
+        return {
+            "label": v["label"],
+            "fft_size": v["fft_size"],
+            "averaging_ms_adaptive": v["averaging_ms"][0],
+            "averaging_ms_sensing": v["averaging_ms"][1],
+            "fft_update_hz_adaptive": v["fft_update_hz"][0],
+            "adaptive": v["adaptive"],
+            "adaptive_band_hz": [lo, hi],
+            "adaptive_band_ok": bool(band_ok),
+            "fft_convertible": bool(convertible),
+        }
+
+    has_thr = bool(threshold_lsb and threshold_lsb.get("available")
+                   and threshold_lsb.get("upper_lsb") is not None)
+
+    def _verdict(d):
+        """Usability + plain-language note for ONE mode's metadata dict `d`. Computed for EVERY mode
+        so the frontend can switch modes client-side (no refetch) — the threshold value is mode-
+        independent; only its validity/interpretation changes."""
+        if not d["fft_convertible"]:
+            return (False,
+                    "%s uses a %d-pt FFT, but the device Timeline LSB (and this calibration) is "
+                    "256-pt. LFP Power is not comparable across FFT sizes, so the Timeline-anchored "
+                    "threshold does NOT translate to this mode — recapture the threshold while "
+                    "sensing in %s before deploying." % (d["label"], d["fft_size"], d["label"]))
+        if not d["adaptive_band_ok"] and d["adaptive"]:
+            return (False,
+                    "%.1f Hz is outside this mode's %g–%g Hz adaptive sensing range, so it cannot run "
+                    "adaptive here regardless of the threshold." % (
+                        float(center_hz or 0), d["adaptive_band_hz"][0], d["adaptive_band_hz"][1]))
+        if not has_thr:
+            return (False,
+                    "Mode is compatible (256-pt FFT, band in range), but no Timeline-anchored LSB "
+                    "threshold is available for this band yet.")
+        avg = d["averaging_ms_adaptive"]
+        if not d["adaptive"]:
+            return (True,
+                    "Sensing-only mode (no adaptive actuation): the Timeline-anchored upper threshold "
+                    "%.1f LSB is reviewed against, not acted on. 256-pt FFT, %g ms averaging." % (
+                        float(threshold_lsb["upper_lsb"]), avg))
+        return (True,
+                "Timeline-anchored upper threshold %.1f LSB is a STARTING POINT: it is read off the "
+                "10-min Timeline average, while %s adapts on a %g ms window. Shorter averaging widens "
+                "the tails, so confirm/raise the threshold live while sensing in %s before enabling "
+                "adaptive." % (float(threshold_lsb["upper_lsb"]), d["label"], avg, d["label"]))
+
+    all_modes = {}
+    for m in modes:
+        d = _one(m)
+        u, note_m = _verdict(d)
+        d["threshold_usable"] = u
+        d["note"] = note_m
+        all_modes[m] = d
+    chosen = all_modes[mode]
+
+    return {
+        "requested_mode": mode,
+        "chosen": chosen,
+        "threshold_usable": chosen["threshold_usable"],
+        "note": chosen["note"],
+        "controller_averaging_ms": chosen["averaging_ms_adaptive"],
+        "timeline_averaging_ms": 600000.0,
+        "all_modes": all_modes,
+    }
+
+
 def band_deployment_roc(request_data):
     """Rating-clustered deployment ROC + cut-point table for ONE committed band (Phase B).
 
@@ -3209,7 +3302,8 @@ def band_psd_lsb_conversion(request_data):
     pairs every offline PSD epoch on the channel with the device's own LSB Timeline samples recorded
     within a time window (±MatchWindowH hours, default 1) and fits the proportional law LSB = k·µV²
     (analytics.psd_lsb_conversion), integrating each PSD over the band the DEVICE was actually sensing
-    at that moment (each LSB sample carries its sensing center_hz) with the mains line-noise notched.
+    at that moment (each LSB sample carries its sensing center_hz). No mains notch is applied — the
+    Percept is implanted and battery-powered, so there is no 60 Hz line component to remove.
 
     The user's design choice: pairs within 1–2 h are "good enough" because chronic band power is
     slowly varying. The conversion is a cross-scale CALIBRATION (show a physical µV² target in the LSB
@@ -3269,48 +3363,150 @@ def band_psd_lsb_conversion(request_data):
     ly = np.asarray(L.get("y"), dtype=float)
     lt = np.asarray(L.get("t"), dtype=float)
     lc = np.asarray(L.get("center_hz"), dtype=float)
+    lsrc = np.asarray(L.get("source") or ["?"] * ly.size, dtype=object)
     keep = np.isfinite(ly) & (ly > 0) & np.isfinite(lt)
-    ly, lt, lc = ly[keep], lt[keep], lc[keep]
+    ly, lt, lc, lsrc = ly[keep], lt[keep], lc[keep], lsrc[keep]
     if lt.size < 20:
         return {"available": False, "reason": f"only {lt.size} usable device LSB samples on {channel}",
                 "n_pairs": 0}
-    order = np.argsort(lt); ly, lt, lc = ly[order], lt[order], lc[order]
+    order = np.argsort(lt); ly, lt, lc, lsrc = ly[order], lt[order], lc[order], lsrc[order]
 
-    # --- time-match each PSD epoch to the device LSB within ±win_h, integrate PSD over the sensed band ---
+    # --- MODALITY + CONFIGURATION GUARD (audit: the 8.8 Hz "drift" was a pooling artifact) ----------
+    # The device computes "LFP Power" through DIFFERENT signal chains depending on how it was recorded
+    # (per the Percept aDBS white paper, FY25): the chronic BrainSense Timeline is a **10-minute**
+    # average; in-clinic streaming (Sensing Only) is a **3000 ms** average; and the adaptive (aDBS)
+    # controller itself acts on a **1200 ms** average (Dual Threshold) — all 256-pt FFT but wildly
+    # different averaging windows. Pooling them gives a SINGLE LSB/µV² gain that is really a blend of
+    # two measurements with ~200-600x different smoothing, and a sensing-band reconfiguration (the
+    # device parked at a different center frequency) breaks the series outright. We therefore:
+    #   (1) NEVER pool across `source`; match + fit each modality SEPARATELY;
+    #   (2) within a match window only use LSB samples whose own sensing center is consistent with the
+    #       band being calibrated (per-sample center, not a window median that can straddle a reconfig);
+    #   (3) tag which modality is closest to what the CONTROLLER acts on (streaming/3000 ms is the
+    #       nearest available proxy for the 1200 ms aDBS detector; chronic/10-min is a trend, far from
+    #       the control timescale and must NOT seed a deployment threshold).
+    # The white-paper averaging windows (ms) per source; aDBS adaptive Dual-Threshold detector = 1200.
+    _SRC_AVG_MS = {"streaming": 3000.0, "chronic": 600000.0}
+    _CONTROLLER_AVG_MS = 1200.0  # Dual Threshold, Adaptive (the unit a deployed threshold must be in)
     win_s = win_h * 3600.0
-    pair_P, pair_L, pair_t = [], [], []
-    for (tp, fr, pw) in psds:
-        a = int(np.searchsorted(lt, tp - win_s, side="left"))
-        b = int(np.searchsorted(lt, tp + win_s, side="right"))
-        if b - a < 1:
-            continue
-        if fixed_center is not None:
-            center = fixed_center
-        else:
-            cc = lc[a:b]; cc = cc[np.isfinite(cc)]
-            if cc.size == 0:
-                continue
-            center = float(np.median(cc))
-        bp = analytics._band_power_notched(fr, pw, center, half)
-        if not (np.isfinite(bp) and bp > 0):
-            continue
-        pair_P.append(bp); pair_L.append(float(np.median(ly[a:b]))); pair_t.append(tp)
 
-    fit = analytics.psd_lsb_conversion(np.asarray(pair_P), np.asarray(pair_L), n_boot=n_boot)
+    def _match_one_source(src_mask, src_name):
+        """Pair PSD epochs to LSB samples of ONE source only; band center from per-sample sensing."""
+        st, sy, sc = lt[src_mask], ly[src_mask], lc[src_mask]
+        if st.size < 20:
+            return None
+        P, Lp, T = [], [], []
+        for (tp, fr, pw) in psds:
+            a = int(np.searchsorted(st, tp - win_s, side="left"))
+            b = int(np.searchsorted(st, tp + win_s, side="right"))
+            if b - a < 1:
+                continue
+            cc = sc[a:b]
+            if fixed_center is not None:
+                center = fixed_center
+                # only keep samples whose own center is within ±half of the requested band
+                near = np.isfinite(cc) & (np.abs(cc - fixed_center) <= half)
+                if near.sum() == 0:
+                    continue
+                lsb_val = float(np.median(sy[a:b][near]))
+            else:
+                ccf = cc[np.isfinite(cc)]
+                if ccf.size == 0:
+                    continue
+                center = float(np.median(ccf))
+                # CONFIGURATION GUARD: require the window to sense ONE band (no reconfig straddle)
+                near = np.isfinite(cc) & (np.abs(cc - center) <= half)
+                if near.sum() == 0 or (near.sum() / cc.size) < 0.8:
+                    continue
+                lsb_val = float(np.median(sy[a:b][near]))
+            bp = analytics._band_power_notched(fr, pw, center, half)
+            if not (np.isfinite(bp) and bp > 0):
+                continue
+            P.append(bp); Lp.append(lsb_val); T.append(tp)
+        if len(P) < 20:
+            return None
+        f = analytics.psd_lsb_conversion(np.asarray(P), np.asarray(Lp), n_boot=n_boot)
+        f["source"] = src_name
+        f["n_pairs"] = len(P)
+        f["averaging_ms"] = _SRC_AVG_MS.get(src_name)
+        f["controller_relevant"] = (src_name == "streaming")
+        f["t_span"] = [float(min(T)), float(max(T))] if T else None
+        if f.get("available"):
+            Pa = np.asarray(P); La = np.asarray(Lp)
+            idx = np.arange(Pa.size)
+            if Pa.size > 400:
+                idx = np.linspace(0, Pa.size - 1, 400).astype(int)
+            f["scatter"] = {"psd_uv2": [float(x) for x in Pa[idx]],
+                            "lsb": [float(x) for x in La[idx]]}
+        return f
+
+    sources = [s for s in ("streaming", "chronic") if np.any(lsrc == s)]
+    by_modality = {}
+    for s in sources:
+        r = _match_one_source(lsrc == s, s)
+        if r is not None:
+            by_modality[s] = r
+
+    if not by_modality:
+        return {"available": False, "reason": "no modality yielded >=20 single-configuration pairs",
+                "n_pairs": 0, "channel": channel}
+
+    # Headline fit = the controller-relevant modality if present, else the largest-n modality.
+    if "streaming" in by_modality:
+        primary = by_modality["streaming"]
+    else:
+        primary = max(by_modality.values(), key=lambda f: f.get("n_pairs", 0))
+
+    fit = dict(primary)  # copy the primary modality's fit to the top level (back-compat)
     fit["channel"] = channel
     fit["channel_label"] = analytics.format_channel(channel)["label"]
     fit["match_window_h"] = win_h
     fit["band_width_hz"] = half * 2.0
     fit["center_hz_mode"] = ("fixed %.1f Hz" % fixed_center) if fixed_center is not None \
         else "device sensing center (per-sample)"
-    # A decimated scatter for the panel (cap the payload).
-    if fit.get("available") and pair_P:
-        P = np.asarray(pair_P); Lv = np.asarray(pair_L)
-        idx = np.arange(P.size)
-        if P.size > 400:
-            idx = np.linspace(0, P.size - 1, 400).astype(int)
-        fit["scatter"] = {"psd_uv2": [float(x) for x in P[idx]],
-                          "lsb": [float(x) for x in Lv[idx]]}
+    fit["primary_source"] = primary["source"]
+    fit["controller_averaging_ms"] = _CONTROLLER_AVG_MS
+    # Per-modality breakdown (k / R² / n / averaging) so the panel can show them side-by-side and
+    # never silently pool. A large k gap between modalities is the pooling artifact made explicit.
+    fit["by_modality"] = {
+        s: {k: r.get(k) for k in ("available", "k_lsb_per_uv2", "k_ci", "r2", "loglog_slope",
+                                  "n_pairs", "averaging_ms", "controller_relevant", "t_span")}
+        for s, r in by_modality.items()
+    }
+    if len(by_modality) > 1:
+        ks = {s: r.get("k_lsb_per_uv2") for s, r in by_modality.items() if r.get("k_lsb_per_uv2")}
+        if len(ks) > 1:
+            kmax, kmin = max(ks.values()), min(ks.values())
+            fit["modality_gain_ratio"] = float(kmax / kmin) if kmin else None
+            fit["modality_caveat"] = (
+                "Chronic (10-min average) and streaming (3000 ms) LFP power use different averaging "
+                "windows and are NOT pooled; their LSB/µV² gains differ by %.1fx. A deployment "
+                "threshold must use the streaming-class gain (closest to the 1200 ms aDBS detector), "
+                "NOT the chronic trend." % (kmax / kmin if kmin else float("nan")))
+
+    # --- THRESHOLD-MODE COMPATIBILITY (audit: 64-pt Single Threshold is a different band integral) ---
+    # This conversion is built from 256-pt-equivalent band power (chronic Timeline + 3000 ms streaming
+    # both 256-pt FFT). Per white paper Table 1, Single Threshold uses a 64-pt FFT — a different set of
+    # frequency bins — so this k is NOT valid for it. Expose the per-mode verdict so the deployment
+    # module can compute a threshold for Dual / Single-Inverse but DECLINE Single Threshold rather than
+    # silently mis-scale it.
+    fit["conversion_fft_size"] = analytics.CONVERSION_FFT_SIZE
+    fit["threshold_mode_compat"] = {
+        m: {
+            "fft_size": v["fft_size"],
+            "averaging_ms_adaptive": v["averaging_ms"][0],
+            "fft_update_hz_adaptive": v["fft_update_hz"][0],
+            "adaptive": v["adaptive"],
+            "adaptive_band_hz": list(v["adaptive_band_hz"]),
+            "convertible": (v["fft_size"] == analytics.CONVERSION_FFT_SIZE),
+            "reason": ("256-pt FFT matches this calibration" if v["fft_size"] == analytics.CONVERSION_FFT_SIZE
+                       else "%d-pt FFT integrates a different band than the 256-pt calibration; "
+                            "LFP Power is not comparable across FFT sizes — recapture calibration in "
+                            "this mode before deploying a threshold." % v["fft_size"]),
+        }
+        for m, v in analytics.THRESHOLD_MODES.items()
+    }
+    fit["compatible_threshold_modes"] = list(analytics.COMPATIBLE_THRESHOLD_MODES)
     return fit
 
 
@@ -3494,6 +3690,16 @@ def band_lsb_and_power(request_data):
             n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
             power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff)
 
+    # ---- 4) THRESHOLD-MODE awareness (audit: mode determines FFT size + adaptive averaging) --------
+    # The percentile-anchored threshold above is read off the device Timeline LSB, which is a 10-MINUTE
+    # average. The controller, once adapting, recomputes LFP Power at the chosen mode's averaging window
+    # (Dual 1200 ms / Single 100 ms / Single-Inverse is sensing-only). A given upper percentile of the
+    # 10-min distribution is NOT the same LSB as that percentile of the shorter-averaged distribution
+    # (shorter averaging => fatter tails => higher upper-percentile LSB), so the Timeline-anchored
+    # number is a STARTING POINT that must be read in the mode it will run in. And Single Threshold uses
+    # a 64-pt FFT — a different band integral — so the Timeline (256-pt) anchor does not even apply.
+    threshold_mode = _threshold_mode_block(rd, center_hz, threshold_lsb)
+
     def _ff(x):
         try:
             return float(x) if x is not None and np.isfinite(x) else None
@@ -3505,6 +3711,7 @@ def band_lsb_and_power(request_data):
         "label_metric": core["label_metric"], "match_direction": core["match_direction"],
         "cutpoint_feature": _ff(cutpoint), "percentile": _ff(percentile), "n_matched_samples": n_feat,
         "threshold_lsb": threshold_lsb,
+        "threshold_mode": threshold_mode,
         "recommended_vs_programmed": recommended_vs_programmed,
         "lsb_ratio": lsb_ratio,
         "power": power,
@@ -3631,13 +3838,43 @@ def deployment_summary(request_data):
         from modules.Biomarkers.routines import psd_lsb_model as _plm
         est = _plm.estimate_lsb(rd.get("Participant"), channel, center_hz, float(cutpoint))
         if est.get("available"):
+            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
+            est_lsb = float(est["lsb"])
             thr_estimate = {
-                "estimated_upper_lsb": round(float(est["lsb"]), 1),
+                "estimated_upper_lsb": round(est_lsb, 1),
+                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
+                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
+                "sigma_fold": round(float(sigma), 3),
                 "tier": est.get("tier"), "k_effective": est.get("k_effective"),
                 "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
                 "r2": est.get("r2"), "note": est.get("note"),
                 "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
             }
+        else:
+            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
+            # we can still translate the physical µV² cut-point with the VALIDATED population constant
+            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
+            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
+            try:
+                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
+            except Exception:  # noqa: BLE001
+                lsb_est = float("nan")
+            if np.isfinite(lsb_est):
+                sigma = analytics.LSB_UV2_SIGMA_FOLD
+                thr_estimate = {
+                    "estimated_upper_lsb": round(float(lsb_est), 1),
+                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
+                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
+                    "sigma_fold": round(float(sigma), 3),
+                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
+                    "r2": 0.94,
+                    "note": ("No per-participant frozen-model entry for this band; translated with the "
+                             "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
+                             "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
+                             "device Timeline before deploying." % sigma),
+                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
+                }
 
     # Power on the clustered effective n.
     power = {"available": False, "reason": "ROC unavailable"}
@@ -3846,6 +4083,11 @@ def deployment_summary(request_data):
             # measured upper_lsb; present only when `available` is False.
             "estimated": (thr_estimate is not None and thr_lsb is None),
             "estimate": thr_estimate,
+            # Threshold-mode awareness (audit): which Percept mode this number is valid for, the
+            # FFT-size compatibility, and the 10-min-Timeline vs adaptive-averaging caveat.
+            "mode": _threshold_mode_block(
+                rd, center_hz,
+                {"available": thr_lsb is not None, "upper_lsb": thr_lsb}),
         },
         "evidence": {
             "auc": _ff(roc.get("auc")), "auc_lo": _ff(roc.get("auc_lo")), "auc_hi": _ff(roc.get("auc_hi")),

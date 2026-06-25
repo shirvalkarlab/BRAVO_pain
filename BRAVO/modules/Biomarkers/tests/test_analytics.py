@@ -779,16 +779,43 @@ def test_psd_lsb_conversion_guards_small_n():
     assert out["n_pairs"] == 3
 
 
-def test_band_power_notched_interpolates_mains_line():
-    """The 60 Hz line-noise spike is interpolated away before band integration so it cannot dominate a
-    band that straddles 60 Hz."""
+def test_lsb_uv2_converters_roundtrip_and_validated_constant():
+    """The validated power-domain LSB<->µV² converters round-trip and use the paired-block constant
+    (k=269 LSB/µV² ≈ 0.0037 µV²/LSB) — distinct from the exact 146 nV/LSB time-domain ADC scale."""
+    k = analytics.LSB_PER_UV2_VALIDATED
+    assert 250.0 < k < 290.0, k                                  # ~269
+    assert abs(analytics.UV2_PER_LSB_VALIDATED - 1.0 / k) < 1e-9
+    # 1 µV² -> ~269 LSB
+    assert abs(analytics.lsb_from_uv2(1.0) - k) < 1e-6
+    # round-trip
+    for uv2 in (0.5, 2.0, 13.7):
+        lsb = analytics.lsb_from_uv2(uv2)
+        assert abs(analytics.uv2_from_lsb(lsb) - uv2) < 1e-6, uv2
+    # the power-domain LSB is NOT the time-domain ADC scale
+    assert analytics.LSB_PER_UV2_VALIDATED != analytics.ADC_NV_PER_LSB
+    # invalid inputs -> NaN, never an exception
+    import math
+    assert math.isnan(analytics.lsb_from_uv2(0.0))
+    assert math.isnan(analytics.lsb_from_uv2(-3.0))
+    assert math.isnan(analytics.uv2_from_lsb(None))
+
+
+def test_band_power_notched_default_no_mains_removal():
+    """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
+    integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
+    60 Hz therefore DOES enter the band by default; it is only interpolated away when notch=True is
+    explicitly requested (for a genuinely tethered/bench recording)."""
     freq = np.arange(40.0, 80.0, 1.0)
     power = np.full_like(freq, 0.05)
-    power[np.argmin(np.abs(freq - 60.0))] = 100.0   # giant mains spike
-    bp_notched = analytics._band_power_notched(freq, power, 60.0, 5.0)
-    # a clean ~0.05/Hz over a 10 Hz band ~ 0.5; the spike (if not notched) would push it >>1
+    power[np.argmin(np.abs(freq - 60.0))] = 100.0   # a feature at 60 Hz (real neural, NOT mains here)
+    # DEFAULT (notch off): the 60 Hz content is preserved, so the band integral is dominated by it.
+    bp_default = analytics._band_power_notched(freq, power, 60.0, 5.0)
+    assert bp_default > 1.0, bp_default          # the 60 Hz content is kept, not blanked
+    # OPT-IN (notch=True): the spike is interpolated away and the band falls back to the ~0.05/Hz floor.
+    bp_notched = analytics._band_power_notched(freq, power, 60.0, 5.0, notch=True)
     assert bp_notched < 1.0, bp_notched
     assert bp_notched > 0.0
+    assert bp_default > bp_notched
 
 
 def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=0.3,
@@ -915,7 +942,8 @@ if __name__ == "__main__":
     test_psd_lsb_conversion_recovers_planted_proportional_constant()
     test_psd_lsb_conversion_flags_nonlinear_slope()
     test_psd_lsb_conversion_guards_small_n()
-    test_band_power_notched_interpolates_mains_line()
+    test_band_power_notched_default_no_mains_removal()
+    test_lsb_uv2_converters_roundtrip_and_validated_constant()
     test_forward_chaining_validates_stationary_band()
     test_forward_chaining_null_band_does_not_beat_chance_forward()
     test_forward_chaining_catches_sign_reversal_over_time()

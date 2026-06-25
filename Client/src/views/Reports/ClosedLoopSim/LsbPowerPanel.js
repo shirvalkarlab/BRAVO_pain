@@ -24,6 +24,7 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 
 function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {
   const pwRef = useRef(null);
+  const thrRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
@@ -141,7 +142,99 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => { if (pwRef.current) Plotly.purge(pwRef.current); }, []);
+  // --- THRESHOLD GAUGE on the device Timeline distribution (Plotly): shows the recommended threshold
+  // as a vertical marker against the device's own LSB distribution (p10/median/p90 from the backend),
+  // with ±1σ error bars when the threshold is ESTIMATED from k (showing the calibration uncertainty).
+  // Percentile-anchored thresholds are exact (no error bar). When threshold_mode is present, the mode
+  // verdict annotation shows below.
+  useEffect(() => {
+    const gd = thrRef.current;
+    if (!gd || !tl) { if (gd) Plotly.purge(gd); return; }
+    const hasLsb = tl.available && tl.upper_lsb != null;
+    const tm = data && data.threshold_mode;
+    // Distribution whisker from device Timeline
+    const p10 = tl.device_lsb_p10; const med = tl.device_lsb_median; const p90 = tl.device_lsb_p90;
+    const hasDist = p10 != null && med != null && p90 != null;
+    if (!hasLsb && !hasDist) { Plotly.purge(gd); return; }
+
+    const traces = [];
+    // Timeline distribution as a horizontal box (p10–p90 with median)
+    if (hasDist) {
+      traces.push({
+        type: "box", x: [p10, med, p90], orientation: "h", name: "Timeline LSB",
+        marker: { color: PAL.neutral }, line: { color: PAL.neutral },
+        boxpoints: false, showlegend: false, hoverinfo: "x",
+        q1: [p10], median: [med], q3: [p90], lowerfence: [p10], upperfence: [p90],
+      });
+      // Actually draw as a shape+scatter since box from summary stats is tricky in plotly.js
+    }
+    // Threshold marker with optional error bars
+    if (hasLsb) {
+      const isEstimated = tl.method && tl.method.includes("modeled");
+      // For estimated thresholds, propagate the k sigma; for anchored ones, no error
+      const sigma = (data && data.lsb_ratio && data.lsb_ratio.sigma_fold)
+        || (tm && tm.chosen && tm.chosen.sigma_fold) || null;
+      const errLo = (isEstimated && sigma) ? tl.upper_lsb - (tl.upper_lsb / sigma) : 0;
+      const errHi = (isEstimated && sigma) ? (tl.upper_lsb * sigma) - tl.upper_lsb : 0;
+      traces.push({
+        type: "scatter", mode: "markers", x: [tl.upper_lsb], y: ["Threshold"],
+        marker: { color: PAL.accent, size: 14, symbol: "diamond",
+          line: { color: "#fff", width: 2 } },
+        error_x: (isEstimated && sigma) ? {
+          type: "data", symmetric: false,
+          array: [errHi], arrayminus: [errLo],
+          color: PAL.accent, thickness: 2, width: 6,
+        } : undefined,
+        hovertemplate: isEstimated
+          ? `Estimated: ${fmt(tl.upper_lsb, 0)} LSB (±1σ: ${fmt(tl.upper_lsb / sigma, 0)}–${fmt(tl.upper_lsb * sigma, 0)})<extra></extra>`
+          : `Anchored: ${fmt(tl.upper_lsb, 0)} LSB (p${fmt(tl.percentile, 0)} of Timeline)<extra></extra>`,
+        showlegend: false,
+      });
+    }
+
+    // Distribution range as horizontal markers
+    if (hasDist) {
+      traces.push({
+        type: "scatter", mode: "markers+text", x: [p10, med, p90],
+        y: ["Timeline", "Timeline", "Timeline"],
+        marker: { color: [PAL.neutral, PAL.neutral, PAL.neutral], size: [8, 12, 8],
+          symbol: ["line-ns", "line-ns", "line-ns"],
+          line: { width: 2, color: PAL.neutral } },
+        text: [`p10`, `median`, `p90`], textposition: "top center",
+        textfont: { size: 7.5, color: PAL.neutral },
+        hovertemplate: "%{x:.0f} LSB<extra></extra>", showlegend: false,
+      });
+      // Range bar
+      traces.push({
+        type: "scatter", mode: "lines", x: [p10, p90], y: ["Timeline", "Timeline"],
+        line: { color: PAL.neutral, width: 4 },
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
+
+    // Mode verdict annotation
+    const modeNote = (tm && tm.chosen)
+      ? `${tm.requested_mode}: ${tm.threshold_usable ? "✓" : "✗"} ${tm.threshold_usable ? "usable" : "not usable"} · ${tm.chosen.fft_size}-pt FFT · ${Math.round(tm.chosen.averaging_ms_adaptive)} ms adaptive`
+      : "";
+    const noteColor = (tm && tm.threshold_usable) ? PAL.pass : PAL.warnText;
+
+    const layout = {
+      margin: { l: 60, r: 10, t: 6, b: modeNote ? 28 : 10 }, height: modeNote ? 110 : 85,
+      xaxis: { title: { text: "Device LFP power (LSB)", font: { size: 9 } },
+        tickfont: { size: 8.5 }, zeroline: false },
+      yaxis: { tickfont: { size: 9 }, fixedrange: true },
+      annotations: modeNote ? [{
+        xref: "paper", yref: "paper", x: 0, y: -0.38, xanchor: "left", yanchor: "top",
+        text: modeNote, showarrow: false, font: { size: 8, color: noteColor }, align: "left",
+      }] : [],
+    };
+    Plotly.react(gd, traces, layout, { displayModeBar: false, responsive: true });
+  }, [data, tl]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => {
+    if (pwRef.current) Plotly.purge(pwRef.current);
+    if (thrRef.current) Plotly.purge(thrRef.current);
+  }, []);
 
   return (
     <Card sx={{ width: "100%" }}>
@@ -209,6 +302,14 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                 </MDTypography>
               </MDBox>
             )}
+
+            {/* 1a) Plotly threshold gauge — threshold on the device Timeline distribution, with ±1σ
+                   error bars when the threshold is ESTIMATED from k (calibration uncertainty). */}
+            {tl ? (
+              <MDBox mb={1.0}>
+                <div ref={thrRef} style={{ width: "100%" }} />
+              </MDBox>
+            ) : null}
 
             {/* 1b) RECOMMENDED vs CURRENTLY-PROGRAMMED Δ (audit C10). Renders only when a closed-loop
                 program is active on this hemisphere — the recommended number alone forces a programmer
