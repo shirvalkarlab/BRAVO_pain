@@ -96,10 +96,10 @@ function BandCandidateIdentity({ bc, envelope }) {
           <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
             sx={{ height: 20, fontSize: 11 }} />
           {bc.adaptive_valid
-            ? <Chip size="small" color="success" label="adaptive-valid (8–30 Hz)"
-                sx={{ height: 20, fontSize: 10.5 }} />
+            ? <Chip size="small" label="adaptive-valid (8–30 Hz)"
+                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.pass, color: "white" }} />
             : <Chip size="small" label="off adaptive band"
-                sx={{ height: 20, fontSize: 10.5, backgroundColor: "#f1d9b5" }} />}
+                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.warn, color: PAL.onWarn }} />}
         </MDBox>
 
         <Grid container spacing={3}>
@@ -125,9 +125,11 @@ function BandCandidateIdentity({ bc, envelope }) {
                 {`${fmt(ev.odds_ratio)} `}
                 {ev.or_lo != null && ev.or_hi != null ? `(95% CI ${fmt(ev.or_lo)}–${fmt(ev.or_hi)})` : ""}
                 {ev.credible_ci === false
-                  ? <span style={{ color: PAL.fail }}> · narrow CI — re-bootstrap (Phase B)</span>
+                  ? <span style={{ color: PAL.fail }}
+                      title="Credible-CI rule: OR-space 95% CI width > 0.10. This CI is narrower than that (saturated-random-effect Wald interval, not trustworthy) — re-validated by cluster bootstrap in Phase B."> · narrow CI — re-bootstrap (Phase B)</span>
                   : ev.credible_ci === true
-                    ? <span style={{ color: PAL.pass }}> · credible</span> : null}
+                    ? <span style={{ color: PAL.pass }}
+                        title="Credible-CI rule: OR-space 95% CI width > 0.10 (not 'excludes 1'). Same flag gates the PE 'credible CI' deployment gate."> · credible</span> : null}
               </KV>
               <KV label="p (glmer)">{fmtP(ev.p_glmer)}</KV>
               <KV label="Samples / eras">{`${ev.n_matched_samples ?? "—"} samples · ${ev.n_clusters ?? "—"} weekly eras`}</KV>
