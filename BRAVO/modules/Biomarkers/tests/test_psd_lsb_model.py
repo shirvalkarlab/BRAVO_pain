@@ -97,6 +97,26 @@ def test_8p8hz_cut_is_current_config_not_changepoint_date():
     assert 1.70 < b88["intercept_a"] < 1.85                  # stable-regime intercept, not the ~2.0 transient
 
 
+def test_highgamma_estimate_flagged_extrapolated():
+    """A high-gamma (55.5 Hz) LSB estimate must be flagged freq_extrapolated, not snapped silently.
+
+    estimate_lsb snaps an out-of-range request to the nearest fitted band (here 26.4 Hz, ~29 Hz
+    away). The validated PSD->LSB range is 7.8-28.3 Hz and the gain is NOT band-flat, so the snapped
+    LSB is an untested extrapolation. The estimate must carry freq_extrapolated=True and say so in
+    its note, so a clinician never deploys a high-gamma threshold as if it were calibrated.
+    """
+    est = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 55.5, 1.0)
+    assert est["available"]
+    assert est.get("freq_extrapolated") is True
+    assert est.get("validated_hz_range") == [7.8, 28.3]
+    assert "extrapolat" in est["note"].lower()
+    # an in-range band must NOT be flagged
+    est_ok = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 24.4, 1.0)
+    assert est_ok["available"] and est_ok.get("freq_extrapolated") is False
+    # boundary: just above the validated ceiling is extrapolated
+    assert plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 28.4, 1.0).get("freq_extrapolated") is True
+
+
 def test_no_impedance_gain_term_adopted():
     """Pin the decision to REJECT the electrode-impedance gain covariate (c=1.02).
 

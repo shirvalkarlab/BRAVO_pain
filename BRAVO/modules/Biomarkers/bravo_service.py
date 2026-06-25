@@ -3848,6 +3848,11 @@ def deployment_summary(request_data):
                 "tier": est.get("tier"), "k_effective": est.get("k_effective"),
                 "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
                 "r2": est.get("r2"), "note": est.get("note"),
+                # Carry the conversion's frequency-coverage flag: True when the band is outside the
+                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
+                # warns that the LSB is extrapolated, not calibrated.
+                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
+                "validated_hz_range": est.get("validated_hz_range"),
                 "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
             }
         else:
@@ -3861,6 +3866,17 @@ def deployment_summary(request_data):
                 lsb_est = float("nan")
             if np.isfinite(lsb_est):
                 sigma = analytics.LSB_UV2_SIGMA_FOLD
+                fextrap = bool(center_hz is not None and (
+                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+                note = ("No per-participant frozen-model entry for this band; translated with the "
+                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
+                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
+                        "device Timeline before deploying." % sigma)
+                if fextrap:
+                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
+                             "where k is untested (the gain is not band-flat). Needs streaming "
+                             "calibration at this center frequency." % (
+                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
                 thr_estimate = {
                     "estimated_upper_lsb": round(float(lsb_est), 1),
                     "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
@@ -3869,10 +3885,9 @@ def deployment_summary(request_data):
                     "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
                     "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
                     "r2": 0.94,
-                    "note": ("No per-participant frozen-model entry for this band; translated with the "
-                             "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
-                             "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
-                             "device Timeline before deploying." % sigma),
+                    "freq_extrapolated": fextrap,
+                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+                    "note": note,
                     "method": "modeled from physical µV² cut-point via validated population LSB constant",
                 }
 

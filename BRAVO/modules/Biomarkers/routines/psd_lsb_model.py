@@ -58,6 +58,25 @@ _MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                           "data", "psd_lsb_models")
 _CACHE = {}
 
+# Frequency range over which the PSD->LSB gain is calibrated on RCS08 paired blocks. Outside it the
+# conversion is an untested extrapolation (the gain anchor is not band-flat — it falls ~0.80
+# log10/decade within range), so an estimate at e.g. 55.5 Hz high-gamma snapped to the nearest fitted
+# band would mis-state the LSB threshold by ~1.7x. Mirror of analytics.LSB_VALIDATED_HZ_{LO,HI}; kept
+# local so this module stays Django/analytics-import-free.
+_LSB_VALIDATED_HZ_LO = 7.8
+_LSB_VALIDATED_HZ_HI = 28.3
+
+
+def _freq_extrapolated(center_hz):
+    """True iff center_hz is outside the validated [7.8, 28.3] Hz calibration range (None -> False)."""
+    if center_hz is None:
+        return False
+    try:
+        f = float(center_hz)
+    except (TypeError, ValueError):
+        return False
+    return f < _LSB_VALIDATED_HZ_LO or f > _LSB_VALIDATED_HZ_HI
+
 
 def _canon(participant):
     """RCS08 / rcs08 / 'RCS08 ' -> 'RCS08'. Participant code, not the uid."""
@@ -128,14 +147,25 @@ def estimate_lsb(participant, channel, center_hz, psd_uv2):
         lsb = np.power(10.0, a_f + float(b) * np.log10(Pc))
         exact = abs(float(bd["center_hz"]) - float(center_hz)) < 1e-6
         k_eff = lsb / Pc                                  # effective LSB/uV^2 at this power (b!=1 => power-dependent)
+        extrap = _freq_extrapolated(center_hz)
+        note = ("exact band match" if exact else
+                f"nearest fitted band {bd['center_hz']:.1f} Hz (requested {float(center_hz):.1f} Hz)")
+        if extrap:
+            # The requested band is outside the 7.8-28.3 Hz calibrated range; the snap above pulled the
+            # nearest IN-RANGE intercept, which understates the gain fall-off with frequency. Flag it so
+            # the clinician never deploys a high-gamma (e.g. 55.5 Hz) threshold as if it were calibrated.
+            note += (f" — EXTRAPOLATED beyond the validated {_LSB_VALIDATED_HZ_LO:.1f}-"
+                     f"{_LSB_VALIDATED_HZ_HI:.1f} Hz range; gain is not band-flat, so this LSB is an "
+                     f"untested extrapolation (needs streaming calibration at this center frequency)")
         out.update({
             "available": True, "tier": "band" if exact else "channel_freq",
             "lsb": (float(lsb) if scalar else [float(x) for x in lsb]),
             "k_effective": (float(k_eff) if scalar else [float(x) for x in k_eff]),
             "slope_b": float(b), "model_center_hz": float(bd["center_hz"]),
             "intercept_a": a_f, "r2": ch.get("r2"),
-            "note": ("exact band match" if exact else
-                     f"nearest fitted band {bd['center_hz']:.1f} Hz (requested {float(center_hz):.1f} Hz)"),
+            "freq_extrapolated": bool(extrap),
+            "validated_hz_range": [_LSB_VALIDATED_HZ_LO, _LSB_VALIDATED_HZ_HI],
+            "note": note,
         })
         return out
 
@@ -143,12 +173,19 @@ def estimate_lsb(participant, channel, center_hz, psd_uv2):
     k = ch.get("channel_pooled_k")
     if k is not None and np.isfinite(k):
         lsb = float(k) * Pc
+        extrap = _freq_extrapolated(center_hz)
+        note = f"channel pooled gain k={float(k):.1f} LSB/uV^2 (no per-frequency model; proportional)"
+        if extrap:
+            note += (f" — EXTRAPOLATED beyond the validated {_LSB_VALIDATED_HZ_LO:.1f}-"
+                     f"{_LSB_VALIDATED_HZ_HI:.1f} Hz range (needs streaming calibration at this center frequency)")
         out.update({
             "available": True, "tier": "channel_pooled",
             "lsb": (float(lsb) if scalar else [float(x) for x in lsb]),
             "k_effective": float(k), "slope_b": 1.0, "model_center_hz": None,
             "r2": None,
-            "note": f"channel pooled gain k={float(k):.1f} LSB/uV^2 (no per-frequency model; proportional)",
+            "freq_extrapolated": bool(extrap),
+            "validated_hz_range": [_LSB_VALIDATED_HZ_LO, _LSB_VALIDATED_HZ_HI],
+            "note": note,
         })
         return out
 

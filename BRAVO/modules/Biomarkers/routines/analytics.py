@@ -2096,6 +2096,14 @@ LSB_PER_UV2_VALIDATED = 269.0          # k, RCS08 stim-off paired-block fit
 UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
 LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
 LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
+# Frequency range over which the PSD→LSB gain is actually calibrated on RCS08 paired blocks.
+# Outside this range the conversion (whether the population k or a per-band model intercept) is an
+# UNTESTED EXTRAPOLATION — the device gain anchor is not band-flat (it falls ≈0.80 log10/decade
+# within range), so a request at e.g. 55.5 Hz high-gamma snapped to the nearest fitted band (26.4 Hz)
+# would mis-state the LSB threshold by ≈1.7× if the in-range trend continues. Callers must flag any
+# estimate whose center frequency lands outside [LSB_VALIDATED_HZ_LO, LSB_VALIDATED_HZ_HI].
+LSB_VALIDATED_HZ_LO = 7.8
+LSB_VALIDATED_HZ_HI = 28.3
 
 
 def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
