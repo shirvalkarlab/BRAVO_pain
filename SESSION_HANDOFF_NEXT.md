@@ -6,6 +6,45 @@
 **Backend suite:** 166/166 PASS via the `_agent_bridge` runner (`python3 _agent_bridge/run_tests.py`).
 **Full prior context:** `MEGA_HANDOFF.md` (7 sessions synthesized + all closures).
 
+---
+
+## UPDATE 2026-06-25 (later session) — BOTH TRACKS EXECUTED, Phase 2 A/B/C done
+
+**HEAD now `584ef7c`** on `PS_closedloop_deployment` (NOT pushed; local). **Suite 166 → 173 PASS**
+(+7 tests). Commit stack above 22b1e97:
+- `b9105ae` — Track 2 **Step 0 VERDICT**: timeline conversion = **Welch256 × fixed 269** (NOT the
+  repro transform). Ran the repro codebase on the 27 real RCS08 paired JSONs (ruff clean, pytest
+  37 pass/2 skip), fresh benchmark **bit-identical** to committed summary (max rel diff 0.0). In
+  8–30 Hz (n=119): Welch256+269 median-fold 1.075 vs transform 1.099 → transform wins only on
+  outlier RMSE; 269 needs no refit (implied-k 272.6 ≈ fixed 269). Verdict written into
+  `ANALYSIS_percept_spectral_repro_comparison.md`. RCS08-ONLY — other subjects need per-patient
+  k re-validation. Artifacts: `step0_verdict_figure.png` (v `2cd803ab-1012-4176-9141-7e991224bc0d`),
+  `step0_inwindow_scores.json`, `step0_benchmark_summary.json`, `step0_benchmark_rows.csv`.
+- `c48efbf` — Track 1 **audit**: triaged all 52 medium+low; **38/52 already resolved** (C1/C2/C3/C8/C4
+  propagation + a prior viz pass), 2 mechanical fixed ([25] adaptive chip → PAL, [1] credible-CI
+  tooltip), **12 judgment calls deferred to Prasad** in `AUDIT_TRIAGE_medium_low.md` bucket B
+  (bootstrap estimand, verdict-on-spread, temporal validity, figures-in-export/print). (The reviewer
+  sub-agent stalled and was stopped; parent did the triage + fixes directly.)
+- `dfaa124` — **Step A**: shared `analytics.psd_band_to_lsb(psd, freq, center, k=269)` — Welch256
+  band-integral × 269, reuses `_band_power_notched` + `lsb_from_uv2` + 7.8–28.3 Hz guard + FFT-mode
+  compatibility. +3 tests.
+- `3c5e73e` — **Step B**: timeline `psd_modeled` LSB tier. `analytics.welch256_density()` (exact
+  calibration transform) + `availability.lsb_series(montage_td_recordings, sensing_hz_by_channel)`
+  Welch-256s montage-survey TD → `psd_band_to_lsb`, canon channel names, device-peak center fallback,
+  separate hollow-marker layer in `lsb_overview`. `BiomarkerDataTimeline.js` draws diamond-open
+  markers + legend. Wired to `psd_list` (montage/survey products). **Montage TD was already ingested
+  under `MedtronicBrainSenseSurvey`** (Percept.py `LfpMontageTimeDomain`→`Data["MontagesTD"]`→
+  Session.py type) — verified end-to-end: real RCS08 yields **1730 modeled LSB points across 30
+  channels**. +4 tests.
+- `584ef7c` — **Step C**: deployment native-vs-modeled FYI cross-check on the sign-off card (fold
+  vs 1σ 1.26×). Deployment threshold UNCHANGED — stays native/frozen (`thr_lsb` never reassigned,
+  frozen model + `psd_lsb_model.py` untouched). +1 test.
+
+**Still open (next session):** push the branch when ready; the 12 bucket-B audit judgment calls;
+frontend wiring of the dynamic-binarization downstream plots (§8e of the design ledger); the
+Closed-Loop Simulation module against the BandCandidate contract. The `psd_modeled` tier currently
+sources montage-survey TD; indefinite-streaming TD could be added as a second modeled source later.
+
 ## State at handoff — what just closed
 
 - **Item #4 (impedance gain term `c=1.02`):** REJECTED & documented (`3207c29`→`a9c3a01`). Cluster-
