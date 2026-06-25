@@ -170,6 +170,8 @@ def extract_availability(recordings_by_type, region_map=None):
                     hz = hemi_hz.get("LEFT") if "LEFT" in cu else (
                          hemi_hz.get("RIGHT") if "RIGHT" in cu else None)
                 fmt = analytics.format_channel(ch, region=region_map.get(ch))
+                n_samp = (int(np.asarray(r.get("Data")).shape[0])
+                          if r.get("Data") is not None else None)
                 records.append({
                     "channel": ch,
                     "label": fmt.get("short", ch),
@@ -180,8 +182,31 @@ def extract_availability(recordings_by_type, region_map=None):
                     "dur_s": float(dur or 0.0),
                     "meta": {"center_hz": snap_freq(hz),
                              "peak_hz": snap_freq(r.get("PeakFrequencyInHertz")),
-                             "n": int(np.asarray(r.get("Data")).shape[0]) if r.get("Data") is not None else None},
+                             "n": n_samp},
                 })
+                # MONTAGE-TD COVERAGE TWIN: the survey/montage products (psd lane) carry raw 250 Hz
+                # time-domain in Recording["Data"] just like indefinite streaming, but were only ever
+                # surfaced as PSD ticks. Emit a PARALLEL timedomain coverage record so montage TD
+                # draws the SAME raw-coverage block as BrainSense/Indefinite streaming (zoom → the
+                # waveform), in addition to its PSD tick + modeled-LSB diamond. Frontend collapses the
+                # (possibly ring-named) channel onto the canonical lane via normalizeChannel. Only when
+                # the record actually carries a real 2-D TD array — a PSD-only montage has nothing to
+                # show as coverage. This is DISPLAY-ONLY: av.records feeds the timeline, never the
+                # pooled-PSD scan or the deployment path.
+                _td_data = r.get("Data")
+                if dtype == "psd" and _td_data is not None and np.asarray(_td_data).ndim == 2:
+                    records.append({
+                        "channel": ch,
+                        "label": fmt.get("short", ch),
+                        "hemisphere": _hemisphere(ch),
+                        "dtype": "timedomain",
+                        "product": "montage_td",
+                        "t_start": float(t0),
+                        "dur_s": float(dur or 0.0),
+                        "meta": {"center_hz": snap_freq(hz),
+                                 "peak_hz": snap_freq(r.get("PeakFrequencyInHertz")),
+                                 "n": n_samp, "from_product": product},
+                    })
     records.sort(key=lambda x: (x["channel"], x["t_start"]))
     return records
 

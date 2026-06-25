@@ -50,10 +50,34 @@ def test_lane_mapping_and_products():
     by_dtype = {}
     for r in recs:
         by_dtype.setdefault(r["dtype"], set()).add(r["product"])
-    # Indefinite + BrainSense TD both land in the timedomain lane; montage in psd; chronic+pd in bandpower.
-    assert by_dtype["timedomain"] == {"streaming_td", "indefinite"}
+    # Indefinite + BrainSense TD land in the timedomain lane; a montage carrying real 2-D TD also
+    # emits a "montage_td" coverage twin into the timedomain lane (raw-coverage parity with
+    # streaming) while KEEPING its psd record. chronic+pd in bandpower.
+    assert by_dtype["timedomain"] == {"streaming_td", "indefinite", "montage_td"}
     assert by_dtype["bandpower"] == {"timeline_lsb", "streaming_lsb"}
     assert by_dtype["psd"] == {"montage_psd"}
+
+
+def test_montage_td_emits_coverage_twin_alongside_psd():
+    """A survey/montage record with real 2-D TD Data surfaces BOTH as a psd record (its tick +
+    modeled-LSB source) AND as a parallel timedomain coverage record on the SAME channel/time, so
+    montage TD draws the same raw-coverage block as indefinite streaming. A PSD-only montage (no
+    2-D Data) emits NO coverage twin."""
+    recs = av.extract_availability(_recs())
+    montage_psd = [r for r in recs if r["product"] == "montage_psd"][0]
+    twin = [r for r in recs if r["product"] == "montage_td"]
+    assert len(twin) == 1
+    tw = twin[0]
+    assert tw["dtype"] == "timedomain" and tw["channel"] == montage_psd["channel"]
+    assert abs(tw["t_start"] - montage_psd["t_start"]) < 1e-6
+    assert tw["meta"].get("from_product") == "montage_psd"
+    # PSD-only montage (no real TD array) -> no coverage twin
+    psd_only = {"MedtronicBaselineMontages": [
+        {"ChannelNames": ["ZERO_THREE_LEFT"], "SamplingRate": 250,
+         "StartTime": T0 + 3600, "PeakFrequencyInHertz": 10.74}]}   # no "Data"
+    recs2 = av.extract_availability(psd_only)
+    assert [r for r in recs2 if r["product"] == "montage_td"] == []
+    assert [r for r in recs2 if r["product"] == "montage_psd"]    # psd record still present
 
 
 def test_timestamp_and_duration():

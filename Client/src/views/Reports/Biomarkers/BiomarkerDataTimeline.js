@@ -429,6 +429,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         const ts = tEpoch(r.t_start);
         const durS = r.dur_s || 0;
         const te = ts + Math.max(durS, initFloorS);
+        // Montage/survey TD (product "montage_td") is raw 250 Hz coverage just like streaming, but
+        // from the stim-off survey sweep — render it with the SAME coverage block, tagged in the
+        // hover so it is not misread as a streaming session.
+        const isMontageTd = r.product === "montage_td";
         let fc = tdc, op = 0.85;
         if (binMode) {
           const b = binOf(ch, ts);
@@ -441,15 +445,17 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           line: { width: 0 }, layer: "above" });
         tdHx.push(D(ts + durS / 2));
         tdHy.push(yb + 0.15 * lh);
-        tdHc.push([fmtHoverDate(ts), fmtHoverTime(ts), fmtDur(r.dur_s)]);
+        tdHc.push([fmtHoverDate(ts), fmtHoverTime(ts), fmtDur(r.dur_s),
+                   isMontageTd ? "montage / survey sweep (stim-off)" : "streaming"]);
       });
       if (tdHx.length) {
         // Invisible markers span the FULL block height band so the hover triggers anywhere over the
         // coverage rect, reporting date · start time · captured duration (the info the PSD/montage
-        // hovers already show, which TD blocks were missing entirely).
+        // hovers already show, which TD blocks were missing entirely). The source word distinguishes
+        // streaming TD from the montage/survey TD coverage now drawn from the same lane.
         traces.push({ type: "scattergl", mode: "markers", x: tdHx, y: tdHy,
           marker: { size: 18, color: "rgba(0,0,0,0)" }, customdata: tdHc,
-          hovertemplate: `${prettyContact(labelFor(ch))} · time-domain streaming<br>`
+          hovertemplate: `${prettyContact(labelFor(ch))} · time-domain %{customdata[3]}<br>`
             + `%{customdata[0]} · started %{customdata[1]}<br>`
             + `duration %{customdata[2]}<extra></extra>`,
           showlegend: false });
@@ -873,7 +879,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         name: "modeled LSB  (hollow; survey PSD × 269 — calibrated, NOT sensed)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
-        name: "raw TD coverage  (zoom → waveform)" });
+        name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
     }
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
