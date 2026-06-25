@@ -118,6 +118,97 @@ The target conversion window for the exploratory workflow is **8–30 Hz**: conv
 present) to LSB across that band. The steps below assume the Welch256+269 default; substitute the
 chosen method if Step 0 selects the transform.
 
+---
+
+## Timeline method decision — VERDICT (Step 0 executed, 2026-06-25)
+
+**Chosen method for the exploratory timeline: Welch256 band-integral × fixed `269 LSB/µV²`.**
+Same method as the deployment threshold — one conversion constant across the whole product. The
+repro transform + report-CV-k is **not** adopted for the timeline.
+
+### What was run (no fabrication — real RCS08 Stage-1 data)
+
+- Located the raw paired data: **27** Stage-1 session JSONs carrying both `BrainSenseLfp` and
+  `BrainSenseTimeDomain` (`RCS008 jsons/Stage 1`, Dropbox). The **23** reports behind the repo's
+  committed head-to-head are all present (matched by `YYYYMMDDThhmmss`); 4 are additional/newer.
+- Ran the repo's own gates in a Python 3.12 env: **`ruff` clean; `pytest` 37 passed / 2 skipped.**
+- Re-ran `scripts/benchmark_brainsense_power.py` (serial; the sandbox blocks `ProcessPoolExecutor`)
+  on the 27 paired JSONs with the frozen `RCS08.json` wired in. The fresh output is
+  **bit-identical** to the committed `brainsense_power_head_to_head_summary.json` (max relative
+  difference **0.0** across all 133 rows). Independently confirmed: fitted `k_median` welch256 =
+  **270.2** (all) / 266.2 (off) — i.e. the committed table is faithfully reproduced, not assumed.
+- Artifacts: `step0_benchmark_summary.json`, `step0_benchmark_rows.csv`, `step0_inwindow_scores.json`,
+  `step0_verdict_figure.png` (Operon project artifacts).
+
+### Decision metric: re-scored **within 8–30 Hz** (the adaptive-controller band)
+
+Restricting to center frequencies in 8–30 Hz drops the 12 rows at 7.81 Hz (below the 8 Hz adaptive
+floor — *adaptive-invalid* regardless of method), leaving **n = 119 positive-target rows**. Scored
+with the repo's own `metric_for` (`median_fold_error` = median of max(p/y, y/p)):
+
+| Method (8–30 Hz, n=119) | r | RMSE (LSB) | **Median fold** | within 1.25× | within 1.5× |
+|---|---:|---:|---:|---:|---:|
+| **Welch256 × fixed `269`** | 0.992 | 59.7 | **1.075** | **0.70** | 0.92 |
+| Transform + report-CV k | 0.996 | 49.8 | 1.099 | 0.68 | 0.93 |
+| Transform + fitted k (all) | 0.996 | 47.1 | 1.092 | 0.68 | 0.93 |
+| BRAVO frozen model (Welch256) | 0.523 | 447.0 | 3.518 | 0.08 | 0.18 |
+
+**The all-band RMSE gap was an artifact of the out-of-window rows.** Corpus-wide, Welch256+269 reads
+RMSE 208.9 vs the transform's 62.1 — but **in 8–30 Hz that collapses to 59.7 vs 49.8**, because the
+12 below-floor 7.81 Hz rows carried almost all of the 269 route's large residuals. Those rows are
+adaptive-invalid and never drive the controller, so they are correctly excluded from the decision.
+
+### Accuracy verdict (in-window)
+
+On **typical** error — the metric that matters for a trace read week-to-week — **Welch256+269 is at
+least as good as the fitted transform**: median fold **1.075 vs 1.099**, within-1.25× **0.70 vs
+0.68**. The transform leads only on **RMSE** (49.8 vs 59.7), i.e. on a handful of outliers, and only
+after fitting a transform-specific scale. The handoff's open question — "does the transform beat 269
+on typical error in-window, or only on outlier RMSE?" — is answered: **only on outlier RMSE.**
+
+### Stability verdict (in-window)
+
+Per-row *implied* scale `k = target_LSB / µV²`:
+
+- **Welch256 implied-k median = 272.6, within ~1.3% of the fixed `269`** — the fixed constant needs
+  no refit in-window. The transform's implied-k median is **352.5** — a non-physical,
+  transform-specific number ~31% above 269 that must be *fit and then maintained*.
+- Residual scatter is comparable (CV 0.21 welch256 vs 0.23 transform; 90/10 spread 1.57× vs 1.61×).
+  Both drift early→late (welch256 19%, transform 10%) and widen at `ZERO_THREE_RIGHT` 26.37 Hz
+  (welch256 90/10 = 1.62×, transform 1.82×). **The drift is a property of the signal/channel, not of
+  the conversion** — it affects both. The decisive difference is that the transform's k is a *fitted,
+  maintained* parameter (the thing that can silently go stale across sessions/firmware), whereas
+  Welch256 rides the already-validated fixed `269` and introduces no new fitted scale.
+
+### Why Welch256+269 wins the timeline (all three criteria)
+
+1. **Accuracy:** ties or beats the transform on typical (median-fold) error in 8–30 Hz; trails only
+   on outlier RMSE.
+2. **Stability / no new fitted parameter:** its implied k already sits on the fixed 269; the
+   transform requires fitting k≈353 and keeping it current. Fewer moving parts = fewer silent-drift
+   failure modes for an exploratory view that must read consistently across weeks.
+3. **Single source of truth:** 269 is the exact physical constant the deployment module already uses.
+   Adopting the transform for the timeline would put **two different conversions in one product** for
+   no in-window accuracy gain. Rejected on Occam grounds.
+
+Native device LSB remains preferred whenever the band was sensed; **Welch256+269 is the fallback** for
+PSD-only bands. The deployment threshold stays on Welch256+269 / the frozen model regardless — so the
+timeline and deployment now share one conversion, no split needed.
+
+### Scope limit (must carry forward)
+
+This benchmark is **RCS08-only** (n=119 in-window rows, one patient). The chosen `269` scale is
+validated on a single subject. If the exploratory timeline ever displays other subjects, the scale
+needs **per-patient re-validation** before its LSB trace is trusted — the conversion is labeled
+"modeled (×269)" precisely so a single-patient-validated number is never mistaken for a native or
+multi-patient-validated one.
+
+### Build implication
+
+**Step A proceeds with Welch256 × `269`** (no swap to the transform). The shared helper
+`analytics.psd_band_to_lsb` implements the fixed-269 Welch256 route, and the timeline tier and the
+deployment fallback both route through it — confirming, not creating, the single-conversion design.
+
 ### A. Shared, audited PSD→LSB helper
 
 - Add `analytics.psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, half_hz=2.5)` →

@@ -296,6 +296,20 @@ guard; the TD→LSB validation and the PSD→TD→LSB back-translation question.
 Grouped by the session that produced them. IDs are Operon artifact/version ids where the
 handoff recorded them.
 
+**Design spec of record (read before any biomarker-pipeline work):**
+- `DESIGN_biomarker_pipeline_v2.md` (artifact/version `bab71722-0293-453e-9d21-36b77a26cbac`) —
+  the consolidated **biomarker pipeline design ledger v2**. This is the spec the rethought
+  pipeline is built against (nothing in it is built yet unless noted): Percept RC controller
+  facts and the 8–30 Hz adaptive sensing range (§1); the three power-domain streams + corrected
+  five-product BrainSense taxonomy (§2, §8a-bis); the **BandCandidate contract v1** — the
+  serializable interface between the Biomarker module and the future Closed-Loop Simulation
+  module (§6, REDCap-PRO-defined label; events corroborate only; selection bias recorded in
+  `provenance`); the LSB↔µV² conversion as a confidence-rated FYI, not a calibration (§4);
+  stim-context-era heterogeneity confounds (§5); the chosen **Option-3 UI split** and the
+  **data-availability-timeline final design** that replaces `BiomarkerTimeline` (§8b–§8e); and
+  the open decisions in §10. The frozen PSD→LSB constants here (`k=269`, `0.0034 µV²/LSB`)
+  cross-reference §2 of this handoff.
+
 **Session `…064004Z` (ClosedLoopSim reset fix / four-reviewer critique, PR #3):**
 - `ClosedLoopSim_review.md` (artifact `29f8efc6-1f58-4c29-bf73-2b9c6c6c76f9`, version
   `83f7dea0-ff85-4dc1-9ae7-f07ea7f62ea6`) — full four-reviewer critique + interactive QA log.
