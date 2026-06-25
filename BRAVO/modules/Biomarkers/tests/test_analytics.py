@@ -453,6 +453,100 @@ def test_spectral_feature_importance_finds_planted_band():
     assert cen[av].min() == 10.5 and cen[av].max() == 27.5
 
 
+def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
+    """LSB feature mode (PI request): when the detail carries absolute µV²/Hz density, the band
+    feature becomes log10(269 × ∫density) restricted to 8–30 Hz, built from TD-derived rows only.
+    Validates: (1) feature flagged lsb_calibrated + unit string; (2) scan clamped to 8–30 Hz so
+    every band center sits in [10.5, 27.5]; (3) the calibrated LSB value equals 269 × the trapezoid
+    band integral of the absolute density (the SAME conversion as deployment/timeline); (4) the
+    planted band is recovered; (5) onboard-FFT rows (NaN in psd_abs) contribute no LSB sample."""
+    det = _planted_detail(center=17.5, beta=0.5, seed=3)
+    f = det["f_set"]; psd = det["psd"]            # psd here is linear (prelog False)
+    # Provide absolute density = the linear psd; NaN out a few "onboard-FFT" rows in channel 0.
+    abs_dens = np.array(psd, dtype=float)
+    abs_dens[:5, 0, :] = np.nan                   # 5 onboard-FFT rows -> excluded from LSB
+    det["psd_abs_uv2_per_hz"] = abs_dens
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
+    assert sc["feature"] == "lsb_calibrated", sc["feature"]
+    assert "LSB" in sc["feature_unit"] and "269" in sc["feature_unit"]
+    cen = np.array(sc["centers"])
+    assert cen.min() >= 10.5 - 1e-9 and cen.max() <= 27.5 + 1e-9, (cen.min(), cen.max())
+    # Every band fully inside 8–30 -> all adaptive_valid in LSB mode.
+    assert all(b["adaptive_valid"] for b in sc["bands"])
+    # Recompute the calibrated LSB for one band/row directly and match the scatter x (log10 LSB).
+    ch0 = sc["channels"][0]
+    bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
+    # Planted band is 15–20 Hz; the strongest 5 Hz scan window must OVERLAP it (its center within
+    # one band-half of the [15,20] edges, i.e. center in [12.5, 22.5]).
+    assert 12.5 - 1e-9 <= cen[bi] <= 22.5 + 1e-9, cen[bi]
+    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
+    # Recompute the calibrated LSB for one TD row (index >=5, since 0-4 are NaN onboard-FFT) and
+    # confirm it appears as a scatter x (log10 LSB) — the SAME 269 × trapezoid-integral conversion.
+    scat = ch0["scatter"][bi]
+    assert scat is not None
+    uv2_row5 = np.trapezoid(abs_dens[5, 0, bmask], f[bmask])
+    expect_log_lsb = np.log10(269.0 * uv2_row5)
+    assert np.isfinite(expect_log_lsb)
+    xs = np.array([v for v in scat["x"] if v is not None], dtype=float)
+    assert np.nanmin(np.abs(xs - expect_log_lsb)) < 1e-6, (xs[:3], expect_log_lsb)
+    # onboard-FFT exclusion: channel-0 LSB sample count never exceeds the 55 TD rows (60 - 5).
+    assert max(n for n in ch0["n_r"] if n is not None) <= 55
+
+
+def test_spectral_scan_lsb_td_priority_over_survey():
+    """When a pain report has a time-domain (streaming) match, its TD-derived LSB takes priority over
+    a survey-sweep LSB for the SAME (channel, rating): the survey row's absolute density is blanked
+    so it contributes no competing LSB point. A report with ONLY a survey match keeps its survey
+    LSB."""
+    f = np.linspace(0.95, 100, 60)
+    E = 8
+    # rows 0..3: channel ZERO_TWO_LEFT, alternating TD/survey, paired by rating_group into 2 reports
+    psd_abs = np.full((E, 1, 60), np.nan)
+    band = (f >= 15) & (f <= 20)
+    # report 0: a TD row (idx0) AND a survey row (idx1) -> survey demoted
+    psd_abs[0, 0, band] = 2.0; psd_abs[1, 0, band] = 9.0
+    # report 1: survey-only (idx2) -> kept
+    psd_abs[2, 0, band] = 5.0
+    # report 2: TD-only (idx3) -> kept
+    psd_abs[3, 0, band] = 3.0
+    labels = np.array([8, 8, 5, 2, np.nan, np.nan, np.nan, np.nan], float)
+    det = {
+        "f_set": f, "psd": np.nan_to_num(psd_abs, nan=1.0), "labels": labels,
+        "psd_abs_uv2_per_hz": psd_abs,
+        "row_source": np.array(["TD streaming", "Montage/survey", "Montage/survey",
+                                "TD streaming", "x", "x", "x", "x"], dtype=object),
+        "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
+        "rating_group": np.array([0, 0, 1, 2, -1, -1, -1, -1]),
+        "chan_order": ["ZERO_TWO_LEFT"],
+        "times": [f"2025-07-{1 + i:02d} 10:00:00" for i in range(E)],
+        "prelog": False,
+    }
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
+                                               low_pct=50.0, high_pct=50.0)
+    assert sc["feature"] == "lsb_calibrated"
+    assert sc["n_survey_demoted_by_td"] == 1, sc["n_survey_demoted_by_td"]   # only idx1 demoted
+    # The 17.5 Hz band scatter: the demoted survey value (9.0 -> log10(269*9*Δf)) must be ABSENT,
+    # while the TD report-0 value (2.0) and survey-only report-1 (5.0) and TD-only report-2 (3.0) are
+    # present. Find the band center nearest 17.5.
+    cen = np.array(sc["centers"]); bi = int(np.argmin(np.abs(cen - 17.5)))
+    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
+    scat = sc["channels"][0]["scatter"][bi]
+    xs = np.array([v for v in (scat["x"] if scat else []) if v is not None], dtype=float)
+    demoted = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 9.0), f[bmask]))
+    kept_td = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 2.0), f[bmask]))
+    assert np.nanmin(np.abs(xs - kept_td)) < 1e-6           # TD report-0 present
+    assert (xs.size == 0) or (np.nanmin(np.abs(xs - demoted)) > 1e-6)   # survey 9.0 absent
+
+
+def test_spectral_scan_lsb_falls_back_without_abs_density():
+    """No psd_abs_uv2_per_hz in the detail (e.g. onboard-FFT-only pool) -> feature="lsb" degrades to
+    the legacy dB feature rather than failing, and the full range is scanned."""
+    det = _planted_detail(center=20.0, beta=0.4, seed=11)
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
+    assert sc["feature"] == "logpsd_db", sc["feature"]
+    assert len(sc["centers"]) == 96    # unrestricted range when not LSB-calibrated
+
+
 def test_spectral_scan_prelog_matches_linear():
     """prelog=True (mean over already-log bins) must match log10(mean linear) closely in r."""
     lin = _planted_detail(center=20.0, beta=0.4, seed=7, prelog=False)
@@ -1007,6 +1101,9 @@ if __name__ == "__main__":
     test_matched_sample_counts_reports_high_low_and_offset()
     test_cv_logistic_auc_oriented_and_guards_small_n()
     test_spectral_feature_importance_finds_planted_band()
+    test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30()
+    test_spectral_scan_lsb_td_priority_over_survey()
+    test_spectral_scan_lsb_falls_back_without_abs_density()
     test_spectral_scan_prelog_matches_linear()
     test_spectral_scan_emits_fdr_qs_and_summary()
     test_spectral_scan_fdr_zero_signal_returns_no_significant_bands()

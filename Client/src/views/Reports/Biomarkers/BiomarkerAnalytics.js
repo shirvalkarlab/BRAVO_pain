@@ -238,6 +238,11 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
   const centers = (scan && scan.centers) || [];
   const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
   const fmax = (scan && scan.fmax) || 100;
+  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, 8–30 Hz) vs legacy dB power.
+  // Drives every axis/hover label so the panel states the unit the numbers actually carry.
+  const isLsb = scan && scan.feature === "lsb_calibrated";
+  const featAxis = isLsb ? "log₁₀ calibrated LSB" : "Std. log band power";
+  const featHover = isLsb ? "log₁₀ LSB" : "log power";
 
   // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
   const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
@@ -352,7 +357,9 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     const layout = {
       ...FIG_BASE, autosize: true, height: 460,
       margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
-      xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" }, range: [0, fmax] },
+      xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
+        // LSB mode scans only 8–30 Hz, so start the axis at the adaptive lower edge rather than 0.
+        range: [isLsb && adaptive ? adaptive[0] : 0, fmax] },
       yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
@@ -468,7 +475,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       // LEFT — band power vs continuous PRO, points colored by pain group (keeps the original view).
       const scTraces = [{ x: sc.x, y: sc.y, type: "scatter", mode: "markers", name: "matched samples",
         marker: { color: ptColors, size: 6, opacity: 0.72 }, text: sc.dates || [],
-        hovertemplate: `log power=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
+        hovertemplate: `${featHover}=%{x:.2f}<br>${pain}=%{y:.2f}<extra></extra>` }];
 
       // RIGHT — violin of THIS band's power split by pain group, with jittered raw points + box +
       // median, so you SEE how low vs high segregate (the comparison the scatter only implies).
@@ -491,7 +498,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                       line: { color: "#fff", width: 0.8 } },
             line: { color: GRP[g], width: 1.4 }, fillcolor: GRP[g], opacity: g === "mid" ? 0.28 : 0.42,
             box: { visible: true, width: 0.18 }, meanline: { visible: false },
-            hovertemplate: `${glabel[g]}<br>std log power=%{y:.2f}<extra></extra>` };
+            hovertemplate: `${glabel[g]}<br>${featHover}=%{y:.2f}<extra></extra>` };
         })
         .filter(Boolean);
 
@@ -503,7 +510,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       const nmid = (sc.n_grp && sc.n_grp.mid) || 0;
       const dMag = cd == null ? "" : (Math.abs(cd) >= 0.8 ? " (large)"
         : Math.abs(cd) >= 0.5 ? " (medium)" : Math.abs(cd) >= 0.2 ? " (small)" : " (negligible)");
-      const effLine = `Low vs high band power:  Cohen's d = ${cd != null ? cd.toFixed(2) : "—"}${dMag}`
+      const effLine = `Low vs high ${isLsb ? "LSB" : "band power"}:  Cohen's d = ${cd != null ? cd.toFixed(2) : "—"}${dMag}`
         + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
         + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
 
@@ -534,13 +541,13 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
           <Grid container spacing={2} mt={0}>
             <Grid item xs={12} lg={6}>
               <Fig height={300} traces={scTraces} layout={{
-                xaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                xaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
                 yaxis: { title: pain }, showlegend: false }} />
             </Grid>
             <Grid item xs={12} lg={6}>
               <Fig height={300} traces={vioTraces} layout={{
                 xaxis: { title: "" },
-                yaxis: { title: `Std. log band power @ ${center.toFixed(1)} Hz` },
+                yaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
                 showlegend: false, violingap: 0.25, violinmode: "group" }} />
               <MDTypography variant="caption" display="block" mt={0.5}
                 sx={{ color: "#344767", fontWeight: "bold", fontSize: 12.5 }}>
@@ -1818,7 +1825,9 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   return (
     <>
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
-               subtitle={"Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter." + rigorAnnotation}
+               subtitle={(scan && scan.feature === "lsb_calibrated"
+                 ? "Every time-domain recording (streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band over 8–30 Hz. The band feature is the CALIBRATED device LSB (269 × the band integral of the time-domain Welch density — the same conversion as the deployment threshold), NOT the raw PSD; the device's onboard-FFT snapshot PSDs are excluded. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
+                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter.") + rigorAnnotation}
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
                subtitle={(slidingActive

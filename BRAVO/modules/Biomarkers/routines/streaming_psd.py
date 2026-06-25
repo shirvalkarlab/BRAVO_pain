@@ -736,6 +736,23 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "max_s": round(float(np.max(_td_dur)), 1),
     } if _td_dur.size else None)
 
+    # ABSOLUTE linear PSD density (µV²/Hz), recovered from the cached log matrix BEFORE the
+    # within-source z-score below strips the calibration scale. This is what the LSB feature in
+    # spectral_feature_importance band-integrates (× the validated 269 LSB/µV² constant). Only the
+    # Welch-from-TD sources are calibratable to LSB this way: "TD streaming" and "Montage/survey"
+    # come from `_welch_rows_into` (scipy welch density of the 250 Hz time domain, the exact quantity
+    # k=269 was fit on). The onboard-FFT sources ("Patient event", "Snapshot") carry the device's own
+    # `FFTBinData` on a DIFFERENT normalization — applying k=269 to those would mix scales — so their
+    # rows are set NaN here and contribute nothing to the LSB feature (they still feed the z-scored dB
+    # views unchanged). PER PI: the full-spectrum LSB exploration must use TD-derived calibrated LSB,
+    # not the device PSDs.
+    _TD_LSB_SOURCES = ("TD streaming", "Montage/survey")
+    Xabs = np.power(10.0, X / 10.0)
+    _lsb_src = np.array([str(s) in _TD_LSB_SOURCES for s in src_arr]) if src_arr.size \
+        else np.zeros(0, bool)
+    if _lsb_src.size:
+        Xabs[~_lsb_src] = np.nan
+
     # Within-(channel,source) per-frequency z-score so sources sharing a channel become poolable.
     Xz = X.copy()
     for ch in np.unique(ch_arr):
@@ -801,9 +818,13 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             for i in np.where(keep)[0]:
                 keys.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
             rows_Xz, rows_ch, rows_src, rows_t, rows_lab, rows_dt, rows_pidx = ([] for _ in range(7))
+            rows_Xabs = []
             for (ch, pidx), idxs in keys.items():
                 idxs = np.asarray(idxs)
                 rows_Xz.append(np.nanmean(Xz[idxs], axis=0))
+                # Absolute density aggregates in LINEAR space (mean µV²/Hz over the cluster), so the
+                # band integral × 269 stays a physical LSB. An all-onboard-FFT cluster is all-NaN.
+                rows_Xabs.append(np.nanmean(Xabs[idxs], axis=0))
                 rows_ch.append(ch)
                 su = np.unique(src_arr[idxs])
                 rows_src.append(str(su[0]) if su.size == 1 else "aggregated")
@@ -812,6 +833,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 rows_dt.append(float(np.nanmean(dt_min[idxs])))
                 rows_pidx.append(int(pidx))
             Xz = np.vstack(rows_Xz)
+            Xabs = np.vstack(rows_Xabs)
             ch_arr = np.asarray(rows_ch, dtype=object)
             src_arr = np.asarray(rows_src, dtype=object)
             t_arr = np.asarray(rows_t, dtype=float)
@@ -819,16 +841,18 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             dt_min = np.asarray(rows_dt, dtype=float)
             pro_idx = np.asarray(rows_pidx, dtype=int)
         else:
-            Xz = Xz[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
+            Xz = Xz[:0]; Xabs = Xabs[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
             t_arr = t_arr[:0]; labels = labels[:0]; dt_min = dt_min[:0]; pro_idx = pro_idx[:0]
 
     chan_order = list(np.unique(ch_arr)) if ch_arr.size else []
     C = len(chan_order)
     N = Xz.shape[0]
     psd_stack = np.full((N, C, F), np.nan)
+    psd_abs_stack = np.full((N, C, F), np.nan)   # absolute µV²/Hz density (TD sources only)
     for ci, ch in enumerate(chan_order):
         m = ch_arr == ch
         psd_stack[m, ci, :] = Xz[m]
+        psd_abs_stack[m, ci, :] = Xabs[m]
 
     def _src_breakdown(mask):
         u, c = np.unique(src_arr[mask], return_counts=True)
@@ -909,6 +933,15 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "f_set": f_set,
         "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
         "feature": psd_stack,
+        # (N, C, F) ABSOLUTE linear PSD density µV²/Hz, TD-derived sources only (onboard-FFT = NaN),
+        # NOT z-scored. spectral_feature_importance band-integrates this × 269 -> calibrated LSB.
+        "psd_abs_uv2_per_hz": psd_abs_stack,
+        # Per-row source label ("TD streaming" | "Montage/survey" | "Patient event" | "Snapshot" |
+        # "aggregated") and the row's channel, so the LSB scan can apply a per-matched-report SOURCE
+        # PRIORITY: when a pain report has a real time-domain (streaming) match, prefer that LSB over
+        # a lower-fidelity survey-sweep LSB for the same rating (PI: TD = highest LSB fidelity).
+        "row_source": np.asarray(src_arr, dtype=object),
+        "row_channel": np.asarray(ch_arr, dtype=object),
         "labels": labels,                    # continuous PRO matched within the window (NaN = none)
         "rating_group": pro_idx,             # (N,) matched PRO index per row (-1 unmatched) = the
                                              # grouping factor for rating-aware AUC ("all" mode)

@@ -1105,20 +1105,34 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                                 high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
                                 region_map=None, n_peaks=6, max_scatter=400,
-                                rating_aware_auc=None):
+                                rating_aware_auc=None, feature="lsb"):
     """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
 
-    Slides a `band_width_hz`-wide window in `step_hz` increments across 0..`fmax`. For each
-    (channel, band):
-      * band power per epoch = mean LINEAR PSD over the band, then 10*log10 (one feature/session)
+    Slides a `band_width_hz`-wide window in `step_hz` increments. For each (channel, band):
+      * a per-epoch band feature (see `feature` below) — one scalar per session
       * Pearson r vs the CONTINUOUS pain label (the exploratory signal, no binarization)
       * ROC-AUC of the BINARIZED label via cross-validated single-feature logistic regression
+      * a cluster-robust (rating-clustered) logistic Wald p — the inferential twin of the AUC,
+        the predictive analog of a per-rating random intercept (the "mixed-effects" readout)
 
-    The two curves are returned per channel for the same band-center x-axis so the UI can overlay
-    them. `adaptive_band` (8-30 Hz on the Percept RC) is flagged per band so the UI can shade the
-    device-valid region. Per band we also return a compact scatter (band power vs continuous label,
-    with dates) so a click on any band shows the underlying relationship. NOTHING here is a
-    validated biomarker — this is a discovery view.
+    `feature` selects the per-band quantity all three readouts run on:
+      * "lsb" (DEFAULT, per PI): CALIBRATED device LSB. The band feature is
+        ``log10(269 × ∫ density dHz over the band)`` computed from the absolute µV²/Hz density the
+        detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
+        are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
+        by the deployment threshold and the timeline modeled tier, so the discovery scan and the
+        deployable number speak one unit. Auto-restricts the scan to `adaptive_band` (8–30 Hz), the
+        only range where k=269 is validated AND the firmware can place an adaptive band — bands
+        outside it have no LSB ground truth. Falls back to "logpsd" if the detail lacks the absolute
+        density (e.g. an onboard-FFT-only pool).
+      * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
+        `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
+        curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
+        clinician's unit and to enforce the TD-only + 8–30 Hz scope.
+
+    The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
+    overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
+    vs continuous label, with dates) is returned. NOTHING here is a validated biomarker — discovery.
     """
     if not td_detail:
         return None
@@ -1127,11 +1141,64 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     labels = np.asarray(td_detail.get("labels"), dtype=float)    # (E,) continuous PRO
     chans = td_detail.get("chan_order", [])
     times = td_detail.get("times")
-    # `prelog`: the stored feature is ALREADY 10*log10 (and possibly within-source z-scored), as the
-    # pooled-PSD builder emits. Then band power = mean over the band directly (no second log10).
+    # `prelog`: the stored `psd` feature is ALREADY 10*log10 (and within-source z-scored), as the
+    # pooled-PSD builder emits. Then a logpsd band feature = mean over the band directly (no re-log).
     prelog = bool(td_detail.get("prelog", False))
     if f.size == 0 or psd.ndim != 3 or labels.size == 0:
         return None
+
+    # --- Feature selection: calibrated LSB (default) vs legacy log-PSD ----------------------------
+    psd_abs = td_detail.get("psd_abs_uv2_per_hz")
+    use_lsb = (str(feature).lower() == "lsb" and psd_abs is not None)
+    if use_lsb:
+        psd_abs = np.asarray(psd_abs, dtype=float)               # (E, C, F) absolute µV²/Hz, TD-only
+        if psd_abs.shape != psd.shape:
+            use_lsb = False                                      # shape mismatch -> safe fallback
+    if use_lsb:
+        # Scan ONLY the validated/device-programmable range (8–30 Hz); k=269 has no ground truth
+        # outside it and the firmware can't place an adaptive band there.
+        if adaptive_band is not None:
+            fmax = min(float(fmax) if fmax is not None else float(np.nanmax(f)),
+                       float(adaptive_band[1]))
+        feature_used = "lsb_calibrated"
+        n_demoted = 0
+
+        # --- SOURCE PRIORITY: time-domain LSB outranks survey-sweep LSB per matched report --------
+        # When a pain report has a real time-domain (streaming) neural match, the LSB derived from
+        # that TD is the highest-fidelity reading — it is the SAME quantity the device would sense
+        # and program on. A montage/survey sweep matched to the same report is a lower-fidelity
+        # stand-in. So for any (channel, matched-rating) that has at least one "TD streaming" row,
+        # blank the absolute density of the NON-TD-streaming rows sharing that (channel, rating):
+        # the LSB feature for that report then comes from the TD sample, and the survey row no
+        # longer contributes a competing LSB point. Unmatched rows (no rating) never compete and are
+        # untouched; reports with ONLY a survey match keep that survey LSB (better than nothing).
+        # This reshapes ONLY the LSB feature — the z-scored dB views and every non-LSB stat are
+        # built from the untouched `psd` stack.
+        rgroup = td_detail.get("rating_group")
+        rsource = td_detail.get("row_source")
+        rchannel = td_detail.get("row_channel")
+        if rgroup is not None and rsource is not None and rchannel is not None:
+            rgroup = np.asarray(rgroup)
+            rsource = np.asarray(rsource, dtype=object)
+            rchannel = np.asarray(rchannel, dtype=object)
+            if rgroup.shape[0] == psd_abs.shape[0] == rsource.shape[0] == rchannel.shape[0]:
+                is_td = np.array([str(s) == "TD streaming" for s in rsource])
+                # (channel, rating) cells that own at least one TD-streaming matched row.
+                td_cells = {(rchannel[i], int(rgroup[i]))
+                            for i in np.where(is_td & (rgroup >= 0))[0]}
+                if td_cells:
+                    psd_abs = psd_abs.copy()
+                    n_demoted = 0
+                    for i in range(psd_abs.shape[0]):
+                        if rgroup[i] >= 0 and not is_td[i] \
+                                and (rchannel[i], int(rgroup[i])) in td_cells:
+                            psd_abs[i, :, :] = np.nan   # demote survey LSB; TD wins this report
+                            n_demoted += 1
+        else:
+            n_demoted = 0
+    else:
+        feature_used = "logpsd_db"
+        n_demoted = 0
 
     # Rating-aware AUC: in "all" mode many epochs share one pain rating (double-dipping), so the
     # binary classifier's cross-validation should keep each rating wholly within a fold (grouped CV)
@@ -1147,8 +1214,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
     fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
     w = float(band_width_hz)
-    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax].
+    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax]. In LSB mode the
+    # whole 5 Hz window must also sit at/above the validated lower edge (8 Hz): clamp the first
+    # center to adaptive_lo + w/2 so no band straddles below 8 Hz where k=269 is unvalidated.
     lo_c = w / 2.0
+    if use_lsb and adaptive_band is not None:
+        lo_c = max(lo_c, float(adaptive_band[0]) + w / 2.0)
     hi_c = fmax - w / 2.0
     if hi_c <= lo_c:
         return None
@@ -1194,17 +1265,33 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 n_r_curve.append(0); p_curve.append(None); p_pearson_curve.append(None)
                 band_power_by_center.append(None)
                 continue
-            sub = psd[:, ci, bmask]                         # (E, nbins) power in band
             with np.errstate(invalid="ignore", divide="ignore"), \
                  warnings.catch_warnings():
                 # All-NaN slices (epochs not recorded on this channel) are expected — nanmean's
                 # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
-                if prelog:
+                if use_lsb:
+                    # CALIBRATED LSB feature: integrate the ABSOLUTE density (µV²/Hz) over the band
+                    # (trapezoid on the real freq axis — same op as _band_power_notched), × 269
+                    # LSB/µV² (lsb_from_uv2), then log10 so it lives on a comparable additive scale
+                    # to the dB feature. NaN where the band has <2 finite bins (e.g. onboard-FFT rows
+                    # are NaN in psd_abs and never contribute). One LSB scalar per session.
+                    sub_abs = psd_abs[:, ci, bmask]            # (E, nbins) absolute µV²/Hz
+                    fb = f[bmask]
+                    E = sub_abs.shape[0]
+                    uv2 = np.full(E, np.nan)
+                    for e in range(E):
+                        row = sub_abs[e]
+                        ok = np.isfinite(row)
+                        if ok.sum() >= 2:
+                            uv2[e] = np.trapezoid(row[ok], fb[ok])
+                    lsb = LSB_PER_UV2_VALIDATED * np.where(uv2 > 0, uv2, np.nan)
+                    bp_log = np.log10(np.where(lsb > 0, lsb, np.nan))   # log10 calibrated LSB
+                elif prelog:
                     # Already log (+ z-scored): the band feature is the mean over the band's bins.
-                    bp_log = np.nanmean(sub, axis=1)
+                    bp_log = np.nanmean(psd[:, ci, bmask], axis=1)
                 else:
-                    bp = np.nanmean(sub, axis=1)            # (E,) mean linear power in band
+                    bp = np.nanmean(psd[:, ci, bmask], axis=1)   # (E,) mean linear power in band
                     bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
             band_power_by_center.append(bp_log)
             # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization). We also
@@ -1303,7 +1390,9 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                     cohens_d = _f(float((np.nanmean(x_hi) - np.nanmean(x_lo)) / np.sqrt(sp2)))
                 median_delta = _f(float(np.nanmedian(x_hi) - np.nanmedian(x_lo)))
             scat.append({
-                "x": [_f(bp_log[i]) for i in idx],          # log band power
+                # In LSB mode x = log10 calibrated LSB (NOT z-scored); in logpsd mode x = standardized
+                # log band power. `x_unit` (set on the channel below) tells the UI which.
+                "x": [_f(bp_log[i]) for i in idx],          # band feature (see x_unit)
                 "y": [_f(labels[i]) for i in idx],          # continuous PRO
                 "g": gs,                                    # pain group: high | low | mid (excluded)
                 "cohens_d": cohens_d,                       # standardized mean diff, high - low
@@ -1377,6 +1466,24 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "adaptive_band": ([a_lo, a_hi] if a_lo is not None else None),
         "strategy": strategy,
         "transform": "log_bandpower",
+        # The per-band feature that r / AUC / clustered-logit p all run on.
+        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, scanned 8–30 Hz
+        #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
+        "feature": feature_used,
+        "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; onboard-FFT PSDs excluded)"
+                         if use_lsb else "dB (10·log10 band PSD)"),
+        "feature_note": (
+            "Band feature is the CALIBRATED device LSB: 269 × the band integral of the Welch density "
+            "of the time domain, the same conversion as the deployment threshold and timeline modeled "
+            "tier. Built only from TD-derived spectra (TD streaming + montage/survey sweeps); the "
+            "device's onboard-FFT PSDs (patient-event / snapshot) are EXCLUDED. When a pain report has "
+            "a time-domain (streaming) match, that TD-derived LSB takes PRIORITY over a survey-sweep "
+            "LSB for the same report (higher fidelity). Scan restricted to the validated, "
+            "firmware-programmable 8–30 Hz range." if use_lsb else
+            "Legacy dB band-power feature; not LSB-calibrated."),
+        # How many survey-sweep rows were demoted because a TD-streaming match existed for the same
+        # (channel, rating). 0 when there were no competing survey rows or no TD matches.
+        "n_survey_demoted_by_td": int(n_demoted),
         # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
         # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
         # dict; this summary is the UI's pseudoreplication-contrast annotation source.
