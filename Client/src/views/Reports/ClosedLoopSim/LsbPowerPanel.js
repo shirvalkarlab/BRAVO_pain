@@ -82,12 +82,30 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
       // power curve
       { x: curve.n, y: curve.power.map((p) => p * 100), type: "scatter", mode: "lines",
         line: { color: PAL.accent, width: 2.2 }, hoverinfo: "skip", showlegend: false },
-      // current N marker
+      // current N marker (power at the POINT AUC — the optimistic end of the band)
       { x: [pw.n_ratings_current], y: [pw.power_current * 100], type: "scatter", mode: "markers",
         marker: { color: curColor, size: 12, line: { color: "#fff", width: 2 } },
-        hovertemplate: `now: ${pw.n_ratings_current} ratings<br>power %{y:.0f}%<extra></extra>`,
+        hovertemplate: `now: ${pw.n_ratings_current} ratings<br>power %{y:.0f}% (point AUC)<extra></extra>`,
         showlegend: false },
     ];
+    // audit C4: power BAND — the conservative end at the de-folded CI lower bound. Power is monotone
+    // in AUC, so the point-AUC marker is optimistic; this open marker (and the connecting bar) shows
+    // how far the honest power could fall if the true AUC sits at the CI lower bound. The "powered"
+    // gate reads THIS end, not the filled marker above.
+    const hasBand = pw.power_current_lo != null && pw.auc_lo != null;
+    if (hasBand) {
+      const yLo = pw.power_current_lo * 100;
+      const yHi = pw.power_current * 100;
+      traces.push(
+        { x: [pw.n_ratings_current, pw.n_ratings_current], y: [yLo, yHi], type: "scatter",
+          mode: "lines", line: { color: PAL.warnText, width: 1.4 }, hoverinfo: "skip",
+          showlegend: false },
+        { x: [pw.n_ratings_current], y: [yLo], type: "scatter", mode: "markers",
+          marker: { color: "#fff", size: 11, symbol: "circle-open",
+                    line: { color: PAL.warnText, width: 2 } },
+          hovertemplate: `conservative: power %{y:.0f}% at AUC CI lower bound ${pw.auc_lo.toFixed(2)}<extra></extra>`,
+          showlegend: false });
+    }
     const annotations = [
       { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
         text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
@@ -98,6 +116,13 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
         yshift: -6, text: `now: ${pw.n_ratings_current}`, showarrow: false,
         font: { size: 8.5, color: curTextColor } },
     ];
+    // audit C4: label the conservative (CI-lower-bound) end of the power band.
+    if (hasBand) {
+      annotations.push({ x: pw.n_ratings_current, y: pw.power_current_lo * 100,
+        xanchor: "left", yanchor: "top", xshift: 8,
+        text: `CI-low: ${Math.round(pw.power_current_lo * 100)}%`, showarrow: false,
+        font: { size: 8, color: PAL.warnText } });
+    }
     // needed-N marker (only when more data is needed and the number is known). Audit C5: place it at
     // the CURVE's own power at n_need (linear-interpolate the existing curve array) — NOT on the 80%
     // target line. The scalar n_ratings_needed comes from a closed-form SE²·N solve while the curve

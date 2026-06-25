@@ -3688,7 +3688,9 @@ def band_lsb_and_power(request_data):
         prev = roc.get("prevalence")
         if n_clu >= 4 and prev is not None and 0 < prev < 1:
             n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
-            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff)
+            # audit C4: pass the de-folded CI lower bound so power is reported as a band and the
+            # gate reads the conservative end (never powered on the optimistic point AUC alone).
+            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=roc.get("auc_lo"))
 
     # ---- 4) THRESHOLD-MODE awareness (audit: mode determines FFT size + adaptive averaging) --------
     # The percentile-anchored threshold above is read off the device Timeline LSB, which is a 10-MINUTE
@@ -3896,7 +3898,9 @@ def deployment_summary(request_data):
     if roc.get("available"):
         n_clu = int(roc.get("n_clusters") or 0); prev = roc.get("prevalence")
         if n_clu >= 4 and prev is not None and 0 < prev < 1:
-            n_pos = int(round(n_clu * prev)); power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos)
+            # audit C4: power band on the de-folded CI lower bound; gate reads the conservative end.
+            n_pos = int(round(n_clu * prev))
+            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=roc.get("auc_lo"))
 
     # Device-control mapping (same as build_band_candidate).
     or_val = g.get("odds_ratio"); coef = g.get("coef")
@@ -3970,11 +3974,23 @@ def deployment_summary(request_data):
         stim_detail = ("band×era LRT did not converge on this match-direction — stim-stability "
                        "UNCONFIRMED (absence of evidence, not evidence of stability).")
     gates.append(_gate("stim_stable", "Stim-stable (band×era LRT n.s.)", stim_state, stim_detail))
+    # audit C4: the gate passes only when the CONSERVATIVE (CI-lower-bound) power clears target, so a
+    # band that looks powered on its optimistic point AUC cannot pass. Detail shows the power band.
+    if power.get("available"):
+        _pc = round(power.get("power_current", 0) * 100)
+        _plo = power.get("power_current_lo")
+        if _plo is not None:
+            _need_hi = power.get("n_ratings_needed_hi")
+            _powered_detail = (f"power {round(_plo*100)}–{_pc}% (conservative–point AUC); "
+                               f"need {_need_hi if _need_hi is not None else '∞'} ratings at the CI "
+                               f"lower bound (audit C4: gate reads the conservative end)")
+        else:
+            _powered_detail = (f"power {_pc}%, need {power.get('n_ratings_needed')} ratings")
+    else:
+        _powered_detail = "n/a"
     gates.append(_gate("powered", "Adequately powered (≥80%)",
                        "pass" if (power.get("available") and not power.get("more_data_needed")) else "fail",
-                       (f"power {round(power.get('power_current',0)*100)}%, "
-                        f"need {power.get('n_ratings_needed')} ratings"
-                        if power.get("available") else "n/a")))
+                       _powered_detail))
     # Forward-validated gate (audit C2): PASS only when the held-out (train-past → test-future) AUC's
     # bootstrap CI lower bound clears chance; INDETERMINATE when the record can't be split forward
     # (no held-out estimate is absence of evidence, never a pass); FAIL when the held-out CI includes

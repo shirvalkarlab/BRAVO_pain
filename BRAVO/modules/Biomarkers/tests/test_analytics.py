@@ -935,6 +935,7 @@ if __name__ == "__main__":
     test_deployment_roc_feature_hist_shape_and_counts()
     test_auc_power_curve_monotone_and_crosses_target()
     test_auc_power_monotone_and_sample_size()
+    test_auc_power_conservative_band_gates_on_ci_lower_bound()
     test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance()
     test_deployment_roc_by_era_pooled_orientation_surfaces_reversal()
     test_deployment_roc_by_era_portable_when_eras_agree()
@@ -1063,6 +1064,40 @@ def test_auc_power_monotone_and_sample_size():
     # orientation: AUC < 0.5 is treated as |AUC-0.5| (a strong negative biomarker still has power)
     neg = analytics.auc_power(0.20, 40, 40)
     assert neg["auc"] == 0.80 and neg["power_current"] > 0.5
+
+
+def test_auc_power_conservative_band_gates_on_ci_lower_bound():
+    """audit C4: when auc_lo is supplied, auc_power reports a power band and the gate-driving
+    `more_data_needed` reads the CONSERVATIVE (CI-lower-bound) end — so a band that looks powered on
+    its optimistic point AUC cannot pass on optimism alone.
+
+    The decisive case: point AUC=0.70 at n=70 clears 80% power (more_data_needed=False), but its CI
+    lower bound 0.60 has far less power, so the conservative gate flips to more_data_needed=True.
+    """
+    point = analytics.auc_power(0.70, 30, 40)
+    band = analytics.auc_power(0.70, 30, 40, auc_lo=0.60)
+    assert point["available"] and band["available"]
+    # point AUC alone reads as powered ...
+    assert point["more_data_needed"] is False
+    # ... but the conservative band does NOT (gate fail-closed on the CI lower bound)
+    assert band["more_data_needed"] is True
+    # band carries the conservative readouts
+    assert band["auc_lo"] == 0.60
+    assert band["power_current_lo"] is not None and band["power_current_lo"] < band["power_current"]
+    assert band["n_ratings_needed_hi"] is not None and band["n_ratings_needed_hi"] > band["n_ratings_needed"]
+    # a CI lower bound AT chance (0.50) => no power, ratings-needed undefined, more data needed.
+    # (Note auc_lo is folded as |auc_lo-0.5|, so 0.49 -> 0.51 is still above chance; only 0.50 lands
+    # exactly on the chance line and trips the null branch.)
+    null_band = analytics.auc_power(0.62, 30, 40, auc_lo=0.50)
+    assert null_band["more_data_needed"] is True and null_band["n_ratings_needed_hi"] is None
+    # a CI lower bound just above chance still flags more data (finite but huge ratings requirement)
+    weak_band = analytics.auc_power(0.62, 30, 40, auc_lo=0.51)
+    assert weak_band["more_data_needed"] is True and weak_band["n_ratings_needed_hi"] > weak_band["n_ratings_needed"]
+    # without auc_lo, behaviour is unchanged (back-compat): point-AUC gate, no band fields populated
+    assert point["power_current_lo"] is None and point["auc_lo"] is None
+    # a genuinely strong band stays powered even on its CI lower bound
+    strong = analytics.auc_power(0.85, 60, 60, auc_lo=0.78)
+    assert strong["more_data_needed"] is False
 
 
 def test_empirical_lsb_ratio_recovers_planted_ratio():

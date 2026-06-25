@@ -2385,7 +2385,7 @@ def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
     }
 
 
-def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
     clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
 
@@ -2393,8 +2393,17 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     ratings (at the observed prevalence) needed for `target_power`. The honest 'do we have enough
     pain ratings to trust this cut-point yet?' number — pairs with the bootstrap CI from the ROC.
 
-    Returns {available, auc, power_current, n_ratings_current, n_ratings_needed, more_data_needed,
-             se_auc, alpha, target_power} or {available: False, reason}.
+    **audit C4 — power on the optimistic AUC.** Power is monotone in AUC, so feeding the in-sample,
+    fold-biased, selection-optimistic POINT auc overstates current power and understates ratings
+    needed — exactly at the deploy/no-deploy margin. When `auc_lo` (the de-folded clustered-bootstrap
+    CI lower bound from deployment_roc) is supplied, this function ALSO reports the conservative end
+    of the power band (power_current_lo, n_ratings_needed_hi) computed at auc_lo, and makes
+    `more_data_needed` fail-closed on that conservative bound — so the "powered" gate cannot pass on
+    optimism alone. The point-AUC numbers are retained for display; the gate reads the band.
+
+    Returns {available, auc, auc_lo, power_current, power_current_lo, n_ratings_current,
+             n_ratings_needed, n_ratings_needed_hi, more_data_needed, se_auc, alpha, target_power,
+             curve} or {available: False, reason}.
     """
     try:
         from scipy import stats as _st
@@ -2425,6 +2434,38 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
     n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
 
+    # ---- audit C4: conservative power band at the de-folded CI lower bound -----------------------
+    # Re-run the SAME Hanley–McNeil math at auc_lo (the clustered-bootstrap CI lower bound). This is
+    # the power we'd actually have if the true AUC sat at the pessimistic edge of the CI — the number
+    # the "powered" deployment gate should fail-closed on, instead of the optimistic point estimate.
+    power_lo = None; n_need_hi = None; auc_lo_used = None
+    if auc_lo is not None:
+        try:
+            a_lo = float(max(float(auc_lo), 1.0 - float(auc_lo)))  # fold defensively (display is oriented >=0.5)
+        except (TypeError, ValueError):
+            a_lo = None
+        if a_lo is not None and np.isfinite(a_lo) and a_lo > 0.5 and a_lo <= auc:
+            auc_lo_used = a_lo
+            Q1l = a_lo / (2.0 - a_lo)
+            Q2l = 2.0 * a_lo * a_lo / (1.0 + a_lo)
+            var_l = (a_lo * (1 - a_lo) + (n_pos - 1) * (Q1l - a_lo * a_lo)
+                     + (n_neg - 1) * (Q2l - a_lo * a_lo)) / (n_pos * n_neg)
+            se_l = float(np.sqrt(max(var_l, 1e-12)))
+            power_lo = float(_st.norm.cdf((a_lo - 0.5) / se_l - za * se0 / se_l))
+            rhs_l = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se_l * se_l * N0)
+            n_need_hi = int(np.ceil((rhs_l / (a_lo - 0.5)) ** 2))
+        elif a_lo is not None and np.isfinite(a_lo) and a_lo <= 0.5:
+            # CI lower bound touches/crosses chance: conservatively, no power and ratings-needed is
+            # undefined (the band could be null). Gate must not pass.
+            auc_lo_used = a_lo; power_lo = float(alpha); n_need_hi = None
+
+    # The gate reads the conservative bound when we have one: more data is needed unless we clear the
+    # target at the CI lower bound. With no auc_lo, fall back to the point-AUC requirement.
+    if auc_lo_used is not None:
+        more_data = bool(n_need_hi is None or n_need_hi > N0 or (power_lo is not None and power_lo < target_power))
+    else:
+        more_data = bool(n_need > N0)
+
     # ---- power-vs-N curve (replaces the 3-number readout with a sufficiency curve) ----
     # Sample total ratings N from a small floor up past whichever is larger of the current count and
     # the 80%-power requirement, holding the observed prevalence fixed, and evaluate the SAME
@@ -2443,13 +2484,19 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80):
     curve = ({"n": curve_n, "power": curve_p, "prevalence": prev}
              if len(curve_n) >= 2 else None)
 
+    note = ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
+            "effective n). Power to reject AUC = 0.5.")
+    if auc_lo_used is not None:
+        note += (" Power BAND reported across [auc_lo, auc]; the 'powered' gate reads the "
+                 "conservative auc_lo end (audit C4) so it cannot pass on the optimistic point AUC.")
     return {
-        "available": True, "auc": auc, "n_pos": n_pos, "n_neg": n_neg, "se_auc": se,
-        "power_current": power, "n_ratings_current": int(N0), "n_ratings_needed": n_need,
-        "more_data_needed": bool(n_need > N0), "alpha": alpha, "target_power": target_power,
+        "available": True, "auc": auc, "auc_lo": auc_lo_used, "n_pos": n_pos, "n_neg": n_neg,
+        "se_auc": se,
+        "power_current": power, "power_current_lo": power_lo,
+        "n_ratings_current": int(N0), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
+        "more_data_needed": more_data, "alpha": alpha, "target_power": target_power,
         "curve": curve,
-        "note": ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
-                 "effective n). Power to reject AUC = 0.5."),
+        "note": note,
     }
 
 
