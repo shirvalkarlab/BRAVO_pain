@@ -230,17 +230,17 @@ operational note in §7 only, not as an action item.)
    `psd_lsb_model.py` docstring + `RCS08.json` special block (`no_impedance_gain_term`); regression
    test `test_no_impedance_gain_term_adopted` pins it. Evidence:
    `rcs08_impedance_term_decision.png`, `rcs08_impedance_term_scan.csv`, `rcs08_impedance_series.csv`.
-2. **High-gamma 55.5 Hz calibration** — *guard SHIPPED (`dac25ac`, `9de1aeb`); k re-calibration
-   still blocked on data.* The 55.5 Hz center frequency was the forward-validated winner, but
-   `k=269` / the per-band PSD→LSB model is validated only 7.8–28.3 Hz. `estimate_lsb` used to
-   silently SNAP a 55.5 Hz request to the nearest fitted band (26.4 Hz) and return it with the
-   in-range r²=0.841 — a confident-looking but untested number. The gain is NOT band-flat (falls
-   ~0.80 log10/decade), so that snap over-states the 55.5 Hz LSB by ~1.7× (> the model's own 1.26×
-   σ). FIX: `analytics.LSB_VALIDATED_HZ_LO/HI`; `estimate_lsb` returns `freq_extrapolated` +
-   EXTRAPOLATED warning (all tiers); deployment estimate + sign-off `deployable_threshold` gate
-   carry/show the flag; test `test_highgamma_estimate_flagged_extrapolated`. Evidence:
-   `rcs08_highgamma_extrapolation.png`. STILL OPEN (lab action): stream sessions recorded at
-   55.5 Hz to calibrate `k` there — code now refuses to present it as calibrated until then.
+2. **High-gamma 55.5 Hz calibration** — *CLOSED (not actionable for closed-loop).* The Percept RC
+   adaptive-stim modes are firmware-limited to 8–30 Hz, so a 55.5 Hz sensing-only band can never
+   drive a closed-loop controller — there is no clinical reason to calibrate `k` there. The
+   extrapolation GUARD shipped (`dac25ac`, `9de1aeb`) STAYS: `estimate_lsb` used to silently snap a
+   55.5 Hz request to the nearest fitted band (26.4 Hz) and return it with the in-range r²=0.841;
+   the gain is not band-flat (falls ~0.80 log10/decade), so that snap over-states the 55.5 Hz LSB
+   by ~1.7× (> the model's own 1.26× σ). Guard: `analytics.LSB_VALIDATED_HZ_LO/HI`; `estimate_lsb`
+   returns `freq_extrapolated` + EXTRAPOLATED warning (all tiers); deployment estimate + sign-off
+   `deployable_threshold` gate carry/show the flag; test `test_highgamma_estimate_flagged_extrapolated`;
+   evidence `rcs08_highgamma_extrapolation.png`. The data-collection action item is RETIRED — no
+   55.5 Hz streaming calibration needed.
 3. **Audit C4** — *RESOLVED (`7fcee95`).* Power readout & 'powered' gate ran on the optimistic
    point AUC (the audit's "resolves once C1 lands" note was wrong: C1 de-folded the CI but both
    `auc_power` call sites still passed `roc['auc']`, never `auc_lo`). FIX: `auc_power(..., auc_lo=)`
