@@ -800,6 +800,67 @@ def test_lsb_uv2_converters_roundtrip_and_validated_constant():
     assert math.isnan(analytics.uv2_from_lsb(None))
 
 
+def test_psd_band_to_lsb_matches_band_integral_times_k():
+    """The shared PSD->LSB helper (timeline 'psd_modeled' tier + deployment fallback) must equal the
+    composition it documents: band-integrate the PSD over [c-half, c+half), then x k=269. A flat PSD of
+    density d over a 5 Hz band integrates to ~5*d µV², so lsb == 269 * (5*d) within trapezoid error."""
+    import math
+    freq = np.arange(0.0, 50.0, 0.5)          # 0.5 Hz bins
+    d = 0.2                                     # µV²/Hz flat
+    psd = np.full_like(freq, d)
+    center, half = 20.0, 2.5
+    out = analytics.psd_band_to_lsb(psd, freq, center, half_hz=half)
+    # band integral of a flat density over a 5 Hz window ~= d * (2*half), trapezoid on [c-half, c+half)
+    expected_uv2 = analytics._band_power_notched(freq, psd, center, half)
+    assert abs(out["uv2"] - expected_uv2) < 1e-9, out
+    assert abs(out["lsb"] - analytics.LSB_PER_UV2_VALIDATED * expected_uv2) < 1e-6, out
+    assert out["k_used"] == analytics.LSB_PER_UV2_VALIDATED
+    # 20 Hz is in-range and Dual is 256-pt -> no flags, clean note
+    assert out["freq_extrapolated"] is False
+    assert out["fft_compatible"] is True
+    assert "validated range" in out["note"]
+
+
+def test_psd_band_to_lsb_flags_extrapolation_and_fft_incompatibility():
+    """Center outside 7.8-28.3 Hz -> freq_extrapolated True (still returns a number, but flagged).
+    threshold_mode='Single' (64-pt FFT) -> fft_compatible False (k=269 is a 256-pt fit). The lsb value
+    is still produced; the FLAGS are how callers refuse to silently trust it (matches estimate_lsb)."""
+    freq = np.arange(0.0, 100.0, 0.5)
+    psd = np.full_like(freq, 0.1)
+    # high-gamma 55.5 Hz: out of validated range
+    hi = analytics.psd_band_to_lsb(psd, freq, 55.5, half_hz=2.5)
+    assert hi["freq_extrapolated"] is True
+    assert np.isfinite(hi["lsb"]) and hi["lsb"] > 0          # still computed, just flagged
+    assert "EXTRAPOLATED" in hi["note"]
+    # below the 8 Hz adaptive floor (and below 7.8 Hz validated lo)
+    lo = analytics.psd_band_to_lsb(psd, freq, 6.0, half_hz=2.5)
+    assert lo["freq_extrapolated"] is True
+    # 64-pt Single mode: in-range center but FFT-incompatible
+    incompat = analytics.psd_band_to_lsb(psd, freq, 20.0, half_hz=2.5, threshold_mode="Single")
+    assert incompat["fft_compatible"] is False
+    assert "non-256-pt FFT" in incompat["note"]
+    # Dual / SingleInverse are 256-pt -> compatible
+    assert analytics.psd_band_to_lsb(psd, freq, 20.0, threshold_mode="SingleInverse")["fft_compatible"] is True
+
+
+def test_psd_band_to_lsb_guards_bad_input():
+    """Missing/mismatched/too-short PSD or a band with <2 bins -> NaN lsb/uv2 with a reason, never an
+    exception. The local _freq_extrapolated must agree with psd_lsb_model's definition at the bounds."""
+    import math
+    freq = np.arange(0.0, 50.0, 0.5)
+    psd = np.full_like(freq, 0.1)
+    # mismatched lengths
+    bad = analytics.psd_band_to_lsb(psd[:-3], freq, 20.0)
+    assert math.isnan(bad["lsb"]) and math.isnan(bad["uv2"])
+    # band entirely outside the available freq axis -> <2 bins
+    empty = analytics.psd_band_to_lsb(psd, freq, 200.0, half_hz=2.5)
+    assert math.isnan(empty["lsb"])
+    # local guard agrees with the frozen-model guard at the validated bounds
+    from Biomarkers.routines import psd_lsb_model as plm
+    for c in (7.0, 7.8, 18.0, 28.3, 29.0):
+        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
+
+
 def test_band_power_notched_default_no_mains_removal():
     """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
     integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
@@ -945,6 +1006,9 @@ if __name__ == "__main__":
     test_psd_lsb_conversion_guards_small_n()
     test_band_power_notched_default_no_mains_removal()
     test_lsb_uv2_converters_roundtrip_and_validated_constant()
+    test_psd_band_to_lsb_matches_band_integral_times_k()
+    test_psd_band_to_lsb_flags_extrapolation_and_fft_incompatibility()
+    test_psd_band_to_lsb_guards_bad_input()
     test_forward_chaining_validates_stationary_band()
     test_forward_chaining_null_band_does_not_beat_chance_forward()
     test_forward_chaining_catches_sign_reversal_over_time()

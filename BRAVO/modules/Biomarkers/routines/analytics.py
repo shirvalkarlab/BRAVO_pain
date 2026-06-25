@@ -2145,6 +2145,106 @@ def uv2_from_lsb(lsb, *, k=LSB_PER_UV2_VALIDATED):
     return float(x) / float(k)
 
 
+def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI):
+    """True iff center_hz is outside the validated [7.8, 28.3] Hz calibration range (None -> False).
+
+    Mirrors psd_lsb_model._freq_extrapolated so the proportional (k=269) route and the frozen per-band
+    model share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to
+    avoid a routines->routines import cycle; the two constants are asserted equal by test.
+    """
+    try:
+        c = float(center_hz)
+    except (TypeError, ValueError):
+        return False
+    if not np.isfinite(c):
+        return False
+    return bool(c < float(lo) or c > float(hi))
+
+
+def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_VALIDATED,
+                    threshold_mode="Dual"):
+    """Convert a physical PSD (µV²/Hz) to device power-domain LSB over a band, via the Step-0-chosen
+    Welch256 band-integral × k=269 route. ONE conversion path shared by the Biomarker timeline's
+    ``psd_modeled`` tier (availability.lsb_series) and the deployment module's modeled fallback
+    (bravo_service band_lsb_and_power), so survey/montage/event PSD bands that carry NO native device
+    LSB still get a calibrated, range-guarded LSB value.
+
+    This is the MODELED fallback only — native device LSB (Timeline / BrainSenseLfp) is always
+    preferred when the band was actually sensed (see DESIGN §4 / Step-0 verdict). The default k=269 is
+    RCS08-validated and approximately band-flat across 7.8–28.3 Hz; outside that range the conversion
+    is an untested extrapolation and is flagged (never silently trusted).
+
+    Step-0 verdict (2026-06-25): of transform+CV-k vs Welch256×269, the fixed-269 route was chosen for
+    the timeline on accuracy (in 8–30 Hz it ties/beats the fitted transform on typical/median-fold
+    error and trails only on outlier RMSE), stability (its implied k sits on the existing fixed 269 —
+    no new fitted/maintained scale), and single-source-of-truth (same constant the deployment threshold
+    uses). See ANALYSIS_percept_spectral_repro_comparison.md "Timeline method decision".
+
+    Parameters
+    ----------
+    psd_uv2_per_hz, freq : array-like
+        PSD power density (µV²/Hz) and matching frequency axis (Hz). Same length.
+    center_hz : float
+        Band center frequency (Hz). Snapped to nothing here — caller picks the sensing center.
+    half_hz : float, default 2.5
+        Half-bandwidth; the integral runs over [center-half, center+half) (≈5 Hz device band).
+    k : float, default 269 (LSB_PER_UV2_VALIDATED)
+        Proportional LSB/µV² constant. Pass a participant-specific k once one is fitted.
+    threshold_mode : str, default "Dual"
+        Percept adaptive mode whose FFT size the k assumes. k=269 is a 256-pt-equivalent fit, valid
+        only for COMPATIBLE_THRESHOLD_MODES (256-pt: Dual, SingleInverse). The 64-pt Single mode
+        integrates a different set of bins, so the conversion is flagged fft_incompatible there.
+
+    Returns
+    -------
+    dict with keys:
+        lsb : float | nan          modeled device LSB (nan if band has <2 bins or non-positive power)
+        uv2 : float | nan          integrated band power in µV²
+        k_used : float             the k applied
+        freq_extrapolated : bool   center outside the validated 7.8–28.3 Hz range
+        fft_compatible : bool      threshold_mode's FFT size matches the 256-pt calibration
+        validated_hz_range : [lo, hi]
+        method : str               provenance label
+        note : str                 human-readable caveat (extrapolation / fft-incompat / ok)
+    """
+    f = np.asarray(freq, dtype=float)
+    P = np.asarray(psd_uv2_per_hz, dtype=float)
+    extrap = _freq_extrapolated(center_hz)
+    fft_compatible = str(threshold_mode) in COMPATIBLE_THRESHOLD_MODES
+    out = {
+        "lsb": float("nan"), "uv2": float("nan"), "k_used": float(k),
+        "freq_extrapolated": bool(extrap), "fft_compatible": bool(fft_compatible),
+        "validated_hz_range": [LSB_VALIDATED_HZ_LO, LSB_VALIDATED_HZ_HI],
+        "method": f"welch256_band_integral_x_k={float(k):.0f}",
+        "note": "",
+    }
+    if f.ndim != 1 or P.ndim != 1 or f.size != P.size or f.size < 2:
+        out["note"] = "PSD/freq axis missing, mismatched, or too short (<2 bins)"
+        return out
+
+    uv2 = _band_power_notched(f, P, float(center_hz), float(half_hz))
+    out["uv2"] = uv2
+    if not np.isfinite(uv2) or uv2 <= 0:
+        out["note"] = f"band [{center_hz - half_hz:.1f}, {center_hz + half_hz:.1f}) Hz has <2 bins or non-positive power"
+        return out
+
+    out["lsb"] = lsb_from_uv2(uv2, k=k)
+
+    notes = []
+    if extrap:
+        notes.append(
+            f"center {float(center_hz):.1f} Hz is EXTRAPOLATED beyond the validated "
+            f"{LSB_VALIDATED_HZ_LO:.1f}–{LSB_VALIDATED_HZ_HI:.1f} Hz range; k is an untested "
+            f"extrapolation here (needs streaming calibration at this frequency)")
+    if not fft_compatible:
+        notes.append(
+            f"threshold_mode={threshold_mode} uses a non-256-pt FFT; k=269 is a 256-pt-equivalent "
+            f"fit and does NOT translate to this mode's band (Medtronic: LFP Power is not comparable "
+            f"across threshold modes)")
+    out["note"] = " · ".join(notes) if notes else "in validated range, 256-pt-compatible"
+    return out
+
+
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
                         band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
     """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device
