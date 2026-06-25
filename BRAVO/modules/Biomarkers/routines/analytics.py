@@ -1816,6 +1816,215 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     }
 
 
+def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                                strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                                pain_cutoff=None, min_train_clusters=8, test_block_weeks=1,
+                                max_test_expand_weeks=4, n_boot=500, seed=0):
+    """Expanding-window, blocked-by-week FORWARD-CHAINING validation for ONE committed (channel,
+    band) — the held-out / out-of-sample companion to deployment_roc (audit C2).
+
+    deployment_roc fits AND evaluates the AUC, the orientation, and the Youden operating point on
+    one contiguous record, so every number it reports is in-sample. For a controller that will run
+    forward in time the decision-relevant quantity is next-week performance: train on weeks 1..k,
+    test on week k+1, never letting the future inform the threshold. This routine does exactly that.
+
+    Anti-look-ahead discipline (the whole point):
+      * Rating CLUSTERS (not raw samples) are the unit, assigned to a single elapsed-week by their
+        earliest sample, so a cluster's near-duplicate PSDs never straddle the train/test boundary.
+      * Within each fold the band's SIGN (flip) and the Youden THRESHOLD are estimated on the TRAIN
+        clusters ALONE; the held-out clusters are scored with that fixed sign + threshold. Any
+        look-ahead would inflate the held-out number, so none is permitted.
+      * Test folds are NON-OVERLAPPING and strictly after their train window, so every held-out
+        cluster is scored exactly once by a model that never saw it (out-of-fold). The per-fold
+        oriented test scores are concatenated into one out-of-fold (OOF) vector and a single pooled
+        held-out AUC is taken over it.
+      * The held-out AUC is NOT re-folded (no max(auc, 1-auc)): it can honestly fall to or below 0.5
+        when the train-fold sign does not generalize — the exact failure C1's de-fold also protects.
+
+    Returns {available, n_folds, reliable, in_sample_auc, held_out_auc, held_out_auc_lo,
+    held_out_auc_hi, held_out_auc_mean_fold, beats_chance_forward, held_out_sens, held_out_spec,
+    optimism, n_test_clusters, n_test_samples, folds:[{test_week_start, n_train_clusters,
+    n_test_clusters, train_auc, test_auc, sens, spec}], note} or {available: False, reason}.
+    """
+    from sklearn import metrics
+
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
+    bp_log, labels, rating_group, times = feat
+    y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+    m = np.isfinite(bp_log) & np.isfinite(y_all)
+    if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
+        return {"available": False, "reason": "too few matched high/low samples for forward-chaining"}
+    x = bp_log[m].astype(float)
+    y = y_all[m].astype(int)
+    g = np.asarray(rating_group)[m]
+    t = np.asarray(times)[m]
+
+    # Elapsed-week index per retained sample (same bucketing as the glmer's weekly random intercept).
+    weeks = _elapsed_week_cluster(t, int(m.sum()))
+    ok = weeks >= 0                            # drop unparseable-time rows (week == -1)
+    if ok.sum() < 12:
+        return {"available": False, "reason": "too few rows with parseable times for weekly folds"}
+    x, y, g, weeks = x[ok], y[ok], g[ok], weeks[ok]
+
+    # Assign each rating cluster to ONE week (its earliest), so a cluster is never split across folds.
+    uniq_clusters = np.unique(g)
+    cl_week = {c: int(np.min(weeks[g == c])) for c in uniq_clusters}
+    cl_rows = {c: np.where(g == c)[0] for c in uniq_clusters}
+    cl_y = {c: int(round(np.mean(y[cl_rows[c]]))) for c in uniq_clusters}   # cluster label (clusters are single-rating)
+    present_weeks = sorted(set(cl_week.values()))
+    if len(present_weeks) < 2:
+        return {"available": False, "reason": "ratings span < 2 elapsed weeks; no forward split possible"}
+
+    def _clusters_with(pred):
+        return [c for c in uniq_clusters if pred(cl_week[c])]
+
+    def _both_classes(clusters):
+        labs = {cl_y[c] for c in clusters}
+        return len(labs) >= 2
+
+    # ---- expanding-window walk over weeks: train = all clusters strictly before the test block ----
+    folds = []
+    oof_score, oof_y, oof_cluster = [], [], []
+    oof_cluster_ids = []
+    wi = 0
+    nW = len(present_weeks)
+    while wi < nW:
+        test_start = present_weeks[wi]
+        train_clusters = _clusters_with(lambda w: w < test_start)
+        # Need a usable training set before we can validate forward at all.
+        if len(train_clusters) < int(min_train_clusters) or not _both_classes(train_clusters):
+            wi += 1
+            continue
+        # Grow the test block forward (week by week) until it carries both classes or hits the cap.
+        wj = wi
+        test_clusters = []
+        while wj < nW and (present_weeks[wj] - test_start) <= int(max_test_expand_weeks) - 1:
+            lo, hi = test_start, present_weeks[wj]
+            test_clusters = _clusters_with(lambda w: lo <= w <= hi)
+            if (wj - wi + 1) >= int(test_block_weeks) and _both_classes(test_clusters):
+                break
+            wj += 1
+        if not test_clusters or not _both_classes(test_clusters):
+            wi = wj + 1
+            continue
+
+        tr_rows = np.concatenate([cl_rows[c] for c in train_clusters])
+        te_rows = np.concatenate([cl_rows[c] for c in test_clusters])
+        xtr, ytr = x[tr_rows], y[tr_rows]
+        xte, yte = x[te_rows], y[te_rows]
+        # Orient + pick the Youden threshold on TRAIN ONLY.
+        raw_tr = float(metrics.roc_auc_score(ytr, xtr))
+        flip = raw_tr < 0.5
+        s_tr = -xtr if flip else xtr
+        s_te = -xte if flip else xte                       # SAME sign carried to the held-out fold
+        fpr, tpr, thr = metrics.roc_curve(ytr, s_tr)
+        finite = np.isfinite(thr)
+        jvals = np.where(finite, tpr - fpr, -np.inf)
+        thr_op = float(thr[int(np.argmax(jvals))])
+        # Score the held-out fold with the fixed train sign + threshold.
+        pred = (s_te >= thr_op).astype(int)
+        sens, spec = _sens_spec(yte, pred)
+        test_auc = float(metrics.roc_auc_score(yte, s_te))  # NOT re-folded: honest, can be < 0.5
+        folds.append({
+            "test_week_start": int(test_start),
+            "n_train_clusters": int(len(train_clusters)),
+            "n_test_clusters": int(len(test_clusters)),
+            "train_auc": float(max(raw_tr, 1.0 - raw_tr)),
+            "test_auc": test_auc,
+            "sens": None if sens is None or not np.isfinite(sens) else float(sens),
+            "spec": None if spec is None or not np.isfinite(spec) else float(spec),
+        })
+        oof_score.append(s_te); oof_y.append(yte)
+        # Give every held-out cluster a globally-unique id so the held-out-AUC bootstrap resamples
+        # independent ratings (te_rows preserves the per-cluster row order of `test_clusters`).
+        base_id = len(oof_cluster_ids)
+        oof_cluster.append(np.repeat(np.arange(base_id, base_id + len(test_clusters)),
+                                     [len(cl_rows[c]) for c in test_clusters]))
+        oof_cluster_ids.extend(range(base_id, base_id + len(test_clusters)))
+        wi = wj + 1                                        # non-overlapping: advance past this block
+
+    if not folds:
+        return {"available": False,
+                "reason": f"no forward fold met the {int(min_train_clusters)}-train-cluster / both-class floor"}
+
+    oof_score = np.concatenate(oof_score)
+    oof_y = np.concatenate(oof_y)
+    oof_cluster = np.concatenate(oof_cluster)
+    # In-sample oriented AUC (the deployment_roc number) for the side-by-side comparison.
+    raw_all = float(metrics.roc_auc_score(y, x))
+    in_sample_auc = float(max(raw_all, 1.0 - raw_all))
+
+    held_out_auc = None
+    held_out_auc_lo = held_out_auc_hi = None
+    if len(np.unique(oof_y)) >= 2:
+        held_out_auc = float(metrics.roc_auc_score(oof_y, oof_score))
+        # Cluster bootstrap CI on the pooled held-out AUC: resample WHOLE held-out clusters so the
+        # CI reflects the count of independent held-out ratings, then percentile 2.5/97.5. The gate
+        # downstream requires this lower bound to clear chance ("CI clears 0.5").
+        rng = np.random.default_rng(seed)
+        uoc = np.unique(oof_cluster)
+        rows_by = {c: np.where(oof_cluster == c)[0] for c in uoc}
+        boot = []
+        for _b in range(int(n_boot)):
+            pick = rng.choice(uoc, size=len(uoc), replace=True)
+            idx = np.concatenate([rows_by[c] for c in pick])
+            yb = oof_y[idx]
+            if len(np.unique(yb)) < 2:
+                continue
+            try:
+                boot.append(float(metrics.roc_auc_score(yb, oof_score[idx])))
+            except ValueError:
+                continue
+        if len(boot) >= 20:
+            held_out_auc_lo = float(np.percentile(boot, 2.5))
+            held_out_auc_hi = float(np.percentile(boot, 97.5))
+
+    # Pooled held-out sens/spec averaged across folds at each fold's train operating point.
+    held_out_sens = held_out_spec = None
+    n_pos = int(np.sum(oof_y == 1)); n_neg = int(np.sum(oof_y == 0))
+    fold_sens = [f["sens"] for f in folds if f["sens"] is not None]
+    fold_spec = [f["spec"] for f in folds if f["spec"] is not None]
+    if fold_sens:
+        held_out_sens = float(np.mean(fold_sens))
+    if fold_spec:
+        held_out_spec = float(np.mean(fold_spec))
+
+    mean_fold_auc = float(np.mean([f["test_auc"] for f in folds]))
+    n_folds = len(folds)
+    reliable = bool(n_folds >= 2 and len(np.unique(oof_cluster)) >= int(min_train_clusters))
+    beats_chance_forward = bool(held_out_auc_lo is not None and held_out_auc_lo > 0.5)
+
+    return {
+        "available": True,
+        "n_folds": n_folds,
+        "reliable": reliable,
+        "in_sample_auc": in_sample_auc,
+        "held_out_auc": held_out_auc,
+        "held_out_auc_lo": held_out_auc_lo,
+        "held_out_auc_hi": held_out_auc_hi,
+        "held_out_auc_mean_fold": mean_fold_auc,
+        "beats_chance_forward": beats_chance_forward,
+        "held_out_sens": held_out_sens,
+        "held_out_spec": held_out_spec,
+        "optimism": (None if held_out_auc is None else float(in_sample_auc - held_out_auc)),
+        "n_test_clusters": int(len(np.unique(oof_cluster))),
+        "n_test_samples": int(oof_y.size),
+        "n_pos_test": n_pos, "n_neg_test": n_neg,
+        "folds": folds,
+        "ci_method": "held-out-cluster bootstrap (de-folded; train-fold orientation fixed)",
+        "note": (f"Expanding-window forward-chaining over {n_folds} non-overlapping weekly test "
+                 f"folds. Orientation and the Youden threshold are fit on the TRAIN weeks only and "
+                 f"applied to the held-out future weeks, so the held-out AUC is genuinely "
+                 f"out-of-sample and is NOT re-folded (it can fall below 0.5 when the band does not "
+                 f"generalize forward). The held-out-AUC CI is a cluster bootstrap over independent "
+                 f"held-out ratings; 'forward-validated' requires its lower bound to clear 0.5. "
+                 f"Compare held_out_auc against in_sample_auc to read the forward optimism."),
+    }
+
+
 ADC_NV_PER_LSB = 146.0   # Percept time-domain ADC scale (nV per LSB), exact per Medtronic.
 
 

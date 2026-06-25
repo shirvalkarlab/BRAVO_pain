@@ -3174,6 +3174,12 @@ def band_deployment_roc(request_data):
         core["pooled"], core["channel"], core["center_hz"],
         band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
         low_pct=core["low_pct"], high_pct=core["high_pct"], n_boot=n_boot)
+    # Forward / out-of-sample validation alongside the in-sample ROC (audit C2): held-out AUC + CI
+    # from train-past → test-future weekly folds, so the panel shows in-sample vs forward side by side.
+    forward = analytics.deployment_forward_chaining(
+        core["pooled"], core["channel"], core["center_hz"],
+        band_width_hz=core["band_width_hz"], strategy=core["label_strategy"],
+        low_pct=core["low_pct"], high_pct=core["high_pct"], n_boot=n_boot)
 
     def _ff(x):
         try:
@@ -3192,6 +3198,7 @@ def band_deployment_roc(request_data):
         "label_metric": core["label_metric"],
         "match_direction": core["match_direction"],
         "roc": roc,
+        "forward": forward,
     }
 
 
@@ -3584,6 +3591,13 @@ def deployment_summary(request_data):
         pooled, channel, center_hz, core.get("stim_series"), band_width_hz=band_width_hz,
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
         n_boot=n_boot)
+    # Forward-chaining / out-of-sample validation (audit C2): train on past weeks, test forward, so
+    # the deploy card carries a held-out AUC beside the in-sample number and a 'forward-validated'
+    # gate. Orientation + Youden threshold are fit on the train fold ONLY (no look-ahead).
+    forward = analytics.deployment_forward_chaining(
+        pooled, channel, center_hz, band_width_hz=band_width_hz,
+        strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
+        n_boot=n_boot)
 
     # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
     cutpoint = _float_param(rd, "Cutpoint", default=None)
@@ -3700,6 +3714,44 @@ def deployment_summary(request_data):
                        (f"power {round(power.get('power_current',0)*100)}%, "
                         f"need {power.get('n_ratings_needed')} ratings"
                         if power.get("available") else "n/a")))
+    # Forward-validated gate (audit C2): PASS only when the held-out (train-past → test-future) AUC's
+    # bootstrap CI lower bound clears chance; INDETERMINATE when the record can't be split forward
+    # (no held-out estimate is absence of evidence, never a pass); FAIL when the held-out CI includes
+    # 0.5 (the band did not generalize forward, even if its in-sample AUC looks good).
+    if not forward.get("available"):
+        fwd_state = "indeterminate"
+        fwd_detail = (f"no forward split available ({forward.get('reason', 'insufficient temporal span')}) "
+                      "— out-of-sample generalization UNCONFIRMED")
+    elif forward.get("held_out_auc_lo") is None:
+        fwd_state = "indeterminate"
+        fwd_detail = (f"{forward.get('n_folds')} forward fold(s) but the held-out CI is unstable "
+                      "(too few independent held-out ratings) — generalization UNCONFIRMED")
+    elif forward.get("beats_chance_forward"):
+        fwd_state = "pass"
+        fwd_detail = (f"held-out AUC {round(forward.get('held_out_auc') or 0, 2)} "
+                      f"(95% CI {round(forward.get('held_out_auc_lo'), 2)}–"
+                      f"{round(forward.get('held_out_auc_hi'), 2)}) over {forward.get('n_folds')} "
+                      f"weekly folds clears chance vs in-sample {round(forward.get('in_sample_auc') or 0, 2)}")
+    else:
+        fwd_state = "fail"
+        _ho = forward.get("held_out_auc") or 0.0
+        _is = forward.get("in_sample_auc") or 0.0
+        _ci = (f"(95% CI {round(forward.get('held_out_auc_lo'), 2)}–"
+               f"{round(forward.get('held_out_auc_hi'), 2)})")
+        if _ho <= 0.55:
+            # The held-out point estimate itself collapsed to (or below) chance: the in-sample
+            # direction does not predict the future — the closed-loop failure C2 exists to catch.
+            fwd_detail = (f"held-out AUC {round(_ho, 2)} {_ci} collapses to chance while in-sample is "
+                          f"{round(_is, 2)} (optimism {round(forward.get('optimism') or 0, 2)}); band "
+                          "did NOT generalize forward — do not program on the in-sample number.")
+        else:
+            # The held-out POINT estimate holds (≈ in-sample) but its CI lower bound dips below 0.5:
+            # underpowered to PROVE it clears chance, not a demonstrated failure to generalize.
+            fwd_detail = (f"held-out AUC {round(_ho, 2)} {_ci} holds near in-sample {round(_is, 2)} "
+                          "(point estimate generalizes) but its CI does not yet exclude chance — "
+                          "UNDERPOWERED forward; more weeks of ratings needed to confirm.")
+    gates.append(_gate("forward_validated", "Forward-validated (held-out AUC clears chance)",
+                       fwd_state, fwd_detail))
 
     # ---- CAVEATS (soft warnings) ----
     caveats = []
@@ -3719,6 +3771,35 @@ def deployment_summary(request_data):
                        "more independent pain ratings needed for 80% power.")
     caveats.append("Selection bias: this band was chosen from a sweep on the same data; the OR/AUC are "
                    "optimistic. Out-of-sample / prospective confirmation is the honest test.")
+    # Audit C2: surface the forward-chaining result as a caveat so the in-sample optimism is
+    # quantified, not just asserted.
+    if forward.get("available") and forward.get("held_out_auc") is not None:
+        if forward.get("beats_chance_forward"):
+            caveats.append(
+                f"Forward-validated: training on past weeks and testing forward, the held-out AUC is "
+                f"{round(forward.get('held_out_auc'), 2)} (95% CI {round(forward.get('held_out_auc_lo'), 2)}–"
+                f"{round(forward.get('held_out_auc_hi'), 2)}) over {forward.get('n_folds')} weekly folds vs "
+                f"in-sample {round(forward.get('in_sample_auc'), 2)} (forward optimism "
+                f"{round(forward.get('optimism') or 0, 2)}). This is the out-of-sample number to weight.")
+        elif (forward.get("held_out_auc") or 0.0) <= 0.55:
+            caveats.append(
+                f"FORWARD VALIDATION FAILED: held-out AUC {round(forward.get('held_out_auc'), 2)} "
+                f"(95% CI {round(forward.get('held_out_auc_lo'), 2)}–{round(forward.get('held_out_auc_hi'), 2)}) "
+                f"collapses to chance, although the in-sample AUC is {round(forward.get('in_sample_auc'), 2)} "
+                f"(forward optimism {round(forward.get('optimism') or 0, 2)}). Training on the past does not "
+                "predict the future for this band — do NOT program it as an adaptive threshold on the "
+                "in-sample number alone.")
+        else:
+            caveats.append(
+                f"Forward UNDERPOWERED: the held-out AUC {round(forward.get('held_out_auc'), 2)} holds near "
+                f"in-sample {round(forward.get('in_sample_auc'), 2)} (the point estimate generalizes forward), "
+                f"but its 95% CI {round(forward.get('held_out_auc_lo'), 2)}–{round(forward.get('held_out_auc_hi'), 2)} "
+                "does not yet exclude chance. More weeks of pain ratings are needed to confirm forward "
+                "validity before programming.")
+    elif not forward.get("available"):
+        caveats.append(
+            f"Forward validation not possible ({forward.get('reason', 'insufficient temporal span')}): "
+            "every reported AUC is in-sample. Out-of-sample generalization is UNCONFIRMED.")
     if thr_lsb is None and thr_estimate is not None:
         caveats.append(
             f"ESTIMATED threshold ({thr_estimate['tier']} tier): the device never sensed this "
@@ -3775,6 +3856,25 @@ def deployment_summary(request_data):
             "operating_point": roc.get("operating_point") if roc.get("available") else None,
         },
         "power": power,
+        # Forward / out-of-sample validation (audit C2): the held-out AUC + CI shown beside the
+        # in-sample AUC, the per-fold trace, and the optimism gap. The card reads in_sample_auc vs
+        # held_out_auc to see how much the in-sample number is inflated by fitting on its own data.
+        "forward": ({"available": True,
+                     "in_sample_auc": _ff(forward.get("in_sample_auc")),
+                     "held_out_auc": _ff(forward.get("held_out_auc")),
+                     "held_out_auc_lo": _ff(forward.get("held_out_auc_lo")),
+                     "held_out_auc_hi": _ff(forward.get("held_out_auc_hi")),
+                     "held_out_sens": _ff(forward.get("held_out_sens")),
+                     "held_out_spec": _ff(forward.get("held_out_spec")),
+                     "optimism": _ff(forward.get("optimism")),
+                     "beats_chance_forward": bool(forward.get("beats_chance_forward")),
+                     "reliable": bool(forward.get("reliable")),
+                     "n_folds": forward.get("n_folds"),
+                     "n_test_clusters": forward.get("n_test_clusters"),
+                     "folds": forward.get("folds"),
+                     "ci_method": forward.get("ci_method"), "note": forward.get("note")}
+                    if forward.get("available")
+                    else {"available": False, "reason": forward.get("reason")}),
         "portability": ({"available": True, "auc_spread": _ff(by_era.get("auc_spread")),
                          "cutpoint_spread": _ff(by_era.get("cutpoint_spread")),
                          "n_eras_estimable": by_era.get("n_eras_estimable"),

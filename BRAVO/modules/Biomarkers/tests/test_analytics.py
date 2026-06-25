@@ -791,6 +791,87 @@ def test_band_power_notched_interpolates_mains_line():
     assert bp_notched > 0.0
 
 
+def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=0.3,
+                    sign_fn=None):
+    """Synthetic td_detail spanning `weeks` elapsed weeks, one rating cluster per sample, planting a
+    band-pain relationship of strength `beta`. `sign_fn(week_index_array)->±1 array` lets a test make
+    the band's sign drift over time (to plant a forward-generalization failure)."""
+    import datetime as _dt
+    rng = np.random.default_rng(seed)
+    f = np.linspace(0.95, 100, F)
+    band = (f >= center - 2.5) & (f <= center + 2.5)
+    base = 1_700_000_000.0
+    t_epoch = base + np.sort(rng.uniform(0, weeks * 7 * 86400, E))
+    times = [_dt.datetime.utcfromtimestamp(t).isoformat(sep=" ") for t in t_epoch]
+    wk = ((t_epoch - base) / (7 * 86400)).astype(int)
+    labels = rng.normal(5, 2, E)
+    psd = np.abs(rng.normal(1, noise, (E, 2, F)))
+    sign = np.ones(E) if sign_fn is None else sign_fn(wk)
+    psd[:, 0, band] *= (1 + (beta * sign * (labels - labels.mean()))[:, None])
+    return {"f_set": f, "psd": psd, "labels": labels, "rating_group": np.arange(E),
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+
+def test_forward_chaining_validates_stationary_band():
+    """Audit C2: a genuinely stationary band (same sign + strength across all weeks) trains on the
+    past and predicts the future well — the held-out AUC stays high, its bootstrap CI clears 0.5, and
+    `beats_chance_forward` is True. Forward-chaining must NOT penalize a real, stable signal."""
+    det = _forward_detail(beta=0.10, noise=1.3, seed=11)
+    r = analytics.deployment_forward_chaining(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=11)
+    assert r["available"], r.get("reason")
+    assert r["n_folds"] >= 3, r["n_folds"]
+    # train on past / score future: the OOF held-out AUC is well above chance and its CI clears 0.5
+    assert r["held_out_auc"] is not None and r["held_out_auc"] > 0.6, r["held_out_auc"]
+    assert r["held_out_auc_lo"] is not None and r["held_out_auc_lo"] > 0.5, r["held_out_auc_lo"]
+    assert r["beats_chance_forward"] is True
+    # a stationary band has near-zero forward optimism (in-sample ≈ held-out)
+    assert abs(r["optimism"]) < 0.10, r["optimism"]
+    assert "forward-chaining" in r.get("note", "")
+
+
+def test_forward_chaining_null_band_does_not_beat_chance_forward():
+    """Audit C2 + C1 de-fold: a band with NO real signal is winner's-curse optimistic in-sample
+    (AUC > 0.5) yet its held-out AUC is NOT re-folded and honestly fails to clear chance — the CI
+    lower bound drops below 0.5 and `beats_chance_forward` is False, so the forward gate abstains."""
+    det = _forward_detail(beta=0.0, noise=1.0, seed=2)
+    r = analytics.deployment_forward_chaining(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=2)
+    assert r["available"], r.get("reason")
+    # in-sample is biased above 0.5 (the optimism the in-sample number cannot see)
+    assert r["in_sample_auc"] >= 0.5
+    # but forward it does not beat chance, and the de-folded CI can fall below 0.5
+    assert r["beats_chance_forward"] is False
+    assert r["held_out_auc_lo"] is not None and r["held_out_auc_lo"] < 0.5, r["held_out_auc_lo"]
+
+
+def test_forward_chaining_catches_sign_reversal_over_time():
+    """Audit C2: the worst closed-loop failure — a band whose sign FLIPS partway through the record.
+    A threshold trained on the early (positive) weeks misfires systematically on the later (negative)
+    weeks. The in-sample AUC folds it back above 0.5 and hides this, but forward-chaining scores the
+    later folds near 0 and the pooled held-out AUC fails to beat chance."""
+    def rev(wk):
+        s = np.ones_like(wk, dtype=float)
+        s[wk >= 6] = -1.0
+        return s
+    det = _forward_detail(beta=0.7, noise=0.3, seed=3, sign_fn=rev)
+    r = analytics.deployment_forward_chaining(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=3)
+    assert r["available"], r.get("reason")
+    assert r["beats_chance_forward"] is False, r
+    # the late folds (after the sign flip) score below chance with the past-trained threshold
+    late = [f["test_auc"] for f in r["folds"] if f["test_week_start"] >= 6]
+    assert late and min(late) < 0.5, late
+    # forward optimism is large and positive (in-sample looks fine, forward collapses)
+    assert r["optimism"] is not None and r["optimism"] > 0.0
+
+
+def test_forward_chaining_guards_single_week():
+    """When all ratings fall in a single elapsed week there is no forward split; the routine must
+    abstain cleanly rather than fabricate a held-out estimate."""
+    det = _forward_detail(beta=0.5, noise=0.5, seed=4, weeks=1, E=120)
+    r = analytics.deployment_forward_chaining(det, "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=4)
+    assert r["available"] is False
+    assert "week" in r.get("reason", "").lower()
+
+
 if __name__ == "__main__":
     test_otsu_matches_canonical_convention()
     test_roc_operating_point_is_youden_and_separates_classes()
@@ -835,6 +916,10 @@ if __name__ == "__main__":
     test_psd_lsb_conversion_flags_nonlinear_slope()
     test_psd_lsb_conversion_guards_small_n()
     test_band_power_notched_interpolates_mains_line()
+    test_forward_chaining_validates_stationary_band()
+    test_forward_chaining_null_band_does_not_beat_chance_forward()
+    test_forward_chaining_catches_sign_reversal_over_time()
+    test_forward_chaining_guards_single_week()
     print("All analytics tests passed.")
 
 
