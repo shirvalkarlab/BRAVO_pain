@@ -2245,6 +2245,30 @@ def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_U
     return out
 
 
+def welch256_density(samples_uv, fs):
+    """Welch 256-pt power-density PSD of a time-domain µV trace — the EXACT transform the k=269
+    calibration was fit against (scipy welch, hann window, nperseg=256, detrend='constant',
+    scaling='density'). Returns (freq, psd_uv2_per_hz) or (None, None) if the trace is too short.
+
+    This is the load-bearing detail for the timeline's psd_modeled tier: k=269 maps a *Welch-256
+    band integral* of the 250 Hz TD to device LSB. The device's own montage/event `FFTBinData` is a
+    DIFFERENT normalization and must NOT be fed to psd_band_to_lsb with k=269 — convert from TD via
+    this helper instead. No mains notch (implanted device; matches _band_power_notched default).
+    """
+    try:
+        from scipy.signal import welch as _welch
+    except Exception:
+        return None, None
+    v = np.asarray(samples_uv, dtype=float)
+    v = v[np.isfinite(v)]
+    fs = float(fs)
+    if v.size < 256 or fs <= 0:
+        return None, None
+    f, p = _welch(v, fs=fs, window="hann", nperseg=min(256, v.size),
+                  detrend="constant", scaling="density")
+    return f, p
+
+
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
                         band_half_hz=2.5, stim_off_mA=0.1, pair_tol_s=5.0, min_secs=5.0):
     """Measure the empirical µV²-per-LSB conversion from CONCURRENT on-demand streaming TD + device

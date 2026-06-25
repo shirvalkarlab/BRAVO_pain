@@ -43,6 +43,18 @@ _FFT_BINS = np.array([3.9, 4.9, 5.9, 6.8, 7.8, 8.8, 9.8, 10.7, 11.7, 12.7, 13.7,
                       15.6, 16.6, 17.6, 18.6, 19.5, 20.5, 21.5, 22.5, 23.4, 24.4, 25.4, 26.4])
 
 
+def _canon_channel(name):
+    """Normalize a Medtronic channel name to the canonical bipolar form (ring/sweep -> short).
+
+    `ZERO_AND_THREE_LEFT_RING` -> `ZERO_THREE_LEFT`; already-short names are unchanged (idempotent).
+    Mirrors bravo_service._canon_channel; kept module-local to avoid a routines->service import.
+    """
+    u = str(name).upper().replace("_AND_", "_")
+    if u.endswith("_RING"):
+        u = u[:-len("_RING")]
+    return u
+
+
 def snap_freq(hz):
     """Snap a center frequency to the nearest Percept FFT bin (None-safe)."""
     if hz is None:
@@ -389,32 +401,49 @@ def inspector_samples(channel, *, td_recs=None, psd_recs=None, chronic_recs=None
 _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power columns
 
 
-def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None):
+def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
+               montage_td_recordings=None, sensing_hz_by_channel=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
 
     Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
     ACTUAL per-sample LFP-power values vs absolute time, so the frontend draws the true trace — not
-    a placeholder. Two products feed each channel and are pooled in RAW device units (no scaling,
-    same convention as the decoder):
+    a placeholder. Three sources feed each channel:
 
-      * Power-Domain (~2 Hz streaming): each '<contact> Power' column -> that contact's series, with
-        the contact's sensing CENTER FREQUENCY (from Descriptor.Therapy) tagged on every sample.
-      * Chronic Timeline (~10-min around-the-clock): Data[:,0] is the per-hemisphere LFP power,
-        Time[:] is absolute epoch; the sensing center frequency comes from the recording's
-        Therapy snapshot (per hemisphere).
+      * NATIVE device LSB (preferred — the band was actually sensed):
+        - Power-Domain (~2 Hz streaming): each '<contact> Power' column -> that contact's series, with
+          the contact's sensing CENTER FREQUENCY (from Descriptor.Therapy) tagged on every sample.
+        - Chronic Timeline (~10-min around-the-clock): Data[:,0] is the per-hemisphere LFP power,
+          Time[:] is absolute epoch; the sensing center frequency comes from the recording's
+          Therapy snapshot (per hemisphere).
+        Both pooled in RAW device units (no scaling, same convention as the decoder).
+      * MODELED LSB (fallback — the band has a spectrum but NO native device LSB):
+        - Montage survey TD (`montage_td_recordings`, stim-off, all contacts): the timeline's
+          ``psd_modeled`` tier. Welch-256 the 250 Hz TD (analytics.welch256_density) and route the
+          band integral through analytics.psd_band_to_lsb (k=269, the Step-0-chosen conversion) so
+          survey contacts that the device never produced an LSB scalar for still get a calibrated LSB
+          point on the trace. NEVER preferred over native LSB; tagged source="psd_modeled" so the
+          frontend draws it with a distinct hollow marker and never confuses it with a sensed value.
+
+    `sensing_hz_by_channel` maps a raw channel -> its configured sensing center (Hz); the psd_modeled
+    tier converts at that center when known, else the montage record's own peak frequency.
 
     Returns dict keyed by RAW channel name:
-        { channel: { "t":[epoch_s], "y":[lsb], "center_hz":[hz|None], "source":["streaming"|"chronic"] } }
+        { channel: { "t":[epoch_s], "y":[lsb], "center_hz":[hz|None],
+                     "source":["streaming"|"chronic"|"psd_modeled"],
+                     "modeled":[bool], "method":[str|None] } }
     Sentinel/negative/non-finite samples are dropped. Samples are time-sorted; each carries its own
     center_hz so the frontend can color the trace by frequency AND honestly show when sensing moved.
     """
     region_map = region_map or {}
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
     out = {}
 
-    def _push(ch, t, y, hz, src):
-        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": []})
+    def _push(ch, t, y, hz, src, *, modeled=False, method=None):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": [],
+                                "modeled": [], "method": []})
         d["t"].append(float(t)); d["y"].append(float(y))
         d["center_hz"].append(snap_freq(hz)); d["source"].append(src)
+        d["modeled"].append(bool(modeled)); d["method"].append(method)
 
     # --- Power-Domain (~2 Hz): per-contact Power columns ---
     pd_center = analytics.power_center_freqs(powerdomain_recordings)
@@ -514,13 +543,67 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None):
         for i in np.where(~bad)[0]:
             _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
+    # --- MODELED tier (fallback): montage survey TD -> Welch-256 -> psd_band_to_lsb (k=269) ---
+    # Survey contacts carry a full-spectrum TD but NO native device LSB scalar, so without this they
+    # would have no LSB point at all. We convert via the Step-0-chosen route so the timeline can show
+    # a calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
+    # have NO native LSB sample get a modeled point per record (native is always preferred): if a
+    # contact has any streaming/chronic LSB we still ADD the modeled survey point (different time), but
+    # tag it modeled so the frontend renders it hollow — it never overrides a sensed value at its time.
+    for r in (montage_td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        # montage TD is (n_samples, n_channels); guard either orientation
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        # device-blessed per-contact peak frequency, when the survey attached its PSD descriptor.
+        # `Descriptor.MedtronicPSD` is positionally aligned to ChannelNames (one entry per stream);
+        # each entry carries PeakFrequencyInHertz. Falls back to a record-level peak, then None.
+        desc = r.get("Descriptor") if isinstance(r.get("Descriptor"), dict) else {}
+        med_psd = desc.get("MedtronicPSD") if isinstance(desc.get("MedtronicPSD"), list) else []
+        rec_peak = snap_freq(r.get("PeakFrequencyInHertz"))
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue
+            col = data[:, ci]
+            col = col[np.isfinite(col)]
+            if col.size < 256:
+                continue
+            # land the modeled sample on the SAME lane key as native LSB: canonicalize the ring/sweep
+            # name (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT). _canon_channel-equivalent.
+            key = _canon_channel(nm)
+            # center: configured sensing band for this contact (preferred, so timeline & deployment
+            # agree on WHICH band), else this contact's device peak, else the record peak.
+            contact_peak = None
+            if ci < len(med_psd) and isinstance(med_psd[ci], dict):
+                contact_peak = snap_freq(med_psd[ci].get("PeakFrequencyInHertz"))
+            center = (sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(nm)
+                      or sensing_hz_by_channel.get(str(nm)) or contact_peak or rec_peak)
+            if center is None or not np.isfinite(center) or float(center) <= 0:
+                continue
+            f, psd = analytics.welch256_density(col, fs)
+            if f is None:
+                continue
+            conv = analytics.psd_band_to_lsb(psd, f, float(center))
+            lsb = conv.get("lsb")
+            if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+                continue
+            _push(key, t0, lsb, center, "psd_modeled",
+                  modeled=True, method=conv.get("method"))
+
     # time-sort each channel's pooled samples
     for ch, d in out.items():
         order = np.argsort(d["t"])
-        d["t"] = [d["t"][i] for i in order]
-        d["y"] = [d["y"][i] for i in order]
-        d["center_hz"] = [d["center_hz"][i] for i in order]
-        d["source"] = [d["source"][i] for i in order]
+        for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
+            d[k_] = [d[k_][i] for i in order]
     return out
 
 
@@ -540,10 +623,17 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                     sample count, and the session's sensing center frequency (for the categorical
                     color). ~one block per recording instead of hundreds of points.
 
+    A third, MODELED layer carries the psd_modeled tier (survey-TD -> Welch256 -> k=269) as discrete
+    points the frontend draws with a DISTINCT HOLLOW marker — never as a native session block, so a
+    calibrated estimate is never read as a sensed LSB. Modeled points are excluded from the streaming
+    session blocks and from the chronic line.
+
     Returns {channel: {"chronic": {"t":[],"y":[]} | None,
                        "sessions": [{"t0","t1","med","lo","hi","center_hz","n"}],
+                       "modeled": [{"t","y","center_hz","method"}],
                        "y_lo","y_hi"}}  where y_lo/y_hi are the robust (2-98 pct) magnitude window
-    across BOTH layers, so the frontend scales the lane once and consistently.
+    across the NATIVE layers (chronic+streaming) only, so a modeled outlier never rescales the
+    sensed trace; the modeled overlay rides the same axis.
     """
     out = {}
     for ch, d in (lsb or {}).items():
@@ -551,12 +641,24 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
         y = np.asarray(d.get("y", []), dtype=float)
         cen = list(d.get("center_hz", []))
         src = list(d.get("source", []))
+        meth = list(d.get("method", [None] * int(t.size)))
         if t.size == 0:
             continue
-        # robust magnitude window across all real samples in this lane
-        finite = y[np.isfinite(y)]
+        modeled_mask = np.array([s == "psd_modeled" for s in src], dtype=bool)
+        # robust magnitude window across NATIVE (sensed) samples only — the modeled overlay rides this
+        # scale but does not set it (a modeled outlier shouldn't rescale the sensed trace).
+        native_y = y[(~modeled_mask) & np.isfinite(y)] if y.size else y
+        finite = native_y if native_y.size else y[np.isfinite(y)]
         y_lo = float(np.percentile(finite, 2)) if finite.size else 0.0
         y_hi = float(np.percentile(finite, 98)) if finite.size else 1.0
+
+        # modeled tier: discrete hollow-marker points, kept OUT of the native session/chronic layers
+        modeled = []
+        for i in np.where(modeled_mask)[0]:
+            if np.isfinite(y[i]):
+                modeled.append({"t": float(t[i]), "y": float(y[i]),
+                                "center_hz": snap_freq(cen[i]) if cen[i] is not None else None,
+                                "method": meth[i] if i < len(meth) else None})
 
         chronic_mask = np.array([s == "chronic" for s in src], dtype=bool)
         # --- chronic: decimated real line, carrying its per-sample sensing center frequency ---
@@ -576,9 +678,9 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                        "y": [float(cy[k]) for k in keep],
                        "center_hz": [None if np.isnan(ccen[k]) else float(ccen[k]) for k in keep]}
 
-        # --- streaming: one block per session (split on time gaps) ---
+        # --- streaming: one block per session (split on time gaps); NATIVE only (exclude modeled) ---
         sessions = []
-        s_idx = np.where(~chronic_mask)[0]
+        s_idx = np.where(~chronic_mask & ~modeled_mask)[0]
         if s_idx.size:
             st, sy = t[s_idx], y[s_idx]
             scen = [snap_freq(cen[i]) for i in s_idx]
@@ -602,7 +704,8 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                             "hi": float(np.percentile(seg_y, 90)),
                             "center_hz": scen[start], "n": int(seg_y.size)})
                     start = k
-        out[ch] = {"chronic": chronic, "sessions": sessions, "y_lo": y_lo, "y_hi": y_hi}
+        out[ch] = {"chronic": chronic, "sessions": sessions, "modeled": modeled,
+                   "y_lo": y_lo, "y_hi": y_hi}
     return out
 
 

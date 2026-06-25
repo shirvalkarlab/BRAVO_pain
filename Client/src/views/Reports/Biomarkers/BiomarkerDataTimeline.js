@@ -255,7 +255,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       const ov = av.lsb_overview || {};
       const keys = Object.keys(ov).filter((k) => normalizeChannel(k) === ch);
       if (!keys.length) return null;
-      const chronicT = [], chronicY = [], chronicHz = [], sessions = [];
+      const chronicT = [], chronicY = [], chronicHz = [], sessions = [], modeled = [];
       let yLo = Infinity, yHi = -Infinity;
       keys.forEach((k) => {
         const d = ov[k] || {};
@@ -267,10 +267,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           });
         }
         (d.sessions || []).forEach((s) => sessions.push(s));
+        // MODELED tier (psd_modeled): calibrated LSB from survey/streaming TD via Welch256 x269.
+        // Kept separate so it renders as a DISTINCT HOLLOW marker, never a sensed session block.
+        (d.modeled || []).forEach((m) => modeled.push(m));
         if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
         if (Number.isFinite(d.y_hi)) yHi = Math.max(yHi, d.y_hi);
       });
-      if (!chronicT.length && !sessions.length) return null;
+      if (!chronicT.length && !sessions.length && !modeled.length) return null;
       // time-sort chronic samples (merged keys may interleave); carry center_hz with the reorder
       // so the chronic line can be colored by its (time-varying) sensing center frequency.
       let chronic = null;
@@ -280,7 +283,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
                     center_hz: ord.map((i) => chronicHz[i]) };
       }
       sessions.sort((a, b) => a.t0 - b.t0);
-      return { chronic, sessions,
+      modeled.sort((a, b) => a.t - b.t);
+      return { chronic, sessions, modeled,
                y_lo: Number.isFinite(yLo) ? yLo : 0, y_hi: Number.isFinite(yHi) ? yHi : 1 };
     };
     // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
@@ -557,6 +561,33 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               hovertemplate: `${prettyContact(labelFor(ch))} · ${key === "na" ? "?" : fmtHz(c)} Hz<br>`
                 + `median %{customdata[0]} LSB (10-90: %{customdata[1]}–%{customdata[2]})<br>`
                 + `n=%{customdata[4]} samples<extra></extra>`,
+              showlegend: false });
+          });
+        }
+        // MODELED tier (psd_modeled): calibrated LSB from montage-survey TD (Welch256 × 269), drawn
+        // as DISTINCT HOLLOW DIAMONDS so it is never read as a sensed value. Colored by sensing
+        // center freq (same FREQ_PALETTE), dimmed in binarization mode like the other band-power
+        // layers. These ride the lane's y-scale but did NOT set it (native-only window), so a modeled
+        // outlier can clip at the lane edge rather than rescale the sensed trace.
+        if (ov.modeled && ov.modeled.length) {
+          const byFreqM = {};
+          ov.modeled.forEach((m) => {
+            const c = snapFreq(m.center_hz);
+            if (c != null) present.add(c);
+            (byFreqM[c == null ? "na" : String(c)] = byFreqM[c == null ? "na" : String(c)] || []).push(m);
+          });
+          Object.keys(byFreqM).forEach((key) => {
+            const ms = byFreqM[key];
+            const c = key === "na" ? null : Number(key);
+            const fc = binMode ? DIM_GREY_FAINT : freqColor(c);
+            const mxRaw = ms.map((m) => m.y);
+            reg.traces.push({ idx: traces.length, raw: mxRaw });
+            traces.push({ type: "scattergl", mode: "markers",
+              x: ms.map((m) => D(m.t)), y: ms.map((m) => sc(m.y)),
+              marker: { symbol: "diamond-open", size: 7, color: fc, line: { color: fc, width: 1.4 } },
+              customdata: ms.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c)]),
+              hovertemplate: `${prettyContact(labelFor(ch))} · modeled (survey PSD ×269) · %{customdata[1]} Hz<br>`
+                + `≈%{customdata[0]} LSB (modeled, not sensed)<br>%{x}<extra></extra>`,
               showlegend: false });
           });
         }
@@ -837,6 +868,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 15, color: LSB_GREEN },
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
+        name: "modeled LSB  (hollow; survey PSD × 269 — calibrated, NOT sensed)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (zoom → waveform)" });

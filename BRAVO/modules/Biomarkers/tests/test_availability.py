@@ -162,6 +162,78 @@ def test_lsb_series_chronic_remaps_to_sensing_contact_and_pools():
     assert s["y"] == [500.0, 520.0, 810.0, 830.0]
 
 
+def test_lsb_series_psd_modeled_tier_from_montage_td():
+    """Montage-survey TD with NO native LSB still gets a calibrated, FLAGGED modeled LSB point: the
+    tier Welch-256s the TD and routes the band integral through analytics.psd_band_to_lsb (k=269).
+    The emitted lsb must EQUAL psd_band_to_lsb on the same Welch PSD (single conversion path), and the
+    sample must be tagged source='psd_modeled' / modeled=True so the frontend draws it distinctly."""
+    from modules.Biomarkers.routines import analytics
+    rng = np.random.default_rng(0)
+    fs, center = 250.0, 20.0
+    n = 250 * 30  # 30 s, like a montage sweep
+    tsec = np.arange(n) / fs
+    # a 20 Hz oscillation in µV + broadband noise -> real power in the 17.5-22.5 Hz band
+    sig = 8.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage = [{
+        "ChannelNames": ["ZERO_THREE_LEFT"],
+        "Data": sig.reshape(-1, 1), "SamplingRate": fs, "StartTime": T0,
+        "PeakFrequencyInHertz": center}]
+    out = av.lsb_series([], [], montage_td_recordings=montage,
+                        sensing_hz_by_channel={"ZERO_THREE_LEFT": center})
+    assert "ZERO_THREE_LEFT" in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["psd_modeled"] and s["modeled"] == [True]
+    assert s["method"][0].startswith("welch256_band_integral_x_k=269")
+    # the lane's modeled LSB equals the shared helper applied to the same Welch-256 PSD
+    f, psd = analytics.welch256_density(sig, fs)
+    expect = analytics.psd_band_to_lsb(psd, f, center)["lsb"]
+    assert abs(s["y"][0] - expect) < 1e-6, (s["y"][0], expect)
+    assert s["y"][0] > 0 and s["t"][0] == float(T0)
+
+
+def test_lsb_series_psd_modeled_canon_name_and_device_peak():
+    """Montage-survey records use ring/sweep names (ZERO_AND_THREE_LEFT_RING) and carry the device's
+    per-contact peak in Descriptor.MedtronicPSD. The tier must (a) canonicalize the name so the
+    modeled point lands on the SAME lane as native LSB, and (b) use the device peak as the center when
+    no configured sensing band is supplied for that contact."""
+    rng = np.random.default_rng(1)
+    fs, center = 250.0, 12.7
+    n = 250 * 25
+    tsec = np.arange(n) / fs
+    sig = 6.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage = [{
+        "ChannelNames": ["ZERO_AND_THREE_LEFT_RING"],
+        "Data": sig.reshape(-1, 1), "SamplingRate": fs, "StartTime": T0,
+        "Descriptor": {"MedtronicPSD": [{"PeakFrequencyInHertz": center}]}}]
+    out = av.lsb_series([], [], montage_td_recordings=montage)   # no sensing_hz -> uses device peak
+    assert "ZERO_THREE_LEFT" in out and "ZERO_AND_THREE_LEFT_RING" not in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["psd_modeled"] and s["center_hz"][0] == av.snap_freq(center)
+
+
+def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
+    """Modeled points must NOT fold into native streaming session blocks or the chronic line — they
+    ride a separate 'modeled' layer (hollow markers), and a modeled outlier must not rescale the
+    native y-window."""
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0, T0 + 4000],
+        "y": [500.0, 520.0, 510.0, 9000.0],                  # last is a big modeled outlier
+        "center_hz": [12.7, 12.7, 12.7, 19.5],               # 19.5 is an exact Percept FFT bin
+        "source": ["streaming", "streaming", "streaming", "psd_modeled"],
+        "modeled": [False, False, False, True],
+        "method": [None, None, None, "welch256_band_integral_x_k=269"]}}
+    ov = av.lsb_overview(lsb)
+    d = ov["ZERO_THREE_LEFT"]
+    # streaming session block holds ONLY the 3 native samples; the modeled point is excluded
+    assert len(d["sessions"]) == 1 and d["sessions"][0]["n"] == 3
+    # modeled layer carries the one hollow point, with its (FFT-bin-snapped) center and method tag
+    assert len(d["modeled"]) == 1
+    assert d["modeled"][0]["y"] == 9000.0 and d["modeled"][0]["center_hz"] == 19.5
+    assert d["modeled"][0]["method"] == "welch256_band_integral_x_k=269"
+    # the native y-window is set by sensed samples only — the 9000 outlier does NOT widen it
+    assert d["y_hi"] < 1000.0
+
+
 def test_lsb_overview_compacts_to_chronic_line_and_session_blocks():
     """The overview collapses per-sample LSB into a chronic LINE + per-session BLOCKS, splitting
     sessions on a time gap AND on a sensing-frequency change."""

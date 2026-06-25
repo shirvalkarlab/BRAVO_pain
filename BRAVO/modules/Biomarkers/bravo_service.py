@@ -2004,7 +2004,22 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # REAL inline LSB: the actual per-sample band-power series (streaming ~2 Hz + chronic
         # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
         # draws the true trace (not a placeholder). Keyed by raw channel; frontend normalizes.
-        lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map)
+        #
+        # MODELED fallback (psd_modeled tier, Step-0 verdict): the MONTAGE SURVEY is the device-blessed
+        # modeled source — it sweeps ALL bipolar contacts STIM-OFF, carries raw 250 Hz TD (in
+        # Recording["Data"]) AND the device's own per-contact peak frequency (Descriptor.MedtronicPSD),
+        # but produces NO native device LSB scalar. So those contacts have no LSB point without this:
+        # convert via Welch-256 -> psd_band_to_lsb (k=269) at each contact's configured sensing center
+        # (falling back to the device peak). `psd_list` is the montage/survey products
+        # (MedtronicBrainSenseSurvey + Baseline/Stimulation montages), all carrying TD. Tagged
+        # source="psd_modeled" so the frontend draws it with a distinct hollow marker; NEVER preferred
+        # over a sensed value. Deployment threshold is unaffected (stays native/frozen) — exploratory
+        # timeline display only. (Montage TD is already ingested under MedtronicBrainSenseSurvey; this
+        # is what surfaces it on the timeline.)
+        sensing_hz = availability.analytics.power_center_freqs(powerdomain_list)
+        lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map,
+                                      montage_td_recordings=psd_list,
+                                      sensing_hz_by_channel=sensing_hz)
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
