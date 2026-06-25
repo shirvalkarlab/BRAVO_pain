@@ -9,8 +9,17 @@ MODEL to *estimate* the LSB threshold from the physical uV^2 cut-point, and flag
 Why a frozen asset and not an on-request refit:
     The model embeds reviewed human judgment that must not silently recompute per request --
     Iglewicz-Hoaglin outlier omission per band, a hard n>=6-per-band reliability floor, the
-    ZERO_THREE_RIGHT 8.8 Hz temporal gain-regime restriction (>= 2026-03-01), and the 23.4 Hz
+    ZERO_THREE_RIGHT 8.8 Hz current-config restriction (>= 2026-03-01), and the 23.4 Hz
     exclusion. The reviewed fit is frozen to data/psd_lsb_models/<PARTICIPANT>.json and loaded here.
+
+    The 8.8 Hz cut deserves a note because it is easy to mistake for the sensing-config
+    change date (2025-12-05) and "correct" it there -- which would be wrong. Chronic 0-3R
+    sensing was reassigned off the 8.8 Hz band on 2025-12-05, but the 8.8 Hz gain then falls
+    through a multi-week settling transient (the chronic config bounced 28/24.4/26.4 Hz before
+    settling), with a significant downward within-regime trend over Dec-Feb (-0.078 log10/month,
+    p=0.039). Stationarity is only reached from ~2026-02-15 (trend p 0.72 -> 0.91 by 03-01). The
+    >= 2026-03-01 cut isolates the stable current-config regime; moving it back to the config-
+    change date would inject the higher-gain declining transient and bias the deployable threshold.
 
 Model form (per channel):  log10(LSB) = a_f + b * log10(uV2),  b = per-channel common slope,
 a_f = per-frequency intercept (= log10 of the device LSB at 1 uV^2 for that band). The frequency

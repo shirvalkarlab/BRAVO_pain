@@ -76,6 +76,27 @@ def test_plot_payload_shape():
             assert {"center_hz", "lsb_at_1uv2", "intercept_a", "n"} <= set(bd)
 
 
+def test_8p8hz_cut_is_current_config_not_changepoint_date():
+    """Guard the deliberate 8.8 Hz restriction so a future edit doesn't 'fix' it.
+
+    The chronic 0-3R sensing config was reassigned off 8.8 Hz on 2025-12-05, but the
+    8.8 Hz gain falls through a settling transient and only reaches stationarity from
+    ~2026-02-15. The model cut is therefore >= 2026-03-01 (stable current-config regime),
+    NOT the 2025-12-05 config-change date. If anyone moves the cut back to the change
+    date, this test should make them justify it.
+    """
+    m = plm.load_model(PART)
+    note = (m["pipeline"]["special"] or {}).get("ZERO_THREE_RIGHT_8.8Hz", "")
+    assert "2026-03-01" in note                              # the cut that is actually applied
+    assert "2025-12-05" in note                              # change date is named and explained
+    # the note must explain WHY the change date is not the cut (settling/transient)
+    assert any(w in note.lower() for w in ("transient", "settl", "stationar"))
+    # the frozen 8.8 Hz fit reflects the stable regime: gain ~1.77 log10 intercept (LSB@1uV2 ~ 59)
+    z3r = m["channels"]["ZERO_THREE_RIGHT"]
+    b88 = next(bd for bd in z3r["bands"] if abs(bd["center_hz"] - 8.8) < 1e-6)
+    assert 1.70 < b88["intercept_a"] < 1.85                  # stable-regime intercept, not the ~2.0 transient
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

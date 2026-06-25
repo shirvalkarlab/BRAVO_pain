@@ -9,7 +9,7 @@
     "outlier_rule": "Iglewicz-Hoaglin robust z |0.6745*(r-med)/MAD|>3.5 on log10(LSB/uV2) per band (MAD>0 guard)",
     "min_n_per_band": 6,
     "special": {
-      "ZERO_THREE_RIGHT_8.8Hz": "restricted to >=2026-03-01 (temporal gain regime shift, Spearman rho=-0.64)",
+      "ZERO_THREE_RIGHT_8.8Hz": "restricted to >=2026-03-01: chronic 0-3R sensing was reassigned off the 8.8 Hz band on 2025-12-05, then bounced across 28/24.4/26.4 Hz before settling. The 8.8 Hz gain falls through a settling transient over Dec-Feb (post-2025-12-05 within-regime trend -0.078 log10/month, p=0.039) and only reaches stationarity from ~2026-02-15 (p=0.72 -> 0.91 at 03-01). The 03-01 cut isolates the stable current-config regime (n=42, mean 1.69 log10(LSB/uV2), flat trend p=0.91); using the 2025-12-05 config-change date instead would inject the higher-gain declining transient and bias the deployable 8.8 Hz threshold.",
       "ZERO_THREE_RIGHT_23.4Hz": "excluded (noisy, inconsistent with 24.4/26.4 Hz neighbors)"
     }
   },
