@@ -3307,6 +3307,30 @@ def band_psd_lsb_conversion(request_data):
     return fit
 
 
+def psd_lsb_conversion_model(request_data):
+    """Return the FROZEN per-participant PSD->LSB conversion model + plot payload for the deployment
+    panel. Unlike band_psd_lsb_conversion (which refits one band live from time-matched streams),
+    this serves the reviewed, frozen model: per-channel common slope, per-frequency gain anchor
+    (intercept = LSB at 1 uV^2), pooled fallback gain, and the cluster scatter for each fittable
+    channel so the panel can draw (a) gain-anchor-vs-frequency per channel and (b) LSB-vs-PSD per
+    channel colored by frequency.
+
+    Request: ParticipantId OR Participant (the participant CODE, e.g. RCS08).
+    Output: {available, participant, schema, pipeline, channels:[{channel, fittable, common_slope_b,
+             r2, channel_pooled_k, bands:[{center_hz, lsb_at_1uv2, intercept_a, intercept_ci, n}]}]}.
+    """
+    from modules.Biomarkers.routines import psd_lsb_model as _plm
+    participant = request_data.get("Participant") or request_data.get("ParticipantId")
+    if not participant:
+        return {"available": False, "reason": "Participant (code) required"}
+    # ParticipantId may be a uid; resolve to the participant code if so.
+    code = participant
+    P = models.Participant.find(uid=participant)
+    if P is not None:
+        code = getattr(P, "code", None) or getattr(P, "name", None) or participant
+    return _plm.model_plot_payload(code)
+
+
 def _sensing_hz_for_pd(pd_rec, contact):
     """Resolve a PowerDomain recording's sensing center frequency for a contact, from its
     Descriptor.Therapy snapshot (the TD streaming recording carries no Therapy)."""
@@ -3583,6 +3607,24 @@ def deployment_summary(request_data):
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
 
+    # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
+    # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
+    # have the physical uV^2 cut-point. Estimate the LSB threshold from the per-participant frozen
+    # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
+    # mistakes a modeled threshold for a measured one.
+    thr_estimate = None
+    if thr_lsb is None and cutpoint is not None:
+        from modules.Biomarkers.routines import psd_lsb_model as _plm
+        est = _plm.estimate_lsb(rd.get("Participant"), channel, center_hz, float(cutpoint))
+        if est.get("available"):
+            thr_estimate = {
+                "estimated_upper_lsb": round(float(est["lsb"]), 1),
+                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
+                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
+                "r2": est.get("r2"), "note": est.get("note"),
+                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
+            }
+
     # Power on the clustered effective n.
     power = {"available": False, "reason": "ROC unavailable"}
     if roc.get("available"):
@@ -3622,11 +3664,20 @@ def deployment_summary(request_data):
                        "pass" if adaptive_valid else "fail",
                        f"center {round(center_hz,1)} Hz (band {round(center_hz-half,1)}–{round(center_hz+half,1)} Hz)",
                        necessary=True))
+    # A MEASURED threshold passes. A MODELED estimate (device never sensed this band) is
+    # "indeterminate" -- usable for planning but NOT a measured prerequisite, so it can never count
+    # toward "ready to program" on its own (audit C8 fail-closed discipline). Neither -> fail.
+    if thr_lsb is not None:
+        _thr_state, _thr_detail = "pass", f"power ≥ {thr_lsb} LSB (measured on device Timeline)"
+    elif thr_estimate is not None:
+        _thr_state = "indeterminate"
+        _thr_detail = (f"power ≥ {thr_estimate['estimated_upper_lsb']} LSB ESTIMATED "
+                       f"({thr_estimate['tier']} tier) — device never sensed this band; "
+                       "modeled from µV² cut-point, confirm by sensing before programming")
+    else:
+        _thr_state, _thr_detail = "fail", f"device sensed this band {n_tl} times"
     gates.append(_gate("deployable_threshold", "Deployable LSB threshold available",
-                       "pass" if thr_lsb is not None else "fail",
-                       (f"power ≥ {thr_lsb} LSB" if thr_lsb is not None
-                        else f"device sensed this band {n_tl} times"),
-                       necessary=True))
+                       _thr_state, _thr_detail, necessary=True))
     gates.append(_gate("credible_ci", "Credible effect-size CI",
                        "pass" if credible else "fail",
                        f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"))
@@ -3668,6 +3719,13 @@ def deployment_summary(request_data):
                        "more independent pain ratings needed for 80% power.")
     caveats.append("Selection bias: this band was chosen from a sweep on the same data; the OR/AUC are "
                    "optimistic. Out-of-sample / prospective confirmation is the honest test.")
+    if thr_lsb is None and thr_estimate is not None:
+        caveats.append(
+            f"ESTIMATED threshold ({thr_estimate['tier']} tier): the device never sensed this "
+            f"(channel, band) long enough to read a threshold off its own LSB Timeline. The "
+            f"≥ {thr_estimate['estimated_upper_lsb']} LSB value is MODELED from the physical µV² "
+            f"cut-point via the frozen PSD→LSB conversion ({thr_estimate['note']}). Sense this band "
+            "on the device to confirm before committing it as an adaptive threshold.")
 
     def _ff(x):
         try:
@@ -3702,6 +3760,11 @@ def deployment_summary(request_data):
             "percentile": round(percentile, 1) if percentile is not None else None,
             "cutpoint_feature": _ff(cutpoint), "n_timeline_samples": n_tl,
             "method": "percentile-anchored on device Timeline LSB",
+            # When the device never sensed this band, an ESTIMATED threshold from the frozen
+            # PSD->LSB conversion model (flagged, with its fallback tier). Never overwrites a
+            # measured upper_lsb; present only when `available` is False.
+            "estimated": (thr_estimate is not None and thr_lsb is None),
+            "estimate": thr_estimate,
         },
         "evidence": {
             "auc": _ff(roc.get("auc")), "auc_lo": _ff(roc.get("auc_lo")), "auc_hi": _ff(roc.get("auc_hi")),

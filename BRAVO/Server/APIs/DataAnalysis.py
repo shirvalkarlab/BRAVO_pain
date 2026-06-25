@@ -848,6 +848,43 @@ class QueryPsdLsbConversion(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryPsdLsbConversionModel(RestViews.APIView):
+    """
+    API View that serves the FROZEN, reviewed per-participant PSD->device-LSB conversion model for
+    the deployment panel: per-channel common slope, per-frequency gain anchor (LSB at 1 uV^2),
+    pooled fallback gain, and the data each fittable channel was fit on. Unlike
+    /queryPsdLsbConversion (a live one-band refit), this is the deployable lookup the threshold
+    estimator falls back on when the device never sensed a band -- exposed here so the panel can
+    draw the gain-vs-frequency trend per channel and the LSB-vs-PSD scatter colored by frequency.
+
+    **URL:** ``/queryPsdLsbConversionModel``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid) or Participant (code, e.g. RCS08).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.psd_lsb_conversion_model(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "psd/lsb model error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryDeploymentRocByEra(RestViews.APIView):
     """
     API View that refits the deployment ROC + Youden cut-point WITHIN each stimulation era

@@ -85,6 +85,7 @@ urlpatterns = [
     path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
     path('queryLsbPower', DataAnalysis.QueryLsbPower.as_view()),
     path('queryPsdLsbConversion', DataAnalysis.QueryPsdLsbConversion.as_view()),
+    path('queryPsdLsbConversionModel', DataAnalysis.QueryPsdLsbConversionModel.as_view()),
     path('queryDeploymentRocByEra', DataAnalysis.QueryDeploymentRocByEra.as_view()),
     path('queryDeploymentSummary', DataAnalysis.QueryDeploymentSummary.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),

@@ -1,0 +1,2808 @@
+{
+  "schema": "psd_lsb_conversion/v1",
+  "participant": "RCS08",
+  "generated_utc": "2026-06-25T01:03:47.255347Z",
+  "pipeline": {
+    "matching": "nearest device-LSB sample per offline PSD epoch; each PSD used once per channel",
+    "window_min": 30,
+    "averaging": "fixed 10-min bins (floor(t/600s)) per (channel,freq); PSD & matched LSB averaged",
+    "outlier_rule": "Iglewicz-Hoaglin robust z |0.6745*(r-med)/MAD|>3.5 on log10(LSB/uV2) per band (MAD>0 guard)",
+    "min_n_per_band": 6,
+    "special": {
+      "ZERO_THREE_RIGHT_8.8Hz": "restricted to >=2026-03-01 (temporal gain regime shift, Spearman rho=-0.64)",
+      "ZERO_THREE_RIGHT_23.4Hz": "excluded (noisy, inconsistent with 24.4/26.4 Hz neighbors)"
+    }
+  },
+  "channels": {
+    "ZERO_THREE_RIGHT": {
+      "fittable": true,
+      "common_slope_b": 0.8545,
+      "r2": 0.841,
+      "bands": [
+        {
+          "center_hz": 8.8,
+          "n": 42,
+          "intercept_a": 1.7695,
+          "intercept_ci": [
+            1.7152,
+            1.8452
+          ],
+          "LSB_at_1uV2": 58.8
+        },
+        {
+          "center_hz": 9.8,
+          "n": 40,
+          "intercept_a": 2.5995,
+          "intercept_ci": [
+            2.4604,
+            2.6808
+          ],
+          "LSB_at_1uV2": 397.7
+        },
+        {
+          "center_hz": 10.7,
+          "n": 13,
+          "intercept_a": 2.5841,
+          "intercept_ci": [
+            2.5527,
+            2.7342
+          ],
+          "LSB_at_1uV2": 383.8
+        },
+        {
+          "center_hz": 11.7,
+          "n": 8,
+          "intercept_a": 2.5673,
+          "intercept_ci": [
+            2.5386,
+            2.6214
+          ],
+          "LSB_at_1uV2": 369.3
+        },
+        {
+          "center_hz": 24.4,
+          "n": 37,
+          "intercept_a": 1.9275,
+          "intercept_ci": [
+            1.914,
+            1.9403
+          ],
+          "LSB_at_1uV2": 84.6
+        },
+        {
+          "center_hz": 26.4,
+          "n": 202,
+          "intercept_a": 1.8544,
+          "intercept_ci": [
+            1.8356,
+            1.8675
+          ],
+          "LSB_at_1uV2": 71.5
+        }
+      ],
+      "channel_pooled_k": 81.35,
+      "n_clusters": 524,
+      "scatter": [
+        {
+          "psd_uv2": 2.13545,
+          "lsb": 54.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.23559,
+          "lsb": 54.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.33585,
+          "lsb": 90.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.95339,
+          "lsb": 103.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.48143,
+          "lsb": 119.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.1582,
+          "lsb": 105.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.77251,
+          "lsb": 1443.2,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.19154,
+          "lsb": 212.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.66345,
+          "lsb": 216.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.37362,
+          "lsb": 210.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.75519,
+          "lsb": 34.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.6051,
+          "lsb": 70.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.13501,
+          "lsb": 120.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.96259,
+          "lsb": 78.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.52903,
+          "lsb": 78.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14884,
+          "lsb": 80.25,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.22639,
+          "lsb": 190.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.19443,
+          "lsb": 74.33,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.24965,
+          "lsb": 97.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.11832,
+          "lsb": 62.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.27149,
+          "lsb": 94.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.16621,
+          "lsb": 108.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.63792,
+          "lsb": 108.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.19015,
+          "lsb": 108.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.88023,
+          "lsb": 117.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.49896,
+          "lsb": 80.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.71385,
+          "lsb": 59.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.18008,
+          "lsb": 99.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.46544,
+          "lsb": 170.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.47182,
+          "lsb": 40.33,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.12367,
+          "lsb": 405.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.2526,
+          "lsb": 56.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.131,
+          "lsb": 257.33,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.58206,
+          "lsb": 184.67,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.94868,
+          "lsb": 334.5,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.14715,
+          "lsb": 163.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.22934,
+          "lsb": 80.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.6932,
+          "lsb": 124.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.95567,
+          "lsb": 122.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.02985,
+          "lsb": 97.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.96538,
+          "lsb": 107.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.79459,
+          "lsb": 202.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.08271,
+          "lsb": 727.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.08271,
+          "lsb": 901.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.82629,
+          "lsb": 711.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.64855,
+          "lsb": 507.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.78091,
+          "lsb": 528.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.05987,
+          "lsb": 517.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.63048,
+          "lsb": 710.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.17097,
+          "lsb": 356.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.60785,
+          "lsb": 356.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.01352,
+          "lsb": 449.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 9.62193,
+          "lsb": 449.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.3348,
+          "lsb": 1320.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.01483,
+          "lsb": 1320.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.88165,
+          "lsb": 488.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.20373,
+          "lsb": 422.2,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.89754,
+          "lsb": 418.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.31835,
+          "lsb": 5003.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 16.95133,
+          "lsb": 8961.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 16.95133,
+          "lsb": 8961.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.55343,
+          "lsb": 2816.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 12.13421,
+          "lsb": 6116.75,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.38904,
+          "lsb": 765.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.60822,
+          "lsb": 765.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.36164,
+          "lsb": 9978.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.88053,
+          "lsb": 3213.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.53773,
+          "lsb": 1065.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.77178,
+          "lsb": 1463.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.48218,
+          "lsb": 3651.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.81152,
+          "lsb": 1516.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.4479,
+          "lsb": 1516.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.54432,
+          "lsb": 1516.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.47123,
+          "lsb": 887.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.99013,
+          "lsb": 1453.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 11.8099,
+          "lsb": 4020.5,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 7.21701,
+          "lsb": 2277.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 7.21701,
+          "lsb": 2162.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.38494,
+          "lsb": 2323.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.77425,
+          "lsb": 2302.33,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.55287,
+          "lsb": 1762.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.55287,
+          "lsb": 1762.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69759,
+          "lsb": 507.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.77827,
+          "lsb": 717.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.23178,
+          "lsb": 648.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.38484,
+          "lsb": 443.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.04515,
+          "lsb": 688.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.34125,
+          "lsb": 727.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.19317,
+          "lsb": 727.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.93475,
+          "lsb": 787.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.06297,
+          "lsb": 1146.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.42836,
+          "lsb": 762.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.98338,
+          "lsb": 689.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.17528,
+          "lsb": 592.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.70624,
+          "lsb": 1017.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.83547,
+          "lsb": 431.0,
+          "center_hz": 11.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 2.0602,
+          "lsb": 381.0,
+          "center_hz": 11.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.77915,
+          "lsb": 812.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.91722,
+          "lsb": 321.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.87499,
+          "lsb": 321.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.38233,
+          "lsb": 519.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.49015,
+          "lsb": 519.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.17503,
+          "lsb": 424.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.83435,
+          "lsb": 363.0,
+          "center_hz": 11.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 2.83435,
+          "lsb": 363.0,
+          "center_hz": 11.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.05899,
+          "lsb": 363.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.87305,
+          "lsb": 715.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.28802,
+          "lsb": 54.0,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.30154,
+          "lsb": 54.5,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.23236,
+          "lsb": 54.0,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.27075,
+          "lsb": 54.5,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.25046,
+          "lsb": 54.0,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.21263,
+          "lsb": 55.0,
+          "center_hz": 24.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.47533,
+          "lsb": 97.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.51177,
+          "lsb": 97.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.43889,
+          "lsb": 97.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63944,
+          "lsb": 118.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53022,
+          "lsb": 118.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 118.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.85826,
+          "lsb": 157.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.80383,
+          "lsb": 157.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 138.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 138.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.80355,
+          "lsb": 138.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.91287,
+          "lsb": 138.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.02246,
+          "lsb": 146.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.02246,
+          "lsb": 146.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.74904,
+          "lsb": 140.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.85863,
+          "lsb": 140.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.83123,
+          "lsb": 140.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.77615,
+          "lsb": 208.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.77615,
+          "lsb": 208.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63972,
+          "lsb": 112.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 112.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 121.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 132.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53022,
+          "lsb": 132.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63944,
+          "lsb": 132.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63944,
+          "lsb": 132.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.44849,
+          "lsb": 122.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.44849,
+          "lsb": 122.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.64,
+          "lsb": 133.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.64,
+          "lsb": 133.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 129.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 129.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63963,
+          "lsb": 126.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.61232,
+          "lsb": 126.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 126.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 110.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.80383,
+          "lsb": 110.0,
+          "center_hz": 24.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03891,
+          "lsb": 62.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03891,
+          "lsb": 62.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 70.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 70.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 72.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 66.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 70.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 70.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 70.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28438,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28438,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28438,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.06575,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03835,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.06575,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 152.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 152.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 152.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 152.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 82.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.12949,
+          "lsb": 82.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.09315,
+          "lsb": 71.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.09315,
+          "lsb": 61.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.11123,
+          "lsb": 73.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03891,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 62.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 62.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 62.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14794,
+          "lsb": 58.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14794,
+          "lsb": 58.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14794,
+          "lsb": 58.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14794,
+          "lsb": 58.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.25698,
+          "lsb": 61.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.11123,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14766,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.25698,
+          "lsb": 59.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.88575,
+          "lsb": 85.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.96766,
+          "lsb": 85.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.30634,
+          "lsb": 66.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 75.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 75.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 75.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 72.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 72.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 72.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.09343,
+          "lsb": 65.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03891,
+          "lsb": 68.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.25698,
+          "lsb": 68.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.03891,
+          "lsb": 68.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.12055,
+          "lsb": 69.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.12055,
+          "lsb": 68.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.11141,
+          "lsb": 65.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.14794,
+          "lsb": 65.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.90192,
+          "lsb": 55.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.90192,
+          "lsb": 55.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.98411,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.09343,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.12986,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.05699,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.12083,
+          "lsb": 54.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 54.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.25698,
+          "lsb": 54.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.20274,
+          "lsb": 54.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 60.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 72.5,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 85.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 85.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 85.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.43434,
+          "lsb": 89.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.72164,
+          "lsb": 126.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.73077,
+          "lsb": 126.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 126.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.54886,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47617,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63972,
+          "lsb": 97.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63972,
+          "lsb": 97.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.25698,
+          "lsb": 91.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28438,
+          "lsb": 91.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.29351,
+          "lsb": 91.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.50301,
+          "lsb": 111.5,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.50301,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69461,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.64,
+          "lsb": 113.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.6126,
+          "lsb": 113.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.64,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.58576,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53069,
+          "lsb": 105.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53069,
+          "lsb": 105.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47589,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.45772,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.49406,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69452,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69452,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.39369,
+          "lsb": 82.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.39369,
+          "lsb": 82.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.50329,
+          "lsb": 94.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.50329,
+          "lsb": 94.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 94.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.77643,
+          "lsb": 114.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.77643,
+          "lsb": 114.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.43945,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47589,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47589,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.66712,
+          "lsb": 106.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.66712,
+          "lsb": 106.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47589,
+          "lsb": 97.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47589,
+          "lsb": 97.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 264.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 264.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 264.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.47617,
+          "lsb": 264.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.47561,
+          "lsb": 102.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.54867,
+          "lsb": 102.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 102.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 80.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 80.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 80.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.85807,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.78538,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.74904,
+          "lsb": 118.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.72164,
+          "lsb": 125.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.72164,
+          "lsb": 125.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.72164,
+          "lsb": 125.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.55753,
+          "lsb": 114.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.55753,
+          "lsb": 114.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53041,
+          "lsb": 100.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.61232,
+          "lsb": 100.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.61232,
+          "lsb": 130.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 130.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63944,
+          "lsb": 130.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.30701,
+          "lsb": 74.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.53041,
+          "lsb": 116.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.61232,
+          "lsb": 131.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 131.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.49425,
+          "lsb": 222.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 119.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.6126,
+          "lsb": 119.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69424,
+          "lsb": 111.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.50301,
+          "lsb": 111.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.36657,
+          "lsb": 101.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.36657,
+          "lsb": 101.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.36657,
+          "lsb": 101.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 155.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 115.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 134.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.53041,
+          "lsb": 132.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.85807,
+          "lsb": 108.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63963,
+          "lsb": 103.33,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.74885,
+          "lsb": 99.33,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 127.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 127.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 127.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.52985,
+          "lsb": 115.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 115.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 115.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5578,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.54867,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.56694,
+          "lsb": 109.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.58502,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.4758,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47617,
+          "lsb": 128.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47617,
+          "lsb": 128.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.47617,
+          "lsb": 128.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.61232,
+          "lsb": 107.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.31178,
+          "lsb": 167.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42137,
+          "lsb": 98.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42137,
+          "lsb": 98.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69452,
+          "lsb": 98.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.02246,
+          "lsb": 98.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.36657,
+          "lsb": 98.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42109,
+          "lsb": 93.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.58492,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.58464,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 112.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42137,
+          "lsb": 88.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42137,
+          "lsb": 88.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.44821,
+          "lsb": 90.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.42081,
+          "lsb": 90.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.44821,
+          "lsb": 90.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.52985,
+          "lsb": 117.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.52985,
+          "lsb": 117.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.37685,
+          "lsb": 147.0,
+          "center_hz": 26.4,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.72164,
+          "lsb": 136.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.74904,
+          "lsb": 134.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.1315,
+          "lsb": 134.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.63944,
+          "lsb": 131.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.66712,
+          "lsb": 124.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.5852,
+          "lsb": 140.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.85835,
+          "lsb": 145.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.72192,
+          "lsb": 150.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.6948,
+          "lsb": 183.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.18629,
+          "lsb": 172.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.96711,
+          "lsb": 181.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.02246,
+          "lsb": 170.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.35013,
+          "lsb": 189.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.93999,
+          "lsb": 173.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.74904,
+          "lsb": 138.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.0493,
+          "lsb": 172.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.80327,
+          "lsb": 223.0,
+          "center_hz": 26.4,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.45888,
+          "lsb": 247.0,
+          "center_hz": 26.4,
+          "excluded": false
+        }
+      ]
+    },
+    "ZERO_THREE_LEFT": {
+      "fittable": true,
+      "common_slope_b": 0.5164,
+      "r2": 0.253,
+      "bands": [
+        {
+          "center_hz": 8.8,
+          "n": 15,
+          "intercept_a": 2.7249,
+          "intercept_ci": [
+            2.657,
+            2.8226
+          ],
+          "LSB_at_1uV2": 530.8
+        },
+        {
+          "center_hz": 9.8,
+          "n": 7,
+          "intercept_a": 2.6562,
+          "intercept_ci": [
+            2.6006,
+            2.7483
+          ],
+          "LSB_at_1uV2": 453.1
+        },
+        {
+          "center_hz": 10.7,
+          "n": 7,
+          "intercept_a": 2.5539,
+          "intercept_ci": [
+            2.5023,
+            2.5771
+          ],
+          "LSB_at_1uV2": 358.0
+        },
+        {
+          "center_hz": 11.7,
+          "n": 10,
+          "intercept_a": 2.5742,
+          "intercept_ci": [
+            2.4884,
+            2.5993
+          ],
+          "LSB_at_1uV2": 375.2
+        },
+        {
+          "center_hz": 22.5,
+          "n": 31,
+          "intercept_a": 2.8535,
+          "intercept_ci": [
+            2.6616,
+            2.9605
+          ],
+          "LSB_at_1uV2": 713.7
+        }
+      ],
+      "channel_pooled_k": 278.76,
+      "n_clusters": 81,
+      "scatter": [
+        {
+          "psd_uv2": 2.66699,
+          "lsb": 748.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.33495,
+          "lsb": 1023.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.22642,
+          "lsb": 1150.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.89109,
+          "lsb": 1150.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.05203,
+          "lsb": 790.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.60774,
+          "lsb": 1842.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.66293,
+          "lsb": 1578.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 4.85385,
+          "lsb": 1578.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.66382,
+          "lsb": 978.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.67985,
+          "lsb": 1198.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.87124,
+          "lsb": 1198.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.20555,
+          "lsb": 1544.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.34044,
+          "lsb": 833.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.96211,
+          "lsb": 930.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.77546,
+          "lsb": 769.0,
+          "center_hz": 8.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 6.70305,
+          "lsb": 1065.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.37638,
+          "lsb": 1080.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.22497,
+          "lsb": 778.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.75648,
+          "lsb": 801.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.25823,
+          "lsb": 1031.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 5.38779,
+          "lsb": 1357.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.30985,
+          "lsb": 545.0,
+          "center_hz": 9.8,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.04585,
+          "lsb": 329.0,
+          "center_hz": 10.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.89587,
+          "lsb": 302.0,
+          "center_hz": 10.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 2.08413,
+          "lsb": 369.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.52977,
+          "lsb": 396.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.00647,
+          "lsb": 513.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.04638,
+          "lsb": 492.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.89919,
+          "lsb": 526.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.83196,
+          "lsb": 526.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.0826,
+          "lsb": 536.0,
+          "center_hz": 10.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.69473,
+          "lsb": 344.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.83091,
+          "lsb": 491.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.75738,
+          "lsb": 412.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.90071,
+          "lsb": 412.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.30901,
+          "lsb": 599.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.36204,
+          "lsb": 599.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.25696,
+          "lsb": 626.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.36966,
+          "lsb": 498.0,
+          "center_hz": 11.7,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.67235,
+          "lsb": 498.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 2.32587,
+          "lsb": 570.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 3.48014,
+          "lsb": 821.0,
+          "center_hz": 11.7,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.86611,
+          "lsb": 594.5,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.66634,
+          "lsb": 372.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.45273,
+          "lsb": 79087.0,
+          "center_hz": 22.5,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 0.5545,
+          "lsb": 1805.25,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.52285,
+          "lsb": 439.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.05769,
+          "lsb": 1041.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.06672,
+          "lsb": 1041.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28931,
+          "lsb": 1041.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.18695,
+          "lsb": 479.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.936,
+          "lsb": 658.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.86108,
+          "lsb": 788.5,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.77493,
+          "lsb": 625.67,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.64417,
+          "lsb": 629.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28609,
+          "lsb": 783.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.01576,
+          "lsb": 783.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.06097,
+          "lsb": 1023.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.18619,
+          "lsb": 1228.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.10102,
+          "lsb": 544.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.28223,
+          "lsb": 2999.09,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.17268,
+          "lsb": 1176.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.88071,
+          "lsb": 692.5,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.9441,
+          "lsb": 2456.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.59469,
+          "lsb": 1405.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.89777,
+          "lsb": 330.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.04058,
+          "lsb": 330.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.69266,
+          "lsb": 330.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.13185,
+          "lsb": 241.5,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.08619,
+          "lsb": 246.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 1.02151,
+          "lsb": 4394.67,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.66595,
+          "lsb": 230.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.57828,
+          "lsb": 15092.0,
+          "center_hz": 22.5,
+          "excluded": true
+        },
+        {
+          "psd_uv2": 1.2295,
+          "lsb": 188.0,
+          "center_hz": 22.5,
+          "excluded": false
+        },
+        {
+          "psd_uv2": 0.99964,
+          "lsb": 233.0,
+          "center_hz": 22.5,
+          "excluded": false
+        }
+      ]
+    },
+    "ONE_THREE_LEFT": {
+      "fittable": false,
+      "common_slope_b": null,
+      "r2": null,
+      "bands": [],
+      "channel_pooled_k": 198.67,
+      "n_clusters": 28,
+      "scatter": []
+    },
+    "ONE_THREE_RIGHT": {
+      "fittable": false,
+      "common_slope_b": null,
+      "r2": null,
+      "bands": [],
+      "channel_pooled_k": null,
+      "n_clusters": 2,
+      "scatter": []
+    },
+    "ZERO_TWO_LEFT": {
+      "fittable": false,
+      "common_slope_b": null,
+      "r2": null,
+      "bands": [],
+      "channel_pooled_k": 333.98,
+      "n_clusters": 8,
+      "scatter": []
+    },
+    "ZERO_TWO_RIGHT": {
+      "fittable": false,
+      "common_slope_b": null,
+      "r2": null,
+      "bands": [],
+      "channel_pooled_k": 646.27,
+      "n_clusters": 9,
+      "scatter": []
+    }
+  },
+  "fit_basis": {
+    "n_total_clusters": 685,
+    "n_outliers_excluded": 33,
+    "min_n_per_band": 6,
+    "estimator": "per-channel common slope (OLS log-log, per-frequency intercept); intercept = robust median(logL - b*logP) per band"
+  }
+}
