@@ -29,11 +29,13 @@ not statistically supported -- LR n.s., adjusted-R^2 does not improve).
 
 No electrode-impedance gain term. An impedance covariate (+ c*log10(Z_0-3R), Z from the 487
 device DeviceImpedance logs joined nearest-in-time onto the ZERO_THREE_RIGHT pairing epochs) was
-evaluated and REJECTED. It is significant only under naive OLS (c=0.53, p=8e-8), which treats
-the 2985 epochs as independent when they share just 230 distinct session-level impedance
-measurements -- pseudoreplication. With impedance-cluster-robust SE the term is n.s. (p=0.26);
-log10(Z) is collinear with calendar time (r=0.36) and its coefficient is unstable across
-specifications (0.53 / 0.90 / 0.17 / the originally claimed 1.02); and in the deployable
+evaluated and REJECTED. It is significant under naive OLS (c=0.53, p=8e-8), which treats the
+2985 epochs as independent when they share just 230 distinct session-level impedance
+measurements -- pseudoreplication. With impedance-cluster-robust SE the term is n.s. (p=0.26).
+It is also significant when forced in alongside a collinear calendar-time covariate (c=0.90,
+p=0.016) -- but log10(Z) is collinear with calendar time (r=0.36), so that reflects shared slow
+drift, not an impedance effect; the coefficient is unstable across specifications
+(0.53 / 0.90 / 0.17 / the originally claimed 1.02); and in the deployable
 >= 2026-03-01 regime -- with the full 2326-4712 ohm range present -- it is c=0.17, p=0.38. Even
 the most generous estimate moves the deployable LSB threshold only 1.22x across the observed Z
 range, smaller than the model's own residual scatter (1.83x, 1 sigma) and the validated k
