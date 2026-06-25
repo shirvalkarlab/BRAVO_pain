@@ -861,6 +861,28 @@ def test_psd_band_to_lsb_guards_bad_input():
         assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
 
 
+def test_native_modeled_crosscheck_fold_and_sigma_gate():
+    """The deployment sign-off's native-vs-modeled FYI (band_lsb_and_power) reports how closely the
+    k=269 model of the µV² cut-point reproduces the MEASURED device-Timeline LSB. Verify the math it
+    relies on: lsb_from_uv2(cutpoint) gives the modeled value, the fold is symmetric max(a/b, b/a),
+    and 'agrees' is fold <= the 1σ conversion scatter (LSB_UV2_SIGMA_FOLD ≈ 1.26×)."""
+    k = analytics.LSB_PER_UV2_VALIDATED               # 269
+    sigma = analytics.LSB_UV2_SIGMA_FOLD              # ≈1.26
+    # a cut-point of 1 µV² models to ~269 LSB; if the device measured ~272, they agree (~1.01×)
+    cutpoint = 1.0
+    modeled = analytics.lsb_from_uv2(cutpoint)
+    assert abs(modeled - k) < 1e-6
+    measured_close = k * 1.05                          # 5% high -> within 1σ
+    fold_close = max(measured_close / modeled, modeled / measured_close)
+    assert fold_close <= sigma                         # agrees
+    measured_far = k * 1.6                             # 60% high -> beyond 1σ
+    fold_far = max(measured_far / modeled, modeled / measured_far)
+    assert fold_far > sigma                            # does NOT agree
+    # the cross-check only fires when BOTH a measured threshold and a cut-point exist; the modeled
+    # value is the SAME constant the unsensed-band fallback uses, so agreement here vouches for it.
+    assert analytics.lsb_from_uv2(2.0) == analytics.lsb_from_uv2(1.0) * 2.0   # linear in µV²
+
+
 def test_band_power_notched_default_no_mains_removal():
     """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
     integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
@@ -1009,6 +1031,7 @@ if __name__ == "__main__":
     test_psd_band_to_lsb_matches_band_integral_times_k()
     test_psd_band_to_lsb_flags_extrapolation_and_fft_incompatibility()
     test_psd_band_to_lsb_guards_bad_input()
+    test_native_modeled_crosscheck_fold_and_sigma_gate()
     test_forward_chaining_validates_stationary_band()
     test_forward_chaining_null_band_does_not_beat_chance_forward()
     test_forward_chaining_catches_sign_reversal_over_time()

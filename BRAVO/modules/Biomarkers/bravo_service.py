@@ -3908,6 +3908,43 @@ def deployment_summary(request_data):
                     "method": "modeled from physical µV² cut-point via validated population LSB constant",
                 }
 
+    # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
+    # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with
+    # the SAME population constant the modeled fallback uses (k=269, via analytics.lsb_from_uv2 — the
+    # scalar form of the shared psd_band_to_lsb path) and report the fold-agreement. This is purely
+    # informational: it never changes the deployable number (the measured Timeline value always wins),
+    # but it tells the clinician how well the modeled route would have reproduced the measured
+    # threshold here — i.e. how much to trust the modeled LSB on bands the device never sensed. Good
+    # agreement (≈1×) means the k=269 fallback is reliable for this participant/band; a large fold
+    # means the modeled tier should be treated with extra caution.
+    native_modeled_check = None
+    if thr_lsb is not None and cutpoint is not None:
+        try:
+            modeled_from_cutpoint = analytics.lsb_from_uv2(float(cutpoint))
+        except Exception:  # noqa: BLE001
+            modeled_from_cutpoint = float("nan")
+        if np.isfinite(modeled_from_cutpoint) and modeled_from_cutpoint > 0 and thr_lsb > 0:
+            fold = max(thr_lsb / modeled_from_cutpoint, modeled_from_cutpoint / thr_lsb)
+            fextrap_cc = bool(center_hz is not None and (
+                center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+            native_modeled_check = {
+                "measured_upper_lsb": round(float(thr_lsb), 1),
+                "modeled_upper_lsb": round(float(modeled_from_cutpoint), 1),
+                "fold_disagreement": round(float(fold), 3),
+                "agrees": bool(fold <= analytics.LSB_UV2_SIGMA_FOLD),   # within the 1σ fold (≈1.26×)
+                "k_used": analytics.LSB_PER_UV2_VALIDATED,
+                "freq_extrapolated": fextrap_cc,
+                "method": "FYI cross-check: measured device-Timeline LSB vs k=269 model of the same µV² cut-point",
+                "note": (
+                    "Measured %.0f LSB vs modeled %.0f LSB (%.2f× apart). %s The deployable value is the "
+                    "MEASURED one; this only gauges how well the k=269 modeled fallback reproduces it here."
+                    % (thr_lsb, modeled_from_cutpoint, fold,
+                       ("Within the 1σ %.2f× conversion scatter — modeled fallback is reliable for this band."
+                        % analytics.LSB_UV2_SIGMA_FOLD) if fold <= analytics.LSB_UV2_SIGMA_FOLD else
+                       ("Exceeds the 1σ %.2f× conversion scatter — treat modeled LSB on unsensed bands with "
+                        "extra caution for this participant." % analytics.LSB_UV2_SIGMA_FOLD))),
+            }
+
     # Power on the clustered effective n.
     power = {"available": False, "reason": "ROC unavailable"}
     if roc.get("available"):
@@ -4138,6 +4175,10 @@ def deployment_summary(request_data):
             # measured upper_lsb; present only when `available` is False.
             "estimated": (thr_estimate is not None and thr_lsb is None),
             "estimate": thr_estimate,
+            # FYI agreement check (only when the band was BOTH measured AND has a µV² cut-point):
+            # how closely the k=269 modeled fallback reproduces the measured Timeline threshold here.
+            # Never changes the deployable number; gauges trust in the modeled tier for unsensed bands.
+            "native_modeled_check": native_modeled_check,
             # Threshold-mode awareness (audit): which Percept mode this number is valid for, the
             # FFT-size compatibility, and the 10-min-Timeline vs adaptive-averaging caveat.
             "mode": _threshold_mode_block(
