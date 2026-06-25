@@ -230,13 +230,29 @@ operational note in §7 only, not as an action item.)
    `psd_lsb_model.py` docstring + `RCS08.json` special block (`no_impedance_gain_term`); regression
    test `test_no_impedance_gain_term_adopted` pins it. Evidence:
    `rcs08_impedance_term_decision.png`, `rcs08_impedance_term_scan.csv`, `rcs08_impedance_series.csv`.
-2. **High-gamma 55.5 Hz calibration** — *blocked on data.* The 55.5 Hz center frequency was the
-   forward-validated winner, but `k=269` is validated only 8–28 Hz; the 55.5 Hz threshold is
-   currently extrapolated. Needs streaming sessions recorded at that center frequency to
-   calibrate `k` there.
-3. **Remaining audit findings** — **28 medium + 24 low** still open from the four-lens
-   closed-loop deployment audit. **C4 is the next priority.** (All four HIGH findings — C1, C2,
-   C3, C8 — are resolved.)
+2. **High-gamma 55.5 Hz calibration** — *guard SHIPPED (`dac25ac`, `9de1aeb`); k re-calibration
+   still blocked on data.* The 55.5 Hz center frequency was the forward-validated winner, but
+   `k=269` / the per-band PSD→LSB model is validated only 7.8–28.3 Hz. `estimate_lsb` used to
+   silently SNAP a 55.5 Hz request to the nearest fitted band (26.4 Hz) and return it with the
+   in-range r²=0.841 — a confident-looking but untested number. The gain is NOT band-flat (falls
+   ~0.80 log10/decade), so that snap over-states the 55.5 Hz LSB by ~1.7× (> the model's own 1.26×
+   σ). FIX: `analytics.LSB_VALIDATED_HZ_LO/HI`; `estimate_lsb` returns `freq_extrapolated` +
+   EXTRAPOLATED warning (all tiers); deployment estimate + sign-off `deployable_threshold` gate
+   carry/show the flag; test `test_highgamma_estimate_flagged_extrapolated`. Evidence:
+   `rcs08_highgamma_extrapolation.png`. STILL OPEN (lab action): stream sessions recorded at
+   55.5 Hz to calibrate `k` there — code now refuses to present it as calibrated until then.
+3. **Audit C4** — *RESOLVED (`7fcee95`).* Power readout & 'powered' gate ran on the optimistic
+   point AUC (the audit's "resolves once C1 lands" note was wrong: C1 de-folded the CI but both
+   `auc_power` call sites still passed `roc['auc']`, never `auc_lo`). FIX: `auc_power(..., auc_lo=)`
+   reports a power BAND and `more_data_needed` fail-closes on the CI-lower-bound end; both call
+   sites pass `roc['auc_lo']`; `LsbPowerPanel.js` draws the conservative marker; test
+   `test_auc_power_conservative_band_gates_on_ci_lower_bound` (AUC 0.70/CI-low 0.60: 83%→29% power,
+   gate flips). The design-effect discount for autocorrelated ratings (TIME half of C4) is deferred
+   — effective n is already the clustered count, so residual within-cluster autocorrelation is
+   second-order.
+4. **Remaining audit findings** — **27 medium + 24 low** still open from the four-lens
+   closed-loop deployment audit (C4 now resolved). All four HIGH findings — C1, C2, C3, C8 — are
+   resolved.
 
 **Resolved / no longer open** (for reference, so they aren't re-opened): C1, C2, C3, C8 (all
 HIGH); the figure-reset bug; C5/C6/C7 (Wave-1/2 figure-honesty); C9/C10 (actionability); the
@@ -247,9 +263,11 @@ guard; the TD→LSB validation and the PSD→TD→LSB back-translation question.
 
 ## 5. Test & build status
 
-- **Backend suite: 164/164 PASS** in the live container, confirmed this session via the bridge:
+- **Backend suite: 166/166 PASS** in the live container, confirmed this session via the bridge:
   `python3 _agent_bridge/run_tests.py`. (Trajectory across sessions: 133 → 139 → 161 → 162 →
-  163 → 164 as tests were added; +1 = `test_no_impedance_gain_term_adopted`, item #4.) **There is no pytest in the container** — `run_tests.py` is the
+  163 → 164 → 165 → 166 as tests were added; +1 `test_no_impedance_gain_term_adopted` (item #4),
+  +1 `test_highgamma_estimate_flagged_extrapolated` (high-gamma guard), +1
+  `test_auc_power_conservative_band_gates_on_ci_lower_bound` (audit C4).) **There is no pytest in the container** — `run_tests.py` is the
   authoritative runner (globs `test_*.py`, sets up Django, reloads the module).
 - **Local standalone runner caveat:** running `modules/Biomarkers/tests/` outside the container
   shows a few harness-only failures (e.g. 48/51 local) — `test_normalize_pro_times*`,
