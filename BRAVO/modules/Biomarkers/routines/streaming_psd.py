@@ -738,20 +738,69 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
     # ABSOLUTE linear PSD density (µV²/Hz), recovered from the cached log matrix BEFORE the
     # within-source z-score below strips the calibration scale. This is what the LSB feature in
-    # spectral_feature_importance band-integrates (× the validated 269 LSB/µV² constant). Only the
-    # Welch-from-TD sources are calibratable to LSB this way: "TD streaming" and "Montage/survey"
-    # come from `_welch_rows_into` (scipy welch density of the 250 Hz time domain, the exact quantity
-    # k=269 was fit on). The onboard-FFT sources ("Patient event", "Snapshot") carry the device's own
-    # `FFTBinData` on a DIFFERENT normalization — applying k=269 to those would mix scales — so their
-    # rows are set NaN here and contribute nothing to the LSB feature (they still feed the z-scored dB
-    # views unchanged). PER PI: the full-spectrum LSB exploration must use TD-derived calibrated LSB,
-    # not the device PSDs.
+    # spectral_feature_importance band-integrates (× the validated 269 LSB/µV² constant).
+    #
+    # Source fidelity for the calibrated LSB (PI directive):
+    #   * "TD streaming" / "Montage/survey" come from `_welch_rows_into` — scipy welch DENSITY of the
+    #     250 Hz time domain, the exact quantity k=269 was fit on. These are directly calibratable;
+    #     their absolute density is used as-is (tier "td").
+    #   * "Patient event" carries the device's onboard `FFTBinData` on a DIFFERENT magnitude scale
+    #     (the comment in `_event_psd_rows` notes this offset is normally absorbed by the within-
+    #     source z-score). When the TIME DOMAIN ISN'T AVAILABLE for a report we STILL want to use this
+    #     PSD (PI). To put it on the calibrated LSB axis we estimate ONE multiplicative scale per
+    #     channel from this participant's own overlap — the median ratio of TD-Welch density to
+    #     device-FFT density over the shared frequency band, on channels that carry both — apply it,
+    #     and tag those rows tier "device_psd_scaled" (an APPROXIMATE LSB). Where a channel has no TD
+    #     overlap to calibrate from, no honest scale exists: that channel's event rows fall back to
+    #     tier "device_psd_uncalibrated" (kept, but flagged — see `_lsb_tier`).
+    # `_lsb_tier` (per row) is carried out so the scan + UI can show the priority TD > survey >
+    # device-PSD and flag fidelity. Onboard `NeuralActivitySnapshot` PSDs are not in the per-channel
+    # scan at all (excluded upstream in `_assemble_psd_rows`).
     _TD_LSB_SOURCES = ("TD streaming", "Montage/survey")
+    _DEVICE_PSD_SOURCES = ("Patient event",)
     Xabs = np.power(10.0, X / 10.0)
-    _lsb_src = np.array([str(s) in _TD_LSB_SOURCES for s in src_arr]) if src_arr.size \
-        else np.zeros(0, bool)
-    if _lsb_src.size:
-        Xabs[~_lsb_src] = np.nan
+    src_str = np.array([str(s) for s in src_arr]) if src_arr.size else np.zeros(0, dtype=object)
+    _is_td = np.isin(src_str, _TD_LSB_SOURCES) if src_str.size else np.zeros(0, bool)
+    _is_dev = np.isin(src_str, _DEVICE_PSD_SOURCES) if src_str.size else np.zeros(0, bool)
+    # Per-row LSB fidelity tier (object array of short tags); rows that never enter the LSB feature
+    # (e.g. unknown sources) are "excluded".
+    _lsb_tier = np.full(src_str.shape, "excluded", dtype=object)
+    _lsb_tier[_is_td] = np.where(src_str[_is_td] == "TD streaming", "td", "survey")
+
+    # Empirical per-CHANNEL device-FFT -> Welch-density scale: median over the overlap band of
+    # (mean TD density) / (mean device density) for channels carrying BOTH. One scalar per channel.
+    device_scale = {}
+    if _is_dev.any() and _is_td.any():
+        # frequency mask for the validated band where both representations are meaningful (8–30 Hz,
+        # the LSB scan range); fall back to all finite freqs if the band is empty.
+        _bandm = (f_set >= 8.0) & (f_set <= 30.0)
+        if not _bandm.any():
+            _bandm = np.ones(F, bool)
+        for ch in np.unique(ch_arr[_is_dev]):
+            td_m = _is_td & (ch_arr == ch)
+            dv_m = _is_dev & (ch_arr == ch)
+            if td_m.sum() == 0 or dv_m.sum() == 0:
+                continue
+            td_mean = np.nanmean(Xabs[td_m][:, _bandm], axis=0)
+            dv_mean = np.nanmean(Xabs[dv_m][:, _bandm], axis=0)
+            ok = np.isfinite(td_mean) & np.isfinite(dv_mean) & (dv_mean > 0) & (td_mean > 0)
+            if ok.sum() >= 3:
+                ratio = np.nanmedian(td_mean[ok] / dv_mean[ok])
+                if np.isfinite(ratio) and ratio > 0:
+                    device_scale[ch] = float(ratio)
+
+    # Apply: TD rows keep their density; device rows are scaled (tier device_psd_scaled) where a
+    # channel scale exists, else flagged uncalibrated; everything else drops out of the LSB feature.
+    if src_str.size:
+        for i in np.where(_is_dev)[0]:
+            ch = ch_arr[i]
+            if ch in device_scale:
+                Xabs[i, :] = Xabs[i, :] * device_scale[ch]
+                _lsb_tier[i] = "device_psd_scaled"
+            else:
+                _lsb_tier[i] = "device_psd_uncalibrated"
+        # Any row that is neither TD nor device-PSD never enters the LSB feature.
+        Xabs[~(_is_td | _is_dev)] = np.nan
 
     # Within-(channel,source) per-frequency z-score so sources sharing a channel become poolable.
     Xz = X.copy()
@@ -819,12 +868,29 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 keys.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
             rows_Xz, rows_ch, rows_src, rows_t, rows_lab, rows_dt, rows_pidx = ([] for _ in range(7))
             rows_Xabs = []
+            rows_tier = []
+            # LSB-fidelity priority within a (channel, rating) cluster: a real TD reading outranks a
+            # montage/survey sweep, which outranks a scaled device-FFT, which outranks an
+            # uncalibrated one. The cluster's calibrated-LSB density is the LINEAR mean over ONLY the
+            # highest tier present (so a survey or device-PSD reading never dilutes a TD one); the
+            # z-scored dB view still averages the whole cluster as before.
+            _tier_rank = {"td": 0, "survey": 1, "device_psd_scaled": 2,
+                          "device_psd_uncalibrated": 3, "excluded": 9}
             for (ch, pidx), idxs in keys.items():
                 idxs = np.asarray(idxs)
                 rows_Xz.append(np.nanmean(Xz[idxs], axis=0))
-                # Absolute density aggregates in LINEAR space (mean µV²/Hz over the cluster), so the
-                # band integral × 269 stays a physical LSB. An all-onboard-FFT cluster is all-NaN.
-                rows_Xabs.append(np.nanmean(Xabs[idxs], axis=0))
+                tiers_here = [_lsb_tier[i] for i in idxs]
+                ranks = [_tier_rank.get(t, 9) for t in tiers_here]
+                best = min(ranks) if ranks else 9
+                if best >= 9:
+                    rows_Xabs.append(np.full(F, np.nan)); rows_tier.append("excluded")
+                else:
+                    sel = idxs[np.asarray(ranks) == best]
+                    # Absolute density aggregates in LINEAR space (mean µV²/Hz), so the band integral
+                    # × 269 stays a physical LSB. Only the top-tier rows define it.
+                    rows_Xabs.append(np.nanmean(Xabs[sel], axis=0))
+                    rows_tier.append({0: "td", 1: "survey", 2: "device_psd_scaled",
+                                      3: "device_psd_uncalibrated"}[best])
                 rows_ch.append(ch)
                 su = np.unique(src_arr[idxs])
                 rows_src.append(str(su[0]) if su.size == 1 else "aggregated")
@@ -836,12 +902,14 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             Xabs = np.vstack(rows_Xabs)
             ch_arr = np.asarray(rows_ch, dtype=object)
             src_arr = np.asarray(rows_src, dtype=object)
+            _lsb_tier = np.asarray(rows_tier, dtype=object)
             t_arr = np.asarray(rows_t, dtype=float)
             labels = np.asarray(rows_lab, dtype=float)
             dt_min = np.asarray(rows_dt, dtype=float)
             pro_idx = np.asarray(rows_pidx, dtype=int)
         else:
             Xz = Xz[:0]; Xabs = Xabs[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
+            _lsb_tier = _lsb_tier[:0]
             t_arr = t_arr[:0]; labels = labels[:0]; dt_min = dt_min[:0]; pro_idx = pro_idx[:0]
 
     chan_order = list(np.unique(ch_arr)) if ch_arr.size else []
@@ -942,6 +1010,13 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         # a lower-fidelity survey-sweep LSB for the same rating (PI: TD = highest LSB fidelity).
         "row_source": np.asarray(src_arr, dtype=object),
         "row_channel": np.asarray(ch_arr, dtype=object),
+        # Per-row LSB fidelity tier: "td" > "survey" > "device_psd_scaled" > "device_psd_uncalibrated"
+        # > "excluded". Lets the scan apply TD>survey>device priority and lets the UI flag which
+        # points are calibrated (TD/survey), scale-corrected device-FFT, or uncalibrated device-FFT.
+        "row_lsb_tier": np.asarray(_lsb_tier, dtype=object),
+        # Empirical per-channel device-FFT -> Welch-density scale used to bring onboard-FFT PSDs onto
+        # the calibrated LSB axis (median ratio over the 8–30 Hz overlap, channels with both sources).
+        "device_psd_scale_by_channel": device_scale,
         "labels": labels,                    # continuous PRO matched within the window (NaN = none)
         "rating_group": pro_idx,             # (N,) matched PRO index per row (-1 unmatched) = the
                                              # grouping factor for rating-aware AUC ("all" mode)

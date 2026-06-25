@@ -634,6 +634,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                   : "")}
             </MDTypography>
           )}
+          {scan && scan.feature === "lsb_calibrated" && scan.device_psd_scale_by_channel
+            && Object.keys(scan.device_psd_scale_by_channel).length > 0 && (
+            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
+              {`Reports with no time-domain match used the device onboard-FFT PSD, rescaled onto the LSB axis `
+               + `by an empirical per-channel factor (${Object.entries(scan.device_psd_scale_by_channel)
+                    .map(([ch, s]) => `${ch}: ×${Number(s).toFixed(2)}`).join(", ")}). `
+               + `These are approximate LSB — lower fidelity than the time-domain-derived points.`}
+            </MDTypography>
+          )}
           {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
             <MDTypography variant="caption" display="block" mb={0.5}
               sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
@@ -1826,7 +1835,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     <>
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
                subtitle={(scan && scan.feature === "lsb_calibrated"
-                 ? "Every time-domain recording (streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band over 8–30 Hz. The band feature is the CALIBRATED device LSB (269 × the band integral of the time-domain Welch density — the same conversion as the deployment threshold), NOT the raw PSD; the device's onboard-FFT snapshot PSDs are excluded. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
+                 ? "Every neural recording matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band over 8–30 Hz. The band feature is the CALIBRATED device LSB (269 × the band integral of the time-domain Welch density — the same conversion as the deployment threshold), NOT the raw PSD. Each report uses its highest-fidelity source: real time-domain streaming, then montage/survey sweep, then — only when no time domain exists for that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical per-channel scale. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
                  : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter.") + rigorAnnotation}
                panels={tdPanels} />
       <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"

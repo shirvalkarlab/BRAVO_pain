@@ -515,6 +515,8 @@ def test_spectral_scan_lsb_td_priority_over_survey():
         "psd_abs_uv2_per_hz": psd_abs,
         "row_source": np.array(["TD streaming", "Montage/survey", "Montage/survey",
                                 "TD streaming", "x", "x", "x", "x"], dtype=object),
+        "row_lsb_tier": np.array(["td", "survey", "survey", "td",
+                                  "excluded", "excluded", "excluded", "excluded"], dtype=object),
         "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
         "rating_group": np.array([0, 0, 1, 2, -1, -1, -1, -1]),
         "chan_order": ["ZERO_TWO_LEFT"],
@@ -536,6 +538,53 @@ def test_spectral_scan_lsb_td_priority_over_survey():
     kept_td = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 2.0), f[bmask]))
     assert np.nanmin(np.abs(xs - kept_td)) < 1e-6           # TD report-0 present
     assert (xs.size == 0) or (np.nanmin(np.abs(xs - demoted)) > 1e-6)   # survey 9.0 absent
+
+
+def test_builder_device_psd_scaled_onto_lsb_axis():
+    """When a report has only a device onboard-FFT PSD (no time domain), the builder brings it onto
+    the calibrated LSB axis via an empirical per-channel scale (median TD/device density ratio over
+    8–30 Hz). Validates: the recovered scale matches the planted offset; device rows are tagged
+    device_psd_scaled and their corrected absolute density equals device_density × scale; a channel
+    with device PSD but NO TD overlap is tagged device_psd_uncalibrated."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    f = np.linspace(0.95, 100, 60)
+    F = f.size
+    # Two channels. ChA: TD rows + device rows (device sits at 1/4 the TD density -> scale 4.0).
+    # ChB: device rows only (no TD overlap -> uncalibrated).
+    OFFSET = 0.25
+    rng = np.random.default_rng(0)
+    td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0          # ChA TD absolute density
+    devA_dens = td_dens.mean(0)[None, :] * OFFSET * np.ones((3, 1))  # ChA device = TD/4
+    devB_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0        # ChB device only
+    rows_log = np.vstack([10 * np.log10(td_dens),
+                          10 * np.log10(devA_dens),
+                          10 * np.log10(devB_dens)])
+    channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3 + ["ZERO_TWO_RIGHT"] * 3,
+                       dtype=object)
+    source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3 + ["Patient event"] * 3,
+                      dtype=object)
+    t0 = 1_700_000_000.0
+    t = t0 + np.arange(10) * 600.0
+    mat = {"f_set": f, "logX": rows_log, "t": t, "channel": channel, "source": source,
+           "dur": np.full(10, 30.0)}
+    # No PRO matching needed for the scale logic; pass empty PROs (rows stay unmatched).
+    det = sp.build_pooled_detail_from_matrix(mat, np.array([]), np.array([]),
+                                             aggregate="all", match_direction="pro_first")
+    scale = det["device_psd_scale_by_channel"]
+    assert "ZERO_TWO_LEFT" in scale, scale
+    assert abs(scale["ZERO_TWO_LEFT"] - (1.0 / OFFSET)) < 0.05, scale   # ~4.0
+    assert "ZERO_TWO_RIGHT" not in scale                               # no TD overlap
+    tiers = list(det["row_lsb_tier"])
+    assert tiers[:4] == ["td"] * 4
+    assert tiers[4:7] == ["device_psd_scaled"] * 3                     # ChA device scaled
+    assert tiers[7:10] == ["device_psd_uncalibrated"] * 3             # ChB device uncalibrated
+    # ChA scaled device absolute density should now match TD scale (device × 4 ≈ TD mean).
+    abs_stack = det["psd_abs_uv2_per_hz"]   # (N, C, F)
+    chans = det["chan_order"]
+    ciA = chans.index("ZERO_TWO_LEFT")
+    dev_row_corr = abs_stack[4, ciA, :]      # first ChA device row, corrected
+    band = (f >= 8) & (f <= 30)
+    assert abs(np.nanmedian(dev_row_corr[band] / td_dens.mean(0)[band]) - 1.0) < 0.05
 
 
 def test_spectral_scan_lsb_falls_back_without_abs_density():
@@ -1103,6 +1152,7 @@ if __name__ == "__main__":
     test_spectral_feature_importance_finds_planted_band()
     test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30()
     test_spectral_scan_lsb_td_priority_over_survey()
+    test_builder_device_psd_scaled_onto_lsb_axis()
     test_spectral_scan_lsb_falls_back_without_abs_density()
     test_spectral_scan_prelog_matches_linear()
     test_spectral_scan_emits_fdr_qs_and_summary()

@@ -1163,39 +1163,43 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         feature_used = "lsb_calibrated"
         n_demoted = 0
 
-        # --- SOURCE PRIORITY: time-domain LSB outranks survey-sweep LSB per matched report --------
-        # When a pain report has a real time-domain (streaming) neural match, the LSB derived from
-        # that TD is the highest-fidelity reading — it is the SAME quantity the device would sense
-        # and program on. A montage/survey sweep matched to the same report is a lower-fidelity
-        # stand-in. So for any (channel, matched-rating) that has at least one "TD streaming" row,
-        # blank the absolute density of the NON-TD-streaming rows sharing that (channel, rating):
-        # the LSB feature for that report then comes from the TD sample, and the survey row no
-        # longer contributes a competing LSB point. Unmatched rows (no rating) never compete and are
-        # untouched; reports with ONLY a survey match keep that survey LSB (better than nothing).
-        # This reshapes ONLY the LSB feature — the z-scored dB views and every non-LSB stat are
-        # built from the untouched `psd` stack.
+        # --- SOURCE PRIORITY per matched report: TD > survey > scaled device-FFT > uncalibrated ----
+        # A report's calibrated LSB should come from its HIGHEST-fidelity neural match. The detail
+        # carries a per-row tier (`row_lsb_tier`): "td" (real time-domain Welch) > "survey" (montage
+        # sweep Welch) > "device_psd_scaled" (onboard FFT brought onto the LSB axis by the empirical
+        # per-channel scale) > "device_psd_uncalibrated" (onboard FFT with no overlap to scale from).
+        # For every (channel, matched-rating), keep only the rows of the best tier present and blank
+        # the absolute density of the lower-tier rows, so a survey or device-FFT reading never
+        # competes with a TD one for the same report. Reports whose only match is a device PSD keep
+        # that device LSB (PI: use the PSD when the time domain isn't available). Unmatched rows are
+        # untouched. In one_per_rating mode the builder already collapsed each cell to its top tier,
+        # so this loop finds nothing left to demote — it's the "all"-mode enforcement. This reshapes
+        # ONLY the LSB feature; the z-scored dB views and every non-LSB stat use the untouched `psd`.
+        _TIER_RANK = {"td": 0, "survey": 1, "device_psd_scaled": 2,
+                      "device_psd_uncalibrated": 3}
         rgroup = td_detail.get("rating_group")
-        rsource = td_detail.get("row_source")
+        rtier = td_detail.get("row_lsb_tier")
         rchannel = td_detail.get("row_channel")
-        if rgroup is not None and rsource is not None and rchannel is not None:
+        if rgroup is not None and rtier is not None and rchannel is not None:
             rgroup = np.asarray(rgroup)
-            rsource = np.asarray(rsource, dtype=object)
+            rtier = np.asarray(rtier, dtype=object)
             rchannel = np.asarray(rchannel, dtype=object)
-            if rgroup.shape[0] == psd_abs.shape[0] == rsource.shape[0] == rchannel.shape[0]:
-                is_td = np.array([str(s) == "TD streaming" for s in rsource])
-                # (channel, rating) cells that own at least one TD-streaming matched row.
-                td_cells = {(rchannel[i], int(rgroup[i]))
-                            for i in np.where(is_td & (rgroup >= 0))[0]}
-                if td_cells:
+            if rgroup.shape[0] == psd_abs.shape[0] == rtier.shape[0] == rchannel.shape[0]:
+                # best (lowest-rank) tier present per (channel, rating) matched cell
+                best_tier = {}
+                for i in np.where(rgroup >= 0)[0]:
+                    rk = _TIER_RANK.get(str(rtier[i]), 9)
+                    key = (rchannel[i], int(rgroup[i]))
+                    if rk < best_tier.get(key, 99):
+                        best_tier[key] = rk
+                if best_tier:
                     psd_abs = psd_abs.copy()
-                    n_demoted = 0
                     for i in range(psd_abs.shape[0]):
-                        if rgroup[i] >= 0 and not is_td[i] \
-                                and (rchannel[i], int(rgroup[i])) in td_cells:
-                            psd_abs[i, :, :] = np.nan   # demote survey LSB; TD wins this report
-                            n_demoted += 1
-        else:
-            n_demoted = 0
+                        if rgroup[i] >= 0:
+                            key = (rchannel[i], int(rgroup[i]))
+                            if _TIER_RANK.get(str(rtier[i]), 9) > best_tier.get(key, 99):
+                                psd_abs[i, :, :] = np.nan   # lower tier loses this report
+                                n_demoted += 1
     else:
         feature_used = "logpsd_db"
         n_demoted = 0
@@ -1470,20 +1474,24 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, scanned 8–30 Hz
         #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
         "feature": feature_used,
-        "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; onboard-FFT PSDs excluded)"
+        "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
                          if use_lsb else "dB (10·log10 band PSD)"),
         "feature_note": (
             "Band feature is the CALIBRATED device LSB: 269 × the band integral of the Welch density "
             "of the time domain, the same conversion as the deployment threshold and timeline modeled "
-            "tier. Built only from TD-derived spectra (TD streaming + montage/survey sweeps); the "
-            "device's onboard-FFT PSDs (patient-event / snapshot) are EXCLUDED. When a pain report has "
-            "a time-domain (streaming) match, that TD-derived LSB takes PRIORITY over a survey-sweep "
-            "LSB for the same report (higher fidelity). Scan restricted to the validated, "
-            "firmware-programmable 8–30 Hz range." if use_lsb else
-            "Legacy dB band-power feature; not LSB-calibrated."),
-        # How many survey-sweep rows were demoted because a TD-streaming match existed for the same
-        # (channel, rating). 0 when there were no competing survey rows or no TD matches.
+            "tier. Per matched report the LSB comes from the highest-fidelity source available: real "
+            "time-domain streaming, then montage/survey sweep, then — when NO time domain exists for "
+            "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
+            "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
+            "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
+            "uncalibrated. Scan restricted to the validated, firmware-programmable 8–30 Hz range."
+            if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
+        # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
+        # (channel, rating). 0 when no report had competing tiers.
         "n_survey_demoted_by_td": int(n_demoted),
+        # Per-channel empirical device-FFT -> Welch-density scale used to put onboard-FFT PSDs on the
+        # calibrated LSB axis (from the detail; {} when no device PSDs or no overlap to calibrate).
+        "device_psd_scale_by_channel": (td_detail.get("device_psd_scale_by_channel") or {}),
         # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
         # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
         # dict; this summary is the UI's pseudoreplication-contrast annotation source.
