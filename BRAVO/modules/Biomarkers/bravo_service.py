@@ -3940,6 +3940,15 @@ def deployment_summary(request_data):
         _thr_detail = (f"power ≥ {thr_estimate['estimated_upper_lsb']} LSB ESTIMATED "
                        f"({thr_estimate['tier']} tier) — device never sensed this band; "
                        "modeled from µV² cut-point, confirm by sensing before programming")
+        if thr_estimate.get("freq_extrapolated"):
+            # Out-of-range high-gamma (e.g. 55.5 Hz): the PSD->LSB conversion itself is extrapolated
+            # beyond its calibrated 7.8-28.3 Hz range, so the LSB value is even less trustworthy than
+            # an in-range estimate. Surface it on the sign-off detail, not just in the nested note.
+            _vr = thr_estimate.get("validated_hz_range") or [analytics.LSB_VALIDATED_HZ_LO,
+                                                             analytics.LSB_VALIDATED_HZ_HI]
+            _thr_detail += (f" ⚠ band is OUTSIDE the validated {_vr[0]:.1f}–{_vr[1]:.1f} Hz "
+                            "conversion range — LSB is EXTRAPOLATED (gain not band-flat); needs "
+                            "streaming calibration at this center frequency")
     else:
         _thr_state, _thr_detail = "fail", f"device sensed this band {n_tl} times"
     gates.append(_gate("deployable_threshold", "Deployable LSB threshold available",
