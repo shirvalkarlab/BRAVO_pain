@@ -1,0 +1,88 @@
+"""Regression tests for the frozen PSD->device-LSB conversion model + fallback estimator.
+
+Run inside the container:
+    docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore \
+        -m pytest modules/Biomarkers/tests/test_psd_lsb_model.py
+"""
+import os
+import sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from Biomarkers.routines import psd_lsb_model as plm  # noqa: E402
+
+PART = "RCS08"
+
+
+def test_model_loads_and_is_cached():
+    m = plm.load_model(PART)
+    assert m is not None and m.get("schema") == "psd_lsb_conversion/v1"
+    assert plm.load_model(PART) is m                      # cached identity
+    assert plm.has_model(PART) and plm.has_model("rcs08 ")  # canonicalized
+    assert not plm.has_model("FAKE99")
+
+
+def test_tier2_exact_band():
+    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 1.0)
+    assert e["available"] and e["estimated"] and e["tier"] == "band"
+    assert e["model_center_hz"] == 26.4
+    # LSB at 1 uV^2 == 10**intercept; positive and in the device's plausible range.
+    assert 40 < e["lsb"] < 120
+
+
+def test_tier2_power_dependent_gain():
+    """b != 1, so effective k = LSB/uV^2 changes with power (falls as power rises)."""
+    e1 = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 1.0)
+    e10 = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, 10.0)
+    assert e10["lsb"] > e1["lsb"]                          # more power -> more LSB
+    assert e10["k_effective"] < e1["k_effective"]          # but lower per-uV^2 gain (sub-proportional)
+
+
+def test_tier3_nearest_frequency():
+    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 15.0, 5.0)
+    assert e["available"] and e["tier"] == "channel_freq"
+    assert e["model_center_hz"] != 15.0 and "nearest" in e["note"]
+
+
+def test_tier4_channel_pooled():
+    e = plm.estimate_lsb(PART, "ONE_THREE_LEFT", 9.0, 2.0)
+    assert e["available"] and e["tier"] == "channel_pooled"
+    assert e["slope_b"] == 1.0                             # proportional fallback
+    assert abs(e["lsb"] - e["k_effective"] * 2.0) < 1e-6
+
+
+def test_none_when_unmodelable():
+    assert not plm.estimate_lsb(PART, "ONE_THREE_RIGHT", 9.0, 2.0)["available"]
+    assert not plm.estimate_lsb("FAKE99", "ZERO_THREE_RIGHT", 26.4, 1.0)["available"]
+    # estimated flag is present even on the failure path (so callers never read a None as measured)
+    assert plm.estimate_lsb("FAKE99", "ZERO_THREE_RIGHT", 26.4, 1.0)["estimated"] is True
+
+
+def test_array_input_mirrors_shape():
+    e = plm.estimate_lsb(PART, "ZERO_THREE_RIGHT", 26.4, [1.0, 2.0, 4.0])
+    assert isinstance(e["lsb"], list) and len(e["lsb"]) == 3
+    assert e["lsb"][0] < e["lsb"][1] < e["lsb"][2]         # monotone in power
+
+
+def test_plot_payload_shape():
+    pp = plm.model_plot_payload(PART)
+    assert pp["available"]
+    fittable = [c for c in pp["channels"] if c["fittable"]]
+    assert len(fittable) >= 2                              # 0-3 Right, 0-3 Left
+    for c in fittable:
+        assert c["common_slope_b"] is not None and len(c["bands"]) >= 2
+        for bd in c["bands"]:
+            assert {"center_hz", "lsb_at_1uv2", "intercept_a", "n"} <= set(bd)
+
+
+if __name__ == "__main__":
+    import traceback
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    passed = 0
+    for fn in fns:
+        try:
+            fn(); passed += 1; print(f"PASS {fn.__name__}")
+        except Exception:                                  # noqa: BLE001
+            print(f"FAIL {fn.__name__}"); traceback.print_exc()
+    print(f"\n{passed}/{len(fns)} passed")

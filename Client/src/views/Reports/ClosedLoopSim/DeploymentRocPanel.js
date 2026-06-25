@@ -83,10 +83,12 @@ function solveCutpoint(roc, rule, costRatio) {
 function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint }) {
   const ref = useRef(null);
   const histRef = useRef(null);
+  const fwdRef = useRef(null);
   const [matchDir, setMatchDir] = useState("prior");      // deploy default = causal forecasting
   const [rule, setRule] = useState("youden");
   const [logCost, setLogCost] = useState(0);              // log2(cFP/cFN); 0 => symmetric
   const [roc, setRoc] = useState(null);
+  const [forward, setForward] = useState(null);   // audit C2: forward-chaining / out-of-sample block
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -110,8 +112,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       const data = response && response.data;
       if (data && data.available && data.roc && data.roc.available) {
         setRoc(data.roc);
+        setForward(data.forward || null);   // audit C2: held-out forward-chaining trace
       } else {
         setRoc(null);
+        setForward(null);
         setErr((data && (data.reason || (data.roc && data.roc.reason))) || "ROC unavailable");
       }
       setLoading(false);
@@ -268,10 +272,72 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     }
   }, [roc, opThr, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // (E) Forward-chaining trace (audit C2): per-fold HELD-OUT AUC across elapsed weeks, drawn beside
+  // the in-sample number. Each marker is one expanding-window fold — train on all weeks before it,
+  // test on that week — so a reader sees WHEN the band stops generalizing, not just a pooled number.
+  // Markers are colored by whether the fold cleared chance (green) or not (vermillion). Overlaid:
+  // a dotted chance line at 0.5, the in-sample AUC as a dashed grey reference (the optimistic number),
+  // and the pooled held-out AUC + its bootstrap CI as a shaded band. Same Plotly.react-once discipline.
+  useEffect(() => {
+    const gd = fwdRef.current;
+    if (!gd || !forward || !forward.available || !Array.isArray(forward.folds) || !forward.folds.length) return;
+    const folds = forward.folds;
+    const xs = folds.map((f) => f.test_week_start);
+    const ys = folds.map((f) => f.test_auc);
+    const cols = folds.map((f) => (f.test_auc >= 0.5 ? PAL.pass : PAL.fail));
+    const xlo = Math.min(...xs) - 0.5;
+    const xhi = Math.max(...xs) + 0.5;
+    const traces = [
+      // pooled held-out CI band (drawn first so it sits behind everything)
+      ...(forward.held_out_auc_lo != null && forward.held_out_auc_hi != null ? [{
+        x: [xlo, xhi, xhi, xlo], y: [forward.held_out_auc_lo, forward.held_out_auc_lo,
+          forward.held_out_auc_hi, forward.held_out_auc_hi],
+        fill: "toself", type: "scatter", mode: "lines", line: { width: 0 },
+        fillcolor: "rgba(0,158,115,0.10)", hoverinfo: "skip", showlegend: false, name: "held-out 95% CI",
+      }] : []),
+      { x: [xlo, xhi], y: [0.5, 0.5], type: "scatter", mode: "lines", name: "chance",
+        line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
+      // in-sample AUC reference (the optimistic number the forward trace is judged against)
+      ...(forward.in_sample_auc != null ? [{
+        x: [xlo, xhi], y: [forward.in_sample_auc, forward.in_sample_auc], type: "scatter", mode: "lines",
+        name: "in-sample AUC", line: { color: PAL.gray, dash: "dash", width: 1.4 },
+        hovertemplate: `in-sample AUC ${fmt(forward.in_sample_auc)}<extra></extra>`, showlegend: false,
+      }] : []),
+      // pooled held-out AUC reference line
+      ...(forward.held_out_auc != null ? [{
+        x: [xlo, xhi], y: [forward.held_out_auc, forward.held_out_auc], type: "scatter", mode: "lines",
+        name: "pooled held-out", line: { color: PAL.pass, width: 1.2 },
+        hovertemplate: `pooled held-out AUC ${fmt(forward.held_out_auc)}<extra></extra>`, showlegend: false,
+      }] : []),
+      // per-fold held-out AUC (the trace itself)
+      { x: xs, y: ys, type: "scatter", mode: "lines+markers", name: "per-fold held-out",
+        line: { color: PAL.accent, width: 1.6 },
+        marker: { color: cols, size: 9, line: { color: "#fff", width: 1.4 } },
+        customdata: folds.map((f) => [f.n_train_clusters, f.n_test_clusters,
+          f.sens == null ? "—" : fmt(f.sens), f.spec == null ? "—" : fmt(f.spec)]),
+        hovertemplate: "week %{x} · held-out AUC %{y:.2f}<br>train %{customdata[0]} / test %{customdata[1]} clusters"
+          + "<br>sens %{customdata[2]} · spec %{customdata[3]}<extra></extra>" },
+    ];
+    const layout = {
+      title: {
+        text: `Forward-chained held-out AUC — pooled ${fmt(forward.held_out_auc)}`
+          + (forward.held_out_auc_lo != null ? ` (CI ${fmt(forward.held_out_auc_lo)}–${fmt(forward.held_out_auc_hi)})` : "")
+          + ` vs in-sample ${fmt(forward.in_sample_auc)}`,
+        font: { size: 11.5 },
+      },
+      margin: { l: 46, r: 12, t: 26, b: 36 }, height: 188,
+      xaxis: { title: { text: "Test fold — elapsed week (train = all earlier weeks)", font: { size: 10 } },
+        zeroline: false, tickfont: { size: 9.5 }, range: [xlo, xhi] },
+      yaxis: { title: { text: "held-out AUC", font: { size: 10 } }, zeroline: false,
+        tickfont: { size: 9.5 }, range: [-0.02, 1.02] },
+    };
+    Plotly.react(gd, traces, layout, PAL.MODEBAR);
+  }, [forward]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Purge only on unmount (NOT on every roc/op change) so the figure nodes are reused across refits.
   useEffect(() => {
-    const g1 = ref.current; const g2 = histRef.current;
-    return () => { if (g1) Plotly.purge(g1); if (g2) Plotly.purge(g2); };
+    const g1 = ref.current; const g2 = histRef.current; const g3 = fwdRef.current;
+    return () => { if (g1) Plotly.purge(g1); if (g2) Plotly.purge(g2); if (g3) Plotly.purge(g3); };
   }, []);
 
   return (
@@ -314,6 +380,30 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             the backend returns feature_hist (older payloads / off-band candidates may omit it). */}
         <div ref={histRef}
           style={{ width: "100%", display: roc && roc.feature_hist ? "block" : "none" }} />
+
+        {/* Forward-chaining held-out AUC trace (audit C2). Always-mounted so it survives refits; shown
+            only when the backend returns a usable forward block with at least one fold. */}
+        <div ref={fwdRef}
+          style={{ width: "100%",
+            display: forward && forward.available && forward.folds && forward.folds.length ? "block" : "none" }} />
+
+        {/* Plain-language read of the forward result: clears chance / collapses forward / underpowered /
+            not assessable. This is the out-of-sample number to weight, beside the optimistic in-sample one. */}
+        {forward && forward.available && forward.held_out_auc != null ? (
+          <MDTypography variant="caption" display="block" sx={{
+            fontSize: 10.5, mt: 0.3,
+            color: forward.beats_chance_forward ? PAL.pass : PAL.warnText }}>
+            {forward.beats_chance_forward
+              ? `Forward-validated: held-out AUC ${fmt(forward.held_out_auc)} clears chance across ${forward.n_folds} weekly folds (forward optimism ${fmt(forward.optimism)}). This is the out-of-sample number to weight.`
+              : (forward.held_out_auc <= 0.55
+                ? `Forward FAIL: held-out AUC ${fmt(forward.held_out_auc)} collapses to chance though in-sample is ${fmt(forward.in_sample_auc)} (optimism ${fmt(forward.optimism)}). Training on the past does not predict the future for this band.`
+                : `Forward UNDERPOWERED: held-out AUC ${fmt(forward.held_out_auc)} holds near in-sample ${fmt(forward.in_sample_auc)} but its CI does not yet exclude chance — more weeks of ratings needed.`)}
+          </MDTypography>
+        ) : (forward && !forward.available ? (
+          <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, mt: 0.3, color: PAL.warnText }}>
+            {`Forward validation not assessable (${forward.reason || "insufficient temporal span"}): every AUC above is in-sample.`}
+          </MDTypography>
+        ) : null)}
 
         {roc && !loading && !err ? (
           <>

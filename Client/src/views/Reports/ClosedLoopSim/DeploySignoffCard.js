@@ -126,6 +126,7 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const ev = data && data.evidence;
   const th = data && data.threshold;
   const pw = data && data.power;
+  const fwd = data && data.forward;
   // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
   // blocks deployment even at a high passed-count), NOT on n_gates_passed === n_gates. Fall back to
   // the count only for older payloads that predate ready_to_program.
@@ -252,7 +253,27 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   </MDTypography>
                   {ev ? (
                     <>
-                      <KV k="Deployment AUC (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                      <KV k="Deployment AUC — in-sample (95% clustered-bootstrap CI)" v={`${fmt(ev.auc)} (${fmt(ev.auc_lo)}–${fmt(ev.auc_hi)})`} />
+                      {/* Audit C2: the held-out (train-past → test-future) AUC shown BESIDE the
+                          in-sample number, so the forward optimism is visible at sign-off. Color the
+                          held-out value by whether its CI clears chance (green) or not (warn). */}
+                      {fwd && fwd.available && fwd.held_out_auc != null ? (
+                        <KV
+                          k={`Deployment AUC — forward held-out (${fwd.n_folds ?? "—"} weekly folds)`}
+                          v={
+                            <span style={{ color: fwd.beats_chance_forward ? PAL.pass : PAL.warnText, fontWeight: 600 }}>
+                              {`${fmt(fwd.held_out_auc)} (${fmt(fwd.held_out_auc_lo)}–${fmt(fwd.held_out_auc_hi)})`}
+                              {fwd.beats_chance_forward ? " ✓ clears chance" : " ✗ not validated forward"}
+                            </span>
+                          }
+                        />
+                      ) : (
+                        <KV k="Deployment AUC — forward held-out" v={
+                          <span style={{ color: PAL.warnText }}>
+                            {fwd && fwd.reason ? `not assessable (${fwd.reason})` : "in-sample only — forward UNCONFIRMED"}
+                          </span>
+                        } />
+                      )}
                       <KV k="Odds ratio (95% CI)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                       <KV k="Mixed-effects p" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "—"} />
                       <KV k="Matched samples / ratings" v={`${ev.n_matched_samples ?? "—"} / ${ev.n_clusters ?? "—"}`} />

@@ -26,6 +26,7 @@ import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
 import PsdLsbPanel from "./PsdLsbPanel";
+import ConversionModelPanel from "./ConversionModelPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
 import PAL from "./palette";
 
@@ -281,6 +282,9 @@ function ClosedLoopSim() {
               <Grid item xs={12} md={6}>
                 <PsdLsbPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} />
+              </Grid>
+              <Grid item xs={12}>
+                <ConversionModelPanel participantUid={participant_uid} />
               </Grid>
               <Grid item xs={12}>
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
