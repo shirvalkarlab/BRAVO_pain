@@ -90,6 +90,34 @@ not only the bands the device streamed natively.
 
 Two surfaces, sharing one conversion helper. Keep the frozen deployment model untouched.
 
+### Step 0. Empirically choose the timeline conversion method (gates A/B/C)
+
+The timeline method is **not** pre-decided. Before building the helper, independently run the
+percept-spectral-repro codebase and decide which conversion drives the biomarker timeline /
+exploratory plotting + calculations:
+
+- Clone + run the repo's gates (`uv run pytest`, `ruff check .`), then re-run
+  `scripts/benchmark_brainsense_power.py` and reproduce the head-to-head table. Specifically verify
+  the **"repro transform + report-held-out CV k"** route (r=0.993, RMSE 62.1 LSB, median fold 1.10×)
+  — the low-RMSE method whose k is fit with the SAME report held out (honest out-of-sample, not a
+  same-report refit).
+- **Re-score within 8–30 Hz only** — that is the band the exploratory workflow and the adaptive
+  controller actually use; the published numbers span all bands. Report per-method r / RMSE /
+  median-fold in-window.
+- **Decide on accuracy AND stability:** at the corpus level the transform's median fold-error equals
+  the Welch256+269 route's (≈1.09×) — the RMSE gap is outliers, not typical error — and the
+  transform's k drifts 10–16% early→late and up to ~1.5× at ZERO_THREE_RIGHT 26.37 Hz. Weigh
+  in-window accuracy against that drift and against keeping a single conversion constant shared with
+  the deployment module. Write the verdict (with in-window numbers) into a new "Timeline method
+  decision" section here, then build A/B with the chosen method.
+- If paired TD/`BrainSenseLfp` data are not reachable from the environment, fall back to a code-level
+  review of `spectral.py` + the committed `brainsense_power_head_to_head_summary.json` and say so —
+  do not fabricate benchmark numbers.
+
+The target conversion window for the exploratory workflow is **8–30 Hz**: convert PSDs (and TD where
+present) to LSB across that band. The steps below assume the Welch256+269 default; substitute the
+chosen method if Step 0 selects the transform.
+
 ### A. Shared, audited PSD→LSB helper
 
 - Add `analytics.psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, half_hz=2.5)` →

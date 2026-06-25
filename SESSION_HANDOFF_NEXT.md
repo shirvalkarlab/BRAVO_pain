@@ -92,26 +92,74 @@ and plan below are its summary.
 
 ### Punchline 2 — optimal approach
 A tiered fall-through, native-preferred: (1) native device LSB when the band was sensed — both
-codebases agree this is best, and our `band_lsb_and_power` ALREADY does it; (2) Welch256 × `269` for
-PSD-only bands; (3) frozen per-band model for its intended deployment-threshold job, with the
-existing extrapolation guard; (4) never the white-paper `100` (under-scaled 3.5×) and never the
-repro fitted-k as a fixed constant.
+codebases agree this is best, and our `band_lsb_and_power` ALREADY does it; (2) a modeled conversion
+for PSD-only bands — **Welch256 × `269` is the default candidate, but the exploratory-timeline method
+is chosen empirically in Step 0** (it may instead be the repro transform + report-CV k if that wins
+in-window on accuracy AND stability); (3) frozen per-band model for its intended deployment-threshold
+job, with the existing extrapolation guard; (4) never the white-paper `100` (under-scaled 3.5×) and
+never the repro fitted-k as a single fixed constant (it drifts by channel/frequency/session — only
+the report-held-out CV form is defensible, and even then per the Step-0 verdict).
 
 ### Implementation plan (build this)
 See `ANALYSIS_percept_spectral_repro_comparison.md` §"Proposed implementation plan" for the detailed
-version. Summary:
-- **A.** Shared `analytics.psd_band_to_lsb(...)` helper — Welch256 band integral × 269, reusing the
-  existing `freq_extrapolated` (7.8–28.3 Hz) guard. One conversion path, one constant.
+version. **The method choice for the timeline is NOT pre-decided — Step 0 decides it empirically.**
+
+- **Step 0 — RUN THE REPRO CODEBASE AND PICK THE METHOD (do this FIRST; it gates A/B/C).**
+  Prasad's instruction: independently run `shirvalkarlab/percept-spectral-repro` and verify the
+  **"repro transform + report-held-out CV k"** route — the one with the low RMSE (r=0.993, RMSE
+  62.1 LSB, median fold 1.10× on n=131; its key property is that k is fit with the SAME report held
+  out, so it is honest out-of-sample, not a same-report refit). Then **decide which method drives the
+  biomarker timeline / exploratory plotting + calculations.** Concretely:
+  1. Clone the repo, `uv --cache-dir .cache/uv run pytest` + `ruff check .` to confirm it runs, then
+     re-run `scripts/benchmark_brainsense_power.py --jobs 16 --out-dir results/...`. Reproduce the
+     head-to-head table (their numbers: transform+CV-k RMSE 62.1 vs Welch256+269 RMSE 208.9, both
+     r≥0.92, both median fold ≈1.09–1.10×).
+  2. **Restrict the comparison to the 8–30 Hz window** — that is the band that matters for the
+     biomarker exploration workflow and is the only range the adaptive controller can use. Re-score
+     each method on 8–30 Hz paired rows only (the full-corpus numbers include out-of-range bands).
+     Report per-method r / RMSE / median-fold **within 8–30 Hz**, since that is the decision-relevant
+     metric, not the all-band number.
+  3. **Decision criteria for the timeline method** (state the verdict explicitly with the numbers):
+     - *Accuracy in 8–30 Hz* — does transform+CV-k actually beat Welch256+269 on TYPICAL error
+       (median fold), or only on outlier RMSE? (At the corpus level the median fold was identical;
+       check whether that holds in-window.)
+     - *Stability* — the transform's k drifts 10–16% early→late and up to ~1.5× at ZERO_THREE_RIGHT
+       26.37 Hz. For an exploratory timeline that must read consistently week-to-week, a drifting
+       scale is a real cost. Quantify the in-window drift before choosing.
+     - *Interpretability / single source of truth* — Welch256+269 is the same physical constant the
+       deployment module already uses; using a different transform for the timeline means two
+       conversions in one product. Weigh that.
+     - *Native-first is non-negotiable either way* — whichever modeled method wins is the FALLBACK;
+       native device LSB is still preferred when the band was sensed.
+  4. **Write the verdict** into `ANALYSIS_percept_spectral_repro_comparison.md` (new "Timeline method
+     decision" section) with the in-window numbers and the chosen method. THEN proceed to A/B/C using
+     the chosen method — do not hardcode 269 in Step A until Step 0 confirms it (or swaps in the
+     transform+CV-k route).
+  Note: their benchmark needs paired TD/`BrainSenseLfp` rows; the repo's are RCS08 Stage-1. If those
+  data are not reachable from this environment, say so and fall back to a code-level review of
+  `spectral.py` + the committed `results/.../brainsense_power_head_to_head_summary.json` — do NOT
+  fabricate benchmark numbers.
+
+- **A.** Shared `analytics.psd_band_to_lsb(...)` helper implementing the **method chosen in Step 0**
+  (Welch256 × 269 *or* the report-CV-k transform), reusing the existing `freq_extrapolated`
+  (7.8–28.3 Hz) guard. The target conversion window is **8–30 Hz** — convert PSDs (and, where TD is
+  present, time-domain windows) to LSB across that band for the exploratory workflow. One conversion
+  path, one chosen constant/transform.
 - **B. Timeline (Biomarker view):** extend `availability.lsb_series` with a `source="psd_modeled"`
-  tier so survey/montage PSD bands (which have a PSD but no native LSB) get a calibrated LSB trace;
-  render it with a distinct hollow marker + "modeled from PSD (×269)" legend so it is never confused
-  with native LSB. This is the user's *"drive LSB for all the band powers from the PSD"* ask.
+  tier so survey/montage PSD bands (which have a PSD but no native LSB) get a calibrated LSB trace
+  over 8–30 Hz; render it with a distinct hollow marker + a legend naming the chosen method (e.g.
+  "modeled from PSD (×269)" or "modeled (repro transform, CV-k)") so it is never confused with native
+  LSB. This is the user's *"drive LSB for all the band powers from the PSD"* ask.
 - **C. Closed-loop deployment module:** `band_lsb_and_power` already prefers native LSB and only
   models when the band was unsensed — VERIFY its fallback routes through the new shared helper, and
-  add an FYI native-vs-modeled agreement cross-check on the sign-off card. Do NOT adopt the repro
-  transform or change the frozen model.
-- **D.** Validate via `_agent_bridge` (baseline 166/166); optionally port their
-  `benchmark_brainsense_power.py` as a one-off confirmation.
+  add an FYI native-vs-modeled agreement cross-check on the sign-off card. **Deployment-threshold
+  conversion stays on the physically-interpretable Welch256+269 / frozen-model path regardless of
+  what Step 0 picks for the timeline** — if Step 0 chooses the transform for exploratory display, the
+  timeline and the deployment threshold may legitimately use different methods (exploratory fidelity
+  vs deployment stability are different objectives); document that split clearly. Do NOT change the
+  frozen model.
+- **D.** Validate via `_agent_bridge` (baseline 166/166); the Step-0 benchmark doubles as the
+  confirmation that our chosen conversion reproduces the expected fold-error.
 
 **Why these are two separate tracks:** Track 1 is a context-heavy review backlog best handled by a
 dedicated sub-agent; Track 2 is hands-on feature work on the timeline + deployment module. They touch
