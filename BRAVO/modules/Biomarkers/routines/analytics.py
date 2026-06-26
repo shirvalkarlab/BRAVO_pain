@@ -1121,14 +1121,16 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
         are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
         by the deployment threshold and the timeline modeled tier, so the discovery scan and the
-        deployable number speak one unit. Auto-restricts the scan to `adaptive_band` (8–30 Hz), the
-        only range where k=269 is validated AND the firmware can place an adaptive band — bands
-        outside it have no LSB ground truth. Falls back to "logpsd" if the detail lacks the absolute
-        density (e.g. an onboard-FFT-only pool).
+        deployable number speak one unit. Scans the FULL 0–`fmax` range (centers 2.5–97.5 Hz with
+        the default 5 Hz window); the validated/firmware-programmable `adaptive_band` (8–30 Hz) is
+        FLAGGED per band via `adaptive_valid` (center-based), not used to restrict the scan — bands
+        outside it are exploratory (k=269 has no LSB ground truth there) and the UI marks them. Falls
+        back to "logpsd" if the detail lacks the absolute density (e.g. an onboard-FFT-only pool).
       * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
         `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
         curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
-        clinician's unit and to enforce the TD-only + 8–30 Hz scope.
+        clinician's unit and to enforce the TD-only source priority (the 8–30 Hz deployable range is
+        flagged per band, not enforced as a scan limit).
 
     The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
     overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
@@ -1155,12 +1157,11 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         if psd_abs.shape != psd.shape:
             use_lsb = False                                      # shape mismatch -> safe fallback
     if use_lsb:
-        # Scan ONLY the validated/device-programmable range (8–30 Hz); k=269 has no ground truth
-        # outside it and the firmware can't place an adaptive band there.
-        # Do NOT cap fmax at adaptive_band[1] — the full 0–100 Hz scan runs in LSB mode too.
-        # Bands outside 8–30 Hz are flagged adaptive_valid=False and shown at reduced opacity;
-        # the validated k=269 calibration still applies within each band's integration window
-        # (out-of-adaptive-range LSB values are exploratory only — the UI labels them clearly).
+        # Full 0–fmax scan in LSB mode (do NOT cap fmax at adaptive_band[1]). k=269 is validated and
+        # the firmware can place an adaptive band only within 8–30 Hz, so bands whose CENTER is
+        # outside [8, 30] are flagged adaptive_valid=False and shown at reduced opacity (exploratory).
+        # The k=269 band-integral conversion is applied uniformly; out-of-adaptive values are
+        # exploratory only and the UI labels them as such.
         if fmax is None:
             fmax = float(np.nanmax(f))
         feature_used = "lsb_calibrated"
@@ -1482,7 +1483,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         # The per-band feature that r / AUC / clustered-logit p all run on.
-        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, scanned 8–30 Hz
+        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, full 0–fmax scan
         #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
         "feature": feature_used,
         "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
@@ -1495,7 +1496,9 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
             "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
             "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
-            "uncalibrated. Scan restricted to the validated, firmware-programmable 8–30 Hz range."
+            "uncalibrated. Scan covers the full 0–100 Hz spectrum; the validated, firmware-"
+            "programmable 8–30 Hz range is flagged per band (adaptive_valid) — bands outside it are "
+            "exploratory and shown at reduced opacity."
             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
         # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
         # (channel, rating). 0 when no report had competing tiers.
