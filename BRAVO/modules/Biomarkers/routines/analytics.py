@@ -1157,9 +1157,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     if use_lsb:
         # Scan ONLY the validated/device-programmable range (8–30 Hz); k=269 has no ground truth
         # outside it and the firmware can't place an adaptive band there.
-        if adaptive_band is not None:
-            fmax = min(float(fmax) if fmax is not None else float(np.nanmax(f)),
-                       float(adaptive_band[1]))
+        # Do NOT cap fmax at adaptive_band[1] — the full 0–100 Hz scan runs in LSB mode too.
+        # Bands outside 8–30 Hz are flagged adaptive_valid=False and shown at reduced opacity;
+        # the validated k=269 calibration still applies within each band's integration window
+        # (out-of-adaptive-range LSB values are exploratory only — the UI labels them clearly).
+        if fmax is None:
+            fmax = float(np.nanmax(f))
         feature_used = "lsb_calibrated"
         n_demoted = 0
 
@@ -1218,12 +1221,15 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
     fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
     w = float(band_width_hz)
-    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax]. In LSB mode the
-    # whole 5 Hz window must also sit at/above the validated lower edge (8 Hz): clamp the first
-    # center to adaptive_lo + w/2 so no band straddles below 8 Hz where k=269 is unvalidated.
+    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully within [0, fmax].
+    # In LSB mode the scan still runs the FULL 0–100 Hz range (centers 2.5–97.5 Hz with the
+    # default 5 Hz window and fmax=100). Bands outside 8–30 Hz are flagged adaptive_valid=False
+    # and the UI renders them at reduced opacity with a green tint over the 8–30 Hz region —
+    # the user sees the full spectral landscape while the deployable range is clearly marked.
+    # Previously the first center was clamped to adaptive_band[0] + w/2 = 10.5 Hz, making
+    # 10.5 Hz the LOWEST displayed center and losing the 8.0–10.0 Hz bands entirely. The fix:
+    # always start at w/2 (= 2.5 Hz) regardless of mode; adaptive_valid already gates correctness.
     lo_c = w / 2.0
-    if use_lsb and adaptive_band is not None:
-        lo_c = max(lo_c, float(adaptive_band[0]) + w / 2.0)
     hi_c = fmax - w / 2.0
     if hi_c <= lo_c:
         return None
@@ -1237,7 +1243,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     band_meta = []
     for c in centers:
         b0, b1 = c - w / 2.0, c + w / 2.0
-        adaptive_valid = bool(a_lo is not None and b0 >= a_lo - 1e-9 and b1 <= a_hi + 1e-9)
+        # adaptive_valid is True when the CENTER frequency (not the full band) lies within the
+        # validated/deployable range [a_lo, a_hi]. This means the 8–30 Hz green tint starts at
+        # the first center that IS 8 Hz (≈ 8.5 Hz on the 2.5-step half-integer grid), not at the
+        # first center whose entire 5 Hz window clears 8 Hz (which was 10.5 Hz — wrong).
+        # The integration still uses the full ±2.5 Hz window; adaptive_valid is purely a UI marker.
+        adaptive_valid = bool(a_lo is not None and a_lo - 1e-9 <= c <= a_hi + 1e-9)
         band_meta.append({"center": float(c), "lo": float(b0), "hi": float(b1),
                           "adaptive_valid": adaptive_valid})
 

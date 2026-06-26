@@ -448,18 +448,21 @@ def test_spectral_feature_importance_finds_planted_band():
     # planted band 15-20 Hz; the peak 5 Hz scan-band center sits within +/- one band-half of 17.5
     assert abs(sc["centers"][bi] - 17.5) <= 2.5, sc["centers"][bi]
     assert ch0["auc"][bi] is not None and ch0["scatter"][bi] is not None
-    # adaptive-valid flags: a 5 Hz band fits inside [8,30] only for centers in [10.5, 27.5]
+    # adaptive_valid now flags by CENTER (not full-band-inside), so the green tint spans
+    # [8, 30] Hz center-wise. On the 2.5-step half-integer grid the first adaptive center is 8.5 Hz
+    # and the last is 29.5 Hz (== largest center ≤ 30.0).
     cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
-    assert cen[av].min() == 10.5 and cen[av].max() == 27.5
+    assert cen[av].min() == 8.5 and cen[av].max() == 29.5
 
 
 def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
     """LSB feature mode (PI request): when the detail carries absolute µV²/Hz density, the band
-    feature becomes log10(269 × ∫density) restricted to 8–30 Hz, built from TD-derived rows only.
-    Validates: (1) feature flagged lsb_calibrated + unit string; (2) scan clamped to 8–30 Hz so
-    every band center sits in [10.5, 27.5]; (3) the calibrated LSB value equals 269 × the trapezoid
-    band integral of the absolute density (the SAME conversion as deployment/timeline); (4) the
-    planted band is recovered; (5) onboard-FFT rows (NaN in psd_abs) contribute no LSB sample."""
+    feature is log10(269 × ∫density), computed for the FULL 0–100 Hz scan (centers 2.5–97.5 Hz).
+    The 8–30 Hz adaptive range is flagged via adaptive_valid (center-based), not by clamping.
+    Validates: (1) feature flagged lsb_calibrated + unit string; (2) full scan (centers 2.5–97.5);
+    (3) adaptive_valid True only for centers in [8, 30] Hz (center-based, not full-band-inside);
+    (4) the calibrated LSB value equals 269 × trapezoid integral (same as deployment/timeline);
+    (5) the planted band is recovered; (6) onboard-FFT rows (NaN in psd_abs) contribute no LSB."""
     det = _planted_detail(center=17.5, beta=0.5, seed=3)
     f = det["f_set"]; psd = det["psd"]            # psd here is linear (prelog False)
     # Provide absolute density = the linear psd; NaN out a few "onboard-FFT" rows in channel 0.
@@ -470,9 +473,12 @@ def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
     assert sc["feature"] == "lsb_calibrated", sc["feature"]
     assert "LSB" in sc["feature_unit"] and "269" in sc["feature_unit"]
     cen = np.array(sc["centers"])
-    assert cen.min() >= 10.5 - 1e-9 and cen.max() <= 27.5 + 1e-9, (cen.min(), cen.max())
-    # Every band fully inside 8–30 -> all adaptive_valid in LSB mode.
-    assert all(b["adaptive_valid"] for b in sc["bands"])
+    # Full 0–100 Hz scan: centers span [2.5, 97.5] Hz (half-integer grid, 5 Hz window).
+    assert abs(cen.min() - 2.5) < 1e-9 and abs(cen.max() - 97.5) < 1e-9, (cen.min(), cen.max())
+    # adaptive_valid = center in [8, 30] Hz (center-based); NOT all bands — only the 8–30 Hz zone.
+    av = np.array([b["adaptive_valid"] for b in sc["bands"]])
+    assert av.any() and not av.all(), "Expected some adaptive and some non-adaptive bands"
+    assert cen[av].min() == 8.5 and cen[av].max() == 29.5, (cen[av].min(), cen[av].max())
     # Recompute the calibrated LSB for one band/row directly and match the scatter x (log10 LSB).
     ch0 = sc["channels"][0]
     bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
