@@ -571,10 +571,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           });
         }
         // MODELED tier (psd_modeled): calibrated LSB from montage-survey TD (Welch256 × 269), drawn
-        // as DISTINCT HOLLOW DIAMONDS so it is never read as a sensed value. Colored by sensing
-        // center freq (same FREQ_PALETTE), dimmed in binarization mode like the other band-power
-        // layers. These ride the lane's y-scale but did NOT set it (native-only window), so a modeled
-        // outlier can clip at the lane edge rather than rescale the sensed trace.
+        // as DISTINCT HOLLOW DIAMONDS so it is never read as a sensed value. These modeled points come
+        // from the montage/survey sweeps, which ARE pooled into the binarization scan — so unlike the
+        // sensed band-power LSB they CAN be assigned to a pain bin. In binarization mode we therefore
+        // color each diamond by its matched pain bin (via binOf on the modeled point's own timestamp),
+        // exactly like the PSD ticks, so the clinician can see which modeled LSB points fall in the
+        // high/low/excluded set; unmatched modeled points stay faint. In frequency mode they color by
+        // sensing center freq (same FREQ_PALETTE). They ride the lane's y-scale but did NOT set it
+        // (native-only window), so a modeled outlier clips at the lane edge rather than rescaling.
         if (ov.modeled && ov.modeled.length) {
           const byFreqM = {};
           ov.modeled.forEach((m) => {
@@ -582,18 +586,32 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             if (c != null) present.add(c);
             (byFreqM[c == null ? "na" : String(c)] = byFreqM[c == null ? "na" : String(c)] || []).push(m);
           });
+          // Color one modeled point: by pain bin in binMode (matched -> bin color, else faint),
+          // by sensing frequency otherwise.
+          const modeledColor = (m, c) => {
+            if (!binMode) return freqColor(c);
+            const b = binOf(ch, m.t);
+            return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
+          };
           Object.keys(byFreqM).forEach((key) => {
             const ms = byFreqM[key];
             const c = key === "na" ? null : Number(key);
-            const fc = binMode ? DIM_GREY_FAINT : freqColor(c);
+            const cols = ms.map((m) => modeledColor(m, c));
+            // Matched modeled points read a touch larger in binMode so the assigned ones stand out.
+            const sizes = cols.map((col) => (binMode && col !== DIM_GREY_FAINT ? 9 : 7));
+            const lineCols = cols;
             const mxRaw = ms.map((m) => m.y);
             reg.traces.push({ idx: traces.length, raw: mxRaw });
             traces.push({ type: "scattergl", mode: "markers",
               x: ms.map((m) => D(m.t)), y: ms.map((m) => sc(m.y)),
-              marker: { symbol: "diamond-open", size: 7, color: fc, line: { color: fc, width: 1.4 } },
-              customdata: ms.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c)]),
+              marker: { symbol: "diamond-open", size: sizes, color: cols,
+                        line: { color: lineCols, width: 1.4 } },
+              customdata: ms.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c),
+                binMode ? (binOf(ch, m.t) || "unmatched") : ""]),
               hovertemplate: `${prettyContact(labelFor(ch))} · modeled (survey PSD ×269) · %{customdata[1]} Hz<br>`
-                + `≈%{customdata[0]} LSB (modeled, not sensed)<br>%{x}<extra></extra>`,
+                + `≈%{customdata[0]} LSB (modeled, not sensed)`
+                + (binMode ? `<br>bin: %{customdata[2]}` : "")
+                + `<br>%{x}<extra></extra>`,
               showlegend: false });
           });
         }
@@ -884,19 +902,41 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
 
-    // ---- right-side frequency legend: only realized centers (multimodal mode only — in
-    // binarization mode the lanes are not frequency-colored, so the freq legend would mislead) ----
+    // ---- frequency-color key: a COMPACT, self-contained box sitting just to the RIGHT of the main
+    // glyph legend, above the plot (was a tall vertical column running down the right margin). Only
+    // realized centers, multimodal mode only — in binarization mode the lanes are not
+    // frequency-colored, so the key would mislead. Laid out as a small wrapped grid of [swatch Hz]
+    // chips inside its own bordered box, mirroring the main legend's white-fill/black-border styling
+    // so the two read as a matched pair of keys flanking the title.
     const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
-    if (pcs.length) annotations.push({ xref: "paper", yref: "paper", x: 1.015, y: 0.90,
-      text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "left",
-      font: { size: 11, color: "#333" } });
-    pcs.forEach((cen, i) => {
-      const yy = 0.855 - i * 0.046;
-      shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: 1.015, x1: 1.033,
-        y0: yy - 0.014, y1: yy + 0.014, fillcolor: freqColor(cen), line: { color: "#fff", width: 0.5 } });
-      annotations.push({ xref: "paper", yref: "paper", x: 1.039, y: yy, text: fmtHz(cen),
-        showarrow: false, xanchor: "left", font: { size: 10.5, color: "#333" } });
-    });
+    if (pcs.length) {
+      // Geometry in paper coords. The box top aligns with the main legend top (y≈1.155); it sits to
+      // the right (x≈0.80→1.0 band, just clear of the centered legend). Chips wrap N-per-row.
+      const BX0 = 0.815, BX1 = 1.0;        // box left/right (paper x)
+      const BTOP = 1.175, ROW_H = 0.05;     // box top + per-row height (paper y)
+      const PER_ROW = 3;                    // chips per row
+      const nRows = Math.ceil(pcs.length / PER_ROW);
+      const titleY = BTOP - 0.028;
+      const gridTop = titleY - 0.044;
+      const colW = (BX1 - BX0 - 0.03) / PER_ROW;
+      // Bordered container (a touch below the title row, enclosing the chip grid).
+      shapes.push({ type: "rect", xref: "paper", yref: "paper",
+        x0: BX0, x1: BX1, y0: gridTop + 0.028 - nRows * ROW_H - 0.012, y1: BTOP,
+        fillcolor: "rgba(255,255,255,0.96)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
+      annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
+        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center",
+        font: { size: 11, color: "#333" } });
+      pcs.forEach((cen, i) => {
+        const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
+        const cx = BX0 + 0.018 + col * colW;
+        const yy = gridTop - row * ROW_H;
+        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.016,
+          y0: yy - 0.013, y1: yy + 0.013, fillcolor: freqColor(cen),
+          line: { color: "#fff", width: 0.5 }, layer: "above" });
+        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.022, y: yy, text: fmtHz(cen),
+          showarrow: false, xanchor: "left", font: { size: 10.5, color: "#333" } });
+      });
+    }
 
     // ---- provenance subtitle -----------------------------------------------------------------
     const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
@@ -909,7 +949,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
       // as the [tick · contact · region] stack needs and no wider — tight, collision-free, and
       // self-adjusting to the label set / font auto-shrink. Was a hardcoded 175/330.
-      margin: { l: MARGIN_L, r: 120, t: 170, b: 46 },
+      // Right margin trimmed (the sensing-Hz key moved from the right column to a box above the
+      // plot); top margin holds the title + the two flanking key boxes.
+      margin: { l: MARGIN_L, r: 60, t: 190, b: 46 },
       hovermode: "closest",
       // Constant uirevision: preserve the clinician's zoom/pan/legend state across re-renders driven
       // by the match-window slider, strategy, or the color-mode toggle (Plotly resets the view on

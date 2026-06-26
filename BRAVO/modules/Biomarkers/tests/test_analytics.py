@@ -834,6 +834,36 @@ def test_deployment_roc_by_era_pooled_orientation_surfaces_reversal():
     assert res["ci_overlaps_pooled"]["HIGH"] is False
 
 
+def test_deployment_roc_by_era_noisy_dip_is_not_a_confident_reversal():
+    """A point AUC below 0.5 is NOT a direction reversal unless the whole 95% CI is below chance.
+    With NO real band-pain relationship in the HIGH era (high_sign=0), that era's AUC scatters
+    around 0.5 with a wide CI that straddles it — the old point-estimate rule would mis-flag the
+    noisy dips as 'direction REVERSES' (the worst, deploy-blocking verdict). The CI-gated rule must
+    not: `reversed` stays falsy and `any_reversed` is False, while `any_below_half` still records the
+    descriptive dip. This is the statistical-correctness fix: AUC<0.5 alone does not imply a sign
+    flip in the band-pain relationship."""
+    det, stim = _era_split_detail(beta=0.6, high_sign=0.0, seed=11)   # HIGH era: no real effect
+    res = analytics.deployment_roc_by_era(det, "ZERO_TWO_LEFT", 20.0, stim, n_boot=300, seed=0)
+    assert res["available"], res.get("reason")
+    high = res["eras"]["HIGH"]
+    assert high["available"]
+    # No era is CONFIDENTLY reversed: every estimable era's reversed flag is falsy (False/None),
+    # and the panel-level hard-fail signal is off.
+    for tag in ["OFF", "LOW", "HIGH"]:
+        e = res["eras"][tag]
+        if e.get("available"):
+            assert e["reversed"] is not True, (tag, e)
+    assert res["any_reversed"] is False
+    # And wherever a point AUC dipped below 0.5, that era's CI still includes 0.5 (not a clean
+    # reversal) — the very condition the fix protects against.
+    for tag in ["OFF", "LOW", "HIGH"]:
+        e = res["eras"][tag]
+        if e.get("available") and e.get("auc_below_half") and e.get("auc_hi") is not None:
+            assert e["auc_hi"] >= 0.5, (tag, e)
+    # The descriptive flag is exposed (whether or not a dip occurred this seed, the key must exist).
+    assert "any_below_half" in res
+
+
 def test_deployment_roc_by_era_portable_when_eras_agree():
     """Audit C3 (other direction): when every era shares the pooled sign and their CIs overlap the
     pooled CI, the band is portable_by_ci and no era is flagged reversed."""
@@ -1168,6 +1198,7 @@ if __name__ == "__main__":
     test_auc_power_conservative_band_gates_on_ci_lower_bound()
     test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance()
     test_deployment_roc_by_era_pooled_orientation_surfaces_reversal()
+    test_deployment_roc_by_era_noisy_dip_is_not_a_confident_reversal()
     test_deployment_roc_by_era_portable_when_eras_agree()
     test_deployment_summary_gate_states_and_necessary_blocking()
     test_psd_lsb_conversion_recovers_planted_proportional_constant()

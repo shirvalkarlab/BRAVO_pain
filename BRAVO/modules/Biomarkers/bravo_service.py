@@ -3834,16 +3834,36 @@ def deployment_summary(request_data):
     chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
     pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
     from modules.Biomarkers.routines import availability as _av
-    lsb = _av.lsb_series(chronic_list, pd_list)
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, Welch256×269 — the same
+    # hollow-diamond series the timeline draws) is available as a fallback when the device never
+    # sensed THIS band natively. Mirrors the timeline caller so the deployment fallback sees exactly
+    # the modeled points the clinician sees on the timeline.
+    psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
+    sensing_hz = analytics.power_center_freqs(pd_list)
+    lsb = _av.lsb_series(chronic_list, pd_list,
+                         montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
     half = band_width_hz / 2.0
     series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
     thr_lsb = None; n_tl = 0
+    modeled_thr = None; n_modeled = 0      # MODELED-LSB fallback (psd_modeled tier)
     if series is not None:
         y = np.asarray(series.get("y"), dtype=float); hz = np.asarray(series.get("center_hz"), dtype=float)
-        bm = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
-        vals = y[bm]; n_tl = int(vals.size)
+        src = np.asarray(series.get("source"), dtype=object)
+        modeled_flag = np.asarray(series.get("modeled"), dtype=object)
+        bandm = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+        # NATIVE (sensed) points only: exclude the modeled psd_modeled samples so a measured threshold
+        # is never contaminated by a modeled one (native is always preferred for the deployable number).
+        is_modeled = np.array([bool(m) for m in modeled_flag]) if modeled_flag.size == y.size \
+            else np.zeros(y.size, bool)
+        native_m = bandm & ~is_modeled
+        vals = y[native_m]; n_tl = int(vals.size)
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
+        # MODELED points in-band (the montage-survey Welch256×269 series) — gathered regardless, used
+        # only if there's no native threshold (handled below).
+        mvals = y[bandm & is_modeled]; n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
 
     # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
     # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
@@ -3851,7 +3871,41 @@ def deployment_summary(request_data):
     # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
     # mistakes a modeled threshold for a measured one.
     thr_estimate = None
-    if thr_lsb is None and cutpoint is not None:
+    # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
+    # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
+    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
+    # those at the same percentile, the SAME way the native path reads it. This is the closest thing
+    # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
+    # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
+    # for a sensed value.
+    if thr_lsb is None and modeled_thr is not None:
+        fextrap = bool(center_hz is not None and (
+            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+        note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
+                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
+                "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
+                "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
+                % (percentile, n_modeled))
+        if fextrap:
+            note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
+                analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
+        sigma = analytics.LSB_UV2_SIGMA_FOLD
+        thr_estimate = {
+            "estimated_upper_lsb": modeled_thr,
+            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
+            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
+            "sigma_fold": round(float(sigma), 3),
+            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
+            "r2": None, "n_modeled_points": n_modeled,
+            "freq_extrapolated": fextrap,
+            "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+            "note": note,
+            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
+        }
+    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
+    # only if there were no modeled timeline points to read either.
+    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
         from modules.Biomarkers.routines import psd_lsb_model as _plm
         est = _plm.estimate_lsb(rd.get("Participant"), channel, center_hz, float(cutpoint))
         if est.get("available"):
@@ -4130,11 +4184,14 @@ def deployment_summary(request_data):
             f"Forward validation not possible ({forward.get('reason', 'insufficient temporal span')}): "
             "every reported AUC is in-sample. Out-of-sample generalization is UNCONFIRMED.")
     if thr_lsb is None and thr_estimate is not None:
+        _src_phrase = ("read from the MODELED LSB timeline (montage/survey sweeps, Welch256×269)"
+                       if thr_estimate.get("tier") == "modeled_timeline"
+                       else "MODELED from the physical µV² cut-point via the frozen PSD→LSB conversion")
         caveats.append(
             f"ESTIMATED threshold ({thr_estimate['tier']} tier): the device never sensed this "
-            f"(channel, band) long enough to read a threshold off its own LSB Timeline. The "
-            f"≥ {thr_estimate['estimated_upper_lsb']} LSB value is MODELED from the physical µV² "
-            f"cut-point via the frozen PSD→LSB conversion ({thr_estimate['note']}). Sense this band "
+            f"(channel, band) long enough to read a threshold off its own sensed LSB Timeline. The "
+            f"≥ {thr_estimate['estimated_upper_lsb']} LSB value is {_src_phrase} "
+            f"({thr_estimate['note']}). Sense this band "
             "on the device to confirm before committing it as an adaptive threshold.")
 
     def _ff(x):

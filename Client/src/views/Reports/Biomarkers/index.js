@@ -6,7 +6,7 @@
 * power-domain ~10-min LFP threshold detector) returned by /api/queryBiomarkerAnalysis.
 */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid, Select, MenuItem, FormControl,
@@ -76,6 +76,19 @@ function Biomarkers() {
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
   const [matchTolerance, setMatchTolerance] = useState(60);
+  // DEBOUNCED match window for the heavy live recompute. Dragging the survey-match slider fires
+  // onChange on every pixel; the matched-scan rematch + the timeline's Plotly redraw are both
+  // expensive, so re-running them on every intermediate value makes the slider and plot lag. We keep
+  // `matchTolerance` updating instantly (responsive thumb + label + the count caption) but debounce a
+  // SECOND value that actually drives the scan model / timeline overlay, so the costly work runs once
+  // the user pauses (~250 ms) rather than dozens of times mid-drag.
+  const [matchToleranceDebounced, setMatchToleranceDebounced] = useState(60);
+  const _tolTimer = useRef(null);
+  useEffect(() => {
+    if (_tolTimer.current) clearTimeout(_tolTimer.current);
+    _tolTimer.current = setTimeout(() => setMatchToleranceDebounced(matchTolerance), 250);
+    return () => { if (_tolTimer.current) clearTimeout(_tolTimer.current); };
+  }, [matchTolerance]);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
@@ -274,11 +287,11 @@ function Biomarkers() {
   const scanModel = useMemo(() => {
     if (!scanIndex || !painSeriesLive) return null;
     return computeMatchedScanModel({
-      scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance,
+      scanIndex, painSeries: painSeriesLive, toleranceMin: matchToleranceDebounced,
       strategy, percentileLow, percentileHigh,
       maxPerRating, refractoryMin, matchDirection,
     });
-  }, [scanIndex, painSeriesLive, matchTolerance, strategy, percentileLow, percentileHigh,
+  }, [scanIndex, painSeriesLive, matchToleranceDebounced, strategy, percentileLow, percentileHigh,
       maxPerRating, refractoryMin, matchDirection]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor

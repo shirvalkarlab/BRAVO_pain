@@ -71,19 +71,25 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       : "";
     const lrtNote = (lrt.available && lrt.lrt_p != null)
       ? ` band×era LRT p=${fmt(lrt.lrt_p, 3)}.` : " band×era LRT did not converge.";
+    // An era whose POINT AUC dipped below 0.5 but whose CI still straddles chance is NOT a reversal
+    // (consistent with no stim-state effect) — surface it as a soft caveat, never the hard verdict.
+    const dipNote = (!data.any_reversed && data.any_below_half)
+      ? " (One era's point AUC fell below 0.5, but its 95% CI still includes chance, so this is noise, not a confirmed reversal.)"
+      : "";
     if (estimable < 2) {
       verdict = { color: PAL.neutral, text: "Only one stim era has enough data — per-era portability across stim states can't be assessed." };
     } else if (data.any_reversed) {
-      // The worst closed-loop failure: the band's direction flips under stim. Hard fragile.
-      verdict = { color: PAL.fail, text: `Direction REVERSES under stim: at least one era's band–pain relationship flips sign (AUC < 0.5 under the pooled orientation). A controller anchored on the pooled threshold would ramp the WRONG way in that era — do not deploy as a fixed-sign adaptive band.${lrtNote}` };
+      // The worst closed-loop failure: the band's direction CONFIDENTLY flips under stim — an era's
+      // ENTIRE 95% CI sits below chance, not just its point estimate. Hard fragile.
+      verdict = { color: PAL.fail, text: `Direction REVERSES under stim: at least one era's band–pain relationship confidently flips sign — its entire 95% AUC CI sits below 0.5 under the pooled orientation. A controller anchored on the pooled threshold would ramp the WRONG way in that era — do not deploy as a fixed-sign adaptive band.${lrtNote}` };
     } else if (lrt.available && lrt.stim_stable === false) {
       verdict = { color: PAL.fail, text: `Fragile across stim states: the band×era interaction is significant (p=${fmt(lrt.lrt_p, 3)}) — the band's pain-prediction depends on stim state, so the same threshold may not hold once stim changes.${spreadNote}` };
     } else if (data.portable_by_ci === false) {
       verdict = { color: PAL.warnText, text: `Per-era CIs do not all overlap the pooled estimate — portability is uncertain across stim states.${lrtNote}${spreadNote}` };
     } else if (data.portable_by_ci === true) {
-      verdict = { color: PAL.pass, text: `Portable across stim states: no era reverses direction and every era's 95% CI overlaps the pooled estimate — the threshold holds across stim levels.${lrtNote}${spreadNote}` };
+      verdict = { color: PAL.pass, text: `Portable across stim states: no era confidently reverses direction and every era's 95% CI overlaps the pooled estimate — the threshold holds across stim levels.${lrtNote}${dipNote}${spreadNote}` };
     } else {
-      verdict = { color: PAL.neutral, text: `Per-era portability across stim states is indeterminate from the available eras.${lrtNote}${spreadNote}` };
+      verdict = { color: PAL.neutral, text: `Per-era portability across stim states is indeterminate from the available eras.${lrtNote}${dipNote}${spreadNote}` };
     }
   }
 

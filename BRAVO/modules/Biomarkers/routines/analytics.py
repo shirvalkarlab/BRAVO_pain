@@ -1838,7 +1838,14 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
         # Pooled (fixed_flip=None) is oriented to its own data -> auc >= 0.5. Eras reuse the pooled
         # sign and report the SIGNED AUC (no fold), so a reversal shows as auc < 0.5.
         auc = float(metrics.roc_auc_score(y, use))
-        reversed_dir = bool(auc < 0.5)
+        # `auc < 0.5` as a POINT estimate is NOT evidence of a true sign reversal — a band with no
+        # real stim-state dependence scatters its per-era AUCs around the pooled value, and a noisy
+        # era easily lands below 0.5 by chance. Calling that a "direction reversal" (the worst,
+        # deploy-blocking verdict) on a point estimate flags noise as a hard failure. We therefore
+        # report two distinct things: `auc_below_half` (the raw point fact, descriptive) and
+        # `reversed` (an INFERENTIAL claim — the whole 95% bootstrap CI sits below 0.5, set after the
+        # bootstrap below). A controller-blocking reversal requires the inferential flag.
+        auc_below_half = bool(auc < 0.5)
         fpr, tpr, thr = metrics.roc_curve(y, use)
         thr_dev = (-thr if flip else thr).astype(float)
         # Youden cut-point
@@ -1866,8 +1873,16 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
                 continue
         lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
         hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
+        # INFERENTIAL reversal: the era's band→pain direction is confidently opposite the pooled sign
+        # only when the ENTIRE 95% CI lies below chance (upper bound < 0.5). If the CI straddles 0.5
+        # the era is merely uninformative under the pooled orientation, not a proven reversal — that
+        # must not trigger the deploy-blocking "ramps the wrong way" verdict. When the CI can't be
+        # estimated (too few bootstrap resamples), fall back to None (unknown), never to the point
+        # estimate.
+        reversed_dir = (bool(hi < 0.5) if hi is not None else None)
         return {"available": True, "auc": auc, "auc_lo": lo, "auc_hi": hi,
-                "reversed": reversed_dir, "n_boot_ok": int(len(baucs)),
+                "reversed": reversed_dir, "auc_below_half": auc_below_half,
+                "n_boot_ok": int(len(baucs)),
                 "n_samples": int(x.size), "n_clusters": int(len(uc)),
                 "n_pos": int(np.sum(y == 1)), "n_neg": int(np.sum(y == 0)),
                 "operating_point": op, "flip": bool(flip),
@@ -1895,7 +1910,12 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     # DESCRIPTIVE annotations only. The band×era LRT (band_stim_stability) is the formal test and is
     # surfaced alongside this by the service layer; this CI signal is the figure-level companion.
     est = [eras_out[t] for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available")]
-    any_reversed = bool(any(e.get("reversed") for e in est))
+    # `reversed` is now the INFERENTIAL flag (whole CI below 0.5); None (CI unknown) is NOT a
+    # reversal. Only a confidently-below-chance era counts. `any_below_half` keeps the descriptive
+    # point-estimate tally so the UI can distinguish "an era dipped below 0.5" (common, noisy) from
+    # "an era's direction is confidently reversed" (rare, deploy-blocking).
+    any_reversed = bool(any(e.get("reversed") is True for e in est))
+    any_below_half = bool(any(e.get("auc_below_half") for e in est))
 
     def _ci_overlap(a, b):
         if a is None or b is None:
@@ -1917,17 +1937,20 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
         "available": True,
         "eras": eras_out, "pooled": pooled,
         "cutpoint_spread": cutpoint_spread, "auc_spread": auc_spread,
-        "any_reversed": any_reversed, "ci_overlaps_pooled": ci_overlaps_pooled,
+        "any_reversed": any_reversed, "any_below_half": any_below_half,
+        "ci_overlaps_pooled": ci_overlaps_pooled,
         "portable_by_ci": portable_by_ci,
         "era_counts": {t: int(np.sum(era == t)) for t in ["OFF", "LOW", "HIGH"]},
         "thresholds_mA": {"off_max": off_max, "low_max": low_max},
         "n_eras_estimable": int(sum(1 for t in ["OFF", "LOW", "HIGH"] if eras_out[t].get("available"))),
         "note": ("Per-era refit of the deployment ROC + Youden cut-point, all oriented to the POOLED "
-                 "sign so a direction reversal under stim shows as a signed AUC below 0.5 (not folded "
-                 "above it). Portability keys on CI overlap with pooled and the band×era LRT, not raw "
-                 "spread; a band whose AUC reverses or whose per-era CIs miss the pooled CI is a "
-                 "fragile controller anchor even with a strong pooled AUC. Eras share "
-                 "band_stim_stability's boundaries."),
+                 "sign. A direction reversal is flagged ONLY when an era's entire 95% CI lies below "
+                 "0.5 (an inferential claim) — a point AUC below 0.5 with a CI straddling chance is "
+                 "reported as 'auc_below_half' but is NOT a reversal, since that is consistent with "
+                 "no stim-state effect. Portability keys on CI overlap with pooled and the band×era "
+                 "LRT, not raw spread; a band whose direction confidently reverses or whose per-era "
+                 "CIs miss the pooled CI is a fragile controller anchor even with a strong pooled "
+                 "AUC. Eras share band_stim_stability's boundaries."),
     }
 
 
