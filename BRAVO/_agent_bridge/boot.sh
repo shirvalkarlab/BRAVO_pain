@@ -25,6 +25,12 @@ fi
 env >> /etc/environment
 service nginx start
 python3 manage.py migrate
-exec gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w "$(nproc)" \
+# Cap workers at 4 for dev: nproc=16 on the lab Mac caused all 16 workers to be
+# spawned, each preloading the full RCS08 dataset. After 2–3 gunicorn --reload
+# cycles (triggered by Client/build writes) RAM was exhausted (15/15 GiB used,
+# 13/16 GiB swap) and the whole machine pegged at 100% CPU on swap thrash.
+# 4 workers handle all realistic concurrent dev load and stay under ~2 GiB.
+NWORKERS=$(( $(nproc) < 4 ? $(nproc) : 4 ))
+exec gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w "$NWORKERS" \
   -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload \
   --access-logfile - --error-logfile -
