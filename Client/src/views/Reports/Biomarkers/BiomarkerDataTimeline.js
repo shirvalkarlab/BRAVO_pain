@@ -926,6 +926,37 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const LEG_TOP_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX);
     const TITLE_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX + TOP_GAP_PX + TITLE_H_PX);  // title baseline (top-anchored)
 
+    // ---- provenance subtitle (hoisted here so the title-width estimate below can use sub.length)
+    const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
+      { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
+    const subj = (data && data.participant_label) || (av && av.participant) || "";
+    const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
+
+    // ---- adaptive legend left edge -----------------------------------------------------------
+    // Read the ACTUAL container pixel width from the live DOM node — exact, not estimated.
+    // plotAreaPx = containerPx - MARGIN_L (left gutter) - 60 (right margin).
+    // computeLegX0(containerPx) → paper-fraction left edge for the glyph legend:
+    //   title is left-anchored at paper x=0.012; its right edge in paper units =
+    //   0.012 + titlePx / plotAreaPx. Add a fixed gap then cap so the Hz chip box fits.
+    // Called once at draw time with the real DOM width, then re-called by plotly_afterplot
+    // on every resize so the legend tracks the title at any browser window width.
+    const computeLegX0 = (cPx) => {
+      const paPx = Math.max(cPx - MARGIN_L - 60, 200);
+      // Arial character widths: bold 26 pt title ≈ 0.63 em/ch; normal 13 pt subtitle ≈ 0.58 em/ch.
+      const titlePx = Math.max(
+        0.63 * 26 * "Biomarker Data Timeline".length,
+        0.58 * 13 * sub.length,
+      );
+      // 0.035 gap between title right edge and legend left edge; cap at 0.80 so Hz box has room.
+      return Math.min(0.012 + titlePx / paPx + 0.035, 0.80);
+    };
+    const containerPx = (ref.current && ref.current.offsetWidth) || 1100;
+    const LEG_X0 = computeLegX0(containerPx);
+    // Legend estimated box width (Arial 11.5 pt × longest label ≈ 38 chars) in paper fraction.
+    // Used below to set BX0 (left edge of the Hz chip box) flush right of the legend.
+    const plotAreaPx = Math.max(containerPx - MARGIN_L - 60, 200);
+    const LEG_EST_W = Math.min(0.018 + (0.58 * 11.5 * 38) / plotAreaPx + 0.04, 0.38);
+
     // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
     // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
     // only — in binarization mode the lanes are not frequency-colored, so the key would mislead.
@@ -939,13 +970,21 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // neither can dip into a lane at any figure height (the old fixed-fraction version did).
       const BTOP = LEG_TOP_Y;              // matched to the main legend top
       const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
-      const PER_ROW = 4;                   // chips per row -> compact grid (11 freqs -> 3 rows)
+      // Adaptive chip layout: BX0 is derived from the legend's estimated right edge so the Hz key
+      // always sits flush to the RIGHT of the glyph legend, regardless of how many realized
+      // frequencies there are. PER_ROW is computed from the remaining paper width (BX0 → right
+      // margin) so chips never overflow off-figure, and never fewer than 2 per row.
+      const HZ_CHIP_W = 0.044;            // paper-fraction width of one [swatch + label] chip
+      const BX0 = LEG_X0 + LEG_EST_W + 0.020;
+      const MAX_BX1 = 0.998;
+      const PER_ROW = Math.max(2, Math.min(pcs.length,
+        Math.floor((MAX_BX1 - BX0 - 0.02) / HZ_CHIP_W)));
       const nRows = Math.ceil(pcs.length / PER_ROW);
-      const BX0 = 0.52, BX1 = 0.80;        // sits to the RIGHT of the left-anchored main legend
-      const CHIP_H = pxY(7);               // chip half-height in pixels -> paper-Y (scales with height)
-      const titleY = BTOP - pxY(18);       // box title baseline
-      const gridTop = titleY - pxY(20);    // first chip-row center
-      const gridBot = BBOT + pxY(12);      // last chip-row center
+      const BX1 = Math.min(BX0 + PER_ROW * HZ_CHIP_W + 0.030, MAX_BX1);
+      const CHIP_H = pxY(7);              // chip half-height in pixels -> paper-Y (scales with height)
+      const titleY = BTOP - pxY(18);      // box title baseline
+      const gridTop = titleY - pxY(20);   // first chip-row center
+      const gridBot = BBOT + pxY(12);     // last chip-row center
       const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
       const colW = (BX1 - BX0 - 0.035) / PER_ROW;
       // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
@@ -967,12 +1006,6 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       });
     }
 
-    // ---- provenance subtitle -----------------------------------------------------------------
-    const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
-      { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
-    const subj = (data && data.participant_label) || (av && av.participant) || "";
-    const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
-
     const layout = {
       height: figH,
       // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
@@ -992,12 +1025,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
-      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored (yanchor:"bottom")
-      // at LEG_BOT_Y — i.e. the box bottom is pinned just above the plot top and the box grows UP into
-      // the margin, so it can NEVER spill into the top lane regardless of how short the plot is (the
-      // old top-anchored version grew downward into the lanes when few channels made the plot short).
-      // LEFT-anchored (x:0) so the compact sensing-Hz key sits flush to its RIGHT, height-matched.
-      legend: { orientation: "v", x: 0.0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
+      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored at LEG_BOT_Y
+      // so the box grows UP into the margin and never spills into a lane. x = LEG_X0: derived from
+      // the actual container pixel width so the legend always starts just right of the title text.
+      // Re-positioned on resize via the plotly_afterplot hook below.
+      legend: { orientation: "v", x: LEG_X0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
@@ -1095,7 +1127,22 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       if (touchedX) { applyTdWidths(); applyLsbScales(); }
     };
     gd.on("plotly_relayout", onRelayout);
-    return () => { try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ } };
+
+    // On resize (window drag, sidebar collapse) recompute the legend's left edge from the
+    // container's new pixel width and relayout — keeps the legend clear of the title at any width.
+    const onAfterPlot = () => {
+      if (!gd || !gd._fullLayout) return;
+      const newPx = (gd.offsetWidth || containerPx);
+      const newX = computeLegX0(newPx);
+      if (Math.abs(newX - (gd._fullLayout.legend && gd._fullLayout.legend.x || 0)) > 0.005) {
+        Plotly.relayout(gd, { "legend.x": newX });
+      }
+    };
+    gd.on("plotly_afterplot", onAfterPlot);
+    return () => {
+      try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
+      try { gd.removeListener("plotly_afterplot", onAfterPlot); } catch (e) { /* noop */ }
+    };
   }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
 
   // Free the WebGL context only when the component actually unmounts (NOT between redraws).
