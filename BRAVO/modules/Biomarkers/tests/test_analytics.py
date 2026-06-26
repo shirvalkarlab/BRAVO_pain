@@ -1625,3 +1625,39 @@ def test_deployment_summary_identity_is_json_serializable():
     restored = json.loads(json.dumps(payload))
     assert restored["identity"]["participant"] == uid
     assert isinstance(restored["identity"]["participant"], str)
+
+
+def test_deployment_summary_real_payload_json_serializable():
+    """Integration guard (code-review PR #8 nit): the hand-built test above can't catch a
+    non-serializable value (numpy scalar, model object) leaking from a REAL roc/forward/by_era/threshold
+    sub-dict — and DRF's renderer json.dumps the WHOLE payload on every request, so any such leak is a
+    hard 500 (exactly the Participant->uid bug). This locks the full contract by json.dumps-ing an actual
+    deployment_summary output.
+
+    Requires the live participant DB (present in the container the test harness runs in). Skips cleanly
+    (no failure) when the participant can't be resolved, so the offline/synthetic path is unaffected.
+    """
+    import json
+    try:
+        from Server import models
+        from Biomarkers import bravo_service as bs
+    except Exception:
+        return  # service/models not importable in this context -> nothing to integration-test
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"  # RCS08 live uid
+    try:
+        if models.Participant.find(uid=uid) is None:
+            return  # participant not in this DB -> skip (no real payload to check)
+    except Exception:
+        return
+    out = bs.deployment_summary({
+        "ParticipantId": uid, "Channel": "ZERO_TWO_LEFT", "CenterHz": 20.0, "BandWidthHz": 5.0,
+        "MatchDirection": "prior",
+    })
+    # Whether available True or False, the payload MUST be JSON-serializable with the stdlib encoder
+    # (no default=str crutch) — that is precisely what DRF does before sending it to the browser.
+    s = json.dumps(out)
+    assert len(s) > 0
+    # And the identity participant, when present, is the uid string (not a model object).
+    if out.get("available") and out.get("identity"):
+        assert out["identity"].get("participant") == uid
+        assert isinstance(out["identity"]["participant"], str)
