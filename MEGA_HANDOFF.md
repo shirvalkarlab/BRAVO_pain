@@ -16,6 +16,75 @@
 
 ---
 
+## 0. Session 2026-06-26 (most recent — read first)
+
+UX + correctness + performance pass on the Biomarker and ClosedLoopSim pages. **PR #8 merged
+into `v3.1.0`** (merge commit `a191b758`; 14 commits `e57a7078..a191b758`). All backend tests:
+**184/184** via `python3 _agent_bridge/run_tests.py`. Active branch `PS_closedloop_deployment`
+is 2 commits ahead of origin's pre-push state at session end; HEAD = `97d4e86`.
+
+**Frontend / UX.**
+- Biomarker timeline legend: right-anchored the glyph legend (`x:1.0, xanchor:"right"`) so it
+  can never overlap the left-aligned title (collision-free by construction); deleted the useless
+  "Sensing center (Hz)" swatch key (commit `3525c0a` + follow-ups).
+- Biomarker page stat-readout UX batch A–I (commit `35a38aa`): larger stat text, ` · ` separators,
+  expanded abbreviations, NOT-significant red callout, "(in-sample, not cross-validated)" AUC label,
+  clearer control labels, de-reddened pain-metric picker, bigger fine print, ToggleButton aria-labels.
+- **Biomarker state persistence** (commit `2fad81b`): navigating Biomarker→deployment→back no longer
+  resets to the loading view. New `biomarkerStateStore.js` — Layer 1 controls in localStorage
+  (`bravo.biomarkerControls.`), Layer 2 in-memory LRU cache of the ~19 MB heavy result with a
+  `performance.memory` pressure guard (declines to cache above 85% heap → recompute fallback). Status
+  chip shows "✓ view retained" (green) or "⚠ memory tight … recompute on return" (amber). React built.
+- ClosedLoopSim: sticky deployment **verdict strip** + one-page **print stylesheet** (`0d9d51d`);
+  verdict strip + sign-off card now surface the **modeled (estimated) LSB threshold** consistently
+  with the LSB panel (`power ≈ X LSB (tier) · extrapolated`), resolving a same-page contradiction
+  for unsensed bands (PR #8 review fix `f9a6efc`).
+
+**Backend correctness.**
+- Spectral feature-importance scan now spans the **full 0–100 Hz** (centers 2.5–97.5 with the 5 Hz
+  window); 8–30 Hz interpreted as CENTER frequencies and flagged `adaptive_valid` (center-based),
+  green-tinted but not scan-restricting (`dffbe9c`/`0107792`/`42316e0`). x-axis always full-range.
+- Modeled-LSB fallback ladder shared between `band_lsb_and_power` and `deployment_summary` via
+  `_modeled_lsb_threshold_estimate` (TIER1 modeled_timeline → TIER2 frozen PSD→LSB → TIER3 validated
+  k=269); estimated values flagged so the UI never shows a modeled number as measured (`dd46c95`).
+- `/queryDeploymentSummary` 500 fixed: identity dict carried a Django `Participant` model object
+  (not JSON-serializable) → use `participant_uid` string (`f5963d9`).
+- Intermittent "ROC request failed": embedded R (single-threaded) corrupted by concurrent glmer fits
+  from sibling panels under the async worker → process-wide reentrant lock `_R_GLOBAL_LOCK` around
+  every pymer4/lme4 fit + lifted the deployment-summary fetch to the parent so verdict strip and
+  sign-off card share ONE call (`7d59fad`).
+
+**Backend performance** (commit `97d4e86`; user ask: "vectorize the bootstraps/elsewhere,
+parallelize across 16 cores where you cannot vectorize"). `run_for_participant` recompute ~63s→~47s.
+- `threshold_biomarker._threshold_metric_arrays`: one `searchsorted` pass for sens/spec/acc across the
+  whole 60–200 threshold grid, replacing 40k+ per-threshold sklearn `confusion_matrix`/`accuracy_score`
+  calls (~35s of `_param_validation` overhead). Selection loop byte-for-byte unchanged. **24.8×** on
+  that function (38.7→1.56 ms/call). Verified exact-match 800/800 fuzz cases (NaN/ties/one-class).
+- `best_threshold_by_balanced_auc`: vectorized `roc_auc_score(y,binary)=(sens+spec)/2` for the
+  sliding-window/all-data threshold-by-AUC loops. Best AUC identical to full float precision;
+  tie-break among equal-AUC thresholds made **deterministic** (first/lowest AUC-optimal) where the
+  original depended on sklearn float-noise — reproducible run-to-run, real LFP unaffected (boundary
+  thresholds, no ties).
+- `spectral_feature_importance`: per-band CV-AUC + cluster-robust logit-p refactored into an optional
+  parallel pass (`_spectral_cv_threads`, **DEFAULT 1/serial**, opt-in `BRAVO_SPECTRAL_CV_THREADS`).
+  Bit-identical to serial (identical digests at 1 vs 16 threads). Defaulted serial because the scan
+  already runs inside the analytics thread pool and is GIL/BLAS-bound — no wall-clock gain measured;
+  path kept for a future process-pool refactor.
+- New tests: `test_find_best_threshold_vectorized_matches_reference`,
+  `test_best_threshold_balanced_auc_matches_reference`. Verbatim pre-vectorization functions kept as
+  equivalence oracles.
+
+**Infra notes (still open).**
+- Live `bravo-server` (OrbStack) gunicorn capped at min(nproc,4) workers in `boot.sh` +
+  `docker-compose.yml` (commit `fd579ef`) — 16 workers × ~2.3 GB preload had exhausted RAM/swap.
+  Added `--reload-engine poll` because the source tree is a VirtioFS bind mount where inotify
+  reload events don't propagate (`bf62b21`). **Both take effect only on next container restart**
+  (sandbox can't reach the docker daemon); meanwhile the workaround is manual worker recycle
+  (`kill -TERM` in batches of 3, master respawns fresh from disk).
+- High-gamma 55.5 Hz calibration still blocked on lab streaming data.
+
+---
+
 ## 1. Project orientation
 
 **What BRAVO_pain is.** A Django (backend) + React (frontend) web platform that ingests
