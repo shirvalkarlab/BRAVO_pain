@@ -29,6 +29,7 @@ import PsdLsbPanel from "./PsdLsbPanel";
 import ConversionModelPanel from "./ConversionModelPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
 import DeploymentVerdictStrip from "./DeploymentVerdictStrip";
+import useDeploymentSummary from "./useDeploymentSummary";
 import PAL from "./palette";
 import "./deployPrint.css";
 
@@ -204,6 +205,22 @@ function ClosedLoopSim() {
   // so panels only refetch when their own inputs actually change.
   const requestParams = useMemo(() => requestParamsFromCandidate(bc), [bc]);
 
+  // ONE deployment-summary fetch for the whole page. Both the top verdict strip and the bottom
+  // sign-off card need this payload; fetching it once here (instead of once per component) halves the
+  // load on /queryDeploymentSummary — each call runs glmer through rpy2's embedded R, which is
+  // single-threaded per worker, so duplicate concurrent calls were starving the worker pool and
+  // dropping sibling requests (the intermittent "ROC request failed"). Shared result, identical
+  // numbers in both places by construction.
+  const cutThr = cutpoint ? cutpoint.threshold : null;
+  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+  const summary = useDeploymentSummary({
+    participantUid: participant_uid,
+    channel: bc && bc.contact,
+    centerHz: bc && bc.center_freq_hz,
+    bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
+    matchDir, cutThr, requestParams,
+  });
+
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -275,10 +292,10 @@ function ClosedLoopSim() {
             </Grid>
           ) : (
             <>
-              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last. */}
+              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
+                  Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
               <Grid item xs={12}>
-                <DeploymentVerdictStrip participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} />
+                <DeploymentVerdictStrip bandCandidate={bc} summary={summary} />
               </Grid>
 
               <Grid item xs={12}>
@@ -306,7 +323,7 @@ function ClosedLoopSim() {
               </Grid>
               <Grid item xs={12} id="cl-signoff">
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} />
+                  requestParams={requestParams} cutpoint={cutpoint} summary={summary} />
               </Grid>
 
               <Grid item xs={12}>

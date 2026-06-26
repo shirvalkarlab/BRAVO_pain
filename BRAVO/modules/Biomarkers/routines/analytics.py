@@ -8,6 +8,7 @@ card plots. They build on the verbatim science in `threshold_biomarker.py` / `st
 scatter, and the Pearson-R-vs-frequency correlation spectrum).
 """
 
+import threading as _threading
 import warnings
 
 import numpy as np
@@ -2776,6 +2777,13 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     }
 
 
+# Process-wide gate serializing all embedded-R (pymer4/lme4 glmer) access within a worker. Embedded R
+# is single-threaded; concurrent fits from sibling requests corrupt it and silently kill the worker.
+# Reentrant so the LRT path (two fits inside one converter ctx) does not self-deadlock. See
+# _rpy2_converter_ctx for the full rationale.
+_R_GLOBAL_LOCK = _threading.RLock()
+
+
 def _rpy2_converter_ctx():
     """Activate a NON-EMPTY rpy2 conversion context on the CURRENT thread for a pymer4 fit.
 
@@ -2807,11 +2815,31 @@ def _rpy2_converter_ctx():
 
     Returns a no-op nullcontext when rpy2 isn't importable (the caller already guards pymer4
     availability separately and degrades to {available: False}).
+
+    CONCURRENCY: embedded R (the single libR the rpy2 process loads) is NOT thread-safe — there is
+    one R interpreter per worker process, and two threads calling into it at once corrupt its state
+    and kill the worker (the connection drops with NO 500 in the log; the client just sees "request
+    failed"). The deploy page fires several glmer-backed panels (ROC, per-era refit, sign-off) on
+    mount, and under the async UvicornWorker those land on ONE worker concurrently. We therefore hold
+    a process-wide reentrant lock for the whole duration of every fit, so concurrent R work QUEUES
+    instead of racing. This serializes only the R section (seconds), changes no numeric result, and is
+    reentrant so a caller that does two fits inside one ctx (the LRT path) does not self-deadlock.
     """
     try:
         import rpy2.robjects as ro
         from rpy2.robjects.conversion import localconverter
-        return localconverter(ro.default_converter)
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _locked_converter():
+            _R_GLOBAL_LOCK.acquire()
+            try:
+                with localconverter(ro.default_converter) as cv:
+                    yield cv
+            finally:
+                _R_GLOBAL_LOCK.release()
+
+        return _locked_converter()
     except Exception:
         from contextlib import nullcontext
         return nullcontext()

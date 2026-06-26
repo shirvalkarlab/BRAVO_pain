@@ -14,7 +14,6 @@ import { Card, Icon } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import useDeploymentSummary from "./useDeploymentSummary";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -32,14 +31,10 @@ function jumpTo(id) {
   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-export default function DeploymentVerdictStrip({ participantUid, bandCandidate, requestParams, cutpoint }) {
+export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
   const bc = bandCandidate || {};
-  const cutThr = cutpoint ? cutpoint.threshold : null;
-  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
-  const { data, loading, err } = useDeploymentSummary({
-    participantUid, channel: bc.contact, centerHz: bc.center_freq_hz,
-    bandWidthHz: bc.bandwidth_hz || 5.0, matchDir, cutThr, requestParams,
-  });
+  // Consume the SHARED summary fetch lifted to the parent (no own /queryDeploymentSummary call).
+  const { data, loading, err } = summary || { data: null, loading: false, err: null };
 
   // audit C8: readiness keys on NECESSARY gates, not the passed-count (mirrors DeploySignoffCard).
   const ready = data

@@ -69,7 +69,7 @@ function KV({ k, v }) {
   );
 }
 
-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint }) {
+function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary }) {
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
@@ -77,11 +77,15 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const cutThr = cutpoint ? cutpoint.threshold : null;
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
 
-  // SHARED fetch — the identical /api/queryDeploymentSummary call the top verdict strip makes, so
-  // the strip's headline can never disagree with this card (same deterministic inputs → same payload).
-  const { data, loading, err } = useDeploymentSummary({
+  // Prefer the SHARED summary fetch lifted to the parent (one /queryDeploymentSummary call feeds both
+  // this card and the top verdict strip — glmer runs through single-threaded embedded R per worker, so
+  // a duplicate concurrent call starved the pool and dropped sibling requests). Fall back to a local
+  // fetch only if the prop isn't supplied (standalone use), so the two can never disagree.
+  const ownSummary = useDeploymentSummary({
     participantUid, channel: channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams,
+    enabled: !summary,
   });
+  const { data, loading, err } = summary || ownSummary;
   // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
   // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
   // patient at different operating points with identical-looking sign-off sheets.

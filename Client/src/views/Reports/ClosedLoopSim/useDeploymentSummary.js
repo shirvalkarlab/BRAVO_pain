@@ -22,12 +22,15 @@ export function deploymentSummaryBody({ participantUid, channel, centerHz, bandW
 }
 
 export default function useDeploymentSummary({ participantUid, channel, centerHz, bandWidthHz,
-  matchDir, cutThr, requestParams }) {
+  matchDir, cutThr, requestParams, enabled = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
+    // `enabled` lets a consumer that receives the summary as a prop skip its own fetch entirely,
+    // so the shared single-fetch path doesn't get shadowed by a duplicate request.
+    if (enabled === false) return undefined;
     if (!participantUid || channel == null || centerHz == null) return undefined;
     let cancelled = false;
     setLoading(true); setErr(null);
@@ -44,7 +47,7 @@ export default function useDeploymentSummary({ participantUid, channel, centerHz
       setData(null); setErr("request failed"); setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [participantUid, channel, centerHz, bandWidthHz, matchDir, cutThr, requestParams]);
+  }, [participantUid, channel, centerHz, bandWidthHz, matchDir, cutThr, requestParams, enabled]);
 
   return { data, loading, err };
 }
