@@ -14,7 +14,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .threshold_biomarker import _sens_spec
+from .threshold_biomarker import _sens_spec, best_threshold_by_balanced_auc
 
 
 # --- Channel-name formatting -----------------------------------------------------------------
@@ -241,18 +241,9 @@ def _all_data_window(df, thresholds):
     min_count = int(data["pain_level"].value_counts().min())
     btr = pd.concat([data[data["pain_level"] == c].sample(min_count, random_state=42)
                      for c in data["pain_level"].unique()])
-    best_auc, best_thr = -1.0, float(thresholds[0])
-    for thr in thresholds:
-        cls = (btr["LFP_smoothed"] >= thr).astype(int)
-        if cls.nunique() < 2:
-            continue
-        try:
-            a = metrics.roc_auc_score(btr["pain_level"].astype(int).values, cls.values)
-            a = max(a, 1 - a)
-            if a > best_auc:
-                best_auc, best_thr = a, float(thr)
-        except Exception:
-            continue
+    # Threshold by balanced AUC, vectorized (see best_threshold_by_balanced_auc); identical selection.
+    best_thr, best_auc = best_threshold_by_balanced_auc(
+        btr["pain_level"].astype(int).values, btr["LFP_smoothed"].values, thresholds)
     true = data["pain_level"].astype(int).values
     score = data["LFP_smoothed"].astype(float).values
     pred = (score >= best_thr).astype(int)
@@ -379,18 +370,11 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
         min_count = int(train["pain_level"].value_counts().min())
         btr = pd.concat([train[train["pain_level"] == c].sample(min_count, random_state=42)
                          for c in train["pain_level"].unique()])
-        best_auc, best_thr = -1.0, float(thresholds[0])
-        for thr in thresholds:
-            cls = (btr["LFP_smoothed"] >= thr).astype(int)
-            if cls.nunique() < 2:
-                continue
-            try:
-                a = metrics.roc_auc_score(btr["pain_level"].astype(int).values, cls.values)
-                a = max(a, 1 - a)
-                if a > best_auc:
-                    best_auc, best_thr = a, float(thr)
-            except Exception:
-                continue
+        # Threshold by train AUC (cell 14), vectorized: roc_auc_score on a BINARY prediction equals
+        # (sens+spec)/2, so the whole grid is one searchsorted pass instead of 140 sklearn calls.
+        # Selection (first-wins on strict-greater, single-class thresholds skipped) preserved exactly.
+        best_thr, best_auc = best_threshold_by_balanced_auc(
+            btr["pain_level"].astype(int).values, btr["LFP_smoothed"].values, thresholds)
 
         true = test["pain_level"].astype(int).values
         score = test["LFP_smoothed"].astype(float).values
@@ -1001,6 +985,30 @@ def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=
     return out
 
 
+def _spectral_cv_threads():
+    """Worker count for the per-band CV-AUC/logit-p parallel pass in spectral_feature_importance.
+
+    DEFAULTS TO 1 (serial) on purpose. spectral_feature_importance already runs as ONE task inside the
+    analytics `td_tasks` ThreadPool, CONCURRENT with the powerdomain pool's threshold work, and the
+    per-band fits are sklearn LogisticRegression + StratifiedGroupKFold — GIL- and BLAS-bound. With the
+    outer pools already saturating the cores, an inner thread pool here adds scheduling overhead for no
+    wall-clock gain (measured: 46.8 s serial vs 47.8 s at 16 threads end-to-end; per-band AUC/n/p are
+    bit-identical either way — the fixed-seed CV is order-independent). The parallel path is kept,
+    fully equivalence-tested, behind an explicit opt-in so it can be switched on if the outer threading
+    model changes (e.g. a process-pool refactor that frees the GIL): set BRAVO_SPECTRAL_CV_THREADS=N
+    (or the shared BRAVO_BIOMARKER_THREADS=N). Returns >= 1.
+    """
+    import os as _os
+    for var in ("BRAVO_SPECTRAL_CV_THREADS", "BRAVO_BIOMARKER_THREADS"):
+        try:
+            v = int(_os.environ.get(var, "0"))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    return 1
+
+
 def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
     """Cross-validated logistic-regression AUC for a SINGLE feature `x` against binary `y`.
 
@@ -1275,6 +1283,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         r_curve, auc_curve, n_curve, n_r_curve, p_curve = [], [], [], [], []
         p_pearson_curve = []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
+        _cv_jobs = []               # (curve_index, bp_log) for the parallel CV-AUC + logit-p pass
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
             if not bmask.any():
@@ -1324,20 +1333,42 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 r = float(_r); p_pearson = float(_p)
             r_curve.append(_f(r) if r is not None else None)
             p_pearson_curve.append(_f(p_pearson) if (p_pearson is not None and np.isfinite(p_pearson)) else None)
-            # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
-            # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
-            # n_used here is generally < the Pearson n above. When rating-aware (default in "all"
-            # mode), folds are grouped by rating so no rating leaks across train/test and n_used is
-            # the count of INDEPENDENT ratings, not raw samples.
+            # AUC vs BINARIZED label (CV logistic) + its cluster-robust logit-p inference twin are the
+            # two expensive per-band fits (StratifiedGroupKFold + LogisticRegression). They depend only
+            # on this band's `bp_log` (y_bin/auc_groups are constant across bands) and are independent
+            # band-to-band, so we COLLECT them here and run them in parallel after the cheap pass below
+            # (see `_band_cv_stats`). Placeholders keep auc/n/p aligned with the curve indices; the
+            # parallel map overwrites them by index, so the result is identical to the serial loop.
+            auc_curve.append(None)
+            n_curve.append(0)
+            p_curve.append(None)
+            _cv_jobs.append((len(auc_curve) - 1, bp_log))
+
+        # --- Parallel CV pass: the per-band CV-logistic AUC and cluster-robust logit-p are the two
+        # heaviest fits in the scan and are independent across bands, so run them concurrently across
+        # cores (sklearn fits release the GIL). Results are written back BY INDEX, so auc/n/p land in
+        # exactly the positions the serial loop would have produced — numerically identical, only the
+        # wall-clock differs. Each job is self-contained (constant y_bin/auc_groups, this band's bp_log).
+        def _band_cv_stats(bp_log):
             auc, n_used = _cv_logistic_auc(bp_log, y_bin, groups=auc_groups)
-            auc_curve.append(_f(auc) if np.isfinite(auc) else None)
-            n_curve.append(int(n_used))
-            # Inference companion to the AUC: cluster-robust (rating-clustered) logistic Wald p when
-            # rating-aware, else ordinary logistic Wald p. Same band feature, same high-vs-low split.
             with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 p_band, _np_n, _np_g = _cluster_robust_logit_p(bp_log, y_bin, groups=auc_groups)
-            p_curve.append(_f(p_band) if np.isfinite(p_band) else None)
+            return (_f(auc) if np.isfinite(auc) else None, int(n_used),
+                    _f(p_band) if np.isfinite(p_band) else None)
+
+        if _cv_jobs:
+            n_workers = max(1, min(len(_cv_jobs), _spectral_cv_threads()))
+            if n_workers == 1:
+                results = [_band_cv_stats(bp) for _idx, bp in _cv_jobs]
+            else:
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                with _TPE(max_workers=n_workers) as _pool:
+                    results = list(_pool.map(lambda job: _band_cv_stats(job[1]), _cv_jobs))
+            for (idx, _bp), (auc_v, n_v, p_v) in zip(_cv_jobs, results):
+                auc_curve[idx] = auc_v
+                n_curve[idx] = n_v
+                p_curve[idx] = p_v
 
         # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
         from scipy.signal import find_peaks

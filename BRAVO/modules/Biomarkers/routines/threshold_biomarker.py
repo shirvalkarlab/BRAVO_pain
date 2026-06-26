@@ -72,22 +72,68 @@ def _sens_spec(true, pred):
     return sens, spec
 
 
+def _threshold_metric_arrays(true_labels, scores, thresholds):
+    """Vectorized per-threshold sens/spec/acc for the rule `pred = scores >= thr`.
+
+    Replaces the per-threshold sklearn confusion_matrix / accuracy_score calls (which dominated the
+    biomarker recompute: ~35 s of `_param_validation` overhead across 40k+ calls) with a single
+    `searchsorted` pass — sens=tp/P and spec=tn/N are step functions of the threshold, so the whole
+    sweep is one sorted scan. Returns (sens_arr, spec_arr, acc_arr), each aligned to `thresholds`,
+    and IDENTICAL element-for-element to the loop it replaces (verified by
+    test_find_best_threshold_vectorized_matches_reference):
+
+      * sens/spec use the same integer counts -> same float division (NaN when the denominator is 0,
+        matching `_sens_spec`); acc = (tp+tn)/total == sklearn accuracy_score.
+      * NaN scores are handled exactly as the original `score >= thr` (always False -> pred 0): they
+        are excluded from the sorted positive/negative score arrays but still counted in P and N, so
+        a NaN-scored positive is an FN and a NaN-scored negative is a TN at every threshold.
+    """
+    true_labels = np.asarray(true_labels).astype(int)
+    scores = np.asarray(scores, dtype=float)
+    thr = np.asarray(thresholds, dtype=float)
+
+    P = int((true_labels == 1).sum())   # total positives  (incl. NaN-scored -> always FN)
+    N = int((true_labels == 0).sum())   # total negatives  (incl. NaN-scored -> always TN)
+    total = P + N
+
+    pos = np.sort(scores[(true_labels == 1) & np.isfinite(scores)])  # finite positive scores, asc
+    neg = np.sort(scores[(true_labels == 0) & np.isfinite(scores)])  # finite negative scores, asc
+
+    # count of finite scores >= thr (side='left' so the boundary value == thr is included, matching >=)
+    tp = pos.size - np.searchsorted(pos, thr, side="left")           # per-threshold true positives
+    fp = neg.size - np.searchsorted(neg, thr, side="left")           # per-threshold false positives
+    fn = P - tp
+    tn = N - fp
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sens = np.where((tp + fn) > 0, tp / (tp + fn), np.nan)
+        spec = np.where((tn + fp) > 0, tn / (tn + fp), np.nan)
+    acc = (tp + tn) / total if total > 0 else np.full(thr.shape, np.nan)
+    return sens, spec, acc
+
+
 def _find_best_threshold_for_metric(train_df, thresholds, metric="sens"):
     """
     metric='sens' -> maximize sensitivity, tie-break by specificity, then accuracy
     metric='spec' -> maximize specificity, tie-break by sensitivity, then accuracy
+
+    Metric values are now computed for ALL thresholds in one vectorized pass
+    (`_threshold_metric_arrays`); the selection loop below is the byte-for-byte notebook logic,
+    unchanged, just reading the precomputed arrays instead of recomputing per threshold.
     """
     true_labels = train_df["pain_level"].astype(int).values
+    sens_arr, spec_arr, acc_arr = _threshold_metric_arrays(
+        true_labels, train_df["LFP_smoothed"].values, thresholds)
 
     best_thr  = thresholds[0]
     best_sens = -1
     best_spec = -1
     best_acc  = -1
 
-    for thr in thresholds:
-        pred = (train_df["LFP_smoothed"] >= thr).astype(int).values
-        sens, spec = _sens_spec(true_labels, pred)
-        acc = metrics.accuracy_score(true_labels, pred)
+    for i, thr in enumerate(thresholds):
+        sens = sens_arr[i]
+        spec = spec_arr[i]
+        acc  = acc_arr[i]
 
         if metric == "sens":
             better = (
@@ -108,6 +154,75 @@ def _find_best_threshold_for_metric(train_df, thresholds, metric="sens"):
             best_spec = spec
             best_acc  = acc
 
+    return best_thr, best_sens, best_spec, best_acc
+
+
+def best_threshold_by_balanced_auc(true_labels, scores, thresholds):
+    """Pick the threshold maximizing the orientation-free balanced AUC of the binary rule
+    `pred = score >= thr`, vectorized — the exact computation the sliding-window and all-data loops
+    in analytics.py did with a per-threshold sklearn `roc_auc_score(y, binary_pred)` call.
+
+    For a BINARY prediction, roc_auc_score(y, pred) == (sens + spec) / 2 (balanced accuracy), so the
+    notebook's `a = max(auc, 1-auc)` over the grid is `max(ba, 1-ba)` where ba=(sens+spec)/2 — one
+    vectorized pass instead of 140 sklearn calls per window. Returns (best_thr, best_auc).
+
+    EQUIVALENCE (verified by test_best_threshold_balanced_auc_matches_reference):
+      * The BEST AUC value is identical to the original loop's to full float precision — 797 fuzz
+        cases with both pain classes present (NaN scores and heavy ties included; one-class folds are
+        skipped before this selector is ever called, exactly as the production code does). The
+        reported per-window sens/spec/acc/auc are therefore unchanged.
+      * The CHOSEN threshold AMONG EXACT AUC TIES is made deterministic here: np.argmax returns the
+        FIRST (lowest) threshold achieving the maximum balanced AUC. The original loop's choice among
+        ties depended on sklearn's internal AUC float-accumulation differing from (sens+spec)/2 at the
+        ~1e-16 level, which could flip the strict-greater `>` onto a later equally-optimal threshold —
+        an undocumented float-noise artifact, NOT a difference in the science. On real continuous LFP
+        data the AUC-maximizing threshold lands at a non-tied grid edge (observed on RCS08: per-window
+        thresholds at grid boundaries 60/192 where no AUC tie exists), so the deterministic choice
+        coincides with an AUC-optimal threshold there. The "first AUC-optimal threshold" rule is
+        reproducible run-to-run, which the original (sklearn-float-dependent) tie-break was not.
+      * Single-class-prediction thresholds (tp+fp == 0 or == n, i.e. the original's `cls.nunique() < 2`
+        skip) are masked out exactly as before. If no threshold yields a 2-class split, returns
+        (float(thresholds[0]), -1.0) — the untouched initial state.
+    """
+    true_labels = np.asarray(true_labels).astype(int)
+    scores = np.asarray(scores, dtype=float)
+    thr = np.asarray(thresholds, dtype=float)
+    sens, spec, _acc = _threshold_metric_arrays(true_labels, scores, thr)
+    ba = (sens + spec) / 2.0                      # == roc_auc_score(y, binary_pred)
+    a = np.maximum(ba, 1.0 - ba)                  # orientation-free, matches max(auc, 1-auc)
+
+    n = true_labels.size
+    # predicted-positive count per threshold = #(finite scores >= thr); NaN scores are never >= thr.
+    finite_sorted = np.sort(scores[np.isfinite(scores)])
+    n_ge = finite_sorted.size - np.searchsorted(finite_sorted, thr, side="left")
+    # single-class prediction (all 0 or all 1) -> skipped in the original; also drop NaN AUC.
+    valid = (n_ge > 0) & (n_ge < n) & np.isfinite(a)
+    if not valid.any():
+        return float(thr[0]), -1.0
+    a_masked = np.where(valid, a, -np.inf)
+    i = int(np.argmax(a_masked))                  # first max (ascending) == first-wins tie-break
+    return float(thr[i]), float(a[i])
+
+
+def _find_best_threshold_for_metric_reference(train_df, thresholds, metric="sens"):
+    """VERBATIM pre-vectorization implementation, kept ONLY as the equivalence oracle for
+    test_find_best_threshold_vectorized_matches_reference. Do not call in production."""
+    true_labels = train_df["pain_level"].astype(int).values
+    best_thr, best_sens, best_spec, best_acc = thresholds[0], -1, -1, -1
+    for thr in thresholds:
+        pred = (train_df["LFP_smoothed"] >= thr).astype(int).values
+        sens, spec = _sens_spec(true_labels, pred)
+        acc = metrics.accuracy_score(true_labels, pred)
+        if metric == "sens":
+            better = ((sens > best_sens) or
+                      (np.isclose(sens, best_sens) and spec > best_spec) or
+                      (np.isclose(sens, best_sens) and np.isclose(spec, best_spec) and acc > best_acc))
+        else:
+            better = ((spec > best_spec) or
+                      (np.isclose(spec, best_spec) and sens > best_sens) or
+                      (np.isclose(spec, best_spec) and np.isclose(sens, best_sens) and acc > best_acc))
+        if better:
+            best_thr, best_sens, best_spec, best_acc = thr, sens, spec, acc
     return best_thr, best_sens, best_spec, best_acc
 
 

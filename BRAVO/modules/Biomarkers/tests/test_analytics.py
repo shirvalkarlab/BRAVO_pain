@@ -1661,3 +1661,102 @@ def test_deployment_summary_real_payload_json_serializable():
     if out.get("available") and out.get("identity"):
         assert out["identity"].get("participant") == uid
         assert isinstance(out["identity"]["participant"], str)
+
+
+def test_find_best_threshold_vectorized_matches_reference():
+    """The vectorized _find_best_threshold_for_metric (searchsorted sens/spec/acc sweep) must be
+    element-for-element identical to the verbatim pre-vectorization loop across degenerate inputs:
+    NaN scores, heavy ties, and all-one-class labels. This is the sens/spec-objective selector used
+    by the chronic sliding-window detector; vectorizing it removed ~35 s of per-threshold sklearn
+    confusion_matrix/accuracy_score overhead from the biomarker recompute."""
+    import numpy as np, pandas as pd
+    from modules.Biomarkers.routines import threshold_biomarker as tb
+    rng = np.random.default_rng(0)
+    thr = np.arange(60, 200, 1)
+    fails = 0
+    for trial in range(150):
+        n = int(rng.integers(5, 60))
+        y = rng.integers(0, 2, n)
+        if trial % 7 == 0:
+            y = np.zeros(n, int)
+        if trial % 11 == 0:
+            y = np.ones(n, int)
+        lfp = rng.normal(120, 40, n)
+        if trial % 5 == 0:
+            lfp[rng.integers(0, n, size=max(1, n // 4))] = np.nan
+        if trial % 3 == 0:
+            lfp = np.round(lfp / 10) * 10
+        df = pd.DataFrame({"pain_level": y, "LFP_smoothed": lfp})
+        for metric in ("sens", "spec"):
+            a = tb._find_best_threshold_for_metric(df, thr, metric=metric)
+            b = tb._find_best_threshold_for_metric_reference(df, thr, metric=metric)
+
+            def _eq(x, yv):
+                if isinstance(x, float) and np.isnan(x):
+                    return isinstance(yv, float) and np.isnan(yv)
+                try:
+                    return bool(np.isclose(x, yv))
+                except Exception:
+                    return x == yv
+            if not all(_eq(x, yv) for x, yv in zip(a, b)):
+                fails += 1
+    assert fails == 0, f"vectorized threshold selector diverged from reference in {fails} cases"
+
+
+def test_best_threshold_balanced_auc_matches_reference():
+    """best_threshold_by_balanced_auc must reproduce the per-threshold roc_auc_score(y, binary_pred)
+    grid search's BEST AUC exactly (roc_auc on a binary prediction == (sens+spec)/2), across NaN
+    scores / ties / one-class folds. The chosen threshold among EXACT AUC ties is deterministic
+    (first/lowest AUC-optimal threshold); we assert the AUC value matches and that the chosen
+    threshold is itself AUC-optimal (a valid member of the original's tie set)."""
+    import numpy as np
+    from sklearn import metrics
+    from modules.Biomarkers.routines.threshold_biomarker import (
+        best_threshold_by_balanced_auc, _threshold_metric_arrays)
+
+    def _reference(y, lfp, thresholds):
+        best_auc, best_thr = -1.0, float(thresholds[0])
+        for t in thresholds:
+            cls = (lfp >= t).astype(int)
+            if len(np.unique(cls)) < 2:
+                continue
+            try:
+                a = metrics.roc_auc_score(y, cls)
+                a = max(a, 1 - a)
+            except Exception:
+                continue
+            if a > best_auc:
+                best_auc, best_thr = a, float(t)
+        return best_thr, best_auc
+
+    rng = np.random.default_rng(7)
+    thr = np.arange(60, 200, 1)
+    auc_fail = 0
+    thr_not_optimal = 0
+    for trial in range(150):
+        n = int(rng.integers(4, 80))
+        y = rng.integers(0, 2, n)
+        if len(np.unique(y)) < 2:
+            continue   # one-class folds are skipped upstream before this selector is called
+        lfp = rng.normal(120, 40, n).astype(float)
+        if trial % 4 == 0:
+            lfp = np.round(lfp / 15) * 15
+        if trial % 6 == 0 and n > 4:
+            lfp[rng.integers(0, n, size=max(1, n // 5))] = np.nan
+        rt, ra = _reference(y, lfp, thr)
+        vt, va = best_threshold_by_balanced_auc(y, lfp, thr)
+        # 1) best AUC value identical
+        if not (np.isclose(ra, va, atol=1e-9) or (ra == -1.0 and va == -1.0)):
+            auc_fail += 1
+        # 2) the chosen threshold is AUC-optimal (balanced-acc at vt equals the grid max)
+        sens, spec, _ = _threshold_metric_arrays(y, lfp, thr)
+        a = np.maximum((sens + spec) / 2.0, 1.0 - (sens + spec) / 2.0)
+        fs = np.sort(lfp[np.isfinite(lfp)])
+        n_ge = fs.size - np.searchsorted(fs, thr.astype(float), side="left")
+        valid = (n_ge > 0) & (n_ge < n) & np.isfinite(a)
+        amax = np.nanmax(np.where(valid, a, -np.inf))
+        vi = int(np.where(thr == int(vt))[0][0])
+        if not np.isclose(a[vi], amax, atol=1e-9):
+            thr_not_optimal += 1
+    assert auc_fail == 0, f"best balanced-AUC value diverged in {auc_fail} cases"
+    assert thr_not_optimal == 0, f"chosen threshold was not AUC-optimal in {thr_not_optimal} cases"
