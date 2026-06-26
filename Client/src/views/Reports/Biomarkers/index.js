@@ -22,6 +22,9 @@ import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 import { computeMatchedScanModel } from "./binarizationModel";
+import {
+  saveControls, loadControls, putHeavy, getHeavy, underMemoryPressure, memoryInfo,
+} from "./biomarkerStateStore";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -75,14 +78,25 @@ function Biomarkers() {
   const { language } = controller;
   const { participant_uid } = useParams();
 
-  const [data, setData] = useState(false);
+  // Persisted controls for THIS participant (localStorage), read once so the state defaults below
+  // restore the exact panel config the user left when they navigated to the deployment view. null
+  // on first-ever visit -> the documented defaults apply. The heavy ~19 MB result is restored
+  // separately from the in-memory cache (see the hydration effect), never from localStorage.
+  const persisted = useMemo(() => loadControls(participant_uid), [participant_uid]);
+  const P = persisted || {};
+
+  // The heavy result is restored from the module-level LRU cache (survives route unmount/mount).
+  // If a fresh cached bundle exists for this participant, seed `data` with it on the very first
+  // render so the page paints the full analysis immediately instead of the loading view.
+  const cachedHeavy = useMemo(() => getHeavy(participant_uid), [participant_uid]);
+  const [data, setData] = useState((cachedHeavy && cachedHeavy.bundle) || false);
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
-  const [metric, setMetric] = useState("nrs");
-  const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
-  const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
-  const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
+  const [metric, setMetric] = useState(P.metric || "nrs");
+  const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
+  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
+  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
   // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
   // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
@@ -92,15 +106,15 @@ function Biomarkers() {
   // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
-  const [matchTolerance, setMatchTolerance] = useState(60);
+  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
   //   maxPerRating = 1  -> one PSD per rating (the old "one per rating": maximally independent)
   //   maxPerRating > 1  -> up to N nearest-prior PSDs per rating; AUC stays rating-grouped on top.
   // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
-  const [maxPerRating, setMaxPerRating] = useState(3);
-  const [refractoryMin, setRefractoryMin] = useState(2);
+  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : 3);
+  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : 2);
   // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
   // tolerance; pairs the closest PSD in either time direction). Default "prior".
   // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
@@ -108,17 +122,21 @@ function Biomarkers() {
   // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
   // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
   // view where causal direction is the right semantics.
-  const [matchDirection, setMatchDirection] = useState("pro_first");
+  const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
   // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
-  const [timelineColorMode, setTimelineColorMode] = useState("multimodal");
+  const [timelineColorMode, setTimelineColorMode] = useState(P.timelineColorMode || "multimodal");
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
   // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
-  const [requestParams, setRequestParams] = useState(null);
+  // Restore the last-computed requestParams so a return visit isn't "dirty" and the results show
+  // without re-clicking Compute. If the in-memory heavy cache is fresh we already seeded `data`, so
+  // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
+  const [requestParams, setRequestParams] = useState(
+    (persisted && persisted.requestParams) || null);
   const [computing, setComputing] = useState(false);
   const [alert, setAlert] = useState(null);
 
@@ -162,18 +180,50 @@ function Biomarkers() {
   // Fetch ONLY when a compute was requested (requestParams set by the Compute button). Progress is
   // shown INLINE (a labeled bar in the card) instead of the generic "loading data" overlay.
   useEffect(() => {
-    if (!participant_uid || !requestParams) return;
+    if (!participant_uid || !requestParams) return undefined;
+    const requestKey = JSON.stringify(requestParams);
+
+    // CACHE HIT: the in-memory LRU holds the heavy result for THIS exact requestParams (e.g. we just
+    // came back from the deployment view). Restore it with zero recompute — instant, identical view.
+    const cached = getHeavy(participant_uid);
+    if (cached && cached.request_key === requestKey) {
+      setData((prev) => (prev === cached.bundle ? prev : cached.bundle));
+      setComputing(false);
+      return undefined;
+    }
+
+    // CACHE MISS: compute (or recompute after a controls change / hard reload). The backend caches
+    // the PSD inputs, so even the ~19 MB analysis returns quickly on a return visit.
+    let cancelled = false;
     setComputing(true);
     SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
     }).then((response) => {
+      if (cancelled) return;
       setData(response.data);
       setComputing(false);
+      // Stash in the heap cache (memory-guarded — declines under pressure) so the next return is
+      // instant. Persist the controls+requestParams so a hard reload restores the view too.
+      putHeavy(participant_uid, response.data, requestKey);
     }).catch((error) => {
+      if (cancelled) return;
       setComputing(false);
       SessionController.displayError(error, setAlert);
     });
+    return () => { cancelled = true; };
   }, [participant_uid, requestParams]);
+
+  // Persist the lightweight control panel + the last-computed requestParams to localStorage whenever
+  // they change, so navigating to the deployment view and back (or a hard reload) restores the exact
+  // view config. This is the small, always-safe layer; the heavy result rides the in-memory cache.
+  useEffect(() => {
+    if (!participant_uid) return;
+    saveControls(participant_uid, {
+      metric, strategy, percentileLow, percentileHigh, matchTolerance,
+      maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+    });
+  }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
+    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -686,6 +736,20 @@ function Biomarkers() {
                         <MDTypography variant="caption" color="dark">
                           {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
                         </MDTypography>
+                      ) : null}
+                      {/* Persistence status: tells the user this view will survive a trip to the
+                          deployment view. Green when the heavy result is cached in memory (instant
+                          restore); amber when memory is tight so it'll recompute on return instead. */}
+                      {data && !computing ? (
+                        underMemoryPressure() ? (
+                          <MDTypography variant="caption" sx={{ color: "#8A6100", fontStyle: "italic" }}>
+                            {`⚠ memory tight${memoryInfo() ? ` (${memoryInfo().usedMB.toFixed(0)}/${memoryInfo().limitMB.toFixed(0)} MB)` : ""} — view will recompute on return`}
+                          </MDTypography>
+                        ) : (
+                          <MDTypography variant="caption" sx={{ color: "#0a7f3f", fontStyle: "italic" }}>
+                            {"✓ view retained — returns instantly from the deployment page"}
+                          </MDTypography>
+                        )
                       ) : null}
                     </MDBox>
                   </Grid>
