@@ -52,6 +52,23 @@ const DEFAULT_STRATEGY_OPTIONS = [
   { key: "kmeans", label: "KMeans (legacy)" },
 ];
 
+// Debounce a fast-changing value for the EXPENSIVE live recompute. Dragging any of the matching
+// sliders fires onChange on every pixel; the matched-scan rematch and the timeline's Plotly redraw
+// are both costly, so re-running them on every intermediate value makes the sliders and plot lag.
+// The raw slider state still updates instantly (responsive thumbs, value labels, captions, and the
+// binarization cut-lines), but a debounced copy is what drives the heavy scanModel / timeline
+// overlay, so that work runs once the drag settles (~delay ms) instead of dozens of times mid-drag.
+function useDebounced(value, delay = 250) {
+  const [debounced, setDebounced] = useState(value);
+  const timer = useRef(null);
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setDebounced(value), delay);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [value, delay]);
+  return debounced;
+}
+
 function Biomarkers() {
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
@@ -76,19 +93,6 @@ function Biomarkers() {
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
   const [matchTolerance, setMatchTolerance] = useState(60);
-  // DEBOUNCED match window for the heavy live recompute. Dragging the survey-match slider fires
-  // onChange on every pixel; the matched-scan rematch + the timeline's Plotly redraw are both
-  // expensive, so re-running them on every intermediate value makes the slider and plot lag. We keep
-  // `matchTolerance` updating instantly (responsive thumb + label + the count caption) but debounce a
-  // SECOND value that actually drives the scan model / timeline overlay, so the costly work runs once
-  // the user pauses (~250 ms) rather than dozens of times mid-drag.
-  const [matchToleranceDebounced, setMatchToleranceDebounced] = useState(60);
-  const _tolTimer = useRef(null);
-  useEffect(() => {
-    if (_tolTimer.current) clearTimeout(_tolTimer.current);
-    _tolTimer.current = setTimeout(() => setMatchToleranceDebounced(matchTolerance), 250);
-    return () => { if (_tolTimer.current) clearTimeout(_tolTimer.current); };
-  }, [matchTolerance]);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
@@ -284,15 +288,24 @@ function Biomarkers() {
   // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
   const scanIndex = (timelineData && timelineData.availability && timelineData.availability.psd_scan_index)
     || (data && data.availability && data.availability.psd_scan_index) || null;
+  // Debounced copies of every slider-driven input to the heavy matched-scan recompute. The raw
+  // states stay live everywhere else (slider thumbs, value labels, the binarization preview's
+  // cut-lines and counts); only the expensive scanModel + timeline overlay wait for the drag to
+  // settle, so all of these sliders now feel as snappy as the survey-match one.
+  const matchToleranceD = useDebounced(matchTolerance);
+  const percentileLowD = useDebounced(percentileLow);
+  const percentileHighD = useDebounced(percentileHigh);
+  const maxPerRatingD = useDebounced(maxPerRating);
+  const refractoryMinD = useDebounced(refractoryMin);
   const scanModel = useMemo(() => {
     if (!scanIndex || !painSeriesLive) return null;
     return computeMatchedScanModel({
-      scanIndex, painSeries: painSeriesLive, toleranceMin: matchToleranceDebounced,
-      strategy, percentileLow, percentileHigh,
-      maxPerRating, refractoryMin, matchDirection,
+      scanIndex, painSeries: painSeriesLive, toleranceMin: matchToleranceD,
+      strategy, percentileLow: percentileLowD, percentileHigh: percentileHighD,
+      maxPerRating: maxPerRatingD, refractoryMin: refractoryMinD, matchDirection,
     });
-  }, [scanIndex, painSeriesLive, matchToleranceDebounced, strategy, percentileLow, percentileHigh,
-      maxPerRating, refractoryMin, matchDirection]);
+  }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
+      maxPerRatingD, refractoryMinD, matchDirection]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the

@@ -910,31 +910,41 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // so the two read as a matched pair of keys flanking the title.
     const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
     if (pcs.length) {
-      // Geometry in paper coords. The box top aligns with the main legend top (y≈1.155); it sits to
-      // the right (x≈0.80→1.0 band, just clear of the centered legend). Chips wrap N-per-row.
-      const BX0 = 0.815, BX1 = 1.0;        // box left/right (paper x)
-      const BTOP = 1.175, ROW_H = 0.05;     // box top + per-row height (paper y)
-      const PER_ROW = 3;                    // chips per row
+      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (now left-anchored) main glyph
+      // legend and HEIGHT-MATCHED to it — the two read as a paired set of legends above the plot.
+      // Geometry is in paper coords. Two hard constraints, both guaranteed by construction:
+      //   (1) NO PLOT OVERLAP — the box BOTTOM is pinned at/above paper y=1.0 (the plot-area top), so
+      //       no row can ever dip into a neural lane regardless of figure height (the old version
+      //       top-anchored and grew DOWN, which is exactly what spilled into the lanes).
+      //   (2) Top aligns with the main legend top (y=1.155). Rows are tight; chips wrap PER_ROW wide
+      //       so the freq set stays 3 short rows, not one tall column. Bigger title + number fonts.
+      const BTOP = 1.155;                  // top, matched to the main legend's y/yanchor
+      const BBOT = 1.000;                  // bottom, AT the plot top — never into the lanes
+      const PER_ROW = 4;                   // chips per row -> compact grid (11 freqs -> 3 rows)
       const nRows = Math.ceil(pcs.length / PER_ROW);
-      const titleY = BTOP - 0.028;
-      const gridTop = titleY - 0.044;
-      const colW = (BX1 - BX0 - 0.03) / PER_ROW;
-      // Bordered container (a touch below the title row, enclosing the chip grid).
+      const BX0 = 0.52, BX1 = 0.80;        // sits to the RIGHT of the left-anchored main legend
+      const CHIP_H = 0.013;                // chip half-height (paper) — sized so rows stay disjoint
+      const titleY = BTOP - 0.026;
+      const gridTop = titleY - 0.030;      // first chip-row center
+      const gridBot = BBOT + 0.018;        // last chip-row center
+      const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
+      const colW = (BX1 - BX0 - 0.035) / PER_ROW;
+      // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
       shapes.push({ type: "rect", xref: "paper", yref: "paper",
-        x0: BX0, x1: BX1, y0: gridTop + 0.028 - nRows * ROW_H - 0.012, y1: BTOP,
-        fillcolor: "rgba(255,255,255,0.96)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
+        x0: BX0, x1: BX1, y0: BBOT, y1: BTOP,
+        fillcolor: "rgba(255,255,255,0.97)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
       annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
         text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center",
-        font: { size: 11, color: "#333" } });
+        font: { size: 14, color: "#222" } });
       pcs.forEach((cen, i) => {
         const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
-        const cx = BX0 + 0.018 + col * colW;
-        const yy = gridTop - row * ROW_H;
-        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.016,
-          y0: yy - 0.013, y1: yy + 0.013, fillcolor: freqColor(cen),
-          line: { color: "#fff", width: 0.5 }, layer: "above" });
-        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.022, y: yy, text: fmtHz(cen),
-          showarrow: false, xanchor: "left", font: { size: 10.5, color: "#333" } });
+        const cx = BX0 + 0.020 + col * colW;
+        const yy = gridTop - row * rowH;
+        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.018,
+          y0: yy - CHIP_H, y1: yy + CHIP_H, fillcolor: freqColor(cen),
+          line: { color: "#fff", width: 0.6 }, layer: "above" });
+        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.026, y: yy, text: fmtHz(cen),
+          showarrow: false, xanchor: "left", font: { size: 13, color: "#222" } });
       });
     }
 
@@ -963,10 +973,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       shapes, annotations,
       showlegend: true,
       // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes, up
-      // by the title) so it never overlaps the PSD ticks or any lane content. CENTERED horizontally
-      // (x:0.5, xanchor:"center") at that same height — the box sits centered over the plot, with the
-      // title on the far left and the sensing-Hz key on the far right both clear of it.
-      legend: { orientation: "v", x: 0.5, xanchor: "center", y: 1.155, yanchor: "top",
+      // by the title) so it never overlaps the PSD ticks or any lane content. LEFT-anchored (x:0,
+      // xanchor:"left") so the compact sensing-Hz key can sit flush to its RIGHT (built below as a
+      // paper-coords box) and the two read as a matched height-aligned pair of legends above the plot.
+      legend: { orientation: "v", x: 0.0, xanchor: "left", y: 1.155, yanchor: "top",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
