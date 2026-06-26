@@ -449,7 +449,7 @@ def test_spectral_feature_importance_finds_planted_band():
     assert abs(sc["centers"][bi] - 17.5) <= 2.5, sc["centers"][bi]
     assert ch0["auc"][bi] is not None and ch0["scatter"][bi] is not None
     # adaptive_valid now flags by CENTER (not full-band-inside), so the green tint spans
-    # [8, 30] Hz center-wise. On the 2.5-step half-integer grid the first adaptive center is 8.5 Hz
+    # [8, 30] Hz center-wise. On the 1.0 Hz-step, half-integer grid the first adaptive center is 8.5 Hz
     # and the last is 29.5 Hz (== largest center ≤ 30.0).
     cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
     assert cen[av].min() == 8.5 and cen[av].max() == 29.5

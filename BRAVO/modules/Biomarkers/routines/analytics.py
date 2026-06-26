@@ -1247,7 +1247,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         b0, b1 = c - w / 2.0, c + w / 2.0
         # adaptive_valid is True when the CENTER frequency (not the full band) lies within the
         # validated/deployable range [a_lo, a_hi]. This means the 8–30 Hz green tint starts at
-        # the first center that IS 8 Hz (≈ 8.5 Hz on the 2.5-step half-integer grid), not at the
+        # the first center that IS 8 Hz (≈ 8.5 Hz on the 1.0 Hz-step, half-integer grid), not at the
         # first center whose entire 5 Hz window clears 8 Hz (which was 10.5 Hz — wrong).
         # The integration still uses the full ±2.5 Hz window; adaptive_valid is purely a UI marker.
         adaptive_valid = bool(a_lo is not None and a_lo - 1e-9 <= c <= a_hi + 1e-9)
@@ -2822,8 +2822,10 @@ def _rpy2_converter_ctx():
     failed"). The deploy page fires several glmer-backed panels (ROC, per-era refit, sign-off) on
     mount, and under the async UvicornWorker those land on ONE worker concurrently. We therefore hold
     a process-wide reentrant lock for the whole duration of every fit, so concurrent R work QUEUES
-    instead of racing. This serializes only the R section (seconds), changes no numeric result, and is
-    reentrant so a caller that does two fits inside one ctx (the LRT path) does not self-deadlock.
+    instead of racing. This serializes only the R section (seconds) and changes no numeric result.
+    The LRT path runs its two fits inside ONE converter ctx (a single acquire), so reentrancy is not
+    exercised today — RLock is chosen defensively (harmless, future-proofs against a nested ctx); a
+    plain Lock would behave identically given the current call sites.
     """
     try:
         import rpy2.robjects as ro

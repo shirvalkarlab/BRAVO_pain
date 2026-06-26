@@ -41,9 +41,17 @@ export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
     ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
     : false;
   const th = data && data.threshold;
-  const thresholdReady = th && th.available;
-  // A modeled (estimated) threshold is shown distinctly from a measured one (≈ vs ≥).
-  const estimated = th && th.estimated;
+  // deployment_summary keeps threshold.available=False / upper_lsb=None for an ESTIMATED (modeled)
+  // threshold and nests the modeled value under threshold.estimate.{estimated_upper_lsb,tier,
+  // freq_extrapolated} — the same fail-closed split the sign-off card uses (a modeled value is never
+  // surfaced as `available`/measured). Read the estimate from there so this strip matches what the
+  // LSB panel shows for an unsensed-but-modelable band, instead of rendering "not deployable".
+  const est = th && th.estimated && th.estimate ? th.estimate : null;
+  const thresholdShown = !!(th && (th.available || est)); // measured OR modeled value to display
+  const estimated = !!est;                                 // modeled → ≈ + tier; measured → ≥
+  const upperLsb = th && th.available ? th.upper_lsb : (est && est.estimated_upper_lsb);
+  const estTier = est && est.tier;
+  const estExtrap = est && est.freq_extrapolated;
 
   const barColor = !data ? PAL.neutral : ready ? PAL.pass : PAL.warn;
   const barFill = !data ? "#6C757D10" : ready ? PAL.passFill : PAL.warnFill;
@@ -90,15 +98,15 @@ export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
             THRESHOLD TO PROGRAM
           </MDTypography>
           <MDTypography variant="h5" sx={{ fontSize: 19, lineHeight: 1.1,
-            color: thresholdReady ? (estimated ? PAL.warnText : PAL.accent) : PAL.neutral }}>
-            {thresholdReady
-              ? `power ${estimated ? "≈" : "≥"} ${fmt(th.upper_lsb, 1)} LSB`
+            color: thresholdShown ? (estimated ? PAL.warnText : PAL.accent) : PAL.neutral }}>
+            {thresholdShown
+              ? `power ${estimated ? "≈" : "≥"} ${fmt(upperLsb, 1)} LSB`
               : "— not deployable"}
           </MDTypography>
-          {thresholdReady ? (
+          {thresholdShown ? (
             <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#888" }}>
               {estimated
-                ? `estimated (${th.tier || "modeled"})${th.freq_extrapolated ? " · extrapolated" : ""}`
+                ? `estimated (${estTier || "modeled"})${estExtrap ? " · extrapolated" : ""}`
                 : `p${fmt(th.percentile, 0)} of device Timeline`}
             </MDTypography>
           ) : null}

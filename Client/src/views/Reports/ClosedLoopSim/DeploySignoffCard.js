@@ -113,6 +113,11 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const dc = data && data.device_control;
   const ev = data && data.evidence;
   const th = data && data.threshold;
+  // ESTIMATED (modeled) threshold for an unsensed-but-modelable band: deployment_summary keeps
+  // threshold.available=False / upper_lsb=None and nests the modeled value under threshold.estimate.
+  // Surface it as an amber ESTIMATED card (power ≈, fail-closed — never as a measured `available`
+  // value), matching what the LSB panel and the top verdict strip show for the same band.
+  const thEst = th && th.estimated && th.estimate ? th.estimate : null;
   const pw = data && data.power;
   const fwd = data && data.forward;
   // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
@@ -207,9 +212,24 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                         </MDTypography>
                       ) : null}
                     </>
+                  ) : thEst ? (
+                    <>
+                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText, lineHeight: 1.1 }}>
+                        {`power ≈ ${fmt(thEst.estimated_upper_lsb, 1)} LSB`}
+                      </MDTypography>
+                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777" }}>
+                        {`ESTIMATED (${thEst.tier || "modeled"}) — device never sensed this band; `}
+                        {thEst.estimated_upper_lsb_lo != null && thEst.estimated_upper_lsb_hi != null
+                          ? `±1σ ${fmt(thEst.estimated_upper_lsb_lo, 1)}–${fmt(thEst.estimated_upper_lsb_hi, 1)} LSB` : ""}
+                        {thEst.freq_extrapolated ? " · ⚠ extrapolated beyond validated 8–30 Hz" : ""}
+                      </MDTypography>
+                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#999", mt: 0.3 }}>
+                        For planning only — not a measured prerequisite. See the LSB panel for the ±1σ gauge.
+                      </MDTypography>
+                    </>
                   ) : (
                     <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
-                      No deployable LSB threshold — this band is off the device's adaptive sensing range.
+                      No deployable LSB threshold — no measured Timeline LSB and no modeled estimate for this band.
                     </MDTypography>
                   )}
                 </MDBox>
