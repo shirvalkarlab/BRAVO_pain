@@ -312,32 +312,36 @@ function Biomarkers() {
   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
   const summaryLine = (label, s) => {
     if (!s) return null;
+    // Line: body-level stat readout (13.5px, variable weight) — these numbers are the clinical
+    // payload of the page, so they get comfortable size + leading, not the cramped button variant.
     const Line = ({ children, color = "dark", bold = false }) => (
-      <MDTypography variant="button" fontWeight={bold ? "medium" : "regular"} color={color} display="block">
+      <MDTypography variant="body2" fontWeight={bold ? "medium" : "regular"} color={color}
+        display="block" sx={{ fontSize: 13.5, lineHeight: 1.55 }}>
         {children}
       </MDTypography>
     );
     // Small italic caption for honesty caveats (provenance, CI conditions, label source).
     const Note = ({ children, color = "dark" }) => (
-      <MDTypography variant="caption" fontStyle="italic" color={color} display="block">
+      <MDTypography variant="caption" fontStyle="italic" color={color} display="block"
+        sx={{ fontSize: 12, lineHeight: 1.5 }}>
         {children}
       </MDTypography>
     );
 
     // Power-domain (threshold detector) branch.
     if (s.best_threshold !== undefined) {
-      const aucTxt = s.auc != null ? `  AUC=${fmt(s.auc)} (in-sample)` : "";
+      const aucTxt = s.auc != null ? ` · AUC = ${fmt(s.auc)} (in-sample, not cross-validated)` : "";
       const rhoTxt = s.lfp_vs_continuous_pain_spearman != null
-        ? `  Spearman ρ(LFP, pain)=${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
+        ? ` · Spearman ρ(LFP, continuous pain) = ${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
       return (
         <MDBox mb={0.5}>
           <Line bold>
-            {`${label}: threshold=${fmt(s.best_threshold)}  sens=${fmt(s.sens)}  spec=${fmt(s.spec)}  n_windows=${s.n_windows ?? "—"}`}
+            {`${label}: threshold = ${fmt(s.best_threshold)} · sensitivity = ${fmt(s.sens)} · specificity = ${fmt(s.spec)} · n = ${s.n_windows ?? "—"} windows`}
           </Line>
           <Line>
-            {`balanced accuracy=${fmt(s.balanced_accuracy)} vs chance=${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
-             `  (prevalence=${fmt(s.prevalence)}` +
-             `${s.majority_accuracy != null ? `, majority-class raw acc=${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
+            {`Balanced accuracy = ${fmt(s.balanced_accuracy)} vs chance = ${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
+             ` (prevalence = ${fmt(s.prevalence)}` +
+             `${s.majority_accuracy != null ? `, majority-class accuracy = ${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
           </Line>
           {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
           {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
@@ -352,13 +356,13 @@ function Biomarkers() {
     // Time-domain (PSD↔pain correlation) branch.
     if (s.band !== undefined || s.freq_hz !== undefined) {
       const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
-      const ciTxt = ci && ci[0] != null && ci[1] != null ? `  95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
-      const fdrTxt = s.fdr_q != null ? `  False Discovery Rate q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
+      const ciTxt = ci && ci[0] != null && ci[1] != null ? ` · 95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
+      const fdrTxt = s.fdr_q != null ? ` · FDR q = ${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
       // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
       // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
-      const permTxt = s.perm_p != null ? `  perm p=${fmtP(s.perm_p)}` : `  p=${fmtP(s.p)}`;
+      const permTxt = s.perm_p != null ? ` · perm p = ${fmtP(s.perm_p)}` : ` · p = ${fmtP(s.p)}`;
       const nTxt = s.n != null
-        ? `n=${s.n}${s.n_effective != null ? ` (effective n=${fmt(s.n_effective)} after autocorrelation)` : ""}`
+        ? `n = ${s.n} paired samples${s.n_effective != null ? ` (effective n = ${fmt(s.n_effective)} after autocorrelation adjustment)` : ""}`
         : "";
       // Honest significance verdict: the band is "real" only if it survives BOTH the selection-
       // aware permutation test AND the per-cell FDR. perm_p is the primary statement.
@@ -367,7 +371,7 @@ function Biomarkers() {
       return (
         <MDBox mb={0.5}>
           <Line bold>
-            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz  r=${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
+            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz · r = ${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
           </Line>
           {nTxt ? <Line>{nTxt}</Line> : null}
           {s.stim_adjusted_r != null ? (
@@ -379,9 +383,14 @@ function Biomarkers() {
             <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
           ) : null}
           {notSignificant ? (
-            <Line color="error">{"⚠ NOT statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as a negative/exploratory result, not a validated biomarker."}</Line>
+            <MDBox mt={0.5} px={1.25} py={0.75} sx={{ backgroundColor: "rgba(211,47,47,0.08)",
+              borderLeft: "3px solid #D32F2F", borderRadius: 1 }}>
+              <MDTypography variant="body2" color="error" sx={{ fontSize: 13, lineHeight: 1.5 }}>
+                {"⚠ Not statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as an exploratory/negative result, not a validated biomarker."}
+              </MDTypography>
+            </MDBox>
           ) : (!s.fdr_significant && permSig ? (
-            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — treat the permutation result as primary."}</Line>
+            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — the permutation result is primary."}</Line>
           ) : null)}
           {s.r_ci_note ? <Note>{`r and CI are ${s.r_ci_note}`}</Note> : null}
         </MDBox>
@@ -444,8 +453,8 @@ function Biomarkers() {
                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
                              gap={2} flexWrap="wrap" justifyContent="center">
                         <MDTypography variant="button" fontWeight="bold"
-                                      sx={{ fontSize: 18, color: "#D32F2F !important" }}>
-                          {"Pain metric (drives exploratory analysis):"}
+                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
+                          {"Pain metric (drives live timeline + exploratory analysis):"}
                         </MDTypography>
                         <FormControl size="small" sx={{ minWidth: 420 }}>
                           <Select value={metric} onChange={(e) => setMetric(e.target.value)}
@@ -459,12 +468,12 @@ function Biomarkers() {
                                       fontSize: "18px !important",  // matches the open-menu items
                                       fontWeight: 700,
                                       lineHeight: 1.2,
-                                      color: "#D32F2F !important",  // red, to stand out
+                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
                                     },
                                   }}>
                             {((timelineData && timelineData.available_metrics)
                                || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18, color: "#D32F2F" }}>{m.label}</MenuItem>
+                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
                             ))}
                           </Select>
                         </FormControl>
@@ -497,7 +506,7 @@ function Biomarkers() {
                             <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
                               <MDBox>
                                 <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
-                                  {"Binarization (high vs low pain label)"}
+                                  {"Binarization — defines the high vs low pain classifier boundary"}
                                 </MDTypography>
                                 <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
                                   <Select
@@ -515,7 +524,7 @@ function Biomarkers() {
                                 <MDBox display="flex" flexDirection="column" gap={1}>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
                                     <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"Low ≤ pct"}
+                                      {"Low pain ≤ percentile"}
                                     </MDTypography>
                                     <Slider
                                       value={percentileLow} min={5} max={50} step={1}
@@ -532,7 +541,7 @@ function Biomarkers() {
                                   </MDBox>
                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
                                     <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"High ≥ pct"}
+                                      {"High pain ≥ percentile"}
                                     </MDTypography>
                                     <Slider
                                       value={percentileHigh} min={50} max={95} step={1}
@@ -564,12 +573,13 @@ function Biomarkers() {
                                 </MDTypography>
                                 <ToggleButtonGroup
                                   value={matchDirection} exclusive size="small"
+                                  aria-label="Match direction"
                                   onChange={(e, v) => { if (v) setMatchDirection(v); }}
                                   sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
                                 >
-                                  <ToggleButton value="pro_first">PRO-first (discovery)</ToggleButton>
-                                  <ToggleButton value="nearest">Nearest (±)</ToggleButton>
-                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
+                                  <ToggleButton value="pro_first" title="Walk pain ratings; claim up to N closest PSDs per channel each (maximizes discovery coverage)">PRO-first (discovery)</ToggleButton>
+                                  <ToggleButton value="nearest" title="Pair each PSD with the nearest pain rating in either time direction (symmetric ± window)">Nearest (±window)</ToggleButton>
+                                  <ToggleButton value="prior" title="Pair each PSD only with pain ratings recorded AFTER it (causal / closed-loop forecasting direction)">Prior (forecast)</ToggleButton>
                                 </ToggleButtonGroup>
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
@@ -585,7 +595,7 @@ function Biomarkers() {
                               <MDBox mt={1.5}>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`PSDs per rating (max ${maxPerRating})`}
+                                  {`Max PSD snapshots per pain rating (currently ${maxPerRating})`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -595,7 +605,7 @@ function Biomarkers() {
                                 </MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
-                                  {`Refractory gap (${refractoryMin} min)`}
+                                  {`Minimum gap between selected PSDs (${refractoryMin} min)`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -742,7 +752,7 @@ function Biomarkers() {
                           const fmt = (p) => {
                             const base = p.region ? `${p.label} (${p.region})` : p.label;
                             const withHz = p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
-                            return p.above_cap ? `${withHz} ⚠︎` : withHz;
+                            return p.above_cap ? `${withHz} ⚠` : withHz;
                           };
                           // Above-cap (≥50 Hz) sensing bands are rendered in the warning color.
                           const rowLine = (p, i) => (
@@ -776,13 +786,13 @@ function Biomarkers() {
                                 {other.map(rowLine)}
                               </MDBox>
                               {anyAboveCap && (
-                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
-                                  {"⚠︎ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
+                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
+                                  {"⚠ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
                                 </MDTypography>
                               )}
                               {noFreq && (
-                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
-                                  {"Sensing-band center frequency not present in this device export."}
+                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
+                                  {"Sensing-band center frequency not available in this device export."}
                                 </MDTypography>
                               )}
                             </MDBox>

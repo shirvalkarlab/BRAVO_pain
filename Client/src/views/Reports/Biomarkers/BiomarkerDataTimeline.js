@@ -941,53 +941,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // numerically with assert_no_overlap: gap ≈ 0.33 at nominal width, and widening only
     // increases it because both footprints shrink as paper fractions.
 
-    // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
-    // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
-    // only — in binarization mode the lanes are not frequency-colored, so the key would mislead.
-    // Laid out as a small wrapped grid of [swatch Hz] chips, mirroring the main legend's
-    // white-fill/black-border styling so the two read as a matched pair of keys above the plot.
-    const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
-    if (pcs.length) {
-      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (left-anchored) main glyph legend
-      // and HEIGHT-MATCHED to it: shares the SAME pixel-derived vertical span (LEG_BOT_Y..LEG_TOP_Y),
-      // so the two boxes line up exactly and BOTH have their bottom pinned just above the plot top —
-      // neither can dip into a lane at any figure height (the old fixed-fraction version did).
-      const BTOP = LEG_TOP_Y;              // matched to the main legend top
-      const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
-      // LEFT-anchored Hz key with a FIXED width. The glyph legend lives at the RIGHT edge, so the
-      // Hz key simply grows rightward from the left margin; with ≤4 chips/row its right edge stays
-      // well left of the legend (proven disjoint by assert_no_overlap, gap ≈ 0.33). No dependence
-      // on container width — chip width is a constant paper fraction and PER_ROW is capped, so the
-      // box footprint is identical at every figure width.
-      const HZ_CHIP_W = 0.046;            // paper-fraction width of one [swatch + label] chip
-      const BX0 = 0.005;                   // flush to the left margin
-      const PER_ROW = Math.min(pcs.length, 4);   // ≤4 per row → at most 2 rows for 6–8 freqs
-      const nRows = Math.ceil(pcs.length / PER_ROW);
-      const BX1 = BX0 + PER_ROW * HZ_CHIP_W + 0.030;
-      const CHIP_H = pxY(7);              // chip half-height in pixels -> paper-Y (scales with height)
-      const titleY = BTOP - pxY(18);      // box title baseline
-      const gridTop = titleY - pxY(20);   // first chip-row center
-      const gridBot = BBOT + pxY(12);     // last chip-row center
-      const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
-      const colW = (BX1 - BX0 - 0.035) / PER_ROW;
-      // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
-      shapes.push({ type: "rect", xref: "paper", yref: "paper",
-        x0: BX0, x1: BX1, y0: BBOT, y1: BTOP,
-        fillcolor: "rgba(255,255,255,0.97)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
-      annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
-        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center", yanchor: "middle",
-        font: { size: 14, color: "#222" } });
-      pcs.forEach((cen, i) => {
-        const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
-        const cx = BX0 + 0.020 + col * colW;
-        const yy = gridTop - row * rowH;
-        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.018,
-          y0: yy - CHIP_H, y1: yy + CHIP_H, fillcolor: freqColor(cen),
-          line: { color: "#fff", width: 0.6 }, layer: "above" });
-        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.026, y: yy, text: fmtHz(cen),
-          showarrow: false, xanchor: "left", yanchor: "middle", font: { size: 13, color: "#222" } });
-      });
-    }
+    // ---- (frequency-color "Sensing center (Hz)" key removed per request: it was redundant with
+    // the per-lane Hz hover/labels and the lane coloring, and crowded the top band.) The lanes are
+    // still frequency-colored via freqColor(); the legend on the right covers the glyph types.
 
     const layout = {
       height: figH,
