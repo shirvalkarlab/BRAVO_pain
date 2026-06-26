@@ -528,24 +528,30 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
               fontSize so neither line is cut at the top (the MUI variant's default line-height is
               tighter than these sizes, which was clipping the second line). */}
           <MDBox sx={{ textAlign: "center", mb: 1, pt: 1 }}>
+            {/* Line 1: contact + sample count + center frequency (the WHAT). Line 2: the Pearson
+                statistic (the RESULT). Grouping the band identity on line 1 and the stat on line 2
+                reads cleaner than splitting freq onto the stat line. */}
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
-              {`${ch.short} (n=${nShown})`}
+              {`${ch.short} (n=${nShown}) @ ${center.toFixed(1)} Hz`}
             </MDTypography>
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
-              {`${center.toFixed(1)} Hz · Pearson r = ${r != null ? r.toFixed(2) : "—"}`
+              {`Pearson r = ${r != null ? r.toFixed(2) : "—"}`
                + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
             </MDTypography>
           </MDBox>
           <Grid container spacing={2} mt={0}>
             <Grid item xs={12} lg={6}>
-              <Fig height={300} traces={scTraces} layout={{
+              {/* Taller (was 300) so the panel is closer to SQUARE: at lg the column is ~half the
+                  card width (~450–520 px), so ~440 px tall makes the scatter near-1:1 — the right
+                  aspect for reading a correlation cloud rather than a wide, flat strip. */}
+              <Fig height={440} traces={scTraces} layout={{
                 xaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
                 yaxis: { title: pain }, showlegend: false }} />
             </Grid>
             <Grid item xs={12} lg={6}>
-              <Fig height={300} traces={vioTraces} layout={{
+              <Fig height={440} traces={vioTraces} layout={{
                 xaxis: { title: "" },
                 yaxis: { title: `${featAxis} @ ${center.toFixed(1)} Hz` },
                 showlegend: false, violingap: 0.25, violinmode: "group" }} />
@@ -669,8 +675,13 @@ function Section({ title, subtitle, panels, header = null }) {
   return (
     <Grid item xs={12}>
       <MDBox mt={4} mb={2}>
-        {/* Section header at ~2x the prior size for clear hierarchy between TD / power-domain. */}
-        <MDTypography variant="h3" fontSize={40} fontWeight="bold">{title}</MDTypography>
+        {/* Section header at ~2x the prior size for clear hierarchy between TD / power-domain.
+            The MUI h3 variant ships a line-height TIGHTER than this bumped-up 40px fontSize, so the
+            first line's ascenders/caps were clipped at the top until a zoom forced a reflow. Set an
+            explicit lineHeight (1.3) ≥ the font box and a little top padding so the glyphs always
+            have room and the title renders fully at default zoom. */}
+        <MDTypography variant="h3" fontWeight="bold"
+          sx={{ fontSize: 40, lineHeight: 1.3, pt: 0.5, overflow: "visible" }}>{title}</MDTypography>
         {subtitle ? <MDTypography variant="body2" color="dark">{subtitle}</MDTypography> : null}
       </MDBox>
       <Grid container spacing={3}>

@@ -902,31 +902,50 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
     // so no generic event glyph is needed here.
 
-    // ---- frequency-color key: a COMPACT, self-contained box sitting just to the RIGHT of the main
-    // glyph legend, above the plot (was a tall vertical column running down the right margin). Only
-    // realized centers, multimodal mode only — in binarization mode the lanes are not
-    // frequency-colored, so the key would mislead. Laid out as a small wrapped grid of [swatch Hz]
-    // chips inside its own bordered box, mirroring the main legend's white-fill/black-border styling
-    // so the two read as a matched pair of keys flanking the title.
+    // ---- TOP-BAND GEOMETRY (title + the two flanking key boxes) -------------------------------
+    // The legend and Hz key live in the top margin, ABOVE the plot. The previous version positioned
+    // them with fixed paper-Y fractions (e.g. legend top at y=1.155), but a paper fraction is a
+    // fraction of the PLOT HEIGHT — which varies with the channel count — so a box pinned by its TOP
+    // grew DOWNWARD into the lanes when the plot was short (few channels) and looked fine only when it
+    // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
+    // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
+    // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
+    const nLegRows = binMode ? 6 : 5;            // glyph-legend entries per mode (see traces above)
+    const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
+    const TITLE_H_PX = 64;                       // two-line title block
+    const TOP_GAP_PX = 14;                       // gap between title and the legend boxes
+    const LEG_BOTTOM_PX = 12;                     // gap between the legend boxes and the plot top
+    // Top margin auto-fits the tallest content (title + legend + gaps), so the title never clips and
+    // the boxes always fit — for BOTH modes (binarization's 7-row legend is taller).
+    const TOP_MARGIN = TITLE_H_PX + TOP_GAP_PX + LEG_H_PX + LEG_BOTTOM_PX + 10;
+    const figH = height || Math.max(560, 150 * channels.length + TOP_MARGIN + 60);
+    const plotHpx = Math.max(figH - TOP_MARGIN - 46, 200);   // 46 = bottom margin
+    const pxY = (p) => p / plotHpx;              // pixels -> paper-Y units (0 = plot top)
+    // Legend box: bottom pinned just above the plot, grows UP. Top = bottom + its pixel height.
+    const LEG_BOT_Y = 1.0 + pxY(LEG_BOTTOM_PX);
+    const LEG_TOP_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX);
+    const TITLE_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX + TOP_GAP_PX + TITLE_H_PX);  // title baseline (top-anchored)
+
+    // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
+    // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
+    // only — in binarization mode the lanes are not frequency-colored, so the key would mislead.
+    // Laid out as a small wrapped grid of [swatch Hz] chips, mirroring the main legend's
+    // white-fill/black-border styling so the two read as a matched pair of keys above the plot.
     const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
     if (pcs.length) {
-      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (now left-anchored) main glyph
-      // legend and HEIGHT-MATCHED to it — the two read as a paired set of legends above the plot.
-      // Geometry is in paper coords. Two hard constraints, both guaranteed by construction:
-      //   (1) NO PLOT OVERLAP — the box BOTTOM is pinned at/above paper y=1.0 (the plot-area top), so
-      //       no row can ever dip into a neural lane regardless of figure height (the old version
-      //       top-anchored and grew DOWN, which is exactly what spilled into the lanes).
-      //   (2) Top aligns with the main legend top (y=1.155). Rows are tight; chips wrap PER_ROW wide
-      //       so the freq set stays 3 short rows, not one tall column. Bigger title + number fonts.
-      const BTOP = 1.155;                  // top, matched to the main legend's y/yanchor
-      const BBOT = 1.000;                  // bottom, AT the plot top — never into the lanes
+      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (left-anchored) main glyph legend
+      // and HEIGHT-MATCHED to it: shares the SAME pixel-derived vertical span (LEG_BOT_Y..LEG_TOP_Y),
+      // so the two boxes line up exactly and BOTH have their bottom pinned just above the plot top —
+      // neither can dip into a lane at any figure height (the old fixed-fraction version did).
+      const BTOP = LEG_TOP_Y;              // matched to the main legend top
+      const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
       const PER_ROW = 4;                   // chips per row -> compact grid (11 freqs -> 3 rows)
       const nRows = Math.ceil(pcs.length / PER_ROW);
       const BX0 = 0.52, BX1 = 0.80;        // sits to the RIGHT of the left-anchored main legend
-      const CHIP_H = 0.013;                // chip half-height (paper) — sized so rows stay disjoint
-      const titleY = BTOP - 0.026;
-      const gridTop = titleY - 0.030;      // first chip-row center
-      const gridBot = BBOT + 0.018;        // last chip-row center
+      const CHIP_H = pxY(7);               // chip half-height in pixels -> paper-Y (scales with height)
+      const titleY = BTOP - pxY(18);       // box title baseline
+      const gridTop = titleY - pxY(20);    // first chip-row center
+      const gridBot = BBOT + pxY(12);      // last chip-row center
       const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
       const colW = (BX1 - BX0 - 0.035) / PER_ROW;
       // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
@@ -934,7 +953,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         x0: BX0, x1: BX1, y0: BBOT, y1: BTOP,
         fillcolor: "rgba(255,255,255,0.97)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
       annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
-        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center",
+        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center", yanchor: "middle",
         font: { size: 14, color: "#222" } });
       pcs.forEach((cen, i) => {
         const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
@@ -944,7 +963,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           y0: yy - CHIP_H, y1: yy + CHIP_H, fillcolor: freqColor(cen),
           line: { color: "#fff", width: 0.6 }, layer: "above" });
         annotations.push({ xref: "paper", yref: "paper", x: cx + 0.026, y: yy, text: fmtHz(cen),
-          showarrow: false, xanchor: "left", font: { size: 13, color: "#222" } });
+          showarrow: false, xanchor: "left", yanchor: "middle", font: { size: 13, color: "#222" } });
       });
     }
 
@@ -955,13 +974,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
 
     const layout = {
-      height: height || Math.max(560, 150 * channels.length + 320),
+      height: figH,
       // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
       // as the [tick · contact · region] stack needs and no wider — tight, collision-free, and
       // self-adjusting to the label set / font auto-shrink. Was a hardcoded 175/330.
-      // Right margin trimmed (the sensing-Hz key moved from the right column to a box above the
-      // plot); top margin holds the title + the two flanking key boxes.
-      margin: { l: MARGIN_L, r: 60, t: 190, b: 46 },
+      // TOP margin is COMPUTED (TOP_MARGIN) to exactly fit the title + the tallest legend box + gaps,
+      // so the title never clips and the key boxes always sit fully inside the margin (not in a lane).
+      // Right margin holds a small buffer so the rightmost glyphs/diamonds aren't clipped at the edge.
+      margin: { l: MARGIN_L, r: 60, t: TOP_MARGIN, b: 46 },
       hovermode: "closest",
       // Constant uirevision: preserve the clinician's zoom/pan/legend state across re-renders driven
       // by the match-window slider, strategy, or the color-mode toggle (Plotly resets the view on
@@ -972,21 +992,27 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
-      // Glyph key: VERTICAL stack, solid white fill + black box, anchored HIGH (above the lanes, up
-      // by the title) so it never overlaps the PSD ticks or any lane content. LEFT-anchored (x:0,
-      // xanchor:"left") so the compact sensing-Hz key can sit flush to its RIGHT (built below as a
-      // paper-coords box) and the two read as a matched height-aligned pair of legends above the plot.
-      legend: { orientation: "v", x: 0.0, xanchor: "left", y: 1.155, yanchor: "top",
+      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored (yanchor:"bottom")
+      // at LEG_BOT_Y — i.e. the box bottom is pinned just above the plot top and the box grows UP into
+      // the margin, so it can NEVER spill into the top lane regardless of how short the plot is (the
+      // old top-anchored version grew downward into the lanes when few channels made the plot short).
+      // LEFT-anchored (x:0) so the compact sensing-Hz key sits flush to its RIGHT, height-matched.
+      legend: { orientation: "v", x: 0.0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
+      // Title sits ABOVE the legend boxes (TITLE_Y, top-anchored), inside the computed top margin, so
+      // its two lines always clear the legend top and are never cut off at the figure edge.
       title: { text: `<b>Biomarker Data Timeline</b><br><span style="font-size:13px;color:#777">${sub}</span>`,
-               x: 0.012, xanchor: "left", y: 0.965, font: { size: 26, color: "#1a1a1a" } },
+               x: 0.012, xanchor: "left", y: TITLE_Y, yanchor: "top", font: { size: 26, color: "#1a1a1a" } },
       // DYNAMIC time gridlines: no fixed dtick, so Plotly auto-picks the tick interval for the
       // current zoom (year/month -> week -> day -> 6 h -> hour) and REDRAWS on every zoom/pan. The
       // gridlines span the whole single y-axis, so they carry through every neural lane + pain +
       // stim. Darker than the old faint shapes per the request.
-      xaxis: { range: [D(t0), D(t1)], type: "date", autorange: false,
+      // Default x-range covers the FULL data span with a small buffer on each end so the first/last
+      // glyphs (e.g. the rightmost modeled diamonds) are never clipped at the plot edge. The right
+      // buffer is a touch larger than the left. Span is in epoch-seconds; D() makes the axis dates.
+      xaxis: { range: [D(t0 - (t1 - t0) * 0.01), D(t1 + (t1 - t0) * 0.03)], type: "date", autorange: false,
                showgrid: true, gridcolor: "rgba(0,0,0,0.18)", gridwidth: 1,
                tickfont: { size: 17 }, ticks: "outside", ticklen: 4, tickcolor: "#ccc",
                showspikes: true, spikemode: "across", spikethickness: 1,
