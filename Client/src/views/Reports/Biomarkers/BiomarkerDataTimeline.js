@@ -926,52 +926,24 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const LEG_TOP_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX);
     const TITLE_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX + TOP_GAP_PX + TITLE_H_PX);  // title baseline (top-anchored)
 
-    // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
-    // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
-    // only — in binarization mode the lanes are not frequency-colored, so the key would mislead.
-    // Laid out as a small wrapped grid of [swatch Hz] chips, mirroring the main legend's
-    // white-fill/black-border styling so the two read as a matched pair of keys above the plot.
-    const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
-    if (pcs.length) {
-      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (left-anchored) main glyph legend
-      // and HEIGHT-MATCHED to it: shares the SAME pixel-derived vertical span (LEG_BOT_Y..LEG_TOP_Y),
-      // so the two boxes line up exactly and BOTH have their bottom pinned just above the plot top —
-      // neither can dip into a lane at any figure height (the old fixed-fraction version did).
-      const BTOP = LEG_TOP_Y;              // matched to the main legend top
-      const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
-      const PER_ROW = 4;                   // chips per row -> compact grid (11 freqs -> 3 rows)
-      const nRows = Math.ceil(pcs.length / PER_ROW);
-      const BX0 = 0.52, BX1 = 0.80;        // sits to the RIGHT of the left-anchored main legend
-      const CHIP_H = pxY(7);               // chip half-height in pixels -> paper-Y (scales with height)
-      const titleY = BTOP - pxY(18);       // box title baseline
-      const gridTop = titleY - pxY(20);    // first chip-row center
-      const gridBot = BBOT + pxY(12);      // last chip-row center
-      const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
-      const colW = (BX1 - BX0 - 0.035) / PER_ROW;
-      // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
-      shapes.push({ type: "rect", xref: "paper", yref: "paper",
-        x0: BX0, x1: BX1, y0: BBOT, y1: BTOP,
-        fillcolor: "rgba(255,255,255,0.97)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
-      annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
-        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center", yanchor: "middle",
-        font: { size: 14, color: "#222" } });
-      pcs.forEach((cen, i) => {
-        const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
-        const cx = BX0 + 0.020 + col * colW;
-        const yy = gridTop - row * rowH;
-        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.018,
-          y0: yy - CHIP_H, y1: yy + CHIP_H, fillcolor: freqColor(cen),
-          line: { color: "#fff", width: 0.6 }, layer: "above" });
-        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.026, y: yy, text: fmtHz(cen),
-          showarrow: false, xanchor: "left", yanchor: "middle", font: { size: 13, color: "#222" } });
-      });
-    }
-
-    // ---- provenance subtitle -----------------------------------------------------------------
+    // ---- provenance subtitle (hoisted here so the title-width estimate below can use sub.length)
     const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
       { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
     const subj = (data && data.participant_label) || (av && av.participant) || "";
     const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
+
+    // ---- legend & Hz-key placement (deterministic, width-independent) -----------------------
+    // Per bravo-timeline-layout skill: the glyph legend is pinned to the plot's RIGHT edge
+    // (x:1.0, xanchor:"right") below, so it can NEVER overlap the LEFT-anchored title/subtitle
+    // regardless of figure width. No DOM-width measurement and no resize hook are needed — the
+    // non-overlap is guaranteed by construction (legend grows leftward from the right edge; the
+    // Hz key grows rightward from the left edge; their combined width ≪ 1.0). Verified
+    // numerically with assert_no_overlap: gap ≈ 0.33 at nominal width, and widening only
+    // increases it because both footprints shrink as paper fractions.
+
+    // ---- (frequency-color "Sensing center (Hz)" key removed per request: it was redundant with
+    // the per-lane Hz hover/labels and the lane coloring, and crowded the top band.) The lanes are
+    // still frequency-colored via freqColor(); the legend on the right covers the glyph types.
 
     const layout = {
       height: figH,
@@ -992,12 +964,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
       shapes, annotations,
       showlegend: true,
-      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored (yanchor:"bottom")
-      // at LEG_BOT_Y — i.e. the box bottom is pinned just above the plot top and the box grows UP into
-      // the margin, so it can NEVER spill into the top lane regardless of how short the plot is (the
-      // old top-anchored version grew downward into the lanes when few channels made the plot short).
-      // LEFT-anchored (x:0) so the compact sensing-Hz key sits flush to its RIGHT, height-matched.
-      legend: { orientation: "v", x: 0.0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
+      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored at LEG_BOT_Y
+      // so the box grows UP into the margin and never spills into a lane. RIGHT-anchored
+      // (x:1.0, xanchor:"right") per bravo-timeline-layout: pinned to the plot's right edge, the
+      // legend grows leftward and can never overlap the LEFT-anchored title/subtitle at ANY width.
+      // This makes the old DOM-width measurement + plotly_afterplot resize hook unnecessary.
+      legend: { orientation: "v", x: 1.0, xanchor: "right", y: LEG_BOT_Y, yanchor: "bottom",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
@@ -1095,7 +1067,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       if (touchedX) { applyTdWidths(); applyLsbScales(); }
     };
     gd.on("plotly_relayout", onRelayout);
-    return () => { try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ } };
+    // No resize hook: the legend is right-anchored and the Hz key left-anchored, so collision-
+    // freedom holds at every width by construction — nothing to recompute on resize.
+    return () => {
+      try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
+    };
   }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
 
   // Free the WebGL context only when the component actually unmounts (NOT between redraws).

@@ -8,6 +8,7 @@ card plots. They build on the verbatim science in `threshold_biomarker.py` / `st
 scatter, and the Pearson-R-vs-frequency correlation spectrum).
 """
 
+import threading as _threading
 import warnings
 
 import numpy as np
@@ -1121,14 +1122,16 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
         are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
         by the deployment threshold and the timeline modeled tier, so the discovery scan and the
-        deployable number speak one unit. Auto-restricts the scan to `adaptive_band` (8–30 Hz), the
-        only range where k=269 is validated AND the firmware can place an adaptive band — bands
-        outside it have no LSB ground truth. Falls back to "logpsd" if the detail lacks the absolute
-        density (e.g. an onboard-FFT-only pool).
+        deployable number speak one unit. Scans the FULL 0–`fmax` range (centers 2.5–97.5 Hz with
+        the default 5 Hz window); the validated/firmware-programmable `adaptive_band` (8–30 Hz) is
+        FLAGGED per band via `adaptive_valid` (center-based), not used to restrict the scan — bands
+        outside it are exploratory (k=269 has no LSB ground truth there) and the UI marks them. Falls
+        back to "logpsd" if the detail lacks the absolute density (e.g. an onboard-FFT-only pool).
       * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
         `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
         curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
-        clinician's unit and to enforce the TD-only + 8–30 Hz scope.
+        clinician's unit and to enforce the TD-only source priority (the 8–30 Hz deployable range is
+        flagged per band, not enforced as a scan limit).
 
     The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
     overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
@@ -1155,11 +1158,13 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         if psd_abs.shape != psd.shape:
             use_lsb = False                                      # shape mismatch -> safe fallback
     if use_lsb:
-        # Scan ONLY the validated/device-programmable range (8–30 Hz); k=269 has no ground truth
-        # outside it and the firmware can't place an adaptive band there.
-        if adaptive_band is not None:
-            fmax = min(float(fmax) if fmax is not None else float(np.nanmax(f)),
-                       float(adaptive_band[1]))
+        # Full 0–fmax scan in LSB mode (do NOT cap fmax at adaptive_band[1]). k=269 is validated and
+        # the firmware can place an adaptive band only within 8–30 Hz, so bands whose CENTER is
+        # outside [8, 30] are flagged adaptive_valid=False and shown at reduced opacity (exploratory).
+        # The k=269 band-integral conversion is applied uniformly; out-of-adaptive values are
+        # exploratory only and the UI labels them as such.
+        if fmax is None:
+            fmax = float(np.nanmax(f))
         feature_used = "lsb_calibrated"
         n_demoted = 0
 
@@ -1218,12 +1223,15 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
     fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
     w = float(band_width_hz)
-    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax]. In LSB mode the
-    # whole 5 Hz window must also sit at/above the validated lower edge (8 Hz): clamp the first
-    # center to adaptive_lo + w/2 so no band straddles below 8 Hz where k=269 is unvalidated.
+    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully within [0, fmax].
+    # In LSB mode the scan still runs the FULL 0–100 Hz range (centers 2.5–97.5 Hz with the
+    # default 5 Hz window and fmax=100). Bands outside 8–30 Hz are flagged adaptive_valid=False
+    # and the UI renders them at reduced opacity with a green tint over the 8–30 Hz region —
+    # the user sees the full spectral landscape while the deployable range is clearly marked.
+    # Previously the first center was clamped to adaptive_band[0] + w/2 = 10.5 Hz, making
+    # 10.5 Hz the LOWEST displayed center and losing the 8.0–10.0 Hz bands entirely. The fix:
+    # always start at w/2 (= 2.5 Hz) regardless of mode; adaptive_valid already gates correctness.
     lo_c = w / 2.0
-    if use_lsb and adaptive_band is not None:
-        lo_c = max(lo_c, float(adaptive_band[0]) + w / 2.0)
     hi_c = fmax - w / 2.0
     if hi_c <= lo_c:
         return None
@@ -1237,7 +1245,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     band_meta = []
     for c in centers:
         b0, b1 = c - w / 2.0, c + w / 2.0
-        adaptive_valid = bool(a_lo is not None and b0 >= a_lo - 1e-9 and b1 <= a_hi + 1e-9)
+        # adaptive_valid is True when the CENTER frequency (not the full band) lies within the
+        # validated/deployable range [a_lo, a_hi]. This means the 8–30 Hz green tint starts at
+        # the first center that IS 8 Hz (≈ 8.5 Hz on the 1.0 Hz-step, half-integer grid), not at the
+        # first center whose entire 5 Hz window clears 8 Hz (which was 10.5 Hz — wrong).
+        # The integration still uses the full ±2.5 Hz window; adaptive_valid is purely a UI marker.
+        adaptive_valid = bool(a_lo is not None and a_lo - 1e-9 <= c <= a_hi + 1e-9)
         band_meta.append({"center": float(c), "lo": float(b0), "hi": float(b1),
                           "adaptive_valid": adaptive_valid})
 
@@ -1471,7 +1484,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         # The per-band feature that r / AUC / clustered-logit p all run on.
-        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, scanned 8–30 Hz
+        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, full 0–fmax scan
         #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
         "feature": feature_used,
         "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
@@ -1484,7 +1497,9 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
             "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
             "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
-            "uncalibrated. Scan restricted to the validated, firmware-programmable 8–30 Hz range."
+            "uncalibrated. Scan covers the full 0–100 Hz spectrum; the validated, firmware-"
+            "programmable 8–30 Hz range is flagged per band (adaptive_valid) — bands outside it are "
+            "exploratory and shown at reduced opacity."
             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
         # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
         # (channel, rating). 0 when no report had competing tiers.
@@ -2762,6 +2777,13 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     }
 
 
+# Process-wide gate serializing all embedded-R (pymer4/lme4 glmer) access within a worker. Embedded R
+# is single-threaded; concurrent fits from sibling requests corrupt it and silently kill the worker.
+# Reentrant so the LRT path (two fits inside one converter ctx) does not self-deadlock. See
+# _rpy2_converter_ctx for the full rationale.
+_R_GLOBAL_LOCK = _threading.RLock()
+
+
 def _rpy2_converter_ctx():
     """Activate a NON-EMPTY rpy2 conversion context on the CURRENT thread for a pymer4 fit.
 
@@ -2793,11 +2815,33 @@ def _rpy2_converter_ctx():
 
     Returns a no-op nullcontext when rpy2 isn't importable (the caller already guards pymer4
     availability separately and degrades to {available: False}).
+
+    CONCURRENCY: embedded R (the single libR the rpy2 process loads) is NOT thread-safe — there is
+    one R interpreter per worker process, and two threads calling into it at once corrupt its state
+    and kill the worker (the connection drops with NO 500 in the log; the client just sees "request
+    failed"). The deploy page fires several glmer-backed panels (ROC, per-era refit, sign-off) on
+    mount, and under the async UvicornWorker those land on ONE worker concurrently. We therefore hold
+    a process-wide reentrant lock for the whole duration of every fit, so concurrent R work QUEUES
+    instead of racing. This serializes only the R section (seconds) and changes no numeric result.
+    The LRT path runs its two fits inside ONE converter ctx (a single acquire), so reentrancy is not
+    exercised today — RLock is chosen defensively (harmless, future-proofs against a nested ctx); a
+    plain Lock would behave identically given the current call sites.
     """
     try:
         import rpy2.robjects as ro
         from rpy2.robjects.conversion import localconverter
-        return localconverter(ro.default_converter)
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _locked_converter():
+            _R_GLOBAL_LOCK.acquire()
+            try:
+                with localconverter(ro.default_converter) as cv:
+                    yield cv
+            finally:
+                _R_GLOBAL_LOCK.release()
+
+        return _locked_converter()
     except Exception:
         from contextlib import nullcontext
         return nullcontext()

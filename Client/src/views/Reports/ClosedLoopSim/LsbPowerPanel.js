@@ -22,6 +22,18 @@ import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
+// Human labels for the modeled-LSB fallback tiers (backend _modeled_lsb_threshold_estimate). Ordered
+// best→coarsest: a real per-contact modeled timeline, the per-participant frozen conversion, then the
+// validated population constant. Shown on the ESTIMATED threshold card so the clinician sees which
+// modeled source produced the number.
+const TIER_LABEL = {
+  modeled_timeline: "from modeled LSB timeline",
+  band: "from frozen PSD→LSB model (band-specific)",
+  channel_freq: "from frozen PSD→LSB model (channel/freq)",
+  channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
+  validated_constant: "from validated k=269 constant",
+};
+
 function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {
   const pwRef = useRef(null);
   const thrRef = useRef(null);
@@ -296,8 +308,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
               </MDBox>
             ) : null}
 
-            {/* 1) THRESHOLD TO PROGRAM */}
-            {tl && tl.available ? (
+            {/* 1) THRESHOLD TO PROGRAM — MEASURED (native device Timeline) */}
+            {tl && tl.available && !tl.estimated ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
                 border: `1px solid ${PAL.accentBorder}` }}>
                 <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
@@ -313,6 +325,28 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
                 </MDTypography>
                 <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
                   Percentile-anchored on the device Timeline — no µV²↔LSB conversion needed.
+                </MDTypography>
+              </MDBox>
+            ) : tl && tl.available && tl.estimated ? (
+              /* THRESHOLD TO PROGRAM — ESTIMATED (modeled fallback: device never sensed this band).
+                 Amber, not accent-green, with the ±1σ calibration band and the tier, so a clinician
+                 never mistakes a modeled estimate for a measured one (audit C8 fail-closed). This is
+                 the LSB default the panel now produces instead of "NO DEPLOYABLE LSB THRESHOLD". */
+              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
+                border: `1px solid ${PAL.warnBorder}` }}>
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
+                  {`ESTIMATED LSB THRESHOLD — ${TIER_LABEL[tl.tier] || "modeled"}${tl.freq_extrapolated ? " · EXTRAPOLATED" : ""}`}
+                </MDTypography>
+                <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.warnText, lineHeight: 1.1 }}>
+                  {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
+                </MDTypography>
+                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
+                  {`±1σ ${fmt(tl.upper_lsb_lo, 1)}–${fmt(tl.upper_lsb_hi, 1)} LSB (${fmt(tl.sigma_fold, 2)}× fold)`
+                    + (tl.percentile != null ? ` · anchored at p${fmt(tl.percentile, 0)}` : "")
+                    + (tl.n_modeled_points ? ` · ${tl.n_modeled_points} modeled in-band points` : "")}
+                </MDTypography>
+                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
+                  {tl.note || "Modeled estimate — device never sensed this band. Confirm live on the device Timeline before deploying."}
                 </MDTypography>
               </MDBox>
             ) : (

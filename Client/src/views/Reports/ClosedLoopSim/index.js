@@ -28,7 +28,10 @@ import EraRefitPanel from "./EraRefitPanel";
 import PsdLsbPanel from "./PsdLsbPanel";
 import ConversionModelPanel from "./ConversionModelPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
+import DeploymentVerdictStrip from "./DeploymentVerdictStrip";
+import useDeploymentSummary from "./useDeploymentSummary";
 import PAL from "./palette";
+import "./deployPrint.css";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -184,6 +187,14 @@ function ClosedLoopSim() {
     setEnvelope(loadBandCandidate(participant_uid));
   }, [participant_uid, navigate]);
 
+  // Tag <body> while this view is mounted so the print stylesheet (deployPrint.css) can scope its
+  // "hide everything except the sign-off record" rules to this page only, and clean the class up on
+  // unmount so printing any OTHER view is unaffected.
+  useEffect(() => {
+    document.body.classList.add("cl-deploy-root");
+    return () => document.body.classList.remove("cl-deploy-root");
+  }, []);
+
   const bc = envelope && envelope.band_candidate;
 
   // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
@@ -193,6 +204,22 @@ function ClosedLoopSim() {
   // loading state at once. Memoizing on the candidate's stable identity keeps the reference stable
   // so panels only refetch when their own inputs actually change.
   const requestParams = useMemo(() => requestParamsFromCandidate(bc), [bc]);
+
+  // ONE deployment-summary fetch for the whole page. Both the top verdict strip and the bottom
+  // sign-off card need this payload; fetching it once here (instead of once per component) halves the
+  // load on /queryDeploymentSummary — each call runs glmer through rpy2's embedded R, which is
+  // single-threaded per worker, so duplicate concurrent calls were starving the worker pool and
+  // dropping sibling requests (the intermittent "ROC request failed"). Shared result, identical
+  // numbers in both places by construction.
+  const cutThr = cutpoint ? cutpoint.threshold : null;
+  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+  const summary = useDeploymentSummary({
+    participantUid: participant_uid,
+    channel: bc && bc.contact,
+    centerHz: bc && bc.center_freq_hz,
+    bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
+    matchDir, cutThr, requestParams,
+  });
 
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -265,19 +292,25 @@ function ClosedLoopSim() {
             </Grid>
           ) : (
             <>
+              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
+                  Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
+              <Grid item xs={12}>
+                <DeploymentVerdictStrip bandCandidate={bc} summary={summary} />
+              </Grid>
+
               <Grid item xs={12}>
                 <BandCandidateIdentity bc={bc} envelope={envelope} />
               </Grid>
 
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-roc">
                 <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} onCutpoint={setCutpoint} />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-lsb">
                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint} />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-era">
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} />
               </Grid>
@@ -288,9 +321,9 @@ function ClosedLoopSim() {
               <Grid item xs={12}>
                 <ConversionModelPanel participantUid={participant_uid} />
               </Grid>
-              <Grid item xs={12}>
+              <Grid item xs={12} id="cl-signoff">
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} />
+                  requestParams={requestParams} cutpoint={cutpoint} summary={summary} />
               </Grid>
 
               <Grid item xs={12}>

@@ -7,14 +7,12 @@
  * for the device-programming record. This is a SUMMARY, not a new analysis — every number here is
  * the same one the Phase B–D panels show, gathered in one place.
  */
-import { useEffect, useState } from "react";
-
 import { Card, Grid, Icon } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
-import { SessionController } from "database/session-control";
+import useDeploymentSummary from "./useDeploymentSummary";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -71,17 +69,23 @@ function KV({ k, v }) {
   );
 }
 
-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-
+function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary }) {
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
   const bandWidthHz = bc.bandwidth_hz || 5.0;
   const cutThr = cutpoint ? cutpoint.threshold : null;
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+
+  // Prefer the SHARED summary fetch lifted to the parent (one /queryDeploymentSummary call feeds both
+  // this card and the top verdict strip — glmer runs through single-threaded embedded R per worker, so
+  // a duplicate concurrent call starved the pool and dropped sibling requests). Fall back to a local
+  // fetch only if the prop isn't supplied (standalone use), so the two can never disagree.
+  const ownSummary = useDeploymentSummary({
+    participantUid, channel: channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams,
+    enabled: !summary,
+  });
+  const { data, loading, err } = summary || ownSummary;
   // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
   // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
   // patient at different operating points with identical-looking sign-off sheets.
@@ -93,22 +97,6 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     specificity: cutpoint.specificity ?? null,
     degenerate: !!cutpoint.degenerate,
   } : null;
-
-  useEffect(() => {
-    if (!participantUid || channelRaw == null || centerHz == null) return;
-    setLoading(true); setErr(null);
-    const body = {
-      ParticipantId: participantUid, Channel: channelRaw, CenterHz: Number(centerHz),
-      BandWidthHz: Number(bandWidthHz), MatchDirection: matchDir, ...requestParams,
-    };
-    if (cutThr != null) body.Cutpoint = Number(cutThr);
-    SessionController.query("/api/queryDeploymentSummary", body).then((response) => {
-      const d = response && response.data;
-      if (d && d.available) setData(d);
-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams]);
 
   const exportJson = () => {
     if (!data) return;
@@ -125,6 +113,11 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const dc = data && data.device_control;
   const ev = data && data.evidence;
   const th = data && data.threshold;
+  // ESTIMATED (modeled) threshold for an unsensed-but-modelable band: deployment_summary keeps
+  // threshold.available=False / upper_lsb=None and nests the modeled value under threshold.estimate.
+  // Surface it as an amber ESTIMATED card (power ≈, fail-closed — never as a measured `available`
+  // value), matching what the LSB panel and the top verdict strip show for the same band.
+  const thEst = th && th.estimated && th.estimate ? th.estimate : null;
   const pw = data && data.power;
   const fwd = data && data.forward;
   // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
@@ -136,12 +129,13 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const nIndet = (data && data.n_gates_indeterminate) || 0;
 
   return (
-    <Card sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
+    <Card className="cl-signoff-card"
+      sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
       <MDBox p={2.5}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
           {data ? (
-            <MDBox>
+            <MDBox className="cl-signoff-actions">
               <MDButton size="small" variant="outlined" color="dark" onClick={() => window.print()} sx={{ mr: 1 }}>
                 Print
               </MDButton>
@@ -218,9 +212,24 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                         </MDTypography>
                       ) : null}
                     </>
+                  ) : thEst ? (
+                    <>
+                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText, lineHeight: 1.1 }}>
+                        {`power ≈ ${fmt(thEst.estimated_upper_lsb, 1)} LSB`}
+                      </MDTypography>
+                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777" }}>
+                        {`ESTIMATED (${thEst.tier || "modeled"}) — device never sensed this band; `}
+                        {thEst.estimated_upper_lsb_lo != null && thEst.estimated_upper_lsb_hi != null
+                          ? `±1σ ${fmt(thEst.estimated_upper_lsb_lo, 1)}–${fmt(thEst.estimated_upper_lsb_hi, 1)} LSB` : ""}
+                        {thEst.freq_extrapolated ? " · ⚠ extrapolated beyond validated 8–30 Hz" : ""}
+                      </MDTypography>
+                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#999", mt: 0.3 }}>
+                        For planning only — not a measured prerequisite. See the LSB panel for the ±1σ gauge.
+                      </MDTypography>
+                    </>
                   ) : (
                     <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
-                      No deployable LSB threshold — this band is off the device's adaptive sensing range.
+                      No deployable LSB threshold — no measured Timeline LSB and no modeled estimate for this band.
                     </MDTypography>
                   )}
                 </MDBox>

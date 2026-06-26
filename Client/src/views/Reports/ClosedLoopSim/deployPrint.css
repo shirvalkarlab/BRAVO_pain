@@ -1,0 +1,60 @@
+/*
+ * Print stylesheet — audit finding #2 ("window.print() dumps the whole app").
+ *
+ * DeploySignoffCard has a Print button, but with no @media print rule the browser prints the entire
+ * page: sidebar nav, top app bar, all six analysis panels, the JSON inspector. The clinician wants a
+ * clean ONE-PAGE programming record: the verdict strip + the sign-off card, nothing else.
+ *
+ * Approach: when the deployment view is mounted it adds `.cl-deploy-root` to <body> (see index.js).
+ * In print, hide everything, then re-show only the verdict strip and the sign-off card, promoted out
+ * of the flctx and laid flat. We hide by default and opt back in, so future panels added to the page
+ * are excluded from the printout automatically (fail-safe: a new panel can't leak into the record).
+ */
+@media print {
+  /* Hide the whole app chrome + every panel by default. */
+  body.cl-deploy-root * {
+    visibility: hidden !important;
+  }
+
+  /* Re-show ONLY the verdict strip and the sign-off card (and their descendants). */
+  body.cl-deploy-root .cl-verdict-strip,
+  body.cl-deploy-root .cl-verdict-strip *,
+  body.cl-deploy-root .cl-signoff-card,
+  body.cl-deploy-root .cl-signoff-card * {
+    visibility: visible !important;
+  }
+
+  /* Lay the two printed blocks flat at the top of the page. */
+  body.cl-deploy-root .cl-verdict-strip {
+    position: static !important;
+    box-shadow: none !important;
+    border: 1px solid #444 !important;
+    margin: 0 0 10px 0 !important;
+    width: 100% !important;
+  }
+  body.cl-deploy-root .cl-signoff-card {
+    position: absolute !important;
+    left: 0;
+    top: 64px;     /* below the flattened strip */
+    width: 100% !important;
+    box-shadow: none !important;
+    border: 1px solid #444 !important;
+  }
+
+  /* Interactive-only affordances have no place on a paper record. */
+  body.cl-deploy-root .cl-jumps,
+  body.cl-deploy-root .cl-signoff-actions {
+    display: none !important;
+  }
+
+  /* Let the record break across pages naturally rather than clipping. */
+  body.cl-deploy-root .cl-signoff-card,
+  body.cl-deploy-root .cl-verdict-strip {
+    overflow: visible !important;
+    page-break-inside: auto;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}

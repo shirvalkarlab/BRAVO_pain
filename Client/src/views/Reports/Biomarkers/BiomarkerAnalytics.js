@@ -238,7 +238,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
   const centers = (scan && scan.centers) || [];
   const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
   const fmax = (scan && scan.fmax) || 100;
-  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, 8–30 Hz) vs legacy dB power.
+  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, full 0–100 Hz scan; the
+  // 8–30 Hz deployable band is shown by the green tint, not by cropping) vs legacy dB power.
   // Drives every axis/hover label so the panel states the unit the numbers actually carry.
   const isLsb = scan && scan.feature === "lsb_calibrated";
   const featAxis = isLsb ? "log₁₀ calibrated LSB" : "Std. log band power";
@@ -358,8 +359,11 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       ...FIG_BASE, autosize: true, height: 460,
       margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
       xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
-        // LSB mode scans only 8–30 Hz, so start the axis at the adaptive lower edge rather than 0.
-        range: [isLsb && adaptive ? adaptive[0] : 0, fmax] },
+        // ALWAYS show the full 0–fmax (0–100 Hz) spectrum in both LSB and log-PSD modes. The scan
+        // now runs the full range in every mode (centers 2.5–97.5 Hz); the 8–30 Hz deployable band
+        // is marked by the green tint + annotation below, not by cropping the axis. (Was previously
+        // clamped to [adaptive[0], fmax] in LSB mode, which hid the out-of-band spectrum entirely.)
+        range: [0, fmax] },
       yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
