@@ -3563,6 +3563,119 @@ def _sensing_hz_for_pd(pd_rec, contact):
         return None
 
 
+def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
+                                    center_hz, percentile, participant, channel):
+    """Shared modeled-LSB fallback ladder (audit: deployment_fallback).
+
+    When the device never sensed THIS (channel, band) long enough to read a deployable threshold
+    straight off its own native LSB Timeline (`thr_lsb is None`), estimate the LSB threshold from
+    progressively coarser modeled sources and flag it ESTIMATED with its tier, so a clinician never
+    mistakes a modeled threshold for a measured one. Returns the `thr_estimate` dict (or None).
+
+    Both deployment endpoints call THIS one function so the measured→modeled fallback can never drift
+    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary):
+
+      TIER 1  modeled_timeline   — montage/survey Welch256×269 in-band points at the same percentile
+                                   (the hollow-diamond series the timeline draws). Closest to measured.
+      TIER 2  frozen PSD→LSB     — per-participant frozen conversion applied to the µV² cut-point.
+      TIER 3  validated_constant — population k=269 LSB/µV² on the µV² cut-point (last resort).
+
+    `thr_lsb` (measured native threshold) ALWAYS wins; this is only consulted when it is None.
+    """
+    thr_estimate = None
+    # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
+    # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
+    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
+    # those at the same percentile, the SAME way the native path reads it. This is the closest thing
+    # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
+    # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
+    # for a sensed value.
+    if thr_lsb is None and modeled_thr is not None:
+        fextrap = bool(center_hz is not None and (
+            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+        note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
+                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
+                "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
+                "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
+                % (percentile, n_modeled))
+        if fextrap:
+            note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
+                analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
+        sigma = analytics.LSB_UV2_SIGMA_FOLD
+        thr_estimate = {
+            "estimated_upper_lsb": modeled_thr,
+            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
+            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
+            "sigma_fold": round(float(sigma), 3),
+            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
+            "r2": None, "n_modeled_points": n_modeled,
+            "freq_extrapolated": fextrap,
+            "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+            "note": note,
+            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
+        }
+    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
+    # only if there were no modeled timeline points to read either.
+    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
+        from modules.Biomarkers.routines import psd_lsb_model as _plm
+        est = _plm.estimate_lsb(participant, channel, center_hz, float(cutpoint))
+        if est.get("available"):
+            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
+            est_lsb = float(est["lsb"])
+            thr_estimate = {
+                "estimated_upper_lsb": round(est_lsb, 1),
+                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
+                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
+                "sigma_fold": round(float(sigma), 3),
+                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
+                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
+                "r2": est.get("r2"), "note": est.get("note"),
+                # Carry the conversion's frequency-coverage flag: True when the band is outside the
+                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
+                # warns that the LSB is extrapolated, not calibrated.
+                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
+                "validated_hz_range": est.get("validated_hz_range"),
+                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
+            }
+        else:
+            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
+            # we can still translate the physical µV² cut-point with the VALIDATED population constant
+            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
+            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
+            try:
+                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
+            except Exception:  # noqa: BLE001
+                lsb_est = float("nan")
+            if np.isfinite(lsb_est):
+                sigma = analytics.LSB_UV2_SIGMA_FOLD
+                fextrap = bool(center_hz is not None and (
+                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+                note = ("No per-participant frozen-model entry for this band; translated with the "
+                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
+                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
+                        "device Timeline before deploying." % sigma)
+                if fextrap:
+                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
+                             "where k is untested (the gain is not band-flat). Needs streaming "
+                             "calibration at this center frequency." % (
+                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
+                thr_estimate = {
+                    "estimated_upper_lsb": round(float(lsb_est), 1),
+                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
+                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
+                    "sigma_fold": round(float(sigma), 3),
+                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
+                    "r2": 0.94,
+                    "freq_extrapolated": fextrap,
+                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+                    "note": note,
+                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
+                }
+    return thr_estimate
+
+
 def band_lsb_and_power(request_data):
     """Phase C: anchor a Phase-B cut-point to deployable device units and report power / sample-size.
 
@@ -3607,20 +3720,41 @@ def band_lsb_and_power(request_data):
     chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
     pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
     from modules.Biomarkers.routines import availability as _av
-    lsb = _av.lsb_series(chronic_list, pd_list)
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, Welch256×269 — the same
+    # hollow-diamond series the timeline draws) is available as a fallback when the device never
+    # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
+    # sees exactly the modeled points the clinician sees on the timeline.
+    psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
+    sensing_hz = analytics.power_center_freqs(pd_list)
+    lsb = _av.lsb_series(chronic_list, pd_list,
+                         montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
     half = band_width_hz / 2.0
     threshold_lsb = {"available": False, "reason": "not computed"}
-    band_lsb_vals = None
+    band_lsb_vals = None                  # NATIVE (device-sensed) in-band LSB
+    thr_lsb = None; n_native = 0
+    modeled_thr = None; n_modeled = 0     # MODELED in-band LSB (psd_modeled tier)
     series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
     if series is not None:
         y = np.asarray(series.get("y"), dtype=float)
         hz = np.asarray(series.get("center_hz"), dtype=float)
+        modeled_flag = np.asarray(series.get("modeled"), dtype=object)
         bmask = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
-        band_lsb_vals = y[bmask]
+        # NATIVE (sensed) points only: exclude modeled psd_modeled samples so a measured threshold is
+        # never contaminated by a modeled one (native is always preferred for the deployable number).
+        is_modeled = (np.array([bool(m) for m in modeled_flag]) if modeled_flag.size == y.size
+                      else np.zeros(y.size, bool))
+        band_lsb_vals = y[bmask & ~is_modeled]
+        n_native = int(band_lsb_vals.size)
+        # MODELED in-band points gathered regardless; used only if there's no native threshold.
+        mvals = y[bmask & is_modeled]; n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
     if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
+        # MEASURED, native device-sensed threshold — the deployable number, always preferred.
         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
         threshold_lsb = {
-            "available": True, "method": "percentile-anchored on device Timeline LSB",
+            "available": True, "estimated": False,
+            "method": "percentile-anchored on device Timeline LSB",
             "upper_lsb": round(thr_lsb, 1), "lower_lsb": None,
             "percentile": round(percentile, 1),
             "n_timeline_samples": int(band_lsb_vals.size),
@@ -3632,17 +3766,48 @@ def band_lsb_and_power(request_data):
                      "at the same percentile (band-restricted) — no µV²↔LSB conversion needed."),
         }
     else:
+        # No native threshold: default to the MODELED LSB estimate via the shared fallback ladder
+        # (modeled timeline → frozen PSD→LSB model → validated k=269 constant), the IDENTICAL helper
+        # deployment_summary uses, so the per-panel number can never drift from the sign-off card.
+        # Flagged estimated=True so the frontend renders it with its ESTIMATED tier + ±1σ band and
+        # never as a measured value (audit C8 fail-closed: a modeled value is for PLANNING, not a
+        # measured prerequisite).
+        thr_estimate = _modeled_lsb_threshold_estimate(
+            thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
+            rd.get("Participant"), channel)
         n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
-        threshold_lsb = {
-            "available": False,
-            "reason": (f"device sensed this band only {n_band} times"
-                       if percentile is not None
-                       else "no Phase-B cut-point supplied (Cutpoint param)"),
-            "n_timeline_samples": n_band,
-            "hint": ("This band is likely off the device's programmed sensing range (the Percept "
-                     "adaptive band is 8–30 Hz); a percentile anchor needs Timeline LSB recorded in "
-                     "this band."),
-        }
+        if thr_estimate is not None:
+            threshold_lsb = {
+                "available": True, "estimated": True,
+                "method": thr_estimate["method"],
+                "tier": thr_estimate["tier"],
+                "upper_lsb": thr_estimate["estimated_upper_lsb"], "lower_lsb": None,
+                "upper_lsb_lo": thr_estimate["estimated_upper_lsb_lo"],
+                "upper_lsb_hi": thr_estimate["estimated_upper_lsb_hi"],
+                "sigma_fold": thr_estimate["sigma_fold"],
+                "percentile": (round(percentile, 1) if percentile is not None else None),
+                "n_timeline_samples": n_band,
+                "n_modeled_points": thr_estimate.get("n_modeled_points", n_modeled),
+                "freq_extrapolated": thr_estimate.get("freq_extrapolated", False),
+                "validated_hz_range": thr_estimate.get("validated_hz_range"),
+                "k_effective": thr_estimate.get("k_effective"),
+                "r2": thr_estimate.get("r2"),
+                "note": thr_estimate["note"],
+            }
+        else:
+            threshold_lsb = {
+                "available": False, "estimated": False,
+                "reason": (f"device sensed this band only {n_band} times, and no modeled LSB or "
+                           "Phase-B cut-point was available to estimate from"
+                           if percentile is not None
+                           else "no Phase-B cut-point supplied (Cutpoint param)"),
+                "n_timeline_samples": n_band,
+                "n_modeled_points": n_modeled,
+                "hint": ("This band is off the device's programmed sensing range (the Percept "
+                         "adaptive band is 8–30 Hz) and no montage/survey sweep covered it, so "
+                         "there is neither a native nor a modeled LSB anchor here. Record a montage "
+                         "sweep or stream this band to obtain a deployable threshold."),
+            }
 
     # ---- 1b) recommended-vs-currently-programmed delta (audit C10) ----
     # The task here is tuning an EXISTING device setting, so a recommended LSB number alone forces the
@@ -3870,97 +4035,13 @@ def deployment_summary(request_data):
     # have the physical uV^2 cut-point. Estimate the LSB threshold from the per-participant frozen
     # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
     # mistakes a modeled threshold for a measured one.
-    thr_estimate = None
-    # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
-    # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
-    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
-    # those at the same percentile, the SAME way the native path reads it. This is the closest thing
-    # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
-    # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
-    # for a sensed value.
-    if thr_lsb is None and modeled_thr is not None:
-        fextrap = bool(center_hz is not None and (
-            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-        note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
-                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
-                "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
-                "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
-                % (percentile, n_modeled))
-        if fextrap:
-            note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
-                analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-        sigma = analytics.LSB_UV2_SIGMA_FOLD
-        thr_estimate = {
-            "estimated_upper_lsb": modeled_thr,
-            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
-            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
-            "sigma_fold": round(float(sigma), 3),
-            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
-            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
-            "r2": None, "n_modeled_points": n_modeled,
-            "freq_extrapolated": fextrap,
-            "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
-            "note": note,
-            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
-        }
-    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
-    # only if there were no modeled timeline points to read either.
-    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
-        from modules.Biomarkers.routines import psd_lsb_model as _plm
-        est = _plm.estimate_lsb(rd.get("Participant"), channel, center_hz, float(cutpoint))
-        if est.get("available"):
-            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
-            est_lsb = float(est["lsb"])
-            thr_estimate = {
-                "estimated_upper_lsb": round(est_lsb, 1),
-                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
-                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
-                "sigma_fold": round(float(sigma), 3),
-                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
-                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
-                "r2": est.get("r2"), "note": est.get("note"),
-                # Carry the conversion's frequency-coverage flag: True when the band is outside the
-                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
-                # warns that the LSB is extrapolated, not calibrated.
-                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
-                "validated_hz_range": est.get("validated_hz_range"),
-                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
-            }
-        else:
-            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
-            # we can still translate the physical µV² cut-point with the VALIDATED population constant
-            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
-            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
-            try:
-                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
-            except Exception:  # noqa: BLE001
-                lsb_est = float("nan")
-            if np.isfinite(lsb_est):
-                sigma = analytics.LSB_UV2_SIGMA_FOLD
-                fextrap = bool(center_hz is not None and (
-                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-                note = ("No per-participant frozen-model entry for this band; translated with the "
-                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
-                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
-                        "device Timeline before deploying." % sigma)
-                if fextrap:
-                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
-                             "where k is untested (the gain is not band-flat). Needs streaming "
-                             "calibration at this center frequency." % (
-                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-                thr_estimate = {
-                    "estimated_upper_lsb": round(float(lsb_est), 1),
-                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
-                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
-                    "sigma_fold": round(float(sigma), 3),
-                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
-                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
-                    "r2": 0.94,
-                    "freq_extrapolated": fextrap,
-                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
-                    "note": note,
-                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
-                }
+    # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
+    # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
+    # have modeled LSB sources. Delegate to the SHARED ladder so this path can never drift from the
+    # per-panel LSB readout (band_lsb_and_power) which calls the identical helper.
+    thr_estimate = _modeled_lsb_threshold_estimate(
+        thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
+        rd.get("Participant"), channel)
 
     # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
     # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with

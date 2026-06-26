@@ -1546,3 +1546,47 @@ def test_pain_scores_emit_utc_t_epoch():
     epochs = sorted(p["t_epoch"] for p in pts)
     assert abs(epochs[0] - pd.Timestamp("2025-07-20 21:00:00").value / 1e9) < 1
     assert abs(epochs[1] - pd.Timestamp("2025-12-20 22:00:00").value / 1e9) < 1
+
+
+def test_modeled_lsb_threshold_fallback_ladder():
+    """Shared modeled-LSB fallback (_modeled_lsb_threshold_estimate) used by BOTH band_lsb_and_power
+    (per-panel LSB readout) and deployment_summary (sign-off card), so an unsensed band defaults to
+    the MODELED LSB instead of dead-ending at 'NO DEPLOYABLE LSB THRESHOLD'. Verifies:
+      (1) a MEASURED native threshold always wins — the estimate is never consulted (returns None);
+      (2) TIER 1 (modeled_timeline) reads the montage/survey LSB at the cut-point percentile;
+      (3) TIER 3 (validated_constant) translates the µV² cut-point via k=269 when no modeled
+          timeline and no frozen per-participant model exist;
+      (4) the ±1σ band is the validated fold (LSB_UV2_SIGMA_FOLD) either side;
+      (5) an out-of-band center (e.g. 50 Hz, outside the validated 7.8–28.3 Hz range) sets
+          freq_extrapolated=True so the UI flags the LSB as extrapolated, not calibrated;
+      (6) with neither modeled points nor a cut-point, the helper honestly returns None."""
+    from modules.Biomarkers import bravo_service as bs
+    k = analytics.LSB_PER_UV2_VALIDATED          # 269
+    sigma = analytics.LSB_UV2_SIGMA_FOLD         # ≈1.26
+
+    # (1) measured native threshold present -> estimate never built
+    assert bs._modeled_lsb_threshold_estimate(
+        123.0, 200.0, 12, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+
+    # (2)+(4) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
+    r1 = bs._modeled_lsb_threshold_estimate(
+        None, 210.0, 15, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
+    assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
+    assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
+    assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
+    assert r1["freq_extrapolated"] is False        # 20 Hz is in the validated range
+
+    # (3) TIER 3: no modeled timeline, no frozen model (participant=None) -> validated k=269 constant
+    r3 = bs._modeled_lsb_threshold_estimate(
+        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
+    assert r3["tier"] == "validated_constant"
+    assert abs(r3["estimated_upper_lsb"] - round(k * 2.0, 1)) < 0.2   # linear in µV²
+
+    # (5) out-of-band center -> extrapolation flag set
+    rex = bs._modeled_lsb_threshold_estimate(
+        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT")
+    assert rex["freq_extrapolated"] is True
+
+    # (6) nothing to estimate from -> honest None (panel shows the no-anchor message)
+    assert bs._modeled_lsb_threshold_estimate(
+        None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
