@@ -81,7 +81,16 @@ parallelize across 16 cores where you cannot vectorize"). `run_for_participant` 
   reload events don't propagate (`bf62b21`). **Both take effect only on next container restart**
   (sandbox can't reach the docker daemon); meanwhile the workaround is manual worker recycle
   (`kill -TERM` in batches of 3, master respawns fresh from disk).
-- High-gamma 55.5 Hz calibration still blocked on lab streaming data.
+- High-gamma 55.5 Hz calibration is **CLOSED as not-actionable** (see §4 item 2): Percept RC
+  adaptive stim is firmware-limited to 8–30 Hz, so a 55.5 Hz sensing-only band can never drive a
+  closed-loop controller. The extrapolation guard (`freq_extrapolated` flag) shipped and stays; the
+  data-collection action item is retired.
+
+**Largest remaining backlog (carried, not touched this session):** the **27 medium + 24 low**
+findings from the four-lens deployment audit (all HIGH — C1/C2/C3/C8 — and C4 are resolved). Not
+itemized in this doc; regenerate the list from the audit before triaging. Also deferred: the
+design-effect discount for autocorrelated ratings (TIME half of C4 — second-order, effective-n
+already uses the clustered count).
 
 ---
 
