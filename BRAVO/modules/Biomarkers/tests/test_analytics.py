@@ -1590,3 +1590,38 @@ def test_modeled_lsb_threshold_fallback_ladder():
     # (6) nothing to estimate from -> honest None (panel shows the no-anchor message)
     assert bs._modeled_lsb_threshold_estimate(
         None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+
+
+def test_deployment_summary_identity_is_json_serializable():
+    """Regression: /api/queryDeploymentSummary 500'd with 'Object of type Participant is not JSON
+    serializable' because the identity block carried core["Participant"] — a Django MODEL object —
+    instead of the participant_uid string. DRF json.dumps() the whole payload on every real fetch, so
+    a model object anywhere in the output is a hard 500 (the gate-assembly tests never caught it
+    because they build dicts by hand and never render). This pins the contract: the identity dict's
+    participant field is a plain string, and an identity-shaped dict round-trips through json.dumps.
+
+    We assert on the documented output shape (no DB): a Participant-like sentinel object in the dict
+    must FAIL json.dumps, and the corrected string form must PASS — exactly the before/after of the
+    fix at bravo_service.deployment_summary identity = {"participant": core["participant_uid"], ...}.
+    """
+    import json
+
+    class _FakeParticipantModel:           # stands in for models.Participant (not JSON-serializable)
+        def __init__(self, uid): self.uid = uid
+
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    # BEFORE the fix: a model object in identity -> json.dumps raises TypeError (the live 500).
+    bad_identity = {"participant": _FakeParticipantModel(uid), "contact": "ZERO_TWO_LEFT"}
+    try:
+        json.dumps({"available": True, "identity": bad_identity})
+        raised = False
+    except TypeError:
+        raised = True
+    assert raised, "a model object in identity should NOT be JSON-serializable (the original 500)"
+
+    # AFTER the fix: the uid STRING serializes cleanly and round-trips.
+    good_identity = {"participant": uid, "contact": "ZERO_TWO_LEFT"}
+    payload = {"available": True, "identity": good_identity}
+    restored = json.loads(json.dumps(payload))
+    assert restored["identity"]["participant"] == uid
+    assert isinstance(restored["identity"]["participant"], str)

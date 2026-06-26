@@ -4284,7 +4284,9 @@ def deployment_summary(request_data):
         "available": True,
         "match_direction": core["match_direction"], "verdict": verdict,
         "identity": {
-            "participant": core.get("Participant"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
+            # participant_uid (a string), NOT core["Participant"] (a Django model object) — the latter
+            # is not JSON-serializable and made /queryDeploymentSummary 500 on every real fetch.
+            "participant": core.get("participant_uid"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
             "contact": channel, "contact_label": analytics.format_channel(channel)["label"],
             "region": analytics.format_channel(channel)["region"],
             "center_freq_hz": _ff(center_hz), "bandwidth_hz": _ff(band_width_hz),
