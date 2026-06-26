@@ -28,7 +28,9 @@ import EraRefitPanel from "./EraRefitPanel";
 import PsdLsbPanel from "./PsdLsbPanel";
 import ConversionModelPanel from "./ConversionModelPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
+import DeploymentVerdictStrip from "./DeploymentVerdictStrip";
 import PAL from "./palette";
+import "./deployPrint.css";
 
 // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
 // committed candidate's label provenance, so the deployment ROC defines the band feature with the
@@ -184,6 +186,14 @@ function ClosedLoopSim() {
     setEnvelope(loadBandCandidate(participant_uid));
   }, [participant_uid, navigate]);
 
+  // Tag <body> while this view is mounted so the print stylesheet (deployPrint.css) can scope its
+  // "hide everything except the sign-off record" rules to this page only, and clean the class up on
+  // unmount so printing any OTHER view is unaffected.
+  useEffect(() => {
+    document.body.classList.add("cl-deploy-root");
+    return () => document.body.classList.remove("cl-deploy-root");
+  }, []);
+
   const bc = envelope && envelope.band_candidate;
 
   // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
@@ -265,19 +275,25 @@ function ClosedLoopSim() {
             </Grid>
           ) : (
             <>
+              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last. */}
+              <Grid item xs={12}>
+                <DeploymentVerdictStrip participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} cutpoint={cutpoint} />
+              </Grid>
+
               <Grid item xs={12}>
                 <BandCandidateIdentity bc={bc} envelope={envelope} />
               </Grid>
 
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-roc">
                 <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} onCutpoint={setCutpoint} />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-lsb">
                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint} />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={6} id="cl-era">
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} />
               </Grid>
@@ -288,7 +304,7 @@ function ClosedLoopSim() {
               <Grid item xs={12}>
                 <ConversionModelPanel participantUid={participant_uid} />
               </Grid>
-              <Grid item xs={12}>
+              <Grid item xs={12} id="cl-signoff">
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint} />
               </Grid>
