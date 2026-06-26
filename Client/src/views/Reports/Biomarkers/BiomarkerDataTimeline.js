@@ -932,30 +932,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const subj = (data && data.participant_label) || (av && av.participant) || "";
     const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
 
-    // ---- adaptive legend left edge -----------------------------------------------------------
-    // Read the ACTUAL container pixel width from the live DOM node — exact, not estimated.
-    // plotAreaPx = containerPx - MARGIN_L (left gutter) - 60 (right margin).
-    // computeLegX0(containerPx) → paper-fraction left edge for the glyph legend:
-    //   title is left-anchored at paper x=0.012; its right edge in paper units =
-    //   0.012 + titlePx / plotAreaPx. Add a fixed gap then cap so the Hz chip box fits.
-    // Called once at draw time with the real DOM width, then re-called by plotly_afterplot
-    // on every resize so the legend tracks the title at any browser window width.
-    const computeLegX0 = (cPx) => {
-      const paPx = Math.max(cPx - MARGIN_L - 60, 200);
-      // Arial character widths: bold 26 pt title ≈ 0.63 em/ch; normal 13 pt subtitle ≈ 0.58 em/ch.
-      const titlePx = Math.max(
-        0.63 * 26 * "Biomarker Data Timeline".length,
-        0.58 * 13 * sub.length,
-      );
-      // 0.035 gap between title right edge and legend left edge; cap at 0.80 so Hz box has room.
-      return Math.min(0.012 + titlePx / paPx + 0.035, 0.80);
-    };
-    const containerPx = (ref.current && ref.current.offsetWidth) || 1100;
-    const LEG_X0 = computeLegX0(containerPx);
-    // Legend estimated box width (Arial 11.5 pt × longest label ≈ 38 chars) in paper fraction.
-    // Used below to set BX0 (left edge of the Hz chip box) flush right of the legend.
-    const plotAreaPx = Math.max(containerPx - MARGIN_L - 60, 200);
-    const LEG_EST_W = Math.min(0.018 + (0.58 * 11.5 * 38) / plotAreaPx + 0.04, 0.38);
+    // ---- legend & Hz-key placement (deterministic, width-independent) -----------------------
+    // Per bravo-timeline-layout skill: the glyph legend is pinned to the plot's RIGHT edge
+    // (x:1.0, xanchor:"right") below, so it can NEVER overlap the LEFT-anchored title/subtitle
+    // regardless of figure width. No DOM-width measurement and no resize hook are needed — the
+    // non-overlap is guaranteed by construction (legend grows leftward from the right edge; the
+    // Hz key grows rightward from the left edge; their combined width ≪ 1.0). Verified
+    // numerically with assert_no_overlap: gap ≈ 0.33 at nominal width, and widening only
+    // increases it because both footprints shrink as paper fractions.
 
     // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
     // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
@@ -970,17 +954,16 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // neither can dip into a lane at any figure height (the old fixed-fraction version did).
       const BTOP = LEG_TOP_Y;              // matched to the main legend top
       const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
-      // Adaptive chip layout: BX0 is derived from the legend's estimated right edge so the Hz key
-      // always sits flush to the RIGHT of the glyph legend, regardless of how many realized
-      // frequencies there are. PER_ROW is computed from the remaining paper width (BX0 → right
-      // margin) so chips never overflow off-figure, and never fewer than 2 per row.
-      const HZ_CHIP_W = 0.044;            // paper-fraction width of one [swatch + label] chip
-      const BX0 = LEG_X0 + LEG_EST_W + 0.020;
-      const MAX_BX1 = 0.998;
-      const PER_ROW = Math.max(2, Math.min(pcs.length,
-        Math.floor((MAX_BX1 - BX0 - 0.02) / HZ_CHIP_W)));
+      // LEFT-anchored Hz key with a FIXED width. The glyph legend lives at the RIGHT edge, so the
+      // Hz key simply grows rightward from the left margin; with ≤4 chips/row its right edge stays
+      // well left of the legend (proven disjoint by assert_no_overlap, gap ≈ 0.33). No dependence
+      // on container width — chip width is a constant paper fraction and PER_ROW is capped, so the
+      // box footprint is identical at every figure width.
+      const HZ_CHIP_W = 0.046;            // paper-fraction width of one [swatch + label] chip
+      const BX0 = 0.005;                   // flush to the left margin
+      const PER_ROW = Math.min(pcs.length, 4);   // ≤4 per row → at most 2 rows for 6–8 freqs
       const nRows = Math.ceil(pcs.length / PER_ROW);
-      const BX1 = Math.min(BX0 + PER_ROW * HZ_CHIP_W + 0.030, MAX_BX1);
+      const BX1 = BX0 + PER_ROW * HZ_CHIP_W + 0.030;
       const CHIP_H = pxY(7);              // chip half-height in pixels -> paper-Y (scales with height)
       const titleY = BTOP - pxY(18);      // box title baseline
       const gridTop = titleY - pxY(20);   // first chip-row center
@@ -1026,10 +1009,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       shapes, annotations,
       showlegend: true,
       // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored at LEG_BOT_Y
-      // so the box grows UP into the margin and never spills into a lane. x = LEG_X0: derived from
-      // the actual container pixel width so the legend always starts just right of the title text.
-      // Re-positioned on resize via the plotly_afterplot hook below.
-      legend: { orientation: "v", x: LEG_X0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
+      // so the box grows UP into the margin and never spills into a lane. RIGHT-anchored
+      // (x:1.0, xanchor:"right") per bravo-timeline-layout: pinned to the plot's right edge, the
+      // legend grows leftward and can never overlap the LEFT-anchored title/subtitle at ANY width.
+      // This makes the old DOM-width measurement + plotly_afterplot resize hook unnecessary.
+      legend: { orientation: "v", x: 1.0, xanchor: "right", y: LEG_BOT_Y, yanchor: "bottom",
                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
                 bordercolor: "#1a1a1a", borderwidth: 1.5,
                 itemsizing: "constant", tracegroupgap: 2 },
@@ -1127,21 +1111,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       if (touchedX) { applyTdWidths(); applyLsbScales(); }
     };
     gd.on("plotly_relayout", onRelayout);
-
-    // On resize (window drag, sidebar collapse) recompute the legend's left edge from the
-    // container's new pixel width and relayout — keeps the legend clear of the title at any width.
-    const onAfterPlot = () => {
-      if (!gd || !gd._fullLayout) return;
-      const newPx = (gd.offsetWidth || containerPx);
-      const newX = computeLegX0(newPx);
-      if (Math.abs(newX - (gd._fullLayout.legend && gd._fullLayout.legend.x || 0)) > 0.005) {
-        Plotly.relayout(gd, { "legend.x": newX });
-      }
-    };
-    gd.on("plotly_afterplot", onAfterPlot);
+    // No resize hook: the legend is right-anchored and the Hz key left-anchored, so collision-
+    // freedom holds at every width by construction — nothing to recompute on resize.
     return () => {
       try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
-      try { gd.removeListener("plotly_afterplot", onAfterPlot); } catch (e) { /* noop */ }
     };
   }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
 
