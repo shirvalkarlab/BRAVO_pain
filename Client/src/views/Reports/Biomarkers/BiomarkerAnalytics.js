@@ -595,15 +595,24 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     <Grid item xs={12}>
       <Card sx={{ width: "100%", scrollMarginTop: "96px" }}>
         <MDBox p={2}>
-          <MDTypography variant="h6" fontSize={17} mb={0.25}>
+          <MDTypography variant="h6" fontSize={19} fontWeight="bold" mb={0.25}>
             {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
           </MDTypography>
-          <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+          {/* Bold one-line takeaway: state exactly what the two curves are and the headline caveat,
+              before the detailed (backend-supplied) note. Font bumped from caption (~12px) to 14px
+              with key phrases bold so the caveats are not lost in a wall of small grey text. */}
+          <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
+            <strong>Each frequency band is screened two ways</strong>: Pearson&nbsp;<em>r</em> vs the
+            {` continuous ${pain} score (all matched samples) and a cross-validated logistic `}
+            <strong>AUC</strong> on the high-vs-low split.{" "}
+            <strong>Exploratory screen — neither r nor AUC is a validated biomarker.</strong>
+          </MDTypography>
+          <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
             {scan && scan.note}
           </MDTypography>
           {/* Matching policy — one concise line stating exactly how PSDs were paired to ratings. */}
           {scan && scan.max_per_rating != null && (
-            <MDTypography variant="caption" display="block" mb={0.5}
+            <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
               {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
                + `${scan.max_per_rating > 1 ? "s" : ""} per channel `
@@ -620,19 +629,19 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
           )}
           {/* Survey usage — the rating-centric view the clinician asked for. */}
           {scan && scan.survey_usage && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
-              {`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} available `
-               + `(${scan.survey_usage.pct_pro_used}%); ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
+              <strong>{`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`}</strong>
+              {` ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
             </MDTypography>
           )}
           {scan && scan.n_pooled != null && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
               {`${scan.n_pooled} PSDs matched a rating across all channels. Each channel's curve uses only the PSDs `
                + `recorded on that montage (the per-channel n in the legend), so any single curve draws on a fraction of that total.`}
             </MDTypography>
           )}
           {scan && scan.binarization && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
               {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
                + (scan.binarization.n_excluded_middle > 0
                   ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
@@ -646,7 +655,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
           )}
           {scan && scan.feature === "lsb_calibrated" && scan.device_psd_scale_by_channel
             && Object.keys(scan.device_psd_scale_by_channel).length > 0 && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
               {`Reports with no time-domain match used the device onboard-FFT PSD, rescaled onto the LSB axis `
                + `by an empirical per-channel factor (${Object.entries(scan.device_psd_scale_by_channel)
                     .map(([ch, s]) => `${ch}: ×${Number(s).toFixed(2)}`).join(", ")}). `
@@ -654,7 +663,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
             </MDTypography>
           )}
           {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
-            <MDTypography variant="caption" display="block" mb={0.5}
+            <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
                     fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
               {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
