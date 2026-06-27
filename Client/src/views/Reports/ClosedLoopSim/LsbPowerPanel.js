@@ -163,9 +163,19 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
         yshift: 6, text: `need: ${nNeed}`, showarrow: false,
         font: { size: 8.5, color: PAL.neutral } });
     }
+    // Audit [19]: when the effective n is discounted for serial autocorrelation (design_effect > 1),
+    // say so on the figure and clarify the x-axis is REAL ratings collected (power is evaluated at the
+    // discounted effective count). At design_effect == 1 the panel is unchanged.
+    const deff = pw.design_effect != null ? pw.design_effect : 1.0;
+    const xTitle = deff > 1.0 ? "pain ratings collected (N)" : "independent pain ratings (N)";
+    if (deff > 1.0) {
+      annotations.push({ x: nMax * 0.5, y: 8, xanchor: "center", yanchor: "bottom",
+        text: `effective N discounted ×${(1 / deff).toFixed(2)} (autocorrelation, DEFF ${deff.toFixed(2)})`,
+        showarrow: false, font: { size: 8, color: PAL.warnText } });
+    }
     const layout = {
       margin: { l: 44, r: 12, t: 8, b: 36 }, height: 170,
-      xaxis: { title: { text: "independent pain ratings (N)", font: { size: 10.5 } },
+      xaxis: { title: { text: xTitle, font: { size: 10.5 } },
         zeroline: false, tickfont: { size: 9.5 }, range: [0, nMax * 1.02] },
       yaxis: { title: { text: "Detection power for AUC > 0.5 (%)", font: { size: 10 } },
         range: [0, 102], zeroline: false, tickfont: { size: 9.5 }, dtick: 25 },

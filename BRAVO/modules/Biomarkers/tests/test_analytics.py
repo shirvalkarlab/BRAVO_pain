@@ -1838,3 +1838,72 @@ def test_deployment_summary_carries_temporal_validity_block():
     assert tv.get("forward_validation") in ("validated", "failed", "not_assessed")
     assert tv.get("threshold_drift") in ("not_assessed",)  # not yet computed (audit [18])
     assert tv.get("stim_state_portability") in ("portable", "fragile", "not_assessed")
+
+
+def test_block_bootstrap_block_len_1_reproduces_iid_loop():
+    """Audit [16]: the vectorized moving-block bootstrap at block_len=1 must reproduce the previous
+    per-replicate sklearn rating-cluster bootstrap EXACTLY (same seed -> same cluster picks -> same
+    de-folded AUC distribution). This pins that the vectorization changed no number on the i.i.d.
+    path. Tolerances are 0 on mean and both CI percentiles."""
+    import numpy as _np
+    from sklearn import metrics as _metrics
+    K = 40
+    rng = _np.random.default_rng(3)
+    sizes = rng.integers(1, 6, K)
+    g = _np.repeat(_np.arange(K), sizes)
+    N = g.size
+    y = rng.integers(0, 2, N); y[:2] = [0, 1]
+    use = rng.normal(0, 1, N) + 0.6 * y
+
+    def loop_boot(nb, seed):
+        r = _np.random.default_rng(seed); uniq = _np.unique(g)
+        rows = {c: _np.where(g == c)[0] for c in uniq}; out = []
+        for _ in range(nb):
+            pick = r.choice(uniq, size=uniq.size, replace=True)
+            idx = _np.concatenate([rows[c] for c in pick]); yb = y[idx]
+            if len(_np.unique(yb)) < 2:
+                continue
+            try:
+                out.append(float(_metrics.roc_auc_score(yb, use[idx])))
+            except ValueError:
+                continue
+        return _np.array(out)
+
+    loop = loop_boot(3000, 11)
+    vec = analytics._block_bootstrap_aucs(use, y, g, K, 3000, 1, _np.random.default_rng(11))
+    vec = vec[_np.isfinite(vec)]
+    assert vec.size == loop.size, f"replicate counts differ: {vec.size} vs {loop.size}"
+    assert abs(loop.mean() - vec.mean()) < 1e-12
+    assert abs(_np.percentile(loop, 2.5) - _np.percentile(vec, 2.5)) < 1e-12
+    assert abs(_np.percentile(loop, 97.5) - _np.percentile(vec, 97.5)) < 1e-12
+
+
+def test_auto_block_len_degrades_to_iid_when_uncorrelated():
+    """Audit [16]: auto block length is 1 (i.i.d.) when the per-cluster pain series has no positive
+    autocorrelation, and grows with serial dependence. Guarantees uncorrelated data is unchanged."""
+    import numpy as _np
+    unc = _np.random.default_rng(1).normal(0, 1, 60)
+    assert analytics._auto_block_len(unc) == 1
+    z = _np.zeros(60)
+    for i in range(1, 60):
+        z[i] = 0.8 * z[i - 1] + _np.random.default_rng(i).normal()
+    assert analytics._auto_block_len(z) >= 2  # AR(1) rho=0.8 -> blocks longer than 1
+
+
+def test_auc_power_design_effect_1_is_exact_noop_and_discount_is_monotone():
+    """Audit [19]: design_effect=1.0 reproduces the prior auc_power EXACTLY (no-op), and design_effect
+    > 1 lowers current power and raises ratings-needed (the honest direction), while DISPLAYING the
+    raw (un-discounted) rating counts."""
+    a = analytics.auc_power(0.75, 20, 20, auc_lo=0.62)                     # default deff=1.0
+    b = analytics.auc_power(0.75, 20, 20, auc_lo=0.62, design_effect=1.0)
+    for k in ("power_current", "power_current_lo", "n_ratings_needed", "n_ratings_needed_hi",
+              "n_ratings_current", "more_data_needed", "se_auc", "n_pos", "n_neg"):
+        assert a.get(k) == b.get(k), f"design_effect=1.0 must be a no-op; differs on {k}"
+    assert a["design_effect"] == 1.0 and a["n_ratings_current"] == 40 and a["n_pos"] == 20
+
+    base = analytics.auc_power(0.70, 15, 15, auc_lo=0.58, design_effect=1.0)
+    disc = analytics.auc_power(0.70, 15, 15, auc_lo=0.58, design_effect=1.5)
+    assert disc["power_current"] <= base["power_current"] + 1e-12, "discount must not raise power"
+    assert disc["n_ratings_needed"] >= base["n_ratings_needed"], "discount must not lower ratings-needed"
+    assert disc["n_ratings_current"] == 30, "displayed current must be RAW ratings (un-discounted)"
+    assert abs(disc["n_ratings_effective"] - 30 / 1.5) < 1e-9, "effective n must be raw/deff"

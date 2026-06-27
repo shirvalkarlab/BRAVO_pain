@@ -1626,6 +1626,83 @@ def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5
     return bp_log, labels, rg, tt
 
 
+def _auto_block_len(cluster_series):
+    """Auto block length for the moving-block bootstrap (audit [16]/[19]), chosen from the temporal
+    autocorrelation of the per-cluster pain series (clusters in TIME ORDER).
+
+    Returns 1 when there is no meaningful positive autocorrelation — so uncorrelated ratings reproduce
+    the i.i.d. rating-cluster bootstrap EXACTLY (the prior behaviour). Otherwise returns the larger of
+    the n^(1/3) rule-of-thumb and the autocorrelation decay length (first lag where the ACF drops below
+    0.1), capped at K//3 so a block never spans most of the record. `cluster_series` is the mean
+    continuous pain value per cluster, ordered by time.
+    """
+    x = np.asarray(cluster_series, dtype=float)
+    x = x[np.isfinite(x)]
+    K = x.size
+    if K < 8:
+        return 1
+    x = x - x.mean()
+    denom = float(np.dot(x, x))
+    if denom <= 0:
+        return 1
+    maxlag = int(min(K // 2, 20))
+    acf = np.array([float(np.dot(x[:-k], x[k:])) / denom for k in range(1, maxlag + 1)])
+    if acf.size == 0 or acf[0] <= 0.1:
+        return 1                                  # no positive lag-1 autocorrelation -> i.i.d.
+    below = np.where(acf < 0.1)[0]
+    decay = int(below[0] + 1) if below.size else maxlag   # first lag with ACF < 0.1 (1-indexed)
+    n13 = max(2, int(round(K ** (1.0 / 3.0))))
+    return int(min(max(decay, n13), max(2, K // 3)))
+
+
+def _block_bootstrap_aucs(use_score, y, cluster_of_row, K, n_boot, block_len, rng):
+    """Vectorized (moving-)block bootstrap of the DE-FOLDED AUC over rating clusters.
+
+    `cluster_of_row` maps each row to a cluster index 0..K-1 in TIME ORDER. With block_len<=1 this is
+    the i.i.d. rating-cluster bootstrap (resample whole clusters with replacement); with block_len>1
+    it is a circular moving-block bootstrap (Politis–Romano) that preserves serial dependence across
+    adjacent ratings. Each replicate's AUC is the fixed-orientation (de-folded, audit C1) tie-aware
+    Mann–Whitney statistic on the cluster multiplicities — computed for ALL replicates at once with
+    a single sort + segment-sum (np.add.reduceat), no Python per-replicate loop and no sklearn call.
+
+    Returns a (n_boot,) float array; replicates that lose a class are NaN (caller filters them).
+    """
+    B = int(n_boot)
+    # ---- draw cluster picks: (B, K) cluster indices ----
+    if block_len is None or block_len <= 1:
+        picks = rng.integers(0, K, size=(B, K))
+    else:
+        L = int(block_len)
+        n_blocks = int(np.ceil(K / L))
+        starts = rng.integers(0, K, size=(B, n_blocks))
+        offs = np.arange(L)
+        idx = (starts[:, :, None] + offs[None, None, :]) % K     # circular blocks
+        picks = idx.reshape(B, -1)[:, :K]
+    # ---- per-replicate cluster multiplicities -> per-row weights (B, N) ----
+    cl_counts = np.zeros((B, K), dtype=np.float64)
+    np.add.at(cl_counts, (np.arange(B)[:, None], picks), 1.0)
+    W = cl_counts[:, cluster_of_row]                              # (B, N)
+    # ---- tie-aware weighted AUC for every replicate, vectorized ----
+    perm = np.argsort(use_score, kind="mergesort")
+    ss = use_score[perm]
+    ys = y[perm]
+    Wp = W[:, perm]
+    pos_w = Wp * (ys == 1)[None, :]
+    neg_w = Wp * (ys == 0)[None, :]
+    npos = pos_w.sum(1)
+    nneg = neg_w.sum(1)
+    # group boundaries at distinct score values (ss is sorted ascending)
+    bounds = np.concatenate([[0], np.where(np.diff(ss) > 0)[0] + 1])
+    gpos = np.add.reduceat(pos_w, bounds, axis=1)                 # (B, G)
+    gneg = np.add.reduceat(neg_w, bounds, axis=1)
+    cum_before = np.cumsum(gneg, axis=1) - gneg                   # neg weight strictly before group
+    U = (gpos * (cum_before + 0.5 * gneg)).sum(1)                 # ties get 0.5 credit
+    auc = np.full(B, np.nan)
+    ok = (npos > 0) & (nneg > 0)
+    auc[ok] = U[ok] / (npos[ok] * nneg[ok])
+    return auc
+
+
 def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                    strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
                    n_boot=500, max_points=300, seed=0):
@@ -1689,26 +1766,57 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # gates inherit this CI, so the de-fold is what makes those downstream readouts honest too.
     rng = np.random.default_rng(seed)
     uniq_clusters = np.unique(g)
-    # Precompute per-cluster row indices once.
-    cluster_rows = {c: np.where(g == c)[0] for c in uniq_clusters}
-    boot_aucs = []
     n_cl = len(uniq_clusters)
-    for _b in range(int(n_boot)):
-        pick = rng.choice(uniq_clusters, size=n_cl, replace=True)
-        idx = np.concatenate([cluster_rows[c] for c in pick])
-        yb = y[idx]
-        if len(np.unique(yb)) < 2:
-            continue
-        try:
-            ab = metrics.roc_auc_score(yb, use_score[idx])
-            boot_aucs.append(float(ab))          # fixed orientation — do NOT re-fold with max()
-        except ValueError:
-            continue
-    if len(boot_aucs) >= 20:
-        auc_lo = float(np.percentile(boot_aucs, 2.5))
-        auc_hi = float(np.percentile(boot_aucs, 97.5))
+
+    # ---- order clusters in TIME so a moving block spans temporally-adjacent ratings ----
+    # Per-cluster representative time = the first parseable sample time in that cluster. Clusters whose
+    # times don't parse keep their natural (id) order, which for rating_group ids is already the
+    # match order. The block bootstrap below preserves serial dependence across adjacent ratings.
+    g_masked = g
+    t_rows = _times[m] if (_times is not None and len(_times) == len(bp_log)) else None
+    if t_rows is not None:
+        cl_time = {}
+        t_epoch = pd.to_datetime(pd.Series([str(s) for s in t_rows]), errors="coerce", utc=True)
+        t_sec = t_epoch.astype("int64").to_numpy() / 1e9  # NaT -> large negative; masked out below
+        for c in uniq_clusters:
+            vals = t_sec[g_masked == c]
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            cl_time[c] = float(vals.min()) if vals.size else np.inf
+        order = sorted(range(n_cl), key=lambda i: (cl_time[uniq_clusters[i]], uniq_clusters[i]))
+    else:
+        order = list(range(n_cl))
+    ordered_clusters = uniq_clusters[np.asarray(order, dtype=int)]
+    cl_pos = {c: i for i, c in enumerate(ordered_clusters)}
+    cluster_of_row = np.array([cl_pos[c] for c in g_masked], dtype=int)
+
+    # Per-cluster mean pain label (time-ordered) drives the auto block length from autocorrelation.
+    cl_mean_label = np.array([float(np.nanmean(labels[m][g_masked == c])) for c in ordered_clusters])
+    block_len = _auto_block_len(cl_mean_label)
+
+    # ---- moving-block bootstrap CI (audit [16]); i.i.d. cluster bootstrap retained for DEFF ----
+    # The block CI is the honest interval (it absorbs serial autocorrelation in the weekly ratings);
+    # the i.i.d. CI is computed too, ONLY so the design effect DEFF = var_block / var_iid can discount
+    # the effective n in the power readout (audit [19]). Both use the SAME de-folded, tie-aware,
+    # fully-vectorized AUC engine; at block_len==1 the block path reproduces the i.i.d. path exactly.
+    boot_block = _block_bootstrap_aucs(use_score, y, cluster_of_row, n_cl, n_boot, block_len, rng)
+    boot_block = boot_block[np.isfinite(boot_block)]
+    rng_iid = np.random.default_rng(seed)  # independent stream so DEFF isn't self-correlated
+    boot_iid = _block_bootstrap_aucs(use_score, y, cluster_of_row, n_cl, n_boot, 1, rng_iid)
+    boot_iid = boot_iid[np.isfinite(boot_iid)]
+    boot_aucs = boot_block                                       # the CI we report is the block CI
+    if len(boot_block) >= 20:
+        auc_lo = float(np.percentile(boot_block, 2.5))
+        auc_hi = float(np.percentile(boot_block, 97.5))
     else:
         auc_lo = auc_hi = None
+    # Design effect: variance inflation from serial dependence. >=1 by construction (block widens);
+    # clamped to [1, 5] defensively and set to 1.0 when either resample is degenerate or block_len==1.
+    var_iid = float(np.var(boot_iid)) if len(boot_iid) >= 20 else 0.0
+    var_block = float(np.var(boot_block)) if len(boot_block) >= 20 else 0.0
+    if block_len > 1 and var_iid > 0 and var_block > 0:
+        deff = float(min(5.0, max(1.0, var_block / var_iid)))
+    else:
+        deff = 1.0
 
     # ---- default operating point: Youden's J ----
     op = None
@@ -1769,8 +1877,16 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         # approximate below SMALL_SAMPLE_CLUSTER_FLOOR independent ratings. Changes no computed value.
         "small_sample": bool(n_clusters < SMALL_SAMPLE_CLUSTER_FLOOR),
         "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
+        # Audit [16]/[19]: moving-block bootstrap parameters. `block_len` is the auto-chosen block
+        # length (1 = ratings uncorrelated -> identical to the i.i.d. cluster bootstrap). `deff` is the
+        # design effect (var_block / var_iid, >=1) used downstream to discount the effective n in the
+        # power readout. `auc_lo_iid`/`auc_hi_iid` retain the i.i.d. CI for transparency/regression.
+        "block_len": int(block_len), "deff": float(deff),
+        "auc_lo_iid": (float(np.percentile(boot_iid, 2.5)) if len(boot_iid) >= 20 else None),
+        "auc_hi_iid": (float(np.percentile(boot_iid, 97.5)) if len(boot_iid) >= 20 else None),
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
-        "ci_method": "rating-clustered bootstrap (de-folded; fixed orientation)",
+        "ci_method": ("moving-block bootstrap (de-folded; fixed orientation; block_len=%d)" % int(block_len)
+                      if block_len > 1 else "rating-clustered bootstrap (de-folded; fixed orientation)"),
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
         "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
                  f"{n_clusters} independent ratings). The point AUC is oriented >= 0.5 and is "
@@ -2705,7 +2821,7 @@ def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
     }
 
 
-def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, design_effect=1.0):
     """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
     clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
 
@@ -2730,12 +2846,23 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     except Exception as e:
         return {"available": False, "reason": f"scipy unavailable: {e}"}
     auc = float(max(auc, 1.0 - auc))
-    n_pos = int(n_pos); n_neg = int(n_neg)
-    if n_pos < 2 or n_neg < 2:
+    n_pos_raw = int(n_pos); n_neg_raw = int(n_neg)
+    if n_pos_raw < 2 or n_neg_raw < 2:
         return {"available": False, "reason": "too few independent ratings for a power estimate"}
+    # Audit [19] — DESIGN-EFFECT DISCOUNT. Weekly pain ratings are serially autocorrelated, so the
+    # independent-rating count overstates the information content. `design_effect` (DEFF >= 1, the
+    # moving-block/i.i.d. bootstrap variance ratio from deployment_roc) discounts the EFFECTIVE n:
+    # the Hanley–McNeil variance scales ~1/N, so dividing each class count by DEFF inflates the
+    # variance by DEFF (= the block bootstrap's honest variance). DEFF==1 reproduces the prior math
+    # EXACTLY (no-op), so uncorrelated ratings and all existing fixtures are unchanged. The RAW counts
+    # are retained for display; only the inference math runs on the discounted counts.
+    deff = float(design_effect) if (design_effect and design_effect >= 1.0) else 1.0
+    n_pos = max(2.0, n_pos_raw / deff)
+    n_neg = max(2.0, n_neg_raw / deff)
     if auc <= 0.5:
         return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
-                "n_ratings_current": n_pos + n_neg, "n_ratings_needed": None,
+                "n_ratings_current": n_pos_raw + n_neg_raw, "n_ratings_needed": None,
+                "design_effect": deff,
                 "more_data_needed": True, "alpha": alpha, "target_power": target_power,
                 "curve": None,
                 "note": "AUC at or below chance — no power to detect a real effect."}
@@ -2749,10 +2876,14 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     za = float(_st.norm.ppf(1 - alpha / 2.0))
     zb = float(_st.norm.ppf(target_power))
     power = float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
-    N0 = n_pos + n_neg
+    N0 = n_pos + n_neg            # EFFECTIVE total (discounted); drives all the power math below
+    N0_raw = n_pos_raw + n_neg_raw  # REAL ratings the clinician has; what we DISPLAY as "current"
     # SE^2 * N is ~constant in N; solve (auc-0.5)*sqrt(N) = za*sqrt(se0^2 N0) + zb*sqrt(se^2 N0).
     rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
-    n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    n_need_eff = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    # Effective ratings needed -> REAL ratings the clinician must collect (each real rating is worth
+    # 1/deff effective under autocorrelation). At deff==1 this is the identity.
+    n_need = int(np.ceil(n_need_eff * deff))
 
     # ---- audit C4: conservative power band at the de-folded CI lower bound -----------------------
     # Re-run the SAME Hanley–McNeil math at auc_lo (the clustered-bootstrap CI lower bound). This is
@@ -2773,18 +2904,21 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
             se_l = float(np.sqrt(max(var_l, 1e-12)))
             power_lo = float(_st.norm.cdf((a_lo - 0.5) / se_l - za * se0 / se_l))
             rhs_l = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se_l * se_l * N0)
-            n_need_hi = int(np.ceil((rhs_l / (a_lo - 0.5)) ** 2))
+            n_need_hi_eff = int(np.ceil((rhs_l / (a_lo - 0.5)) ** 2))
+            n_need_hi = int(np.ceil(n_need_hi_eff * deff))   # -> real ratings (deff==1 -> identity)
         elif a_lo is not None and np.isfinite(a_lo) and a_lo <= 0.5:
             # CI lower bound touches/crosses chance: conservatively, no power and ratings-needed is
             # undefined (the band could be null). Gate must not pass.
             auc_lo_used = a_lo; power_lo = float(alpha); n_need_hi = None
 
     # The gate reads the conservative bound when we have one: more data is needed unless we clear the
-    # target at the CI lower bound. With no auc_lo, fall back to the point-AUC requirement.
+    # target at the CI lower bound. Comparisons are in REAL ratings (n_need_* already × deff, N0_raw
+    # is the real current count) — equivalent to comparing effective-vs-effective, so deff cancels in
+    # the gate logic and the gate is unchanged at deff==1.
     if auc_lo_used is not None:
-        more_data = bool(n_need_hi is None or n_need_hi > N0 or (power_lo is not None and power_lo < target_power))
+        more_data = bool(n_need_hi is None or n_need_hi > N0_raw or (power_lo is not None and power_lo < target_power))
     else:
-        more_data = bool(n_need > N0)
+        more_data = bool(n_need > N0_raw)
 
     # ---- power-vs-N curve (replaces the 3-number readout with a sufficiency curve) ----
     # Sample total ratings N from a small floor up past whichever is larger of the current count and
@@ -2793,11 +2927,14 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     # line, the current-N marker and the needed-N marker on it. Prevalence is held at n_pos/N0 so
     # n_pos(N) and n_neg(N) scale together the way more ratings would actually accrue.
     prev = float(n_pos) / float(N0) if N0 > 0 else 0.5
-    n_top = int(max(N0, n_need) * 1.35) + 4
+    # x-axis is REAL ratings the clinician collects; power is evaluated at the corresponding EFFECTIVE
+    # count N/deff (autocorrelation discount, audit [19]). At deff==1 these coincide -> identical curve.
+    n_top = int(max(N0_raw, n_need) * 1.35) + 4
     n_grid = np.unique(np.clip(np.linspace(4, n_top, 40).astype(int), 4, None))
     curve_n, curve_p = [], []
     for N in n_grid:
-        np_i = int(round(N * prev)); nn_i = int(N - np_i)
+        N_eff = max(4.0, N / deff)
+        np_i = int(round(N_eff * prev)); nn_i = int(round(N_eff - np_i))
         pw = _hm_auc_power_at(auc, np_i, nn_i, za)
         if pw is not None:
             curve_n.append(int(N)); curve_p.append(float(pw))
@@ -2806,17 +2943,29 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
 
     note = ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
             "effective n). Power to reject AUC = 0.5.")
+    if deff > 1.0:
+        note += (f" Effective n is DISCOUNTED by a design effect of {deff:.2f} (audit [16]/[19]): "
+                 "weekly ratings are serially autocorrelated, so the moving-block bootstrap variance "
+                 "exceeds the i.i.d. cluster bootstrap by this factor. Power and ratings-needed are "
+                 "reported on the discounted effective n; the x-axis is real ratings collected.")
     if auc_lo_used is not None:
         note += (" Power BAND reported across [auc_lo, auc]; the 'powered' gate reads the "
                  "conservative auc_lo end (audit C4) so it cannot pass on the optimistic point AUC.")
     return {
-        "available": True, "auc": auc, "auc_lo": auc_lo_used, "n_pos": n_pos, "n_neg": n_neg,
+        "available": True, "auc": auc, "auc_lo": auc_lo_used,
+        # DISPLAY the real (un-discounted) class counts; the discounted effective counts are exposed
+        # separately so a reader can see both. (audit [19])
+        "n_pos": n_pos_raw, "n_neg": n_neg_raw,
         "se_auc": se,
         "power_current": power, "power_current_lo": power_lo,
-        "n_ratings_current": int(N0), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
+        "n_ratings_current": int(N0_raw), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
         "more_data_needed": more_data, "alpha": alpha, "target_power": target_power,
+        # Audit [19]: design-effect discount. design_effect==1.0 -> no discount (identical to prior).
+        "design_effect": deff,
+        "n_ratings_effective": float(N0_raw / deff),
         # Audit [8]: advisory only — Gaussian power approximation is rough below the cluster floor.
-        "small_sample": bool(N0 < SMALL_SAMPLE_CLUSTER_FLOOR),
+        # Keyed on REAL ratings (what the clinician has), consistent with n_ratings_current.
+        "small_sample": bool(N0_raw < SMALL_SAMPLE_CLUSTER_FLOOR),
         "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
         "curve": curve,
         "note": note,

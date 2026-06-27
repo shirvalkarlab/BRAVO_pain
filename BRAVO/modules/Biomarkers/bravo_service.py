@@ -3870,7 +3870,8 @@ def band_lsb_and_power(request_data):
             n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
             # audit C4: pass the de-folded CI lower bound so power is reported as a band and the
             # gate reads the conservative end (never powered on the optimistic point AUC alone).
-            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=roc.get("auc_lo"),
+                                        design_effect=roc.get("deff", 1.0))
 
     # ---- 4) THRESHOLD-MODE awareness (audit: mode determines FFT size + adaptive averaging) --------
     # The percentile-anchored threshold above is read off the device Timeline LSB, which is a 10-MINUTE
@@ -4087,7 +4088,8 @@ def deployment_summary(request_data):
         if n_clu >= 4 and prev is not None and 0 < prev < 1:
             # audit C4: power band on the de-folded CI lower bound; gate reads the conservative end.
             n_pos = int(round(n_clu * prev))
-            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=roc.get("auc_lo"),
+                                        design_effect=roc.get("deff", 1.0))
 
     # Device-control mapping (same as build_band_candidate).
     or_val = g.get("odds_ratio"); coef = g.get("coef")
