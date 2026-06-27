@@ -2253,10 +2253,111 @@ def test_modeled_excluded_from_native_correlation_path():
     assert np.all(np.isfinite(y[keep])) and 9999.0 not in set(y[keep].tolist())
 
 
+# ─────────────────────────────  CS-3 PSD→LSB BRIDGE  ─────────────────────────────
+
+def test_bridge_constants_compose_from_transform_and_td_psd_ratio():
+    """K_PSD_LSB is exactly LSB_PER_UV2_TRANSFORM / K_TD_PSD — the composition is not an independent
+    magic number but the two measured links multiplied. Pins both the ratio and the derived constant."""
+    assert abs(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO - 4.789) < 1e-9
+    expect = analytics.LSB_PER_UV2_TRANSFORM / analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
+    assert abs(analytics.LSB_PER_DEVICE_PSD - expect) < 1e-9
+    assert abs(analytics.LSB_PER_DEVICE_PSD - 73.63) < 0.01      # 352.62 / 4.789
+    # the bridge constant is the device-PSD constant, NOT the TD constant or the welch256 constant
+    assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_TRANSFORM
+    assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_VALIDATED
+
+
+def test_clamp_device_psd_floors_negatives_only():
+    """The unit reconciliation: FFTBinData negatives (sub-noise-floor baseline-subtracted bins) clamp
+    to 0; positives and NaNs are untouched. This is what puts event FFTBinData on the LFPMagnitude
+    (linear µV, 0 negatives) footing."""
+    m = np.array([-0.1133, -1e-9, 0.0, 0.5, 2.0, np.nan])
+    c = analytics.clamp_device_psd(m)
+    assert c[0] == 0.0 and c[1] == 0.0 and c[2] == 0.0       # negatives + zero -> 0
+    assert c[3] == 0.5 and c[4] == 2.0                       # positives preserved
+    assert np.isnan(c[5])                                    # NaN preserved
+    assert np.all(c[np.isfinite(c)] >= 0)
+
+
+def test_device_psd_band_power_sum_of_squared_in_band_magnitudes():
+    """device_psd_band_power == Σ(clamped in-band magnitude)² over [center±half] — the SAME band-power
+    definition as td_transform_band_power, so the two sides of the bridge are commensurable. Negatives
+    are clamped before squaring (else a -0.11 bin would add spurious +0.012 power)."""
+    f = np.linspace(0.0, 96.68, 100)
+    m = np.zeros(100)
+    band = (f >= 17.5) & (f < 22.5)
+    idx = np.where(band)[0]
+    m[idx[:5]] = [1.0, -0.11, 3.0, 2.0, -0.05]               # two sub-floor negatives in the band
+    bp = analytics.device_psd_band_power(f, m, 20.0, half_hz=2.5)
+    # clamp negatives -> [1,0,3,2,0]; sum of squares = 1+0+9+4+0 = 14
+    assert abs(bp - 14.0) < 1e-9
+    # a band with no in-range bin -> NaN
+    assert np.isnan(analytics.device_psd_band_power(f, m, 200.0, half_hz=2.5))
+
+
+def test_device_psd_to_lsb_applies_bridge_constant_and_guards():
+    """device_psd_to_lsb == LSB_PER_DEVICE_PSD × device_psd_band_power, scalar->float and vector->ndarray,
+    NaN where band power is NaN/non-positive."""
+    f = np.linspace(0.0, 96.68, 100)
+    m = np.zeros(100); m[(f >= 17.5) & (f < 22.5)] = 2.0
+    bp = analytics.device_psd_band_power(f, m, 20.0)
+    assert abs(analytics.device_psd_to_lsb(f, m, 20.0) - analytics.LSB_PER_DEVICE_PSD * bp) < 1e-6
+    vec = analytics.device_psd_to_lsb(f, m, np.array([10.0, 20.0, 30.0]))
+    assert vec.shape == (3,) and np.isnan(vec[0]) and np.isfinite(vec[1]) and np.isnan(vec[2])
+    # an all-negative (sub-floor) band -> clamped to 0 -> non-positive power -> NaN
+    mneg = np.where(m > 0, -0.1, m)
+    assert np.isnan(analytics.device_psd_to_lsb(f, mneg, 20.0))
+
+
+def test_bridge_reproduces_direct_transform_on_a_white_signal():
+    """Bridge invariant (synthetic end-to-end): a device-PSD that IS the magnitude spectrum of a TD
+    trace, fed through device_psd_to_lsb, must equal that TD trace's td_to_lsb to within the K_TD_PSD
+    definition. We don't have the device's onboard FFT here, so we synthesize the montage relationship:
+    PSD_bp = K_TD_PSD · TD_bp by construction, then check LSB agreement closes the loop."""
+    rng = np.random.default_rng(3)
+    sr = 250.0
+    sig = rng.standard_normal(7500) + 3.0 * np.sin(2 * np.pi * 20.0 * np.arange(7500) / sr)
+    td_bp = analytics.td_transform_band_power(sig, sr, 20.0, half_hz=2.5)
+    lsb_direct = analytics.td_to_lsb(sig, sr, 20.0)
+    # construct a device-PSD whose band power is exactly K_TD_PSD * td_bp (one in-band bin carrying it)
+    f = np.linspace(0.0, 96.68, 100)
+    mag = np.zeros(100)
+    inband = np.where((f >= 17.5) & (f < 22.5))[0]
+    mag[inband[0]] = np.sqrt(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO * td_bp)  # |x|² = K*td_bp
+    lsb_bridge = analytics.device_psd_to_lsb(f, mag, 20.0)
+    # LSB_bridge = K_PSD_LSB * (K_TD_PSD * td_bp) = (352.62/4.789)*4.789*td_bp = 352.62*td_bp = LSB_direct
+    assert abs(lsb_bridge - lsb_direct) / lsb_direct < 1e-9
+
+
+def test_event_psd_bridge_tier_restricted_to_deployable_band():
+    """availability.lsb_series only honors an event-PSD bridge point when its center is inside
+    [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; a center outside that band is dropped (no calibrated
+    meaning there). Also: the emitted point is source='psd_modeled', modeled=True, method tagged."""
+    from Biomarkers.routines import availability
+    f = list(np.linspace(0.0, 96.68, 100))
+    mag = np.zeros(100); mag[(np.array(f) >= 17.5) & (np.array(f) < 22.5)] = 2.0
+    mag = list(mag)
+    inband = {"channel": "ZERO_THREE_LEFT", "t": 1.7e9, "freq": f, "power": mag, "center_hz": 20.0}
+    outband = {"channel": "ZERO_THREE_LEFT", "t": 1.7e9 + 10, "freq": f, "power": mag,
+               "center_hz": 55.5}                          # high-gamma, above LSB_DEPLOYABLE_HZ_HI
+    out = availability.lsb_series([], [], montage_td_recordings=[],
+                                  event_psd_recordings=[inband, outband])
+    d = out.get("ZERO_THREE_LEFT", {"y": [], "source": [], "modeled": [], "method": []})
+    bridge = [(y, s, mo, me) for y, s, mo, me in
+              zip(d["y"], d["source"], d["modeled"], d["method"]) if me and "event_psd_bridge" in me]
+    assert len(bridge) == 1                                 # only the in-band center survives
+    y, s, mo, me = bridge[0]
+    assert s == "psd_modeled" and mo is True
+    assert me == f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}"
+    assert np.isfinite(y) and y > 0
+
+
 if __name__ == "__main__":
     # ad-hoc local run of just the CS-1 transform tests (the container harness globs test_* itself)
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_td_") or _name.startswith("test_transform_") or \
+           _name.startswith("test_bridge_") or _name.startswith("test_device_psd_") or \
+           _name.startswith("test_clamp_device_psd") or _name.startswith("test_event_psd_bridge_") or \
            _name in ("test_k_cancels_in_correlation_and_auc",
                      "test_modeled_transform_point_stays_flagged_native_preferred",
                      "test_modeled_excluded_from_native_correlation_path"):

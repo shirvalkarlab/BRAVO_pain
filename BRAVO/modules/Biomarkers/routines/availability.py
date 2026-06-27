@@ -441,7 +441,8 @@ _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power
 
 
 def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
-               montage_td_recordings=None, sensing_hz_by_channel=None):
+               montage_td_recordings=None, sensing_hz_by_channel=None,
+               event_psd_recordings=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
 
     Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
@@ -464,8 +465,22 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
           LSB; the tier enum stays source="psd_modeled" (downstream native-preferred masking keys on
           it) so the frontend draws it with a distinct hollow marker; the DSP route is in `method`.
 
+        - Patient-triggered snapshot events (`event_psd_recordings`, PSD-ONLY — no TD): the CS-3
+          PSD->LSB BRIDGE. These device onboard-FFT snapshots (FFTBinData) have a spectrum but NO time
+          domain, so the direct transform cannot run; convert the device-PSD band power to LSB via
+          analytics.device_psd_to_lsb (LSB_PER_DEVICE_PSD ~= 73.63 = k=352.62 / the montage TD<->PSD
+          ratio 4.79). Same psd_modeled tier + modeled=True flag (never preferred over native, never
+          deployable); the DSP route is recorded in `method` as event_psd_bridge_x_k=73.63. Restricted
+          to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] -- the bridge is only honored where a deployable
+          band can sit. Montage/survey products are NOT routed here (they carry TD -> the modeled tier
+          above); the bridge is for the PSD-only events that are otherwise LSB-less.
+
     `sensing_hz_by_channel` maps a raw channel -> its configured sensing center (Hz); the psd_modeled
     tier converts at that center when known, else the montage record's own peak frequency.
+
+    `event_psd_recordings` is a list of PSD-only event blocks already assigned to a canonical channel:
+        [{ "channel": canon_ch, "t": epoch_s, "freq": [Hz], "power": [FFTBinData], "center_hz": hz }]
+    (center_hz optional; falls back to sensing_hz_by_channel[channel]).
 
     Returns dict keyed by RAW channel name:
         { channel: { "t":[epoch_s], "y":[lsb], "center_hz":[hz|None],
@@ -644,6 +659,36 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
             # produced the value is recorded in `method` (now transform x352.62, was welch256 x269).
             _push(key, t0, lsb, center, "psd_modeled",
                   modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
+
+    # --- MODELED tier (CS-3 PSD->LSB BRIDGE): PSD-ONLY patient-triggered snapshot events ---
+    # These events carry a device onboard-FFT spectrum (FFTBinData) but NO time domain, so they cannot
+    # use the direct transform. Convert the device-PSD band power to LSB via the bridge constant
+    # (device_psd_to_lsb, k ~= 73.63). Same psd_modeled tier + modeled=True (never preferred over native,
+    # never deployable). Restricted to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]: outside that band a
+    # deployable adaptive band cannot sit, and the bridge has no calibrated meaning there, so we drop the
+    # point rather than show an LSB the device could never act on. Montage/survey products are NOT here —
+    # they carry TD and went through the modeled tier above; this tier is exclusively for the PSD-only
+    # events that would otherwise have no LSB at all.
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict):
+            continue
+        key = ev.get("channel")
+        t0 = _to_epoch(ev.get("t"))
+        freq = ev.get("freq"); power = ev.get("power")
+        if key is None or t0 is None or freq is None or power is None:
+            continue
+        center = ev.get("center_hz") or sensing_hz_by_channel.get(key) \
+            or sensing_hz_by_channel.get(str(key))
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        # honor the bridge only inside the deployable band — outside it the conversion is uncalibrated
+        if not (analytics.LSB_VALIDATED_HZ_LO <= float(center) <= analytics.LSB_DEPLOYABLE_HZ_HI):
+            continue
+        lsb = analytics.device_psd_to_lsb(freq, power, float(center))
+        if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+            continue
+        _push(key, t0, lsb, center, "psd_modeled",
+              modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
 
     # time-sort each channel's pooled samples
     for ch, d in out.items():

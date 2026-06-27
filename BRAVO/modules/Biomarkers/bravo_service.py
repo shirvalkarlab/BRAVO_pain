@@ -54,10 +54,14 @@ AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontage
 #
 #   (1) UNITS / POOLING identity — what scale the spectrum is in, hence which rows z-score together and
 #       which conversion applies. Patient-triggered events carry the device's ONBOARD FFT
-#       (Frequency/FFTBinData on the ORM row metadata) — a different normalization that sits ~6 dB above
-#       a Welch-of-time-domain spectrum on the same channel; that constant offset is absorbed by the
-#       within-(channel, pooling_source) z-score in psd_rows_to_matrix. Montage/survey PSDs are the
-#       device's LFPMagnitude (linear µV). The two are NOT interchangeable (see CS-3 unit reconciliation).
+#       (Frequency/FFTBinData on the ORM row metadata). CS-3 (paired montage fit, RCS08 2026-06-27)
+#       established this is LINEAR µV magnitude, the SAME unit as the montage device-PSD (LFPMagnitude),
+#       but BASELINE-SUBTRACTED so sub-noise-floor bins read slightly negative (~1/3 of bins, down to
+#       ~−1 quantum); LFPMagnitude clamps those ≥0. Paired FFTBinData↔LFPMagnitude slope≈1, ratio≈1.04
+#       (≈ identity after clamping negatives to 0). The onboard-FFT band power sits ~6 dB (×4.79) above
+#       a Welch-of-time-domain band power on the same channel — a constant absorbed by the within-
+#       (channel, pooling_source) z-score in psd_rows_to_matrix for the SCAN, and applied explicitly as
+#       the bridge constant for LSB (see CS-3 below). Montage/survey PSDs are the same LFPMagnitude unit.
 #
 #   (2) LSB ROUTE — decided by whether the product ALSO carries time-domain (TD). LSB lives only in the
 #       PROGRAMMED products (on-demand BrainSenseLfp streaming + Timeline). A product WITH TD gets LSB
@@ -84,7 +88,7 @@ PSD_SOURCE_TAXONOMY = {
     "patient_event": {
         "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": False,
         "origin": "Patient-triggered LFP snapshot, manually labeled button press",
-        "units": "onboard FFTBinData (log/dB-domain, ~6 dB above Welch)",
+        "units": "onboard FFTBinData (linear µV magnitude, baseline-subtracted; ~6 dB above Welch)",
         "has_td": False, "has_psd": True, "has_lsb": False,
         "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
         "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_PATIENT_EVENT,
@@ -92,7 +96,7 @@ PSD_SOURCE_TAXONOMY = {
     "streaming_event": {
         "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": True,
         "origin": "Auto LFP frequency snapshot fired around surveys (name='Streaming')",
-        "units": "onboard FFTBinData (log/dB-domain, ~6 dB above Welch)",
+        "units": "onboard FFTBinData (linear µV magnitude, baseline-subtracted; ~6 dB above Welch)",
         "has_td": False, "has_psd": True, "has_lsb": False,
         "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
         "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_STREAMING_EVENT,
@@ -443,6 +447,44 @@ def _event_psd_index(participant_uid):
             out.append({"t": float(t), "channel": ch, "source": EVENT_PSD_SOURCE,
                         "name": ev_name})
     return out
+
+
+def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None):
+    """Build CS-3 PSD->LSB BRIDGE input blocks from the PSD-only patient-triggered snapshot events.
+
+    These events (PatientControllerEvent metadata: per-hemisphere Frequency/FFTBinData) carry a device
+    onboard-FFT spectrum but NO time domain, so they are the bridge's sole consumer (montage/survey
+    products carry TD -> direct transform; never routed here). Reuses `_event_psd_rows` for the
+    channel-assigned {channel, t, freq, power} spectra, then attaches a `center_hz`:
+      - the contact's configured sensing center (sensing_hz_by_channel) when known — so the modeled
+        event LSB lands on the SAME band the device would deploy; else
+      - the event spectrum's own in-[LO,DEPLOYABLE_HI] peak frequency (device acts in that band).
+    availability.lsb_series applies analytics.device_psd_to_lsb (k~=73.63) and keeps the result inside
+    [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; blocks whose center can't be resolved are dropped there.
+    Returns a list of {channel, t, freq, power, center_hz}.
+    """
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    lo = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    blocks = []
+    for row in _event_psd_rows(participant_uid):
+        ch = row.get("channel")
+        freq = row.get("freq"); power = row.get("power")
+        if ch is None or freq is None or power is None:
+            continue
+        center = sensing_hz_by_channel.get(ch) or sensing_hz_by_channel.get(str(ch))
+        if center is None:
+            # device-blessed band: the in-deployable-range peak of THIS event's clamped magnitude
+            f = np.asarray(freq, dtype=float)
+            m = analytics.clamp_device_psd(power)
+            band = (f >= lo) & (f <= hi) & np.isfinite(m)
+            if band.any():
+                center = float(f[band][int(np.argmax(m[band]))])
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        blocks.append({"channel": ch, "t": row.get("t"),
+                       "freq": freq, "power": power, "center_hz": float(center)})
+    return blocks
 
 
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
@@ -2093,9 +2135,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # timeline display only. (Montage TD is already ingested under MedtronicBrainSenseSurvey; this
         # is what surfaces it on the timeline.)
         sensing_hz = availability.analytics.power_center_freqs(powerdomain_list)
+        # CS-3 PSD->LSB bridge: PSD-only patient-triggered snapshot events (no TD) -> modeled LSB.
+        # Montage/survey (psd_list) carry TD and go through montage_td_recordings above; this is the
+        # exclusive consumer of the bridge.
+        event_psd_blocks = _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=sensing_hz)
         lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map,
                                       montage_td_recordings=psd_list,
-                                      sensing_hz_by_channel=sensing_hz)
+                                      sensing_hz_by_channel=sensing_hz,
+                                      event_psd_recordings=event_psd_blocks)
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)

@@ -102,4 +102,29 @@ def test_taxonomy_three_sources_have_distinct_display_categories():
     disp = {tax["patient_event"]["display"], tax["streaming_event"]["display"],
             tax["montage_snapshot"]["display"]}
     assert len(disp) == 3
+
+
+def test_event_units_described_as_linear_not_log_after_cs3():
+    """CS-3 proved event FFTBinData is LINEAR µV magnitude (baseline-subtracted), NOT log/dB. The
+    taxonomy units field must reflect that — a stale 'log/dB' label would mislead anyone wiring a new
+    consumer into using an anti-log inverse instead of the negative-clamp the bridge actually uses."""
+    for key in ("patient_event", "streaming_event"):
+        units = bs.PSD_SOURCE_TAXONOMY[key]["units"].lower()
+        assert "linear" in units, f"{key}: units must say linear after CS-3"
+        assert "log" not in units and "d/db" not in units.replace(" ", ""), \
+            f"{key}: stale log/dB label — CS-3 disproved it"
+
+
+def test_event_psd_lsb_blocks_only_consumes_psd_only_events():
+    """The bridge block-builder reads PSD-only patient events (via _event_psd_rows) and never touches
+    montage/survey products — those carry TD and route through the direct transform. We assert the
+    builder exists and that the taxonomy keeps montage on td_transform (the routing contract the builder
+    relies on), without needing live data."""
+    assert hasattr(bs, "_event_psd_lsb_blocks")
+    # the bridge constant the builder's downstream (device_psd_to_lsb) applies
+    from modules.Biomarkers.routines import analytics
+    assert abs(analytics.LSB_PER_DEVICE_PSD - analytics.LSB_PER_UV2_TRANSFORM /
+               analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO) < 1e-9
+    # montage is NOT a bridge consumer
+    assert bs.PSD_SOURCE_TAXONOMY["montage_snapshot"]["lsb_route"] == "td_transform"
     assert bs.DISPLAY_MONTAGE_SNAPSHOT != bs.DISPLAY_STREAMING_EVENT != bs.DISPLAY_PATIENT_EVENT

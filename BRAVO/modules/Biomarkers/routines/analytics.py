@@ -2665,6 +2665,35 @@ LSB_PER_UV2_TRANSFORM = 352.62         # k, transform route — RCS08 all-stim m
 LSB_DEPLOYABLE_HZ_HI = 30.0
 
 
+# ── PSD→LSB BRIDGE (CS-3) — for PSD-ONLY patient-triggered snapshot events ───────────────────────────
+# The device emits a frequency-domain "onboard FFT" magnitude spectrum on its montage surveys
+# (Descriptor.MedtronicPSD[].LFPMagnitude, linear µV, 0 negatives) AND on patient-triggered LFP
+# snapshot events (PatientControllerEvent metadata FFTBinData, same linear-µV unit but baseline-
+# subtracted so ~1/3 of bins read slightly negative). Patient events carry NO time-domain, so they
+# cannot use the direct TD→LSB transform; this bridge converts their device-PSD band power to LSB.
+#
+# Derivation (RCS08, 2026-06-27 — CS3_FFTBinData_units_recon doc + paired montage fit, n=10476
+# contact-band points across 219 surveys; ps-statsmodels rigor):
+#   1. UNITS: event FFTBinData ≡ survey LFPMagnitude (same linear-µV onboard-FFT magnitude). Paired
+#      log-log slope 1.0 (CI brackets ~1), proportionality ≈1.04 — i.e. identity after clamping the
+#      negative (sub-noise-floor) bins to 0. So both device-PSDs use ONE band-power definition:
+#      bp = Σ(in-band magnitude)²  (negatives clamped first).
+#   2. MONTAGE TD↔PSD LAW: on surveys (TD + device-PSD on the SAME recording), device-PSD band power is
+#      proportional to the TD-transform band power: PSD_bp = K_TD_PSD · TD_bp, K_TD_PSD = 4.789
+#      (geomean, 95% CI [4.772, 4.806]; slope 1.022, r=0.987; offset 6.80 dB ≈ the onboard-FFT-vs-Welch
+#      ~6 dB note; per-contact K 4.73–4.87, fold 1.22× < the 1.26× calibration scatter).
+#   3. COMPOSE: TD→LSB is LSB = LSB_PER_UV2_TRANSFORM · TD_bp (= 352.62 · TD_bp). Substituting
+#      TD_bp = PSD_bp / K_TD_PSD gives LSB = (352.62 / 4.789) · PSD_bp = K_PSD_LSB · PSD_bp.
+# End-to-end check on montage (LSB via this bridge vs direct TD→LSB): geomean fold 1.000 (unbiased),
+# scatter 1.21×, r=0.987. The bridge reproduces the direct transform to within calibration scatter.
+#
+# Apply ONLY to PSD-only patient-triggered snapshot events. Montage/survey/snapshot products carry their
+# own TD and MUST use td_to_lsb (k=352.62) directly — they are this bridge's CALIBRATION SOURCE, never
+# a consumer of it. The event PSD must be negative-clamped (clamp_device_psd) before band-integration.
+LSB_PER_UV2_DEVICE_PSD_TD_RATIO = 4.789   # K_TD_PSD: device-PSD band power / TD-transform band power
+LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 73.63
+
+
 def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
     """Translate an offline band power in µV² to device power-domain LSB using the validated
     proportional constant k (default = RCS08 stim-off fit, 269 LSB/µV²). Pass a participant-specific
@@ -2991,6 +3020,46 @@ def td_to_lsb(samples_uv, fs, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_TRANSFORM
     arr = np.atleast_1d(np.asarray(uv2, dtype=float))
     lsb = np.where(np.isfinite(arr) & (arr > 0), float(k) * arr, np.nan)
     return float(lsb[0]) if np.ndim(uv2) == 0 else lsb
+
+
+def clamp_device_psd(magnitude):
+    """Reconcile a device onboard-FFT magnitude spectrum into the linear-µV frame the bridge expects.
+
+    The device's montage-survey PSD (LFPMagnitude) is already linear µV with no negatives; the
+    patient-event PSD (FFTBinData) is the SAME unit but baseline-subtracted, so sub-noise-floor bins
+    read slightly negative (down to about −1 quantum). Clamping those to 0 puts both on the same linear
+    magnitude footing (CS3_FFTBinData_units recon: paired FFTBinData↔LFPMagnitude slope≈1, ratio≈1.04).
+    Returns a float ndarray with negatives set to 0; NaNs preserved."""
+    m = np.asarray(magnitude, dtype=float)
+    return np.where(m < 0, 0.0, m)
+
+
+def device_psd_band_power(freq, magnitude, center_hz, *, half_hz=2.5):
+    """Band power of a device onboard-FFT magnitude spectrum over [center±half_hz], in the SAME
+    definition as td_transform_band_power: Σ(in-band magnitude)² after negative-clamping. Works for a
+    scalar center (→ float) or a vector of centers (→ ndarray). NaN if no in-band bin."""
+    f = np.asarray(freq, dtype=float)
+    m = clamp_device_psd(magnitude)
+    c = np.atleast_1d(np.asarray(center_hz, dtype=float))
+    out = np.full(c.shape, np.nan, dtype=float)
+    for i, cc in enumerate(c):
+        band = (f >= cc - half_hz) & (f < cc + half_hz) & np.isfinite(m)
+        if band.any():
+            out[i] = float(np.sum(m[band] ** 2))
+    return float(out[0]) if np.ndim(center_hz) == 0 else out
+
+
+def device_psd_to_lsb(freq, magnitude, center_hz, *, half_hz=2.5, k=LSB_PER_DEVICE_PSD):
+    """PSD→LSB BRIDGE (CS-3): device power-domain LSB from a PSD-ONLY patient-triggered snapshot event's
+    onboard-FFT magnitude spectrum (Frequency + FFTBinData), via device_psd_band_power × k
+    (default LSB_PER_DEVICE_PSD ≈ 73.63 = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO).
+
+    Use ONLY for PSD-only patient events (no TD). Montage/survey/snapshot products carry TD → td_to_lsb.
+    Returns float LSB (or ndarray for a vector center); NaN where band power is NaN/non-positive."""
+    pbp = device_psd_band_power(freq, magnitude, center_hz, half_hz=half_hz)
+    arr = np.atleast_1d(np.asarray(pbp, dtype=float))
+    lsb = np.where(np.isfinite(arr) & (arr > 0), float(k) * arr, np.nan)
+    return float(lsb[0]) if np.ndim(center_hz) == 0 else lsb
 
 
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
