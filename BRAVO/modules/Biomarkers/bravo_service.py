@@ -3870,7 +3870,12 @@ def band_lsb_and_power(request_data):
             n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
             # audit C4: pass the de-folded CI lower bound so power is reported as a band and the
             # gate reads the conservative end (never powered on the optimistic point AUC alone).
-            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=roc.get("auc_lo"),
+            # audit C1 guard: the "powered/beats-chance" gate reads the DE-FOLDED percentile lower
+            # bound (auc_lo_defold), NOT the BCa headline bound — BCa's bias term re-floors a null band
+            # at ~0.5, which must never let absence-of-signal read as significance. Falls back to the
+            # BCa bound only if the guard is absent (CI suppressed below the valid-replicate floor).
+            _gate_auc_lo = roc.get("auc_lo_defold", roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=_gate_auc_lo,
                                         design_effect=roc.get("deff", 1.0))
 
     # ---- 4) THRESHOLD-MODE awareness (audit: mode determines FFT size + adaptive averaging) --------
@@ -4088,7 +4093,9 @@ def deployment_summary(request_data):
         if n_clu >= 4 and prev is not None and 0 < prev < 1:
             # audit C4: power band on the de-folded CI lower bound; gate reads the conservative end.
             n_pos = int(round(n_clu * prev))
-            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=roc.get("auc_lo"),
+            # audit C1 guard: gate reads the de-folded percentile lower bound, not the BCa bound.
+            _gate_auc_lo = roc.get("auc_lo_defold", roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=_gate_auc_lo,
                                         design_effect=roc.get("deff", 1.0))
 
     # Device-control mapping (same as build_band_candidate).

@@ -24,6 +24,13 @@ from .threshold_biomarker import _sens_spec, best_threshold_by_balanced_auc
 # 10 is a conventional floor for trusting asymptotic AUC inference; it is advisory, not a gate.
 SMALL_SAMPLE_CLUSTER_FLOOR = 10
 
+# Audit [3]-floor: minimum number of VALID (class-non-degenerate) bootstrap replicates required to
+# report an AUC confidence interval at all. Raised from the original 20 to 100 — below 100 surviving
+# replicates the percentile/BCa tails are too noisy to trust, so the CI is SUPPRESSED (auc_lo/hi=None)
+# rather than reported on a handful of resamples. The existing "[3]-display" tag already labels a CI
+# built on <100 replicates as "unstable"; this makes the suppression threshold match that warning.
+BOOT_CI_VALID_FLOOR = 100
+
 
 # --- Channel-name formatting -----------------------------------------------------------------
 _WORD2DIGIT = {"ZERO": "0", "ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4",
@@ -1682,7 +1689,18 @@ def _block_bootstrap_aucs(use_score, y, cluster_of_row, K, n_boot, block_len, rn
     cl_counts = np.zeros((B, K), dtype=np.float64)
     np.add.at(cl_counts, (np.arange(B)[:, None], picks), 1.0)
     W = cl_counts[:, cluster_of_row]                              # (B, N)
-    # ---- tie-aware weighted AUC for every replicate, vectorized ----
+    return _weighted_auc_matrix(use_score, y, W)
+
+
+def _weighted_auc_matrix(use_score, y, W):
+    """De-folded, tie-aware Mann–Whitney AUC for EVERY row of a (B, N) weight matrix at once.
+
+    `W[b, j]` is the (non-negative) multiplicity of row j in replicate b — integer counts for a
+    bootstrap, 0/1 masks for a jackknife. Fixed orientation (no per-row re-fold, audit C1). Returns a
+    (B,) float array; rows that lose a class are NaN. One mergesort + np.add.reduceat segment-sum; no
+    Python loop over replicates.
+    """
+    W = np.asarray(W, dtype=np.float64)
     perm = np.argsort(use_score, kind="mergesort")
     ss = use_score[perm]
     ys = y[perm]
@@ -1697,10 +1715,56 @@ def _block_bootstrap_aucs(use_score, y, cluster_of_row, K, n_boot, block_len, rn
     gneg = np.add.reduceat(neg_w, bounds, axis=1)
     cum_before = np.cumsum(gneg, axis=1) - gneg                   # neg weight strictly before group
     U = (gpos * (cum_before + 0.5 * gneg)).sum(1)                 # ties get 0.5 credit
-    auc = np.full(B, np.nan)
+    auc = np.full(W.shape[0], np.nan)
     ok = (npos > 0) & (nneg > 0)
     auc[ok] = U[ok] / (npos[ok] * nneg[ok])
     return auc
+
+
+def _jackknife_cluster_aucs(use_score, y, cluster_of_row, K):
+    """Delete-one-CLUSTER jackknife AUCs (de-folded), vectorized. Row i of the (K, N) weight matrix is
+    all-ones with cluster i zeroed -> the AUC on every sample EXCEPT cluster i. Used for the BCa
+    acceleration term (the empirical influence/skew of the AUC), which is a property of the statistic
+    and so is estimated the same way regardless of the block-resampling scheme."""
+    W = np.ones((K, use_score.size), dtype=np.float64)
+    for i in range(K):
+        W[i, cluster_of_row == i] = 0.0
+    return _weighted_auc_matrix(use_score, y, W)
+
+
+def _bca_ci(theta_hat, boot, jack, alpha=0.05):
+    """Bias-corrected & accelerated (BCa) percentile interval (Efron). `boot` is the REPORTED
+    bootstrap distribution (here the moving-block resamples) and `jack` the delete-one-cluster
+    jackknife estimates for the acceleration. Returns (lo, hi, z0, a). The BCa percentile shift is read
+    from `boot`, so the interval keeps the block bootstrap's honest width while correcting median bias
+    (z0) and skew (a). Falls back to a plain percentile interval (z0=a=0) when bias/accel are
+    undefined (all replicates on one side of theta, or a degenerate jackknife)."""
+    from scipy import stats as _st
+    boot = np.asarray(boot, dtype=float); boot = boot[np.isfinite(boot)]
+    jack = np.asarray(jack, dtype=float); jack = jack[np.isfinite(jack)]
+    if boot.size < 2:
+        return None, None, 0.0, 0.0
+    prop = float(np.mean(boot < theta_hat))
+    z0 = 0.0 if (prop <= 0.0 or prop >= 1.0) else float(_st.norm.ppf(prop))
+    a = 0.0
+    if jack.size >= 3:
+        jbar = jack.mean()
+        d = jbar - jack
+        den = 6.0 * (np.sum(d * d) ** 1.5)
+        if den != 0:
+            a = float(np.sum(d ** 3) / den)
+    zlo = float(_st.norm.ppf(alpha / 2.0)); zhi = float(_st.norm.ppf(1.0 - alpha / 2.0))
+
+    def _adj(zq):
+        denom = 1.0 - a * (z0 + zq)
+        if denom == 0:
+            denom = 1e-12
+        return float(_st.norm.cdf(z0 + (z0 + zq) / denom))
+
+    a1, a2 = _adj(zlo), _adj(zhi)
+    lo = float(np.percentile(boot, 100.0 * a1))
+    hi = float(np.percentile(boot, 100.0 * a2))
+    return lo, hi, z0, a
 
 
 def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
@@ -1804,9 +1868,28 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     boot_iid = _block_bootstrap_aucs(use_score, y, cluster_of_row, n_cl, n_boot, 1, rng_iid)
     boot_iid = boot_iid[np.isfinite(boot_iid)]
     boot_aucs = boot_block                                       # the CI we report is the block CI
-    if len(boot_block) >= 20:
-        auc_lo = float(np.percentile(boot_block, 2.5))
-        auc_hi = float(np.percentile(boot_block, 97.5))
+
+    # ---- BCa interval on the reported (block) bootstrap (audit [3]) ----
+    # Bias-corrected & accelerated percentile interval. z0 corrects median bias in the block
+    # distribution; the acceleration `a` comes from a delete-one-CLUSTER jackknife (the empirical
+    # influence of the AUC — a property of the statistic, so the same regardless of the block scheme).
+    # The CI is SUPPRESSED below BOOT_CI_VALID_FLOOR valid replicates (audit [3]-floor) rather than
+    # reported on a noisy handful. ci_lo/hi_bca falls back to plain percentiles when bias/accel are
+    # undefined (handled inside _bca_ci).
+    # The de-folded PLAIN percentile bounds are the audit-C1 guard: because the score is oriented once
+    # on the full sample, this lower bound can honestly fall below 0.5 on a true-null band. BCa's bias
+    # term (z0) re-centers on the orientation-inflated point AUC, which near chance pushes the BCa lower
+    # bound back up to ~0.5 — re-creating the "manufactured beats-chance floor" C1 removed. So the
+    # headline CI is full BCa (bias + skew corrected, audit [3]), but the "beats chance" gate reads the
+    # de-folded percentile guard below, NOT the BCa bound, so absence-of-signal can never read as
+    # significance. Both are reported.
+    bca_z0 = bca_a = None
+    auc_lo_defold = auc_hi_defold = None
+    if len(boot_block) >= BOOT_CI_VALID_FLOOR:
+        auc_lo_defold = float(np.percentile(boot_block, 2.5))
+        auc_hi_defold = float(np.percentile(boot_block, 97.5))
+        jack = _jackknife_cluster_aucs(use_score, y, cluster_of_row, n_cl)
+        auc_lo, auc_hi, bca_z0, bca_a = _bca_ci(auc, boot_block, jack, alpha=0.05)
     else:
         auc_lo = auc_hi = None
     # Design effect: variance inflation from serial dependence. >=1 by construction (block widens);
@@ -1884,16 +1967,28 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "block_len": int(block_len), "deff": float(deff),
         "auc_lo_iid": (float(np.percentile(boot_iid, 2.5)) if len(boot_iid) >= 20 else None),
         "auc_hi_iid": (float(np.percentile(boot_iid, 97.5)) if len(boot_iid) >= 20 else None),
+        # Audit [3]: BCa interval. ci_method names the resampling scheme; the interval itself is
+        # bias-corrected & accelerated (bca_z0 = bias correction, bca_a = acceleration from the
+        # delete-one-cluster jackknife). CI suppressed (auc_lo/hi None) below BOOT_CI_VALID_FLOOR.
+        "ci_interval": "BCa", "bca_z0": (None if bca_z0 is None else float(bca_z0)),
+        "bca_a": (None if bca_a is None else float(bca_a)),
+        "ci_valid_floor": int(BOOT_CI_VALID_FLOOR),
+        # Audit C1 guard: de-folded PLAIN percentile bounds. The "beats chance" gate reads
+        # auc_lo_defold (never the BCa auc_lo), so a true-null band's lower bound can honestly fall
+        # below 0.5 instead of being re-floored by BCa's bias correction. See CI block comment.
+        "auc_lo_defold": (None if auc_lo_defold is None else float(auc_lo_defold)),
+        "auc_hi_defold": (None if auc_hi_defold is None else float(auc_hi_defold)),
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
-        "ci_method": ("moving-block bootstrap (de-folded; fixed orientation; block_len=%d)" % int(block_len)
-                      if block_len > 1 else "rating-clustered bootstrap (de-folded; fixed orientation)"),
+        "ci_method": (("moving-block bootstrap, BCa (de-folded; fixed orientation; block_len=%d)" % int(block_len))
+                      if block_len > 1 else "rating-clustered bootstrap, BCa (de-folded; fixed orientation)"),
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
-        "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
-                 f"{n_clusters} independent ratings). The point AUC is oriented >= 0.5 and is "
-                 f"optimistic near chance for borderline bands; the CI is de-folded (fixed "
-                 f"orientation), so its lower bound can honestly fall below 0.5 when the band does "
-                 f"not beat chance. Class-collapsed replicates are dropped (mildly narrows the CI "
-                 f"at low prevalence)."),
+        "note": (f"Rating-clustered {'moving-block ' if block_len > 1 else ''}bootstrap, BCa interval "
+                 f"({len(boot_aucs)}/{int(n_boot)} valid replicates over {n_clusters} independent "
+                 f"ratings; CI suppressed below {int(BOOT_CI_VALID_FLOOR)}). The point AUC is oriented "
+                 f">= 0.5 and is optimistic near chance for borderline bands; the BCa CI is de-folded "
+                 f"(fixed orientation) and bias/skew-corrected, so its lower bound can honestly fall "
+                 f"below 0.5 when the band does not beat chance. Class-collapsed replicates are "
+                 f"dropped (mildly narrows the CI at low prevalence)."),
     }
 
 
@@ -2045,8 +2140,9 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
                 ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(float(ab))
             except ValueError:
                 continue
-        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
-        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
+        # Audit [3]-floor: suppress the era CI below BOOT_CI_VALID_FLOOR valid replicates (was 20).
+        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= BOOT_CI_VALID_FLOOR else None
+        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= BOOT_CI_VALID_FLOOR else None
         # INFERENTIAL reversal: the era's band→pain direction is confidently opposite the pooled sign
         # only when the ENTIRE 95% CI lies below chance (upper bound < 0.5). If the CI straddles 0.5
         # the era is merely uninformative under the pooled orientation, not a proven reversal — that
@@ -2290,7 +2386,7 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
                 boot.append(float(metrics.roc_auc_score(yb, oof_score[idx])))
             except ValueError:
                 continue
-        if len(boot) >= 20:
+        if len(boot) >= BOOT_CI_VALID_FLOOR:   # audit [3]-floor: was 20
             held_out_auc_lo = float(np.percentile(boot, 2.5))
             held_out_auc_hi = float(np.percentile(boot, 97.5))
 

@@ -148,20 +148,24 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // or dragging the cost slider never rebuilds the curve and never discards the user's zoom/pan.
   useEffect(() => {
     if (!ref.current || !roc) return;
-    // Audit C7: name the CI method ON the figure (a reader of the figure alone can't tell this is a
-    // rating-clustered bootstrap — the property that distinguishes it from a naive over-tight CI).
+    // Audit C7 + [3]/[16]: name the CI method ON the figure. The interval is a BCa (bias-corrected &
+    // accelerated) interval on a rating-clustered moving-block bootstrap — the properties that
+    // distinguish it from a naive over-tight CI. block_len>1 means serial autocorrelation widened it.
+    const ciKind = (roc.ci_interval === "BCa" ? "BCa" : "percentile");
+    const blockTxt = (roc.block_len != null && roc.block_len > 1) ? `, block=${roc.block_len}` : "";
     const ciTxt = (roc.auc_lo != null && roc.auc_hi != null)
-      ? ` (95% clustered-bootstrap CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
+      ? ` (95% clustered-bootstrap ${ciKind} CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)}${blockTxt})` : "";
     // Audit [8]: below the cluster floor the asymptotic AUC inference is approximate — say so on the
     // figure. Advisory label only; no number changes (the flag comes straight from the backend).
     const smallTxt = roc.small_sample
       ? `  ·  small sample (${roc.n_clusters} ratings < ${roc.small_sample_floor}) — approximate` : "";
-    // Audit [3]: surface how many bootstrap replicates the CI actually rests on, and flag a thin
-    // resample (< 100 valid) as an unstable CI. The 2.5/97.5 percentiles of few replicates sit near
-    // the min/max and are noisy. Annotation only — the CI math and the >=20 floor are unchanged.
+    // Audit [3]: surface how many bootstrap replicates the CI rests on. The CI is now SUPPRESSED by the
+    // backend below the valid-replicate floor (ci_valid_floor, =100); when it is shown, flag a thin
+    // resample as unstable. The 2.5/97.5 percentiles of few replicates sit near the min/max and are noisy.
     const nbOk = (roc.n_boot_ok != null) ? roc.n_boot_ok : null;
+    const floor = (roc.ci_valid_floor != null) ? roc.ci_valid_floor : 100;
     const bootTxt = (ciTxt && nbOk != null)
-      ? (nbOk < 100 ? `  ·  CI on ${nbOk} bootstrap replicates — unstable` : `  ·  ${nbOk} bootstrap replicates`)
+      ? (nbOk < floor ? `  ·  CI on ${nbOk} bootstrap replicates — unstable` : `  ·  ${nbOk} bootstrap replicates`)
       : "";
     const traces = [
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",

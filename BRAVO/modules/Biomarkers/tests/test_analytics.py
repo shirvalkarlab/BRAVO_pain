@@ -776,9 +776,15 @@ def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
     assert roc["available"] and roc["auc_lo"] is not None
-    # the de-folded null CI honestly reaches below chance (the old fold pinned this at ~0.5)
-    assert roc["auc_lo"] < 0.5, f"null lower CI {roc['auc_lo']} should drop below 0.5 (de-fold)"
+    # audit C1 (post-[3]): the headline CI is now BCa (bias+skew corrected), whose bias term can
+    # re-center a near-chance band's lower bound back to ~0.5. The DE-FOLDED percentile GUARD bound
+    # (auc_lo_defold) — which the "beats chance" power gate reads — must still honestly drop below 0.5
+    # on a true-null band, so absence-of-signal can never read as significance.
+    assert roc["auc_lo_defold"] is not None
+    assert roc["auc_lo_defold"] < 0.5, \
+        f"null de-folded guard CI {roc['auc_lo_defold']} should drop below 0.5 (C1 guard)"
     assert "de-folded" in roc.get("ci_method", "")
+    assert roc.get("ci_interval") == "BCa"
     # CI still brackets the (oriented) point estimate
     assert roc["auc_lo"] <= roc["auc"] + 1e-9 <= roc["auc_hi"] + 1e-9
 
@@ -1907,3 +1913,75 @@ def test_auc_power_design_effect_1_is_exact_noop_and_discount_is_monotone():
     assert disc["n_ratings_needed"] >= base["n_ratings_needed"], "discount must not lower ratings-needed"
     assert disc["n_ratings_current"] == 30, "displayed current must be RAW ratings (un-discounted)"
     assert abs(disc["n_ratings_effective"] - 30 / 1.5) < 1e-9, "effective n must be raw/deff"
+
+
+def test_deployment_roc_bca_fields_and_defold_guard_present():
+    """Audit [3]: the deployment ROC reports a BCa headline interval (ci_interval='BCa', with bca_z0 /
+    bca_a populated) AND a de-folded percentile guard (auc_lo_defold/auc_hi_defold). On a clean planted
+    band both the BCa CI and the guard sit above chance; the guard brackets the point AUC."""
+    import numpy as _np
+    rng = _np.random.default_rng(3)
+    E, C, F = 160, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.8 * (labels - labels.mean())[:, None])
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
+    assert roc["available"]
+    assert roc["ci_interval"] == "BCa"
+    assert roc["bca_z0"] is not None and roc["bca_a"] is not None
+    assert roc["auc_lo_defold"] is not None and roc["auc_hi_defold"] is not None
+    assert roc["ci_valid_floor"] == analytics.BOOT_CI_VALID_FLOOR == 100
+    # planted band: both the BCa CI and the de-folded guard beat chance
+    assert roc["auc_lo"] > 0.5 and roc["auc_lo_defold"] > 0.5
+    # the de-folded guard brackets the oriented point estimate
+    assert roc["auc_lo_defold"] <= roc["auc"] + 1e-9 <= roc["auc_hi_defold"] + 1e-9
+
+
+def test_bca_matches_scipy_on_iid_skewed_statistic():
+    """Audit [3]: the in-house BCa interval matches scipy.stats.bootstrap(method='BCa') to within
+    bootstrap Monte-Carlo error on a skewed statistic where the bias/accel corrections are non-trivial.
+    Pins the BCa formula (z0 from the bootstrap, a from the jackknife)."""
+    import numpy as _np
+    from scipy import stats as _st
+    rng = _np.random.default_rng(0)
+    x = rng.gamma(2.0, 1.0, 40)
+    theta = float(_np.var(x))
+    res = _st.bootstrap((x,), _np.var, n_resamples=20000, method="BCa",
+                        random_state=1, confidence_level=0.95)
+    B = 20000
+    idx = rng.integers(0, x.size, size=(B, x.size))
+    boot = _np.var(x[idx], axis=1)
+    jack = _np.array([_np.var(_np.delete(x, i)) for i in range(x.size)])
+    lo, hi, z0, a = analytics._bca_ci(theta, boot, jack, alpha=0.05)
+    assert abs(res.confidence_interval.low - lo) < 0.05
+    assert abs(res.confidence_interval.high - hi) < 0.05
+    assert abs(z0) > 0.01 and abs(a) > 0.001    # corrections are genuinely non-zero on skewed data
+
+
+def test_jackknife_cluster_aucs_matches_manual_delete_one():
+    """Audit [3]: the vectorized delete-one-CLUSTER jackknife (BCa acceleration input) equals a manual
+    leave-one-cluster-out AUC loop, exactly."""
+    import numpy as _np
+    rng = _np.random.default_rng(7)
+    K = 35
+    sizes = rng.integers(1, 5, K)
+    col = _np.repeat(_np.arange(K), sizes)
+    N = col.size
+    y = rng.integers(0, 2, N); y[:2] = [0, 1]
+    use = rng.normal(0, 1, N) + 0.7 * y
+    vec = analytics._jackknife_cluster_aucs(use, y, col, K)
+
+    def _auc(uu, yy):
+        if len(_np.unique(yy)) < 2:
+            return _np.nan
+        pos = uu[yy == 1][:, None]; neg = uu[yy == 0][None, :]
+        return float((pos > neg).mean() + 0.5 * (pos == neg).mean())
+
+    man = _np.array([_auc(use[col != i], y[col != i]) for i in range(K)])
+    fin = _np.isfinite(vec) & _np.isfinite(man)
+    assert _np.max(_np.abs(vec[fin] - man[fin])) < 1e-12
