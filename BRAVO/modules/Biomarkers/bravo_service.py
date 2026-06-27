@@ -16,6 +16,7 @@ import os
 import json
 import math
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -553,6 +554,12 @@ _LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
 # worker doesn't grow unboundedly across participants/PRO-sets.
 _LSB_SPECTRUM_MEMO = {}
 _LSB_SPECTRUM_MEMO_MAX = 8
+# Guards the memo check/evict/insert sequence. Under gunicorn thread workers the read-check-write
+# around the dict is not atomic (two threads can both pass the size test, or both evict), so the
+# "bounded at MAX" guarantee is only soft without it. The per-channel compute stays OUTSIDE the lock
+# — a duplicated compute under contention is harmless (last writer wins, same content), and holding
+# the lock across the heavy DSP would serialize all participants behind one slow request.
+_LSB_SPECTRUM_MEMO_LOCK = threading.Lock()
 
 
 def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers):
@@ -586,21 +593,30 @@ def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd
 
 def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings,
                              event_psd_blocks, *, centers=_LSB_SPECTRUM_CENTERS):
-    """SHARED source of truth: the per-(channel, PRO) full-spectrum modeled LSB, computed ONCE and
-    memoized, consumed by BOTH the timeline modeled markers and the spectral feature-importance panel.
+    """The per-(channel, PRO) full-spectrum modeled LSB, computed and memoized. Consumed by the
+    timeline modeled markers (via _build_availability) and the spectral feature-importance panel
+    (via run_for_participant).
 
     For each channel, runs availability.per_pro_lsb_spectrum (TD-transform k=352.62 where TD covers the
     rating, CS-3 bridge k≈73.63 from a coincident PSD-only event otherwise) over the band-center grid.
     Returns { raw_channel: [ per-PRO spectrum dict, ... ] } where each dict carries
     {t, tier, lsb:[per-center], calibrated:[per-center], center_hz:[centers], used_s, saturated, reason}.
-    The same call from either consumer with identical inputs hits the memo, so the two views are the
-    SAME numbers by construction.
+
+    The two consumers pass DIFFERENT pro_times (the timeline uses pain["t"], the metric-agnostic PRO
+    set; the scan uses pro_match[0], the metric-filtered set whose indices populate `rating_group`), so
+    they land in SEPARATE memo entries under different signatures — this is NOT one shared slot. The
+    numbers nevertheless agree on any PRO they have in common, because per_pro_lsb_spectrum is a pure
+    function of (pro_time, channel, recordings, centers): same PRO time + same recordings → identical
+    LSB regardless of which consumer asked. The memo bounds per-worker memory; it is not the thing that
+    makes the two views consistent. The scan's bounds invariant len(value) == len(pro_match[0]) is
+    documented at the run_for_participant call site.
     """
     pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
     if pt.size == 0 or not channels:
         return {}
     sig = _lsb_spectrum_signature(participant_uid, pt, td_recordings, event_psd_blocks, centers)
-    cached = _LSB_SPECTRUM_MEMO.get(sig)
+    with _LSB_SPECTRUM_MEMO_LOCK:
+        cached = _LSB_SPECTRUM_MEMO.get(sig)
     if cached is not None:
         return cached
     out = {}
@@ -612,10 +628,15 @@ def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings
                 pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
         except Exception as e:
             _log.warning("Biomarkers: per-PRO LSB spectrum failed for %s (%s)", raw_ch, e)
-    # bound the memo (FIFO-ish): drop an arbitrary old entry when full
-    if len(_LSB_SPECTRUM_MEMO) >= _LSB_SPECTRUM_MEMO_MAX:
-        _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
-    _LSB_SPECTRUM_MEMO[sig] = out
+    # bound the memo (FIFO-ish): drop the oldest entry when full. Check/evict/insert under the lock so
+    # the size guarantee is hard even when two threads finish computing the same/different sigs at once.
+    with _LSB_SPECTRUM_MEMO_LOCK:
+        existing = _LSB_SPECTRUM_MEMO.get(sig)
+        if existing is not None:
+            return existing                       # another thread won the race; reuse its result
+        if len(_LSB_SPECTRUM_MEMO) >= _LSB_SPECTRUM_MEMO_MAX:
+            _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
+        _LSB_SPECTRUM_MEMO[sig] = out
     return out
 
 
@@ -2569,11 +2590,17 @@ def run_for_participant(request_data):
     pro_match = _pro_match_arrays(pro_df, label_metric)
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
 
-    # SHARED per-pair LSB spectrum cache — the source of truth for both the timeline modeled markers
-    # and the spectral feature-importance scan. Build once here; the availability payload already
-    # built it and populated the memo, so this call is a free memo hit in the common case.
-    # td_recordings = ALL TD-bearing products (streaming + montage/survey, all 250 Hz);
-    # event_psd_blocks = PatientControllerEvent FFT only (PSD-only, no TD) per PI 2026-06-27.
+    # Per-pair LSB spectrum cache for the SPECTRAL SCAN. The per-band LSB the scan reads is indexed by
+    # `rating_group`, which is the position of each matched PSD's PRO in `pro_match[0]` (the
+    # metric-FILTERED PRO set — only ratings with a finite label_metric). So the cache MUST be built
+    # from that exact array: _scan_pro_times = pro_match[0]. analytics.spectral_feature_importance does
+    # `ch_spectra[int(rating_group[i])]`, so len(ch_spectra) == len(pro_match[0]) is the bounds
+    # invariant — do not substitute pain["t"] (the metric-AGNOSTIC set the timeline uses) here, or the
+    # index would point at the wrong PRO. The timeline's modeled markers build their OWN cache entry
+    # from pain["t"] in _build_availability under a DIFFERENT signature; the two entries agree on any
+    # shared PRO because per_pro_lsb_spectrum is deterministic in (pro_time, channel, recordings) — the
+    # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
+    # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
     _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
     _scan_event_blocks = _event_psd_lsb_blocks(participant_uid)
     _scan_channels = list(dict.fromkeys(

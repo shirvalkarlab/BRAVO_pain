@@ -562,6 +562,57 @@ def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
         assert any(abs(x - expect1) < 1e-6 for x in xs), (xs, expect1)
 
 
+def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band():
+    """The vectorized (E, n_cache_centers) LSB matrix must assign each epoch row the LSB of ITS
+    PRO at the right band — distinct PROs and distinct bands, multiple rows per PRO. Guards the
+    Finding-2 rewrite (per-band column gather replacing the per-row Python loop): a transposed
+    scatter or a wrong rating_group→row mapping would surface here."""
+    f = np.linspace(0.95, 100, 60)
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    ci10 = int(np.argmin(np.abs(cen_grid - 10.5)))
+    ci40 = int(np.argmin(np.abs(cen_grid - 40.5)))
+    # 6 epoch rows: rows {0,1}->PRO0, {2,3}->PRO1, {4,5}->PRO2 (two PSDs per PRO, pro_first style)
+    E = 6
+    labels = np.array([8.0, 8.0, 4.0, 4.0, 1.0, 1.0])
+    rgroup = np.array([0, 0, 1, 1, 2, 2])
+    psd = np.random.default_rng(7).normal(0, 1, (E, 1, 60))
+    det = {
+        "f_set": f, "psd": psd, "labels": labels,
+        "row_source": np.array(["TD streaming"] * E, dtype=object),
+        "row_lsb_tier": np.array(["td"] * E, dtype=object),
+        "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
+        "rating_group": rgroup,
+        "chan_order": ["ZERO_TWO_LEFT"],
+        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
+        "prelog": True,
+    }
+    # Each PRO has DISTINCT LSB at the 10.5 and 40.5 Hz bands.
+    def _spec(lsb10, lsb40):
+        lsb = [100.0] * len(cen_grid)
+        lsb[ci10] = lsb10; lsb[ci40] = lsb40
+        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
+                "calibrated": [True] * len(cen_grid), "center_hz": list(cen_grid)}
+    cache = {"ZERO_TWO_LEFT": [_spec(200.0, 700.0), _spec(300.0, 800.0), _spec(500.0, 900.0)]}
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
+                                               low_pct=50.0, high_pct=50.0,
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14"
+    cen = np.array(sc["centers"])
+    ch0 = sc["channels"][0]
+    # At the 10.5 Hz band: rows 0,1 -> log10(200); rows 2,3 -> log10(300); rows 4,5 -> log10(500).
+    bi10 = int(np.argmin(np.abs(cen - 10.5)))
+    xs10 = sorted(v for v in (ch0["scatter"][bi10]["x"] if ch0["scatter"][bi10] else []) if v is not None)
+    exp10 = sorted([np.log10(200.0)] * 2 + [np.log10(300.0)] * 2 + [np.log10(500.0)] * 2)
+    assert len(xs10) == 6, xs10
+    assert all(abs(a - b) < 1e-6 for a, b in zip(xs10, exp10)), (xs10, exp10)
+    # At the 40.5 Hz band: the SAME rows map to the 40-band LSBs (distinct from 10-band).
+    bi40 = int(np.argmin(np.abs(cen - 40.5)))
+    xs40 = sorted(v for v in (ch0["scatter"][bi40]["x"] if ch0["scatter"][bi40] else []) if v is not None)
+    exp40 = sorted([np.log10(700.0)] * 2 + [np.log10(800.0)] * 2 + [np.log10(900.0)] * 2)
+    assert len(xs40) == 6, xs40
+    assert all(abs(a - b) < 1e-6 for a, b in zip(xs40, exp40)), (xs40, exp40)
+
+
 def test_builder_no_device_psd_scale_in_detail():
     """device_psd_scale_by_channel and psd_abs_uv2_per_hz were REMOVED from build_pooled_detail
     (PI 2026-06-27). Validates: (1) neither key is present in the returned detail;
@@ -1197,6 +1248,7 @@ if __name__ == "__main__":
     test_spectral_feature_importance_finds_planted_band()
     test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum()
     test_spectral_scan_lsb_cs14_cache_lookup_per_pro()
+    test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band()
     test_builder_no_device_psd_scale_in_detail()
     test_spectral_scan_lsb_falls_back_without_abs_density()
     test_spectral_scan_prelog_matches_linear()

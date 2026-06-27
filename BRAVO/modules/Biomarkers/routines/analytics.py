@@ -1182,16 +1182,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             fmax = float(np.nanmax(f))
         feature_used = "lsb_cs14"
         n_demoted = 0
-        # Build (N, C, F_centers) LSB matrix from the cache. Each cell is log10(LSB) for matched
-        # rows whose (channel, PRO) has a spectrum entry; unmatched or unresolved → NaN.
-        # We use the SAME center grid as the cache (bravo_service._LSB_SPECTRUM_CENTERS) and map
-        # each scan band center to the nearest cache center. Falls back to logpsd per band if no
-        # cache entry covers a given (channel, rating).
-        rgroup = np.asarray(td_detail.get("rating_group", []))
-        labels_arr = labels  # already extracted above
-        pro_times_epoch = td_detail.get("pro_times_epoch")   # injected by bravo_service if available
-        # The per-band LSB look-up is deferred to the per-channel inner loop below; store the
-        # pre-indexed cache here once so the loop doesn't re-index per band.
+        # The per-band LSB is log10(cache_lsb[pro, nearest_center]). The heavy lifting (resolving the
+        # channel's spectra and scattering PRO LSB vectors into an (E, n_cache_centers) matrix) is
+        # done ONCE per channel inside the channel loop below (see lsb_log_mat); each band then reads
+        # a single column. Falls back to logpsd per band if a channel has no cache entry.
         _lsb_cache = pro_lsb_spectrum_by_channel  # { raw_ch: [{t,tier,lsb,calibrated,...},...] }
     else:
         feature_used = "logpsd_db"
@@ -1264,6 +1258,53 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         p_pearson_curve = []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
         _cv_jobs = []               # (curve_index, bp_log) for the parallel CV-AUC + logit-p pass
+
+        # ---- LSB-cache pre-build (vectorized, once per channel) -------------------------------
+        # In lsb_cs14 mode the per-band feature is just log10(cache_lsb[pro, band_center]). Building
+        # an (E, n_cache_centers) log-LSB matrix ONCE here turns each band into a single column
+        # gather (lsb_log_mat[:, ci_cache]) instead of a Python loop over E rows per band — the
+        # O(bands × E) interpreter scatter the reviewer flagged collapses to one matrix build + a
+        # slice per band. cache_centers is constant across PROs, so its center→column map is built
+        # once too.
+        lsb_log_mat = None          # (E, n_cache_centers) log10(LSB); NaN where unmatched/unresolved
+        cache_centers = None        # the cache's own band-center grid (for nearest-center mapping)
+        if use_lsb:
+            ch_spectra = _lsb_cache.get(raw)
+            if ch_spectra is None:
+                raw_up = str(raw).upper()
+                ch_spectra = next(
+                    (v for k, v in _lsb_cache.items() if str(k).upper() == raw_up), None)
+            E = psd.shape[0]
+            rg_arr = np.asarray(td_detail.get("rating_group", []))
+            if ch_spectra:
+                _cspec0 = ch_spectra[0]
+                cache_centers = np.asarray((_cspec0 or {}).get("center_hz", []), dtype=float)
+                nC = cache_centers.size
+                if nC:
+                    # Stack each PRO's LSB vector into (n_pro, nC); rows with no/short vector → NaN.
+                    n_pro = len(ch_spectra)
+                    pro_lsb = np.full((n_pro, nC), np.nan)
+                    for pi in range(n_pro):
+                        sp = ch_spectra[pi]
+                        if not sp:
+                            continue
+                        vals = sp.get("lsb") or []
+                        m = min(len(vals), nC)
+                        if m:
+                            arr = np.array([v if (v is not None) else np.nan
+                                            for v in vals[:m]], dtype=float)
+                            pro_lsb[pi, :m] = arr
+                    pro_lsb[~(pro_lsb > 0)] = np.nan       # non-positive / zero → NaN (log undefined)
+                    pro_log = np.log10(pro_lsb)            # (n_pro, nC)
+                    # Scatter to epoch rows by rating_group; only matched rows with a valid PRO index.
+                    lsb_log_mat = np.full((E, nC), np.nan)
+                    valid = label_fin_all & (np.arange(E) < rg_arr.size)
+                    rows = np.where(valid)[0]
+                    if rows.size:
+                        pidx = rg_arr[rows].astype(int)
+                        ok = (pidx >= 0) & (pidx < n_pro)
+                        rr, pp = rows[ok], pidx[ok]
+                        lsb_log_mat[rr, :] = pro_log[pp, :]
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
             if not bmask.any():
@@ -1277,49 +1318,19 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 if use_lsb:
-                    # CS-1…CS-4 SHARED LSB CACHE: look up the per-PRO LSB spectrum for this
-                    # channel and band center. The cache was built by
-                    # bravo_service._pro_lsb_spectrum_cached (TD-transform k=352.62 / CS-3 bridge
-                    # k≈73.63) on the same matched (channel, PRO) pairs this scan uses. Each cache
-                    # entry holds an LSB value per band center (0–100 Hz); we pick the nearest
-                    # center. The scan row corresponds to one matched PSD record whose `rating_group`
-                    # index identifies which PRO it was matched to. We recover the PRO's LSB at this
-                    # band from the cache and log10 it. Rows with no cache entry (unmatched, no TD
-                    # or event PSD near the PRO) → NaN, same as the old path for unresolved rows.
-                    # look up by raw name first, then by any matching key (uppercase comparison)
-                    ch_spectra = _lsb_cache.get(raw)
-                    if ch_spectra is None:
-                        raw_up = str(raw).upper()
-                        ch_spectra = next(
-                            (v for k, v in _lsb_cache.items() if str(k).upper() == raw_up),
-                            None)
+                    # CS-1…CS-4 SHARED LSB CACHE: the per-band feature is log10(LSB) for each matched
+                    # (channel, PRO), read from the cache pre-built into lsb_log_mat above. The cache
+                    # came from bravo_service._pro_lsb_spectrum_cached (TD-transform k=352.62 / CS-3
+                    # bridge k≈73.63) on the SAME matched pairs this scan uses. Map this scan band's
+                    # center to the nearest cache center, then gather that column — one O(E) slice,
+                    # no per-row Python loop. Rows with no cache entry stay NaN. Bands outside the
+                    # calibrated range keep their value; the UI flags them via adaptive_valid.
                     E = psd.shape[0]
-                    bp_log = np.full(E, np.nan)
-                    if ch_spectra is not None:
-                        # build center→cache_index lookup once per (channel, band_center)
-                        _cspec0 = ch_spectra[0] if ch_spectra else None
-                        if _cspec0 is not None:
-                            cache_centers = np.asarray(_cspec0.get("center_hz", []), dtype=float)
-                            ci_cache = int(np.argmin(np.abs(cache_centers - c))) if cache_centers.size else None
-                        else:
-                            ci_cache = None
-                        rg_arr = np.asarray(td_detail.get("rating_group", []))
-                        for row_i in range(E):
-                            if not label_fin_all[row_i]:
-                                continue   # unmatched row
-                            pro_i = int(rg_arr[row_i]) if rg_arr.size > row_i else -1
-                            if pro_i < 0 or pro_i >= len(ch_spectra):
-                                continue
-                            spec = ch_spectra[pro_i]
-                            if spec is None or ci_cache is None:
-                                continue
-                            lsb_vals = spec.get("lsb") or []
-                            if ci_cache >= len(lsb_vals):
-                                continue
-                            v = lsb_vals[ci_cache]
-                            if v is not None and v > 0:
-                                bp_log[row_i] = float(np.log10(v))
-                    # full band outside calibrated range → keep value, UI flags via adaptive_valid
+                    if lsb_log_mat is not None and cache_centers is not None and cache_centers.size:
+                        ci_cache = int(np.argmin(np.abs(cache_centers - c)))
+                        bp_log = lsb_log_mat[:, ci_cache].copy()
+                    else:
+                        bp_log = np.full(E, np.nan)
                 elif prelog:
                     # Already log (+ z-scored): the band feature is the mean over the band's bins.
                     bp_log = np.nanmean(psd[:, ci, bmask], axis=1)

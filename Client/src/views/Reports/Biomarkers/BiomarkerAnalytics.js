@@ -663,12 +663,14 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                + `Full 0\u2013100\u202fHz shown; green shading marks the validated 7.8\u201330\u202fHz range.`}
             </MDTypography>
           )}
-          {/* Double-dipping: only flag when PRO-first + rating-grouped AUC does NOT already handle it.
+          {/* Double-dipping: only suppress when PRO-first + rating-grouped AUC already handles it.
               In PRO-first mode each rating is the unit of analysis and the AUC groups folds by rating,
               so multi-PSD-per-rating is intentional and the AUC n is already the independent count.
-              Only show the warning when the user chose a PSD-first direction (nearest/prior). */}
+              Show the warning for every other direction — INCLUDING legacy payloads with no
+              match_direction field (cached prior/nearest scans), where double-dipping is real and
+              hiding it would mislead the clinician. Only the explicit "pro_first" string suppresses. */}
           {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0
-            && scan.match_direction !== "pro_first" && scan.match_direction != null && (
+            && scan.match_direction !== "pro_first" && (
             <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
                     fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
