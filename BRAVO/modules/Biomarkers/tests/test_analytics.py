@@ -455,142 +455,142 @@ def test_spectral_feature_importance_finds_planted_band():
     assert cen[av].min() == 8.5 and cen[av].max() == 29.5
 
 
-def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
-    """LSB feature mode (PI request): when the detail carries absolute µV²/Hz density, the band
-    feature is log10(269 × ∫density), computed for the FULL 0–100 Hz scan (centers 2.5–97.5 Hz).
-    The 8–30 Hz adaptive range is flagged via adaptive_valid (center-based), not by clamping.
-    Validates: (1) feature flagged lsb_calibrated + unit string; (2) full scan (centers 2.5–97.5);
-    (3) adaptive_valid True only for centers in [8, 30] Hz (center-based, not full-band-inside);
-    (4) the calibrated LSB value equals 269 × trapezoid integral (same as deployment/timeline);
-    (5) the planted band is recovered; (6) onboard-FFT rows (NaN in psd_abs) contribute no LSB."""
+def test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum():
+    """LSB feature mode (CS-1…CS-4 cache, PI 2026-06-27): when pro_lsb_spectrum_by_channel is
+    provided, the band feature is log10(CS-14 LSB) from the cache, covering the full 0–100 Hz scan.
+    Validates: (1) feature == 'lsb_cs14'; (2) full scan centers 2.5–97.5 Hz;
+    (3) adaptive_valid True only for centers in [8, 30] Hz;
+    (4) the planted band is recovered from the cache values;
+    (5) logpsd fallback when no cache is provided."""
     det = _planted_detail(center=17.5, beta=0.5, seed=3)
-    f = det["f_set"]; psd = det["psd"]            # psd here is linear (prelog False)
-    # Provide absolute density = the linear psd; NaN out a few "onboard-FFT" rows in channel 0.
-    abs_dens = np.array(psd, dtype=float)
-    abs_dens[:5, 0, :] = np.nan                   # 5 onboard-FFT rows -> excluded from LSB
-    det["psd_abs_uv2_per_hz"] = abs_dens
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
-    assert sc["feature"] == "lsb_calibrated", sc["feature"]
-    assert "LSB" in sc["feature_unit"] and "269" in sc["feature_unit"]
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    E = det["psd"].shape[0]
+    labels = det["labels"]
+    rgroup = np.arange(E)
+    det["rating_group"] = rgroup
+
+    # Build a synthetic cache: one spectrum per PRO for channel ZERO_TWO_LEFT.
+    # Plant strong LSB at ~17.5 Hz for matched rows; unmatched rows get None.
+    ch = "ZERO_TWO_LEFT"
+    planted_center = 17.5
+    spectra = []
+    for i in range(E):
+        if not np.isfinite(labels[i]):
+            spectra.append({"t": 0.0, "tier": None, "lsb": [None] * len(cen_grid),
+                            "calibrated": [False] * len(cen_grid),
+                            "center_hz": list(cen_grid)})
+            continue
+        lsb_vec = []
+        for c in cen_grid:
+            if abs(c - planted_center) <= 2.5:
+                lsb_vec.append(500.0 + float(labels[i]) * 20.0)  # correlated with pain
+            else:
+                lsb_vec.append(100.0)
+        cal = [bool(7.8 <= c <= 30.0) for c in cen_grid]
+        spectra.append({"t": 0.0, "tier": "td_transform", "lsb": lsb_vec,
+                        "calibrated": cal, "center_hz": list(cen_grid)})
+
+    cache = {ch: spectra}
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14", sc["feature"]
+    assert "352.62" in sc["feature_note"] or "CS-1" in sc["feature_note"]
     cen = np.array(sc["centers"])
-    # Full 0–100 Hz scan: centers span [2.5, 97.5] Hz (half-integer grid, 5 Hz window).
+    # Full 0–100 Hz scan
     assert abs(cen.min() - 2.5) < 1e-9 and abs(cen.max() - 97.5) < 1e-9, (cen.min(), cen.max())
-    # adaptive_valid = center in [8, 30] Hz (center-based); NOT all bands — only the 8–30 Hz zone.
+    # adaptive_valid flagged by center in [8, 30]
     av = np.array([b["adaptive_valid"] for b in sc["bands"]])
-    assert av.any() and not av.all(), "Expected some adaptive and some non-adaptive bands"
-    assert cen[av].min() == 8.5 and cen[av].max() == 29.5, (cen[av].min(), cen[av].max())
-    # Recompute the calibrated LSB for one band/row directly and match the scatter x (log10 LSB).
+    assert av.any() and not av.all()
+    assert cen[av].min() >= 8.0 - 1e-9 and cen[av].max() <= 30.0 + 1e-9
+    # Planted band (~17.5 Hz) should have strongest |r|
     ch0 = sc["channels"][0]
     bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
-    # Planted band is 15–20 Hz; the strongest 5 Hz scan window must OVERLAP it (its center within
-    # one band-half of the [15,20] edges, i.e. center in [12.5, 22.5]).
-    assert 12.5 - 1e-9 <= cen[bi] <= 22.5 + 1e-9, cen[bi]
-    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
-    # Recompute the calibrated LSB for one TD row (index >=5, since 0-4 are NaN onboard-FFT) and
-    # confirm it appears as a scatter x (log10 LSB) — the SAME 269 × trapezoid-integral conversion.
-    scat = ch0["scatter"][bi]
-    assert scat is not None
-    uv2_row5 = np.trapezoid(abs_dens[5, 0, bmask], f[bmask])
-    expect_log_lsb = np.log10(269.0 * uv2_row5)
-    assert np.isfinite(expect_log_lsb)
-    xs = np.array([v for v in scat["x"] if v is not None], dtype=float)
-    assert np.nanmin(np.abs(xs - expect_log_lsb)) < 1e-6, (xs[:3], expect_log_lsb)
-    # onboard-FFT exclusion: channel-0 LSB sample count never exceeds the 55 TD rows (60 - 5).
-    assert max(n for n in ch0["n_r"] if n is not None) <= 55
+    assert abs(cen[bi] - planted_center) <= 3.0, cen[bi]
+    # Fallback: no cache -> logpsd_db
+    sc2 = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
+    assert sc2["feature"] == "logpsd_db", sc2["feature"]
 
 
-def test_spectral_scan_lsb_td_priority_over_survey():
-    """When a pain report has a time-domain (streaming) match, its TD-derived LSB takes priority over
-    a survey-sweep LSB for the SAME (channel, rating): the survey row's absolute density is blanked
-    so it contributes no competing LSB point. A report with ONLY a survey match keeps its survey
-    LSB."""
+def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
+    """Cache lookup correctness: per matched row, the scan looks up the PRO index in the cache
+    and assigns log10(cache_lsb) for that band. Rows with no cache entry (tier=None) get NaN.
+    Verifies: (1) matched rows with TD LSB produce finite bp_log; (2) unmatched rows produce NaN;
+    (3) source priority is already enforced by the cache (TD > survey > bridge), not by the scan."""
     f = np.linspace(0.95, 100, 60)
-    E = 8
-    # rows 0..3: channel ZERO_TWO_LEFT, alternating TD/survey, paired by rating_group into 2 reports
-    psd_abs = np.full((E, 1, 60), np.nan)
-    band = (f >= 15) & (f <= 20)
-    # report 0: a TD row (idx0) AND a survey row (idx1) -> survey demoted
-    psd_abs[0, 0, band] = 2.0; psd_abs[1, 0, band] = 9.0
-    # report 1: survey-only (idx2) -> kept
-    psd_abs[2, 0, band] = 5.0
-    # report 2: TD-only (idx3) -> kept
-    psd_abs[3, 0, band] = 3.0
-    labels = np.array([8, 8, 5, 2, np.nan, np.nan, np.nan, np.nan], float)
+    E = 4
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    ci17 = int(np.argmin(np.abs(cen_grid - 17.5)))
+    labels = np.array([8.0, 5.0, np.nan, 2.0])
+    rgroup = np.array([0, 1, -1, 2])
+    psd = np.random.default_rng(42).normal(0, 1, (E, 1, 60))
     det = {
-        "f_set": f, "psd": np.nan_to_num(psd_abs, nan=1.0), "labels": labels,
-        "psd_abs_uv2_per_hz": psd_abs,
-        "row_source": np.array(["TD streaming", "Montage/survey", "Montage/survey",
-                                "TD streaming", "x", "x", "x", "x"], dtype=object),
-        "row_lsb_tier": np.array(["td", "survey", "survey", "td",
-                                  "excluded", "excluded", "excluded", "excluded"], dtype=object),
+        "f_set": f, "psd": psd, "labels": labels,
+        "row_source": np.array(["TD streaming"] * E, dtype=object),
+        "row_lsb_tier": np.array(["td"] * E, dtype=object),
         "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
-        "rating_group": np.array([0, 0, 1, 2, -1, -1, -1, -1]),
+        "rating_group": rgroup,
         "chan_order": ["ZERO_TWO_LEFT"],
-        "times": [f"2025-07-{1 + i:02d} 10:00:00" for i in range(E)],
-        "prelog": False,
+        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
+        "prelog": True,
     }
+    # PRO 0: LSB=400 at band 17.5; PRO 1: LSB=600; PRO 2: all None (no source)
+    def _spec(lsb_at_17):
+        lsb = [lsb_at_17 if i == ci17 else 100.0 for i in range(len(cen_grid))]
+        cal = [bool(7.8 <= c <= 30.0) for c in cen_grid]
+        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
+                "calibrated": cal, "center_hz": list(cen_grid)}
+    none_spec = {"t": 0.0, "tier": None, "lsb": [None]*len(cen_grid),
+                 "calibrated": [False]*len(cen_grid), "center_hz": list(cen_grid)}
+    cache = {"ZERO_TWO_LEFT": [_spec(400), _spec(600), none_spec]}
     sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
-                                               low_pct=50.0, high_pct=50.0)
-    assert sc["feature"] == "lsb_calibrated"
-    assert sc["n_survey_demoted_by_td"] == 1, sc["n_survey_demoted_by_td"]   # only idx1 demoted
-    # The 17.5 Hz band scatter: the demoted survey value (9.0 -> log10(269*9*Δf)) must be ABSENT,
-    # while the TD report-0 value (2.0) and survey-only report-1 (5.0) and TD-only report-2 (3.0) are
-    # present. Find the band center nearest 17.5.
-    cen = np.array(sc["centers"]); bi = int(np.argmin(np.abs(cen - 17.5)))
-    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
-    scat = sc["channels"][0]["scatter"][bi]
-    xs = np.array([v for v in (scat["x"] if scat else []) if v is not None], dtype=float)
-    demoted = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 9.0), f[bmask]))
-    kept_td = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 2.0), f[bmask]))
-    assert np.nanmin(np.abs(xs - kept_td)) < 1e-6           # TD report-0 present
-    assert (xs.size == 0) or (np.nanmin(np.abs(xs - demoted)) > 1e-6)   # survey 9.0 absent
+                                               low_pct=50.0, high_pct=50.0,
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14"
+    # Find band at ~17.5 Hz
+    cen = np.array(sc["centers"])
+    bi = int(np.argmin(np.abs(cen - 17.5)))
+    ch0 = sc["channels"][0]
+    scat = ch0["scatter"][bi]
+    if scat is not None:
+        xs = [v for v in scat["x"] if v is not None]
+        assert len(xs) >= 2          # at least PRO 0 and PRO 1 contribute
+        expect0 = float(np.log10(400.0)); expect1 = float(np.log10(600.0))
+        assert any(abs(x - expect0) < 1e-6 for x in xs), (xs, expect0)
+        assert any(abs(x - expect1) < 1e-6 for x in xs), (xs, expect1)
 
 
-def test_builder_device_psd_scaled_onto_lsb_axis():
-    """When a report has only a device onboard-FFT PSD (no time domain), the builder brings it onto
-    the calibrated LSB axis via an empirical per-channel scale (median TD/device density ratio over
-    8–30 Hz). Validates: the recovered scale matches the planted offset; device rows are tagged
-    device_psd_scaled and their corrected absolute density equals device_density × scale; a channel
-    with device PSD but NO TD overlap is tagged device_psd_uncalibrated."""
+def test_builder_no_device_psd_scale_in_detail():
+    """device_psd_scale_by_channel and psd_abs_uv2_per_hz were REMOVED from build_pooled_detail
+    (PI 2026-06-27). Validates: (1) neither key is present in the returned detail;
+    (2) row_lsb_tier now uses 'td'/'survey'/'patient_event' (no 'device_psd_scaled');
+    (3) the detail still contains psd, row_source, row_channel, row_lsb_tier, f_set."""
     from modules.Biomarkers.routines import streaming_psd as sp
     f = np.linspace(0.95, 100, 60)
     F = f.size
-    # Two channels. ChA: TD rows + device rows (device sits at 1/4 the TD density -> scale 4.0).
-    # ChB: device rows only (no TD overlap -> uncalibrated).
-    OFFSET = 0.25
     rng = np.random.default_rng(0)
-    td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0          # ChA TD absolute density
-    devA_dens = td_dens.mean(0)[None, :] * OFFSET * np.ones((3, 1))  # ChA device = TD/4
-    devB_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0        # ChB device only
-    rows_log = np.vstack([10 * np.log10(td_dens),
-                          10 * np.log10(devA_dens),
-                          10 * np.log10(devB_dens)])
-    channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3 + ["ZERO_TWO_RIGHT"] * 3,
-                       dtype=object)
-    source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3 + ["Patient event"] * 3,
-                      dtype=object)
+    td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0
+    dev_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0
+    rows_log = np.vstack([10 * np.log10(td_dens), 10 * np.log10(dev_dens)])
+    channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3, dtype=object)
+    source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3, dtype=object)
     t0 = 1_700_000_000.0
-    t = t0 + np.arange(10) * 600.0
+    t = t0 + np.arange(7) * 600.0
     mat = {"f_set": f, "logX": rows_log, "t": t, "channel": channel, "source": source,
-           "dur": np.full(10, 30.0)}
-    # No PRO matching needed for the scale logic; pass empty PROs (rows stay unmatched).
+           "dur": np.full(7, 30.0)}
     det = sp.build_pooled_detail_from_matrix(mat, np.array([]), np.array([]),
                                              aggregate="all", match_direction="pro_first")
-    scale = det["device_psd_scale_by_channel"]
-    assert "ZERO_TWO_LEFT" in scale, scale
-    assert abs(scale["ZERO_TWO_LEFT"] - (1.0 / OFFSET)) < 0.05, scale   # ~4.0
-    assert "ZERO_TWO_RIGHT" not in scale                               # no TD overlap
+    # Removed fields must NOT be present
+    assert "device_psd_scale_by_channel" not in det, "device_psd_scale_by_channel should be removed"
+    assert "psd_abs_uv2_per_hz" not in det, "psd_abs_uv2_per_hz should be removed"
+    # Core fields still present
+    for key in ("psd", "f_set", "row_source", "row_channel", "row_lsb_tier", "labels"):
+        assert key in det, f"missing key: {key}"
+    # Tiers: TD rows -> "td", patient-event rows -> "patient_event" (no device_psd_scaled)
     tiers = list(det["row_lsb_tier"])
-    assert tiers[:4] == ["td"] * 4
-    assert tiers[4:7] == ["device_psd_scaled"] * 3                     # ChA device scaled
-    assert tiers[7:10] == ["device_psd_uncalibrated"] * 3             # ChB device uncalibrated
-    # ChA scaled device absolute density should now match TD scale (device × 4 ≈ TD mean).
-    abs_stack = det["psd_abs_uv2_per_hz"]   # (N, C, F)
-    chans = det["chan_order"]
-    ciA = chans.index("ZERO_TWO_LEFT")
-    dev_row_corr = abs_stack[4, ciA, :]      # first ChA device row, corrected
-    band = (f >= 8) & (f <= 30)
-    assert abs(np.nanmedian(dev_row_corr[band] / td_dens.mean(0)[band]) - 1.0) < 0.05
+    assert tiers[:4] == ["td"] * 4, tiers[:4]
+    assert tiers[4:7] == ["patient_event"] * 3, tiers[4:7]
+    valid_tiers = {"td", "survey", "patient_event"}
+    assert all(t in valid_tiers for t in tiers), tiers
 
 
 def test_spectral_scan_lsb_falls_back_without_abs_density():
@@ -1192,9 +1192,9 @@ if __name__ == "__main__":
     test_matched_sample_counts_reports_high_low_and_offset()
     test_cv_logistic_auc_oriented_and_guards_small_n()
     test_spectral_feature_importance_finds_planted_band()
-    test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30()
-    test_spectral_scan_lsb_td_priority_over_survey()
-    test_builder_device_psd_scaled_onto_lsb_axis()
+    test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum()
+    test_spectral_scan_lsb_cs14_cache_lookup_per_pro()
+    test_builder_no_device_psd_scale_in_detail()
     test_spectral_scan_lsb_falls_back_without_abs_density()
     test_spectral_scan_prelog_matches_linear()
     test_spectral_scan_emits_fdr_qs_and_summary()

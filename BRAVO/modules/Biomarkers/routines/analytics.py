@@ -1129,7 +1129,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                                 high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
                                 region_map=None, n_peaks=6, max_scatter=400,
-                                rating_aware_auc=None, feature="lsb"):
+                                rating_aware_auc=None, feature="lsb",
+                                pro_lsb_spectrum_by_channel=None):
     """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
 
     Slides a `band_width_hz`-wide window in `step_hz` increments. For each (channel, band):
@@ -1140,21 +1141,19 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         the predictive analog of a per-rating random intercept (the "mixed-effects" readout)
 
     `feature` selects the per-band quantity all three readouts run on:
-      * "lsb" (DEFAULT, per PI): CALIBRATED device LSB. The band feature is
-        ``log10(269 × ∫ density dHz over the band)`` computed from the absolute µV²/Hz density the
-        detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
-        are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
-        by the deployment threshold and the timeline modeled tier, so the discovery scan and the
-        deployable number speak one unit. Scans the FULL 0–`fmax` range (centers 2.5–97.5 Hz with
-        the default 5 Hz window); the validated/firmware-programmable `adaptive_band` (8–30 Hz) is
-        FLAGGED per band via `adaptive_valid` (center-based), not used to restrict the scan — bands
-        outside it are exploratory (k=269 has no LSB ground truth there) and the UI marks them. Falls
-        back to "logpsd" if the detail lacks the absolute density (e.g. an onboard-FFT-only pool).
-      * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
-        `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
-        curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
-        clinician's unit and to enforce the TD-only source priority (the 8–30 Hz deployable range is
-        flagged per band, not enforced as a scan limit).
+      * "lsb" (DEFAULT, per PI): CALIBRATED device LSB from the SHARED per-pair CS-1…CS-4 cache
+        (`pro_lsb_spectrum_by_channel`, required for this mode). Per matched (channel, PRO), the
+        LSB vector was computed once by `bravo_service._pro_lsb_spectrum_cached`:
+          - TD-transform route (k=352.62, analytics.td_transform_band_power): any TD-bearing recording
+            covering the rating → 30 s rating-centered window → vectorized rFFT over all centers.
+          - CS-3 PSD-bridge route (k≈73.63, analytics.device_psd_to_lsb): no TD + coincident PSD-only
+            patient event → device_psd_band_power over all centers. Full 0–100 Hz; bands outside
+            [7.8, 30] carry calibrated=False (exploratory; the UI flags them). Bridge shown full-
+            spectrum per PI 2026-06-27 ("calculate it anyway … make it clear outside 7.8–30 Hz
+            this hasn't been validated").
+        The old Welch-density × k=269 / device-FFT rescale path is REMOVED (PI 2026-06-27). Falls
+        back to "logpsd" if pro_lsb_spectrum_by_channel is None (e.g. back-compat callers).
+      * "logpsd": mean LINEAR PSD over the band → 10*log10 (dB). Kept for parity/debugging.
 
     The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
     overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
@@ -1173,61 +1172,27 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     if f.size == 0 or psd.ndim != 3 or labels.size == 0:
         return None
 
-    # --- Feature selection: calibrated LSB (default) vs legacy log-PSD ----------------------------
-    psd_abs = td_detail.get("psd_abs_uv2_per_hz")
-    use_lsb = (str(feature).lower() == "lsb" and psd_abs is not None)
+    # --- Feature selection: CS-1…CS-4 shared LSB cache (default) vs legacy log-PSD ----------------
+    # "lsb" mode: per-band LSB comes from the shared per-pair spectrum cache
+    # (bravo_service._pro_lsb_spectrum_cached), threaded in as `pro_lsb_spectrum_by_channel`.
+    # The old psd_abs_uv2_per_hz × k=269 / device-FFT rescale path is REMOVED (PI 2026-06-27).
+    use_lsb = (str(feature).lower() == "lsb" and pro_lsb_spectrum_by_channel is not None)
     if use_lsb:
-        psd_abs = np.asarray(psd_abs, dtype=float)               # (E, C, F) absolute µV²/Hz, TD-only
-        if psd_abs.shape != psd.shape:
-            use_lsb = False                                      # shape mismatch -> safe fallback
-    if use_lsb:
-        # Full 0–fmax scan in LSB mode (do NOT cap fmax at adaptive_band[1]). k=269 is validated and
-        # the firmware can place an adaptive band only within 8–30 Hz, so bands whose CENTER is
-        # outside [8, 30] are flagged adaptive_valid=False and shown at reduced opacity (exploratory).
-        # The k=269 band-integral conversion is applied uniformly; out-of-adaptive values are
-        # exploratory only and the UI labels them as such.
         if fmax is None:
             fmax = float(np.nanmax(f))
-        feature_used = "lsb_calibrated"
+        feature_used = "lsb_cs14"
         n_demoted = 0
-
-        # --- SOURCE PRIORITY per matched report: TD > survey > scaled device-FFT > uncalibrated ----
-        # A report's calibrated LSB should come from its HIGHEST-fidelity neural match. The detail
-        # carries a per-row tier (`row_lsb_tier`): "td" (real time-domain Welch) > "survey" (montage
-        # sweep Welch) > "device_psd_scaled" (onboard FFT brought onto the LSB axis by the empirical
-        # per-channel scale) > "device_psd_uncalibrated" (onboard FFT with no overlap to scale from).
-        # For every (channel, matched-rating), keep only the rows of the best tier present and blank
-        # the absolute density of the lower-tier rows, so a survey or device-FFT reading never
-        # competes with a TD one for the same report. Reports whose only match is a device PSD keep
-        # that device LSB (PI: use the PSD when the time domain isn't available). Unmatched rows are
-        # untouched. In one_per_rating mode the builder already collapsed each cell to its top tier,
-        # so this loop finds nothing left to demote — it's the "all"-mode enforcement. This reshapes
-        # ONLY the LSB feature; the z-scored dB views and every non-LSB stat use the untouched `psd`.
-        _TIER_RANK = {"td": 0, "survey": 1, "device_psd_scaled": 2,
-                      "device_psd_uncalibrated": 3}
-        rgroup = td_detail.get("rating_group")
-        rtier = td_detail.get("row_lsb_tier")
-        rchannel = td_detail.get("row_channel")
-        if rgroup is not None and rtier is not None and rchannel is not None:
-            rgroup = np.asarray(rgroup)
-            rtier = np.asarray(rtier, dtype=object)
-            rchannel = np.asarray(rchannel, dtype=object)
-            if rgroup.shape[0] == psd_abs.shape[0] == rtier.shape[0] == rchannel.shape[0]:
-                # best (lowest-rank) tier present per (channel, rating) matched cell
-                best_tier = {}
-                for i in np.where(rgroup >= 0)[0]:
-                    rk = _TIER_RANK.get(str(rtier[i]), 9)
-                    key = (rchannel[i], int(rgroup[i]))
-                    if rk < best_tier.get(key, 99):
-                        best_tier[key] = rk
-                if best_tier:
-                    psd_abs = psd_abs.copy()
-                    for i in range(psd_abs.shape[0]):
-                        if rgroup[i] >= 0:
-                            key = (rchannel[i], int(rgroup[i]))
-                            if _TIER_RANK.get(str(rtier[i]), 9) > best_tier.get(key, 99):
-                                psd_abs[i, :, :] = np.nan   # lower tier loses this report
-                                n_demoted += 1
+        # Build (N, C, F_centers) LSB matrix from the cache. Each cell is log10(LSB) for matched
+        # rows whose (channel, PRO) has a spectrum entry; unmatched or unresolved → NaN.
+        # We use the SAME center grid as the cache (bravo_service._LSB_SPECTRUM_CENTERS) and map
+        # each scan band center to the nearest cache center. Falls back to logpsd per band if no
+        # cache entry covers a given (channel, rating).
+        rgroup = np.asarray(td_detail.get("rating_group", []))
+        labels_arr = labels  # already extracted above
+        pro_times_epoch = td_detail.get("pro_times_epoch")   # injected by bravo_service if available
+        # The per-band LSB look-up is deferred to the per-channel inner loop below; store the
+        # pre-indexed cache here once so the loop doesn't re-index per band.
+        _lsb_cache = pro_lsb_spectrum_by_channel  # { raw_ch: [{t,tier,lsb,calibrated,...},...] }
     else:
         feature_used = "logpsd_db"
         n_demoted = 0
@@ -1312,22 +1277,49 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 if use_lsb:
-                    # CALIBRATED LSB feature: integrate the ABSOLUTE density (µV²/Hz) over the band
-                    # (trapezoid on the real freq axis — same op as _band_power_notched), × 269
-                    # LSB/µV² (lsb_from_uv2), then log10 so it lives on a comparable additive scale
-                    # to the dB feature. NaN where the band has <2 finite bins (e.g. onboard-FFT rows
-                    # are NaN in psd_abs and never contribute). One LSB scalar per session.
-                    sub_abs = psd_abs[:, ci, bmask]            # (E, nbins) absolute µV²/Hz
-                    fb = f[bmask]
-                    E = sub_abs.shape[0]
-                    uv2 = np.full(E, np.nan)
-                    for e in range(E):
-                        row = sub_abs[e]
-                        ok = np.isfinite(row)
-                        if ok.sum() >= 2:
-                            uv2[e] = np.trapezoid(row[ok], fb[ok])
-                    lsb = LSB_PER_UV2_VALIDATED * np.where(uv2 > 0, uv2, np.nan)
-                    bp_log = np.log10(np.where(lsb > 0, lsb, np.nan))   # log10 calibrated LSB
+                    # CS-1…CS-4 SHARED LSB CACHE: look up the per-PRO LSB spectrum for this
+                    # channel and band center. The cache was built by
+                    # bravo_service._pro_lsb_spectrum_cached (TD-transform k=352.62 / CS-3 bridge
+                    # k≈73.63) on the same matched (channel, PRO) pairs this scan uses. Each cache
+                    # entry holds an LSB value per band center (0–100 Hz); we pick the nearest
+                    # center. The scan row corresponds to one matched PSD record whose `rating_group`
+                    # index identifies which PRO it was matched to. We recover the PRO's LSB at this
+                    # band from the cache and log10 it. Rows with no cache entry (unmatched, no TD
+                    # or event PSD near the PRO) → NaN, same as the old path for unresolved rows.
+                    # look up by raw name first, then by any matching key (uppercase comparison)
+                    ch_spectra = _lsb_cache.get(raw)
+                    if ch_spectra is None:
+                        raw_up = str(raw).upper()
+                        ch_spectra = next(
+                            (v for k, v in _lsb_cache.items() if str(k).upper() == raw_up),
+                            None)
+                    E = psd.shape[0]
+                    bp_log = np.full(E, np.nan)
+                    if ch_spectra is not None:
+                        # build center→cache_index lookup once per (channel, band_center)
+                        _cspec0 = ch_spectra[0] if ch_spectra else None
+                        if _cspec0 is not None:
+                            cache_centers = np.asarray(_cspec0.get("center_hz", []), dtype=float)
+                            ci_cache = int(np.argmin(np.abs(cache_centers - c))) if cache_centers.size else None
+                        else:
+                            ci_cache = None
+                        rg_arr = np.asarray(td_detail.get("rating_group", []))
+                        for row_i in range(E):
+                            if not label_fin_all[row_i]:
+                                continue   # unmatched row
+                            pro_i = int(rg_arr[row_i]) if rg_arr.size > row_i else -1
+                            if pro_i < 0 or pro_i >= len(ch_spectra):
+                                continue
+                            spec = ch_spectra[pro_i]
+                            if spec is None or ci_cache is None:
+                                continue
+                            lsb_vals = spec.get("lsb") or []
+                            if ci_cache >= len(lsb_vals):
+                                continue
+                            v = lsb_vals[ci_cache]
+                            if v is not None and v > 0:
+                                bp_log[row_i] = float(np.log10(v))
+                    # full band outside calibrated range → keep value, UI flags via adaptive_valid
                 elif prelog:
                     # Already log (+ z-scored): the band feature is the mean over the band's bins.
                     bp_log = np.nanmean(psd[:, ci, bmask], axis=1)
@@ -1530,29 +1522,22 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         # The per-band feature that r / AUC / clustered-logit p all run on.
-        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, full 0–fmax scan
-        #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
+        #   "lsb_cs14"  -> log10(CS-1…CS-4 shared LSB cache): TD-transform k=352.62 or CS-3 bridge
+        #                   k≈73.63, per matched (channel, PRO), rating-centered 30 s window.
+        #   "logpsd_db" -> 10*log10(mean band PSD), legacy fallback
         "feature": feature_used,
-        "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
+        "feature_unit": ("log10 LSB (CS-1…CS-4: TD-transform k=352.62 / PSD-bridge k≈73.63)"
                          if use_lsb else "dB (10·log10 band PSD)"),
         "feature_note": (
-            "Band feature is the CALIBRATED device LSB: 269 × the band integral of the Welch density "
-            "of the time domain, the same conversion as the deployment threshold and timeline modeled "
-            "tier. Per matched report the LSB comes from the highest-fidelity source available: real "
-            "time-domain streaming, then montage/survey sweep, then — when NO time domain exists for "
-            "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
-            "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
-            "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
-            "uncalibrated. Scan covers the full 0–100 Hz spectrum; the validated, firmware-"
-            "programmable 8–30 Hz range is flagged per band (adaptive_valid) — bands outside it are "
-            "exploratory and shown at reduced opacity."
+            "Band feature is the CALIBRATED device LSB from the shared CS-1…CS-4 per-pair cache "
+            "(bravo_service._pro_lsb_spectrum_cached). Per matched (channel, PRO) report: "
+            "TD-bearing recordings (streaming, montage/survey, all 250 Hz) → 30 s rating-centered "
+            "window → transform DSP (Hann-windowed zero-padded FFT, 50% overlap) × k=352.62 "
+            "(LSB_PER_UV2_TRANSFORM). PSD-only patient events with no coincident TD → CS-3 bridge "
+            "(device_psd_band_power × k≈73.63). Full 0–100 Hz per PI 2026-06-27; bands outside "
+            "[7.8, 30] Hz carry calibrated=False (exploratory, shown at reduced opacity). "
+            "The old Welch-density × k=269 / per-channel device-FFT rescale path is REMOVED."
             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
-        # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
-        # (channel, rating). 0 when no report had competing tiers.
-        "n_survey_demoted_by_td": int(n_demoted),
-        # Per-channel empirical device-FFT -> Welch-density scale used to put onboard-FFT PSDs on the
-        # calibrated LSB axis (from the detail; {} when no device PSDs or no overlap to calibrate).
-        "device_psd_scale_by_channel": (td_detail.get("device_psd_scale_by_channel") or {}),
         # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
         # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
         # dict; this summary is the UI's pseudoreplication-contrast annotation source.

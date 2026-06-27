@@ -1765,7 +1765,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        train_days=None, step_days=None, sliding=True, region_map=None,
                        match_tolerance_min=None, psd_matrix=None, pro_match=None,
                        aggregate="all", max_per_rating=3, refractory_min=2.0,
-                       match_direction="prior"):
+                       match_direction="prior", pro_lsb_spectrum_by_channel=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -1816,7 +1816,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
                 "spectral_feature_importance": lambda: analytics.spectral_feature_importance(
                     scan_src, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    region_map=region_map),
+                    region_map=region_map,
+                    pro_lsb_spectrum_by_channel=pro_lsb_spectrum_by_channel),
                 "matched_sample_counts": count_task,
                 "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
@@ -2568,6 +2569,24 @@ def run_for_participant(request_data):
     pro_match = _pro_match_arrays(pro_df, label_metric)
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
 
+    # SHARED per-pair LSB spectrum cache — the source of truth for both the timeline modeled markers
+    # and the spectral feature-importance scan. Build once here; the availability payload already
+    # built it and populated the memo, so this call is a free memo hit in the common case.
+    # td_recordings = ALL TD-bearing products (streaming + montage/survey, all 250 Hz);
+    # event_psd_blocks = PatientControllerEvent FFT only (PSD-only, no TD) per PI 2026-06-27.
+    _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    _scan_event_blocks = _event_psd_lsb_blocks(participant_uid)
+    _scan_channels = list(dict.fromkeys(
+        availability._canon_channel(ch) for ch in (chan_order or [])))
+    _scan_pro_times = (pro_match[0] if pro_match is not None else None)
+    pro_lsb_spectrum = (
+        _pro_lsb_spectrum_cached(
+            participant_uid, _scan_pro_times, _scan_channels,
+            list(td or []) + list(_scan_psd_list or []),
+            _scan_event_blocks)
+        if (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels) else {}
+    )
+
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
                                                  label_strategy=label_strategy,
@@ -2578,7 +2597,8 @@ def run_for_participant(request_data):
                                                  psd_matrix=psd_matrix, pro_match=pro_match,
                                                  aggregate=aggregate, max_per_rating=max_per_rating,
                                                  refractory_min=refractory_min,
-                                                 match_direction=match_direction),
+                                                 match_direction=match_direction,
+                                                 pro_lsb_spectrum_by_channel=pro_lsb_spectrum),
                          label_metric=label_metric)
     out["label_metric"] = label_metric
     out["aggregate"] = aggregate
