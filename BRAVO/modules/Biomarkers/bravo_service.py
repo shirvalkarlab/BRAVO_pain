@@ -541,6 +541,84 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
     return out
 
 
+# Default band-center grid for the shared per-pair LSB spectrum: full 0–100 Hz, the same span the
+# spectral feature-importance scan covers. Centers on the half-integer grid at 1 Hz step (matching the
+# scan's default w/2 start); callers can request a different grid (e.g. the timeline's exact sensing
+# center) from the SAME builder, so a timeline marker and a spectral point at one center are identical.
+_LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
+
+# In-process memo for the per-pair LSB spectrum, keyed on a content signature. The timeline
+# (_build_availability) and the spectral scan both build the SAME spectrum from the SAME decoded
+# recordings within a request; this avoids the second consumer recomputing it. Bounded so a long-lived
+# worker doesn't grow unboundedly across participants/PRO-sets.
+_LSB_SPECTRUM_MEMO = {}
+_LSB_SPECTRUM_MEMO_MAX = 8
+
+
+def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers):
+    """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event recording
+    identities + the band-center grid. Any change to the PROs, the recordings feeding the transform/
+    bridge, or the centers misses the memo and recomputes."""
+    import hashlib
+    h = hashlib.sha1()
+    h.update(str(participant_uid).encode())
+    h.update(_pro_set_signature(pro_times).encode())
+    # recording identity: StartTime + channel names + sample count is enough to detect a content change
+    for tag, recs in (("td", td_recordings or []), ("ev", event_psd_blocks or [])):
+        h.update(tag.encode())
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+            st = r.get("StartTime") if "StartTime" in r else r.get("t")
+            names = r.get("ChannelNames") or r.get("channel") or ""
+            data = r.get("Data")
+            freq = r.get("freq")
+            if data is not None:
+                n = np.asarray(data).shape[0]
+            elif freq is not None:
+                n = np.asarray(freq).size
+            else:
+                n = 0
+            h.update(f"{st}|{names}|{n};".encode())
+    h.update(np.asarray(centers, dtype=float).tobytes())
+    return h.hexdigest()[:16]
+
+
+def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings,
+                             event_psd_blocks, *, centers=_LSB_SPECTRUM_CENTERS):
+    """SHARED source of truth: the per-(channel, PRO) full-spectrum modeled LSB, computed ONCE and
+    memoized, consumed by BOTH the timeline modeled markers and the spectral feature-importance panel.
+
+    For each channel, runs availability.per_pro_lsb_spectrum (TD-transform k=352.62 where TD covers the
+    rating, CS-3 bridge k≈73.63 from a coincident PSD-only event otherwise) over the band-center grid.
+    Returns { raw_channel: [ per-PRO spectrum dict, ... ] } where each dict carries
+    {t, tier, lsb:[per-center], calibrated:[per-center], center_hz:[centers], used_s, saturated, reason}.
+    The same call from either consumer with identical inputs hits the memo, so the two views are the
+    SAME numbers by construction.
+    """
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0 or not channels:
+        return {}
+    sig = _lsb_spectrum_signature(participant_uid, pt, td_recordings, event_psd_blocks, centers)
+    cached = _LSB_SPECTRUM_MEMO.get(sig)
+    if cached is not None:
+        return cached
+    out = {}
+    cen = np.asarray(centers, dtype=float)
+    for raw_ch in channels:
+        key = availability._canon_channel(raw_ch)
+        try:
+            out[raw_ch] = availability.per_pro_lsb_spectrum(
+                pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: per-PRO LSB spectrum failed for %s (%s)", raw_ch, e)
+    # bound the memo (FIFO-ish): drop an arbitrary old entry when full
+    if len(_LSB_SPECTRUM_MEMO) >= _LSB_SPECTRUM_MEMO_MAX:
+        _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
+    _LSB_SPECTRUM_MEMO[sig] = out
+    return out
+
+
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     """Load NeuralActivitySnapshot montage sweeps as montage-PSD marker events, de-duplicated
     against the montage/survey PSD recordings that ALREADY render on the timeline.
@@ -2209,6 +2287,21 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         pro_lsb = _pro_lsb_by_channel(
             _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
             event_psd_blocks, sensing_hz) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
+        # SHARED per-pair full-spectrum LSB cache (0–100 Hz). Both this timeline payload AND the
+        # spectral feature-importance scan read from it (same computation, same source of truth).
+        # td_recordings = ALL TD-bearing recordings (streaming + montage/survey, every product at 250 Hz
+        # TD) → TD-transform route (k=352.62). Per PI 2026-06-27: montage/survey PSDs are NEVER passed
+        # to event_psd_recordings here — they carry TD and always go through the transform route;
+        # the bridge is ONLY for patient-event FFT blocks (PatientControllerEvent, PSD-only, no TD).
+        _pro_all_channels = sorted({availability._canon_channel(r) for r in (lsb or {}).keys()})
+        pro_lsb_spectrum = (
+            _pro_lsb_spectrum_cached(
+                participant_uid, _pro_t_lsb,
+                _pro_all_channels,
+                list(td_list or []) + list(psd_list or []),  # ALL TD-bearing: streaming + montage/survey
+                event_psd_blocks)                             # PSD-only patient events (bridge only)
+            if (_pro_t_lsb is not None and _pro_t_lsb.size and _pro_all_channels) else {}
+        )
         bands = availability.present_freq_bands(records)
         # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
         # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
@@ -2285,14 +2378,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
 
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
-                "pro_lsb": pro_lsb,
+                "pro_lsb": pro_lsb, "pro_lsb_spectrum": pro_lsb_spectrum,
                 "events": events, "montage_events": montage_events,
                 "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
-                "pro_lsb": {},
+                "pro_lsb": {}, "pro_lsb_spectrum": {},
                 "events": {"events": [], "n": 0},
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
