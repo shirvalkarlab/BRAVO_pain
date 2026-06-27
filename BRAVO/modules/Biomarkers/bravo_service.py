@@ -2066,8 +2066,8 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                     "channel": ch, "label": fmt.get("short", ch),
                     "hemisphere": availability._hemisphere(ch),
                     "dtype": "psd", "product": "patient_event",
-                    "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming")
-                    "category": _event_display_category(ev.get("name", "")),  # Streaming vs labeled
+                    "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming");
+                                                             # the lane tick keys on product/event_name
                     "t_start": float(ev["t"]), "dur_s": 30.0,
                     "meta": {"center_hz": None, "peak_hz": None, "n": None},
                 })
@@ -2100,12 +2100,20 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
         bands = availability.present_freq_bands(records)
-        # Patient-triggered events — demarcated on the timeline. Now includes BOTH the labeled button
-        # presses (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
-        # (category=DISPLAY_STREAMING_EVENT); each marker carries its `category` so the frontend draws
-        # the two on distinct rows/glyphs (`events.categories` lists which are present).
+        # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
+        # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
+        # (category=DISPLAY_STREAMING_EVENT). The diamond EVENTS row only renders the LABELED presses;
+        # the Streaming snapshots render as per-lane PSD ticks from a SEPARATE payload (av.records via
+        # _event_psd_index). So we run the (PSD-averaging) event_markers on the labeled events ONLY and
+        # surface the Streaming count separately — avoids the (many) wasted decimated-PSD/peak
+        # computations for Streaming markers the diamond row never draws.
         event_list = _load_patient_events(participant_uid)
-        events = availability.event_markers(event_list)
+        labeled_events = [e for e in event_list
+                          if e.get("category") != DISPLAY_STREAMING_EVENT]
+        streaming_count = sum(1 for e in event_list
+                              if e.get("category") == DISPLAY_STREAMING_EVENT)
+        events = availability.event_markers(labeled_events)
+        events["streaming_count"] = streaming_count
         # Montage-PSD events: NeuralActivitySnapshot montage sweeps (category=DISPLAY_MONTAGE_SNAPSHOT;
         # a montage product carrying its OWN TD, distinct from the PSD-only patient events) NOT already
         # represented by a montage/survey PSD recording (de-duplicated against those StartTimes so we

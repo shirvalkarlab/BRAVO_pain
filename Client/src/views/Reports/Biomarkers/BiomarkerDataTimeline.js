@@ -696,14 +696,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // moment is locatable against every channel. Hover LEADS with the patient's label, then time,
     // peak Hz, and channel count. These corroborate only (DESIGN §2/§6) — never decode.
     const evWrap = av.events || { events: [] };
-    // The events payload now carries BOTH labeled patient presses AND the auto 'Streaming' LFP
-    // snapshots, each tagged with `category`. The EVENTS diamond row shows only the LABELED presses
-    // (one color per label); the ~2479 Streaming snapshots are their OWN category and render as
-    // per-lane event-PSD ticks (teal, in each contact lane) rather than flooding this row.
-    const STREAMING_CAT = "Streaming event PSD";
-    const evListAll = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
-    const evList = evListAll.filter((e) => (e.category || e.label) !== STREAMING_CAT);
-    const streamingList = evListAll.filter((e) => (e.category || e.label) === STREAMING_CAT);
+    // The backend already separates the two PSD-event axes: `av.events.events` carries ONLY the
+    // labeled patient presses (the diamond row), and `av.events.streaming_count` is the number of auto
+    // 'Streaming' LFP snapshots — those render as per-lane event-PSD ticks (teal) from a SEPARATE
+    // payload (av.records), not here, so they don't flood the diamond row. We trust that contract
+    // rather than re-deriving the split by string-matching a category literal on the frontend.
+    const evList = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    const streamingCount = Number.isFinite(evWrap.streaming_count) ? evWrap.streaming_count : 0;
     if (evList.length) {
       // stable label order (by first appearance) so colors + legend are deterministic
       const labelOrder = [];
@@ -732,7 +731,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
       text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} labeled` +
-        `${streamingList.length ? ` · ${streamingList.length} streaming` : ""}</span>` : ""}`,
+        `${streamingCount ? ` · ${streamingCount} streaming` : ""}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
     // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
@@ -893,7 +892,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       const LSB_GREEN = "#2CA02C";
       // PSD tick glyphs — TWO distinct sources that previously both read as "montage PSD":
       //  • grey ticks = montage/survey + NeuralActivitySnapshot device PSDs (carry their own TD)
-      //  • teal ticks = patient-triggered EVENT PSDs (incl. the 2479 'Streaming' snapshots), PSD-only
+      //  • teal ticks = patient-triggered EVENT PSDs (incl. the auto 'Streaming' snapshots), PSD-only
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
         name: "montage PSD  (survey sweep + montage snapshot; hover → spectrum)" });

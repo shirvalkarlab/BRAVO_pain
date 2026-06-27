@@ -323,7 +323,9 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         label = str(e.get("name") or "event")
         # display category (DISPLAY_STREAMING_EVENT vs DISPLAY_PATIENT_EVENT vs DISPLAY_MONTAGE_SNAPSHOT)
         # carried from the loader so the frontend can render each source on its own row/glyph. Falls
-        # back to the label when a caller didn't tag one (e.g. montage-PSD markers).
+        # back to the label when a caller didn't tag one. (Both event loaders tag `category` explicitly
+        # now; the montage loader's marker name == DISPLAY_MONTAGE_SNAPSHOT, so even an untagged montage
+        # marker would fall back to the correct category — intentional belt-and-suspenders, not luck.)
         category = str(e.get("category") or label)
         # average the per-hemisphere PSDs onto a common frequency grid
         freq = None

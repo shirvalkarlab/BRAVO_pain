@@ -69,6 +69,32 @@ def test_taxonomy_lsb_routing_rule_matches_td_presence():
     assert tax["montage_snapshot"]["lsb_route"] == "td_transform"
 
 
+def test_labeled_streaming_split_for_diamond_row_and_count():
+    """The assembler runs the PSD-averaging event_markers on LABELED events only and surfaces the
+    Streaming count separately (Streaming render as per-lane ticks from av.records, NOT the diamond
+    row). This pins that split so a regression can't (a) flood the diamond row with Streaming or
+    (b) waste decimated-PSD compute on the ~2479 Streaming markers the row never draws."""
+    from modules.Biomarkers.routines import availability as av
+    T0 = 1_700_000_000.0
+    # mimic _load_patient_events output: 2 labeled + 3 streaming, each category-tagged
+    event_list = [
+        {"name": "Higher Pain", "category": bs.DISPLAY_PATIENT_EVENT,   "t": T0,       "psds": []},
+        {"name": "Medication",  "category": bs.DISPLAY_PATIENT_EVENT,   "t": T0 + 10,  "psds": []},
+        {"name": "Streaming",   "category": bs.DISPLAY_STREAMING_EVENT, "t": T0 + 20,  "psds": []},
+        {"name": "Streaming",   "category": bs.DISPLAY_STREAMING_EVENT, "t": T0 + 30,  "psds": []},
+        {"name": "Streaming",   "category": bs.DISPLAY_STREAMING_EVENT, "t": T0 + 40,  "psds": []},
+    ]
+    # the exact split the assembler performs
+    labeled = [e for e in event_list if e.get("category") != bs.DISPLAY_STREAMING_EVENT]
+    streaming_count = sum(1 for e in event_list if e.get("category") == bs.DISPLAY_STREAMING_EVENT)
+    markers = av.event_markers(labeled)
+    markers["streaming_count"] = streaming_count
+    assert markers["n"] == 2                                   # diamond row = labeled only
+    assert {e["label"] for e in markers["events"]} == {"Higher Pain", "Medication"}
+    assert markers["streaming_count"] == 3                     # streaming surfaced as a count, not rows
+    assert all(e["label"] != "Streaming" for e in markers["events"])
+
+
 def test_taxonomy_three_sources_have_distinct_display_categories():
     """All three PSD-event display categories are distinct, so none can masquerade as another on the
     timeline (the 'Streaming reads as Montage PSD' mislabel)."""
