@@ -2919,16 +2919,20 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
         Zero-pad / FFT length. The k=352.62 calibration assumes 256.
     maxf : float, default 96.68
         Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
-    agg : {"median","mean"}, default "median"
-        Across-window aggregation. The repo and the deployed sweep both use the median.
+    agg : {"median","mean","none"}, default "median"
+        Across-window aggregation. The repo and the deployed sweep both use the median. "none" returns
+        the PER-WINDOW band power without aggregating — shape (W,) for a scalar center, (W, C) for a
+        vector center — for the sliding-window overlay / within-window QC (CS-4). The window start
+        times are `arange(0, n-win+1, step)`.
 
     Returns
     -------
-    float (scalar center) or ndarray (vector center) of band power in µV². NaN / all-NaN when the
-    trace has fewer than `win_samples` finite samples (the 1-window / 1-second minimum), or when
-    win > n_fft / fs<=0. A center whose band lies entirely ABOVE `maxf` (≈96.68 Hz) has no kept bins
-    and returns ~0 BY DESIGN (td_to_lsb then maps it to NaN via its >0 guard) — read that as
-    out-of-range, not a real null.
+    float (scalar center) or ndarray (vector center) of band power in µV² for agg in {median,mean}.
+    For agg="none": ndarray of per-window band power, (W,) scalar-center or (W, C) vector-center.
+    NaN / all-NaN when the trace has fewer than `win_samples` finite samples (the 1-window / 1-second
+    minimum), or when win > n_fft / fs<=0. A center whose band lies entirely ABOVE `maxf` (≈96.68 Hz)
+    has no kept bins and returns ~0 BY DESIGN (td_to_lsb then maps it to NaN via its >0 guard) — read
+    that as out-of-range, not a real null.
     """
     v = np.asarray(samples_uv, dtype=float)
     v = v[np.isfinite(v)]
@@ -2942,6 +2946,9 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     # NaN-out contract intact for an unexpected fs (>256) instead of raising.
     if win <= 0 or step <= 0 or fs <= 0 or win > n_fft or v.size < win:
         nan = float("nan")
+        if agg == "none":
+            # no windows -> empty per-window series (preserve center axis for vector centers)
+            return np.empty((0,), dtype=float) if scalar_in else np.empty((0, centers.size), dtype=float)
         return nan if scalar_in else np.full(centers.size, nan)
 
     # Strided window matrix (W, win): one row per sub-window. No Python loop over windows.
@@ -2960,6 +2967,9 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     band = ((freqs[None, :] >= centers[:, None] - half_hz) &
             (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
     pw = p2 @ band.T                                       # (W, C)
+    if agg == "none":
+        # per-window band power, no aggregation (sliding-window overlay / QC). (W,) scalar, (W,C) vector.
+        return pw[:, 0] if scalar_in else pw
     out = (np.median(pw, axis=0) if agg == "median" else np.mean(pw, axis=0))
     return float(out[0]) if scalar_in else out
 
