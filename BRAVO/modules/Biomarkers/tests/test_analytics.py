@@ -2036,3 +2036,192 @@ def test_threshold_drift_sparse_record_not_assessed():
     assert r["status"] == "not_assessed"
     assert r["drift_flag"] is False
     assert r["n_weeks_qualifying"] < analytics.DRIFT_MIN_WEEKS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CS-1 — transform route (k=352.62) as the PRIMARY TD→LSB source of truth
+# (HANDOFF_TD_LSB_calibration_2026-06-27.md). The transform DSP is the percept-spectral-repro
+# "selected band power": per 1 s rcs-Hann window, zero-pad to 256, rFFT, peak scale 2/256, magnitude,
+# in-band summed-squared-magnitude, median across windows. NOT Welch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _reference_transform_block(samples_uv, center_hz, *, half_hz=2.5,
+                               nonzero=250, n_fft=256, sr=250.0, maxf=96.68):
+    """Verbatim percept-spectral-repro transform DSP (the anchor), NON-overlapping windows. This is an
+    independent re-implementation of the published reference — the vendored td_transform_band_power
+    must reproduce it bit-for-bit, which is what proves the DSP was vendored correctly (repo k=352.62,
+    r=0.9927)."""
+    freqs = np.round(np.arange(n_fft // 2 + 1) * sr / n_fft, 2)
+    freqs = freqs[freqs <= maxf + 1e-9]
+    coeffs = np.zeros(n_fft)
+    coeffs[:nonzero] = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.arange(nonzero) / nonzero))
+    v = np.asarray(samples_uv, float)
+    v = v[np.isfinite(v)]
+    if v.size < nonzero:
+        return float("nan")
+    powers = []
+    for s in range(0, v.size - nonzero + 1, nonzero):
+        w = v[s:s + nonzero] - np.mean(v[s:s + nonzero])
+        pad = np.zeros(n_fft); pad[:nonzero] = w
+        mag = 2.0 * np.abs(np.fft.rfft(pad * coeffs, n=n_fft)) / n_fft
+        mag = mag[:len(freqs)]
+        m = (freqs >= center_hz - half_hz) & (freqs <= center_hz + half_hz)
+        powers.append(float(np.sum(mag[m] ** 2)))
+    return float(np.median(powers))
+
+
+def test_td_transform_band_power_reproduces_reference_dsp():
+    """ANCHOR: the vendored transform reproduces the percept-spectral-repro reference DSP bit-for-bit
+    under non-overlapping windows (the only configuration k=352.62 was fit against). Any deviation here
+    means the DSP was vendored wrong, not that the science changed."""
+    sr = 250.0
+    rng = np.random.default_rng(11)
+    max_err = 0.0
+    for _ in range(6):
+        n = int(rng.integers(800, 6000))
+        t = np.arange(n) / sr
+        sig = (12 * np.sin(2 * np.pi * 22.5 * t) + 6 * np.sin(2 * np.pi * 9.8 * t)
+               + rng.normal(0, 3, n))
+        for c in (8.8, 10.0, 20.0, 22.5, 26.4):
+            ref = _reference_transform_block(sig, c)
+            got = analytics.td_transform_band_power(sig, sr, c)   # default step == win (non-overlap)
+            max_err = max(max_err, abs(ref - got))
+    assert max_err < 1e-9, max_err
+    # vector-center path shares one rFFT and matches the per-center scalar calls
+    centers = np.array([8.8, 20.0, 26.4])
+    vec = analytics.td_transform_band_power(sig, sr, centers)
+    scal = np.array([analytics.td_transform_band_power(sig, sr, c) for c in centers])
+    assert np.allclose(vec, scal, atol=1e-12)
+
+
+def test_td_to_lsb_applies_transform_constant_and_guards():
+    """td_to_lsb == LSB_PER_UV2_TRANSFORM (352.62, NOT 269) × transform band power, with the 1 s
+    (one-window) minimum and non-positive guards returning NaN."""
+    import math
+    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9
+    assert analytics.LSB_PER_UV2_TRANSFORM != analytics.LSB_PER_UV2_VALIDATED   # 352.62 vs 269
+    sr = 250.0
+    t = np.arange(3000) / sr
+    sig = 10 * np.sin(2 * np.pi * 20.0 * t)
+    bp = analytics.td_transform_band_power(sig, sr, 20.0)
+    assert abs(analytics.td_to_lsb(sig, sr, 20.0) - analytics.LSB_PER_UV2_TRANSFORM * bp) < 1e-9
+    # 1 s minimum: exactly one window (250 samples) computes; below it → NaN
+    assert np.isfinite(analytics.td_to_lsb(sig[:250], sr, 20.0))
+    assert math.isnan(analytics.td_to_lsb(sig[:249], sr, 20.0))
+
+
+def test_k_cancels_in_correlation_and_auc():
+    """THE SAFETY CLAIM behind the route switch: because the per-band feature is a LOG of band power,
+    the multiplicative k is an additive log-offset that cancels in Pearson r and in AUC. So swapping
+    the TD path from welch256×269 to transform×352.62 moves the displayed/deployable LSB scale but
+    cannot move any correlation or AUC result. Asserted byte-for-byte (not merely 'close')."""
+    from sklearn.metrics import roc_auc_score
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(3)
+    uv2 = np.exp(rng.normal(0, 1, 400))                     # positive band powers
+    pain = rng.normal(0, 1, 400)
+    label = (np.log(uv2) + 0.4 * rng.normal(0, 1, 400) > np.log(uv2).mean()).astype(int)
+    # feature = log(LSB) = log(k) + log(uv2): the log(k) term is a pure additive shift
+    f269 = np.log(analytics.LSB_PER_UV2_VALIDATED * uv2)
+    f352 = np.log(analytics.LSB_PER_UV2_TRANSFORM * uv2)
+    # difference is exactly the constant log-ratio, identical for every point
+    assert np.allclose(f352 - f269, np.log(analytics.LSB_PER_UV2_TRANSFORM /
+                                           analytics.LSB_PER_UV2_VALIDATED), atol=1e-12)
+    # Pearson r identical to full float precision
+    assert abs(pearsonr(f269, pain)[0] - pearsonr(f352, pain)[0]) < 1e-12
+    # AUC identical (rank statistic — a monotone +shift cannot reorder)
+    assert abs(roc_auc_score(label, f269) - roc_auc_score(label, f352)) < 1e-12
+
+
+def test_transform_centered_window_clip_dont_slide_contract():
+    """The per-PRO TD extent for the 0–100 Hz sweep: 30 s CENTERED on the rating, CLIPPED to the
+    recording (asymmetric near an edge, never slid into padding), dropped below one 1 s window or above
+    10% Missing. This is the contract CS-2 wires into PRO matching."""
+    sr = 250.0
+    n = 30000                                               # 120 s recording
+    sig = np.sin(2 * np.pi * 20.0 * np.arange(n) / sr)
+    # mid-recording → full 30 s (extent_s default)
+    sl, used = analytics.transform_centered_window(sig, sr, 60.0)
+    assert sl is not None and sl.size == int(round(30.0 * sr)) and abs(used - 30.0) < 1e-9
+    # 5 s from start → clipped to [0, 20 s], asymmetric, not padded to 30 s
+    sl, used = analytics.transform_centered_window(sig, sr, 5.0)
+    assert sl.size == int(round(20.0 * sr)) and abs(used - 20.0) < 1e-9
+    # recording shorter than one transform window → dropped
+    sl, used = analytics.transform_centered_window(sig[:200], sr, 0.4)
+    assert sl is None and used == 0.0
+    # >10% of the centered span Missing → rejected
+    miss = np.zeros(n); miss[int(44 * sr):int(76 * sr)] = 1     # covers the [45,75] s span
+    sl, used = analytics.transform_centered_window(sig, sr, 60.0, missing=miss)
+    assert sl is None and used == 0.0
+
+
+def test_transform_50pct_overlap_window_count_and_variance_only_shift():
+    """The deployed sweep slides the 1 s window at 0.5 s (50% overlap): 59 windows over a full 30 s vs
+    30 non-overlapping. Overlap changes only the number of windows the median is taken over (a variance
+    reduction), so on a stationary signal the band power barely moves — well under the 1.26× calibration
+    scatter (the live-RCS08 check measures the real-data shift; this pins the synthetic invariant)."""
+    sr = 250.0
+    step = int(round(sr * analytics.TRANSFORM_STEP_SECONDS))     # 125 = 0.5 s
+    win = int(round(sr * analytics.TRANSFORM_WIN_SECONDS))       # 250 = 1 s
+    n = int(round(30.0 * sr))
+    assert len(np.arange(0, n - win + 1, win)) == 30            # non-overlap window count
+    assert len(np.arange(0, n - win + 1, step)) == 59          # 50%-overlap window count
+    t = np.arange(n) / sr
+    sig = 10 * np.sin(2 * np.pi * 22.5 * t) + np.random.default_rng(5).normal(0, 2, n)
+    no = analytics.td_transform_band_power(sig, sr, 22.5)                       # non-overlap
+    ov = analytics.td_transform_band_power(sig, sr, 22.5, step_samples=step)    # 50% overlap
+    fold = max(no / ov, ov / no)
+    assert fold < analytics.LSB_UV2_SIGMA_FOLD, fold           # « 1.26× scatter
+
+
+def test_modeled_transform_point_stays_flagged_native_preferred():
+    """NATIVE-PREFERRED INVARIANT (§3.3). The route switch moved the modeled tier's DSP from
+    welch256×269 to transform×352.62 but MUST keep the point tagged source='psd_modeled' + modeled=True,
+    because the deployment threshold and the timeline y-scaler exclude modeled points via that exact
+    flag. Here: (1) availability.lsb_series tags the switched montage-TD point modeled=True /
+    source='psd_modeled' / method='td_transform_…'; (2) the verbatim bravo_service mask
+    (y[band & ~is_modeled]) keeps ONLY the native value when a native and a modeled point share a band,
+    so a measured threshold is never contaminated by the modeled estimate."""
+    from Biomarkers.routines import availability
+    sr = 250.0
+    t = np.arange(int(40 * sr)) / sr                          # 40 s survey → full transform support
+    ch = "ZERO_AND_TWO_LEFT"
+    rec = {
+        "ChannelNames": [ch],
+        "Data": (10 * np.sin(2 * np.pi * 20.0 * t)).reshape(-1, 1),
+        "SamplingRate": sr,
+        "StartTime": 1_700_000_000.0,
+        "PeakFrequencyInHertz": 20.0,
+    }
+    key = availability._canon_channel(ch)
+    out = availability.lsb_series(
+        chronic_recordings=[], powerdomain_recordings=[],
+        montage_td_recordings=[rec], sensing_hz_by_channel={key: 20.0})
+    ser = out.get(key)
+    assert ser is not None and len(ser["y"]) >= 1, out.keys()
+    # exactly the modeled transform point, correctly flagged
+    assert ser["source"][0] == "psd_modeled"
+    assert bool(ser["modeled"][0]) is True
+    assert ser["method"][0].startswith("td_transform_x_k=")
+    assert "352.62" in ser["method"][0]
+    assert np.isfinite(ser["y"][0]) and ser["y"][0] > 0
+
+    # (2) the deployment native-only mask keeps native when both exist on the same band
+    y = np.array([100.0, 100.0, 9999.0])                     # 2 native, 1 modeled
+    hz = np.array([20.0, 20.0, 20.0])
+    modeled_flag = np.array([False, False, True], dtype=object)
+    center_hz, half = 20.0, 2.5
+    bmask = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+    is_modeled = np.array([bool(m) for m in modeled_flag])
+    native = y[bmask & ~is_modeled]
+    assert native.size == 2 and np.all(native == 100.0)      # modeled 9999 excluded
+    assert 9999.0 not in set(native.tolist())
+
+
+if __name__ == "__main__":
+    # ad-hoc local run of just the CS-1 transform tests (the container harness globs test_* itself)
+    for _name, _fn in sorted(globals().items()):
+        if _name.startswith("test_td_") or _name.startswith("test_transform_") or \
+           _name in ("test_k_cancels_in_correlation_and_auc",
+                     "test_modeled_transform_point_stays_flagged_native_preferred"):
+            _fn(); print("PASS", _name)

@@ -2602,6 +2602,7 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
                                    if v["fft_size"] == CONVERSION_FFT_SIZE)  # ("Dual","SingleInverse")
 
 
+# ── welch256 route — PSD→LSB EXPLORATION BACKUP ONLY (NOT the primary TD→LSB route) ──────────────
 # Power-domain LSB <-> µV² calibration, VALIDATED on RCS08 ground truth (on-demand BrainSense
 # Streaming: BrainSenseLfp device LSB + BrainSenseTimeDomain 250 Hz TD on the SAME signal, 50 stim-off
 # paired blocks). Welch 256-pt PSD of the TD integrated over the sensed band, regressed on the device's
@@ -2614,7 +2615,14 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
 # power LSB, which is normalization-dependent and remains a CONFIDENCE-RATED estimate (use the device's
 # own Timeline LSB percentile anchor for the actual deployed threshold; use this only to translate a
 # physical µV² target into LSB when the device never sensed the band).
-LSB_PER_UV2_VALIDATED = 269.0          # k, RCS08 stim-off paired-block fit
+#
+# ROUTE STATUS (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md): k=269 is the
+# **welch256 route**, demoted to the PSD→LSB EXPLORATION BACKUP — used only to turn a power-domain
+# PSD into LSB when NO coincident time-domain stream exists for a match. The PRIMARY TD→LSB source of
+# truth is now the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62** (below). Do NOT feed a
+# transform-DSP µV² through k=269, and do NOT feed a welch256 µV² through 352.62 — each DSP carries its
+# own scale (see ERROR 3 in the handoff). The two are NOT interchangeable.
+LSB_PER_UV2_VALIDATED = 269.0          # k, welch256 route — PSD→LSB exploration backup ONLY
 UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
 LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
 LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
@@ -2626,6 +2634,26 @@ LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calib
 # estimate whose center frequency lands outside [LSB_VALIDATED_HZ_LO, LSB_VALIDATED_HZ_HI].
 LSB_VALIDATED_HZ_LO = 7.8
 LSB_VALIDATED_HZ_HI = 28.3
+
+# ── transform route — PRIMARY TD→LSB source of truth (PI decision 2026-06-27) ─────────────────────
+# k for the percept-spectral-repro "transform" DSP (RC+S-Hann / 256-pt zero-padded FFT / peak-
+# amplitude / mean-magnitude band power), reproduced bit-for-bit on the user's Stage-1 RCS08 JSONs:
+# all-stim median k = 352.62, r = 0.9927, RMSE 60.6 LSB (see HANDOFF_TD_LSB_calibration_2026-06-27.md,
+# transform_3s_blocks.csv). This is the deployable + exploratory TD→LSB constant. The stim-off variant
+# (356.61) is recorded for provenance ONLY and is NOT deployed — use 352.62 exactly, do not round.
+# k is multiplicative on a LOG band-power feature, so it CANCELS inside Pearson r / AUC (the
+# correlation/AUC panels are identical whether k is 269, 352.62, or 1). k matters only for (a) the
+# absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching the TD
+# path from welch256×269 to transform×352.62 moves the displayed/deployable scale to the lab-consistent
+# value WITHOUT moving any r/AUC result (test_k_cancels_in_corr_and_auc pins this).
+LSB_PER_UV2_TRANSFORM = 352.62         # k, transform route — RCS08 all-stim median; PRIMARY TD→LSB
+# Device adaptive-sensing ceiling. Distinct from LSB_VALIDATED_HZ_HI (28.3 Hz = where paired-block
+# CALIBRATION ground truth exists, used by the extrapolation guard _freq_extrapolated). 30 Hz is the
+# firmware HARD limit on where an adaptive sensing band can be placed: a deployable modeled LSB is
+# offered only in [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; the 0–100 Hz exploration sweep is not
+# band-restricted (k cancels in r/AUC; displayed LSB is illustrative). Keep these two bounds separate —
+# 28.3 is a data-coverage fact, 30.0 is a device-capability fact; do not collapse them.
+LSB_DEPLOYABLE_HZ_HI = 30.0
 
 
 def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
@@ -2685,22 +2713,24 @@ def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI
 
 def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_VALIDATED,
                     threshold_mode="Dual"):
-    """Convert a physical PSD (µV²/Hz) to device power-domain LSB over a band, via the Step-0-chosen
-    Welch256 band-integral × k=269 route. ONE conversion path shared by the Biomarker timeline's
-    ``psd_modeled`` tier (availability.lsb_series) and the deployment module's modeled fallback
-    (bravo_service band_lsb_and_power), so survey/montage/event PSD bands that carry NO native device
-    LSB still get a calibrated, range-guarded LSB value.
+    """Convert a physical PSD (µV²/Hz) to device power-domain LSB over a band, via the Welch256
+    band-integral × k=269 route. This is the **PSD→LSB EXPLORATION BACKUP** — used only to turn a
+    power-domain PSD into LSB when NO coincident time-domain stream exists for a match. When TD is
+    available, the PRIMARY route is td_to_lsb (transform DSP × LSB_PER_UV2_TRANSFORM = 352.62); do not
+    route a TD trace through here.
 
-    This is the MODELED fallback only — native device LSB (Timeline / BrainSenseLfp) is always
-    preferred when the band was actually sensed (see DESIGN §4 / Step-0 verdict). The default k=269 is
-    RCS08-validated and approximately band-flat across 7.8–28.3 Hz; outside that range the conversion
-    is an untested extrapolation and is flagged (never silently trusted).
+    This is a MODELED value either way — native device LSB (Timeline / BrainSenseLfp) is always
+    preferred when the band was actually sensed (see DESIGN §4). The default k=269 is RCS08-validated
+    and approximately band-flat across 7.8–28.3 Hz; outside that range the conversion is an untested
+    extrapolation and is flagged (never silently trusted).
 
-    Step-0 verdict (2026-06-25): of transform+CV-k vs Welch256×269, the fixed-269 route was chosen for
-    the timeline on accuracy (in 8–30 Hz it ties/beats the fitted transform on typical/median-fold
-    error and trails only on outlier RMSE), stability (its implied k sits on the existing fixed 269 —
-    no new fitted/maintained scale), and single-source-of-truth (same constant the deployment threshold
-    uses). See ANALYSIS_percept_spectral_repro_comparison.md "Timeline method decision".
+    Route history (do not re-litigate): a 2026-06-25 "Step-0" pass chose fixed-269 over the transform
+    for the timeline. That decision was SUPERSEDED on 2026-06-27 (PI; HANDOFF_TD_LSB_calibration_
+    2026-06-27.md): the transform route (k=352.62), reproduced bit-for-bit against the lab repo, is now
+    the primary TD→LSB source of truth for both exploration and the deployment modeled fallback, and
+    welch256×269 is retained ONLY as the PSD-backup served by this function. The k switch is safe
+    because k cancels in the r/AUC curves (it is multiplicative on a log band-power feature) — only the
+    absolute displayed/deployable LSB moves to the lab-consistent scale.
 
     Parameters
     ----------
@@ -2789,6 +2819,151 @@ def welch256_density(samples_uv, fs):
     f, p = _welch(v, fs=fs, window="hann", nperseg=min(256, v.size),
                   detrend="constant", scaling="density")
     return f, p
+
+
+# Default sliding-window geometry for the transform DSP (the PRIMARY TD→LSB route). A 1-second
+# (TRANSFORM_WIN_SECONDS) rcs-Hann window, zero-padded to 256 points, is the percept-spectral-repro
+# "transform" unit; the repo reproduction slides it NON-overlapping (step = win). The deployed
+# per-PRO sweep slides it at TRANSFORM_STEP_SECONDS = 0.5 s (50% overlap) across a ~30 s rating-
+# centered extent and takes the median band power, which only reduces estimator variance (the 50%-
+# vs non-overlap median band power agrees to ≪ the 1.26× calibration scatter — verified on RCS08).
+TRANSFORM_N_FFT = 256
+TRANSFORM_WIN_SECONDS = 1.0
+TRANSFORM_STEP_SECONDS = 0.5
+TRANSFORM_MAX_FREQ_HZ = 96.68          # repo percept_frequency_bins ceiling (bins ≤ this are kept)
+
+
+def _rcs_hann(nonzero):
+    """RC+S Hann taper over `nonzero` samples: 0.5*(1 - cos(2πn/nonzero)). Verbatim from
+    percept-spectral-repro (note the period is `nonzero`, NOT nonzero-1 — matches the device)."""
+    n = np.arange(int(nonzero))
+    return 0.5 * (1.0 - np.cos(2.0 * np.pi * n / float(nonzero)))
+
+
+def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
+                            win_samples=None, step_samples=None,
+                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median"):
+    """Transform-DSP band power (µV²) of a time-domain µV trace — the PRIMARY TD→LSB front end.
+
+    This is the percept-spectral-repro "transform": per sliding sub-window, mean-detrend → rcs-Hann
+    taper over `win_samples` nonzero samples → ZERO-PAD to `n_fft` → rFFT → peak scale (2/n_fft) →
+    magnitude → band power = sum of squared magnitudes over [center−half_hz, center+half_hz].
+    Aggregated (median, default) across sub-windows. This is a Hann-windowed zero-padded FFT, **not**
+    Welch — do not confuse with welch256_density. A NON-overlapping call (step == win) reproduces the
+    lab repo bit-for-bit (k=352.62, r=0.9927); the deployed sweep passes a 50%-overlap step.
+
+    Fully vectorized: one strided window matrix → ONE batched rFFT over all windows → one band-mask
+    matmul over all requested centers → median across the window axis. No per-window or per-band loop,
+    so the whole 0–100 Hz / 1 Hz-step sweep shares a single rFFT per extent.
+
+    Parameters
+    ----------
+    samples_uv : array-like
+        1-D time-domain trace in µV (non-finite samples are dropped first).
+    fs : float
+        Sampling rate (Hz). win/step default to 1 s / 1 s in samples when not given.
+    center_hz : float or array-like
+        Band center(s) in Hz. Scalar in → float out; array in → ndarray out (shared FFT).
+    half_hz : float, default 2.5
+        Half-bandwidth; the band is [center−half, center+half] (≈5 Hz device band).
+    win_samples, step_samples : int, optional
+        Window length / hop in SAMPLES. Defaults: win = round(fs*TRANSFORM_WIN_SECONDS) (=250 @ 250
+        Hz), step = win (non-overlapping). Pass step = round(fs*TRANSFORM_STEP_SECONDS) for 50% overlap.
+    n_fft : int, default 256
+        Zero-pad / FFT length. The k=352.62 calibration assumes 256.
+    maxf : float, default 96.68
+        Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
+    agg : {"median","mean"}, default "median"
+        Across-window aggregation. The repo and the deployed sweep both use the median.
+
+    Returns
+    -------
+    float (scalar center) or ndarray (vector center) of band power in µV². NaN / all-NaN when the
+    trace has fewer than `win_samples` finite samples (the 1-window / 1-second minimum).
+    """
+    v = np.asarray(samples_uv, dtype=float)
+    v = v[np.isfinite(v)]
+    fs = float(fs)
+    scalar_in = np.ndim(center_hz) == 0
+    centers = np.atleast_1d(np.asarray(center_hz, dtype=float))
+    win = int(win_samples) if win_samples else int(round(fs * TRANSFORM_WIN_SECONDS))
+    step = int(step_samples) if step_samples else win
+    if win <= 0 or step <= 0 or fs <= 0 or v.size < win:
+        nan = float("nan")
+        return nan if scalar_in else np.full(centers.size, nan)
+
+    # Strided window matrix (W, win): one row per sub-window. No Python loop over windows.
+    starts = np.arange(0, v.size - win + 1, step)
+    M = v[starts[:, None] + np.arange(win)[None, :]]
+    M = M - M.mean(axis=1, keepdims=True)                  # per-window mean detrend
+    buf = np.zeros((M.shape[0], n_fft), dtype=float)
+    buf[:, :win] = M * _rcs_hann(win)[None, :]             # rcs-Hann taper + zero pad
+    mag = 2.0 * np.abs(np.fft.rfft(buf, n=n_fft, axis=-1)) / n_fft   # ONE batched rFFT (W, n_fft//2+1)
+    freqs = np.round(np.arange(n_fft // 2 + 1) * fs / n_fft, 2)
+    if maxf is not None:
+        keep = freqs <= float(maxf) + 1e-9
+        mag = mag[:, keep]; freqs = freqs[keep]
+    p2 = mag ** 2                                          # (W, Fb) squared magnitudes
+    # Band-mask matrix (C, Fb); one matmul → in-band summed power for every center at once.
+    band = ((freqs[None, :] >= centers[:, None] - half_hz) &
+            (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
+    pw = p2 @ band.T                                       # (W, C)
+    out = (np.median(pw, axis=0) if agg == "median" else np.mean(pw, axis=0))
+    return float(out[0]) if scalar_in else out
+
+
+TRANSFORM_CENTERED_EXTENT_SECONDS = 30.0   # rating-centered TD extent fed to the per-PRO LSB sweep
+
+
+def transform_centered_window(samples_uv, fs, center_offset_s, *,
+                              extent_s=TRANSFORM_CENTERED_EXTENT_SECONDS,
+                              missing=None, max_missing_frac=0.10):
+    """Cut the rating-centered TD extent for the per-PRO transform LSB sweep (CS-2 consumer).
+
+    For a PRO whose timestamp sits `center_offset_s` seconds into this recording, return the slice of
+    `samples_uv` spanning [center − extent_s/2, center + extent_s/2], CLIPPED to the recording bounds
+    (asymmetric near an edge; never slid across into padding) — i.e. 30 s centered on the rating, or
+    "whatever's available" when the recording is shorter. The caller then runs td_transform_band_power
+    / td_to_lsb on the returned slice with a 50%-overlap step (step_samples = round(fs*
+    TRANSFORM_STEP_SECONDS)); the transform's own ≥1-window rule enforces the 1 s minimum.
+
+    Mirrors streaming_psd.welch_rating_centered's clip-don't-slide contract and its >max_missing_frac
+    Missing rejection (FixBreaking zero-fill protection), but for the transform DSP rather than Welch.
+
+    Returns (slice_uv, used_seconds) or (None, 0.0) when the clipped extent is below one transform
+    window or is more than `max_missing_frac` Missing.
+    """
+    v = np.asarray(samples_uv, dtype=float)
+    fs = float(fs)
+    n = v.size
+    win = int(round(fs * TRANSFORM_WIN_SECONDS))
+    if n < win or fs <= 0:
+        return None, 0.0
+    half = int(round(extent_s * fs / 2.0))
+    ci = int(round(float(center_offset_s) * fs))
+    lo = max(0, ci - half)
+    hi = min(n, ci + half)
+    if hi - lo < win:
+        return None, 0.0
+    if missing is not None:
+        miss = np.asarray(missing, dtype=float).ravel()
+        if miss.size >= n:
+            frac = float(np.mean(miss[lo:hi] > 0))
+            if frac > float(max_missing_frac):
+                return None, 0.0
+    return v[lo:hi], (hi - lo) / fs
+
+
+def td_to_lsb(samples_uv, fs, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_TRANSFORM, **win_kw):
+    """PRIMARY TD→LSB: device power-domain LSB from a time-domain µV trace via the transform DSP ×
+    k (default LSB_PER_UV2_TRANSFORM = 352.62). One helper, one constant, used by both the Biomarker
+    exploration panels and the deployment modeled fallback. `win_kw` forwards win_samples/step_samples/
+    agg to td_transform_band_power (pass step_samples for the 50%-overlap deployed sweep). Returns
+    float LSB (or ndarray for a vector center); NaN where the band power is NaN/non-positive."""
+    uv2 = td_transform_band_power(samples_uv, fs, center_hz, half_hz=half_hz, **win_kw)
+    arr = np.atleast_1d(np.asarray(uv2, dtype=float))
+    lsb = np.where(np.isfinite(arr) & (arr > 0), float(k) * arr, np.nan)
+    return float(lsb[0]) if np.ndim(uv2) == 0 else lsb
 
 
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,

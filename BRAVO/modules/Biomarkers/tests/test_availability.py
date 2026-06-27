@@ -187,10 +187,12 @@ def test_lsb_series_chronic_remaps_to_sensing_contact_and_pools():
 
 
 def test_lsb_series_psd_modeled_tier_from_montage_td():
-    """Montage-survey TD with NO native LSB still gets a calibrated, FLAGGED modeled LSB point: the
-    tier Welch-256s the TD and routes the band integral through analytics.psd_band_to_lsb (k=269).
-    The emitted lsb must EQUAL psd_band_to_lsb on the same Welch PSD (single conversion path), and the
-    sample must be tagged source='psd_modeled' / modeled=True so the frontend draws it distinctly."""
+    """Montage-survey TD with NO native LSB still gets a calibrated, FLAGGED modeled LSB point. The
+    tier now converts via the PRIMARY transform route (analytics.td_to_lsb = transform DSP x
+    k=LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27, superseding welch256 x269). The emitted lsb must
+    EQUAL td_to_lsb on the same TD (single conversion path), and the sample must be tagged
+    source='psd_modeled' / modeled=True (the tier enum the native-preferred masking keys on), with the
+    DSP route recorded in `method`, so the frontend draws it distinctly."""
     from modules.Biomarkers.routines import analytics
     rng = np.random.default_rng(0)
     fs, center = 250.0, 20.0
@@ -207,10 +209,11 @@ def test_lsb_series_psd_modeled_tier_from_montage_td():
     assert "ZERO_THREE_LEFT" in out
     s = out["ZERO_THREE_LEFT"]
     assert s["source"] == ["psd_modeled"] and s["modeled"] == [True]
-    assert s["method"][0].startswith("welch256_band_integral_x_k=269")
-    # the lane's modeled LSB equals the shared helper applied to the same Welch-256 PSD
-    f, psd = analytics.welch256_density(sig, fs)
-    expect = analytics.psd_band_to_lsb(psd, f, center)["lsb"]
+    assert s["method"][0].startswith("td_transform_x_k=")
+    assert "352.62" in s["method"][0]
+    # the lane's modeled LSB equals the shared PRIMARY helper applied to the same TD (whole-column,
+    # the display-tier extent — no PRO centering here)
+    expect = analytics.td_to_lsb(sig, fs, center)
     assert abs(s["y"][0] - expect) < 1e-6, (s["y"][0], expect)
     assert s["y"][0] > 0 and s["t"][0] == float(T0)
 

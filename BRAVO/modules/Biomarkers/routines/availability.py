@@ -443,11 +443,12 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         Both pooled in RAW device units (no scaling, same convention as the decoder).
       * MODELED LSB (fallback — the band has a spectrum but NO native device LSB):
         - Montage survey TD (`montage_td_recordings`, stim-off, all contacts): the timeline's
-          ``psd_modeled`` tier. Welch-256 the 250 Hz TD (analytics.welch256_density) and route the
-          band integral through analytics.psd_band_to_lsb (k=269, the Step-0-chosen conversion) so
-          survey contacts that the device never produced an LSB scalar for still get a calibrated LSB
-          point on the trace. NEVER preferred over native LSB; tagged source="psd_modeled" so the
-          frontend draws it with a distinct hollow marker and never confuses it with a sensed value.
+          ``psd_modeled`` tier. Convert the 250 Hz TD to LSB via the PRIMARY transform route
+          (analytics.td_to_lsb = transform DSP x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27,
+          superseding the old welch256 x269 path) so survey contacts that the device never produced an
+          LSB scalar for still get a calibrated LSB point on the trace. NEVER preferred over native
+          LSB; the tier enum stays source="psd_modeled" (downstream native-preferred masking keys on
+          it) so the frontend draws it with a distinct hollow marker; the DSP route is in `method`.
 
     `sensing_hz_by_channel` maps a raw channel -> its configured sensing center (Hz); the psd_modeled
     tier converts at that center when known, else the montage record's own peak frequency.
@@ -568,10 +569,11 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         for i in np.where(~bad)[0]:
             _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
-    # --- MODELED tier (fallback): montage survey TD -> Welch-256 -> psd_band_to_lsb (k=269) ---
+    # --- MODELED tier (fallback): montage survey TD -> transform DSP -> td_to_lsb (k=352.62) ---
     # Survey contacts carry a full-spectrum TD but NO native device LSB scalar, so without this they
-    # would have no LSB point at all. We convert via the Step-0-chosen route so the timeline can show
-    # a calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
+    # would have no LSB point at all. We convert via the PRIMARY TD->LSB route (the percept-spectral-
+    # repro transform x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27) so the timeline can show a
+    # calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
     # have NO native LSB sample get a modeled point per record (native is always preferred): if a
     # contact has any streaming/chronic LSB we still ADD the modeled survey point (different time), but
     # tag it modeled so the frontend renders it hollow — it never overrides a sensed value at its time.
@@ -600,7 +602,8 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                 continue
             col = data[:, ci]
             col = col[np.isfinite(col)]
-            if col.size < 256:
+            # transform minimum = one 1 s (round(fs)) rcs-Hann window; td_to_lsb returns NaN below this
+            if col.size < int(round(fs * analytics.TRANSFORM_WIN_SECONDS)):
                 continue
             # land the modeled sample on the SAME lane key as native LSB: canonicalize the ring/sweep
             # name (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT). _canon_channel-equivalent.
@@ -614,15 +617,19 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                       or sensing_hz_by_channel.get(str(nm)) or contact_peak or rec_peak)
             if center is None or not np.isfinite(center) or float(center) <= 0:
                 continue
-            f, psd = analytics.welch256_density(col, fs)
-            if f is None:
-                continue
-            conv = analytics.psd_band_to_lsb(psd, f, float(center))
-            lsb = conv.get("lsb")
+            # PRIMARY TD->LSB: transform DSP (median over 1 s rcs-Hann/256-pt windows across the whole
+            # survey) x k=352.62. The survey is stamped at one StartTime (no PRO centering here), so the
+            # whole column is the analysis extent — the direct transform analog of the old whole-column
+            # Welch. Range/fft guards live downstream on the deployable threshold, not on this display
+            # point (the exploration timeline is not band-restricted; k cancels in r/AUC).
+            lsb = analytics.td_to_lsb(col, fs, float(center))
             if lsb is None or not np.isfinite(lsb) or lsb <= 0:
                 continue
+            # source stays the "psd_modeled" TIER enum (the native-preferred masking at the y-window
+            # scaler + the deployment threshold + the frontend all key on it); the DSP ROUTE that
+            # produced the value is recorded in `method` (now transform x352.62, was welch256 x269).
             _push(key, t0, lsb, center, "psd_modeled",
-                  modeled=True, method=conv.get("method"))
+                  modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
 
     # time-sort each channel's pooled samples
     for ch, d in out.items():
@@ -648,7 +655,7 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                     sample count, and the session's sensing center frequency (for the categorical
                     color). ~one block per recording instead of hundreds of points.
 
-    A third, MODELED layer carries the psd_modeled tier (survey-TD -> Welch256 -> k=269) as discrete
+    A third, MODELED layer carries the psd_modeled tier (survey-TD -> transform DSP -> k=352.62) as discrete
     points the frontend draws with a DISTINCT HOLLOW marker — never as a native session block, so a
     calibrated estimate is never read as a sensed LSB. Modeled points are excluded from the streaming
     session blocks and from the chronic line.
