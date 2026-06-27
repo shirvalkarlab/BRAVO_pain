@@ -615,11 +615,13 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
             <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
               {`Matching: `
-               + (scan.match_direction === "pro_first" || scan.match_direction == null
+               + (scan.match_direction === "pro_first"
                   ? `each pain rating claims up to ${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""} per channel closest in time within the match window (PRO-first — each rating is the unit of analysis).`
                   : scan.match_direction === "nearest"
                     ? `each PSD is matched to the rating closest in time (either direction) within the match window.`
-                    : `each PSD is matched to the next rating AFTER it within the match window (forecasting semantics — the neural signal precedes the report).`)
+                    : scan.match_direction === "prior"
+                      ? `each PSD is matched to the next rating AFTER it within the match window (forecasting semantics — the neural signal precedes the report).`
+                      : `up to ${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""} per channel matched per rating (legacy payload — matching direction not recorded; if this was a PSD-first run, see the double-dipping note below).`)
                + (scan.max_per_rating > 1 && scan.refractory_min
                   ? ` No two matched PSDs per rating closer than ${scan.refractory_min} min.` : "")
                + (scan.n_capped_dropped ? ` ${scan.n_capped_dropped} excess PSDs dropped by the cap.` : "")

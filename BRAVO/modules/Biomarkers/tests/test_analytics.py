@@ -648,8 +648,8 @@ def test_builder_no_device_psd_scale_in_detail():
 
 
 def test_spectral_scan_lsb_falls_back_without_abs_density():
-    """No psd_abs_uv2_per_hz in the detail (e.g. onboard-FFT-only pool) -> feature="lsb" degrades to
-    the legacy dB feature rather than failing, and the full range is scanned."""
+    """No pro_lsb_spectrum_by_channel cache passed (e.g. back-compat caller) -> feature="lsb" degrades
+    to the legacy dB feature ("logpsd_db") rather than failing, and the full range is scanned."""
     det = _planted_detail(center=20.0, beta=0.4, seed=11)
     sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
     assert sc["feature"] == "logpsd_db", sc["feature"]

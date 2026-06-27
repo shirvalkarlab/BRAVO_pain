@@ -1181,7 +1181,6 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         if fmax is None:
             fmax = float(np.nanmax(f))
         feature_used = "lsb_cs14"
-        n_demoted = 0
         # The per-band LSB is log10(cache_lsb[pro, nearest_center]). The heavy lifting (resolving the
         # channel's spectra and scattering PRO LSB vectors into an (E, n_cache_centers) matrix) is
         # done ONCE per channel inside the channel loop below (see lsb_log_mat); each band then reads
@@ -1189,7 +1188,6 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         _lsb_cache = pro_lsb_spectrum_by_channel  # { raw_ch: [{t,tier,lsb,calibrated,...},...] }
     else:
         feature_used = "logpsd_db"
-        n_demoted = 0
 
     # Rating-aware AUC: in "all" mode many epochs share one pain rating (double-dipping), so the
     # binary classifier's cross-validation should keep each rating wholly within a fold (grouped CV)
