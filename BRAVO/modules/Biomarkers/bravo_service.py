@@ -474,7 +474,13 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None):
             continue
         center = sensing_hz_by_channel.get(ch) or sensing_hz_by_channel.get(str(ch))
         if center is None:
-            # device-blessed band: the in-deployable-range peak of THIS event's clamped magnitude
+            # No configured sensing center: fall back to a device-blessed band — the peak of THIS
+            # event's clamped magnitude, SEARCHED ONLY within [lo, hi] so the fallback can never pick a
+            # high-frequency noise peak the bridge couldn't calibrate. (This is the peak-SEARCH bound;
+            # availability.lsb_series applies the SAME [lo, hi] as the FINAL gate on whatever center
+            # arrives — sensing-config centers bypass this search but still face that gate, so both the
+            # configured and the fallback path are bounded identically. The constants are the single
+            # source: analytics.LSB_VALIDATED_HZ_LO / LSB_DEPLOYABLE_HZ_HI.)
             f = np.asarray(freq, dtype=float)
             m = analytics.clamp_device_psd(power)
             band = (f >= lo) & (f <= hi) & np.isfinite(m)

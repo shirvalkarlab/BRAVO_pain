@@ -684,8 +684,10 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         # honor the bridge only inside the deployable band — outside it the conversion is uncalibrated
         if not (analytics.LSB_VALIDATED_HZ_LO <= float(center) <= analytics.LSB_DEPLOYABLE_HZ_HI):
             continue
+        # scalar center -> device_psd_to_lsb returns a float (never None/ndarray); NaN if the band power
+        # is non-positive (e.g. an all-sub-floor band clamped to 0).
         lsb = analytics.device_psd_to_lsb(freq, power, float(center))
-        if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+        if not np.isfinite(lsb) or lsb <= 0:
             continue
         _push(key, t0, lsb, center, "psd_modeled",
               modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
