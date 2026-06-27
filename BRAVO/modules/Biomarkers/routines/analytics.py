@@ -3036,16 +3036,22 @@ def clamp_device_psd(magnitude):
 
 def device_psd_band_power(freq, magnitude, center_hz, *, half_hz=2.5):
     """Band power of a device onboard-FFT magnitude spectrum over [center±half_hz], in the SAME
-    definition as td_transform_band_power: Σ(in-band magnitude)² after negative-clamping. Works for a
-    scalar center (→ float) or a vector of centers (→ ndarray). NaN if no in-band bin."""
+    definition as td_transform_band_power: Σ(in-band magnitude)² after negative-clamping, with the
+    band edges inclusive on both sides exactly as that function masks them (so the K_TD_PSD ratio the
+    bridge composes is measured between commensurable band-power definitions). Vectorized: one
+    band-mask sum over all centers, no per-center Python loop. Works for a scalar center (→ float) or
+    a vector of centers (→ ndarray). NaN if no in-band bin."""
     f = np.asarray(freq, dtype=float)
     m = clamp_device_psd(magnitude)
     c = np.atleast_1d(np.asarray(center_hz, dtype=float))
-    out = np.full(c.shape, np.nan, dtype=float)
-    for i, cc in enumerate(c):
-        band = (f >= cc - half_hz) & (f < cc + half_hz) & np.isfinite(m)
-        if band.any():
-            out[i] = float(np.sum(m[band] ** 2))
+    finite = np.isfinite(m)
+    p2 = np.where(finite, m, 0.0) ** 2                       # squared clamped in-band magnitudes
+    # Band-mask matrix (C, Fb); one masked sum -> in-band power for every center at once. Edges
+    # [center-half, center+half] INCLUSIVE on both sides, IDENTICAL to td_transform_band_power's
+    # mask (the bridge's calibration partner) so the two sides stay commensurable at the band edge.
+    band = ((f[None, :] >= c[:, None] - half_hz) &
+            (f[None, :] <= c[:, None] + half_hz) & finite[None, :])
+    out = np.where(band.any(axis=1), (band * p2[None, :]).sum(axis=1), np.nan)
     return float(out[0]) if np.ndim(center_hz) == 0 else out
 
 
