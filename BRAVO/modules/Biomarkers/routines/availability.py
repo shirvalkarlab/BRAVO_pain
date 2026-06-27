@@ -891,6 +891,15 @@ def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half
          "lsb": [per-window LSB], "median_lsb": float|None, "used_s": float,
          "n_windows": int, "n_saturated": int, "saturated": bool, "ok": bool, "reason": str}
     `ok=False` (with reason) when the extent is below one window or >max_missing Missing.
+
+    NOTE on `t_offset_s`: these are FINITE-SAMPLE-ELAPSED offsets (s/fs over the non-finite-filtered
+    vector), NOT wall-clock offsets from the extent start. t_offset_s, lsb, and the saturation flags
+    share this one window axis (the alignment guarantee), so the trace is internally consistent. But on
+    a gappy recording (NaN samples dropped before windowing) the axis COMPRESSES relative to wall clock:
+    a 2 s gap near the start shifts every later window's wall-clock time ahead of its t_offset_s. A
+    frontend overlaying this trace against a wall-clock PRO marker must map `starts` back through the
+    finite mask to true sample indices first; for showing the within-window spread the median collapses,
+    elapsed-finite time is fine as-is.
     """
     if extent_s is None:
         extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
