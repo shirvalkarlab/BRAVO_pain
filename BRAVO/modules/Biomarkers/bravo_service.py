@@ -348,9 +348,11 @@ def _event_psd_rows(participant_uid):
     """Harvest EVERY PatientControllerEvent PSD (incl. the auto 'Streaming' markers) as poolable
     PSD rows for the per-channel biomarker scan.
 
-    Unlike `_load_patient_events` (timeline display, which drops 'Streaming' and pools hemispheres
-    without channel identity), this assigns each per-hemisphere FFT block to its canonical bipolar
-    channel (`_event_block_channel`) so the spectra join the same per-channel pool as TD/Montage.
+    Unlike `_load_patient_events` (timeline display, which pools hemispheres without channel
+    identity and tags each event a display `category`), this assigns each per-hemisphere FFT block
+    to its canonical bipolar channel (`_event_block_channel`) so the spectra join the same
+    per-channel pool as TD/Montage. Both paths now surface 'Streaming' (CS-2): this one always did
+    (the pool was never name-filtered); `_load_patient_events` no longer drops it.
     The onboard-FFT vs Welch scale offset is absorbed by the within-(channel, source) z-score, since
     every row here is tagged `source=EVENT_PSD_SOURCE`. No .bdat decode — the spectra live on the
     ORM row `metadata`, one subdict per hemisphere with `DateTime` / `Frequency` / `FFTBinData`.
