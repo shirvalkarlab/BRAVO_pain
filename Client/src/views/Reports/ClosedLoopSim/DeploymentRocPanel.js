@@ -152,6 +152,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     // rating-clustered bootstrap — the property that distinguishes it from a naive over-tight CI).
     const ciTxt = (roc.auc_lo != null && roc.auc_hi != null)
       ? ` (95% clustered-bootstrap CI ${fmt(roc.auc_lo)}–${fmt(roc.auc_hi)})` : "";
+    // Audit [8]: below the cluster floor the asymptotic AUC inference is approximate — say so on the
+    // figure. Advisory label only; no number changes (the flag comes straight from the backend).
+    const smallTxt = roc.small_sample
+      ? `  ·  small sample (${roc.n_clusters} ratings < ${roc.small_sample_floor}) — approximate` : "";
+    // Audit [3]: surface how many bootstrap replicates the CI actually rests on, and flag a thin
+    // resample (< 100 valid) as an unstable CI. The 2.5/97.5 percentiles of few replicates sit near
+    // the min/max and are noisy. Annotation only — the CI math and the >=20 floor are unchanged.
+    const nbOk = (roc.n_boot_ok != null) ? roc.n_boot_ok : null;
+    const bootTxt = (ciTxt && nbOk != null)
+      ? (nbOk < 100 ? `  ·  CI on ${nbOk} bootstrap replicates — unstable` : `  ·  ${nbOk} bootstrap replicates`)
+      : "";
     const traces = [
       { x: [0, 1], y: [0, 1], type: "scatter", mode: "lines", name: "chance",
         line: { color: "#bbb", dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false },
@@ -164,7 +175,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
         hovertemplate: "cut-point<extra></extra>" },
     ];
     const layout = {
-      title: { text: `AUC = ${fmt(roc.auc)}${ciTxt}`, font: { size: 13 } },
+      title: { text: `AUC = ${fmt(roc.auc)}${ciTxt}${bootTxt}${smallTxt}`, font: { size: 13 } },
       margin: { l: 46, r: 12, t: 32, b: 42 }, height: 320,
       xaxis: { title: { text: "False positive rate", font: { size: 11 } }, range: [-0.02, 1.02],
         zeroline: false, tickfont: { size: 10 } },

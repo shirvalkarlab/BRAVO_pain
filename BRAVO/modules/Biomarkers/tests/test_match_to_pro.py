@@ -119,6 +119,59 @@ def test_pro_first_dt_sign_convention_unchanged():
     assert dt[0] > 0 and dt[1] < 0, f"dt sign should encode PRO - PSD, got {dt}"
 
 
+def test_prior_no_lookahead_invariant_survives_full_pooled_pipeline():
+    """Audit [17] — deploy-critical no-look-ahead invariant at the POOLED-PIPELINE level.
+
+    test_prior_direction_requires_psd_before_pro pins the matcher itself; this asserts the property
+    survives the full `build_pooled_detail_from_matrix` path (within-source z-score, per-(channel,
+    rating) cap, refractory de-dup, aggregate). In direction='prior' EVERY retained matched row must
+    have dt_min >= 0 (PSD at/before its rating) and dt_min <= tolerance — no future neural sample can
+    leak into a forecasting deployment fit. We feed a matrix with PSDs deliberately placed BOTH before
+    and after each rating and confirm only the before-rating ones survive, with non-negative offsets.
+    """
+    from modules.Biomarkers.routines.streaming_psd import build_pooled_detail_from_matrix, _match_to_pro
+    F = 8
+    f_set = np.linspace(2.0, 90.0, F)
+    # Ratings at t=1000 and t=5000 s. For each, one PSD 5 min BEFORE (valid in prior mode) and one
+    # 5 min AFTER (must be rejected). Two channels so the per-channel cap path is exercised.
+    base = []
+    for rt in (1000.0, 5000.0):
+        for off in (-300.0, +300.0):   # seconds relative to rating: before / after
+            for ch in ("ZERO_TWO_LEFT", "ONE_THREE_LEFT"):
+                base.append((rt + off, ch))
+    t = np.array([b[0] for b in base], dtype=float)
+    ch = np.array([b[1] for b in base], dtype=object)
+    rng = np.random.default_rng(0)
+    mat = {
+        "f_set": f_set,
+        "logX": rng.normal(0.0, 1.0, size=(t.size, F)),
+        "t": t,
+        "channel": ch,
+        "source": np.array(["TD streaming"] * t.size, dtype=object),
+        "dur": np.full(t.size, 30.0),
+    }
+    pro_times = np.array([1000.0, 5000.0])
+    pro_vals = np.array([2.0, 8.0])
+    det = build_pooled_detail_from_matrix(
+        mat, pro_times, pro_vals, tolerance_min=10.0, aggregate="all",
+        max_per_rating=3, refractory_min=0.0, match_direction="prior")
+    # Reconstruct the per-row matcher offsets the pooled detail was built from, restricted to the
+    # rows it actually retained (matched rows carry a finite label / rating_group >= 0).
+    lab, dt, idx = _match_to_pro(t, pro_times, pro_vals, tolerance_min=10.0,
+                                 direction="prior", channels=ch, max_per_rating=3)
+    retained = np.isfinite(dt)
+    assert retained.any(), "expected the before-rating PSDs to match in prior mode"
+    assert np.all(dt[retained] >= 0.0), f"look-ahead leak: negative dt under prior mode -> {dt[retained]}"
+    assert np.all(dt[retained] <= 10.0), f"matched outside tolerance -> {dt[retained]}"
+    # The +300 s (after-rating) PSDs are at t in {1300, 5300}; none may have matched in prior mode.
+    after_rows = np.isclose(t, 1300.0) | np.isclose(t, 5300.0)
+    assert after_rows.sum() == 4, f"test setup: expected 4 after-rating rows, got {int(after_rows.sum())}"
+    assert not np.any(np.isfinite(dt[after_rows])), "an after-rating PSD leaked into a prior-mode match"
+    # And the pooled detail the deployment scan consumes is non-empty and carries only matched ratings.
+    pooled_labels = np.asarray(det.get("labels"), dtype=float)
+    assert np.isfinite(pooled_labels).any(), "pooled prior-mode detail should retain the valid matches"
+
+
 if __name__ == "__main__":
     test_prior_direction_requires_psd_before_pro()
     test_nearest_direction_matches_either_side()
@@ -126,4 +179,5 @@ if __name__ == "__main__":
     test_pro_first_enforces_per_channel_cap()
     test_pro_first_falls_back_to_nearest_on_misuse()
     test_pro_first_dt_sign_convention_unchanged()
+    test_prior_no_lookahead_invariant_survives_full_pooled_pipeline()
     print("OK")

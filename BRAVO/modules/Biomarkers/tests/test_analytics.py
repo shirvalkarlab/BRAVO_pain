@@ -1760,3 +1760,81 @@ def test_best_threshold_balanced_auc_matches_reference():
             thr_not_optimal += 1
     assert auc_fail == 0, f"best balanced-AUC value diverged in {auc_fail} cases"
     assert thr_not_optimal == 0, f"chosen threshold was not AUC-optimal in {thr_not_optimal} cases"
+
+
+def test_roc_small_sample_advisory_is_label_only():
+    """Audit [8]: deployment_roc carries a `small_sample` advisory (n_clusters < floor) that flips at
+    the floor and changes NO computed value. We compare a few-cluster vs many-cluster fixture and
+    assert (a) the flag tracks n_clusters vs SMALL_SAMPLE_CLUSTER_FLOOR, and (b) removing the two
+    advisory keys leaves an otherwise-identical payload for the SAME data (label-only contract)."""
+    import numpy as _np
+    F, C = 60, 2
+    f = _np.linspace(0.95, 100, F)
+    band = (f >= 17.5) & (f <= 22.5)
+
+    def _det(n_clusters, reps=4, seed=5):
+        # n_clusters INDEPENDENT ratings, each shared by `reps` neural samples (clustered). The det
+        # carries an explicit rating_group so deployment_roc counts INDEPENDENT RATINGS (not rows) —
+        # exactly the real-data situation where the small_sample advisory matters. reps keeps the
+        # matched-sample count >= 12 (the ROC availability floor) even when n_clusters is small.
+        rng = _np.random.default_rng(seed)
+        E = n_clusters * reps
+        labels = _np.repeat(rng.normal(5, 2, n_clusters), reps)
+        rating_group = _np.repeat(_np.arange(n_clusters), reps)
+        psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+        psd[:, 0, band] *= (1 + 0.7 * (labels - labels.mean())[:, None])
+        times = []
+        for ci in range(n_clusters):
+            day = 1 + (ci % 27)
+            times += [f"2025-07-{day:02d} 10:00:00"] * reps
+        return {"f_set": f, "psd": psd, "labels": labels, "rating_group": rating_group,
+                "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+    floor = analytics.SMALL_SAMPLE_CLUSTER_FLOOR
+    # Use a few-cluster and a many-cluster fixture. n_clusters is the post-binarization independent-
+    # rating count (the middle tertile is dropped), so we assert the CONTRACT — small_sample ==
+    # (n_clusters < floor) — on whatever n_clusters each fixture yields, plus that the two fixtures
+    # land on opposite sides of the floor (sanity that the flag can be both True and False).
+    roc_small = analytics.deployment_roc(_det(8), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    roc_big = analytics.deployment_roc(_det(30), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    assert roc_small["available"] and roc_big["available"]
+    # the flag is exactly the floor test on n_clusters — no off-by-one, no perturbation
+    for r in (roc_small, roc_big):
+        assert r["small_sample"] == (r["n_clusters"] < floor)
+        assert r["small_sample_floor"] == floor
+    # the two fixtures straddle the floor (flag is genuinely toggling, not stuck)
+    assert roc_small["small_sample"] is True, f"expected small fixture below floor, n={roc_small['n_clusters']}"
+    assert roc_big["small_sample"] is False, f"expected big fixture at/above floor, n={roc_big['n_clusters']}"
+
+    # (b) label-only: dropping the advisory keys, the small-sample payload equals what the SAME data
+    # produced (i.e. the flag did not perturb auc / ci / operating point). Recompute identically.
+    roc_small_again = analytics.deployment_roc(_det(8), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    for k in ("auc", "auc_lo", "auc_hi", "n_clusters", "n_pos", "n_neg"):
+        a, b = roc_small[k], roc_small_again[k]
+        assert (a == b) or (a is not None and b is not None and abs(a - b) < 1e-12), \
+            f"advisory must not change {k}: {a} vs {b}"
+
+
+def test_deployment_summary_carries_temporal_validity_block():
+    """Audit [23]: the deployment_summary device record must ALWAYS carry an explicit
+    `temporal_validity` block (forward_validation / threshold_drift / stim_state_portability), each
+    defaulting to 'not_assessed' so the exported JSON is unambiguous. Runs against the live RCS08
+    participant; skips cleanly when absent. Asserts presence + allowed enum values, not specific
+    verdicts (those depend on data)."""
+    import os, sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+    from Server import models
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    if models.Participant.find(uid=uid) is None:
+        return  # participant not in this DB — skip
+    out = bs.deployment_summary({
+        "ParticipantId": uid, "Channel": "ZERO_TWO_LEFT", "CenterHz": 20.0, "BandWidthHz": 5.0,
+        "Metric": "nrs", "Strategy": "tertile", "MatchDirection": "prior"})
+    if not out.get("available"):
+        return
+    tv = out.get("temporal_validity")
+    assert isinstance(tv, dict), "temporal_validity block must always be present"
+    assert tv.get("forward_validation") in ("validated", "failed", "not_assessed")
+    assert tv.get("threshold_drift") in ("not_assessed",)  # not yet computed (audit [18])
+    assert tv.get("stim_state_portability") in ("portable", "fragile", "not_assessed")

@@ -4361,6 +4361,28 @@ def deployment_summary(request_data):
                                       "available": v.get("available", False)}
                                   for k, v in (by_era.get("eras") or {}).items()}}
                         if by_era.get("available") else {"available": False, "reason": by_era.get("reason")}),
+        # Audit [23] — explicit, single-place temporal-validity status for the exported DEVICE RECORD,
+        # so a reader of the JSON never has to infer it from the nested forward/portability dicts.
+        # Every field defaults to "not_assessed" when the corresponding analysis didn't run, so the
+        # record is unambiguous either way. Derived from already-computed results — no new computation.
+        "temporal_validity": {
+            "forward_validation": (
+                ("validated" if forward.get("beats_chance_forward") else "failed")
+                if forward.get("available") else "not_assessed"),
+            "forward_held_out_auc": _ff(forward.get("held_out_auc")) if forward.get("available") else None,
+            "forward_reliable": (bool(forward.get("reliable")) if forward.get("available") else None),
+            # Threshold-drift over time is NOT yet computed (audit [18], deferred); state it plainly
+            # rather than implying the threshold was checked for non-stationarity.
+            "threshold_drift": "not_assessed",
+            "stim_state_portability": (
+                ("portable" if by_era.get("portable_by_ci") else "fragile")
+                if (by_era.get("available") and by_era.get("portable_by_ci") is not None)
+                else "not_assessed"),
+            "note": ("forward_validation = expanding-window weekly forward-chaining held-out AUC vs "
+                     "chance (audit C2). stim_state_portability = per-era CI-overlap + LRT (audit C3); "
+                     "this is robustness to stim STATE, not calendar-time drift. threshold_drift is "
+                     "not yet assessed (audit [18])."),
+        },
         "gates": gates, "caveats": caveats,
         "n_gates_passed": int(sum(1 for x in gates if x["pass"])), "n_gates": len(gates),
         "n_gates_indeterminate": int(sum(1 for x in gates if x.get("state") == "indeterminate")),

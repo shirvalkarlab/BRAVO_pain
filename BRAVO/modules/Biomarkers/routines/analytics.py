@@ -17,6 +17,14 @@ import pandas as pd
 from .threshold_biomarker import _sens_spec, best_threshold_by_balanced_auc
 
 
+# Audit [8] — below this many independent ratings (rating clusters), the asymptotic-normal AUC
+# variance (Hanley–McNeil) and the Gaussian power approximation are only roughly valid, and the
+# clustered-bootstrap CI rests on few resamples. We do NOT change any computed value at small n;
+# we attach a `small_sample` advisory flag so the UI can tag the readout "small-sample, approximate".
+# 10 is a conventional floor for trusting asymptotic AUC inference; it is advisory, not a gate.
+SMALL_SAMPLE_CLUSTER_FLOOR = 10
+
+
 # --- Channel-name formatting -----------------------------------------------------------------
 _WORD2DIGIT = {"ZERO": "0", "ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4",
                "FIVE": "5", "SIX": "6", "SEVEN": "7", "EIGHT": "8", "NINE": "9"}
@@ -1757,6 +1765,10 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
         "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
         "n_samples": int(m.sum()), "n_clusters": n_clusters,
+        # Audit [8]: advisory only — flags that asymptotic AUC inference / Gaussian power are
+        # approximate below SMALL_SAMPLE_CLUSTER_FLOOR independent ratings. Changes no computed value.
+        "small_sample": bool(n_clusters < SMALL_SAMPLE_CLUSTER_FLOOR),
+        "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
         "ci_method": "rating-clustered bootstrap (de-folded; fixed orientation)",
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
@@ -2803,6 +2815,9 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
         "power_current": power, "power_current_lo": power_lo,
         "n_ratings_current": int(N0), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
         "more_data_needed": more_data, "alpha": alpha, "target_power": target_power,
+        # Audit [8]: advisory only — Gaussian power approximation is rough below the cluster floor.
+        "small_sample": bool(N0 < SMALL_SAMPLE_CLUSTER_FLOOR),
+        "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
         "curve": curve,
         "note": note,
     }
