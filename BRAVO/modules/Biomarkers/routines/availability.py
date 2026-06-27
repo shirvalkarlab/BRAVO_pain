@@ -759,6 +759,11 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
     half = float(band_half_hz)
     lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
     hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    # Canonicalize the target channel ONCE so all three tiers match on the same key: tier 2 already
+    # canonicalizes each recording's raw ring/sweep name (_canon_channel below), so the native series,
+    # the TD recordings, and the event records are all compared in canonical form regardless of whether
+    # the caller passed a raw ring name or a canonical one.
+    channel = _canon_channel(channel)
 
     # --- pre-index NATIVE in-band sensed samples for this channel (tier 1) ---
     nat_t = np.empty(0); nat_y = np.empty(0)
@@ -766,11 +771,16 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
         y = np.asarray(native_lsb_series.get("y"), dtype=float)
         hz = np.asarray(native_lsb_series.get("center_hz"), dtype=float)
         modeled = native_lsb_series.get("modeled") or []
+        # FAIL CLOSED: the native tier must NEVER promote a CS-1/CS-3 modeled ESTIMATE to a measured
+        # value. If the `modeled` array is missing or misaligned we cannot certify any point native, so
+        # treat every point as modeled (is_modeled=True) and let the lower tiers serve the PRO instead.
         is_modeled = (np.array([bool(m) for m in modeled], dtype=bool)
-                      if len(modeled) == y.size else np.zeros(y.size, bool))
+                      if len(modeled) == y.size else np.ones(y.size, bool))
         t = np.asarray(native_lsb_series.get("t"), dtype=float)
+        # band edges INCLUSIVE on both sides, matching the DSP band-power mask (a native sample exactly
+        # at center+half is in-band on the modeling side, so it must be in-band for selection too).
         band = (np.isfinite(y) & np.isfinite(hz) & ~is_modeled
-                & (hz >= center_hz - half) & (hz < center_hz + half))
+                & (hz >= center_hz - half) & (hz <= center_hz + half))
         nat_t = t[band]; nat_y = y[band]
 
     out = []
@@ -824,18 +834,26 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
                                       step_samples=step_samples)
             if lsb is None or not np.isfinite(lsb) or lsb <= 0:
                 continue
-            rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_TD, used_s=float(used_s),
+            # A clean conversion here OVERRIDES any saturated flag a PRIOR overlapping recording's
+            # railed window may have set — the PRO is served by THIS recording, so its trust label
+            # must reflect THIS recording, not a discarded earlier one.
+            rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_TD, used_s=float(used_s), saturated=False,
                        reason="direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM)
             matched_td = True
             break
         if matched_td:
             out.append(rec); continue
 
-        # (3) PSD->LSB BRIDGE — only a PSD-only patient event, only inside the deployable band
+        # (3) PSD->LSB BRIDGE — only a PSD-only patient event, only inside the deployable band.
+        # NOTE: if tier 2 matched a TD recording but every overlapping window was SATURATED (matched_td
+        # stayed False, rec["saturated"]=True), we DO fall through to the bridge here. A clean coincident
+        # device-FFT reading is a better estimate than a clipped TD window (whose band power is
+        # harmonic-contaminated and was discarded). The saturated flag stays set, so the frontend can
+        # still annotate that the rating's TD was clipped even though a bridge value was used.
         if lo_hz <= float(center_hz) <= hi_hz:
             best = None
             for ev in (event_psd_recordings or []):
-                if not isinstance(ev, dict) or ev.get("channel") != channel:
+                if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
                     continue
                 te = _to_epoch(ev.get("t"))
                 if te is None or abs(te - tp) > native_tol_s:
@@ -887,19 +905,25 @@ def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half
                 "reason": "extent below one window or >max_missing Missing"}
     win = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
     step = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
+    # td_transform_band_power(agg='none') drops non-finite samples FIRST and strides over the
+    # COMPACTED array, so the window axis (and hence the trace x and the saturation flags) MUST be
+    # derived from that same finite-filtered vector — otherwise a gappy recording decouples t_offset_s,
+    # lsb, and sat. Finite-filter once here and build everything (band power, starts, saturation) from it.
     sl = np.asarray(slice_uv, dtype=float)
-    # per-window band power (no aggregation) -> LSB
-    pw = analytics.td_transform_band_power(sl, fs, float(center_hz), half_hz=half,
+    vf = sl[np.isfinite(sl)]
+    if vf.size < win:
+        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": float(used_s),
+                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
+                "reason": "fewer than one finite window after dropping non-finite samples"}
+    pw = analytics.td_transform_band_power(vf, fs, float(center_hz), half_hz=half,
                                            step_samples=step, agg="none")
     pw = np.asarray(pw, dtype=float).ravel()
     lsb = np.where(np.isfinite(pw) & (pw > 0), analytics.LSB_PER_UV2_TRANSFORM * pw, np.nan)
-    starts = np.arange(0, sl.size - win + 1, step)
-    # per-window saturation: does any sample in the window touch the rail?
-    sat = np.zeros(starts.size, dtype=bool)
-    for i, s0 in enumerate(starts):
-        seg = sl[s0:s0 + win]
-        if seg.size and np.nanmax(np.abs(seg)) >= saturation_uv:
-            sat[i] = True
+    starts = np.arange(0, vf.size - win + 1, step)        # SAME axis the band power strided over
+    # per-window saturation, vectorized: one strided window matrix -> per-window max|.| -> rail test.
+    # No Python loop; shares the window axis with pw/lsb so the QC flags align to the trace.
+    M = vf[starts[:, None] + np.arange(win)[None, :]]      # (W, win)
+    sat = (np.nanmax(np.abs(M), axis=1) >= saturation_uv) if starts.size else np.zeros(0, dtype=bool)
     med = float(np.nanmedian(lsb)) if np.isfinite(lsb).any() else None
     return {"t_offset_s": [float(s / fs) for s in starts],
             "lsb": [float(x) for x in lsb],

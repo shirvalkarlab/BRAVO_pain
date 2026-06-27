@@ -145,3 +145,63 @@ def test_overlay_short_extent_not_ok():
     sig = np.random.default_rng(0).standard_normal(50)    # 0.2 s @ 250 Hz < 1 s window
     ov = av.per_pro_lsb_overlay(sig, _FS, 0.1, 20.0)
     assert ov["ok"] is False and ov["n_windows"] == 0 and ov["median_lsb"] is None
+
+
+# ---- CS-4 review fixes (request_changes -> resolved) ----
+
+def test_overlay_trace_axes_stay_aligned_under_nonfinite_samples():
+    """BLOCKING fix: a gappy TD slice (some NaN samples, still <10% so the window passes) must keep
+    t_offset_s, lsb, and the saturation flags on ONE window axis. The band power is computed over the
+    finite-filtered slice, so the trace x and QC must be derived from that same vector — not the
+    NaN-inclusive length (which used to give 59 vs 58)."""
+    n = int(30 * _FS); tt = np.arange(n) / _FS
+    sig = 2.0 * np.sin(2 * np.pi * 20 * tt) + 0.1 * np.random.default_rng(1).standard_normal(n)
+    sig[1000:1010] = np.nan                                # 10 NaN of 7500 (<<10%, passes missing gate)
+    ov = av.per_pro_lsb_overlay(sig, _FS, 15.0, 20.0)
+    assert ov["ok"]
+    assert len(ov["t_offset_s"]) == len(ov["lsb"]) == ov["n_windows"]   # the alignment guarantee
+    assert ov["median_lsb"] is not None and ov["median_lsb"] > 0
+
+
+def test_native_tier_fails_closed_on_misaligned_modeled_mask():
+    """IMPORTANT fix: if the native series' `modeled` array is missing or length-misaligned, the native
+    tier must NOT promote a modeled estimate to tier='native'. It fails CLOSED (every point treated as
+    modeled), so a lower tier serves the PRO instead."""
+    ch = "ZERO_THREE_LEFT"; center = 20.0
+    td = _td_rec(ch, _T0, secs=40.0)
+    # a series whose `modeled` is misaligned (len 1 vs y len 1 is aligned; force mismatch with len 0)
+    bad_native = {"t": [_T0 + 20.0], "y": [999.0], "center_hz": [20.0], "modeled": [],
+                  "source": ["modeled"]}
+    r = av.per_pro_lsb([_T0 + 20.0], bad_native, ch, center, td_recordings=[td])[0]
+    assert r["tier"] != av.PRO_LSB_TIER_NATIVE       # never selected the modeled 999 as native
+    assert r["tier"] == av.PRO_LSB_TIER_TD           # fell through to the real TD transform
+    # absent `modeled` key entirely -> also fail closed
+    bad2 = {"t": [_T0 + 20.0], "y": [999.0], "center_hz": [20.0]}
+    r2 = av.per_pro_lsb([_T0 + 20.0], bad2, ch, center, td_recordings=[td])[0]
+    assert r2["tier"] == av.PRO_LSB_TIER_TD
+
+
+def test_saturated_flag_does_not_leak_across_recordings():
+    """IMPORTANT fix: a PRO cleanly served by recording #2 must NOT report saturated=True because an
+    earlier overlapping recording #1 had a railed window. The clean conversion resets the flag."""
+    ch = "ZERO_THREE_LEFT"; center = 20.0
+    railed = _td_rec(ch, _T0, secs=40.0, rail=(4900, 5100))   # overlaps the PRO, saturated
+    clean = _td_rec(ch, _T0, secs=40.0, seed=7)               # overlaps the PRO, clean
+    r = av.per_pro_lsb([_T0 + 20.0], None, ch, center, td_recordings=[railed, clean])[0]
+    assert r["tier"] == av.PRO_LSB_TIER_TD and r["lsb"] > 0
+    assert r["saturated"] is False                            # not leaked from recording #1
+
+
+def test_channel_canonicalized_across_all_tiers():
+    """IMPORTANT fix: a ring-named `channel` argument is canonicalized at entry, so a ring-named TD
+    recording and a ring-named event both match (tier 2 already canonicalized recording names; tiers
+    1/3 now compare in canonical form too)."""
+    ring = "ZERO_AND_THREE_LEFT_RING"
+    canon = av._canon_channel(ring)
+    td = _td_rec(ring, _T0, secs=40.0)                        # raw ring-named recording
+    r = av.per_pro_lsb([_T0 + 20.0], None, ring, 20.0, td_recordings=[td])[0]
+    assert r["tier"] == av.PRO_LSB_TIER_TD and r["center_hz"] == 20.0
+    # ring-named event matches a ring-named channel arg via canonicalization on both sides
+    ev = _event_block(ring, _T0 + 5.0)
+    r2 = av.per_pro_lsb([_T0 + 5.0], None, canon, 20.0, td_recordings=[], event_psd_recordings=[ev])[0]
+    assert r2["tier"] == av.PRO_LSB_TIER_BRIDGE
