@@ -16,7 +16,45 @@
 
 ---
 
-## 0. Session 2026-06-26 (most recent — read first)
+## 0. Session 2026-06-27 (most recent — read first): TD→LSB calibration deployment (CS-1…CS-4)
+
+Took the lab's `percept-spectral-repro` "transform" DSP and made it the **primary TD→LSB source of
+truth** end-to-end, then built the per-PRO LSB deployment selection on top. Branch
+`PS_closedloop_deployment`, off `e164a7d`. **Suite 184→227** (all in-container
+`python3 _agent_bridge/run_tests.py`). Each phase ran the code-review agent (correctness +
+vectorization + dead-code mandates) before commit. Commits this session (all pushed through `15a87d5`;
+CS-4 `beb2c97` local at the time of writing):
+
+| Phase | Commit(s) | What |
+|---|---|---|
+| CS-1 | `7ea8f6d` + `ebc3000` | Vendored the transform DSP into `analytics.py` (`td_transform_band_power`, `td_to_lsb`, `_rcs_hann`); **`LSB_PER_UV2_TRANSFORM = 352.62`** (RCS08 all-stim median k, r=0.9927) is now the PRIMARY TD→LSB; demoted welch256×269 to a PSD-exploration backup. Switched `availability.lsb_series` modeled tier to the transform. Fully vectorized (strided window matrix → one batched rFFT → band-mask matmul → median). Review fixes: scoped the "k cancels in r/AUC" claim to single-source features, fail-closed Missing guard. |
+| CS-2 | `ca7735e` + `b1adebd` + `e164a7d` | **PSD-source taxonomy.** `PSD_SOURCE_TAXONOMY` (patient_event / streaming_event / montage_snapshot) separates POOLING identity from DISPLAY category. Removed `_EVENT_NAME_EXCLUDE` (Streaming was hard-dropped); Streaming is now its own timeline category, not mislabeled "Montage PSD". Frontend `BiomarkerDataTimeline.js`: labeled events → diamond row, Streaming → per-lane ticks + count. |
+| CS-3 | `f4d821a` + `3c438d5` + `15a87d5` | **PSD→LSB bridge** for PSD-only patient-triggered snapshot events. Found event `FFTBinData` is LINEAR µV magnitude (= survey `LFPMagnitude`), baseline-subtracted (≈⅓ bins negative → clamp to 0). Montage TD↔PSD law: **PSD_bp = 4.789·TD_bp** (geomean, r=0.987, n=10476 contact-band points). Compose: **LSB = (352.62/4.789)·PSD_bp = 73.63·PSD_bp** (`LSB_PER_DEVICE_PSD`). Helpers `clamp_device_psd`, `device_psd_band_power`, `device_psd_to_lsb`; `lsb_series` bridge tier (psd_modeled, restricted to [7.8,30]). Review caught + fixed a band-edge convention mismatch (device side half-open vs TD side closed) — K re-confirmed 4.789 unchanged under the fix. |
+| CS-4 | `beb2c97` | **Per-PRO LSB selection.** `availability.per_pro_lsb` strict precedence: (1) NATIVE device LSB → (2) DIRECT TD→LSB transform when any TD-bearing recording overlaps the PRO (reuses the CS-1 `transform_centered_window`: 30 s rating-centered, clip-don't-slide, 1 s-min, fail-closed >10% Missing; 50% overlap) → (3) PSD bridge ONLY for PSD-only patient events in [7.8,30]. Montage/survey TD never uses the bridge. `per_pro_lsb_overlay` = the 50%-overlap sliding-window LSB trace + per-window saturation QC (±4000 µV ADC rail) + missing rejection. `td_transform_band_power` gained `agg="none"` (per-window band power). |
+
+**Key constants (analytics.py):** `LSB_PER_UV2_TRANSFORM=352.62` (primary TD→LSB),
+`LSB_PER_UV2_DEVICE_PSD_TD_RATIO=4.789`, `LSB_PER_DEVICE_PSD≈73.63` (PSD bridge),
+`LSB_PER_UV2_VALIDATED=269.0` (welch256 backup, **retained per PI** pending a device-PSD refit
+discussion), `LSB_VALIDATED_HZ_LO/HI=7.8/28.3` (calibration-validity), `LSB_DEPLOYABLE_HZ_HI=30.0`
+(device adaptive ceiling), `TRANSFORM_WIN_SECONDS=1.0`, `TRANSFORM_STEP_SECONDS=0.5`,
+`TRANSFORM_CENTERED_EXTENT_SECONDS=30.0`. **Provenance doc:** `CS3_FFTBinData_units_recon_2026-06-27.md`
+(units finding 264/1056/3114 bins; montage TD↔PSD fit n=10476; compose).
+
+**Per-PRO time contract (the answer to "where/how much TD per PRO"):** for a PRO at time T matched to
+a TD recording, the transform runs on **30 s centered on T = [T−15 s, T+15 s]**, clipped to the
+session boundary (use whatever's available if shorter, ≥1 s), >10% Missing rejected; a 1 s rcs-Hann
+window slides at 500 ms (50% overlap, ≈59 windows) and the **median** in-band summed-squared-magnitude
+→ one LSB.
+
+**Still open:** welch256_density / psd_band_to_lsb deliberately retained (PI: discuss device-PSD refit
+separately — welch256 produces a PSD from TD, it cannot consume a device PSD, so it was never a valid
+no-TD backup). `per_pro_lsb` / `per_pro_lsb_overlay` are a staged API not yet wired to a frontend caller
+(intentional, like CS-1's forward-declared `LSB_DEPLOYABLE_HZ_HI`). Track B audit backlog ([5]/[14]/
+[42]/[49]) untouched; [14] needs a PI judgment call.
+
+---
+
+## 0b. Session 2026-06-26: read second
 
 UX + correctness + performance pass on the Biomarker and ClosedLoopSim pages. **PR #8 merged
 into `v3.1.0`** (merge commit `a191b758`; 14 commits `e57a7078..a191b758`). All backend tests:
