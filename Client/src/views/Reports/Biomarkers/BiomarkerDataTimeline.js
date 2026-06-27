@@ -164,7 +164,7 @@ const HEMI2 = {
   LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)" },
   RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)" },
 };
-const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
+const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a", proLsb: "#1F4E79" };
 
 // Categorical colors for PATIENT-EVENT labels (Higher Pain / Tingly-Burning / Feeling Good / …).
 // Pain-type labels lean red/orange; relief/medication lean blue/green; others fall through to a
@@ -286,6 +286,21 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       modeled.sort((a, b) => a.t - b.t);
       return { chronic, sessions, modeled,
                y_lo: Number.isFinite(yLo) ? yLo : 0, y_hi: Number.isFinite(yHi) ? yHi : 1 };
+    };
+    // CS-4 per-PRO LSB SELECTION for a lane: av.pro_lsb is keyed by RAW channel, one entry per pain
+    // rating tagged with the source TIER (native sensed > direct TD->LSB transform > PSD-only-event
+    // bridge) it was chosen from. Collapse raw keys onto the normalized lane and keep only the ratings
+    // that actually resolved to an LSB (tier != null). Returns [{t, lsb, tier, center_hz, saturated}].
+    const proLsbFor = (ch) => {
+      const pl = av.pro_lsb || {};
+      const keys = Object.keys(pl).filter((k) => normalizeChannel(k) === ch);
+      if (!keys.length) return [];
+      const pts = [];
+      keys.forEach((k) => (pl[k] || []).forEach((r) => {
+        if (r && r.lsb != null && r.tier) pts.push(r);
+      }));
+      pts.sort((a, b) => a.t - b.t);
+      return pts;
     };
     // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
     // exploratory lanes (early channel-switching) get a thinner lane and lighter label.
@@ -615,6 +630,48 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               showlegend: false });
           });
         }
+        // CS-4 PER-PRO LSB SELECTION: one point per pain rating, placed at the LSB the selection
+        // precedence chose for that rating, SHAPED by source tier so the clinician can read at a glance
+        // how trustworthy each rating's biomarker value is:
+        //   native       -> filled circle  (device actually sensed this band near the rating)
+        //   td_transform -> open circle    (direct TD->LSB transform on an overlapping recording)
+        //   psd_bridge   -> open diamond   (PSD-only patient-event bridge, last resort)
+        // A saturated rating (its TD window hit the ADC rail but a bridge value was still found) gets a
+        // red outline. These ride the lane's y-scale but did NOT set it, so an outlier clips at the edge.
+        const proPts = proLsbFor(ch);
+        if (proPts.length) {
+          const TIER_SYMBOL = { native: "circle", td_transform: "circle-open", psd_bridge: "diamond-open" };
+          const TIER_LABEL = { native: "native (sensed)", td_transform: "TD→LSB transform",
+                               psd_bridge: "PSD event bridge" };
+          const byTier = {};
+          proPts.forEach((p) => { (byTier[p.tier] = byTier[p.tier] || []).push(p); });
+          Object.keys(byTier).forEach((tier) => {
+            const ps = byTier[tier];
+            // In binarization mode color by the rating's pain bin (so the selected high/low set is
+            // visible); otherwise a single steel tone per tier (shape already encodes the tier).
+            const colOf = (p) => {
+              if (binMode) {
+                const b = binOf(ch, p.t);
+                return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
+              }
+              return PAL.proLsb || "#1F4E79";
+            };
+            const cols = ps.map(colOf);
+            const lineCols = ps.map((p, i) => (p.saturated ? "#C0392B" : cols[i]));
+            reg.traces.push({ idx: traces.length, raw: ps.map((p) => p.lsb) });
+            traces.push({ type: "scattergl", mode: "markers",
+              x: ps.map((p) => D(p.t)), y: ps.map((p) => sc(p.lsb)),
+              marker: { symbol: TIER_SYMBOL[tier] || "circle", size: ps.map((p) => (p.saturated ? 9 : 7)),
+                        color: cols, line: { color: lineCols, width: ps.map((p) => (p.saturated ? 2 : 1.3)) } },
+              customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), TIER_LABEL[tier] || tier,
+                p.saturated ? " · TD saturated" : "", binMode ? (binOf(ch, p.t) || "unmatched") : ""]),
+              hovertemplate: `${prettyContact(labelFor(ch))} · per-rating LSB · %{customdata[2]}%{customdata[3]}<br>`
+                + `%{customdata[0]} LSB @ %{customdata[1]} Hz`
+                + (binMode ? `<br>bin: %{customdata[4]}` : "")
+                + `<br>%{x}<extra></extra>`,
+              showlegend: false });
+          });
+        }
         // Hz labels at each sensing-frequency transition across sessions (committed lanes)
         if (committed.has(ch) && ov.sessions.length) {
           let lastLbl = -1e18, lastCen = null;
@@ -913,6 +970,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
         name: "modeled LSB  (hollow; transform DSP → LSB; calibrated, NOT sensed)" });
+      // CS-4 per-PRO LSB selection — one point per pain rating, shape = source tier (native filled /
+      // TD-transform open circle / PSD-bridge open diamond), red outline = TD window saturated.
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "circle", size: 9, color: PAL.proLsb, line: { width: 1.3, color: PAL.proLsb } },
+        name: "per-rating LSB  (● native · ○ TD-transform · ◇ PSD-bridge; red ring = saturated)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
@@ -926,7 +988,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 6 : 7;            // glyph-legend entries per mode (see traces above)
+    const nLegRows = binMode ? 6 : 8;            // glyph-legend entries per mode (see traces above)
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes

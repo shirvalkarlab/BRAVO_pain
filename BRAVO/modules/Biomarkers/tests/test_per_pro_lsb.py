@@ -192,6 +192,32 @@ def test_saturated_flag_does_not_leak_across_recordings():
     assert r["saturated"] is False                            # not leaked from recording #1
 
 
+def test_wiring_pro_lsb_by_channel_builds_per_channel_series():
+    """The bravo_service wiring helper _pro_lsb_by_channel runs per_pro_lsb for every channel that has
+    a resolvable sensing center, keyed by raw channel, and resolves the center from
+    sensing_hz_by_channel (canonical key) with a fallback to the channel's own series center_hz."""
+    from modules.Biomarkers import bravo_service as bs
+    ch = "ZERO_THREE_LEFT"
+    td = _td_rec(ch, _T0, secs=40.0)
+    # an inline lsb_series-shaped dict keyed by raw channel; one NATIVE sensed sample near a PRO
+    lsb = {ch: {"t": [_T0 + 5000.0], "y": [321.0], "center_hz": [20.0],
+                "source": ["streaming"], "modeled": [False], "method": [None]}}
+    pro_times = np.array([_T0 + 20.0, _T0 + 5000.0])      # one TD-overlap, one native
+    out = bs._pro_lsb_by_channel(pro_times, lsb, [td], [], {ch: 20.0})
+    assert ch in out and len(out[ch]) == 2
+    tiers = [r["tier"] for r in out[ch]]
+    assert av.PRO_LSB_TIER_TD in tiers and av.PRO_LSB_TIER_NATIVE in tiers
+    # center fallback: no sensing map -> use the series' own center_hz
+    out2 = bs._pro_lsb_by_channel(pro_times, lsb, [td], [], {})
+    assert ch in out2 and out2[ch][1]["center_hz"] == 20.0
+    # channel with no resolvable center -> dropped
+    lsb_noc = {ch: {"t": [], "y": [], "center_hz": [], "source": [], "modeled": [], "method": []}}
+    out3 = bs._pro_lsb_by_channel(pro_times, lsb_noc, [td], [], {})
+    assert ch not in out3
+    # no PROs -> empty dict (and a numpy-array pro_times must not raise on the truth-value guard)
+    assert bs._pro_lsb_by_channel(np.array([]), lsb, [td], [], {ch: 20.0}) == {}
+
+
 def test_channel_canonicalized_across_all_tiers():
     """IMPORTANT fix: a ring-named `channel` argument is canonicalized at entry, so a ring-named TD
     recording and a ring-named event both match (tier 2 already canonicalized recording names; tiers

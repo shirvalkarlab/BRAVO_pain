@@ -493,6 +493,47 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None):
     return blocks
 
 
+def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
+                        sensing_hz_by_channel):
+    """One per-PRO LSB selection series per channel for the timeline (CS-4 consumer of per_pro_lsb).
+
+    For each channel that has a resolvable sensing center, run availability.per_pro_lsb over the PRO
+    timestamps with the SAME inputs the inline lsb_series uses:
+      * native_lsb_series = that channel's lsb_series entry (NATIVE samples are selected inside
+        per_pro_lsb via its modeled-mask, so the modeled/bridge points in the series are ignored for
+        the native tier and only the sensed samples can win tier 1);
+      * td_recordings = TD-bearing recordings (streaming + montage/survey, all 250 Hz TD) for tier 2;
+      * event_psd_recordings = the CS-3 PSD-only event blocks for tier 3.
+
+    The per-channel center is the configured sensing center (sensing_hz_by_channel, canonical key),
+    falling back to the channel's own series center_hz (first finite). Channels with no center resolve
+    to nothing (the band is undefined). Returns { raw_channel: [ {t,lsb,tier,center_hz,used_s,
+    saturated,reason}, ... ] } — one entry per PRO, in PRO order; empty dict when there are no PROs.
+    """
+    out = {}
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0:
+        return out
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    for raw_ch, series in (lsb or {}).items():
+        key = availability._canon_channel(raw_ch)
+        center = sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(raw_ch)
+        if center is None:
+            # fall back to the first finite center the inline series carries for this channel
+            for hz in (series.get("center_hz") or []):
+                if hz is not None and np.isfinite(hz) and float(hz) > 0:
+                    center = float(hz); break
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        try:
+            out[raw_ch] = availability.per_pro_lsb(
+                pt, series, key, float(center),
+                td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: per-PRO LSB failed for %s (%s)", raw_ch, e)
+    return out
+
+
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     """Load NeuralActivitySnapshot montage sweeps as montage-PSD marker events, de-duplicated
     against the montage/survey PSD recordings that ALREADY render on the timeline.
@@ -2152,6 +2193,15 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
+        # CS-4 per-PRO LSB SELECTION: one LSB per pain rating per channel, chosen by the strict source
+        # precedence (native sensed > direct TD->LSB transform > PSD-only-event bridge), each tagged
+        # with its tier + saturation flag so the timeline can colour each rating's biomarker point by
+        # trust. TD-bearing recordings for tier 2 = streaming TD (td_list) + montage/survey TD
+        # (psd_list, all 250 Hz TD); the PSD-only event bridge is tier 3 (event_psd_blocks).
+        _pro_t_lsb = np.asarray(pain.get("t") or [], dtype=float) if isinstance(pain, dict) else None
+        pro_lsb = _pro_lsb_by_channel(
+            _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
+            event_psd_blocks, sensing_hz) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
         bands = availability.present_freq_bands(records)
         # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
         # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
@@ -2228,12 +2278,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
 
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
+                "pro_lsb": pro_lsb,
                 "events": events, "montage_events": montage_events,
                 "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
+                "pro_lsb": {},
                 "events": {"events": [], "n": 0},
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
