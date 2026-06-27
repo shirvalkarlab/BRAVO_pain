@@ -517,7 +517,14 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
     sensing_hz_by_channel = sensing_hz_by_channel or {}
     for raw_ch, series in (lsb or {}).items():
         key = availability._canon_channel(raw_ch)
-        center = sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(raw_ch)
+        # ONE center per channel — the configured sensing center (deployment 'one band' semantics).
+        # CAVEAT: if a channel's sensing band was RETUNED over the implant, native samples recorded at
+        # an earlier band fall outside [center±half] and silently demote to TD/bridge/None for PROs near
+        # that period. The per-PRO center_hz is returned in the payload so this is auditable downstream.
+        # `is not None` (not `or`) so a stored 0.0 Hz doesn't silently fall through to the series center.
+        center = sensing_hz_by_channel.get(key)
+        if center is None:
+            center = sensing_hz_by_channel.get(raw_ch)
         if center is None:
             # fall back to the first finite center the inline series carries for this channel
             for hz in (series.get("center_hz") or []):

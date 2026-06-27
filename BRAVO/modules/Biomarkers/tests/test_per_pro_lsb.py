@@ -192,6 +192,24 @@ def test_saturated_flag_does_not_leak_across_recordings():
     assert r["saturated"] is False                            # not leaked from recording #1
 
 
+def test_tier2_recording_order_invariant_after_searchsorted_prep():
+    """PERF refactor guard: per_pro_lsb prepares TD recordings once and uses searchsorted over t0-sorted
+    recordings. The result must be invariant to the INPUT order of td_recordings (the prep sorts by t0),
+    and a PRO must still match the recording that actually covers it."""
+    ch = "ZERO_THREE_LEFT"; center = 20.0
+    early = _td_rec(ch, _T0, secs=40.0, seed=1)            # covers _T0.._T0+40
+    late = _td_rec(ch, _T0 + 1000.0, secs=40.0, seed=2)    # covers _T0+1000.._T0+1040
+    pros = [_T0 + 20.0, _T0 + 1020.0]
+    r_fwd = av.per_pro_lsb(pros, None, ch, center, td_recordings=[early, late])
+    r_rev = av.per_pro_lsb(pros, None, ch, center, td_recordings=[late, early])
+    assert [x["tier"] for x in r_fwd] == [x["tier"] for x in r_rev] == ["td_transform", "td_transform"]
+    # identical LSB regardless of input order (same recording covers each PRO)
+    assert all(abs(a["lsb"] - b["lsb"]) < 1e-9 for a, b in zip(r_fwd, r_rev))
+    # a PRO between the two recordings (covered by neither) is honestly None
+    r_gap = av.per_pro_lsb([_T0 + 500.0], None, ch, center, td_recordings=[early, late])[0]
+    assert r_gap["tier"] is None
+
+
 def test_wiring_pro_lsb_by_channel_builds_per_channel_series():
     """The bravo_service wiring helper _pro_lsb_by_channel runs per_pro_lsb for every channel that has
     a resolvable sensing center, keyed by raw channel, and resolves the center from

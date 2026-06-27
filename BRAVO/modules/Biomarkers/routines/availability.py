@@ -783,6 +783,35 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
                 & (hz >= center_hz - half) & (hz <= center_hz + half))
         nat_t = t[band]; nat_y = y[band]
 
+    # --- prep TD recordings ONCE for tier 2 (PERF): a recording's Data->float column, t0, dur, fs, and
+    # missing vector are PRO-independent, so materialize them a single time here instead of re-converting
+    # per PRO. Keep ONLY recordings that carry this channel; sort by t0 so the PRO scan can stop early.
+    td_prepped = []   # [{t0, t1, fs, col, miss, step}]
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+        if ci is None:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T  # -> (n_samples, n_ch)
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None or ci >= data.shape[1]:
+            continue
+        nsamp = data.shape[0]
+        dur_s = nsamp / fs if fs > 0 else 0.0
+        td_prepped.append({
+            "t0": t0, "t1": t0 + dur_s, "fs": fs,
+            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
+            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
+    td_prepped.sort(key=lambda d: d["t0"])
+    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)   # sorted; for searchsorted
+
     out = []
     for tp in np.asarray(pro_times, dtype=float):
         rec = {"t": float(tp), "lsb": None, "tier": None, "center_hz": float(center_hz),
@@ -796,32 +825,17 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
                 rec.update(lsb=float(nat_y[j]), tier=PRO_LSB_TIER_NATIVE, reason="device-sensed in band")
                 out.append(rec); continue
 
-        # (2) DIRECT TD->LSB — the rating must fall inside a TD recording's real coverage
+        # (2) DIRECT TD->LSB — the rating must fall inside a TD recording's real coverage. Only
+        # recordings with t0 <= tp can cover the PRO; searchsorted skips the rest (sorted by t0).
         matched_td = False
-        for r in (td_recordings or []):
-            if not isinstance(r, dict):
+        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
+        for pr in td_prepped[:hi]:
+            if not (pr["t0"] <= tp <= pr["t1"]):
                 continue
-            names = list(r.get("ChannelNames") or [])
-            ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-            if ci is None:
-                continue
-            data = np.asarray(r.get("Data"), dtype=float)
-            if data.ndim != 2:
-                continue
-            if data.shape[0] == len(names) and data.shape[1] != len(names):
-                data = data.T  # -> (n_samples, n_ch)
-            fs = float(r.get("SamplingRate") or 250.0) or 250.0
-            t0 = _to_epoch(r.get("StartTime"))
-            if t0 is None or ci >= data.shape[1]:
-                continue
-            nsamp = data.shape[0]
-            dur_s = nsamp / fs if fs > 0 else 0.0
-            if not (t0 <= tp <= t0 + dur_s):
-                continue
-            col = data[:, ci]
-            miss = _missing_per_sample(r.get("Missing"), nsamp)
+            fs = pr["fs"]
             slice_uv, used_s = analytics.transform_centered_window(
-                col, fs, tp - t0, extent_s=extent_s, missing=miss, max_missing_frac=max_missing_frac)
+                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
+                max_missing_frac=max_missing_frac)
             if slice_uv is None:
                 continue
             # saturation QC: any sample at/over the ADC rail -> clipped window, skip (flag it)
@@ -829,9 +843,8 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
                 rec["saturated"] = True
                 rec["reason"] = "TD window saturated (ADC rail)"
                 continue
-            step_samples = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
             lsb = analytics.td_to_lsb(slice_uv, fs, float(center_hz), half_hz=half,
-                                      step_samples=step_samples)
+                                      step_samples=pr["step"])
             if lsb is None or not np.isfinite(lsb) or lsb <= 0:
                 continue
             # A clean conversion here OVERRIDES any saturated flag a PRIOR overlapping recording's

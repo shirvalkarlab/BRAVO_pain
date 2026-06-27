@@ -940,6 +940,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
         name: `pain rating · no neural match${su.n_pro_unused != null ? `  ·  ${su.n_pro_unused}` : ""}` });
+      // per-rating LSB selection still renders in binMode (colored by pain bin); document its shapes.
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "circle", size: 9, color: DIM_GREY, line: { width: 1.3, color: DIM_GREY } },
+        name: "per-rating LSB  (● native · ○ TD-transform · ◇ PSD-bridge; color = bin)" });
     } else {
       // Glyph key listed TOP→BOTTOM in the order the layers actually stack within a neural lane:
       // montage/PSD ticks at the TOP, then the chronic 24/7 LSB trend, then the streaming LSB session
@@ -988,7 +992,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 6 : 8;            // glyph-legend entries per mode (see traces above)
+    const nLegRows = binMode ? 7 : 8;            // glyph-legend entries per mode (see traces above)
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes
