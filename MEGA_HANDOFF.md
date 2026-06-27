@@ -16,7 +16,44 @@
 
 ---
 
-## 0. Session 2026-06-27 (most recent — read first): TD→LSB calibration deployment (CS-1…CS-4)
+## 0a. Session 2026-06-27 (continued, 2nd half): Spectral scan → CS-1…CS-4 + timeline display fixes
+
+**Branch:** `PS_closedloop_deployment`. **Suite:** 227 → **233** (all PASS, 0 FAIL).
+Extends the first half (§0b below) with four phases completing the "unify timeline and spectral" plan.
+
+### Phase 0 — Timeline display fixes (`94343e8`)
+- **Relabel modeled diamonds** (`BiomarkerDataTimeline.js`): hover text now reads the actual DSP route from `m.method` — "transform DSP ×352.62" or "PSD→LSB bridge ×73.63" per point. Old stale "survey PSD ×269" label removed everywhere except an explanatory comment.
+- **Ungate per-rating modeled markers**: CS-4 hollow circles/diamonds were trapped inside `if (ov)` and borrowed its y-scale — drawing never happened for streaming-only lanes. Moved to an independent sub-lane scale outside `if (ov)`. Native filled circles dropped (native LSB already shown as the colored lane time series); TD-transform → hollow circle, PSD-bridge → hollow diamond.
+
+### Phase 1 — Shared per-pair full-spectrum LSB cache (`09bc91b`)
+- **`availability.per_pro_lsb_spectrum()`**: generalization of `per_pro_lsb` to a full 0–100 Hz band-center grid in ONE vectorized call per matched (channel, PRO). Source preference decided once per pair: TD-transform route (`td_transform_band_power × k=352.62`) when any TD-bearing recording covers the rating; CS-3 bridge (`device_psd_band_power × k≈73.63`) for PSD-only patient events (full 0–100 Hz, per-band `calibrated` flag). TD-transform `calibrated=True` everywhere (k=352.62 band-agnostic); bridge `calibrated=False` outside [7.8, 30] Hz (exploratory).
+- **`bravo_service._pro_lsb_spectrum_cached()`**: content-signature-keyed in-process memo (max 8, FIFO eviction). Signature = participant + PRO-set sha1 + recording identities + band-center grid. Both `_build_availability` (timeline) and `run_for_participant` (spectral scan) call the same function — guaranteed identical numbers at any shared center. `_build_availability` emits `pro_lsb_spectrum` in payload (success + error path).
+- **Routing (per PI 2026-06-27):** `td_recordings = td_list + psd_list` (all 250 Hz TD-bearing products — streaming + montage/survey); `event_psd_blocks = PatientControllerEvent FFT only` (PSD-only, no TD). Montage PSDs never reach the bridge.
+
+### Phase 2 — Rewire spectral scan; remove k=269 + device_psd_scaled (`d1d3d3e`)
+- **`streaming_psd.build_pooled_detail_from_matrix`**: REMOVED `psd_abs_uv2_per_hz`, `device_psd_scale_by_channel`, `Xabs`, `device_scale`, `psd_abs_stack` (~65 lines). `row_lsb_tier` now emits `td`/`survey`/`patient_event` (no more `device_psd_scaled`/`uncalibrated`).
+- **`analytics.spectral_feature_importance`**: new `pro_lsb_spectrum_by_channel` kwarg. When provided, `feature="lsb"` reads `log10(cache[channel][pro_i]["lsb"][ci_cache])` per (channel, band) instead of integrating Welch density × 269. `feature_used` now `"lsb_cs14"`. Falls back to `"logpsd_db"` when cache absent (back-compat callers). Source priority (TD > survey > device_psd_scaled demotion loop) REMOVED — the cache already enforces TD-first per pair.
+- **`bravo_service.run_for_participant`**: builds the spectrum cache at compute time (memo hit in the common case); threads `pro_lsb_spectrum_by_channel` through `_compute_analytics` → `spectral_feature_importance`.
+- **Tests (3 rewritten → 3 new):** `test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum`, `test_spectral_scan_lsb_cs14_cache_lookup_per_pro`, `test_builder_no_device_psd_scale_in_detail`.
+
+### Phase 3 — Caption fixes + code review fix (`cca1241` + `25bbab5`)
+- **Caption (`BiomarkerAnalytics.js`)**: match_direction 3-way (pro_first was falling into forecasting arm — fixed); survey-reuse wording corrected for pro_first; td_welch → CS-14 feature note; device_psd_scale block removed; double-dipping warning suppressed for `pro_first` (AUC grouped by rating, multi-PSD/rating intentional).
+- **Code review fix (`25bbab5`)**: `isLsb` and section subtitle now OR-gate `"lsb_cs14" || "lsb_calibrated"` — `lsb_cs14` axis labels, hover templates, Cohen's d wording, and section description all update correctly.
+
+**Commit chain (this sub-session):** `94343e8` → `09bc91b` → `d1d3d3e` → `cca1241` → `25bbab5`  
+**HEAD:** `25bbab5` (synced to `origin/PS_closedloop_deployment`)
+
+### Key constants (unchanged from Phase 0b)
+`LSB_PER_UV2_TRANSFORM = 352.62` · `LSB_PER_DEVICE_PSD ≈ 73.63` · `LSB_VALIDATED_HZ_LO = 7.8` · `LSB_DEPLOYABLE_HZ_HI = 30.0`
+
+### Open threads carried forward
+- Anchor test for "timeline circle == spectral point at same center" not yet a live test (deferred — the identity holds by construction but has no E2E test across the two call sites).
+- Track B audit backlog items [5]/[14]/[42]/[49] remain open; [14] needs PI judgment.
+- Scratch probes in `BRAVO/_agent_bridge/` (`_per_pro_test.py`, `_overlay_test.py`, `_cs4_test_run.py`, etc.) — not production code.
+
+---
+
+## 0b. Session 2026-06-27 (first half): TD→LSB calibration deployment (CS-1…CS-4)
 
 Took the lab's `percept-spectral-repro` "transform" DSP and made it the **primary TD→LSB source of
 truth** end-to-end, then built the per-PRO LSB deployment selection on top. Branch
