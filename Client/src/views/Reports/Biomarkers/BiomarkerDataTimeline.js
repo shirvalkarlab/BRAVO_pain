@@ -267,7 +267,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           });
         }
         (d.sessions || []).forEach((s) => sessions.push(s));
-        // MODELED tier (psd_modeled): calibrated LSB from survey/streaming TD via Welch256 x269.
+        // MODELED tier (psd_modeled): calibrated LSB via the transform DSP (survey/montage TD →
+        // td_to_lsb ×352.62) or the CS-3 PSD→LSB bridge (×73.63); each point's `method` names which.
         // Kept separate so it renders as a DISTINCT HOLLOW marker, never a sensed session block.
         (d.modeled || []).forEach((m) => modeled.push(m));
         if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
@@ -585,15 +586,20 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               showlegend: false });
           });
         }
-        // MODELED tier (psd_modeled): calibrated LSB from montage-survey TD (Welch256 × 269), drawn
-        // as DISTINCT HOLLOW DIAMONDS so it is never read as a sensed value. These modeled points come
-        // from the montage/survey sweeps, which ARE pooled into the binarization scan — so unlike the
-        // sensed band-power LSB they CAN be assigned to a pain bin. In binarization mode we therefore
-        // color each diamond by its matched pain bin (via binOf on the modeled point's own timestamp),
-        // exactly like the PSD ticks, so the clinician can see which modeled LSB points fall in the
-        // high/low/excluded set; unmatched modeled points stay faint. In frequency mode they color by
-        // sensing center freq (same FREQ_PALETTE). They ride the lane's y-scale but did NOT set it
-        // (native-only window), so a modeled outlier clips at the lane edge rather than rescaling.
+        // MODELED tier (psd_modeled): a calibrated-but-not-sensed LSB, drawn as DISTINCT HOLLOW
+        // DIAMONDS so it is never read as a sensed value. Two DSP routes feed this tier and each point
+        // carries its `method` string (availability.lsb_series):
+        //   td_transform_x_k=352.62  -> montage/survey 250 Hz TD through the PRIMARY transform DSP
+        //                               (analytics.td_to_lsb, k=352.62). NOT Welch256×269 (removed
+        //                               2026-06-27); the hover names the actual route from m.method.
+        //   event_psd_bridge_x_k=73.63 -> a PSD-only patient event with no TD, through the CS-3
+        //                               PSD->LSB bridge (analytics.device_psd_to_lsb, k≈73.63).
+        // These modeled points are pooled into the binarization scan, so unlike the sensed band-power
+        // LSB they CAN be assigned to a pain bin. In binarization mode we color each diamond by its
+        // matched pain bin (via binOf on the point's own timestamp); unmatched modeled points stay
+        // faint. In frequency mode they color by sensing center freq (same FREQ_PALETTE). They ride the
+        // lane's y-scale but did NOT set it (native-only window), so a modeled outlier clips at the
+        // lane edge rather than rescaling.
         if (ov.modeled && ov.modeled.length) {
           const byFreqM = {};
           ov.modeled.forEach((m) => {
@@ -607,6 +613,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             if (!binMode) return freqColor(c);
             const b = binOf(ch, m.t);
             return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
+          };
+          // Human label for the DSP route a modeled point came from, read from its `method` string.
+          const routeLabel = (method) => {
+            const s = String(method || "");
+            if (s.startsWith("td_transform")) return "transform DSP ×352.62";
+            if (s.startsWith("event_psd_bridge")) return "PSD→LSB bridge ×73.63";
+            return "modeled";
           };
           Object.keys(byFreqM).forEach((key) => {
             const ms = byFreqM[key];
@@ -622,52 +635,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               marker: { symbol: "diamond-open", size: sizes, color: cols,
                         line: { color: lineCols, width: 1.4 } },
               customdata: ms.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c),
-                binMode ? (binOf(ch, m.t) || "unmatched") : ""]),
-              hovertemplate: `${prettyContact(labelFor(ch))} · modeled (survey PSD ×269) · %{customdata[1]} Hz<br>`
+                binMode ? (binOf(ch, m.t) || "unmatched") : "", routeLabel(m.method)]),
+              hovertemplate: `${prettyContact(labelFor(ch))} · modeled (%{customdata[3]}) · %{customdata[1]} Hz<br>`
                 + `≈%{customdata[0]} LSB (modeled, not sensed)`
                 + (binMode ? `<br>bin: %{customdata[2]}` : "")
-                + `<br>%{x}<extra></extra>`,
-              showlegend: false });
-          });
-        }
-        // CS-4 PER-PRO LSB SELECTION: one point per pain rating, placed at the LSB the selection
-        // precedence chose for that rating, SHAPED by source tier so the clinician can read at a glance
-        // how trustworthy each rating's biomarker value is:
-        //   native       -> filled circle  (device actually sensed this band near the rating)
-        //   td_transform -> open circle    (direct TD->LSB transform on an overlapping recording)
-        //   psd_bridge   -> open diamond   (PSD-only patient-event bridge, last resort)
-        // A saturated rating (its TD window hit the ADC rail but a bridge value was still found) gets a
-        // red outline. These ride the lane's y-scale but did NOT set it, so an outlier clips at the edge.
-        const proPts = proLsbFor(ch);
-        if (proPts.length) {
-          const TIER_SYMBOL = { native: "circle", td_transform: "circle-open", psd_bridge: "diamond-open" };
-          const TIER_LABEL = { native: "native (sensed)", td_transform: "TD→LSB transform",
-                               psd_bridge: "PSD event bridge" };
-          const byTier = {};
-          proPts.forEach((p) => { (byTier[p.tier] = byTier[p.tier] || []).push(p); });
-          Object.keys(byTier).forEach((tier) => {
-            const ps = byTier[tier];
-            // In binarization mode color by the rating's pain bin (so the selected high/low set is
-            // visible); otherwise a single steel tone per tier (shape already encodes the tier).
-            const colOf = (p) => {
-              if (binMode) {
-                const b = binOf(ch, p.t);
-                return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
-              }
-              return PAL.proLsb || "#1F4E79";
-            };
-            const cols = ps.map(colOf);
-            const lineCols = ps.map((p, i) => (p.saturated ? "#C0392B" : cols[i]));
-            reg.traces.push({ idx: traces.length, raw: ps.map((p) => p.lsb) });
-            traces.push({ type: "scattergl", mode: "markers",
-              x: ps.map((p) => D(p.t)), y: ps.map((p) => sc(p.lsb)),
-              marker: { symbol: TIER_SYMBOL[tier] || "circle", size: ps.map((p) => (p.saturated ? 9 : 7)),
-                        color: cols, line: { color: lineCols, width: ps.map((p) => (p.saturated ? 2 : 1.3)) } },
-              customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), TIER_LABEL[tier] || tier,
-                p.saturated ? " · TD saturated" : "", binMode ? (binOf(ch, p.t) || "unmatched") : ""]),
-              hovertemplate: `${prettyContact(labelFor(ch))} · per-rating LSB · %{customdata[2]}%{customdata[3]}<br>`
-                + `%{customdata[0]} LSB @ %{customdata[1]} Hz`
-                + (binMode ? `<br>bin: %{customdata[4]}` : "")
                 + `<br>%{x}<extra></extra>`,
               showlegend: false });
           });
@@ -702,6 +673,66 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
           font: { size: 9.5, color: "#9AA0A6" } });
+      }
+
+      // CS-4 PER-RATING MODELED LSB — one MODELED point per pain rating, on its OWN independent,
+      // separable y-scale. This draws REGARDLESS of whether the lane had band-power overview geometry
+      // (it lives OUTSIDE the `if (ov)` block above), so streaming-only / survey-sparse periods
+      // (e.g. Feb–Mar 2026 onward) still get their per-rating markers.
+      //
+      // We deliberately DROP the native (sensed) tier here: native streamed LSB is ALREADY drawn as
+      // the colored per-lane band-power time series above, so re-plotting it as a marker would
+      // double-count the same measurement. Only the MODELED-at-rating values are shown, kept visually
+      // separable by source:
+      //   td_transform -> HOLLOW CIRCLE   (rating-centered 30 s TD through td_to_lsb, k=352.62)
+      //   psd_bridge   -> HOLLOW DIAMOND  (PSD-only patient event through the CS-3 bridge, k≈73.63)
+      // A saturated rating (TD window hit the ADC rail but a bridge value was still found) gets a red
+      // outline. The y-scale is this lane's own robust min/max over the modeled per-rating LSB values
+      // (independent of the band-power overview), registered for zoom-rescale like the other LSB layers.
+      const proPtsAll = proLsbFor(ch).filter((p) => p.tier && p.tier !== "native" && p.lsb != null);
+      if (proPtsAll.length) {
+        const pvals = proPtsAll.map((p) => p.lsb).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+        const q = (arr, f) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(f * (arr.length - 1))))];
+        // robust 5th–95th-pct window so a single outlier rating doesn't flatten the rest
+        const pLo = pvals.length ? q(pvals, 0.05) : 0;
+        const pHi = pvals.length ? q(pvals, 0.95) : 1;
+        const PRO_LO = yb + 0.04 * lh, PRO_HI = yb + 0.30 * lh;   // lower sub-band, separate from BP band
+        const scP = (v) => PRO_LO + (PRO_HI - PRO_LO)
+          * Math.min(Math.max((v - pLo) / (pHi - pLo + 1e-9), 0), 1);
+        const regP = { BP_LO: PRO_LO, BP_HI: PRO_HI, full_lo: pLo, full_hi: pHi,
+                       samples: [], traces: [], tickHiIdx: null, tickLoIdx: null };
+        const TIER_SYMBOL = { td_transform: "circle-open", psd_bridge: "diamond-open" };
+        const TIER_LABEL = { td_transform: "transform DSP ×352.62", psd_bridge: "PSD→LSB bridge ×73.63" };
+        const byTier = {};
+        proPtsAll.forEach((p) => { (byTier[p.tier] = byTier[p.tier] || []).push(p); });
+        Object.keys(byTier).forEach((tier) => {
+          const ps = byTier[tier];
+          // binMode: color by the rating's pain bin (so the high/low selection is visible); else a
+          // single steel tone (the marker SHAPE already encodes which DSP route produced the value).
+          const colOf = (p) => {
+            if (binMode) {
+              const b = binOf(ch, p.t);
+              return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
+            }
+            return PAL.proLsb || "#1F4E79";
+          };
+          const cols = ps.map(colOf);
+          const lineCols = ps.map((p, i) => (p.saturated ? "#C0392B" : cols[i]));
+          ps.forEach((p) => regP.samples.push({ t: p.t, v: p.lsb }));
+          regP.traces.push({ idx: traces.length, raw: ps.map((p) => p.lsb) });
+          traces.push({ type: "scattergl", mode: "markers",
+            x: ps.map((p) => D(p.t)), y: ps.map((p) => scP(p.lsb)),
+            marker: { symbol: TIER_SYMBOL[tier] || "circle-open", size: ps.map((p) => (p.saturated ? 9 : 7)),
+                      color: "rgba(0,0,0,0)", line: { color: lineCols, width: ps.map((p) => (p.saturated ? 2 : 1.4)) } },
+            customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), TIER_LABEL[tier] || tier,
+              p.saturated ? " · TD saturated" : "", binMode ? (binOf(ch, p.t) || "unmatched") : ""]),
+            hovertemplate: `${prettyContact(labelFor(ch))} · per-rating modeled LSB · %{customdata[2]}%{customdata[3]}<br>`
+              + `≈%{customdata[0]} LSB @ %{customdata[1]} Hz (modeled, not sensed)`
+              + (binMode ? `<br>bin: %{customdata[4]}` : "")
+              + `<br>%{x}<extra></extra>`,
+            showlegend: false });
+        });
+        if (regP.traces.length) lsbScaleRef.current.push(regP);
       }
 
       // (c) PSD ticks (montage/survey) — these ARE pooled into the binarization scan. In
@@ -940,10 +971,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
         name: `pain rating · no neural match${su.n_pro_unused != null ? `  ·  ${su.n_pro_unused}` : ""}` });
-      // per-rating LSB selection still renders in binMode (colored by pain bin); document its shapes.
+      // per-rating MODELED LSB still renders in binMode (colored by pain bin); document its shapes.
+      // Native is NOT shown here — it's the colored band-power lane trace; these are modeled-at-rating.
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle", size: 9, color: DIM_GREY, line: { width: 1.3, color: DIM_GREY } },
-        name: "per-rating LSB  (● native · ○ TD-transform · ◇ PSD-bridge; color = bin)" });
+        marker: { symbol: "circle-open", size: 9, color: "rgba(0,0,0,0)", line: { width: 1.4, color: DIM_GREY } },
+        name: "per-rating modeled LSB  (○ TD-transform · ◇ PSD-bridge; color = bin)" });
     } else {
       // Glyph key listed TOP→BOTTOM in the order the layers actually stack within a neural lane:
       // montage/PSD ticks at the TOP, then the chronic 24/7 LSB trend, then the streaming LSB session
@@ -974,11 +1006,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
         name: "modeled LSB  (hollow; transform DSP → LSB; calibrated, NOT sensed)" });
-      // CS-4 per-PRO LSB selection — one point per pain rating, shape = source tier (native filled /
-      // TD-transform open circle / PSD-bridge open diamond), red outline = TD window saturated.
+      // CS-4 per-rating MODELED LSB — one modeled point per pain rating on its own sub-lane scale.
+      // Native is NOT shown here (it's the colored band-power lane trace); shape = DSP route:
+      // ○ hollow circle = TD-transform (×352.62), ◇ hollow diamond = PSD-bridge (×73.63); red ring = saturated.
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle", size: 9, color: PAL.proLsb, line: { width: 1.3, color: PAL.proLsb } },
-        name: "per-rating LSB  (● native · ○ TD-transform · ◇ PSD-bridge; red ring = saturated)" });
+        marker: { symbol: "circle-open", size: 9, color: "rgba(0,0,0,0)", line: { width: 1.4, color: PAL.proLsb } },
+        name: "per-rating modeled LSB  (○ TD-transform · ◇ PSD-bridge; red ring = saturated)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
