@@ -1985,3 +1985,54 @@ def test_jackknife_cluster_aucs_matches_manual_delete_one():
     man = _np.array([_auc(use[col != i], y[col != i]) for i in range(K)])
     fin = _np.isfinite(vec) & _np.isfinite(man)
     assert _np.max(_np.abs(vec[fin] - man[fin])) < 1e-12
+
+
+def _drift_detail(E, weeks, drift_per_week=0.0, seed=1):
+    """Synthetic td_detail spanning `weeks` calendar weeks with a planted band→pain relation whose
+    separation threshold optionally drifts `drift_per_week` per week (moves the optimal cut-point)."""
+    import numpy as _np, datetime as _dt
+    rng = _np.random.default_rng(seed); C, F = 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    wkidx = _np.repeat(_np.arange(weeks), int(_np.ceil(E / weeks)))[:E]
+    shift = drift_per_week * wkidx
+    psd[:, 0, band] *= (1 + 0.5 * (labels - labels.mean())[:, None] + shift[:, None])
+    t0 = _dt.datetime(2025, 1, 6)
+    times = [(t0 + _dt.timedelta(days=int(wkidx[i]) * 7 + (i % 5))).strftime("%Y-%m-%dT10:00:00")
+             for i in range(E)]
+    return {"f_set": f, "psd": psd, "labels": labels,
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+
+def test_threshold_drift_stationary_is_stable():
+    """Audit [18]: a stationary band (no week-trend in the cut-point) is reported 'stable' with a
+    non-significant slope and no drift flag."""
+    det = _drift_detail(240, 12, drift_per_week=0.0, seed=2)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["available"] and r["status"] == "stable"
+    assert r["drift_flag"] is False
+    assert r["slope_p"] is not None and r["slope_p"] >= 0.05
+    assert r["n_weeks_qualifying"] >= analytics.DRIFT_MIN_WEEKS
+
+
+def test_threshold_drift_detects_planted_trend():
+    """Audit [18]: a band whose cut-point drifts systematically over weeks is flagged 'drift_detected'
+    with a significant slope and a non-zero total drift."""
+    det = _drift_detail(360, 16, drift_per_week=0.18, seed=5)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["available"] and r["status"] == "drift_detected"
+    assert r["drift_flag"] is True
+    assert r["slope_p"] < 0.05
+    assert abs(r["total_drift"]) > 0
+
+
+def test_threshold_drift_sparse_record_not_assessed():
+    """Audit [18]: fail-closed — too few qualifying weeks yields 'not_assessed', never a spurious
+    drift flag from sparse weeks."""
+    det = _drift_detail(20, 10, seed=3)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["status"] == "not_assessed"
+    assert r["drift_flag"] is False
+    assert r["n_weeks_qualifying"] < analytics.DRIFT_MIN_WEEKS

@@ -2224,6 +2224,120 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     }
 
 
+# Audit [18]: per-week threshold-drift diagnostic gates.
+DRIFT_MIN_SAMPLES_PER_WEEK = 6     # a week needs >= this many matched samples to yield a cut-point
+DRIFT_MIN_WEEKS = 4                # need >= this many qualifying weeks to fit a calendar-time trend
+
+
+def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                            strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                            pain_cutoff=None):
+    """Audit [18]: does the deployment cut-point DRIFT over calendar time?
+
+    The deployment threshold is fit once on all data; if the optimal Youden cut-point moves
+    systematically week-to-week (non-stationarity), a single fixed device threshold will be
+    miscalibrated in later weeks. This buckets the matched samples by ELAPSED WEEK (the same index the
+    offline random-intercept uses), computes each qualifying week's Youden cut-point under the POOLED
+    orientation (so all weekly cut-points share one signed scale), and runs a trend test: OLS of weekly
+    cut-point on week index. Drift is FLAGGED when the slope is significantly non-zero.
+
+    A week qualifies only with >= DRIFT_MIN_SAMPLES_PER_WEEK matched samples AND both pain-high and
+    pain-low present (a cut-point is otherwise undefined). The trend test needs >= DRIFT_MIN_WEEKS
+    qualifying weeks; below that the diagnostic is 'not_assessed' (fail-closed — never a spurious flag
+    from sparse weeks).
+
+    Returns {available, status, n_weeks_qualifying, slope_per_week, slope_p, total_drift, drift_flag,
+    weekly:[{week, threshold, n, prevalence}], pooled_threshold, note} or {available: False, reason}.
+    status is one of 'stable' | 'drift_detected' | 'not_assessed'.
+    """
+    from sklearn import metrics
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found", "status": "not_assessed"}
+    bp_log, labels, _rating_group, times = feat
+    y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+    weeks_all = _elapsed_week_cluster(times, len(bp_log))
+    m = np.isfinite(bp_log) & np.isfinite(y_all) & (weeks_all >= 0)
+    if m.sum() < DRIFT_MIN_SAMPLES_PER_WEEK * 2 or len(np.unique(y_all[m])) < 2:
+        return {"available": False, "reason": "too few matched samples for a drift assessment",
+                "status": "not_assessed"}
+    x = bp_log[m].astype(float)
+    y = y_all[m].astype(int)
+    wk = weeks_all[m].astype(int)
+
+    # Orient ONCE on the pooled fit so every weekly cut-point is on the same signed scale.
+    raw_auc = float(metrics.roc_auc_score(y, x))
+    flip = raw_auc < 0.5
+    use = -x if flip else x
+
+    def _youden_cut(uu, yy):
+        """Youden-J optimal cut-point on the oriented score; mapped back to the original log-power
+        scale (rule power >= thr). None when a class is absent."""
+        if len(np.unique(yy)) < 2:
+            return None
+        fpr, tpr, thr = metrics.roc_curve(yy, uu)
+        j = tpr - fpr
+        j[~np.isfinite(thr)] = -np.inf
+        k = int(np.argmax(j))
+        t = thr[k]
+        if not np.isfinite(t):
+            return None
+        return float(-t if flip else t)
+
+    pooled_thr = _youden_cut(use, y)
+
+    weekly = []
+    for w in np.unique(wk):
+        sel = wk == w
+        if int(sel.sum()) < DRIFT_MIN_SAMPLES_PER_WEEK:
+            continue
+        yy = y[sel]
+        if len(np.unique(yy)) < 2:
+            continue
+        t = _youden_cut(use[sel], yy)
+        if t is None:
+            continue
+        weekly.append({"week": int(w), "threshold": float(t), "n": int(sel.sum()),
+                       "prevalence": float(np.mean(yy == 1))})
+
+    n_weeks = len(weekly)
+    if n_weeks < DRIFT_MIN_WEEKS:
+        return {"available": True, "status": "not_assessed",
+                "n_weeks_qualifying": int(n_weeks), "pooled_threshold": pooled_thr,
+                "weekly": weekly, "slope_per_week": None, "slope_p": None, "total_drift": None,
+                "drift_flag": False,
+                "note": (f"Only {n_weeks} week(s) had >= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples "
+                         f"with both classes (need >= {DRIFT_MIN_WEEKS}); calendar-time drift not "
+                         f"assessed.")}
+
+    # OLS trend test: weekly cut-point ~ week index. Significant non-zero slope = systematic drift.
+    wks = np.array([d["week"] for d in weekly], dtype=float)
+    thrs = np.array([d["threshold"] for d in weekly], dtype=float)
+    from scipy import stats as _st
+    lin = _st.linregress(wks, thrs)
+    slope = float(lin.slope); slope_p = float(lin.pvalue)
+    span = float(wks.max() - wks.min())
+    total_drift = float(slope * span)
+    drift_flag = bool(slope_p < 0.05 and np.isfinite(slope))
+    status = "drift_detected" if drift_flag else "stable"
+    verdict_txt = ("DRIFT DETECTED — a single fixed device threshold will be miscalibrated in later "
+                   "weeks; consider periodic recalibration." if drift_flag else
+                   "No significant calendar-time drift; the pooled cut-point is stationary over the "
+                   "record.")
+    return {"available": True, "status": status,
+            "n_weeks_qualifying": int(n_weeks),
+            "pooled_threshold": pooled_thr,
+            "slope_per_week": slope, "slope_p": slope_p, "total_drift": total_drift,
+            "week_span": span, "drift_flag": drift_flag,
+            "weekly": weekly,
+            "note": (f"Youden cut-point trend over {n_weeks} qualifying weeks "
+                     f"(>= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples, both classes each). "
+                     f"Slope {slope:+.3g}/week (p={slope_p:.3g}); total drift {total_drift:+.3g} over "
+                     f"{span:.0f} weeks on the oriented log-power scale. " + verdict_txt),
+            }
+
+
 def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                                 strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                                 pain_cutoff=None, min_train_clusters=8, test_block_weeks=1,

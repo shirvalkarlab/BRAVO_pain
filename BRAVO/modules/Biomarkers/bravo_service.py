@@ -3993,6 +3993,12 @@ def deployment_summary(request_data):
         pooled, channel, center_hz, band_width_hz=band_width_hz,
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
         n_boot=n_boot)
+    # Audit [18]: per-week threshold-drift diagnostic. Does the optimal Youden cut-point move
+    # systematically over calendar time? A single fixed device threshold fit on all data would be
+    # miscalibrated in later weeks if so. Fail-closed to 'not_assessed' when too few weeks qualify.
+    drift = analytics.threshold_drift_by_week(
+        pooled, channel, center_hz, band_width_hz=band_width_hz,
+        strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"])
 
     # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
     cutpoint = _float_param(rd, "Cutpoint", default=None)
@@ -4239,6 +4245,14 @@ def deployment_summary(request_data):
             caveats.append(f"Per-era fragility: AUC swings {round(by_era.get('auc_spread') or 0,2)} / "
                            f"cut-point swings {round(by_era.get('cutpoint_spread') or 0,2)} across "
                            "OFF/LOW/HIGH — the threshold may not hold once stim changes.")
+    # Audit [18]: calendar-time threshold drift. A significant weekly trend in the optimal cut-point
+    # means a single fixed device threshold will be miscalibrated in later weeks.
+    if drift.get("available") and drift.get("drift_flag"):
+        caveats.append(f"Threshold drift over time: the optimal cut-point trends "
+                       f"{round(drift.get('slope_per_week') or 0, 3):+} /week "
+                       f"(p={round(drift.get('slope_p') or 1, 3)}) across "
+                       f"{drift.get('n_weeks_qualifying')} weeks — a fixed device threshold will be "
+                       "miscalibrated in later weeks; plan periodic recalibration.")
     if power.get("available") and power.get("more_data_needed"):
         caveats.append(f"Underpowered: ~{(power.get('n_ratings_needed',0) - power.get('n_ratings_current',0))} "
                        "more independent pain ratings needed for 80% power.")
@@ -4380,17 +4394,26 @@ def deployment_summary(request_data):
                 if forward.get("available") else "not_assessed"),
             "forward_held_out_auc": _ff(forward.get("held_out_auc")) if forward.get("available") else None,
             "forward_reliable": (bool(forward.get("reliable")) if forward.get("available") else None),
-            # Threshold-drift over time is NOT yet computed (audit [18], deferred); state it plainly
-            # rather than implying the threshold was checked for non-stationarity.
-            "threshold_drift": "not_assessed",
+            # Audit [18]: per-week cut-point drift over CALENDAR time (distinct from stim-state
+            # portability below). 'stable' / 'drift_detected' / 'not_assessed'.
+            "threshold_drift": (drift.get("status", "not_assessed")
+                                if drift.get("available") else "not_assessed"),
+            "threshold_drift_slope_per_week": (_ff(drift.get("slope_per_week"))
+                                               if drift.get("available") else None),
+            "threshold_drift_p": (_ff(drift.get("slope_p")) if drift.get("available") else None),
+            "threshold_drift_total": (_ff(drift.get("total_drift")) if drift.get("available") else None),
+            "threshold_drift_n_weeks": (drift.get("n_weeks_qualifying")
+                                        if drift.get("available") else None),
             "stim_state_portability": (
                 ("portable" if by_era.get("portable_by_ci") else "fragile")
                 if (by_era.get("available") and by_era.get("portable_by_ci") is not None)
                 else "not_assessed"),
             "note": ("forward_validation = expanding-window weekly forward-chaining held-out AUC vs "
                      "chance (audit C2). stim_state_portability = per-era CI-overlap + LRT (audit C3); "
-                     "this is robustness to stim STATE, not calendar-time drift. threshold_drift is "
-                     "not yet assessed (audit [18])."),
+                     "this is robustness to stim STATE. threshold_drift = OLS trend test of the weekly "
+                     "Youden cut-point vs week index (audit [18]); 'drift_detected' means the cut-point "
+                     "moves systematically over calendar time and a fixed device threshold needs "
+                     "periodic recalibration."),
         },
         "gates": gates, "caveats": caveats,
         "n_gates_passed": int(sum(1 for x in gates if x["pass"])), "n_gates": len(gates),
