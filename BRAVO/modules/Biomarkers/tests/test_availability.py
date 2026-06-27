@@ -368,3 +368,32 @@ def test_montage_event_dedup_against_psd_times():
                T0 + 9000.0]   # no match                   -> keep
     kept = [t for t in snaps_t if not is_dup(t)]
     assert kept == [T0 + 2500.0, T0 + 9000.0]
+
+
+# ── CS-2: PSD-source display categories on event markers ──────────────────────────────────────────
+def test_event_markers_threads_category_and_lists_categories():
+    """event_markers must carry each event's `category` through (Streaming vs labeled patient event vs
+    montage snapshot) and expose the distinct set in `categories`, so the frontend can draw the three
+    PSD-event sources on separate rows/glyphs instead of collapsing them under one label."""
+    freq = np.arange(0, 100.5, 0.5)
+    p = (1.0 / (freq + 1.0)); p[freq == 13.5] = 20.0
+    ev = [
+        {"name": "Streaming", "category": "Streaming event PSD", "t": T0,        "psds": [(freq, p)]},
+        {"name": "Higher Pain", "category": "Patient event",     "t": T0 + 100,  "psds": [(freq, p)]},
+        {"name": "Montage PSD", "category": "Montage PSD",        "t": T0 + 200,  "psds": [(freq, p)]},
+    ]
+    out = av.event_markers(ev)
+    assert out["n"] == 3
+    assert out["categories"] == ["Montage PSD", "Patient event", "Streaming event PSD"]  # sorted, distinct
+    by_t = {e["t"]: e for e in out["events"]}
+    assert by_t[T0]["category"] == "Streaming event PSD"
+    assert by_t[T0 + 100]["category"] == "Patient event"
+    assert by_t[T0 + 200]["category"] == "Montage PSD"
+
+
+def test_event_markers_category_defaults_to_label_when_untagged():
+    """A caller that didn't tag a category (older payloads) falls back to the event's own label, so
+    the category axis never produces a None/KeyError."""
+    out = av.event_markers([{"name": "Medication", "t": T0, "psds": []}])
+    e = out["events"][0]
+    assert e["category"] == "Medication" and out["categories"] == ["Medication"]

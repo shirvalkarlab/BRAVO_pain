@@ -44,21 +44,76 @@ POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # Patient-triggered LABELED events: button presses the patient annotated ("Higher Pain",
 # "Tingly/Burning", "Feeling Good", "Medication", ...). Stored as PatientControllerEvent rows whose
 # `metadata` carries, per hemisphere, the event DateTime + a full-band PSD (Frequency/FFTBinData).
-# Auto-generated "Streaming" markers are excluded. These only corroborate (DESIGN §2/§6), never feed
-# the decoder, but are demarcated (with their label) on the timeline.
 PATIENT_EVENT_TYPE = "PatientControllerEvent"
-_EVENT_NAME_EXCLUDE = {"streaming"}   # auto-markers, not patient annotations (timeline display only)
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
                           "MedtronicStimulationMontages"]
 
-# Source label for PSDs harvested from PatientControllerEvent markers (incl. "Streaming" markers the
-# patient was instructed to fire around each survey). These carry the device's ONBOARD FFT
-# (Frequency/FFTBinData on the row metadata) rather than a Welch-of-time-domain spectrum, so they sit
-# ~6 dB higher than the TD/Montage Welch PSDs on the same channel. That constant offset is removed
-# automatically because the matrix builder z-scores within (channel, source): tagging events as their
-# own source makes them poolable with the rest without re-scaling. (psd_rows_to_matrix already lists
-# "Patient event" as a recognised source.)
-EVENT_PSD_SOURCE = "Patient event"
+# ── PSD-source taxonomy — single source of truth (verified on RCS08 JSONs, 2026-06-27) ────────────
+# Several products carry a frequency-domain PSD. They differ along TWO axes that the pipeline must not
+# conflate:
+#
+#   (1) UNITS / POOLING identity — what scale the spectrum is in, hence which rows z-score together and
+#       which conversion applies. Patient-triggered events carry the device's ONBOARD FFT
+#       (Frequency/FFTBinData on the ORM row metadata) — a different normalization that sits ~6 dB above
+#       a Welch-of-time-domain spectrum on the same channel; that constant offset is absorbed by the
+#       within-(channel, pooling_source) z-score in psd_rows_to_matrix. Montage/survey PSDs are the
+#       device's LFPMagnitude (linear µV). The two are NOT interchangeable (see CS-3 unit reconciliation).
+#
+#   (2) LSB ROUTE — decided by whether the product ALSO carries time-domain (TD). LSB lives only in the
+#       PROGRAMMED products (on-demand BrainSenseLfp streaming + Timeline). A product WITH TD gets LSB
+#       from the direct, validated TD→LSB transform (analytics.td_to_lsb, k=352.62). A PSD-ONLY product
+#       (patient-triggered snapshot events) has no TD, so it gets LSB only via the PSD→LSB BRIDGE (CS-3):
+#       the montage TD↔PSD law composed with the TD→LSB transform. Montage/survey products are the
+#       bridge's CALIBRATION SOURCE — never a consumer of it.
+#
+# POOLING-source tags (used by the biomarker matrix; events share onboard-FFT units, so they pool as one):
+EVENT_PSD_SOURCE = "Patient event"          # any PatientControllerEvent PSD (labeled OR Streaming)
+MONTAGE_PSD_SOURCE = "Montage PSD"          # NeuralActivitySnapshot / montage-survey device PSD
+#
+# DISPLAY categories (timeline lane + legend; distinct identities the user must be able to tell apart):
+DISPLAY_PATIENT_EVENT   = "Patient event"        # labeled patient-triggered events (Medication, Pain, …)
+DISPLAY_STREAMING_EVENT = "Streaming event PSD"  # auto patient-triggered LFP snapshots fired around surveys
+DISPLAY_MONTAGE_SNAPSHOT = "Montage PSD"         # NeuralActivitySnapshot automatic ~20 s montage sweep
+#
+# The name the device gives auto-fired streaming snapshots (a PatientControllerEvent, NOT a manual label):
+STREAMING_EVENT_NAME = "streaming"
+#
+# Declarative taxonomy: every PSD-bearing source, its origin and routing. Consumed by the event loaders,
+# the timeline assembler, and the CS-3 bridge so all paths agree on one classification.
+PSD_SOURCE_TAXONOMY = {
+    "patient_event": {
+        "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": False,
+        "origin": "Patient-triggered LFP snapshot, manually labeled button press",
+        "units": "onboard FFTBinData (log/dB-domain, ~6 dB above Welch)",
+        "has_td": False, "has_psd": True, "has_lsb": False,
+        "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
+        "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_PATIENT_EVENT,
+    },
+    "streaming_event": {
+        "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": True,
+        "origin": "Auto LFP frequency snapshot fired around surveys (name='Streaming')",
+        "units": "onboard FFTBinData (log/dB-domain, ~6 dB above Welch)",
+        "has_td": False, "has_psd": True, "has_lsb": False,
+        "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
+        "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_STREAMING_EVENT,
+    },
+    "montage_snapshot": {
+        "db_type": "NeuralActivitySnapshot", "name_is_streaming": None,
+        "origin": "Automatic ~20 s montage sweep (full-band PSD over reference montage)",
+        "units": "device LFPMagnitude (linear µV) + carries 250 Hz TD",
+        "has_td": True, "has_psd": True, "has_lsb": False,
+        "lsb_route": "td_transform",               # has TD → direct k=352.62; bridge CALIBRATION source
+        "pooling_source": MONTAGE_PSD_SOURCE, "display": DISPLAY_MONTAGE_SNAPSHOT,
+    },
+}
+
+
+def _event_display_category(event_name):
+    """Map a PatientControllerEvent's name to its DISPLAY category. Auto 'Streaming' snapshots get
+    their own category (DISPLAY_STREAMING_EVENT); every other (manually labeled) press is a patient
+    event. Both share the EVENT_PSD_SOURCE pooling tag (same onboard-FFT units)."""
+    nm = (event_name or "").strip().lower()
+    return DISPLAY_STREAMING_EVENT if nm == STREAMING_EVENT_NAME else DISPLAY_PATIENT_EVENT
 
 # Map a patient-event PSD block to its canonical bipolar channel. The block's identity lives in
 # SenseID (a SensingElectrodeConfigDef, e.g. "...ZERO_AND_THREE") plus the hemisphere key; SenseID is
@@ -207,15 +262,21 @@ def _load_recordings(participant_uid, types):
 def _load_patient_events(participant_uid):
     """Load patient-annotated LFP snapshot events for the availability timeline.
 
-    These are PatientControllerEvent rows — button presses the patient labeled ("Higher Pain",
-    "Tingly/Burning", "Feeling Good", "Medication", ...). Unlike the .bdat recordings, the event's
-    time and per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with
-    `DateTime`, `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
+    These are PatientControllerEvent rows — both manually LABELED button presses ("Higher Pain",
+    "Tingly/Burning", "Feeling Good", "Medication", ...) AND the auto-fired "Streaming" LFP snapshots
+    the patient triggers around each survey. Unlike the .bdat recordings, the event's time and
+    per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with `DateTime`,
+    `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
 
-    The auto-generated "Streaming" markers are excluded (not patient annotations). The authoritative
-    timestamp is the per-hemisphere `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
+    Streaming events are NO LONGER dropped (2026-06-27, PI): on RCS08 they are the dominant
+    PSD-bearing modality (~2477 vs ~221 labeled) and the primary closed-loop signal, so they are
+    surfaced as their OWN display category (`category=DISPLAY_STREAMING_EVENT`) rather than being
+    discarded or folded into the montage-PSD markers. Each returned event carries a `category` tag
+    (DISPLAY_STREAMING_EVENT for Streaming, DISPLAY_PATIENT_EVENT for labeled presses) so the timeline
+    can render them as distinct rows/glyphs. The authoritative timestamp is the per-hemisphere
+    `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
 
-    Returns [{"name": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
+    Returns [{"name": str, "category": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
     """
     import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
@@ -228,7 +289,7 @@ def _load_patient_events(participant_uid):
     out = []
     for r in rows:
         name = getattr(r, "name", "") or ""
-        if not name or name.strip().lower() in _EVENT_NAME_EXCLUDE:
+        if not name:
             continue
         md = getattr(r, "metadata", None)
         if not isinstance(md, dict):
@@ -253,7 +314,10 @@ def _load_patient_events(participant_uid):
             t = getattr(r, "date", None)
         if t is None:
             continue
-        out.append({"name": name, "t": float(t), "psds": psds})
+        # Streaming events are surfaced (no longer dropped) under their own display category; labeled
+        # presses keep their annotation as the patient-event category. Both share onboard-FFT units.
+        out.append({"name": name, "category": _event_display_category(name),
+                    "t": float(t), "psds": psds})
     return out
 
 
@@ -390,8 +454,15 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     `dedup_times` (the montage/survey PSD record StartTimes). The remainder — montage sweeps with no
     matching survey/montage recording — are surfaced as their own markers.
 
+    These are a DISTINCT source from the patient-triggered events: NeuralActivitySnapshot carries its
+    own 250 Hz TD (it is a montage product, LSB route = direct TD→LSB transform), whereas patient
+    events are PSD-only. They are tagged `category=DISPLAY_MONTAGE_SNAPSHOT` so the timeline keeps them
+    separate from the Streaming/labeled patient-event rows (which previously shared the bare
+    "Montage PSD" label and caused the mislabel: Streaming-event ticks reading as montage PSDs).
+
     Returns events normalized for `availability.event_markers`:
-        [{"name": "Montage PSD", "t": epoch_s, "psds": [(freq, power), ...]}, ...]
+        [{"name": DISPLAY_MONTAGE_SNAPSHOT, "category": DISPLAY_MONTAGE_SNAPSHOT,
+          "t": epoch_s, "psds": [(freq, power), ...]}, ...]
     """
     snaps = _load_recordings(participant_uid, ["NeuralActivitySnapshot"])
     dedup = sorted(float(t) for t in (dedup_times or []) if t is not None)
@@ -417,7 +488,8 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
                 f, m = p.get("Frequency"), p.get("Power")
                 if f is not None and m is not None and len(f) == len(m) and len(f) > 0:
                     psds.append((list(f), list(m)))
-        out.append({"name": "Montage PSD", "t": float(t0), "psds": psds})
+        out.append({"name": DISPLAY_MONTAGE_SNAPSHOT, "category": DISPLAY_MONTAGE_SNAPSHOT,
+                    "t": float(t0), "psds": psds})
     return out
 
 
@@ -1993,6 +2065,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                     "hemisphere": availability._hemisphere(ch),
                     "dtype": "psd", "product": "patient_event",
                     "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming")
+                    "category": _event_display_category(ev.get("name", "")),  # Streaming vs labeled
                     "t_start": float(ev["t"]), "dur_s": 30.0,
                     "meta": {"center_hz": None, "peak_hz": None, "n": None},
                 })
@@ -2025,12 +2098,16 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
         bands = availability.present_freq_bands(records)
-        # Patient-annotated events (labeled button presses) — demarcated on the timeline.
+        # Patient-triggered events — demarcated on the timeline. Now includes BOTH the labeled button
+        # presses (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
+        # (category=DISPLAY_STREAMING_EVENT); each marker carries its `category` so the frontend draws
+        # the two on distinct rows/glyphs (`events.categories` lists which are present).
         event_list = _load_patient_events(participant_uid)
         events = availability.event_markers(event_list)
-        # Montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already represented by a
-        # montage/survey PSD recording (de-duplicated against those StartTimes so we don't double-
-        # count). Surfaced as their own marker row, separate from the labeled patient events.
+        # Montage-PSD events: NeuralActivitySnapshot montage sweeps (category=DISPLAY_MONTAGE_SNAPSHOT;
+        # a montage product carrying its OWN TD, distinct from the PSD-only patient events) NOT already
+        # represented by a montage/survey PSD recording (de-duplicated against those StartTimes so we
+        # don't double-count). Surfaced as their own marker row.
         psd_times = [availability._to_epoch(r.get("StartTime")) for r in (psd_list or [])
                      if isinstance(r, dict)]
         montage_events = availability.event_markers(

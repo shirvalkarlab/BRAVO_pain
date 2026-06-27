@@ -303,9 +303,15 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
       * peak_power: band power at that peak (raw FFT-bin units), for the hover.
       * a decimated averaged PSD ({freq, mag}) so the frontend hover-overview can draw the spectrum.
 
-    Returns {"events": [{"t", "label", "peak_hz", "peak_power", "n_chan",
+    Each event also carries a `category` (DISPLAY_STREAMING_EVENT / DISPLAY_PATIENT_EVENT /
+    DISPLAY_MONTAGE_SNAPSHOT) from the loader, so the frontend can render the three PSD-event sources
+    on distinct rows/glyphs. The auto-fired "Streaming" snapshots are now included (no longer dropped)
+    under DISPLAY_STREAMING_EVENT.
+
+    Returns {"events": [{"t", "label", "category", "peak_hz", "peak_power", "n_chan",
                          "psd": {"freq", "mag"} | None}, ...],
-             "labels": [distinct labels, sorted], "n": int}  sorted by time.
+             "labels": [distinct labels, sorted],
+             "categories": [distinct categories, sorted], "n": int}  sorted by time.
     """
     events = []
     for e in events_raw or []:
@@ -315,6 +321,10 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         if t0 is None:
             continue
         label = str(e.get("name") or "event")
+        # display category (DISPLAY_STREAMING_EVENT vs DISPLAY_PATIENT_EVENT vs DISPLAY_MONTAGE_SNAPSHOT)
+        # carried from the loader so the frontend can render each source on its own row/glyph. Falls
+        # back to the label when a caller didn't tag one (e.g. montage-PSD markers).
+        category = str(e.get("category") or label)
         # average the per-hemisphere PSDs onto a common frequency grid
         freq = None
         mags = []
@@ -347,6 +357,7 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         events.append({
             "t": float(t0),
             "label": label,
+            "category": category,
             "peak_hz": peak_hz,
             "peak_power": peak_power,
             "n_chan": len(mags),
@@ -354,7 +365,8 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         })
     events.sort(key=lambda e: e["t"])
     labels = sorted({e["label"] for e in events})
-    return {"events": events, "labels": labels, "n": len(events)}
+    categories = sorted({e["category"] for e in events})
+    return {"events": events, "labels": labels, "categories": categories, "n": len(events)}
 
 
 def _decimate(arr, n=2000):

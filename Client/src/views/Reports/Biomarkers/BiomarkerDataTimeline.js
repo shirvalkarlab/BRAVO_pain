@@ -696,7 +696,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // moment is locatable against every channel. Hover LEADS with the patient's label, then time,
     // peak Hz, and channel count. These corroborate only (DESIGN §2/§6) — never decode.
     const evWrap = av.events || { events: [] };
-    const evList = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    // The events payload now carries BOTH labeled patient presses AND the auto 'Streaming' LFP
+    // snapshots, each tagged with `category`. The EVENTS diamond row shows only the LABELED presses
+    // (one color per label); the ~2479 Streaming snapshots are their OWN category and render as
+    // per-lane event-PSD ticks (teal, in each contact lane) rather than flooding this row.
+    const STREAMING_CAT = "Streaming event PSD";
+    const evListAll = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    const evList = evListAll.filter((e) => (e.category || e.label) !== STREAMING_CAT);
+    const streamingList = evListAll.filter((e) => (e.category || e.label) === STREAMING_CAT);
     if (evList.length) {
       // stable label order (by first appearance) so colors + legend are deterministic
       const labelOrder = [];
@@ -724,7 +731,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
-      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} presses</span>` : ""}`,
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} labeled` +
+        `${streamingList.length ? ` · ${streamingList.length} streaming` : ""}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
     // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
@@ -883,9 +891,20 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // GREEN (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line,
       // streaming = a solid block. (The lanes themselves stay colored by sensing Hz — right-side key.)
       const LSB_GREEN = "#2CA02C";
+      // PSD tick glyphs — TWO distinct sources that previously both read as "montage PSD":
+      //  • grey ticks = montage/survey + NeuralActivitySnapshot device PSDs (carry their own TD)
+      //  • teal ticks = patient-triggered EVENT PSDs (incl. the 2479 'Streaming' snapshots), PSD-only
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-        name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
+        name: "montage PSD  (survey sweep + montage snapshot; hover → spectrum)" });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "line-ns-open", size: 10, color: "#3B8A8F", line: { width: 1.4 } },
+        name: "streaming / event PSD  (patient-triggered LFP snapshot; PSD-only)" });
+      // Patient-event diamonds (the EVENTS row) — one filled diamond per LABELED press, colored by
+      // label. Add an explicit glyph so the row is documented (the per-label colors stay in the row).
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "diamond", size: 10, color: "#888", line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
+        name: "patient event  (labeled press: Pain / Medication / …; color = label)" });
       traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
         line: { color: LSB_GREEN, width: 2.5, dash: "dashdot", shape: "spline" },
         name: "chronic LSB · 24/7 trend  (squiggle; lane color = sensing Hz)" });
@@ -894,13 +913,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
-        name: "modeled LSB  (hollow; survey PSD × 269 — calibrated, NOT sensed)" });
+        name: "modeled LSB  (hollow; transform DSP → LSB; calibrated, NOT sensed)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
     }
-    // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
-    // so no generic event glyph is needed here.
 
     // ---- TOP-BAND GEOMETRY (title + the two flanking key boxes) -------------------------------
     // The legend and Hz key live in the top margin, ABOVE the plot. The previous version positioned
@@ -910,7 +927,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 6 : 5;            // glyph-legend entries per mode (see traces above)
+    const nLegRows = binMode ? 6 : 7;            // glyph-legend entries per mode (see traces above)
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes
