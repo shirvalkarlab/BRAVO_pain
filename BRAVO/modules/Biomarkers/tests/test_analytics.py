@@ -486,7 +486,9 @@ def test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum():
                 lsb_vec.append(500.0 + float(labels[i]) * 20.0)  # correlated with pain
             else:
                 lsb_vec.append(100.0)
-        cal = [bool(7.8 <= c <= 30.0) for c in cen_grid]
+        # TD-transform: calibrated=True for any finite band (k=352.62 is band-agnostic).
+        # Only the CS-3 bridge gates calibrated by [7.8,30] Hz.
+        cal = [True] * len(cen_grid)
         spectra.append({"t": 0.0, "tier": "td_transform", "lsb": lsb_vec,
                         "calibrated": cal, "center_hz": list(cen_grid)})
 
@@ -536,7 +538,8 @@ def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
     # PRO 0: LSB=400 at band 17.5; PRO 1: LSB=600; PRO 2: all None (no source)
     def _spec(lsb_at_17):
         lsb = [lsb_at_17 if i == ci17 else 100.0 for i in range(len(cen_grid))]
-        cal = [bool(7.8 <= c <= 30.0) for c in cen_grid]
+        # TD-transform: calibrated=True everywhere (k=352.62 is band-agnostic)
+        cal = [True] * len(cen_grid)
         return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
                 "calibrated": cal, "center_hz": list(cen_grid)}
     none_spec = {"t": 0.0, "tier": None, "lsb": [None]*len(cen_grid),

@@ -610,69 +610,75 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
           <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
             {scan && scan.note}
           </MDTypography>
-          {/* Matching policy — one concise line stating exactly how PSDs were paired to ratings. */}
+          {/* Matching policy — describes how PSDs were paired to ratings (3 modes). */}
           {scan && scan.max_per_rating != null && (
             <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: "#2C5282", fontWeight: "bold" }}>
-              {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
-               + `${scan.max_per_rating > 1 ? "s" : ""} per channel `
-               + (scan.match_direction === "nearest"
-                  ? "closest in time (either direction), within the match window"
-                  : "recorded just BEFORE it (forecasting), within the match window")
+              {`Matching: `
+               + (scan.match_direction === "pro_first" || scan.match_direction == null
+                  ? `each pain rating claims up to ${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""} per channel closest in time within the match window (PRO-first — each rating is the unit of analysis).`
+                  : scan.match_direction === "nearest"
+                    ? `each PSD is matched to the rating closest in time (either direction) within the match window.`
+                    : `each PSD is matched to the next rating AFTER it within the match window (forecasting semantics — the neural signal precedes the report).`)
                + (scan.max_per_rating > 1 && scan.refractory_min
-                  ? `, no two closer than ${scan.refractory_min} min` : "")
-               + (scan.n_capped_dropped ? ` — ${scan.n_capped_dropped} extra PSDs dropped by the cap.` : ".")
-               + (scan.max_per_rating > 1
-                  ? " AUC is cross-validated with folds grouped by rating, so its n is the count of independent ratings; a band's scatter p is the rating-clustered logistic Wald p."
-                  : " Every sample is an independent (channel, rating) pair; a band's scatter p is the logistic Wald p.")}
+                  ? ` No two matched PSDs per rating closer than ${scan.refractory_min} min.` : "")
+               + (scan.n_capped_dropped ? ` ${scan.n_capped_dropped} excess PSDs dropped by the cap.` : "")
+               + (scan.auc_mode === "rating_grouped"
+                  ? " AUC folds are grouped by rating (each rating is one fold unit), so its effective n is the count of independent ratings — not the count of matched PSDs."
+                  : " Every matched sample is treated as independent.")}
             </MDTypography>
           )}
           {/* Survey usage — the rating-centric view the clinician asked for. */}
           {scan && scan.survey_usage && (
             <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
               <strong>{`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`}</strong>
-              {` ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
+              {scan.survey_usage.n_pro_reused > 0
+                ? ` ${scan.survey_usage.n_pro_reused} received more than one matched PSD (up to ${scan.max_per_rating}/channel — by design in PRO-first mode).`
+                : ""}
             </MDTypography>
           )}
           {scan && scan.n_pooled != null && (
             <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
-              {`${scan.n_pooled} PSDs matched a rating across all channels. Each channel's curve uses only the PSDs `
-               + `recorded on that montage (the per-channel n in the legend), so any single curve draws on a fraction of that total.`}
+              {`${scan.n_pooled} neural samples matched a rating across all channels. Each channel's curve uses only the samples `
+               + `recorded on that montage (per-channel n in legend), so any single curve draws on a fraction of that total.`}
             </MDTypography>
           )}
           {scan && scan.binarization && (
             <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
-              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
+              {`Logistic AUC split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
                + (scan.binarization.n_excluded_middle > 0
                   ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
-                  : ` (no middle excluded — discrete ratings collapse the ${scan.binarization.strategy} cut). `)
+                  : ` (no middle excluded). `)
                + `Pearson r uses all matched samples.`
-               + (scan.td_welch_duration
-                  ? ` TD epochs Welch'd over ${scan.td_welch_duration.mean_s}±${scan.td_welch_duration.sd_s} s `
-                    + `(n=${scan.td_welch_duration.n}), matching the ~30 s onboard event/montage PSDs.`
+               + (scan.feature === "lsb_cs14"
+                  ? " LSB per sample from the CS-1\u20134 30\u202fs rating-centred window (transform DSP k\u202f=\u202f352.62) or CS-3 PSD bridge (k\u202f\u2248\u202f73.63); outside 7.8\u201330\u202fHz the bridge is exploratory."
                   : "")}
             </MDTypography>
           )}
-          {scan && scan.feature === "lsb_calibrated" && scan.device_psd_scale_by_channel
-            && Object.keys(scan.device_psd_scale_by_channel).length > 0 && (
+          {/* CS-14 feature note: show when new workflow is active. */}
+          {scan && scan.feature === "lsb_cs14" && (
             <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
-              {`Reports with no time-domain match used the device onboard-FFT PSD, rescaled onto the LSB axis `
-               + `by an empirical per-channel factor (${Object.entries(scan.device_psd_scale_by_channel)
-                    .map(([ch, s]) => `${ch}: ×${Number(s).toFixed(2)}`).join(", ")}). `
-               + `These are approximate LSB — lower fidelity than the time-domain-derived points.`}
+              {`LSB source: TD-transform (k\u202f=\u202f352.62) when a time-domain recording covers the rating; `
+               + `CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events with no coincident TD. `
+               + `Full 0\u2013100\u202fHz shown; green shading marks the validated 7.8\u201330\u202fHz range.`}
             </MDTypography>
           )}
-          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
+          {/* Double-dipping: only flag when PRO-first + rating-grouped AUC does NOT already handle it.
+              In PRO-first mode each rating is the unit of analysis and the AUC groups folds by rating,
+              so multi-PSD-per-rating is intentional and the AUC n is already the independent count.
+              Only show the warning when the user chose a PSD-first direction (nearest/prior). */}
+          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0
+            && scan.match_direction !== "pro_first" && scan.match_direction != null && (
             <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
                     fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
-              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
-               + `map to only ${scan.pro_independence.n_unique_pro} unique pain scores `
+              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched samples `
+               + `cover only ${scan.pro_independence.n_unique_pro} unique pain scores `
                + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
                + `${scan.pro_independence.max_reuse}×). `
                + (scan.auc_mode === "rating_grouped"
-                  ? "The AUC already corrects for this (folds grouped by rating); the Pearson r still pools all matched samples, so treat r as exploratory."
-                  : "Effective sample size is well below the matched n — treat r/AUC as exploratory, not as independent observations.")}
+                  ? "AUC folds are grouped by rating so AUC is corrected; Pearson r still pools all samples — treat r as exploratory."
+                  : "Effective sample size is well below the matched n — treat both r and AUC as exploratory.")}
             </MDTypography>
           )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />

@@ -1534,8 +1534,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "TD-bearing recordings (streaming, montage/survey, all 250 Hz) → 30 s rating-centered "
             "window → transform DSP (Hann-windowed zero-padded FFT, 50% overlap) × k=352.62 "
             "(LSB_PER_UV2_TRANSFORM). PSD-only patient events with no coincident TD → CS-3 bridge "
-            "(device_psd_band_power × k≈73.63). Full 0–100 Hz per PI 2026-06-27; bands outside "
-            "[7.8, 30] Hz carry calibrated=False (exploratory, shown at reduced opacity). "
+            "(device_psd_band_power × k≈73.63). Full 0–100 Hz per PI 2026-06-27. "
+            "TD-transform bands are calibrated across the full spectrum (k=352.62 is band-agnostic). "
+            "CS-3 bridge bands outside [7.8, 30] Hz carry calibrated=False (exploratory, shown at "
+            "reduced opacity — the bridge has no validated meaning there). "
             "The old Welch-density × k=269 / per-channel device-FFT rescale path is REMOVED."
             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
         # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
