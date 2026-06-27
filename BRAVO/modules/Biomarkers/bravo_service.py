@@ -2005,12 +2005,13 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
         # draws the true trace (not a placeholder). Keyed by raw channel; frontend normalizes.
         #
-        # MODELED fallback (psd_modeled tier, Step-0 verdict): the MONTAGE SURVEY is the device-blessed
+        # MODELED fallback (psd_modeled tier): the MONTAGE SURVEY is the device-blessed
         # modeled source — it sweeps ALL bipolar contacts STIM-OFF, carries raw 250 Hz TD (in
         # Recording["Data"]) AND the device's own per-contact peak frequency (Descriptor.MedtronicPSD),
         # but produces NO native device LSB scalar. So those contacts have no LSB point without this:
-        # convert via Welch-256 -> psd_band_to_lsb (k=269) at each contact's configured sensing center
-        # (falling back to the device peak). `psd_list` is the montage/survey products
+        # convert via the transform DSP -> td_to_lsb (k=352.62, CS-1 2026-06-27; was Welch-256 ->
+        # psd_band_to_lsb k=269) at each contact's configured sensing center (falling back to the
+        # device peak). `psd_list` is the montage/survey products
         # (MedtronicBrainSenseSurvey + Baseline/Stimulation montages), all carrying TD. Tagged
         # source="psd_modeled" so the frontend draws it with a distinct hollow marker; NEVER preferred
         # over a sensed value. Deployment threshold is unaffected (stays native/frozen) — exploratory
@@ -4057,8 +4058,10 @@ def deployment_summary(request_data):
 
     # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
     # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with
-    # the SAME population constant the modeled fallback uses (k=269, via analytics.lsb_from_uv2 — the
-    # scalar form of the shared psd_band_to_lsb path) and report the fold-agreement. This is purely
+    # the DEPLOYMENT population constant (k=269, via analytics.lsb_from_uv2). NOTE: this is the
+    # deployment fallback's own constant for a physical µV² cut-point — it is NOT the exploration
+    # timeline's transform route (CS-1 switched lsb_series to td_to_lsb k=352.62; this deployment path
+    # is intentionally unchanged, each DSP carries its own scale). Report the fold-agreement. This is purely
     # informational: it never changes the deployable number (the measured Timeline value always wins),
     # but it tells the clinician how well the modeled route would have reproduced the measured
     # threshold here — i.e. how much to trust the modeled LSB on bands the device never sensed. Good

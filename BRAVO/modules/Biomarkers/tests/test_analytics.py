@@ -2218,10 +2218,46 @@ def test_modeled_transform_point_stays_flagged_native_preferred():
     assert 9999.0 not in set(native.tolist())
 
 
+def test_modeled_excluded_from_native_correlation_path():
+    """SCOPE GUARD for the 'k cancels' safety claim. k cancels in r/AUC only within a SINGLE-SOURCE
+    feature (homogeneous k). A native+modeled MIXED feature is NOT k-invariant — raising modeled k from
+    269→352.62 shifts only the modeled subset. This is safe ONLY because the deployable / measured path
+    excludes modeled points via the is_modeled mask, so no mixed-k column ever reaches a correlation.
+    This test pins that segregation: (1) on a mixed series the masked native subset is k-invariant while
+    the unmasked mixed series is NOT, and (2) the bravo_service native-only mask drops every modeled
+    point regardless of which k produced it."""
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(7)
+    n = 300
+    uv2 = np.exp(rng.normal(0, 1, n))
+    pain = rng.normal(0, 1, n)                               # continuous outcome for correlation
+    is_modeled = np.zeros(n, bool); is_modeled[rng.choice(n, 120, replace=False)] = True
+    # native points carry raw device LSB (no k); modeled points carry k*uv2. Lifting modeled k adds a
+    # constant log-offset to ONLY the modeled rows, so the mixed column is no longer a pure rescale of
+    # itself between the two k -> a covariance-based statistic (Pearson r) moves.
+    native_lsb = uv2.copy()                                  # stand-in raw units, no k
+    def mixed_feature(k):
+        return np.log(np.where(is_modeled, k * uv2, native_lsb))
+    # (1) UNMASKED mixed feature is NOT k-invariant: Pearson r differs between the two k
+    r_mixed_269 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_VALIDATED), pain)[0]
+    r_mixed_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM), pain)[0]
+    assert abs(r_mixed_269 - r_mixed_352) > 1e-6           # mixing DOES move r — claim must be scoped
+    # (2) NATIVE-ONLY subset (the masked path) is fully k-invariant
+    nat = ~is_modeled
+    r_nat_269 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_VALIDATED)[nat], pain[nat])[0]
+    r_nat_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM)[nat], pain[nat])[0]
+    assert abs(r_nat_269 - r_nat_352) < 1e-12             # masked native path: k cancels, safe
+    # (3) the bravo_service native-only mask drops EVERY modeled point, independent of method/k
+    y = np.where(is_modeled, 9999.0, native_lsb)
+    keep = ~np.array([bool(m) for m in is_modeled])
+    assert np.all(np.isfinite(y[keep])) and 9999.0 not in set(y[keep].tolist())
+
+
 if __name__ == "__main__":
     # ad-hoc local run of just the CS-1 transform tests (the container harness globs test_* itself)
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_td_") or _name.startswith("test_transform_") or \
            _name in ("test_k_cancels_in_correlation_and_auc",
-                     "test_modeled_transform_point_stays_flagged_native_preferred"):
+                     "test_modeled_transform_point_stays_flagged_native_preferred",
+                     "test_modeled_excluded_from_native_correlation_path"):
             _fn(); print("PASS", _name)

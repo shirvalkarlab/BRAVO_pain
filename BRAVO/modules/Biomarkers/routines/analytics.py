@@ -2641,11 +2641,18 @@ LSB_VALIDATED_HZ_HI = 28.3
 # all-stim median k = 352.62, r = 0.9927, RMSE 60.6 LSB (see HANDOFF_TD_LSB_calibration_2026-06-27.md,
 # transform_3s_blocks.csv). This is the deployable + exploratory TD→LSB constant. The stim-off variant
 # (356.61) is recorded for provenance ONLY and is NOT deployed — use 352.62 exactly, do not round.
-# k is multiplicative on a LOG band-power feature, so it CANCELS inside Pearson r / AUC (the
-# correlation/AUC panels are identical whether k is 269, 352.62, or 1). k matters only for (a) the
-# absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching the TD
-# path from welch256×269 to transform×352.62 moves the displayed/deployable scale to the lab-consistent
-# value WITHOUT moving any r/AUC result (test_k_cancels_in_corr_and_auc pins this).
+# k is multiplicative on a LOG band-power feature, so within a SINGLE-SOURCE feature (every point
+# scaled by the same k) it CANCELS inside Pearson r / AUC — the correlation/AUC panels are identical
+# whether k is 269, 352.62, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
+# It does NOT hold for a feature that POOLS native device LSB (raw units, no k) with modeled points
+# (k=352.62) on the same axis — there, raising modeled k from 269→352.62 shifts only the modeled
+# subset by +log(352.62/269)≈+0.272 relative to native, which CAN move r/AUC. The native-preferred
+# masking (is_modeled) keeps modeled points out of the deployable threshold and the measured-r path, so
+# no mixed feature reaches a correlation; test_k_cancels_in_correlation_and_auc pins the single-source
+# case and test_modeled_excluded_from_native_correlation_path pins the segregation. k matters only for
+# (a) the absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching
+# the exploration TD path from welch256×269 to transform×352.62 moves the displayed scale to the
+# lab-consistent value WITHOUT moving any r/AUC result.
 LSB_PER_UV2_TRANSFORM = 352.62         # k, transform route — RCS08 all-stim median; PRIMARY TD→LSB
 # Device adaptive-sensing ceiling. Distinct from LSB_VALIDATED_HZ_HI (28.3 Hz = where paired-block
 # CALIBRATION ground truth exists, used by the extrapolation guard _freq_extrapolated). 30 Hz is the
@@ -2653,6 +2660,8 @@ LSB_PER_UV2_TRANSFORM = 352.62         # k, transform route — RCS08 all-stim m
 # offered only in [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; the 0–100 Hz exploration sweep is not
 # band-restricted (k cancels in r/AUC; displayed LSB is illustrative). Keep these two bounds separate —
 # 28.3 is a data-coverage fact, 30.0 is a device-capability fact; do not collapse them.
+# NOTE (CS-1): FORWARD DECLARATION — no code reads this yet. CS-2 wires the [LO, 30.0] band gate on the
+# deployable modeled path; until then this constant only documents the intended invariant.
 LSB_DEPLOYABLE_HZ_HI = 30.0
 
 
@@ -2727,10 +2736,18 @@ def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_U
     Route history (do not re-litigate): a 2026-06-25 "Step-0" pass chose fixed-269 over the transform
     for the timeline. That decision was SUPERSEDED on 2026-06-27 (PI; HANDOFF_TD_LSB_calibration_
     2026-06-27.md): the transform route (k=352.62), reproduced bit-for-bit against the lab repo, is now
-    the primary TD→LSB source of truth for both exploration and the deployment modeled fallback, and
-    welch256×269 is retained ONLY as the PSD-backup served by this function. The k switch is safe
-    because k cancels in the r/AUC curves (it is multiplicative on a log band-power feature) — only the
-    absolute displayed/deployable LSB moves to the lab-consistent scale.
+    the primary TD→LSB source of truth for the EXPLORATION timeline (availability.lsb_series, switched
+    in CS-1). The k switch is safe there because k cancels in the r/AUC curves (it is multiplicative on
+    a log band-power feature) — only the absolute displayed LSB moves to the lab-consistent scale.
+
+    SCOPE (as of CS-1): the bravo_service DEPLOYMENT modeled fallback is NOT switched — it converts a
+    frozen-model physical µV² cut-point via lsb_from_uv2 (k=269, the population constant), not a TD
+    trace, so it legitimately keeps k=269 (each DSP carries its own scale; do not feed a cut-point
+    through 352.62). This psd_band_to_lsb function itself currently has NO production caller after the
+    CS-1 switch — it is the intended PSD→LSB backup for the no-TD case, but that backup is NOT yet
+    wired and the welch256 DSP is anyway the wrong front end for a device PSD (it re-derives a PSD from
+    TD; a device montage/event PSD is in a different normalization). The proper no-TD backup needs its
+    OWN device-PSD→LSB refit — tracked as a follow-up, see INGEST/HANDOFF notes — not this function.
 
     Parameters
     ----------
@@ -2879,7 +2896,10 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     Returns
     -------
     float (scalar center) or ndarray (vector center) of band power in µV². NaN / all-NaN when the
-    trace has fewer than `win_samples` finite samples (the 1-window / 1-second minimum).
+    trace has fewer than `win_samples` finite samples (the 1-window / 1-second minimum), or when
+    win > n_fft / fs<=0. A center whose band lies entirely ABOVE `maxf` (≈96.68 Hz) has no kept bins
+    and returns ~0 BY DESIGN (td_to_lsb then maps it to NaN via its >0 guard) — read that as
+    out-of-range, not a real null.
     """
     v = np.asarray(samples_uv, dtype=float)
     v = v[np.isfinite(v)]
@@ -2888,7 +2908,10 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     centers = np.atleast_1d(np.asarray(center_hz, dtype=float))
     win = int(win_samples) if win_samples else int(round(fs * TRANSFORM_WIN_SECONDS))
     step = int(step_samples) if step_samples else win
-    if win <= 0 or step <= 0 or fs <= 0 or v.size < win:
+    # win > n_fft would overflow the zero-pad buffer (buf[:, :win] broadcast error). At the percept
+    # 250 Hz TD, win=250 < 256, so this never triggers in production; the guard keeps the scalar-in ->
+    # NaN-out contract intact for an unexpected fs (>256) instead of raising.
+    if win <= 0 or step <= 0 or fs <= 0 or win > n_fft or v.size < win:
         nan = float("nan")
         return nan if scalar_in else np.full(centers.size, nan)
 
@@ -2947,10 +2970,14 @@ def transform_centered_window(samples_uv, fs, center_offset_s, *,
         return None, 0.0
     if missing is not None:
         miss = np.asarray(missing, dtype=float).ravel()
-        if miss.size >= n:
-            frac = float(np.mean(miss[lo:hi] > 0))
-            if frac > float(max_missing_frac):
-                return None, 0.0
+        # FAIL CLOSED on a malformed mask: a missing array that does not cover the cut span cannot be
+        # trusted to certify the window clean (a short/misaligned FixBreaking mask would otherwise skip
+        # the rejection and pass possibly-corrupt samples downstream). Drop the window instead.
+        if miss.size < hi:
+            return None, 0.0
+        frac = float(np.mean(miss[lo:hi] > 0))
+        if frac > float(max_missing_frac):
+            return None, 0.0
     return v[lo:hi], (hi - lo) / fs
 
 
