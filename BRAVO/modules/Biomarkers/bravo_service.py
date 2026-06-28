@@ -983,13 +983,32 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     return out
 
 
-# The six main bipolar sensing pairs (per hemisphere). The exploratory spectral scan is restricted
-# to these — ring/segment montages and reference-electrode channels are dropped (they aren't the
+# The main bipolar sensing pairs (per hemisphere). The exploratory spectral scan is restricted to
+# these — ring/segment montages and reference-electrode channels are dropped (they aren't the
 # closed-loop sensing channels and don't map to a single bipolar pair). DESIGN: channel is the gate.
-_MAIN_BIPOLAR = {
-    "ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT", "ONE_THREE_RIGHT",
-    "ZERO_TWO_LEFT", "ZERO_TWO_RIGHT",
-}
+#
+# R12 / audit F5: this set is now DERIVED from a pair list × hemispheres rather than hand-listed, and
+# is OVERRIDABLE per participant/site via the BRAVO_MAIN_BIPOLAR env var (comma-separated canonical
+# channel names) — so onboarding a participant with a different sensing montage (e.g. ZERO_ONE,
+# TWO_THREE, or a custom pair) no longer requires a code edit. The default reproduces the original
+# six pairs exactly. Pairs are the contiguous + skip-one bipoles available on a 4-contact Percept
+# lead; extend `_DEFAULT_BIPOLAR_PAIRS` (or set the env var) for non-standard configurations.
+_DEFAULT_BIPOLAR_PAIRS = ("ZERO_THREE", "ONE_THREE", "ZERO_TWO")
+_HEMISPHERES = ("LEFT", "RIGHT")
+
+
+def _build_main_bipolar():
+    """Canonical bipolar channel set: env override if present, else pairs × hemispheres default."""
+    import os as _os
+    override = _os.environ.get("BRAVO_MAIN_BIPOLAR", "").strip()
+    if override:
+        names = {n.strip().upper() for n in override.split(",") if n.strip()}
+        if names:
+            return names
+    return {f"{p}_{h}" for p in _DEFAULT_BIPOLAR_PAIRS for h in _HEMISPHERES}
+
+
+_MAIN_BIPOLAR = _build_main_bipolar()
 
 # Bump when the channel-canonicalization rule below changes — folded into the PSD-matrix cache
 # signature so a rule change forces a re-Welch instead of serving the stale pre-fix matrix.

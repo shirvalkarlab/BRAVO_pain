@@ -906,12 +906,11 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
 
 # --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
 def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                     pain_cutoff=None, finite_mask=None):
+                     pain_cutoff=None, finite_mask=None, rating_group=None):
     """Binary 0/1 label (NaN for the excluded middle) from a 1-D continuous PRO array.
 
     Mirrors adapter._threshold_pain_level but operates on a flat array (one value per matched
-    neural sample, NOT daily-broadcast — the matching already gave us one PRO per session). The cut
-    is computed on the FINITE values present:
+    neural sample). The cut is computed on the FINITE values present:
       * "tertile"/"percentile": <= low_pct quantile -> 0, >= high_pct quantile -> 1, middle -> NaN
       * "median": >= median -> 1 else 0
       * "cutoff": >= pain_cutoff (default = median) -> 1 else 0
@@ -921,6 +920,14 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
     to a subset of rows — used by the glmer/stim-stability click-validate path to binarize on a
     single channel's own labels (PARITY audit §6b), reproducing the offline per-channel cut. Rows
     outside the mask stay NaN. When None, the cut is global over all finite values (scan behaviour).
+
+    `rating_group` (optional int/str array, same shape) defeats pseudoreplication of the CUT
+    REFERENCE: when supplied, the tertile/median/cutoff threshold is computed on ONE value per
+    unique rating group (the unique daily PRO distribution) rather than on the per-sample vector,
+    where a rating matched by k neural windows would otherwise appear k times and pull the cut
+    toward whichever pain state had more recording activity (remediation R11 / audit A7). The
+    resulting thresholds are then applied to EVERY finite sample, so n_high/n_low still count
+    per-sample. Output labels are unchanged in shape; only the percentile reference is deduplicated.
     """
     v = np.asarray(values, dtype=float)
     out = np.full(v.shape, np.nan)
@@ -930,6 +937,18 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
     ref = v[fin]
     if ref.size == 0:
         return out
+    # R11: build the cut REFERENCE from one representative value per unique rating group so the
+    # threshold reflects the PRO distribution, not the matched-sample multiplicity. Samples in the
+    # same group share their rating's PRO value, so the per-group representative is well-defined.
+    if rating_group is not None:
+        rg = np.asarray(rating_group)
+        if rg.shape == v.shape:
+            seen = {}
+            for gid, val, ok in zip(rg[fin], v[fin], np.ones(int(fin.sum()), dtype=bool)):
+                if gid not in seen:
+                    seen[gid] = float(val)
+            if seen:
+                ref = np.asarray(list(seen.values()), dtype=float)
     if strategy in ("tertile", "percentile"):
         lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
         hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
@@ -1218,9 +1237,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     centers = np.arange(lo_c, hi_c + 1e-9, float(step_hz))
     a_lo, a_hi = (None, None) if adaptive_band is None else (float(adaptive_band[0]), float(adaptive_band[1]))
 
-    # Binarize the continuous label ONCE (same split for every band).
+    # Binarize the continuous label ONCE (same split for every band). R11: pass rating_group so the
+    # tertile cut is computed on the unique-PRO distribution, not the pseudoreplicated per-sample
+    # vector (rg has one entry per epoch; samples sharing a rating share an rg value).
     y_bin = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                             pain_cutoff=pain_cutoff)
+                             pain_cutoff=pain_cutoff,
+                             rating_group=(rg if (rg is not None and rg.size == labels.size) else None))
 
     band_meta = []
     for c in centers:
@@ -1434,6 +1456,25 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 n_curve[idx] = n_v
                 p_curve[idx] = p_v
 
+        # R1 / audit A1: SIGNED AUC. `auc_curve` is folded to >= 0.5 (the notebook-parity orientation,
+        # max(auc, 1-auc)) — so a null band cannot read below chance and every band looks discriminative.
+        # `auc_signed` re-expresses each band's AUC in the direction of its OWN correlation sign: a band
+        # whose feature falls with pain (r < 0) reads AUC < 0.5, one that rises with pain reads > 0.5, and
+        # a true null sits at ~0.5 from both sides. This is a DISPLAY companion (the folded `auc` is left
+        # untouched for backward compatibility and for the omnibus screen); the frontend should plot
+        # `auc_signed` against a 0.5 chance line so direction and effect size read honestly together.
+        auc_signed_curve = []
+        for _bi, _a in enumerate(auc_curve):
+            if _a is None:
+                auc_signed_curve.append(None)
+                continue
+            _rv = r_curve[_bi] if _bi < len(r_curve) else None
+            # Orient by correlation sign: negative r -> reflect the folded AUC below 0.5.
+            if _rv is not None and _rv < 0:
+                auc_signed_curve.append(_f(1.0 - float(_a)))
+            else:
+                auc_signed_curve.append(_f(float(_a)))
+
         # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
         from scipy.signal import find_peaks
         absr = np.array([abs(x) if x is not None else 0.0 for x in r_curve], dtype=float)
@@ -1451,7 +1492,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             # Scale of the DISPLAYED feature (scatter/violin axis + correlation): raw linear LSB for the
             # LSB feature (matches the Percept device scale), or log/dB for the power feature.
             "feature_scale": ("raw" if use_lsb else "log"),
-            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center (fit on log10 LSB)
+            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center (fit on log10 LSB); folded >=0.5
+            # R1/A1: signed-AUC display companion — same CV-AUC oriented by the band's correlation sign so a
+            # null band reads ~0.5 and a beta-suppression band reads <0.5. Plot this against a 0.5 chance line.
+            "auc_signed": auc_signed_curve,
             "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
             "n_r": n_r_curve,        # correlation samples per band (ALL matched continuous, this channel)
             "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
@@ -1636,6 +1680,47 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "method": "BH-FDR",
             "family": "band x channel (per metric)",
         }
+
+    # R2 / audit A2: PER-CONTACT biomarker selection. The pain-tracking band AND its sign are
+    # contact-specific (e.g. RCS08: R 1-3+ VIM beta ELEVATES with pain, the GPi contacts SUPPRESS),
+    # so there is no single global "the beta biomarker". Each channel gets a `selected_band` dict
+    # naming its own best band: prefer the lowest-q band that survives rigorous BH-FDR (q < 0.05);
+    # if none clears FDR, fall back to the max-|rho| band, flagged fdr_significant=False. The sign
+    # is taken from that band's correlation. Never averaged across contacts (signs cancel).
+    for ch in out_channels:
+        rr = ch.get("r") or []
+        qq = ch.get("q") or []
+        aus = ch.get("auc_signed") or []
+        cen = centers
+        best_i = None
+        # 1) lowest-q FDR-significant band
+        sig = [(i, qq[i]) for i in range(len(qq))
+               if i < len(qq) and qq[i] is not None and qq[i] < 0.05
+               and i < len(rr) and rr[i] is not None]
+        if sig:
+            best_i = min(sig, key=lambda t: t[1])[0]
+            fdr_sig = True
+        else:
+            # 2) fall back to max |rho|
+            cand = [(i, abs(rr[i])) for i in range(len(rr)) if rr[i] is not None]
+            if cand:
+                best_i = max(cand, key=lambda t: t[1])[0]
+            fdr_sig = False
+        if best_i is None:
+            ch["selected_band"] = None
+        else:
+            _r = rr[best_i]
+            ch["selected_band"] = {
+                "center_hz": float(cen[best_i]),
+                "rho": _f(_r),
+                "auc_signed": (_f(aus[best_i]) if best_i < len(aus) and aus[best_i] is not None else None),
+                "q": (_f(qq[best_i]) if best_i < len(qq) and qq[best_i] is not None else None),
+                "sign": ("positive" if (_r is not None and _r > 0) else
+                         "negative" if (_r is not None and _r < 0) else "flat"),
+                "direction": ("elevation" if (_r is not None and _r > 0) else
+                              "suppression" if (_r is not None and _r < 0) else "none"),
+                "fdr_significant": bool(fdr_sig),
+            }
     # --------------------------------------------------------------------------------------------
 
     return {

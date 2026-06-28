@@ -419,6 +419,33 @@ def test_binarize_labels_tertile_excludes_middle():
     assert np.isnan(b[3]) and np.isnan(b[9]), b   # middle + NaN both excluded
 
 
+def test_binarize_cut_invariant_to_sample_multiplicity():
+    """R11/audit A7: the tertile cut must be computed on the unique-PRO distribution, not the
+    pseudoreplicated per-sample vector. Duplicating one rating's samples must NOT move the cut."""
+    # 9 unique ratings 1..9, one rating (value 7, near the 67th pct) replicated 18x as in the
+    # real data (max_reuse=18). Without rating_group the duplication drags the high cut down.
+    base_vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9], float)
+    base_rg = np.arange(9)
+    dup_vals = np.concatenate([base_vals, np.full(17, 7.0)])      # rating "7" now appears 18x
+    dup_rg = np.concatenate([base_rg, np.full(17, 6)])            # all share rating-group id 6
+
+    # Per-group (deduplicated) cut: identical labels for the 9 canonical samples in both cases.
+    b_unique = analytics._binarize_labels(base_vals, strategy="tertile",
+                                          rating_group=base_rg)
+    b_dup = analytics._binarize_labels(dup_vals, strategy="tertile",
+                                       rating_group=dup_rg)
+    # The first 9 entries correspond to the same 9 unique ratings; their labels must match exactly.
+    assert np.array_equal(np.nan_to_num(b_unique, nan=-1),
+                          np.nan_to_num(b_dup[:9], nan=-1)), (b_unique, b_dup[:9])
+
+    # Contrast: WITHOUT rating_group the pseudoreplicated cut differs (regression guard — confirms
+    # the dedup is actually doing something, not a no-op).
+    b_pseudo = analytics._binarize_labels(dup_vals, strategy="tertile")
+    assert not np.array_equal(np.nan_to_num(b_unique, nan=-1),
+                              np.nan_to_num(b_pseudo[:9], nan=-1)), \
+        "dedup made no difference — rating_group not wired through"
+
+
 def test_matched_sample_counts_reports_high_low_and_offset():
     vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
     dt = np.array([2, -5, 10, np.nan, 3, -12, 1, 8, -2, np.nan], float)
@@ -453,6 +480,55 @@ def test_spectral_feature_importance_finds_planted_band():
     # and the last is 29.5 Hz (== largest center ≤ 30.0).
     cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
     assert cen[av].min() == 8.5 and cen[av].max() == 29.5
+
+
+def test_auc_signed_reflects_correlation_direction():
+    """R1/audit A1: the folded `auc` is always >= 0.5, so it cannot show direction. `auc_signed`
+    must reflect the band's correlation sign — a band whose feature RISES with pain reads > 0.5, one
+    that FALLS with pain reads < 0.5 — and must satisfy signed == auc or 1-auc band-by-band."""
+    # Positive-correlation planted band (feature rises with pain).
+    sc_pos = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=1),
+                                                   strategy="tertile")
+    ch = sc_pos["channels"][0]
+    assert "auc_signed" in ch and len(ch["auc_signed"]) == len(ch["auc"])
+    bi = int(np.argmax([abs(x) if x is not None else 0 for x in ch["r"]]))
+    assert ch["r"][bi] is not None and ch["r"][bi] > 0, ch["r"][bi]
+    assert ch["auc"][bi] >= 0.5                       # folded is always >= chance
+    assert ch["auc_signed"][bi] >= 0.5                # rises with pain -> signed >= chance
+    # Negative-correlation planted band (feature falls with pain): folded still >= 0.5, signed < 0.5.
+    sc_neg = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=1),
+                                                   strategy="tertile")
+    chn = sc_neg["channels"][0]
+    bn = int(np.argmax([abs(x) if x is not None else 0 for x in chn["r"]]))
+    assert chn["r"][bn] is not None and chn["r"][bn] < 0, chn["r"][bn]
+    assert chn["auc"][bn] >= 0.5                       # folded hides the sign
+    assert chn["auc_signed"][bn] <= 0.5               # falls with pain -> signed below chance
+    # Band-by-band relationship: signed is either the folded value or its reflection.
+    for a, s in zip(chn["auc"], chn["auc_signed"]):
+        if a is None:
+            assert s is None
+        else:
+            assert (abs(s - a) < 1e-9) or (abs(s - (1.0 - a)) < 1e-9), (a, s)
+
+
+def test_selected_band_is_per_contact_and_signed():
+    """R2/audit A2: each channel carries a `selected_band` naming its own best band + sign. The
+    planted band must be selected, with the correct direction, and never a single global band."""
+    sc = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=2),
+                                               strategy="tertile")
+    # Every channel has a selected_band entry (channel 1 has no planted signal but still gets a pick).
+    assert all("selected_band" in ch for ch in sc["channels"])
+    sb0 = sc["channels"][0]["selected_band"]
+    assert sb0 is not None
+    assert abs(sb0["center_hz"] - 17.5) <= 2.5, sb0          # picked the planted band
+    assert sb0["sign"] == "positive" and sb0["direction"] == "elevation", sb0
+    assert sb0["rho"] is not None and sb0["rho"] > 0
+    # Negative planted band -> suppression direction on its selected band.
+    scn = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=2),
+                                                strategy="tertile")
+    sbn = scn["channels"][0]["selected_band"]
+    assert sbn["sign"] == "negative" and sbn["direction"] == "suppression", sbn
+    assert sbn["auc_signed"] is not None and sbn["auc_signed"] <= 0.5, sbn
 
 
 def test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum():

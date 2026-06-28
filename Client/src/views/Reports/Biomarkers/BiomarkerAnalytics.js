@@ -334,10 +334,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
         customdata: centers.map((c, bi) => [ci, bi]),
         hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      traces.push({ x: centers, y: ch.auc, name: `${ch.short}${nch} · AUC`, type: "scattergl", mode: "lines",
+      // R1/A1: plot the SIGNED AUC (oriented by the band's correlation sign) so a band whose power
+      // FALLS with pain reads below the 0.5 chance line and a null band sits at ~0.5 — the folded
+      // `auc` (always >= 0.5) made every band look discriminative. Fall back to folded auc if absent.
+      traces.push({ x: centers,
+        y: (ch.auc_signed && ch.auc_signed.length === centers.length) ? ch.auc_signed : ch.auc,
+        name: `${ch.short}${nch} · AUC (signed)`, type: "scattergl", mode: "lines",
         line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
         customdata: centers.map((c, bi) => [ci, bi]),
-        hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
+        hovertemplate: "%{x:.1f} Hz · signed AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
       // Rigor-pass overlay: solid black-outlined markers at every band whose rating-clustered
       // logit p survives BH-FDR over the band x channel grid (`is_fdr_sig` from the backend).
       // The markers sit on the r curve (left axis) — same color as the channel, with a black ring
@@ -378,6 +383,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
         y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
     }
+    // R1/A1: chance line at signed-AUC 0.5 (right axis) so direction reads against an explicit
+    // reference — bands below discriminate in the pain-DOWN direction, above it pain-UP.
+    shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 0.5, y1: 0.5,
+      line: { width: 1, color: "#9AA0A6", dash: "dash" }, layer: "below" });
     // The selected-band vertical guide is NOT drawn here. It is applied by a separate
     // Plotly.relayout effect keyed on `sel` (below), so that clicking a band never rebuilds the
     // traces — a rebuild is what used to wipe the user's legend on/off state (the cleanup purge
@@ -394,8 +403,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         range: [0, fmax] },
       yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `${corrName} vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
-      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
-        overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
+      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Signed logistic AUC (binarized · 0.5 = chance)" },
+        overlaying: "y", side: "right", range: [0.0, 1.0], showgrid: false },
       legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
                 // Single-click toggles a group on/off; that's the only legend gesture that changes
                 // visibility. Double-click-to-isolate is disabled — without this, a double-click
@@ -678,6 +687,56 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
             {isLsb && <span>{"LSB is shown on the raw (linear) device scale; ρ is rank-based, robust to its heavy tail. "}</span>}
             <strong>Exploratory screen — neither the correlation nor AUC is a validated biomarker.</strong>
           </MDTypography>
+          {/* R2/A2: per-contact biomarker selection — the pain-tracking band AND its direction are
+              contact-specific, so name each contact's own best band rather than implying one global
+              biomarker. Direction from the sign of ρ; ✓ marks bands clearing rigorous BH-FDR. Built
+              as a self-contained IIFE (the proven JSX pattern here) to avoid the react-hooks eslint
+              false-positive that a component-body const+map triggers. */}
+          {(() => {
+            const rows = ((scan && Array.isArray(scan.channels)) ? scan.channels : [])
+              .filter((c) => c.selected_band);
+            if (!rows.length) return null;
+            return (
+              <MDBox mb={1} mt={0.5} sx={{ overflowX: "auto" }}>
+                <MDTypography variant="caption" display="block" fontWeight="bold" mb={0.5} sx={{ fontSize: 12.5 }}>
+                  {"Per-contact best band (no single global biomarker — band & direction differ by contact):"}
+                </MDTypography>
+                <table style={{ borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #cfd6dd", textAlign: "left" }}>
+                      {["Contact", "Band", "Direction", "\u03c1", "Signed AUC", "q (FDR)"].map((h) => (
+                        <th key={h} style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((c) => {
+                      const sb = c.selected_band;
+                      const dc = sb.sign === "positive" ? "#D55E00" : sb.sign === "negative" ? "#0072B2" : "#9AA0A6";
+                      const dl = sb.direction === "elevation" ? "\u2191 elevation"
+                        : sb.direction === "suppression" ? "\u2193 suppression" : "\u2014 flat";
+                      return (
+                        <tr key={c.short} style={{ borderBottom: "1px solid #eef1f4" }}>
+                          <td style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{c.short}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{`${sb.center_hz.toFixed(1)} Hz`}</td>
+                          <td style={{ padding: "2px 10px 2px 0", color: dc, fontWeight: 600 }}>{dl}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.rho == null ? "\u2014" : sb.rho.toFixed(2)}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.auc_signed == null ? "\u2014" : sb.auc_signed.toFixed(2)}</td>
+                          <td style={{ padding: "2px 10px 2px 0", fontWeight: sb.fdr_significant ? 700 : 400,
+                                       color: sb.fdr_significant ? "#0a7f3f" : "#6c757d" }}>
+                            {sb.q == null ? "\u2014" : `${sb.q.toFixed(3)}${sb.fdr_significant ? " \u2713" : ""}`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <MDTypography variant="caption" display="block" mt={0.3} sx={{ fontSize: 11, fontStyle: "italic", color: "#6c757d" }}>
+                  {"\u2713 = survives band\u00d7channel BH-FDR (q<0.05); others are the contact's strongest exploratory band. Signed AUC <0.5 = power falls with pain."}
+                </MDTypography>
+              </MDBox>
+            );
+          })()}
           {scan && scan.note && (
             <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
               {scan.note}
