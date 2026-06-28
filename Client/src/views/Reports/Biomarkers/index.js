@@ -129,6 +129,7 @@ function Biomarkers() {
   // LSB vector reused across more than one rating. Off path keeps the legacy per-rating LSB build.
   const [useLiveMatching, setUseLiveMatching] = useState(P.useLiveMatching != null ? P.useLiveMatching : false);
   const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
+  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -170,12 +171,20 @@ function Biomarkers() {
     MatchDirection: matchDirection,
     UseLiveMatching: useLiveMatching,
     MatchExtentSec: matchExtentSec,
+    AllowWindowReuse: allowWindowReuse,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
   const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
+  // Independence note shown under the live-matching control, switched by the window-reuse toggle.
+  const halfExtentTxt = (matchExtentSec / 2).toFixed(0);
+  const reuseNote = allowWindowReuse
+    ? "Window reuse is ON: a window may serve several overlapping ratings, raising n at the cost of independence."
+    : "No LSB window is shared between ratings, so each rating is one independent observation of the cache.";
+  const liveMatchCaption = "Each rating's LSB spectrum is the median of the raw 3 s windows within \u00b1"
+    + halfExtentTxt + " s of it (time-domain windows preferred over PSD). " + reuseNote;
 
   useEffect(() => {
     if (!participant_uid) {
@@ -630,12 +639,27 @@ function Biomarkers() {
                                         valueLabelDisplay="auto" size="small"
                                         onChange={(e, v) => setMatchExtentSec(v)} />
                                     </MDBox>
+                                    <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+                                      <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                        sx={{ fontSize: 13 }}>
+                                        {"Window reuse"}
+                                      </MDTypography>
+                                      <ToggleButtonGroup
+                                        value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
+                                        aria-label="window reuse mode"
+                                        onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
+                                        sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
+                                      >
+                                        <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
+                                        <ToggleButton value="reuse" title="Each raw window is assigned to every rating whose extent covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
+                                      </ToggleButtonGroup>
+                                    </MDBox>
                                   </MDBox>
                                 )}
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
                                   {useLiveMatching
-                                    ? `Each rating's LSB spectrum is the median of the raw 3 s windows within ±${(matchExtentSec / 2).toFixed(0)} s of it (time-domain windows preferred over PSD). No LSB window is shared between ratings, so each rating is one independent observation of the cache.`
+                                    ? liveMatchCaption
                                     : "Legacy: per-rating LSB recomputed from the recordings at match time. Turn on Live cache to match against the decoupled raw-LSB cache with the no-reuse rule."}
                                 </MDTypography>
                                 {data && data.live_match_stats && (
