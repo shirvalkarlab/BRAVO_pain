@@ -116,7 +116,8 @@ function classify(v, cuts) {
 export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                                           strategy, percentileLow, percentileHigh,
                                           maxPerRating = 3, refractoryMin = 2,
-                                          matchDirection = "prior" }) {
+                                          matchDirection = "prior",
+                                          allowWindowReuse = false }) {
   const empty = {
     samples: [], binByKey: new Map(), matchedValues: [], cuts: { kind: "none" },
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
@@ -148,7 +149,56 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     t: e.t, channel: e.channel, source: e.source, v: null, dtMin: null, proIdx: -1,
   }));
   let nCappedDropped = 0;
-  if (matchDirection === "pro_first" && proSorted.length && tolSec > 0 && maxPerRating >= 1) {
+  // WINDOW REUSE (mirrors the backend live matcher's AllowWindowReuse): a single neural sample
+  // within tolerance of MULTIPLE ratings contributes one observation to EACH of them, instead of
+  // being claimed by exactly one. We build the observation list directly: for each rating, take the
+  // K (maxPerRating) closest samples per channel inside the window — with NO cross-rating exclusivity,
+  // so a sample covered by two ratings appears under both. Samples covered by no rating are kept as
+  // unmatched records (greyed on the timeline). When the toggle is OFF, `reuseObs` stays null and the
+  // strict one-sample-one-rating path below runs byte-identically.
+  let reuseObs = null;
+  if (allowWindowReuse && proSorted.length && tolSec > 0) {
+    reuseObs = [];
+    const order = matched.map((_, i) => i).sort((a, b) => matched[a].t - matched[b].t);
+    const tSorted = order.map((i) => matched[i].t);
+    const everMatched = new Array(matched.length).fill(false);
+    for (let pk = 0; pk < proSorted.length; pk++) {
+      const tPro = proSorted[pk].t;
+      const vPro = proSorted[pk].v;
+      let lo = 0, hi = tSorted.length;
+      while (lo < hi) { const mi = (lo + hi) >> 1; if (tSorted[mi] < tPro - tolSec) lo = mi + 1; else hi = mi; }
+      const winLo = lo;
+      lo = 0; hi = tSorted.length;
+      while (lo < hi) { const mi = (lo + hi) >> 1; if (tSorted[mi] <= tPro + tolSec) lo = mi + 1; else hi = mi; }
+      const winHi = lo;
+      if (winHi <= winLo) continue;
+      const perCh = new Map();
+      for (let k = winLo; k < winHi; k++) {
+        const mi = order[k];
+        // 'prior' is a forecasting constraint: the neural sample must PRECEDE the rating. 'pro_first'
+        // and 'nearest' use the symmetric ±tol window.
+        if (matchDirection === "prior" && matched[mi].t > tPro) continue;
+        const ch = matched[mi].channel;
+        if (!perCh.has(ch)) perCh.set(ch, []);
+        perCh.get(ch).push(mi);
+      }
+      for (const idxs of perCh.values()) {
+        idxs.sort((a, b) => Math.abs(matched[a].t - tPro) - Math.abs(matched[b].t - tPro));
+        for (const mi of idxs.slice(0, Math.max(1, maxPerRating))) {
+          everMatched[mi] = true;
+          reuseObs.push({ t: matched[mi].t, channel: matched[mi].channel, source: matched[mi].source,
+                          v: vPro, dtMin: (tPro - matched[mi].t) / 60, proIdx: pk });
+        }
+      }
+    }
+    // Preserve samples no rating covered, so the timeline still greys them (v=null => unmatched bin).
+    for (let i = 0; i < matched.length; i++) {
+      if (!everMatched[i]) {
+        reuseObs.push({ t: matched[i].t, channel: matched[i].channel, source: matched[i].source,
+                        v: null, dtMin: null, proIdx: -1 });
+      }
+    }
+  } else if (matchDirection === "pro_first" && proSorted.length && tolSec > 0 && maxPerRating >= 1) {
     // Index scan rows for searchsorted by time.
     const idxByT = matched.map((_, i) => i).sort((a, b) => matched[a].t - matched[b].t);
     const sortedT = idxByT.map((i) => matched[i].t);
@@ -216,10 +266,13 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       }
     }
   }
-  const offsets = matched.filter((s) => s.v != null && Number.isFinite(s.v))
+  // Downstream aggregation runs over `obs`: the reuse observation list when window reuse is on
+  // (one record per sample×covered-rating), else the strict one-record-per-sample `matched` array.
+  const obs = reuseObs || matched;
+  const offsets = obs.filter((s) => s.v != null && Number.isFinite(s.v))
     .map((s) => Math.abs(s.dtMin));
   // Survey usage (rating-centric): how many distinct ratings were used and how many reused.
-  const usedIdx = matched.filter((s) => s.v != null && Number.isFinite(s.v) && s.proIdx >= 0)
+  const usedIdx = obs.filter((s) => s.v != null && Number.isFinite(s.v) && s.proIdx >= 0)
     .map((s) => s.proIdx);
   const useCounts = new Map();
   usedIdx.forEach((k) => useCounts.set(k, (useCounts.get(k) || 0) + 1));
@@ -237,7 +290,7 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     if (Number.isInteger(i0)) painMatched[i0] = true;
   });
   // cuts computed on the matched continuous values (exactly as the backend binarizes the labels).
-  const matchedValues = matched.filter((s) => s.v != null && Number.isFinite(s.v)).map((s) => s.v);
+  const matchedValues = obs.filter((s) => s.v != null && Number.isFinite(s.v)).map((s) => s.v);
   const cuts = computeCuts(matchedValues, strategy, percentileLow, percentileHigh);
 
   // 2nd pass: assign each sample its bin + build the (channel,t) lookup for the timeline.
@@ -247,19 +300,25 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   const samples = [];
   const binByKey = new Map();
   let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0, nMatchedEvent = 0;
-  // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. psd_scan_index
-  // ships three sources: "TD streaming", "Montage/survey", and "Patient event" (the imported
-  // event-marker PSDs). LSB (band power) is NOT pooled — its slot stays 0 (renderer shows "n/a").
+  // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. The backend
+  // `_psd_sample_index` stamps four `source` labels (bravo_service.py): time-domain streams are
+  // "BrainSense streaming" or "Indefinite stream", montage/survey is "Montage", and imported
+  // event-marker PSDs are "Patient event". srcBucket MUST key on those exact strings — an earlier
+  // version matched the substring "td", which NONE of them contain, so every time-domain sample
+  // fell through to the montage bucket and the hover's "TD" figure always read 0. LSB (band power)
+  // is NOT pooled here — its slot stays 0 (renderer shows "n/a").
   const bySrc = { low: { td: 0, montage: 0, event: 0, lsb: 0 },
                   high: { td: 0, montage: 0, event: 0, lsb: 0 },
                   excluded: { td: 0, montage: 0, event: 0, lsb: 0 } };
   const srcBucket = (src) => {
     const s = String(src || "").toLowerCase();
-    if (s.indexOf("td") >= 0) return "td";
+    // Time domain: BrainSense streaming + Indefinite stream (both are raw 250 Hz TD). Keep the
+    // legacy "td" / "stream" / "indefinite" tokens so any older label still maps correctly.
+    if (s.indexOf("td") >= 0 || s.indexOf("stream") >= 0 || s.indexOf("indefinite") >= 0) return "td";
     if (s.indexOf("event") >= 0) return "event";
-    return "montage";
+    return "montage";   // "Montage" / "Montage PSD" / survey
   };
-  for (const s of matched) {
+  for (const s of obs) {
     let bin;
     if (s.v == null || !Number.isFinite(s.v)) bin = "unmatched";
     else {
@@ -320,8 +379,15 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
           psd_per_pro_max: cArr.length ? cArr[cArr.length - 1] : 0,
         };
       })(),
+      // Fraction of the pooled scan samples that fed >=1 rating. Under reuse, matchedValues counts
+      // OBSERVATIONS (a sample reused by k ratings counts k times), so the honest numerator is the
+      // count of DISTINCT samples that matched at least once — capped at the pool size (<=100%).
+      n_obs: matchedValues.length,
       pct_psd_used: scanIndex.length
-        ? Math.round((1000 * matchedValues.length) / scanIndex.length) / 10 : 0,
+        ? Math.round((1000 * Math.min(scanIndex.length,
+            reuseObs ? new Set(obs.filter((s) => s.v != null && Number.isFinite(s.v))
+                                  .map((s) => `${s.channel}|${Math.round(s.t)}`)).size
+                     : matchedValues.length)) / scanIndex.length) / 10 : 0,
     },
   };
 }

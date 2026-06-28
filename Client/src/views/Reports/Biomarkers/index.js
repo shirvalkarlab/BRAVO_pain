@@ -370,9 +370,10 @@ function Biomarkers() {
       scanIndex, painSeries: painSeriesLive, toleranceMin: matchToleranceD,
       strategy, percentileLow: percentileLowD, percentileHigh: percentileHighD,
       maxPerRating: maxPerRatingD, refractoryMin: refractoryMinD, matchDirection,
+      allowWindowReuse,
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
-      maxPerRatingD, refractoryMinD, matchDirection]);
+      maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
