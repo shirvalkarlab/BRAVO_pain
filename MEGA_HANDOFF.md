@@ -20,10 +20,10 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `53bdb06`** + **uncommitted** changeset (indefinite-stream mislabel fix + log10→raw/Spearman revert
-> + text-revision phase + Phase 1 frontend + Phase 4a backend; §0 newest entry), **suite 253/253 PASS**
-> (built + retested 2026-06-28), frontend built + ready to commit. No-agent-commits rule RETIRED — agent
-> now commits + pushes (bravo-session-rules Rule 4).
+> **HEAD `ed1b9a0`** (Phase 1 + 3 + 4a committed + pushed 2026-06-28), **suite 253/253 PASS** (initial
+> run FAIL=1 in scatter test due to log10→raw expectation mismatch; test fixed, retested PASS=253 FAIL=0,
+> committed). Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
+> (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`; the

@@ -587,6 +587,24 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
         summary.update(_band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig,
                                        session_df.get("stim_amplitude")))
         summary.update({"channel": ch["short"], "channel_raw": ch["raw"]})
+    
+    # Inject rating_group into the detail so deduplication works for TD-only channels.
+    # Map each session's matched PRO back to the PRO index in pro_df. Each epoch (session) matches
+    # to at most one PRO label; we find its index for the rating-grouped deduplication.
+    td_labels = result.get("labels", labels)  # use result labels (should match session_df)
+    rating_group = np.full(len(td_labels), -1, dtype=int)
+    for i, lbl in enumerate(td_labels):
+        if np.isfinite(lbl):
+            # Find the matching PRO in pro_df by value (should match the session PRO)
+            pro_vals = pro_df[label_col].to_numpy(dtype=float)
+            matched_idx = np.where(
+                np.isfinite(pro_vals) & 
+                (np.abs(pro_vals - lbl) < 1e-6)
+            )[0]
+            if len(matched_idx) > 0:
+                rating_group[i] = matched_idx[0]
+    result["rating_group"] = rating_group
+    
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,
             "timeline": timeline, "detail": result, "summary": summary}
 
