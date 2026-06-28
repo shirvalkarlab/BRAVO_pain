@@ -593,16 +593,19 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # to at most one PRO label; we find its index for the rating-grouped deduplication.
     td_labels = result.get("labels", labels)  # use result labels (should match session_df)
     rating_group = np.full(len(td_labels), -1, dtype=int)
-    for i, lbl in enumerate(td_labels):
-        if np.isfinite(lbl):
-            # Find the matching PRO in pro_df by value (should match the session PRO)
-            pro_vals = pro_df[label_col].to_numpy(dtype=float)
-            matched_idx = np.where(
-                np.isfinite(pro_vals) & 
-                (np.abs(pro_vals - lbl) < 1e-6)
-            )[0]
-            if len(matched_idx) > 0:
-                rating_group[i] = matched_idx[0]
+    # Map each session's label back to its PRO row in pro_df by value. session_df's `{m}_min`/`{m}_mean`
+    # columns are copies of the matched PRO's RAW metric value (adapter.align_pros), so the comparison
+    # set is the BARE metric column `pro_df[label_metric]` (e.g. "vas") — NOT `label_col` ("vas_min"),
+    # which exists only on session_df and would KeyError on the raw PRO frame. Hoisted out of the loop
+    # (invariant across epochs). If the metric column is absent, leave rating_group as -1 (no dedup).
+    pro_vals = (pd.to_numeric(pro_df[label_metric], errors="coerce").to_numpy(dtype=float)
+                if label_metric in pro_df.columns else None)
+    if pro_vals is not None:
+        for i, lbl in enumerate(td_labels):
+            if np.isfinite(lbl):
+                matched_idx = np.where(np.isfinite(pro_vals) & (np.abs(pro_vals - lbl) < 1e-6))[0]
+                if len(matched_idx) > 0:
+                    rating_group[i] = matched_idx[0]
     result["rating_group"] = rating_group
     
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,

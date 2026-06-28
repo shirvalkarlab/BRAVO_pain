@@ -20,9 +20,9 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `ed1b9a0`** (Phase 1 + 3 + 4a committed + pushed 2026-06-28), **suite 253/253 PASS** (initial
+> **HEAD `d521acd`** (scatter dedup + live matching + Phase 1/3/4a committed + pushed 2026-06-28), **suite 253/253 PASS** (initial
 > run FAIL=1 in scatter test due to log10→raw expectation mismatch; test fixed, retested PASS=253 FAIL=0,
-> committed). Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
+> committed + amended). Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
 > (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
@@ -37,10 +37,24 @@
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
 
-**Biomarker count integrity + UI-text overhaul + raw LSB cache → live matching + Phase-1 frontend (2026-06-28, UNCOMMITTED).**
-- **Live matching wired in.** `live_lsb_spectrum_match()` assigns each raw 3 s window to NEAREST PRO (TD ±30 s, PSD ±120 s, no-reuse by construction). Toggle `UseLiveMatching` (default OFF for A/B), param `MatchExtentSec` (3–300 s). FDR naive 401 vs legacy 428 — no-reuse doesn't collapse over-reporting (root: MaxPerRating on separate PSD match). AUC unchanged.
+**`vas_min` KeyError regression FIXED (2026-06-28).** Any non-default `LabelMetric` (vas, mpq_sum,
+etc.) crashed `run_for_participant` with `Biomarker computation error: 'vas_min'` (the card rendered
+the "upload a Percept session / configure REDCap" fallback). ROOT: the scatter-dedup `rating_group`
+injection added in 2daf80e (`pipeline.run_timedomain_branch`) read `pro_df[label_col]` where
+`label_col = f"{label_metric}_{label_reduce}"` (= "vas_min") — but `pro_df` is the RAW REDCap frame
+whose columns are bare metric names (`vas`/`nrs`/`mpq_sum`); the `_min`/`_mean` suffixes exist only on
+`session_df` (adapter.align_pros). `nrs` worked only because `label_reduce` defaults made the column
+coincidentally present in some paths. FIX: map session labels back to PRO rows via the bare
+`pro_df[label_metric]` column (pd.to_numeric-coerced), guarded with `if label_metric in pro_df.columns`
+(else rating_group stays -1 → no dedup, no crash); invariant lookup hoisted out of the per-epoch loop.
+Repro'd + verified through the bridge on RCS08 with `LabelMetric=vas` (was KeyError → now message='',
+6 channels). Suite 253/253.
+
+**Phase 1 + 3 + 4a + scatter dedup bug fix (2026-06-28, COMMITTED 2daf80e).**
+- **Scatter dedup bug FIXED.** TD-only channels (e.g., L 0⁻2⁺) were not deduplicated because `rating_group` was missing from the TD detail dict. User reported n=90 in title but only ~14 visible points. Root: `compute_psd_pain_correlation()` returns no `rating_group`; only `build_pooled_detail_from_matrix()` (PSD path) had it. FIX: inject `rating_group` in `pipeline.py run_timedomain_branch()` by mapping each session's matched PRO to its index in pro_df. Dedup now works for both TD and pooled paths.
+- **Live matching wired in (Phase 4a).** `live_lsb_spectrum_match()` assigns each raw 3 s window to NEAREST PRO (TD ±30 s, PSD ±120 s, no-reuse by construction). Toggle `UseLiveMatching` (default OFF for A/B), param `MatchExtentSec` (3–300 s). FDR naive 401 vs legacy 428 — no-reuse doesn't collapse over-reporting (root: MaxPerRating on separate PSD match). AUC unchanged.
 - **Phase-1 frontend: toggle + draggable histogram + hover.** Toggle (Legacy/Live-cache) + extent Slider + stats readout. Draggable cut-lines in Plotly (replace disconnected sliders with chips). Histogram hover: day-count pinned top, then TD/PSD source splits.
-- **Indefinite-stream mislabel (pre-existing).** 103 IndefiniteStream recs mislabeled BrainSense — decoded payloads carry no type field. FIX: stamp `RecordingType` from DB onto dict in `_decode`; discriminators now key off `RecordingType=='MedtronicIndefiniteStream'`. Index: `{BS 326, Indef 624, Montage 1174, Event 3119}`.
+- **Indefinite-stream mislabel (Phase 3).** 103 IndefiniteStream recs mislabeled BrainSense — decoded payloads carry no type field. FIX: stamp `RecordingType` from DB onto dict in `_decode`; discriminators now key off `RecordingType=='MedtronicIndefiniteStream'`. Index: `{BS 326, Indef 624, Montage 1174, Event 3119}`.
 - **Text revision (Phase 3).** log10→raw + Pearson→Spearman ρ (rank-invariant); AUC fit stays log10 internally. Slider relabel: "Max LSB samples per Pain rating". FDR annotation reworded (MaxPerRating, not LSB reuse). Power-domain section removed. Feature-importance height +25 %; super-title spacing fixed.
 
 ---
