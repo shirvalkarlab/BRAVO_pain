@@ -1,4 +1,0 @@
-band,in_sample_auc,held_out_auc,held_out_ci_lo,held_out_ci_hi,optimism,n_folds,n_test_clusters,beats_chance_forward,gate_state
-nrs ZERO_THREE_RIGHT 26.4,0.551,0.242,0.139,0.368,0.309,13,52,False,fail
-nrs ZERO_THREE_RIGHT 8.8,0.523,0.368,0.247,0.508,0.155,13,52,False,fail
-mpq ZERO_THREE_RIGHT 83.5,0.669,0.67,0.495,0.782,-0.0,12,37,False,fail
