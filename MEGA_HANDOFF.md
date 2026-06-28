@@ -20,7 +20,7 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `fe31c87`** (in sync with origin), **suite 229/229 PASS** (in-container runner).
+> **HEAD `e8a0d3f`** (in sync with origin), **suite 239/239 PASS** (in-container runner).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-27.md`; the TD→LSB
@@ -33,6 +33,39 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Deployment LSB fallback → universal TIER-1 off raw TD; z-scored units bug fixed (2026-06-28, `09798f7` + build `e8a0d3f`).**
+A cross-module LSB-consistency code review found a **CRITICAL units bug** in the deployment threshold
+path: the ROC cut-point is a within-(channel,source) **z-scored log-power feature** (dimensionless,
+frequently negative — built by `streaming_psd.build_pooled_detail_from_matrix`, `prelog=True`), but the
+prior fallback fed it straight into `psd_lsb_model.estimate_lsb`, which expects a **linear µV²** band
+power. A z≤0 clipped to 1e-12 (LSB≈0); a z>0 was silently misread as µV². This was the patient-facing
+stim-threshold for any unsensed band. **Fix — one units-consistent modeled tier:**
+- **New `availability.modeled_lsb_at_center(channel, center_hz, *, td_recordings=, psd_recordings=, half_hz=2.5)`**
+  models the device-LSB line off the **RAW µV TD** the ROC was built from, **at the ROC's OWN band
+  center** (transform `td_to_lsb` ×352.62; bridge `device_psd_to_lsb` ≈73.63 for PSD-only events), then
+  the caller anchors a threshold by **RANK (percentile)** exactly like the native path — **no µV²↔LSB
+  conversion of the cut-point**. Universal: covers any band the ROC can score, incl. high-gamma the
+  montage never swept. **Honors the ROC center exactly (no `snap_freq` clamp)** — a 55 Hz winner converts
+  at 55 Hz, not the 26.4 Hz top of the device sensing-bin table (snap is for timeline display only;
+  catching this corrected a high-gamma threshold that was ~4× too high).
+- **Deployment-only:** the helper only CALLS shared primitives; `lsb_series` and the Biomarker
+  Exploration timeline are **byte-unchanged in behavior**. Both endpoints (`band_lsb_and_power`,
+  `deployment_summary`) now source `modeled_thr` from the helper at the ROC center.
+- **TIER-2 (frozen-model-on-cut-point) and the old TIER-3 are both gone.** `_modeled_lsb_threshold_estimate`
+  is now a single modeled tier; fail-closed (`modeled_thr None → thr_estimate None`) only when there is
+  genuinely no TD/PSD for the channel. `estimate_lsb` is **retained as a tested µV²→LSB utility (no
+  production caller)** with a loud input-contract warning against z-scored/log/cut-point inputs.
+- **Hardening:** channel-name guard now requires a named column matching the target (mirrors `lsb_series`);
+  unnamed/extra columns (malformed packets) and power-domain records (`fs≤0`, e.g. ChronicBrainSense) are
+  skipped — no cross-channel or units leak. `chronic_list` no longer passed to the TD tier.
+- **Tests:** +9 net (8 helper-branch tests — named-match, foreign-channel exclusion, power-domain skip,
+  malformed extra-columns, orientation, short-column, fail-closed, PSD band-gate/high-gamma — plus the
+  restored `test_freq_extrapolated_guard_agrees_with_frozen_model`). Suite **239/239**.
+
+> ⚠ This **supersedes** the conclusion of the entry below: the deployment fallback is **NOT**
+> frozen-model-only. The frozen-model-on-cut-point step was itself the units bug and was removed; the
+> deployment modeled threshold is now the raw-TD transform/bridge route, rank-anchored.
 
 **welch256 / k=269 removal — deployment fallback now frozen-model-only (2026-06-28, `184ea74`+`fa2c416`).**
 The Welch-256 PSD→LSB exploration backup and the `k=269` population constant were fully removed; the
@@ -116,7 +149,7 @@ actionable Percept sensing/threshold parameters a clinician can program. Subject
   inside the live `bravo-server` OrbStack container.
 - Remote: `https://github.com/shirvalkarlab/BRAVO_pain.git`.
 - **Default branch:** `v3.1.0`. The old `v3.0.0-alpha` is deleted.
-- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `fe31c87`**,
+- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `e8a0d3f`**,
   in sync with origin.
 - Other remote branches: `development` (legacy) + release branches `v2.0-alpha`…`v2.2.1`.
   Retired (squash-merged into `v3.1.0`): `PS_biomarker_{actionability,clfixes,module}` (§9).
@@ -291,7 +324,8 @@ into history, not current HEAD.
 | 17 | **Impedance term `c=1.02` — REJECTED** | Significant only under naive OLS (pseudoreplication: 2985 epochs share 230 impedance measurements). Cluster-robust SE n.s. (p=0.26); a slow-time proxy, not a physical gain. Threshold impact 1.22× < model scatter. Frozen fit UNCHANGED. | `a9c3a01` |
 | 18 | **Primary TD→LSB → transform `k=352.62`** (welch256 `k=269` demoted to backup) | The vendored transform DSP reaches r=0.9927 / RMSE 60.6 LSB; welch256 produces a PSD from TD and can't consume a device PSD, so it was never a valid no-TD backup. | CS-1 (§0) |
 | 19 | **Audit-cleanup statistical calls** — moving-block bootstrap CI + DEFF; BCa headline CI with de-folded `auc_lo_defold` as the C1-safe gate; per-week threshold-drift trend test | Honest CIs under autocorrelated ratings; keep the C1 beats-chance floor from being re-manufactured by BCa's bias term. | §0, `8509e96`/`2ef0408`/`abe8a23` |
-| 20 | **welch256 `k=269` REMOVED — deployment fallback frozen-model-only** | The cut-point's own model converts it: the offline-Welch µV² cut-point → LSB via the per-participant frozen model (fit on the same Welch→LSB mapping), not a bespoke population scalar. Population-constant TIER-3 retired → fail-closed (indeterminate) when no fitted entry. Dead welch256 DSP + converters deleted. | §0, `184ea74`/`fa2c416` |
+| 20 | **welch256 `k=269` REMOVED — deployment fallback frozen-model-only** *(superseded by 21)* | The cut-point's own model converts it: the offline-Welch µV² cut-point → LSB via the per-participant frozen model (fit on the same Welch→LSB mapping), not a bespoke population scalar. Population-constant TIER-3 retired → fail-closed (indeterminate) when no fitted entry. Dead welch256 DSP + converters deleted. | §0, `184ea74`/`fa2c416` |
+| 21 | **Deployment LSB fallback → universal TIER-1 modeled off raw TD** (frozen-model TIER-2 deleted) | The ROC cut-point is a **z-scored** log-power feature, NOT linear µV² — feeding it to the frozen model (decision 20) was a units bug (z≤0→LSB≈0, z>0 mis-read). Model the LSB line off the raw µV TD at the ROC's OWN center (transform ×352.62 / bridge ≈73.63) and anchor by RANK like native — no µV²↔LSB conversion of the cut-point. Honors the ROC center exactly (no snap-clamp); fail-closed when no TD/PSD. Deployment-only; Exploration timeline unchanged. | §0, `09798f7` |
 
 ---
 
@@ -327,7 +361,7 @@ TD→LSB validation + PSD→TD→LSB back-translation; impedance `c=1.02` (rejec
 
 ## 5. Test & build status
 
-- **Backend suite: 229/229 PASS** in the live container via the bridge:
+- **Backend suite: 239/239 PASS** in the live container via the bridge:
   `python3 _agent_bridge/run_tests.py`. **No pytest in the container** — `run_tests.py` is the
   authoritative runner (globs `test_*.py`, sets up Django, reloads the module). `test_analytics.py`
   holds ~96 of the test functions.
@@ -422,7 +456,9 @@ session handoffs or `operon.artifacts()` if ever needed.)
   (`spectral_feature_importance`, `feature="lsb"→lsb_cs14`); stim-era assignment (`_assign_stim_eras`,
   `_elapsed_week_cluster`).
 - `routines/availability.py` — per-PRO LSB selection (`per_pro_lsb`, `per_pro_lsb_overlay`,
-  `per_pro_lsb_spectrum`), modeled `lsb_series` tier.
+  `per_pro_lsb_spectrum`), modeled `lsb_series` tier, and `modeled_lsb_at_center` (deployment-only:
+  models the device-LSB line off raw TD at the ROC's own band center — the units-consistent fallback,
+  decision 21).
 - `routines/streaming_psd.py` — Welch (`welch_psd_for_instance`, `welch_rating_centered`,
   `WELCH_MAX_MISSING_FRAC`), `build_pooled_detail_from_matrix`.
 - `routines/psd_lsb_model.py` — frozen-model loader/estimator (`load_model`, `has_model`,
@@ -471,7 +507,10 @@ cached PRO table `BRAVO/_pro_dump/RCS08_chronic_pro_df.csv` (679 rows); `secrets
 | — | CS-1…CS-4 + Phase 0–3 | branch | TD→LSB transform primary; PSD bridge; per-PRO selection; spectral-scan unify (§0) |
 | — | `8274d6c` | branch | code-review fixes for the Phase 2–3 spectral rewire |
 | — | `184ea74` | branch | remove dead welch256 DSP; fix stale TIER-1 modeled-timeline labels (§0) |
-| — | **`fa2c416`** | `PS_closedloop_deployment` (HEAD) | **remove k=269 population constant; deployment fallback frozen-model-only (§0)** |
+| — | `fa2c416` | branch | remove k=269 population constant; deployment fallback frozen-model-only (§0) |
+| — | `e15e57e`/`fe31c87`/`45c39a9` | branch | MEGA top-of-doc update instructions; un-track ~100 stray scratch files + restore docs |
+| — | `09798f7` | branch | deployment LSB fallback → universal TIER-1 off raw TD; fix z-scored units bug (decision 21, §0) |
+| — | **`e8a0d3f`** | `PS_closedloop_deployment` (HEAD) | **rebuild frontend (drop retired k=269 tier label)** |
 
 **Engineering envs:** `bravo_app` (py 3.11, local decode — Django-free pure-function checks),
 `rocqa` (plotly 6.8 + kaleido — broken Chrome export in sandbox; use `write_html` or the bridge),
@@ -480,7 +519,7 @@ sklearn 1.5.2.
 
 ---
 
-*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`fe31c87`**, suite **229/229**.
+*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`e8a0d3f`**, suite **239/239**.
 Authoritative sources: `RCS08.json`, the dated `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files,
 and the current `analytics.py`. Preserve exact numbers, SHAs, paths, and dates when editing —
 and verify constants against source (`grep`), not against this doc, before relying on a line number.*
