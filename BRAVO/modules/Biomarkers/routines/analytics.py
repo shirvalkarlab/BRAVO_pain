@@ -2598,36 +2598,24 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
                                    if v["fft_size"] == CONVERSION_FFT_SIZE)  # ("Dual","SingleInverse")
 
 
-# ── population PSD→LSB scalar k=269 — DEPLOYMENT last-resort fallback ONLY (NOT primary TD→LSB) ──
-# Power-domain LSB <-> µV² calibration, VALIDATED on RCS08 ground truth (on-demand BrainSense
-# Streaming: BrainSenseLfp device LSB + BrainSenseTimeDomain 250 Hz TD on the SAME signal, 50 stim-off
-# paired blocks). Welch 256-pt PSD of the TD integrated over the sensed band, regressed on the device's
-# own LFP power: k = 269 LSB/µV² (1 LSB ≈ 0.0037 µV²), log-log slope 0.835, R² 0.94, 5-fold CV fold-
-# error 1.19×, 1σ multiplicative scatter 1.26×. This MATCHES the design-ledger empirical 0.0034 µV²/LSB
-# to within 9% and is 0.37× the Medtronic 0.01-µV²/LSB rule of thumb. It is far tighter than the older
-# empirical_lsb_ratio FYI (which was rated to ~3×) because TD and LSB come from the identical signal —
-# no time-matching slop. This is the time-domain ADC LSB's DISTINCT power-domain sibling: 146 nV/LSB
-# (ADC_NV_PER_LSB) is the exact time-domain count scale; the constant below is the firmware's band-
-# power LSB, which is normalization-dependent and remains a CONFIDENCE-RATED estimate (use the device's
-# own Timeline LSB percentile anchor for the actual deployed threshold; use this only to translate a
-# physical µV² target into LSB when the device never sensed the band).
+# ── TD→LSB conversion routes (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md) ──
+# The PRIMARY TD→LSB source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62**
+# (below); the PSD-only no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 73.63** (CS-3,
+# below). The deployment fallback ladder anchors an offline-Welch µV² cut-point to LSB via the
+# per-participant frozen PSD→LSB model (psd_lsb_model.estimate_lsb), which is itself fit on the SAME
+# offline-Welch µV²→device-LSB mapping (RCS08.json), so the cut-point and the converter share units.
 #
-# ROUTE STATUS (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md): the PRIMARY TD→LSB
-# source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62** (below); the PSD-only
-# no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 73.63** (CS-3, below). The standalone
-# Welch-256 PSD→LSB DSP helpers (psd_band_to_lsb / welch256_density) were the original exploration
-# backup and were REMOVED 2026-06-27 once the bridge superseded them — they had no production caller.
-# k=269 itself SURVIVES as a SCALAR population constant for ONE narrow live path: the deployment
-# fallback ladder (bravo_service._modeled_lsb_threshold_estimate / deployment_summary), which converts
-# a frozen-model OFFLINE µV² cut-point to LSB via lsb_from_uv2(cutpoint, k=269) as a last resort when
-# neither a native device threshold nor the frozen PSD→LSB model is available. That cut-point is an
-# offline-Welch band power, so k=269 (the Welch-256 fit) is the physically correct scale there — do
-# NOT feed a transform-DSP µV² through k=269, nor an offline-Welch µV² through 352.62 (each DSP carries
-# its own scale; see ERROR 3 in the handoff). The two are NOT interchangeable.
-LSB_PER_UV2_VALIDATED = 269.0          # k, Welch-256 fit — deployment µV²→LSB fallback scalar ONLY
-UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
-LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
-LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
+# REMOVED 2026-06-28: the standalone Welch-256 population constant k=269 (LSB_PER_UV2_VALIDATED /
+# UV2_PER_LSB_VALIDATED / LSB_UV2_LOGLOG_SLOPE) and its converters lsb_from_uv2 / uv2_from_lsb, plus
+# the Welch-256 DSP helpers psd_band_to_lsb / welch256_density (all without a production caller after
+# the bridge + frozen-model rewire). The deployment last-resort population-constant TIER was retired:
+# when neither a native device threshold nor a frozen per-participant model entry exists, the modeled
+# threshold is now returned as indeterminate (fail-closed) rather than a population-average guess.
+# 146 nV/LSB (ADC_NV_PER_LSB) remains the exact time-domain count scale — a DISTINCT quantity from the
+# power-domain band-power LSB the conversion routes above produce.
+MODELED_LSB_SIGMA_FOLD = 1.26          # 1σ multiplicative scatter of the modeled-LSB conversion (±band
+                                       # on TIER-1/TIER-2 estimates; per-participant resid_log_sigma_fold
+                                       # overrides it when the frozen model carries one)
 # Frequency range over which the PSD→LSB gain is actually calibrated on RCS08 paired blocks.
 # Outside this range the conversion (whether the population k or a per-band model intercept) is an
 # UNTESTED EXTRAPOLATION — the device gain anchor is not band-flat (it falls ≈0.80 log10/decade
@@ -2696,51 +2684,12 @@ LSB_PER_UV2_DEVICE_PSD_TD_RATIO = 4.789   # K_TD_PSD: device-PSD band power / TD
 LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 73.63
 
 
-def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
-    """Translate an offline band power in µV² to device power-domain LSB using the validated
-    proportional constant k (default = RCS08 stim-off fit, 269 LSB/µV²). Pass a participant-specific
-    k when one has been fitted. Returns float LSB, or NaN for non-positive/invalid input.
-
-    This is the DIRECT route the back-translation analysis confirmed is sufficient: device LFP Power is
-    the band integral of the PSD, and a band integral is phase-independent, so reconstructing a time
-    series from the PSD (PSD→TD→LSB) cannot add information — band power from a phase-randomized
-    reconstruction matched the direct integral to within 0.8% across 113 RCS08 blocks. Only the 256-pt
-    FFT modes (Dual, Single-Inverse) are valid targets; Single Threshold's 64-pt band is a different
-    quantity (see THRESHOLD_MODES / COMPATIBLE_THRESHOLD_MODES).
-
-    **Frequency coverage:** the default k (269) is validated on RCS08 paired blocks at 7.8–28.3 Hz
-    only (approximately band-flat within that range, 1.23× span excluding the anomalous 7.8 Hz n=4
-    point). Bands outside ~8–28 Hz have NO ground truth — k there is an untested extrapolation. This
-    is not clinically restrictive for the adaptive modes (firmware-limited to 8–30 Hz), but sensing-
-    only bands at higher frequencies (e.g. high-gamma) would need their own streaming calibration.
-    """
-    try:
-        x = float(uv2)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(x) or x <= 0:
-        return float("nan")
-    return float(k) * x
-
-
-def uv2_from_lsb(lsb, *, k=LSB_PER_UV2_VALIDATED):
-    """Inverse of lsb_from_uv2: device power-domain LSB → offline band power in µV². Returns NaN for
-    non-positive/invalid input."""
-    try:
-        x = float(lsb)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(x) or x <= 0 or k == 0:
-        return float("nan")
-    return float(x) / float(k)
-
-
 def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI):
     """True iff center_hz is outside the validated [7.8, 28.3] Hz calibration range (None -> False).
 
-    Mirrors psd_lsb_model._freq_extrapolated so the proportional (k=269) route and the frozen per-band
-    model share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to
-    avoid a routines->routines import cycle; the two constants are asserted equal by test.
+    Mirrors psd_lsb_model._freq_extrapolated so the deployment fallback and the frozen per-band model
+    share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to avoid
+    a routines->routines import cycle; the two constants are asserted equal by test.
     """
     try:
         c = float(center_hz)
@@ -2972,12 +2921,11 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
 
     This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold. NOTE: a later paired-
     block validation (BrainSenseLfp + BrainSenseTimeDomain on the SAME signal, 50 RCS08 stim-off
-    blocks) pinned this far more tightly than the "~3×" caveat once suggested — k = 269 LSB/µV²
-    (≈ 0.0037 µV²/LSB), R² 0.94, CV fold-error 1.19×, i.e. 0.37× the 0.01 rule of thumb (see
-    LSB_PER_UV2_VALIDATED / lsb_from_uv2). The absolute constant is still normalization-dependent, so
-    the deployable threshold remains percentile-anchored on the device's own Timeline LSB (see the
-    service layer); use the validated constant only to translate a physical µV² target into LSB when
-    the device never sensed the band. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
+    blocks) pinned the µV²↔LSB scatter far more tightly than the "~3×" caveat once suggested (R² 0.94,
+    CV fold-error 1.19×). The absolute ratio is still normalization-dependent, so the deployable
+    threshold remains percentile-anchored on the device's own Timeline LSB (see the service layer);
+    an offline µV² cut-point is translated to LSB only via the per-participant frozen PSD→LSB model
+    (psd_lsb_model.estimate_lsb) on bands the device never sensed natively. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
     recording's sensing center frequency for a contact (the TD recording itself carries no Therapy
     snapshot).
 

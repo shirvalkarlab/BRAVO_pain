@@ -1018,57 +1018,6 @@ def test_psd_lsb_conversion_guards_small_n():
     assert out["n_pairs"] == 3
 
 
-def test_lsb_uv2_converters_roundtrip_and_validated_constant():
-    """The validated power-domain LSB<->µV² converters round-trip and use the paired-block constant
-    (k=269 LSB/µV² ≈ 0.0037 µV²/LSB) — distinct from the exact 146 nV/LSB time-domain ADC scale."""
-    k = analytics.LSB_PER_UV2_VALIDATED
-    assert 250.0 < k < 290.0, k                                  # ~269
-    assert abs(analytics.UV2_PER_LSB_VALIDATED - 1.0 / k) < 1e-9
-    # 1 µV² -> ~269 LSB
-    assert abs(analytics.lsb_from_uv2(1.0) - k) < 1e-6
-    # round-trip
-    for uv2 in (0.5, 2.0, 13.7):
-        lsb = analytics.lsb_from_uv2(uv2)
-        assert abs(analytics.uv2_from_lsb(lsb) - uv2) < 1e-6, uv2
-    # the power-domain LSB is NOT the time-domain ADC scale
-    assert analytics.LSB_PER_UV2_VALIDATED != analytics.ADC_NV_PER_LSB
-    # invalid inputs -> NaN, never an exception
-    import math
-    assert math.isnan(analytics.lsb_from_uv2(0.0))
-    assert math.isnan(analytics.lsb_from_uv2(-3.0))
-    assert math.isnan(analytics.uv2_from_lsb(None))
-
-
-def test_freq_extrapolated_guard_agrees_with_frozen_model():
-    """The analytics extrapolation guard must agree with psd_lsb_model's definition at the validated
-    bounds, so an out-of-range band is flagged identically wherever the deployment path checks it."""
-    from Biomarkers.routines import psd_lsb_model as plm
-    for c in (7.0, 7.8, 18.0, 28.3, 29.0):
-        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
-
-
-def test_native_modeled_crosscheck_fold_and_sigma_gate():
-    """The deployment sign-off's native-vs-modeled FYI (band_lsb_and_power) reports how closely the
-    k=269 model of the µV² cut-point reproduces the MEASURED device-Timeline LSB. Verify the math it
-    relies on: lsb_from_uv2(cutpoint) gives the modeled value, the fold is symmetric max(a/b, b/a),
-    and 'agrees' is fold <= the 1σ conversion scatter (LSB_UV2_SIGMA_FOLD ≈ 1.26×)."""
-    k = analytics.LSB_PER_UV2_VALIDATED               # 269
-    sigma = analytics.LSB_UV2_SIGMA_FOLD              # ≈1.26
-    # a cut-point of 1 µV² models to ~269 LSB; if the device measured ~272, they agree (~1.01×)
-    cutpoint = 1.0
-    modeled = analytics.lsb_from_uv2(cutpoint)
-    assert abs(modeled - k) < 1e-6
-    measured_close = k * 1.05                          # 5% high -> within 1σ
-    fold_close = max(measured_close / modeled, modeled / measured_close)
-    assert fold_close <= sigma                         # agrees
-    measured_far = k * 1.6                             # 60% high -> beyond 1σ
-    fold_far = max(measured_far / modeled, modeled / measured_far)
-    assert fold_far > sigma                            # does NOT agree
-    # the cross-check only fires when BOTH a measured threshold and a cut-point exist; the modeled
-    # value is the SAME constant the unsensed-band fallback uses, so agreement here vouches for it.
-    assert analytics.lsb_from_uv2(2.0) == analytics.lsb_from_uv2(1.0) * 2.0   # linear in µV²
-
-
 def test_band_power_notched_default_no_mains_removal():
     """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
     integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
@@ -1219,9 +1168,7 @@ if __name__ == "__main__":
     test_psd_lsb_conversion_flags_nonlinear_slope()
     test_psd_lsb_conversion_guards_small_n()
     test_band_power_notched_default_no_mains_removal()
-    test_lsb_uv2_converters_roundtrip_and_validated_constant()
     test_freq_extrapolated_guard_agrees_with_frozen_model()
-    test_native_modeled_crosscheck_fold_and_sigma_gate()
     test_forward_chaining_validates_stationary_band()
     test_forward_chaining_null_band_does_not_beat_chance_forward()
     test_forward_chaining_catches_sign_reversal_over_time()
@@ -1560,40 +1507,36 @@ def test_modeled_lsb_threshold_fallback_ladder():
     the MODELED LSB instead of dead-ending at 'NO DEPLOYABLE LSB THRESHOLD'. Verifies:
       (1) a MEASURED native threshold always wins — the estimate is never consulted (returns None);
       (2) TIER 1 (modeled_timeline) reads the montage/survey LSB at the cut-point percentile;
-      (3) TIER 3 (validated_constant) translates the µV² cut-point via k=269 when no modeled
-          timeline and no frozen per-participant model exist;
-      (4) the ±1σ band is the validated fold (LSB_UV2_SIGMA_FOLD) either side;
-      (5) an out-of-band center (e.g. 50 Hz, outside the validated 7.8–28.3 Hz range) sets
-          freq_extrapolated=True so the UI flags the LSB as extrapolated, not calibrated;
-      (6) with neither modeled points nor a cut-point, the helper honestly returns None."""
+      (3) the ±1σ band is the modeled-LSB fold (MODELED_LSB_SIGMA_FOLD) either side;
+      (4) FAIL-CLOSED: with no modeled timeline AND no frozen per-participant model (participant=None),
+          the population-constant last resort having been retired 2026-06-28, the helper returns None
+          (indeterminate) rather than a population-average guess — for ANY cut-point or center freq;
+      (5) with neither modeled points nor a cut-point, the helper honestly returns None."""
     from modules.Biomarkers import bravo_service as bs
-    k = analytics.LSB_PER_UV2_VALIDATED          # 269
-    sigma = analytics.LSB_UV2_SIGMA_FOLD         # ≈1.26
+    sigma = analytics.MODELED_LSB_SIGMA_FOLD     # ≈1.26
 
     # (1) measured native threshold present -> estimate never built
     assert bs._modeled_lsb_threshold_estimate(
         123.0, 200.0, 12, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
 
-    # (2)+(4) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
+    # (2)+(3) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
     r1 = bs._modeled_lsb_threshold_estimate(
         None, 210.0, 15, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
     assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
     assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
     assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
     assert r1["freq_extrapolated"] is False        # 20 Hz is in the validated range
+    assert r1["k_effective"] == analytics.LSB_PER_UV2_TRANSFORM   # timeline runs transform×352.62
+    assert r1["slope_b"] is None                   # no proportional-fit slope applied at read time
 
-    # (3) TIER 3: no modeled timeline, no frozen model (participant=None) -> validated k=269 constant
-    r3 = bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
-    assert r3["tier"] == "validated_constant"
-    assert abs(r3["estimated_upper_lsb"] - round(k * 2.0, 1)) < 0.2   # linear in µV²
+    # (4) FAIL-CLOSED: no modeled timeline, no frozen model (participant=None) -> indeterminate (None),
+    #     regardless of cut-point magnitude or whether the center is in/out of the validated range.
+    assert bs._modeled_lsb_threshold_estimate(
+        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    assert bs._modeled_lsb_threshold_estimate(
+        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT") is None
 
-    # (5) out-of-band center -> extrapolation flag set
-    rex = bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT")
-    assert rex["freq_extrapolated"] is True
-
-    # (6) nothing to estimate from -> honest None (panel shows the no-anchor message)
+    # (5) nothing to estimate from -> honest None (panel shows the no-anchor message)
     assert bs._modeled_lsb_threshold_estimate(
         None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
 
@@ -2099,7 +2042,7 @@ def test_td_to_lsb_applies_transform_constant_and_guards():
     (one-window) minimum and non-positive guards returning NaN."""
     import math
     assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9
-    assert analytics.LSB_PER_UV2_TRANSFORM != analytics.LSB_PER_UV2_VALIDATED   # 352.62 vs 269
+    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9                 # transform route k
     sr = 250.0
     t = np.arange(3000) / sr
     sig = 10 * np.sin(2 * np.pi * 20.0 * t)
@@ -2121,16 +2064,18 @@ def test_k_cancels_in_correlation_and_auc():
     uv2 = np.exp(rng.normal(0, 1, 400))                     # positive band powers
     pain = rng.normal(0, 1, 400)
     label = (np.log(uv2) + 0.4 * rng.normal(0, 1, 400) > np.log(uv2).mean()).astype(int)
-    # feature = log(LSB) = log(k) + log(uv2): the log(k) term is a pure additive shift
-    f269 = np.log(analytics.LSB_PER_UV2_VALIDATED * uv2)
+    # feature = log(LSB) = log(k) + log(uv2): the log(k) term is a pure additive shift. Compare the
+    # PRIMARY transform k against an arbitrary alternate scale (the property is k-agnostic — it held
+    # for the retired welch256 269 too, and must hold for ANY positive constant).
+    k_alt = 269.0
+    f_alt = np.log(k_alt * uv2)
     f352 = np.log(analytics.LSB_PER_UV2_TRANSFORM * uv2)
     # difference is exactly the constant log-ratio, identical for every point
-    assert np.allclose(f352 - f269, np.log(analytics.LSB_PER_UV2_TRANSFORM /
-                                           analytics.LSB_PER_UV2_VALIDATED), atol=1e-12)
+    assert np.allclose(f352 - f_alt, np.log(analytics.LSB_PER_UV2_TRANSFORM / k_alt), atol=1e-12)
     # Pearson r identical to full float precision
-    assert abs(pearsonr(f269, pain)[0] - pearsonr(f352, pain)[0]) < 1e-12
+    assert abs(pearsonr(f_alt, pain)[0] - pearsonr(f352, pain)[0]) < 1e-12
     # AUC identical (rank statistic — a monotone +shift cannot reorder)
-    assert abs(roc_auc_score(label, f269) - roc_auc_score(label, f352)) < 1e-12
+    assert abs(roc_auc_score(label, f_alt) - roc_auc_score(label, f352)) < 1e-12
 
 
 def test_transform_centered_window_clip_dont_slide_contract():
@@ -2171,7 +2116,7 @@ def test_transform_50pct_overlap_window_count_and_variance_only_shift():
     no = analytics.td_transform_band_power(sig, sr, 22.5)                       # non-overlap
     ov = analytics.td_transform_band_power(sig, sr, 22.5, step_samples=step)    # 50% overlap
     fold = max(no / ov, ov / no)
-    assert fold < analytics.LSB_UV2_SIGMA_FOLD, fold           # « 1.26× scatter
+    assert fold < analytics.MODELED_LSB_SIGMA_FOLD, fold       # « 1.26× scatter
 
 
 def test_modeled_transform_point_stays_flagged_native_preferred():
@@ -2239,14 +2184,15 @@ def test_modeled_excluded_from_native_correlation_path():
     def mixed_feature(k):
         return np.log(np.where(is_modeled, k * uv2, native_lsb))
     # (1) UNMASKED mixed feature is NOT k-invariant: Pearson r differs between the two k
-    r_mixed_269 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_VALIDATED), pain)[0]
+    k_alt = 269.0                                          # arbitrary alternate scale (k-agnostic claim)
+    r_mixed_alt = pearsonr(mixed_feature(k_alt), pain)[0]
     r_mixed_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM), pain)[0]
-    assert abs(r_mixed_269 - r_mixed_352) > 1e-6           # mixing DOES move r — claim must be scoped
+    assert abs(r_mixed_alt - r_mixed_352) > 1e-6          # mixing DOES move r — claim must be scoped
     # (2) NATIVE-ONLY subset (the masked path) is fully k-invariant
     nat = ~is_modeled
-    r_nat_269 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_VALIDATED)[nat], pain[nat])[0]
+    r_nat_alt = pearsonr(mixed_feature(k_alt)[nat], pain[nat])[0]
     r_nat_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM)[nat], pain[nat])[0]
-    assert abs(r_nat_269 - r_nat_352) < 1e-12             # masked native path: k cancels, safe
+    assert abs(r_nat_alt - r_nat_352) < 1e-12            # masked native path: k cancels, safe
     # (3) the bravo_service native-only mask drops EVERY modeled point, independent of method/k
     y = np.where(is_modeled, 9999.0, native_lsb)
     keep = ~np.array([bool(m) for m in is_modeled])
@@ -2262,9 +2208,8 @@ def test_bridge_constants_compose_from_transform_and_td_psd_ratio():
     expect = analytics.LSB_PER_UV2_TRANSFORM / analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
     assert abs(analytics.LSB_PER_DEVICE_PSD - expect) < 1e-9
     assert abs(analytics.LSB_PER_DEVICE_PSD - 73.63) < 0.01      # 352.62 / 4.789
-    # the bridge constant is the device-PSD constant, NOT the TD constant or the welch256 constant
+    # the bridge constant is the device-PSD constant, NOT the TD transform constant
     assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_TRANSFORM
-    assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_VALIDATED
 
 
 def test_clamp_device_psd_floors_negatives_only():

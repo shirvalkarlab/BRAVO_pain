@@ -23,15 +23,15 @@ import PAL from "./palette";
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
 // Human labels for the modeled-LSB fallback tiers (backend _modeled_lsb_threshold_estimate). Ordered
-// best→coarsest: a real per-contact modeled timeline, the per-participant frozen conversion, then the
-// validated population constant. Shown on the ESTIMATED threshold card so the clinician sees which
-// modeled source produced the number.
+// best→coarsest: a real per-contact modeled timeline, then the per-participant frozen conversion. The
+// population-constant (k=269) tier was retired 2026-06-28 — when no fitted per-participant model exists
+// the backend returns no modeled threshold (indeterminate) rather than a population-average guess.
+// Shown on the ESTIMATED threshold card so the clinician sees which modeled source produced the number.
 const TIER_LABEL = {
   modeled_timeline: "from modeled LSB timeline",
   band: "from frozen PSD→LSB model (band-specific)",
   channel_freq: "from frozen PSD→LSB model (channel/freq)",
   channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
-  validated_constant: "from validated k=269 constant",
 };
 
 function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {

@@ -3918,7 +3918,8 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
       TIER 1  modeled_timeline   — montage/survey transform×352.62 in-band points at the same percentile
                                    (the hollow-diamond series the timeline draws). Closest to measured.
       TIER 2  frozen PSD→LSB     — per-participant frozen conversion applied to the µV² cut-point.
-      TIER 3  validated_constant — population k=269 LSB/µV² on the µV² cut-point (last resort).
+      (TIER-3 population-constant last resort retired 2026-06-28: no fitted per-participant model ->
+       modeled threshold is INDETERMINATE, fail-closed, rather than a population-average guess.)
 
     `thr_lsb` (measured native threshold) ALWAYS wins; this is only consulted when it is None.
     """
@@ -3941,7 +3942,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
         if fextrap:
             note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-        sigma = analytics.LSB_UV2_SIGMA_FOLD
+        sigma = analytics.MODELED_LSB_SIGMA_FOLD
         thr_estimate = {
             "estimated_upper_lsb": modeled_thr,
             "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
@@ -3961,7 +3962,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
         from modules.Biomarkers.routines import psd_lsb_model as _plm
         est = _plm.estimate_lsb(participant, channel, center_hz, float(cutpoint))
         if est.get("available"):
-            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
+            sigma = est.get("resid_log_sigma_fold") or analytics.MODELED_LSB_SIGMA_FOLD
             est_lsb = float(est["lsb"])
             thr_estimate = {
                 "estimated_upper_lsb": round(est_lsb, 1),
@@ -3978,41 +3979,10 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
                 "validated_hz_range": est.get("validated_hz_range"),
                 "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
             }
-        else:
-            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
-            # we can still translate the physical µV² cut-point with the VALIDATED population constant
-            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
-            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
-            try:
-                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
-            except Exception:  # noqa: BLE001
-                lsb_est = float("nan")
-            if np.isfinite(lsb_est):
-                sigma = analytics.LSB_UV2_SIGMA_FOLD
-                fextrap = bool(center_hz is not None and (
-                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-                note = ("No per-participant frozen-model entry for this band; translated with the "
-                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
-                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
-                        "device Timeline before deploying." % sigma)
-                if fextrap:
-                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
-                             "where k is untested (the gain is not band-flat). Needs streaming "
-                             "calibration at this center frequency." % (
-                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-                thr_estimate = {
-                    "estimated_upper_lsb": round(float(lsb_est), 1),
-                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
-                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
-                    "sigma_fold": round(float(sigma), 3),
-                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
-                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
-                    "r2": 0.94,
-                    "freq_extrapolated": fextrap,
-                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
-                    "note": note,
-                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
-                }
+        # No per-participant frozen-model entry for this band -> indeterminate. The population-constant
+        # last resort (k=269) was retired 2026-06-28: a modeled threshold is returned ONLY when a fitted
+        # per-participant conversion exists; otherwise the caller surfaces "no deployable LSB threshold"
+        # (fail-closed) rather than a population-average guess. thr_estimate stays None.
     return thr_estimate
 
 
@@ -4395,44 +4365,11 @@ def deployment_summary(request_data):
         thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
         rd.get("Participant"), channel)
 
-    # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
-    # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with
-    # the DEPLOYMENT population constant (k=269, via analytics.lsb_from_uv2). NOTE: this is the
-    # deployment fallback's own constant for a physical µV² cut-point — it is NOT the exploration
-    # timeline's transform route (CS-1 switched lsb_series to td_to_lsb k=352.62; this deployment path
-    # is intentionally unchanged, each DSP carries its own scale). Report the fold-agreement. This is purely
-    # informational: it never changes the deployable number (the measured Timeline value always wins),
-    # but it tells the clinician how well the modeled route would have reproduced the measured
-    # threshold here — i.e. how much to trust the modeled LSB on bands the device never sensed. Good
-    # agreement (≈1×) means the k=269 fallback is reliable for this participant/band; a large fold
-    # means the modeled tier should be treated with extra caution.
+    # Native-vs-modeled cross-check: REMOVED 2026-06-28 with the k=269 population constant. It compared
+    # the measured Timeline LSB against lsb_from_uv2(cutpoint, k=269); with k=269 retired there is no
+    # population-constant model of a sensed band's cut-point to compare against (the frozen per-participant
+    # model is per-band, not a single scalar). Kept as None so the payload contract is unchanged.
     native_modeled_check = None
-    if thr_lsb is not None and cutpoint is not None:
-        try:
-            modeled_from_cutpoint = analytics.lsb_from_uv2(float(cutpoint))
-        except Exception:  # noqa: BLE001
-            modeled_from_cutpoint = float("nan")
-        if np.isfinite(modeled_from_cutpoint) and modeled_from_cutpoint > 0 and thr_lsb > 0:
-            fold = max(thr_lsb / modeled_from_cutpoint, modeled_from_cutpoint / thr_lsb)
-            fextrap_cc = bool(center_hz is not None and (
-                center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-            native_modeled_check = {
-                "measured_upper_lsb": round(float(thr_lsb), 1),
-                "modeled_upper_lsb": round(float(modeled_from_cutpoint), 1),
-                "fold_disagreement": round(float(fold), 3),
-                "agrees": bool(fold <= analytics.LSB_UV2_SIGMA_FOLD),   # within the 1σ fold (≈1.26×)
-                "k_used": analytics.LSB_PER_UV2_VALIDATED,
-                "freq_extrapolated": fextrap_cc,
-                "method": "FYI cross-check: measured device-Timeline LSB vs k=269 model of the same µV² cut-point",
-                "note": (
-                    "Measured %.0f LSB vs modeled %.0f LSB (%.2f× apart). %s The deployable value is the "
-                    "MEASURED one; this only gauges how well the k=269 modeled fallback reproduces it here."
-                    % (thr_lsb, modeled_from_cutpoint, fold,
-                       ("Within the 1σ %.2f× conversion scatter — modeled fallback is reliable for this band."
-                        % analytics.LSB_UV2_SIGMA_FOLD) if fold <= analytics.LSB_UV2_SIGMA_FOLD else
-                       ("Exceeds the 1σ %.2f× conversion scatter — treat modeled LSB on unsensed bands with "
-                        "extra caution for this participant." % analytics.LSB_UV2_SIGMA_FOLD))),
-            }
 
     # Power on the clustered effective n.
     power = {"available": False, "reason": "ROC unavailable"}
@@ -4680,9 +4617,8 @@ def deployment_summary(request_data):
             # measured upper_lsb; present only when `available` is False.
             "estimated": (thr_estimate is not None and thr_lsb is None),
             "estimate": thr_estimate,
-            # FYI agreement check (only when the band was BOTH measured AND has a µV² cut-point):
-            # how closely the k=269 modeled fallback reproduces the measured Timeline threshold here.
-            # Never changes the deployable number; gauges trust in the modeled tier for unsensed bands.
+            # FYI agreement check: retired 2026-06-28 with the k=269 constant; always None now (the
+            # payload key is retained for API-contract stability; no frontend consumer).
             "native_modeled_check": native_modeled_check,
             # Threshold-mode awareness (audit): which Percept mode this number is valid for, the
             # FFT-size compatibility, and the 10-min-Timeline vs adaptive-averaging caveat.
