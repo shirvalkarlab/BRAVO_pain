@@ -20,10 +20,14 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `edfd0b5`** (binarization-hover zero-TD fix + reuse-modeled preview, committed + pushed),
-> **suite 257/257 PASS** (4 new live-matcher tests added this session). Frontend built and deployed;
-> backend untouched in `edfd0b5` so no worker reload needed — just a browser refresh. Prior `d2f0d8a`
-> (montage device-PSD coverage + window-reuse toggle, backend `b6f660f`) is live (workers HUP-reloaded).
+> **HEAD `7ce588d`** (biomarker accuracy remediation R1/R2/R11/R12 — signed AUC, per-contact best-band
+> table, unique-PRO binarization cut, derivable montage whitelist; committed + pushed). 3 new analytics
+> tests; local analytics suite 96 pass (5 pre-existing Django-import-only failures). Frontend rebuilt
+> (chunk `434.45559227`). NOTE: the orbstack bridge watcher was DOWN this session (heartbeat stale,
+> not restartable from the sandbox) so the full in-container suite was NOT run — backend changes are
+> pure analytics functions verified by the local Django-free suite; HUP-reload the workers + run the
+> container suite next session. Prior `edfd0b5` (binarization-hover zero-TD fix + reuse-modeled preview,
+> suite 257/257), `d2f0d8a` (montage device-PSD coverage + window-reuse toggle, backend `b6f660f`) are live.
 > No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
@@ -37,6 +41,29 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Biomarker accuracy remediation — high-priority audit fixes (2026-06-28, `7ce588d`).** Four of the
+high-severity items from the stress-test audit (`remediation_action_plan.md`, artifact `488a4d02`).
+**R1/A1 signed AUC:** `_cv_logistic_auc` keeps its notebook-parity fold (`max(auc,1-auc)`, always ≥0.5),
+but `spectral_feature_importance` now also emits per-band `auc_signed` — the same CV-AUC oriented by the
+band's correlation sign, so a null band reads ~0.5 and a beta-SUPPRESSION band reads <0.5. The scan figure
+plots `auc_signed` on y2 over `[0,1]` with a dashed 0.5 chance line (was folded `auc` over `[0.4,1]`).
+**R11/A7 binarization bias:** `_binarize_labels` gained a `rating_group` arg so the tertile cut is computed
+on the UNIQUE-PRO distribution, not the pseudoreplicated per-sample vector (a rating matched by k windows
+was pulling the cut toward recording-dense pain states; max_reuse=18 here). **R2/A2 per-contact biomarker:**
+each channel now carries `selected_band` {center_hz, rho, auc_signed, q, sign, direction, fdr_significant} —
+best FDR-significant band else max-|ρ| — and the frontend renders a per-contact best-band table (band AND
+direction are contact-specific: RCS08 R 1⁻3⁺ VIM beta ELEVATES, GPi contacts SUPPRESS). **R12/F5 montage
+generalization:** `_MAIN_BIPOLAR` is now derived by `_build_main_bipolar()` from `_DEFAULT_BIPOLAR_PAIRS ×
+_HEMISPHERES` with a `BRAVO_MAIN_BIPOLAR` env override; default reproduces the original six pairs. New tests:
+`test_auc_signed_reflects_correlation_direction`, `test_binarize_cut_invariant_to_sample_multiplicity`,
+`test_selected_band_is_per_contact_and_signed`. **Frontend eslint gotcha (reconfirmed):** a component-body
+`const … = arr.map((c) => {…})` retroactively trips `react-hooks/rules-of-hooks` (flags earlier hooks as
+conditional) even though Babel parses it — the per-contact table had to be built as a self-contained JSX
+IIFE, and the signed-AUC y-array inlined (no `const` in the trace callback). R3 (FDR rigorous-count headline)
+was found already satisfied in code+test. **R5/R6/R7/R8/R9/R10/R13/R14 remain** (coverage doc, tolerance-regime
+label, bridge single-process probe, band-grid params, min_per_group guard, magic-constant config, calibrated-band
+gate, per-participant k). NOTE: bridge watcher down → container suite NOT run; HUP workers next session.
 
 **Binarization-hover zero-TD-count fix + reuse-modeled preview (2026-06-28, `edfd0b5`).** Two
 frontend bugs in the binarization-preview histogram. (1) ZERO TD COUNTS: the hover's per-source line
