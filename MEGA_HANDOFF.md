@@ -22,12 +22,13 @@
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
 > **HEAD `7ce588d`** (biomarker accuracy remediation R1/R2/R11/R12 — signed AUC, per-contact best-band
 > table, unique-PRO binarization cut, derivable montage whitelist; committed + pushed). 3 new analytics
-> tests; local analytics suite 94 pass / 5 fail (the 5 are pre-existing Django-import-only tests, not
-> regressions; commit `7ce588d`'s message says "96 pass" — that was a miscount, the real number is 94). Frontend rebuilt
-> (chunk `434.45559227`). NOTE: the orbstack bridge watcher was DOWN this session (heartbeat stale,
-> not restartable from the sandbox) so the full in-container suite was NOT run — backend changes are
-> pure analytics functions verified by the local Django-free suite; HUP-reload the workers + run the
-> container suite next session. Prior `edfd0b5` (binarization-hover zero-TD fix + reuse-modeled preview,
+> tests; local Django-free analytics suite 94 pass / 5 fail (the 5 are pre-existing Django-import-only
+> tests, not regressions; commit `7ce588d`'s message says "96 pass" — that was a miscount, the real
+> number is 94). **Full in-container suite: PASS=260 FAIL=0** (was 257; +3 new analytics tests) — run
+> after the bridge watcher came back up. Live `run_for_participant` on 2e3c75c0 confirms `auc_signed`
+> present on all 6 channels (R 1⁻3⁺ VIM signed AUC 0.63 / elevation; suppression contacts <0.5) and
+> `selected_band` per contact; workers HUP-reloaded so the new fields are live. Frontend rebuilt
+> (chunk `434.45559227`). Prior `edfd0b5` (binarization-hover zero-TD fix + reuse-modeled preview,
 > suite 257/257), `d2f0d8a` (montage device-PSD coverage + window-reuse toggle, backend `b6f660f`) are live.
 > No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
