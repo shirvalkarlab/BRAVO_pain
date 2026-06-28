@@ -1,9 +1,26 @@
 # BRAVO_pain — Mega Handoff (consolidated)
 
+> **HOW TO UPDATE THIS DOC (read before editing).** This is the single durable handoff; keep it
+> that way. At the end of a session that changed the codebase:
+> 1. **Read the whole doc first.** Don't append at the top while the bottom goes stale — that is
+>    exactly how this file rotted before (duplicate headers, contradictory HEAD/suite lines).
+> 2. **Update the state line below** (branch, HEAD short-SHA, suite count) to the real `git`/test
+>    state — verify, don't copy from memory.
+> 3. **Add a §0 entry** (newest first) summarizing what changed and why. Fold related fixes into
+>    one entry; don't accumulate near-duplicate bullets.
+> 4. **Update the affected reference**, not just §0: constants in §2, decisions in §3, open items
+>    in §4, gotchas in §7, file map in §8. If a constant/function was removed, delete its row —
+>    don't leave it described as current.
+> 5. **Remove outdated comments/claims.** When a later fact supersedes an earlier one, drop the
+>    earlier one rather than stacking a contradiction. §2b frozen-model numbers are SACRED — keep
+>    verbatim.
+> 6. Keep it durable: constants, decisions, gotchas, file map — not the blow-by-blow (that lives
+>    in the per-session `SESSION_HANDOFF_*.md` / `HANDOFF_*.md`).
+>
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `8274d6c`** (in sync with origin), **suite 234/234 PASS** (in-container runner).
+> **HEAD `fa2c416`** (in sync with origin), **suite 229/229 PASS** (in-container runner).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-27.md`; the TD→LSB
@@ -16,6 +33,32 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**welch256 / k=269 removal — deployment fallback now frozen-model-only (2026-06-28, `184ea74`+`fa2c416`).**
+The Welch-256 PSD→LSB exploration backup and the `k=269` population constant were fully removed; the
+deployment threshold path now converts the offline-Welch µV² ROC cut-point to LSB **solely via the
+per-participant frozen PSD→LSB model** (`psd_lsb_model.estimate_lsb`), which is itself fit on the SAME
+offline-Welch µV²→device-LSB mapping — so cut-point and converter share units (the principle: the
+cut-point's own model converts it, not a bespoke scalar). Specifics:
+- **Deleted DSP (no production caller):** `analytics.psd_band_to_lsb`, `welch256_density` (superseded by
+  the CS-3 device-PSD bridge `device_psd_to_lsb`, k=73.63).
+- **Deleted constant + converters:** `LSB_PER_UV2_VALIDATED` (269.0), `UV2_PER_LSB_VALIDATED`,
+  `LSB_UV2_LOGLOG_SLOPE`, `lsb_from_uv2`, `uv2_from_lsb`. `LSB_UV2_SIGMA_FOLD` → renamed
+  **`MODELED_LSB_SIGMA_FOLD`** (1.26, DSP-neutral; the ±1σ band on TIER-1/TIER-2 modeled estimates,
+  still overridable by a frozen model's `resid_log_sigma_fold`).
+- **Deployment fallback ladder (`_modeled_lsb_threshold_estimate`):** TIER-3 `validated_constant`
+  population-constant last resort **DELETED**. When neither a native device threshold nor a fitted
+  per-participant model entry exists, the modeled threshold is now **INDETERMINATE (fail-closed)**
+  instead of a k=269 guess. The native-vs-modeled k=269 QC cross-check was deleted too (no frontend
+  consumer; payload key `native_modeled_check` retained as `None` for API-contract stability).
+- **Stale-label bug fixed (same pass):** TIER-1 `modeled_timeline` reported `k_effective=269` /
+  "Welch256×269", but since CS-1 it reads straight off the transform×352.62 LSB timeline applying NO k.
+  Payload now reports `k_effective=352.62`, `slope_b=None`, transform-route notes. Frontend
+  `validated_constant` TIER_LABEL entry removed (tier no longer emitted).
+- **Coverage note (audited):** removing TIER-3 only affects bands with NO frozen-model entry — i.e. any
+  non-RCS08 participant, or RCS08 `ONE_THREE_RIGHT` (0 bands, `pooled_k=None`). All other RCS08 channels
+  are covered by TIER-2. Suite 234→229 (net −5 from test removal/rewrite). The deployable number is
+  unchanged in all covered cases (measured native threshold always wins; TIER-2 numbers identical).
 
 **TD→LSB calibration + spectral unification (CS-1…CS-4 + Phase 0–3, 2026-06-27).** The vendored
 `percept-spectral-repro` transform DSP is now the **primary TD→LSB route** (`k=352.62`; §3 decision 18,
@@ -73,7 +116,7 @@ actionable Percept sensing/threshold parameters a clinician can program. Subject
   inside the live `bravo-server` OrbStack container.
 - Remote: `https://github.com/shirvalkarlab/BRAVO_pain.git`.
 - **Default branch:** `v3.1.0`. The old `v3.0.0-alpha` is deleted.
-- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `8274d6c`**,
+- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `fa2c416`**,
   in sync with origin.
 - Other remote branches: `development` (legacy) + release branches `v2.0-alpha`…`v2.2.1`.
   Retired (squash-merged into `v3.1.0`): `PS_biomarker_{actionability,clfixes,module}` (§9).
@@ -119,8 +162,12 @@ In `BRAVO/modules/Biomarkers/routines/analytics.py` unless noted. Line numbers a
 | `LSB_PER_UV2_TRANSFORM` | **352.62 LSB/µV²** | **PRIMARY TD→LSB** | k for the vendored `percept-spectral-repro` transform DSP (Hann-windowed zero-padded FFT, 50% overlap). RCS08 all-stim median, r=0.9927, RMSE 60.6 LSB. Band-agnostic. Use exactly, do not round. |
 | `LSB_PER_DEVICE_PSD` | **≈73.63 LSB/(device-PSD bp)** | PSD→LSB bridge | `= 352.62 / 4.789`. For PSD-only patient-event snapshots; restricted to [7.8, 30] Hz (else `calibrated=False`). |
 | `LSB_PER_UV2_DEVICE_PSD_TD_RATIO` | **4.789** | bridge composition | Device-PSD band power / TD-transform band power (geomean, r=0.987, n=10476). |
-| `LSB_PER_UV2_VALIDATED` | **269.0 LSB/µV²** | welch256 backup ONLY | `k` for the welch256 band-integral route. **Demoted** to PSD-exploration backup; retained per PI pending a device-PSD refit discussion. Do NOT feed a transform-DSP µV² through 269, or a welch256 µV² through 352.62. |
-| `UV2_PER_LSB_VALIDATED` | 0.00372 µV²/LSB (=1/269) | — | inverse of the welch256 k. |
+| `MODELED_LSB_SIGMA_FOLD` | **1.26** | uncertainty band | 1σ multiplicative scatter on TIER-1/TIER-2 **modeled** LSB estimates (±band on the deployment sign-off card). Per-participant `resid_log_sigma_fold` overrides it when the frozen model carries one. (DSP-neutral rename of the old `LSB_UV2_SIGMA_FOLD`.) |
+
+> **REMOVED 2026-06-28** (`fa2c416`): `LSB_PER_UV2_VALIDATED` (269.0), `UV2_PER_LSB_VALIDATED`,
+> `LSB_UV2_LOGLOG_SLOPE`, and the `lsb_from_uv2` / `uv2_from_lsb` converters — plus the welch256 DSP
+> helpers `psd_band_to_lsb` / `welch256_density`. The deployment fallback now anchors the offline-Welch
+> µV² cut-point to LSB via the per-participant frozen PSD→LSB model only (fail-closed when absent). See §0.
 
 **Other current constants:**
 
@@ -204,12 +251,12 @@ LSB, treat as unreliable.)
 
 ### 2c. Constants/claims later corrected or retracted
 
-- **welch256 `k=269` is no longer the primary TD→LSB.** It was the rigorous stim-off
-  paired-block constant (superseding an even looser early direct fit of k≈74.1), but the
-  CS-1 session demoted it to a PSD-exploration backup: the deployed primary TD→LSB is now the
-  transform route **`k=352.62`** (§2a). welch256 produces a PSD from TD — it cannot consume a
-  device PSD, so it was never a valid no-TD backup; retained only pending a PI device-PSD refit
-  discussion.
+- **welch256 `k=269` was REMOVED entirely (2026-06-28, `fa2c416`).** It was the rigorous stim-off
+  paired-block constant (superseding an even looser early direct fit of k≈74.1); CS-1 first demoted it
+  to a PSD-exploration backup, then the 2026-06-28 pass deleted it outright once the device-PSD bridge
+  (k=73.63) and the per-participant frozen model covered every live path. The deployed primary TD→LSB is
+  the transform route **`k=352.62`** (§2a); the deployment fallback converts the offline-Welch µV²
+  cut-point via the frozen model only (fail-closed when no fitted entry exists). See §0.
 - **8.8 Hz "ρ=−0.64 temporal regime shift, ~3× gain drop, unexplained"** — superseded by the
   documented settling-transient mechanism (see §2b / §3 item 16).
 - **Forced log-log slope = 1.1** was explored as within ~0.005 R² of the forced optimum (0.90)
@@ -244,6 +291,7 @@ into history, not current HEAD.
 | 17 | **Impedance term `c=1.02` — REJECTED** | Significant only under naive OLS (pseudoreplication: 2985 epochs share 230 impedance measurements). Cluster-robust SE n.s. (p=0.26); a slow-time proxy, not a physical gain. Threshold impact 1.22× < model scatter. Frozen fit UNCHANGED. | `a9c3a01` |
 | 18 | **Primary TD→LSB → transform `k=352.62`** (welch256 `k=269` demoted to backup) | The vendored transform DSP reaches r=0.9927 / RMSE 60.6 LSB; welch256 produces a PSD from TD and can't consume a device PSD, so it was never a valid no-TD backup. | CS-1 (§0) |
 | 19 | **Audit-cleanup statistical calls** — moving-block bootstrap CI + DEFF; BCa headline CI with de-folded `auc_lo_defold` as the C1-safe gate; per-week threshold-drift trend test | Honest CIs under autocorrelated ratings; keep the C1 beats-chance floor from being re-manufactured by BCa's bias term. | §0, `8509e96`/`2ef0408`/`abe8a23` |
+| 20 | **welch256 `k=269` REMOVED — deployment fallback frozen-model-only** | The cut-point's own model converts it: the offline-Welch µV² cut-point → LSB via the per-participant frozen model (fit on the same Welch→LSB mapping), not a bespoke population scalar. Population-constant TIER-3 retired → fail-closed (indeterminate) when no fitted entry. Dead welch256 DSP + converters deleted. | §0, `184ea74`/`fa2c416` |
 
 ---
 
@@ -279,7 +327,7 @@ TD→LSB validation + PSD→TD→LSB back-translation; impedance `c=1.02` (rejec
 
 ## 5. Test & build status
 
-- **Backend suite: 234/234 PASS** in the live container via the bridge:
+- **Backend suite: 229/229 PASS** in the live container via the bridge:
   `python3 _agent_bridge/run_tests.py`. **No pytest in the container** — `run_tests.py` is the
   authoritative runner (globs `test_*.py`, sets up Django, reloads the module). `test_analytics.py`
   holds ~96 of the test functions.
@@ -367,7 +415,7 @@ session handoffs or `operon.artifacts()` if ever needed.)
 
 **Backend (`BRAVO/modules/Biomarkers/`):**
 - `routines/analytics.py` — glmer converter (`_rpy2_converter_ctx`); LSB constants + converters
-  (`td_transform_band_power`, `td_to_lsb`, `device_psd_to_lsb`, `lsb_from_uv2`, `THRESHOLD_MODES`,
+  (`td_transform_band_power`, `td_to_lsb`, `device_psd_to_lsb`, `THRESHOLD_MODES`,
   `_band_power_notched`); deployment stats (`deployment_roc`, `deployment_roc_by_era`,
   `deployment_forward_chaining`, `threshold_drift_by_week`, `auc_power`); bootstrap/CI helpers
   (`_block_bootstrap_aucs`, `_auto_block_len`, `_bca_ci`, `_jackknife_cluster_aucs`); spectral scan
@@ -421,7 +469,9 @@ cached PRO table `BRAVO/_pro_dump/RCS08_chronic_pro_df.csv` (679 rows); `secrets
 | — | `f915257` | v3.1.0 / branch base | Modality-sensitive conversion, threshold-mode guard, LSB estimation |
 | — | `e9d7a80` | branch | 8.8 Hz cut rationale; keep ≥2026-03-01 (decision 16) |
 | — | CS-1…CS-4 + Phase 0–3 | branch | TD→LSB transform primary; PSD bridge; per-PRO selection; spectral-scan unify (§0) |
-| — | **`8274d6c`** | `PS_closedloop_deployment` (HEAD) | **code-review fixes for the Phase 2–3 spectral rewire** |
+| — | `8274d6c` | branch | code-review fixes for the Phase 2–3 spectral rewire |
+| — | `184ea74` | branch | remove dead welch256 DSP; fix stale TIER-1 modeled-timeline labels (§0) |
+| — | **`fa2c416`** | `PS_closedloop_deployment` (HEAD) | **remove k=269 population constant; deployment fallback frozen-model-only (§0)** |
 
 **Engineering envs:** `bravo_app` (py 3.11, local decode — Django-free pure-function checks),
 `rocqa` (plotly 6.8 + kaleido — broken Chrome export in sandbox; use `write_html` or the bridge),
@@ -430,7 +480,7 @@ sklearn 1.5.2.
 
 ---
 
-*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`8274d6c`**, suite **234/234**.
+*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`fa2c416`**, suite **229/229**.
 Authoritative sources: `RCS08.json`, the dated `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files,
 and the current `analytics.py`. Preserve exact numbers, SHAs, paths, and dates when editing —
 and verify constants against source (`grep`), not against this doc, before relying on a line number.*
