@@ -20,8 +20,9 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `e8a0d3f`** (in sync with origin) + **uncommitted** changeset (event-PSD resolver + modeled-LSB
-> symbol fix + Bug 3/4 in-progress; §0 newest entry), **suite 249/249 PASS** (in-container runner).
+> **HEAD `f6849c4`** (Bug 1–4 committed + pushed to origin) + **uncommitted** changeset (audit [5]
+> server-side cut-point + [42] LSB op-point chip; §0 newest entry), **suite 253/253 PASS** (in-container
+> runner). No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-27.md`; the TD→LSB
@@ -34,6 +35,27 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Audit [5] (server-side cut-point) + [42] (LSB op-point chip) + Bug 1–4 committed (2026-06-28). Suite 253/253.**
+- **Bug 1–4 landed:** the prior event-PSD-resolver + frontend tier/title changeset was committed
+  (`f6849c4`) and pushed to origin. The PI reversed the no-agent-commits rule; the `bravo-session-rules`
+  skill now carries **Rule 4 (commit + push after a verified changeset)** instead. Git identity
+  `Prasad Shirvalkar <prasad.shirvalkar@ucsf.edu>` passed via `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env
+  vars (sandbox `.git/config` is write-protected, so `git config user.*` fails).
+- **[5] — full-array cut-point.** `deployment_roc` downsampled `fpr/tpr/thr` to `max_points`, and the
+  ROC panel re-solved the operating point in-browser on those downsampled arrays — so the displayed
+  cut-point (incl. the Youden default lifted to Phases C–E) could drift from the backend's exact
+  optimum. New `analytics._solve_roc_operating_point(...)` solves youden/f1/cost on the FULL arrays;
+  `deployment_roc` ships `operating_points={youden,f1,cost:[{log_cost,cost_ratio,...}]}` (cost grid =
+  the UI slider's −3..3 step-0.25 = 25 pts). Frontend `pickServerCutpoint()` snaps to it, falling back
+  to the live `solveCutpoint()` only for older payloads. Legacy `operating_point` unchanged and now
+  provably == `operating_points['youden']`. +4 tests.
+- **[42] — op-point chip + histogram LSB.** `LsbPowerPanel` renders an operating-point chip (rule +
+  sens/spec + oriented-log-power cut + `→ ≥/≈ X LSB`) and lifts the resolved device LSB to the parent
+  (`index.js` `lsbThreshold` state); `DeploymentRocPanel`'s feature-histogram cut line now annotates
+  the resulting `≥/≈ X LSB` beneath the log-power cut. Closes the "two numbers connected only by
+  prose" gap. UI-only (LSB value already came from `/queryLsbPower`). Frontend rebuilt.
+- Per-session detail: `SESSION_HANDOFF_2026-06-28_audit_5_42.md`.
 
 **Bug 1: Event-PSD channel resolver + Bug 2: Modeled-LSB symbol fix (2026-06-28, UNCOMMITTED). Suite 249/249.**
 
@@ -197,8 +219,8 @@ actionable Percept sensing/threshold parameters a clinician can program. Subject
   inside the live `bravo-server` OrbStack container.
 - Remote: `https://github.com/shirvalkarlab/BRAVO_pain.git`.
 - **Default branch:** `v3.1.0`. The old `v3.0.0-alpha` is deleted.
-- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `e8a0d3f`**,
-  in sync with origin.
+- **Active working branch:** `PS_closedloop_deployment` (off `v3.1.0`), **HEAD `f6849c4`**,
+  in sync with origin (audit [5]/[42] changeset uncommitted on top).
 - Other remote branches: `development` (legacy) + release branches `v2.0-alpha`…`v2.2.1`.
   Retired (squash-merged into `v3.1.0`): `PS_biomarker_{actionability,clfixes,module}` (§9).
 
@@ -386,11 +408,9 @@ into history, not current HEAD.
 
 1. **Audit backlog — Bucket C/D + low-polish.** Of the original four-lens audit (4 high · 28 medium ·
    24 low), all HIGH (C1/C2/C3/C8) and C4 are resolved, and the 2026-06-27 audit-cleanup session
-   cleared Bucket B + four statistical calls (§0). Remaining:
-   - **[5]** move the displayed cut-point solve server-side onto the full ROC arrays (mechanical).
+   cleared Bucket B + four statistical calls; **[5] and [42] closed 2026-06-28** (§0). Remaining:
    - **[14]** reconcile clustering granularity (per-rating ROC `n_clusters` vs weekly-glmer
      elapsed-week units report different N). **Needs a PI judgment call before coding.**
-   - **[42]** operating-point chip (rule + sens/spec) on the LSB panel + LSB annotation on the histogram.
    - **[49]** embed Plotly PNG snapshots of the 4 figures into the deploy export / printed sheet
      (needs the bridge for kaleido — §7).
    - **Low-polish cluster:** [0]/[15]/[22]/[28]/[39]/[43]/[48] — labeling/navigation niceties, batchable.
@@ -400,7 +420,9 @@ into history, not current HEAD.
 3. **`per_pro_lsb_overlay`** (within-rating sliding-window LSB trace + saturation QC) is available
    but not yet drawn — natural next step is a hover/expand detail on a rating's 30 s LSB trace.
 
-**Closed (do not re-open):** all four HIGH (C1/C2/C3/C8) + C4; figure-reset bug; C5/C6/C7
+**Closed (do not re-open):** all four HIGH (C1/C2/C3/C8) + C4; **[5]** (server-side full-array
+cut-point — `operating_points` table); **[42]** (LSB op-point chip + histogram resulting-LSB);
+figure-reset bug; C5/C6/C7
 (figure-honesty); C9/C10 (actionability); 8.8 Hz cut date; 60 Hz notch default; threshold-mode guard;
 TD→LSB validation + PSD→TD→LSB back-translation; impedance `c=1.02` (rejected); high-gamma 55.5 Hz
 (not actionable — firmware limited to 8–30 Hz; the `freq_extrapolated` guard stays).

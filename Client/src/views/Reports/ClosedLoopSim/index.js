@@ -181,6 +181,9 @@ function ClosedLoopSim() {
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
   const [showJson, setShowJson] = useState(false);
   const [cutpoint, setCutpoint] = useState(null);   // chosen operating point, lifted from Phase B
+  // Audit [42]: the resolved device-LSB threshold, lifted from Phase C (LsbPowerPanel) so Phase B's
+  // feature histogram can annotate its cut line with the SAME LSB the clinician will program.
+  const [lsbThreshold, setLsbThreshold] = useState(null);   // {upperLsb, estimated} | null
 
   useEffect(() => {
     if (!participant_uid) { navigate("/database", { replace: false }); return; }
@@ -304,11 +307,13 @@ function ClosedLoopSim() {
 
               <Grid item xs={12} md={6} id="cl-roc">
                 <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} onCutpoint={setCutpoint} />
+                  requestParams={requestParams} onCutpoint={setCutpoint}
+                  lsbThreshold={lsbThreshold} />
               </Grid>
               <Grid item xs={12} md={6} id="cl-lsb">
                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} />
+                  requestParams={requestParams} cutpoint={cutpoint}
+                  onLsbThreshold={setLsbThreshold} />
               </Grid>
               <Grid item xs={12} md={6} id="cl-era">
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}

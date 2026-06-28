@@ -34,7 +34,7 @@ const TIER_LABEL = {
   channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
 };
 
-function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {
+function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold }) {
   const pwRef = useRef(null);
   const thrRef = useRef(null);
   const [data, setData] = useState(null);
@@ -75,6 +75,18 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
   const pw = data && data.power;
   const lr = data && data.lsb_ratio;
   const rvp = data && data.recommended_vs_programmed;   // audit C10: recommended-vs-programmed Δ
+
+  // Audit [42]: lift the resolved device-LSB threshold + whether it is estimated up to the parent, so
+  // the ROC panel's feature-histogram cut line can be annotated with the SAME LSB the clinician will
+  // program — closing the "oriented log-power ↔ LSB connected only by prose" gap. Fires only when the
+  // value actually changes (keyed on the primitives, not the rebuilt tl object).
+  const tlUpperLsb = tl && tl.available ? tl.upper_lsb : null;
+  const tlEstimated = !!(tl && tl.available && tl.estimated);
+  useEffect(() => {
+    if (!onLsbThreshold) return;
+    onLsbThreshold(tlUpperLsb != null && Number.isFinite(Number(tlUpperLsb))
+      ? { upperLsb: Number(tlUpperLsb), estimated: tlEstimated } : null);
+  }, [tlUpperLsb, tlEstimated]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw the POWER-vs-N sufficiency curve once per payload: power to reject AUC=0.5 as the count of
   // independent ratings grows, with the 80% target line, and markers at the current N and the N
@@ -289,6 +301,34 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint 
         <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
           LSB threshold + power / sample-size
         </MDTypography>
+
+        {/* Audit [42]: operating-point chip echoing the ROC cut-point that THIS LSB threshold derives
+            from — the decision rule + sensitivity/specificity that produced it, then the oriented
+            log-power cut-point, then (when resolved below) the resulting device LSB. Makes the two
+            numbers (ROC feature units → device LSB) one connected statement on the panel instead of
+            relying on the reader to bridge them across panels by prose. */}
+        {cutpoint && cutThr != null ? (
+          <MDBox mb={1} p={0.8} display="flex" flexWrap="wrap" alignItems="center" gap={0.8}
+            sx={{ backgroundColor: cutDegenerate ? PAL.warnFill : "#f2f5f7",
+              borderRadius: "6px", border: `1px solid ${cutDegenerate ? PAL.warnBorder : "#dde3e7"}` }}>
+            <MDBox px={0.8} py={0.2} sx={{ backgroundColor: cutDegenerate ? PAL.warnText : PAL.accent,
+              color: "#fff", borderRadius: "4px", fontSize: 9.5, fontWeight: "bold" }}>
+              {`${(cutpoint.rule || "youden").toUpperCase()} cut-point`}
+            </MDBox>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5 }}>
+              {`sens ${fmt(cutpoint.sensitivity)} · spec ${fmt(cutpoint.specificity)}`}
+            </MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#777" }}>
+              {`power ≥ ${fmt(cutThr, 3)} (log-power)`}
+            </MDTypography>
+            {tl && tl.available && tl.upper_lsb != null ? (
+              <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
+                color: tl.estimated ? PAL.warnText : PAL.accent }}>
+                {`→ ${tl.estimated ? "≈" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB${tl.estimated ? " (est.)" : ""}`}
+              </MDTypography>
+            ) : null}
+          </MDBox>
+        ) : null}
 
         {cutThr == null ? (
           <MDTypography variant="caption" color="text" sx={{ fontStyle: "italic", fontSize: 11 }}>

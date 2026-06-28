@@ -1763,6 +1763,59 @@ def _bca_ci(theta_hat, boot, jack, alpha=0.05):
     return lo, hi, z0, a
 
 
+def _solve_roc_operating_point(fpr, tpr, thr_device, rule, prevalence, cost_ratio=1.0):
+    """Pick the operating-point vertex on the ROC for one cut-point rule.
+
+    Audit [5]: this is the SAME selection the deployment ROC frontend used to run in the browser
+    (Youden J / max-F1 / cost-sensitive tangent), lifted server-side so it can run on the FULL,
+    un-downsampled fpr/tpr/thr arrays. The browser previously re-solved on the DOWNSAMPLED curve, so
+    its chosen vertex could differ slightly from the backend's own full-array Youden default and that
+    drift propagated to Phases C–E. `thr_device` is the oriented log-power threshold (rule: power >=
+    thr) aligned index-for-index with fpr/tpr; the +inf/-inf sentinel vertex at the (0,0) corner is
+    skipped. Strictly-greater keeps the first (lowest-index) maximizer so ties never flip.
+
+    Returns {k, fpr, tpr, threshold, sensitivity, specificity, rule, degenerate} or None.
+    """
+    n = len(fpr)
+    if n == 0:
+        return None
+    p = prevalence
+    p_ok = (p is not None) and np.isfinite(p) and (0.0 < p < 1.0)
+    best_k, best_u = -1, -np.inf
+    for i in range(n):
+        t = thr_device[i]
+        if t is None or not np.isfinite(t):
+            continue                                   # skip the +/-inf sentinel at (0,0)
+        f_i = float(fpr[i]); t_i = float(tpr[i])
+        if rule == "f1":
+            if not p_ok:
+                u = t_i - f_i
+            else:
+                tp = t_i * p; fp = f_i * (1.0 - p); fn = (1.0 - t_i) * p
+                denom = 2.0 * tp + fp + fn
+                u = (2.0 * tp) / denom if denom > 0 else -np.inf
+        elif rule == "cost":
+            # Cost-sensitive tangent: maximize tpr - slope*fpr, slope = cost_ratio*(1-p)/p.
+            u = (t_i - f_i) if not p_ok else (t_i - (cost_ratio * (1.0 - p) / p) * f_i)
+        else:                                          # youden (default / unknown rule)
+            u = t_i - f_i
+        if u > best_u:
+            best_u, best_k = u, i
+    if best_k < 0:
+        return None
+    sens = float(tpr[best_k]); fpr_k = float(fpr[best_k]); spec = 1.0 - fpr_k
+    # Same degeneracy guard as the frontend: a tangent at an extreme cost ratio (or F1 at high
+    # prevalence) can land on an ROC corner — "alarm almost always" (spec~0) or "almost never"
+    # (sens~0) — a valid optimum but a useless controller. Flag it so the UI can warn.
+    degenerate = (spec < 0.10) or (sens < 0.30) or (fpr_k > 0.95) or (fpr_k < 0.02 and sens < 0.5)
+    return {
+        "k": int(best_k), "fpr": fpr_k, "tpr": sens,
+        "threshold": float(thr_device[best_k]),
+        "sensitivity": sens, "specificity": spec,
+        "rule": rule, "degenerate": bool(degenerate),
+    }
+
+
 def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                    strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
                    n_boot=500, max_points=300, seed=0):
@@ -1913,6 +1966,27 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
             "rule": "youden",
         }
 
+    # ---- full-array operating points (audit [5]) ----
+    # Solve every cut-point rule the frontend offers on the FULL (un-downsampled) curve, so the
+    # displayed/propagated operating point is exact rather than re-solved on the downsampled arrays.
+    # `youden` and `f1` are prevalence-determined (no slider); `cost` is solved at a grid of cost
+    # ratios so the slider can snap to the nearest precomputed full-array point. The frontend keeps
+    # its live solver as a fallback for older payloads, but prefers operating_points when present.
+    thr_dev_list = [None if not np.isfinite(t) else float(t) for t in thr_device]
+    operating_points = {
+        "youden": _solve_roc_operating_point(fpr, tpr, thr_dev_list, "youden", prevalence),
+        "f1": _solve_roc_operating_point(fpr, tpr, thr_dev_list, "f1", prevalence),
+    }
+    # Cost-sensitive points across the slider's log2 range (-3..3, step 0.25 — matches the UI Slider).
+    cost_points = []
+    for log_cost in np.arange(-3.0, 3.0 + 1e-9, 0.25):
+        cr = float(2.0 ** log_cost)
+        cp = _solve_roc_operating_point(fpr, tpr, thr_dev_list, "cost", prevalence, cost_ratio=cr)
+        if cp is not None:
+            cp = dict(cp); cp["log_cost"] = float(log_cost); cp["cost_ratio"] = cr
+            cost_points.append(cp)
+    operating_points["cost"] = cost_points
+
     # ---- downsample the curve (keep thr parallel) ----
     fpr_o, tpr_o, thr_o = fpr, tpr, thr_device
     if max_points and len(fpr_o) > max_points:
@@ -1975,6 +2049,10 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "auc_lo_defold": (None if auc_lo_defold is None else float(auc_lo_defold)),
         "auc_hi_defold": (None if auc_hi_defold is None else float(auc_hi_defold)),
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
+        # Audit [5]: full-array operating-point table (solved on the un-downsampled curve). Keys:
+        # 'youden', 'f1' (single points), 'cost' (list across the slider's log2 cost-ratio grid).
+        # The frontend snaps to these instead of re-solving on the downsampled fpr/tpr/thr.
+        "operating_points": operating_points,
         "ci_method": (("moving-block bootstrap, BCa (de-folded; fixed orientation; block_len=%d)" % int(block_len))
                       if block_len > 1 else "rating-clustered bootstrap, BCa (de-folded; fixed orientation)"),
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",

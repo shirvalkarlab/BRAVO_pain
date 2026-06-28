@@ -2305,6 +2305,83 @@ def test_event_psd_bridge_tier_restricted_to_deployable_band():
     assert np.isfinite(y) and y > 0
 
 
+# ---------------------------------------------------------------------------
+# Audit [5] — server-side cut-point on the FULL ROC arrays (was re-solved in the
+# browser on the downsampled curve, so the displayed/propagated operating point
+# could drift). analytics.deployment_roc now ships an `operating_points` table
+# solved on the un-downsampled fpr/tpr/thr; the legacy Youden `operating_point`
+# must equal operating_points['youden'].
+# ---------------------------------------------------------------------------
+
+def test_solve_roc_operating_point_youden_matches_full_array_argmax():
+    """The Youden solve over the parallel arrays returns the (tpr-fpr)-maximizing vertex, skipping the
+    +inf sentinel, with sens/spec read off that vertex."""
+    fpr = np.array([0.0, 0.0, 0.1, 0.4, 1.0])
+    tpr = np.array([0.0, 0.6, 0.9, 0.95, 1.0])
+    thr = [None, 3.0, 2.0, 1.0, 0.0]            # index 0 = +inf sentinel at (0,0)
+    op = analytics._solve_roc_operating_point(fpr, tpr, thr, "youden", prevalence=0.5)
+    # Youden J: [skip, 0.6, 0.8, 0.55, 0.0] -> argmax at index 2.
+    assert op is not None and op["k"] == 2
+    assert op["threshold"] == 2.0
+    assert abs(op["sensitivity"] - 0.9) < 1e-9
+    assert abs(op["specificity"] - 0.9) < 1e-9
+    assert op["rule"] == "youden" and op["degenerate"] is False
+
+
+def test_solve_roc_operating_point_skips_inf_sentinel_and_ties_keep_first():
+    """A None/inf threshold vertex is never selectable, and tied utilities keep the lowest index
+    (strictly-greater) so the chosen point is deterministic."""
+    # Exactly-representable values so the J tie is real (no float drift): J = [—, 0.25, 0.25].
+    fpr = np.array([0.0, 0.25, 0.5])
+    tpr = np.array([0.0, 0.5, 0.75])
+    thr = [None, 2.0, 1.0]
+    op = analytics._solve_roc_operating_point(fpr, tpr, thr, "youden", prevalence=0.5)
+    assert op is not None and op["k"] == 1 and op["threshold"] == 2.0   # first maximizer wins
+
+
+def test_solve_roc_operating_point_cost_shifts_toward_specificity():
+    """Raising the FP:FN cost ratio steepens the tangent slope, moving the operating point toward
+    lower FPR (higher specificity)."""
+    fpr = np.array([0.0, 0.1, 0.3, 0.6])
+    tpr = np.array([0.0, 0.5, 0.85, 0.97])
+    thr = [None, 3.0, 2.0, 1.0]
+    op_cheap = analytics._solve_roc_operating_point(fpr, tpr, thr, "cost", 0.5, cost_ratio=0.25)
+    op_dear = analytics._solve_roc_operating_point(fpr, tpr, thr, "cost", 0.5, cost_ratio=8.0)
+    assert op_cheap is not None and op_dear is not None
+    assert op_dear["fpr"] <= op_cheap["fpr"]            # costlier FP -> more conservative (lower FPR)
+    assert op_dear["specificity"] >= op_cheap["specificity"]
+
+
+def test_deployment_roc_ships_full_array_operating_points_table():
+    """deployment_roc returns operating_points={youden, f1, cost:[...]}, and the full-array Youden
+    point equals the legacy operating_point (the displayed default is now exact, not re-solved on the
+    downsampled curve). max_points is forced small so the curve IS downsampled in the payload."""
+    import numpy as _np
+    rng = _np.random.default_rng(5)
+    E, C, F = 200, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.7 * (labels - labels.mean())[:, None])   # planted band -> real ROC
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=200, max_points=20, seed=1)
+    assert roc["available"]
+    ops = roc.get("operating_points")
+    assert isinstance(ops, dict) and "youden" in ops and "f1" in ops and "cost" in ops
+    # The displayed curve was downsampled (max_points=20) but the table was solved on the full arrays.
+    assert len(roc["fpr"]) <= 20
+    yo = ops["youden"]
+    assert yo is not None and abs(yo["threshold"] - roc["operating_point"]["threshold"]) < 1e-9
+    assert abs(yo["sensitivity"] - roc["operating_point"]["sensitivity"]) < 1e-9
+    # cost grid spans the slider's log2 range (-3..3 step 0.25 -> 25 points) with the metadata keys.
+    assert isinstance(ops["cost"], list) and len(ops["cost"]) == 25
+    assert all("log_cost" in cp and "cost_ratio" in cp for cp in ops["cost"])
+    assert ops["cost"][0]["log_cost"] == -3.0 and abs(ops["cost"][-1]["log_cost"] - 3.0) < 1e-9
+
+
 if __name__ == "__main__":
     # ad-hoc local run of just the CS-1 transform tests (the container harness globs test_* itself)
     for _name, _fn in sorted(globals().items()):

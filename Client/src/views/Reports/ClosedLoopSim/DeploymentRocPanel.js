@@ -30,8 +30,37 @@ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Nu
 // base trace array MUST be: 0 = chance line, 1 = ROC curve, 2 = cut-point marker.
 const CUTPOINT_TRACE = 2;
 
+// Audit [5]: prefer the backend's FULL-ARRAY operating point. The backend (analytics.deployment_roc)
+// now solves every rule on the un-downsampled ROC and ships roc.operating_points = {youden, f1, cost:[
+// {log_cost, cost_ratio, ...}]}. The browser's solveCutpoint below re-solves on the DOWNSAMPLED
+// fpr/tpr/thr, so its vertex could drift slightly from the backend's exact optimum and that drift
+// propagated to Phases C–E. When operating_points is present we snap to it; for 'cost' we pick the
+// precomputed point at the slider's nearest log2 cost ratio. Returns the same shape as solveCutpoint
+// (so downstream code is unchanged), or null when the payload predates this field (older payloads).
+function pickServerCutpoint(roc, rule, logCost) {
+  const ops = roc && roc.operating_points;
+  if (!ops) return null;
+  if (rule === "cost") {
+    const list = Array.isArray(ops.cost) ? ops.cost : null;
+    if (!list || !list.length) return null;
+    // Snap to the precomputed cost point whose log_cost is nearest the slider (grid step 0.25).
+    let best = null; let bestD = Infinity;
+    for (let i = 0; i < list.length; i += 1) {
+      const lc = list[i] && list[i].log_cost;
+      if (lc == null || !Number.isFinite(lc)) continue;
+      const d = Math.abs(lc - logCost);
+      if (d < bestD) { bestD = d; best = list[i]; }
+    }
+    return best || null;
+  }
+  const op = ops[rule];
+  return (op && Number.isFinite(op.threshold)) ? op : null;
+}
+
 // Solve the operating point on the ROC for a given rule, in the browser, from the parallel
 // fpr/tpr/thr arrays + prevalence. Returns {k, fpr, tpr, threshold, sensitivity, specificity, ...}.
+// Audit [5]: this is now the FALLBACK for payloads that predate roc.operating_points; live callers
+// prefer pickServerCutpoint (full-array, exact) and only fall back here for older payloads.
 function solveCutpoint(roc, rule, costRatio) {
   if (!roc || !Array.isArray(roc.fpr) || !roc.fpr.length) return null;
   const { fpr, tpr, thr } = roc;
@@ -80,7 +109,7 @@ function solveCutpoint(roc, rule, costRatio) {
   };
 }
 
-function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint }) {
+function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint, lsbThreshold }) {
   const ref = useRef(null);
   const histRef = useRef(null);
   const fwdRef = useRef(null);
@@ -123,7 +152,9 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, requestParams]);
 
   const costRatio = Math.pow(2, logCost);
-  const op = roc ? solveCutpoint(roc, rule, costRatio) : null;
+  // Audit [5]: snap to the backend's full-array operating point when available; fall back to the
+  // browser's downsampled-curve solver only for payloads that predate roc.operating_points.
+  const op = roc ? (pickServerCutpoint(roc, rule, logCost) || solveCutpoint(roc, rule, costRatio)) : null;
   const opThr = op ? op.threshold : null;
   const opRule = op ? op.rule : null;
   const rocAuc = roc ? roc.auc : null;
@@ -275,17 +306,24 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
     if (!gd || !fh || !gd.layout) return;
     if (opThr != null && Number.isFinite(Number(opThr))) {
       const lineColor = (op && op.degenerate) ? PAL.cutpointDegenerate : PAL.thresholdLine;
+      // Audit [42]: annotate the cut line with the RESULTING device LSB (lifted from Phase C) right
+      // beside the oriented-log-power cut, so the histogram shows BOTH numbers the deployment
+      // connects — not just the feature-scale cut whose LSB the reader had to find in the next panel.
+      const lsbTxt = (lsbThreshold && Number.isFinite(Number(lsbThreshold.upperLsb)))
+        ? `<br>${lsbThreshold.estimated ? "≈" : "≥"} ${fmt(lsbThreshold.upperLsb, 1)} LSB${lsbThreshold.estimated ? " (est.)" : ""}`
+        : "";
       Plotly.relayout(gd, {
         shapes: [{ type: "line", x0: opThr, x1: opThr, yref: "paper", y0: 0, y1: 1,
           line: { color: lineColor, width: 2, dash: "dash" } }],
         annotations: [{ x: opThr, y: 1, yref: "paper", yanchor: "bottom",
-          text: `cut ≥ ${fmt(opThr)}`, showarrow: false, font: { size: 9.5, color: lineColor },
+          text: `cut ≥ ${fmt(opThr)}${lsbTxt}`, showarrow: false, align: "center",
+          font: { size: 9.5, color: lineColor },
           xanchor: opThr > (fh.x_min + fh.x_max) / 2 ? "right" : "left" }],
       });
     } else {
       Plotly.relayout(gd, { shapes: [], annotations: [] });
     }
-  }, [roc, opThr, op && op.degenerate]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [roc, opThr, op && op.degenerate, lsbThreshold]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (E) Forward-chaining trace (audit C2): per-fold HELD-OUT AUC across elapsed weeks, drawn beside
   // the in-sample number. Each marker is one expanding-window fold — train on all weeks before it,
