@@ -20,9 +20,10 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `d2f0d8a`** (montage device-PSD coverage + window-reuse toggle backend `b6f660f` + frontend
-> `d2f0d8a`, committed + pushed), **suite 257/257 PASS** (4 new live-matcher tests added this session).
-> Frontend built and deployed; container workers HUP-reloaded so the montage coverage fix is live.
+> **HEAD `edfd0b5`** (binarization-hover zero-TD fix + reuse-modeled preview, committed + pushed),
+> **suite 257/257 PASS** (4 new live-matcher tests added this session). Frontend built and deployed;
+> backend untouched in `edfd0b5` so no worker reload needed — just a browser refresh. Prior `d2f0d8a`
+> (montage device-PSD coverage + window-reuse toggle, backend `b6f660f`) is live (workers HUP-reloaded).
 > No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
@@ -36,6 +37,23 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Binarization-hover zero-TD-count fix + reuse-modeled preview (2026-06-28, `edfd0b5`).** Two
+frontend bugs in the binarization-preview histogram. (1) ZERO TD COUNTS: the hover's per-source line
+("X TD · Y montage · Z event") always showed `0 TD`. Root cause: `binarizationModel.srcBucket`
+classified a sample's source by the literal substring `"td"`, but the backend `_psd_sample_index`
+(bravo_service.py:1272) stamps time-domain samples `"BrainSense streaming"` / `"Indefinite stream"` —
+neither contains "td" — so all 950 TD samples (624 indefinite + 326 streaming for 2e3c75c0) fell into
+the montage bucket and `by_source.*.td` stayed 0. FIX: `srcBucket` now maps `td`/`stream`/`indefinite`
+→ td (montage/event unchanged). (2) REUSE TOGGLE INERT ON PREVIEW: the preview is a CLIENT-SIDE replica
+(`computeMatchedScanModel` over `availability.psd_scan_index`) with no reuse concept, so `AllowWindowReuse`
+moved only the backend scatter, never the preview histogram. FIX: added an `allowWindowReuse` branch that
+matches each sample to EVERY rating within tolerance (K-closest per rating per channel; `prior` stays
+one-directional), preserving uncovered samples as unmatched; `pct_psd_used` uses DISTINCT matched samples
+under reuse so it stays ≤100%. Verified by Node unit test (strict TD=2 not 0; reuse lifts n_matched and TD
+count; pct≤100). Frontend-only — no worker reload, just a browser refresh. GOTCHA: the preview matcher is a
+deliberate replica of the backend pooled match; if backend match semantics change, this must change in
+lockstep or preview vs committed counts diverge.
 
 **Montage device-PSD coverage + window-reuse toggle (2026-06-28).** The raw LSB cache routed
 montage/survey recordings only through the TD-transform path (×352.62) and treated them as having "no
