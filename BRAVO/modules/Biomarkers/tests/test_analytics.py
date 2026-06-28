@@ -564,9 +564,16 @@ def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
 
 def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band():
     """The vectorized (E, n_cache_centers) LSB matrix must assign each epoch row the LSB of ITS
-    PRO at the right band — distinct PROs and distinct bands, multiple rows per PRO. Guards the
-    Finding-2 rewrite (per-band column gather replacing the per-row Python loop): a transposed
-    scatter or a wrong rating_group→row mapping would surface here."""
+    PRO at the right band — distinct PROs and distinct bands. Guards the Finding-2 rewrite (per-band
+    column gather replacing the per-row Python loop): a transposed scatter or a wrong
+    rating_group→row mapping would surface here.
+
+    De-dup contract (2026-06-28): the scatter collapses to ONE observation per distinct rating
+    (rating_group), because plotting one marker per matched PSD overplots all rows that share a
+    rating onto the same (x, y) pixel and inflates the headline n. With two PSDs per PRO below, the
+    scatter must therefore emit ONE point per PRO (3), each carrying that PRO's per-band LSB — NOT
+    one point per matched row (6). Both rows of a PRO carry the identical per-band LSB (the cache is
+    keyed by rating_group), so first-wins de-dup yields the same value either row wins."""
     f = np.linspace(0.95, 100, 60)
     cen_grid = np.arange(2.5, 100.0, 1.0)
     ci10 = int(np.argmin(np.abs(cen_grid - 10.5)))
@@ -599,17 +606,24 @@ def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band(
     assert sc["feature"] == "lsb_cs14"
     cen = np.array(sc["centers"])
     ch0 = sc["channels"][0]
-    # At the 10.5 Hz band: rows 0,1 -> log10(200); rows 2,3 -> log10(300); rows 4,5 -> log10(500).
+    # De-dup must have fired (3 distinct ratings from 6 matched rows), and the headline count must
+    # equal the rendered point count — the integrity invariant the de-dup exists to guarantee.
     bi10 = int(np.argmin(np.abs(cen - 10.5)))
-    xs10 = sorted(v for v in (ch0["scatter"][bi10]["x"] if ch0["scatter"][bi10] else []) if v is not None)
-    exp10 = sorted([np.log10(200.0)] * 2 + [np.log10(300.0)] * 2 + [np.log10(500.0)] * 2)
-    assert len(xs10) == 6, xs10
+    scat10 = ch0["scatter"][bi10]
+    assert scat10 and scat10.get("dedup_by_rating") is True, scat10
+    assert scat10["n_obs"] == 3 and scat10["n_rows"] == 6, (scat10["n_obs"], scat10["n_rows"])
+    ng = scat10["n_grp"]; assert ng["high"] + ng["low"] + ng["mid"] == 3, ng
+    # At the 10.5 Hz band: PRO0 -> log10(200); PRO1 -> log10(300); PRO2 -> log10(500) (one each).
+    xs10 = sorted(v for v in (scat10["x"] if scat10 else []) if v is not None)
+    exp10 = sorted([np.log10(200.0), np.log10(300.0), np.log10(500.0)])
+    assert len(xs10) == 3, xs10
     assert all(abs(a - b) < 1e-6 for a, b in zip(xs10, exp10)), (xs10, exp10)
-    # At the 40.5 Hz band: the SAME rows map to the 40-band LSBs (distinct from 10-band).
+    # At the 40.5 Hz band: the SAME PROs map to the 40-band LSBs (distinct from 10-band), de-duped.
     bi40 = int(np.argmin(np.abs(cen - 40.5)))
-    xs40 = sorted(v for v in (ch0["scatter"][bi40]["x"] if ch0["scatter"][bi40] else []) if v is not None)
-    exp40 = sorted([np.log10(700.0)] * 2 + [np.log10(800.0)] * 2 + [np.log10(900.0)] * 2)
-    assert len(xs40) == 6, xs40
+    scat40 = ch0["scatter"][bi40]
+    xs40 = sorted(v for v in (scat40["x"] if scat40 else []) if v is not None)
+    exp40 = sorted([np.log10(700.0), np.log10(800.0), np.log10(900.0)])
+    assert len(xs40) == 3, xs40
     assert all(abs(a - b) < 1e-6 for a, b in zip(xs40, exp40)), (xs40, exp40)
 
 

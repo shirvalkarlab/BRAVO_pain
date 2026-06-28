@@ -138,39 +138,54 @@ function ValidationReadout({ validation, validating, emitContext }) {
     .join("  ·  ") : null;
   return (
     <MDBox mt={1}>
-      <MDBox display="flex" alignItems="center" gap={1} mb={0.5}>
-        <MDBox px={1.2} py={0.3} sx={{ backgroundColor: badgeColor, color: "white",
-          borderRadius: "10px", fontSize: 10.5, fontWeight: "bold", letterSpacing: 0.2 }}>
+      <MDBox display="flex" alignItems="center" gap={1.2} mb={0.5} flexWrap="wrap">
+        <MDBox px={1.6} py={0.5} sx={{ backgroundColor: badgeColor, color: "white",
+          borderRadius: "12px", fontSize: 14, fontWeight: "bold", letterSpacing: 0.3 }}>
           {verdict}
         </MDBox>
         {dirLine ? (
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 11 }}>{dirLine}</MDTypography>
+          <MDTypography color="dark" sx={{ fontSize: 15, fontWeight: "bold" }}>{dirLine}</MDTypography>
         ) : null}
       </MDBox>
+      {/* Enlarged + bold headline of the mixed-effects result — the takeaway the PI wants to read at
+          a glance (OR per 1 SD, 95% CI, p, cluster n). The full method prose stays below in small text. */}
+      {g.available !== false && g.odds_ratio != null && (
+        <MDTypography color="dark" display="block" mb={0.5}
+          sx={{ fontSize: 16, fontWeight: "bold", lineHeight: 1.4 }}>
+          {`OR = ${fmt(g.odds_ratio)} per 1 SD`
+           + (g.or_lo != null && g.or_hi != null ? `  (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)})` : "")
+           + `  ·  p = ${fmtP(g.p)}`}
+          <span style={{ fontSize: 12.5, fontWeight: 400, color: "#6c757d" }}>
+            {`   across ${g.n_clusters} weekly eras (n = ${g.n})`}
+          </span>
+        </MDTypography>
+      )}
       {g.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
-          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era): `
-           + `odds ratio per 1 SD increase in band power = ${fmt(g.odds_ratio)}`
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
+          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era). `
+           + `Full fit: OR = ${fmt(g.odds_ratio)}`
            + (g.or_lo != null && g.or_hi != null
               ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
-           + `p = ${fmtP(g.p)}, n = ${g.n} samples across ${g.n_clusters} weekly eras.`}
+           + `p = ${fmtP(g.p)}, n = ${g.n} across ${g.n_clusters} weekly eras.`}
         </MDTypography>
       ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
           {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
         </MDTypography>
       )}
       {s.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
-          {`Band × stim-era interaction (likelihood-ratio test): `
-           + `χ² = ${fmt(s.chisq)}, p = ${fmtP(s.lrt_p)} `
-           + `(${s.stim_stable ? "stim-stable" : "stim-dependent"}). `
-           + `Per-era odds ratio (n samples): ${erasArr}. `
-           + `Stim eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
+          <strong style={{ fontSize: 13, color: s.stim_stable ? "#0a7f3f" : "#B17500" }}>
+            {`Stim ${s.stim_stable ? "stable" : "dependent"}`}
+          </strong>
+          {` — band × stim-era interaction LRT: χ² = ${fmt(s.chisq)}, `}
+          <strong>{`p = ${fmtP(s.lrt_p)}`}</strong>
+          {`. Per-era OR (n): ${erasArr}. `
+           + `Eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
            + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
         </MDTypography>
       ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
           {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
         </MDTypography>
       )}
@@ -298,9 +313,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       });
     orderedChannels.forEach(({ ch, ci }) => {
       const color = hemiOf(ch) === "Right" ? HI : LO;
-      // Per-channel matched-sample ceiling: the pooled matched count splits across the bipolar
-      // montages (one montage per recording), so each channel's curve uses only its own PSDs.
-      const nch = (ch.n_channel != null) ? ` (n=${ch.n_channel})` : "";
+      // Per-channel count shown in the legend AND echoed into the curve hover (the hovertemplate's
+      // <extra> renders fullData.name). The honest count is the number of INDEPENDENT LSB vectors
+      // feeding this channel's analysis, split into the only two sources the PI wants surfaced:
+      // time-domain-derived (n_td) vs PSD-derived (n_psd_bridge). This is NOT ch.n_channel — that
+      // counts matched PSD ROWS (e.g. 278) and massively overstates the independent vectors (e.g.
+      // 17 TD + 3 PSD = 20), which is exactly why the old hover N never matched rendered points.
+      const nch = (ch.n_td != null || ch.n_psd_bridge != null)
+        ? ` (${ch.n_td || 0} TD · ${ch.n_psd_bridge || 0} PSD)`
+        : (ch.n_channel != null ? ` (n=${ch.n_channel})` : "");   // logpsd fallback
       // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
       traces.push({ x: centers, y: ch.r, name: `${ch.short}${nch} · r`, type: "scattergl", mode: "lines",
         line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
@@ -518,13 +539,20 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
         + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
 
-      // Number of samples drawn in both the left scatter AND the right violin. Derived from the
-      // server-side per-group counts (sc.n_grp) — the same source that allocates the violin's
-      // per-group ys arrays — so the title's n is arithmetically identical to the violin caption's
-      // group breakdown (nlo + nhi + nmid). Using sc.x.length would also be equal in practice
-      // (sc.x is built from the same idx), but binding to n_grp makes the identity explicit and
-      // keeps both panels locked to one source even if a future filter is added on either side.
-      const nShown = nlo + nhi + nmid;
+      // Headline n = DISTINCT observations actually rendered. The server de-duplicates the scatter
+      // to one point per rating in rating-grouped (LSB) mode, so n_obs == sc.x.length == the violin's
+      // jittered-point count == nlo+nhi+nmid. This is the honest count the title must show — NOT the
+      // pre-dedup matched-PSD-row count (sc.n_rows) and NOT the montage match ceiling (ch.n_channel),
+      // both of which were previously printed as the headline and exceeded the rendered dots (the
+      // "n=84 but 2 dots" bug). Those two are kept as SECONDARY context only.
+      const nShown = nlo + nhi + nmid;                 // == sc.n_obs by construction
+      // LSB-source split of the rendered points — the two counts the PI wants on every label:
+      // how many rendered LSB vectors are time-domain-derived vs PSD-derived. null in logpsd mode.
+      const nTD = (sc.n_td != null) ? sc.n_td : null;
+      const nPSD = (sc.n_psd != null) ? sc.n_psd : null;
+      const hasSrc = nTD != null && nPSD != null;
+      const srcLbl = hasSrc ? `${nTD} TD · ${nPSD} PSD` : null;   // e.g. "16 TD · 83 PSD"
+      const subsampled = (sc.n_distinct != null) && (sc.n_distinct > nShown); // display cap fired
       scatterNode = (
         <MDBox mt={1}>
           {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
@@ -540,7 +568,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                 reads cleaner than splitting freq onto the stat line. */}
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
-              {`${ch.short} (n=${ch.n_channel != null ? ch.n_channel : nShown}${(ch.n_channel != null && nShown < ch.n_channel) ? ` shown: ${nShown}` : ""}) @ ${center.toFixed(1)} Hz`}
+              {`${ch.short} (n=${nShown}${srcLbl ? `: ${srcLbl}` : ""}${subsampled ? ` of ${sc.n_distinct}` : ""}) @ ${center.toFixed(1)} Hz`}
               {matchDirty && <span style={{ fontSize: 13, fontWeight: 400, color: "#6c757d", marginLeft: 6 }}>{"· scan at prior window"}</span>}
             </MDTypography>
             <MDTypography fontWeight="bold" color="dark"
@@ -568,7 +596,9 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                 {effLine}
               </MDTypography>
               <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-                {`n=${nShown}: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
+                {`n=${nShown}: ${nlo} low · ${nhi} high · ${nmid} excluded-middle`
+                 + (srcLbl ? ` · LSB source: ${srcLbl}` : "")
+                 + (subsampled ? ` (subsampled from ${sc.n_distinct} for display). ` : ". ")
                  + "Power is z-scored within channel/source, so Δ is in SD units; "
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
@@ -602,6 +632,30 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
           <MDTypography variant="h6" fontSize={19} fontWeight="bold" mb={0.25}>
             {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
           </MDTypography>
+          {/* LSB-SOURCE INDICATOR: every value feeding this panel is a modeled/real LSB vector derived
+              from a time-domain recording (TD-transform, k=352.62) OR a PSD-only patient event (CS-3
+              bridge, k≈73.63), computed across the full 0–100 Hz. The chip below pools the independent
+              TD- vs PSD-derived LSB counts across the displayed channels so the provenance mix is
+              explicit (the per-channel split is in the summary above and on each scatter title). */}
+          {(() => {
+            const ch = channels || [];
+            const tdN = ch.reduce((a, c) => a + (c.n_td || 0), 0);
+            const psdN = ch.reduce((a, c) => a + (c.n_psd_bridge || 0), 0);
+            if (tdN + psdN === 0) return null;
+            return (
+              <MDBox display="inline-flex" alignItems="center" gap={0.75} mb={0.75} px={1} py={0.4}
+                sx={{ backgroundColor: "rgba(44,82,130,0.06)", border: "1px solid rgba(44,82,130,0.25)",
+                      borderRadius: "8px" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#2C5282" }}>{"LSB source"}</span>
+                <span style={{ fontSize: 12.5, color: "#33475b" }}>
+                  {`derived from TD + PSD sections (0–100 Hz):  `}
+                  <strong>{`${tdN} TD-transform`}</strong>{`  ·  `}
+                  <strong>{`${psdN} PSD-bridge`}</strong>
+                  {`  independent LSB vectors`}
+                </span>
+              </MDBox>
+            );
+          })()}
           {/* Bold one-line takeaway: state exactly what the two curves are and the headline caveat,
               before the detailed (backend-supplied) note. Font bumped from caption (~12px) to 14px
               with key phrases bold so the caveats are not lost in a wall of small grey text. */}
@@ -611,62 +665,41 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
             <strong>AUC</strong> on the high-vs-low split.{" "}
             <strong>Exploratory screen — neither r nor AUC is a validated biomarker.</strong>
           </MDTypography>
-          <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
-            {scan && scan.note}
-          </MDTypography>
-          {/* Matching policy — describes how PSDs were paired to ratings (3 modes). */}
+          {scan && scan.note && (
+            <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
+              {scan.note}
+            </MDTypography>
+          )}
+          {/* Condensed methods line: matching policy + survey usage in ONE compact statement. The
+              per-channel high/low/excluded + TD/PSD-LSB counts now live in the summary above the
+              scan and on each scatter title, so this line states only the pooled method facts. */}
           {scan && scan.max_per_rating != null && (
-            <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
-              sx={{ color: "#2C5282", fontWeight: "bold" }}>
-              {`Matching: `
-               + (scan.match_direction === "pro_first"
-                  ? `each pain rating claims up to ${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""} per channel closest in time within the match window (PRO-first — each rating is the unit of analysis).`
+            <MDTypography variant="body2" display="block" mb={0.5} fontSize={13.5}
+              sx={{ color: "#2C5282" }}>
+              <strong>{"Matching: "}</strong>
+              {(scan.match_direction === "pro_first"
+                  ? `PRO-first — each rating claims ≤${scan.max_per_rating} closest PSD${scan.max_per_rating > 1 ? "s" : ""}/channel in the window`
                   : scan.match_direction === "nearest"
-                    ? `each PSD is matched to the rating closest in time (either direction) within the match window.`
+                    ? "each PSD → nearest rating either direction"
                     : scan.match_direction === "prior"
-                      ? `each PSD is matched to the next rating AFTER it within the match window (forecasting semantics — the neural signal precedes the report).`
-                      : `up to ${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""} per channel matched per rating (legacy payload — matching direction not recorded; if this was a PSD-first run, see the double-dipping note below).`)
-               + (scan.max_per_rating > 1 && scan.refractory_min
-                  ? ` No two matched PSDs per rating closer than ${scan.refractory_min} min.` : "")
-               + (scan.n_capped_dropped ? ` ${scan.n_capped_dropped} excess PSDs dropped by the cap.` : "")
+                      ? "each PSD → next rating after it (forecasting)"
+                      : `≤${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""}/rating (legacy payload)`)
+               + (scan.max_per_rating > 1 && scan.refractory_min ? `, ≥${scan.refractory_min} min apart` : "")
+               + (scan.n_capped_dropped ? `, ${scan.n_capped_dropped} excess dropped` : "")
+               + ". "
                + (scan.auc_mode === "rating_grouped"
-                  ? " AUC folds are grouped by rating (each rating is one fold unit), so its effective n is the count of independent ratings — not the count of matched PSDs."
-                  : " Every matched sample is treated as independent.")}
-            </MDTypography>
-          )}
-          {/* Survey usage — the rating-centric view the clinician asked for. */}
-          {scan && scan.survey_usage && (
-            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
-              <strong>{`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`}</strong>
-              {scan.survey_usage.n_pro_reused > 0
-                ? ` ${scan.survey_usage.n_pro_reused} received more than one matched PSD (up to ${scan.max_per_rating}/channel — by design in PRO-first mode).`
-                : ""}
-            </MDTypography>
-          )}
-          {scan && scan.n_pooled != null && (
-            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
-              {`${scan.n_pooled} neural samples matched a rating across all channels. Each channel's curve uses only the samples `
-               + `recorded on that montage (per-channel n in legend), so any single curve draws on a fraction of that total.`}
-            </MDTypography>
-          )}
-          {scan && scan.binarization && (
-            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14}>
-              {`Logistic AUC split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
-               + (scan.binarization.n_excluded_middle > 0
-                  ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
-                  : ` (no middle excluded). `)
-               + `Pearson r uses all matched samples.`
-               + (scan.feature === "lsb_cs14"
-                  ? " LSB per sample from the CS-1\u20134 30\u202fs rating-centred window (transform DSP k\u202f=\u202f352.62) or CS-3 PSD bridge (k\u202f\u2248\u202f73.63); outside 7.8\u201330\u202fHz the bridge is exploratory."
+                  ? "AUC folds grouped by rating (effective n = independent ratings)."
+                  : "Every matched sample treated as independent.")
+               + (scan.survey_usage
+                  ? ` Surveys used: ${scan.survey_usage.n_pro_used}/${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`
                   : "")}
             </MDTypography>
           )}
-          {/* CS-14 feature note: show when new workflow is active. */}
+          {/* One-line LSB provenance + validated-range note (only in LSB mode). */}
           {scan && scan.feature === "lsb_cs14" && (
-            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={14} sx={{ fontStyle: "italic" }}>
-              {`LSB source: TD-transform (k\u202f=\u202f352.62) when a time-domain recording covers the rating; `
-               + `CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events with no coincident TD. `
-               + `Full 0\u2013100\u202fHz shown; green shading marks the validated 7.8\u201330\u202fHz range.`}
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={13.5} sx={{ fontStyle: "italic" }}>
+              {"LSB per rating: TD-transform (k\u202f=\u202f352.62) when a time-domain recording covers it, "
+               + "else CS-3 PSD bridge (k\u202f\u2248\u202f73.63). Full 0\u2013100\u202fHz; green shading = validated 7.8\u201330\u202fHz."}
             </MDTypography>
           )}
           {/* Double-dipping: only suppress when PRO-first + rating-grouped AUC already handles it.

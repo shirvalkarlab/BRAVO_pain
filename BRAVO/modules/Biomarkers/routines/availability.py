@@ -1143,6 +1143,160 @@ def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
     return out
 
 
+# Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the
+# human source-subtype label the binarization-hover breakdown wants. PSD events carry their own
+# `source` string already. Kept here so the cache tags each window's provenance once, at build time.
+TD_PRODUCT_SOURCE_LABEL = {
+    "streaming_td": "BrainSense streaming",
+    "indefinite":   "Indefinite stream",
+    "montage_td":   "Montage",
+}
+
+
+def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
+                           td_recordings=None, event_psd_recordings=None,
+                           window_s=None, max_missing_frac=0.10,
+                           saturation_uv=PRO_LSB_SATURATION_UV):
+    """Match-AGNOSTIC raw LSB spectrum cache for ONE channel — the decoupled source of truth.
+
+    Tiles the ENTIRE recording history into fixed `window_s` (default RAW_LSB_WINDOW_SECONDS = 3 s)
+    NON-OVERLAPPING windows and computes the full 0–100 Hz LSB vector for every window, INDEPENDENT of
+    any pain rating / PRO. Matching (which window or windows serve which rating, with the median-over-
+    extent aggregation) is performed LIVE downstream — NOT baked in here. Because nothing about a PRO
+    set enters this function, the cache key is purely (channel, recordings, centers): the SAME cache
+    serves every metric / strategy / match policy, and no LSB vector is pre-assigned to any rating.
+
+    Two window families, kept SEPARATE by source so a downstream matcher can prefer TD over PSD inside
+    a match window and so the no-reuse-across-PROs rule can be applied per individual vector:
+
+      * TD-derived (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): each TD recording is cut into
+        consecutive `window_s` tiles indexed by WALL-CLOCK SAMPLE position (so a tile's timestamp is
+        correct even when the trace has dropped/NaN samples — unlike the finite-sample-space window
+        axis of td_transform_band_power(agg="none")). Within each tile the VALIDATED transform runs at
+        its native 1 s rcs-Hann / 256-FFT, 50 % overlap, median across the (~5 for a 3 s tile) internal
+        sub-windows, × 352.62. A tile with < 1 s finite signal, or more than `max_missing_frac` non-
+        finite samples, or any sample at the ADC rail (≥ saturation_uv), emits an all-NaN row flagged
+        (`saturated` / insufficient) rather than a misleading value.
+
+      * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): each PSD-only event is ONE window at
+        its own onboard-FFT timestamp, device_psd_band_power over all centers × 73.63. Per-band
+        `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
+        exploratory (computed and flagged), matching per_pro_lsb_spectrum's bridge contract.
+
+    Parameters mirror per_pro_lsb_spectrum (same recording dict schema, same constants) MINUS pro_times
+    and extent_s — there is no rating and no extent at cache-build time.
+
+    Returns a dict (zero-length axes, never None, when a family is empty so the [W × C] shape holds):
+        {"channel": canon, "centers_hz": [C floats], "window_s": float, "band_half_hz": float,
+         "td":  {"t": [Wt window-CENTER epoch_s], "lsb": [[C] × Wt], "saturated": [Wt bool],
+                 "source": [Wt label], "n_finite_s": [Wt float], "ok": [Wt bool]},
+         "psd": {"t": [Wp epoch_s], "lsb": [[C] × Wp], "calibrated": [[C bool] × Wp],
+                 "source": [Wp label]},
+         "n_td_windows": Wt, "n_psd_windows": Wp}
+    """
+    if window_s is None:
+        window_s = analytics.RAW_LSB_WINDOW_SECONDS
+    window_s = float(window_s)
+    half = float(band_half_hz)
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    channel = _canon_channel(channel)
+    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    nC = centers.size
+    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+
+    td_out = {"t": [], "lsb": [], "saturated": [], "source": [], "n_finite_s": [], "ok": []}
+    psd_out = {"t": [], "lsb": [], "calibrated": [], "source": []}
+
+    # ---- TD-derived tiles -------------------------------------------------------------------------
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+        if ci is None:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None or ci >= data.shape[1] or fs <= 0:
+            continue
+        col = data[:, ci]
+        nsamp = col.shape[0]
+        miss = _missing_per_sample(r.get("Missing"), nsamp)
+        src = TD_PRODUCT_SOURCE_LABEL.get(r.get("product"), r.get("product") or "time-domain")
+        win_tile = int(round(fs * window_s))
+        step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))   # 50% overlap sub-window hop
+        min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))  # ≥1 sub-window (1 s) to score
+        if win_tile <= 0:
+            continue
+        # Non-overlapping tiles by RAW sample index. A trailing partial tile is kept only if it can
+        # still hold ≥1 transform sub-window; shorter remainders are dropped (no valid LSB).
+        for start in range(0, nsamp, win_tile):
+            end = min(start + win_tile, nsamp)
+            seg = col[start:end]
+            seg_miss = miss[start:end] if miss is not None else None
+            fin = np.isfinite(seg)
+            n_fin = int(fin.sum())
+            t_center = t0 + ((start + end) / 2.0) / fs
+            # Default: a NaN row we will overwrite on success. Keeps Wt aligned with the tile grid.
+            row = [None] * nC
+            saturated = False
+            ok = False
+            if n_fin >= min_finite:
+                miss_frac = (float(np.mean(seg_miss)) if seg_miss is not None and seg_miss.size
+                             else 1.0 - n_fin / max(seg.size, 1))
+                if np.nanmax(np.abs(seg)) >= saturation_uv:
+                    saturated = True
+                elif miss_frac <= max_missing_frac:
+                    bp = np.atleast_1d(analytics.td_transform_band_power(
+                        seg, fs, centers, half_hz=half, step_samples=step_sub, agg="median"))
+                    lsb = np.where(np.isfinite(bp) & (bp > 0),
+                                   analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
+                    row = [float(v) if np.isfinite(v) else None for v in lsb]
+                    ok = any(v is not None for v in row)
+            td_out["t"].append(float(t_center))
+            td_out["lsb"].append(row)
+            td_out["saturated"].append(bool(saturated))
+            td_out["source"].append(src)
+            td_out["n_finite_s"].append(round(n_fin / fs, 3))
+            td_out["ok"].append(bool(ok))
+
+    # ---- PSD-derived windows (one per event) ------------------------------------------------------
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+            continue
+        te = _to_epoch(ev.get("t"))
+        if te is None:
+            continue
+        bp = np.atleast_1d(analytics.device_psd_band_power(
+            ev.get("freq"), ev.get("power"), centers, half_hz=half))
+        lsb = np.where(np.isfinite(bp) & (bp > 0), analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
+        psd_out["t"].append(float(te))
+        psd_out["lsb"].append([float(v) if np.isfinite(v) else None for v in lsb])
+        psd_out["calibrated"].append([bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)])
+        psd_out["source"].append(str(ev.get("source") or "PSD event"))
+
+    # time-sort each family (tiles are already roughly ordered, but recordings may interleave)
+    def _sort_family(fam, keys):
+        if not fam["t"]:
+            return
+        order = np.argsort(np.asarray(fam["t"], dtype=float), kind="stable")
+        for k in keys:
+            fam[k] = [fam[k][i] for i in order]
+    _sort_family(td_out, ["t", "lsb", "saturated", "source", "n_finite_s", "ok"])
+    _sort_family(psd_out, ["t", "lsb", "calibrated", "source"])
+
+    return {"channel": channel, "centers_hz": [float(c) for c in centers],
+            "window_s": window_s, "band_half_hz": half,
+            "td": td_out, "psd": psd_out,
+            "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
+
+
 def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half_hz=2.5,
                         extent_s=None, missing=None, max_missing_frac=0.10,
                         saturation_uv=PRO_LSB_SATURATION_UV):

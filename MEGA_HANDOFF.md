@@ -20,13 +20,14 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `f6849c4`** (Bug 1–4 committed + pushed to origin) + **uncommitted** changeset (audit [5]
-> server-side cut-point + [42] LSB op-point chip; §0 newest entry), **suite 253/253 PASS** (in-container
-> runner). No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
+> **HEAD `8c8f976`** (audit [5] + [42] committed + pushed) + **uncommitted** changeset (biomarker
+> count-integrity + hover-N audit + UI-text overhaul + raw match-agnostic LSB cache; §0 newest entry),
+> **suite 253/253 PASS** (in-container runner). No-agent-commits rule RETIRED — agent now commits +
+> pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
-> synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-27.md`; the TD→LSB
-> calibration write-up is `HANDOFF_TD_LSB_calibration_2026-06-27.md`). This doc keeps the
+> synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`; the
+> TD→LSB calibration write-up is `HANDOFF_TD_LSB_calibration_2026-06-27.md`). This doc keeps the
 > durable facts — constants, frozen model, decisions, gotchas, file map — not the blow-by-blow.
 
 ---
@@ -35,6 +36,43 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Biomarker count integrity + hover-N audit + UI-text overhaul + raw LSB cache (2026-06-28). Suite 253/253.**
+- **Scatter/violin overplot fixed (root cause).** In LSB mode the click-scatter plots `x=log10(modeled
+  LSB)` (modeled PER RATING) vs `y=PRO rating`, so every matched PSD sharing a rating collapses onto
+  the same (x,y) — overplotting, not dropped points — while the title summed `n_grp` over ALL matched
+  rows (inflated headline; `len_x` could even exceed `n_channel`). `spectral_feature_importance` now
+  DE-DUPLICATES the scatter to one observation per distinct `rating_group` (`dedup_by_rating`,
+  first-wins); `n_grp` derives from the de-duped index so `nlo+nhi+nmid == n_obs == len(x)` (rendered
+  dots == headline n). `n_obs` is taken AFTER the `max_scatter` cap (cap-parity edge fixed). New
+  scatter payload: `n_obs/n_distinct/n_rows/dedup_by_rating` + per-band `n_td/n_psd`; new per-channel
+  `n_high/n_low/n_excluded/n_td/n_psd_bridge`. Bridge-verified at 25.5 Hz on all 6 channels.
+- **Hover-N audit (all traces).** 8 count sites; 3 misreported (spectrum curve legend+hover ~L303,
+  scatter title ~L556, violin caption ~L584), all printing `n_channel` (matched PSD ROWS) where the
+  count of independent rendered LSB vectors belonged — inflating 130–925 (R 0⁻3⁺ claimed n=1026 vs
+  ~101 vectors). The cited "AUC N=98 == Pearson N=98" is ONE `n_channel` echoed onto both the r and
+  AUC traces via `<extra>%{fullData.name}</extra>`; `ch.n_r` is rendered nowhere. New label spec (PI):
+  report only TWO values everywhere in the spectral panel — `(<n_td> TD · <n_psd> PSD)`.
+- **UI text.** `index.js`: legacy Time-/Power-domain `summaryLine()` prose (and orphaned `fmt`/`fmtP`)
+  replaced by a concise per-channel high/low/excluded + TD/PSD summary. `BiomarkerAnalytics.js`: Full
+  Spectrum caption 6 paragraphs → 2 lines; mixed-effects `ValidationReadout` enlarged+bolded (verdict
+  badge 14px, 16px OR/CI/p headline, bold stim verdict + LRT p). `BiomarkerDataTimeline.js`: stale
+  green (`LSB_GREEN #2CA02C`) glyphs removed from the legend — no rendered trace is ever green (real
+  LSB colored by sensing Hz / steel-blue); recolored to `LANE_NEUTRAL` (DIM_GREY), 9→7 legend rows.
+- **Raw match-agnostic LSB cache (decouple, half 1 of 2).** New `availability.raw_lsb_spectrum_cache()`
+  tiles the WHOLE recording into 3 s non-overlapping windows (`RAW_LSB_WINDOW_SECONDS=3.0`), full
+  0–100 Hz, `[W×C]` per channel + per-window timestamps, **NO PRO coupling** (cache key = channel +
+  recordings + centers). TD tiles by wall-clock sample index (gap-correct) → validated 1 s-Hann/256-FFT
+  median ×352.62; PSD-bridge one window/event ×73.63, calibrated mask gated [7.8,30]. Each window
+  source-tagged (Montage/Indefinite/BrainSense for TD; Patient event for PSD) via `TD_PRODUCT_SOURCE_
+  LABEL` for the future hover breakdown. LSB-source provenance chip added to the spectral panel.
+  Bridge-verified on RCS08 (60 528 TD + 445 PSD windows on ZERO_THREE_RIGHT; saturation/missing
+  rejection unit-tested). **DEFERRED to a focused follow-up (PI: "cache layer first, matching next
+  session"):** wiring the cache into `bravo_service`, LIVE matching (median over a configurable ~30 s
+  rating-centered extent, TD preferred within window), the no-LSB-reuse-across->1-PRO rule (cuts
+  today's ~79.7 % pseudoreplication — report r/AUC before/after), and the binarization-histogram hover
+  source breakdown. The old `per_pro_lsb_spectrum` PRO-coupled path stays live until then.
+- Per-session detail: `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`.
 
 **Audit [5] (server-side cut-point) + [42] (LSB op-point chip) + Bug 1–4 committed (2026-06-28). Suite 253/253.**
 - **Bug 1–4 landed:** the prior event-PSD-resolver + frontend tier/title changeset was committed

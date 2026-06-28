@@ -1248,6 +1248,28 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
         chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
         n_channel = int(chan_fin.sum())
+        # Per-channel binarization split of the MATCHED samples on this montage (the summary the PI
+        # asked to surface above the scan): high / low / excluded-middle by the SAME y_bin the AUC
+        # uses (1=high, 0=low, NaN=excluded). Counts matched PSD rows on this channel, so they sum
+        # to n_channel. (The de-duplicated independent-rating counts live on the scatter payload.)
+        ch_n_high = int(np.nansum((y_bin == 1.0) & chan_fin))
+        ch_n_low = int(np.nansum((y_bin == 0.0) & chan_fin))
+        ch_n_excl = int(n_channel - ch_n_high - ch_n_low)   # NaN y_bin among matched rows
+        # LSB-source split for THIS channel: how many of this channel's resolved per-rating LSB
+        # vectors came from the TD-transform route (k=352.62) vs the CS-3 PSD bridge (k≈73.63).
+        # Only modeled/real LSB values (a resolved tier) feed the spectral feature-importance scan;
+        # tier=None ratings contribute nothing and are not counted. Source: the per-(channel,PRO)
+        # cache `ch_spectra` resolved in the use_lsb pre-build below — recomputed here defensively
+        # so the field is correct whether or not the pre-build ran for this channel.
+        ch_n_td = ch_n_psd = None
+        if use_lsb:
+            _cs = _lsb_cache.get(raw)
+            if _cs is None:
+                _ru = str(raw).upper()
+                _cs = next((v for k, v in _lsb_cache.items() if str(k).upper() == _ru), None)
+            if _cs:
+                ch_n_td = int(sum(1 for sp in _cs if sp and sp.get("tier") == "td_transform"))
+                ch_n_psd = int(sum(1 for sp in _cs if sp and sp.get("tier") == "psd_bridge"))
         # `p_pearson_curve` is the independence-assuming Pearson p (treats every PSD as independent).
         # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
         # it only so the FDR pass below can quantify the pseudoreplication inflation (naive bands
@@ -1405,6 +1427,11 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             # quantify the pseudoreplication inflation vs the rating-clustered logit p.
             "p_pearson": p_pearson_curve,
             "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
+            # Per-channel matched-sample binarization split (sums to n_channel) and LSB-source split.
+            # Surfaced so the UI can show "high / low / excluded per channel" and "# TD-transform vs
+            # # PSD-bridge LSBs" without recomputing client-side. n_td/n_psd are None in logpsd mode.
+            "n_high": ch_n_high, "n_low": ch_n_low, "n_excluded": ch_n_excl,
+            "n_td": ch_n_td, "n_psd_bridge": ch_n_psd,
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
             # frontend reads scatter via the band index). Stored compact (one row per center).
@@ -1417,15 +1444,58 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     for ch in out_channels:
         bp_list = ch.pop("_band_power")
         scat = []
+        # Per-epoch LSB SOURCE tier for THIS channel, so each band's scatter can report how many of
+        # its RENDERED points are TD-transform vs PSD-bridge LSBs (the only two values the PI wants
+        # surfaced). tier is decided once per (channel, PRO) in the cache; map PRO→epoch via rg.
+        epoch_tier = None
+        if use_lsb and rg is not None:
+            _csr = _lsb_cache.get(ch.get("raw"))
+            if _csr is None:
+                _ru = str(ch.get("raw")).upper()
+                _csr = next((v for k, v in _lsb_cache.items() if str(k).upper() == _ru), None)
+            if _csr:
+                _np_cache = len(_csr)
+                epoch_tier = [None] * len(labels)
+                for _i in range(len(labels)):
+                    _pi = int(rg[_i]) if _i < rg.size else -1
+                    if 0 <= _pi < _np_cache and _csr[_pi]:
+                        epoch_tier[_i] = _csr[_pi].get("tier")
         for bp_log in bp_list:
             if bp_log is None:
                 scat.append(None); continue
             m = np.isfinite(bp_log) & label_fin
-            idx = np.where(m)[0]
-            if idx.size < 3:
+            idx_all = np.where(m)[0]
+            if idx_all.size < 3:
                 scat.append(None); continue
+            # Raw count of matched PSD rows in this band on this channel (the pre-dedup denominator,
+            # surfaced as SECONDARY context only — never the headline n).
+            n_rows = int(idx_all.size)
+            # ---- De-duplicate to the UNIT OF ANALYSIS so rendered dots == the honest n ------------
+            # In rating-grouped mode (LSB / rating-aware AUC) the per-band feature is modeled ONCE per
+            # rating, so every matched PSD sharing a rating carries an IDENTICAL (x, y) — plotting one
+            # marker per matched row stacks them on a single pixel while the title counted the rows
+            # (the "n=84 but 2 dots" bug). The rating is the unit of analysis here, so collapse idx to
+            # ONE representative epoch per distinct rating (rg). This is lossless in LSB mode (shared x)
+            # and makes the rendered point count equal the independent-rating n. In non-rating mode
+            # (logpsd, each PSD genuinely distinct) we keep every epoch — there is no overplotting.
+            dedup_by_rating = (auc_groups is not None and rg is not None and rg.size == labels.size)
+            if dedup_by_rating:
+                seen = {}
+                for i in idx_all:
+                    key = int(rg[i])
+                    if key not in seen:          # first epoch wins; in LSB mode all share x/y anyway
+                        seen[key] = i
+                idx = np.array(sorted(seen.values()), dtype=int)
+            else:
+                idx = idx_all
+            # Distinct observations after de-dup but BEFORE the display cap (the true independent n).
+            n_distinct = int(idx.size)
             if idx.size > max_scatter:
                 idx = idx[np.linspace(0, idx.size - 1, max_scatter).astype(int)]
+            # Headline n = points ACTUALLY rendered. Taken AFTER the cap so it equals len(x) and the
+            # n_grp sum even when distinct ratings exceed max_scatter (the cap subsamples idx). When no
+            # cap fires n_obs == n_distinct. (n_distinct is surfaced too, so the UI can note subsampling.)
+            n_obs = int(idx.size)
             # Per-sample binarization group from the SAME high/low/excluded split the AUC uses
             # (y_bin: 1.0=high, 0.0=low, NaN=excluded middle), so the click panel's violin can
             # color points by pain group without recomputing the cut client-side.
@@ -1463,6 +1533,22 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 "median_delta": median_delta,               # median(high) - median(low), in SD units
                 "n_grp": {"high": int((ga == "high").sum()), "low": int((ga == "low").sum()),
                           "mid": int((ga == "mid").sum())},
+                # Count taxonomy so the UI labels honestly (see BiomarkerAnalytics title logic):
+                #   n_obs  — DISTINCT observations actually rendered (headline n; == len(x)).
+                #   n_rows — matched PSD rows before rating de-dup (secondary context only).
+                #   dedup_by_rating — whether n_obs collapsed multiple PSDs/rating to one point.
+                "n_obs": n_obs,
+                "n_distinct": n_distinct,                # distinct ratings before display cap
+                "n_rows": n_rows,
+                "dedup_by_rating": bool(dedup_by_rating),
+                # LSB-source split of the RENDERED points (the two values the PI wants in every count
+                # label): how many came from TD-transform (k=352.62) vs PSD-bridge (k≈73.63). None in
+                # logpsd mode (no LSB tiers). td + psd may be < n_obs if any rendered point's tier is
+                # unresolved (should be 0 in practice — every modeled LSB carries a tier).
+                "n_td": (int(sum(1 for i in idx if epoch_tier[i] == "td_transform"))
+                         if epoch_tier is not None else None),
+                "n_psd": (int(sum(1 for i in idx if epoch_tier[i] == "psd_bridge"))
+                          if epoch_tier is not None else None),
                 "dates": ([str(times[i]) for i in idx] if times is not None else None),
             })
         ch["scatter"] = scat
@@ -2886,6 +2972,12 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
 
 
 TRANSFORM_CENTERED_EXTENT_SECONDS = 30.0   # rating-centered TD extent fed to the per-PRO LSB sweep
+# Tile width for the match-AGNOSTIC raw LSB cache (availability.raw_lsb_spectrum_cache). The whole
+# recording is sliced into fixed RAW_LSB_WINDOW_SECONDS non-overlapping tiles, INDEPENDENT of any PRO;
+# each tile's LSB is the validated 1 s-Hann/256-FFT transform (k=352.62) median across its internal
+# 50%-overlap sub-windows. Matching (median of the tiles falling inside a rating-centered extent) is
+# done LIVE downstream, not baked into this cache. 3 s holds ~5 sub-windows per tile.
+RAW_LSB_WINDOW_SECONDS = 3.0
 
 
 def transform_centered_window(samples_uv, fs, center_offset_s, *,

@@ -360,94 +360,9 @@ function Biomarkers() {
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
-  const summaryLine = (label, s) => {
-    if (!s) return null;
-    // Line: body-level stat readout (13.5px, variable weight) — these numbers are the clinical
-    // payload of the page, so they get comfortable size + leading, not the cramped button variant.
-    const Line = ({ children, color = "dark", bold = false }) => (
-      <MDTypography variant="body2" fontWeight={bold ? "medium" : "regular"} color={color}
-        display="block" sx={{ fontSize: 13.5, lineHeight: 1.55 }}>
-        {children}
-      </MDTypography>
-    );
-    // Small italic caption for honesty caveats (provenance, CI conditions, label source).
-    const Note = ({ children, color = "dark" }) => (
-      <MDTypography variant="caption" fontStyle="italic" color={color} display="block"
-        sx={{ fontSize: 12, lineHeight: 1.5 }}>
-        {children}
-      </MDTypography>
-    );
-
-    // Power-domain (threshold detector) branch.
-    if (s.best_threshold !== undefined) {
-      const aucTxt = s.auc != null ? ` · AUC = ${fmt(s.auc)} (in-sample, not cross-validated)` : "";
-      const rhoTxt = s.lfp_vs_continuous_pain_spearman != null
-        ? ` · Spearman ρ(LFP, continuous pain) = ${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
-      return (
-        <MDBox mb={0.5}>
-          <Line bold>
-            {`${label}: threshold = ${fmt(s.best_threshold)} · sensitivity = ${fmt(s.sens)} · specificity = ${fmt(s.spec)} · n = ${s.n_windows ?? "—"} windows`}
-          </Line>
-          <Line>
-            {`Balanced accuracy = ${fmt(s.balanced_accuracy)} vs chance = ${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
-             ` (prevalence = ${fmt(s.prevalence)}` +
-             `${s.majority_accuracy != null ? `, majority-class accuracy = ${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
-          </Line>
-          {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
-          {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
-          {s.in_sample ? (
-            <Line color="warning">{`⚠ ${s.note || "All-data fit: scored on the same data (in-sample, optimistic — not a generalization estimate)."}`}</Line>
-          ) : null}
-          {s.pain_level_note ? <Note>{s.pain_level_note}</Note> : null}
-        </MDBox>
-      );
-    }
-
-    // Time-domain (PSD↔pain correlation) branch.
-    if (s.band !== undefined || s.freq_hz !== undefined) {
-      const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
-      const ciTxt = ci && ci[0] != null && ci[1] != null ? ` · 95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
-      const fdrTxt = s.fdr_q != null ? ` · FDR q = ${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
-      // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
-      // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
-      const permTxt = s.perm_p != null ? ` · perm p = ${fmtP(s.perm_p)}` : ` · p = ${fmtP(s.p)}`;
-      const nTxt = s.n != null
-        ? `n = ${s.n} paired samples${s.n_effective != null ? ` (effective n = ${fmt(s.n_effective)} after autocorrelation adjustment)` : ""}`
-        : "";
-      // Honest significance verdict: the band is "real" only if it survives BOTH the selection-
-      // aware permutation test AND the per-cell FDR. perm_p is the primary statement.
-      const permSig = s.perm_p != null && s.perm_p < 0.05;
-      const notSignificant = (s.perm_p != null || s.fdr_q != null) && !permSig && !s.fdr_significant;
-      return (
-        <MDBox mb={0.5}>
-          <Line bold>
-            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz · r = ${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
-          </Line>
-          {nTxt ? <Line>{nTxt}</Line> : null}
-          {s.stim_adjusted_r != null ? (
-            <Line>{`stim-adjusted r=${fmt(s.stim_adjusted_r)} (partial correlation removing stim amplitude)`}</Line>
-          ) : s.stim_adjusted_note ? (
-            <Line>{`stim adjustment: ${s.stim_adjusted_note}`}</Line>
-          ) : null}
-          {s.narrow_peak_warning ? (
-            <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
-          ) : null}
-          {notSignificant ? (
-            <MDBox mt={0.5} px={1.25} py={0.75} sx={{ backgroundColor: "rgba(211,47,47,0.08)",
-              borderLeft: "3px solid #D32F2F", borderRadius: 1 }}>
-              <MDTypography variant="body2" color="error" sx={{ fontSize: 13, lineHeight: 1.5 }}>
-                {"⚠ Not statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as an exploratory/negative result, not a validated biomarker."}
-              </MDTypography>
-            </MDBox>
-          ) : (!s.fdr_significant && permSig ? (
-            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — the permutation result is primary."}</Line>
-          ) : null)}
-          {s.r_ci_note ? <Note>{`r and CI are ${s.r_ci_note}`}</Note> : null}
-        </MDBox>
-      );
-    }
-    return null;
-  };
+  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary it
+  // generated was replaced by the concise per-channel matched-sample + TD/PSD-LSB summary
+  // rendered inline below the Recompute button (see the spectral_feature_importance block).
 
   return (
     <>
@@ -799,8 +714,50 @@ function Biomarkers() {
                               : ""}
                           </MDTypography>
                         ) : null}
-                        {summaryLine("Time-domain", data.summary.timedomain)}
-                        {summaryLine("Power-domain", data.summary.powerdomain)}
+                        {/* Concise per-channel matched-sample summary (replaces the legacy dual-
+                            pipeline Time-/Power-domain prose). For each bipolar channel: how many
+                            matched samples fell HIGH / LOW / excluded-middle by the active cut, and
+                            how many of the channel's LSB vectors are time-domain-derived vs PSD-
+                            derived. Only modeled/real LSB values feed the spectral feature-importance
+                            scan, so these two source counts ARE the analyzable-sample budget. */}
+                        {(() => {
+                          const sfi = data.analytics && data.analytics.timedomain
+                            && data.analytics.timedomain.spectral_feature_importance;
+                          const chans = (sfi && sfi.channels) || [];
+                          if (!chans.length) return null;
+                          const bin = (sfi && sfi.binarization) || {};
+                          return (
+                            <MDBox mt={0.5} mb={0.5}>
+                              <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
+                                {"Matched samples per channel "}
+                                <span style={{ fontWeight: 400, color: "#6c757d" }}>
+                                  {"(high / low / excluded · LSB source TD / PSD)"}
+                                </span>
+                              </MDTypography>
+                              {chans.map((c, i) => (
+                                <MDTypography key={i} variant="caption" color="text" display="block"
+                                  sx={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                                  <strong>{c.short}</strong>
+                                  {`: ${c.n_high != null ? c.n_high : "—"} high · `
+                                   + `${c.n_low != null ? c.n_low : "—"} low · `
+                                   + `${c.n_excluded != null ? c.n_excluded : "—"} excluded`}
+                                  {(c.n_td != null || c.n_psd_bridge != null)
+                                    ? <span style={{ color: "#6c757d" }}>{`  ·  ${c.n_td || 0} TD / ${c.n_psd_bridge || 0} PSD LSBs`}</span>
+                                    : null}
+                                </MDTypography>
+                              ))}
+                              {bin.n_high != null && (
+                                <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
+                                  sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
+                                  {`Pooled binarization: ${bin.n_high} high · ${bin.n_low} low · `
+                                   + `${bin.n_excluded_middle} excluded-middle. `
+                                   + "Only modeled/real LSB values (TD-transform or PSD-bridge) feed the "
+                                   + "spectral feature-importance scan."}
+                                </MDTypography>
+                              )}
+                            </MDBox>
+                          );
+                        })()}
                         {data.powerdomain_pooled_warning ? (
                           <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
                             {`⚠ ${data.powerdomain_pooled_warning}`}
@@ -889,19 +846,7 @@ function Biomarkers() {
   );
 }
 
-function fmt(x) {
-  if (x === null || x === undefined || Number.isNaN(x)) return "—";
-  if (typeof x === "number") return Math.abs(x) >= 100 ? x.toFixed(1) : x.toFixed(3);
-  return String(x);
-}
-
-// Compact p-value formatter: scientific notation for tiny p, 3 decimals otherwise.
-function fmtP(x) {
-  if (x === null || x === undefined || Number.isNaN(x)) return "—";
-  const n = Number(x);
-  if (!Number.isFinite(n)) return "—";
-  if (n > 0 && n < 1e-3) return n.toExponential(1);
-  return n.toFixed(3);
-}
+// [removed] module-level fmt()/fmtP() — their only consumer was summaryLine(), removed above.
+// The recorded-power list uses its own local fmt(); other panels format inline.
 
 export default Biomarkers;

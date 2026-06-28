@@ -980,7 +980,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // blocks, then the raw TD coverage band at the BOTTOM. The two LSB families share a distinct
       // GREEN (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line,
       // streaming = a solid block. (The lanes themselves stay colored by sensing Hz — right-side key.)
-      const LSB_GREEN = "#2CA02C";
+      // Neutral lane glyph color for the chronic/streaming/modeled LSB legend entries. Their REAL
+      // on-plot color is the sensing center frequency (FREQ_PALETTE, in the right-side Hz key), so the
+      // legend uses a neutral grey rather than a fixed hue that no rendered trace actually uses. (Was
+      // LSB_GREEN #2CA02C — removed: no LSB trace is drawn green, it only appeared in this legend.)
+      const LANE_NEUTRAL = DIM_GREY;
       // PSD tick glyphs — TWO distinct sources that previously both read as "montage PSD":
       //  • grey ticks = montage/survey + NeuralActivitySnapshot device PSDs (carry their own TD)
       //  • teal ticks = patient-triggered EVENT PSDs (incl. the auto 'Streaming' snapshots), PSD-only
@@ -995,24 +999,23 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "diamond", size: 10, color: "#888", line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
         name: "patient event  (labeled press: Pain / Medication / …; color = label)" });
+      // Chronic 24/7 and streaming-LSB glyphs: the SHAPE is the identifying channel (dashdot squiggle
+      // vs solid block). Their real on-plot COLOR is the sensing center frequency (FREQ_PALETTE,
+      // documented in the right-side Hz key) — NOT green. The legend glyph is drawn NEUTRAL grey so it
+      // does not advertise a green that no rendered trace uses (the stale-symbol fix).
       traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-        line: { color: LSB_GREEN, width: 2.5, dash: "dashdot", shape: "spline" },
+        line: { color: LANE_NEUTRAL, width: 2.5, dash: "dashdot", shape: "spline" },
         name: "chronic LSB · 24/7 trend  (squiggle; lane color = sensing Hz)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "square", size: 15, color: LSB_GREEN },
+        marker: { symbol: "square", size: 15, color: LANE_NEUTRAL },
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
+      // CS-4 MODELED LSB (both the overview and per-rating layers share these two glyphs). One modeled
+      // point per rating; SHAPE = DSP route, COLOR = sensing Hz (overview) / steel-blue (per-rating),
+      // red ring = TD saturated. ○ TD-transform (k=352.62) · ◇ PSD→LSB bridge (k≈73.63). (Previously
+      // listed three times in stale green — collapsed to this single neutral, shape-accurate entry.)
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
-        name: "modeled LSB  (○ TD-transform ×352.62 — hollow circle)" });
-      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
-        name: "modeled LSB  (◇ PSD→LSB bridge ×73.63 — hollow diamond)" });
-      // CS-4 per-rating MODELED LSB — one modeled point per pain rating on its own sub-lane scale.
-      // Native is NOT shown here (it's the colored band-power lane trace); shape = DSP route:
-      // ○ hollow circle = TD-transform (×352.62), ◇ hollow diamond = PSD-bridge (×73.63); red ring = saturated.
-      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle-open", size: 9, color: "rgba(0,0,0,0)", line: { width: 1.4, color: PAL.proLsb } },
-        name: "per-rating modeled LSB  (same symbols: ○ TD-transform · ◇ PSD-bridge; red ring = saturated)" });
+        marker: { symbol: "circle-open", size: 11, color: "rgba(0,0,0,0)", line: { width: 1.5, color: PAL.proLsb } },
+        name: "modeled LSB  (○ TD-transform ×352.62 · ◇ PSD-bridge ×73.63; red ring = TD saturated)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
@@ -1026,7 +1029,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 5 : 9;            // glyph-legend entries per mode (see traces above)
+    const nLegRows = binMode ? 5 : 7;            // glyph-legend entries per mode (see traces above)
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes
