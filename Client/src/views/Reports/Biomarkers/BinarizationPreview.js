@@ -42,17 +42,6 @@ function percentile(values, q) {
   return a[lo] + (a[hi] - a[lo]) * (idx - lo);
 }
 
-// Inverse of percentile(): the empirical-CDF percentile rank (0..100) of a pain value x over the
-// SAME finite-value array the histogram is built on. Used when the user DRAGS a cut line: the dragged
-// pain-value is converted back to the percentile knob (percentileLow/High) so the line, the sliders,
-// and the backend labeler stay byte-consistent (cut = percentile(vals, pct); pct = cdf(vals, cut)).
-function valueToPercentile(values, x) {
-  if (!values || values.length === 0 || !Number.isFinite(x)) return null;
-  let c = 0;
-  for (const v of values) if (v <= x) c += 1;
-  return (c / values.length) * 100;
-}
-
 // Compute cuts given strategy + percentile state (legacy daily-mode fallback only; matched mode
 // takes its cuts straight from the scanModel so they are byte-identical to the backend labeler).
 function computeCuts(vals, strategy, lowPct, highPct) {
@@ -264,25 +253,19 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const widths = cnt.map((_, i) => (edges[i + 1] - edges[i]) * 0.96);
     const shapes = [];
     const annotations = [];
-    // Cut lines are user-DRAGGABLE in two-cut percentile/tertile mode (when the parent passes the
-    // percentile setters): dragging a line is equivalent to moving the matching percentile slider —
-    // the relayout handler below converts the dragged pain-value back to its empirical-CDF percentile
-    // and writes percentileLow/High, so line + slider + backend labeler stay in lock-step. Record the
-    // shape index of each cut line so the handler can tell low from high. (Idx map reset each render.)
-    const cutShapeIdx = { low: null, high: null, single: null };
-    const draggableCuts = (cuts.kind === "two-cut") && !!setPercentileLow && !!setPercentileHigh;
-    const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center", role = null) => {
-      const idx = shapes.length;
+    // Cut lines are DISPLAY-ONLY dashed notches at the current thresholds — the percentile cut points
+    // are set by the two-handle range slider above the histogram (see JSX), not by dragging in-plot.
+    // The notch + its percentile label simply mirror the slider's current low/high.
+    const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center") => {
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1,
                     line: { color, width: 2, dash: "dash" } });
-      if (role) cutShapeIdx[role] = idx;
       annotations.push({ x, yref: "paper", y: yLevel, xanchor, yanchor: "bottom",
                          text: `${x.toFixed(1)} (${label})`, showarrow: false,
                          font: { size: 10, color } });
     };
     if (cuts.kind === "two-cut") {
-      pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right", "low");
-      pushCutLine(cuts.highCut, cuts.highLabel, HI, 1.13, "left", "high");
+      pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right");
+      pushCutLine(cuts.highCut, cuts.highLabel, HI, 1.13, "left");
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: cuts.lowCut, x1: cuts.highCut,
                     y0: 0, y1: 1, fillcolor: MID, opacity: 0.10, line: { width: 0 } });
     } else if (cuts.kind === "one-cut") {
@@ -430,56 +413,19 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
       shapes, annotations, showlegend: false,
     };
-    // When the cut lines are draggable, advertise it with a small hint and enable shape-position
-    // edits in the config (Plotly makes all line/rect shapes draggable; the handler below acts ONLY
-    // on the two cut-line indices, so dragging the shaded mid-band rect is ignored and snaps back on
-    // the next state-driven render).
-    if (draggableCuts) {
-      annotations.push({ xref: "paper", yref: "paper", x: 0.5, y: -0.16, xanchor: "center",
-                         yanchor: "top", text: "drag the dashed cut lines to set the percentiles",
-                         showarrow: false, font: { size: 9.5, color: "#8A929B" } });
-    }
+    // The percentile cut points are set by the two-handle RANGE SLIDER rendered ABOVE the histogram
+    // (see the JSX below), NOT by dragging inside the plot. Plotly's `edits.shapePosition` is a single
+    // boolean with no per-axis constraint — a shape drag moves in x AND y and can resize the line — so
+    // in-plot editing is DISABLED here and the cut lines are display-only dashed notches at the current
+    // thresholds. This removes the broken vertical-drag/resize behavior and keeps the slider as the one
+    // source of truth for percentileLow/High.
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false, displayModeBar: false,
-      edits: { shapePosition: draggableCuts },
+      edits: { shapePosition: false },
     });
-
-    // Drag → percentile. Reading shapes[idx].x0 (a pain VALUE) back to its empirical-CDF percentile
-    // over the histogrammed `vals` keeps the dragged line, the slider, and the backend cut consistent.
-    // Re-bound each render so the closure captures the current `vals`/`cutShapeIdx`. Tertile is the
-    // fixed 33.3/66.7 preset, so a drag promotes strategy→percentile (same as the slider's onChange).
+    // Defensive: drop any stale relayout drag handler from an earlier render of this component.
     const gd = ref.current;
     if (gd && gd.removeAllListeners) gd.removeAllListeners("plotly_relayout");
-    if (gd && draggableCuts && gd.on) {
-      gd.on("plotly_relayout", (e) => {
-        if (!e) return;
-        const readX = (idx) => {
-          if (idx == null) return null;
-          const x0 = e[`shapes[${idx}].x0`];
-          const x1 = e[`shapes[${idx}].x1`];
-          const x = (x0 != null) ? x0 : x1;
-          return (x != null && Number.isFinite(Number(x))) ? Number(x) : null;
-        };
-        const xLow = readX(cutShapeIdx.low);
-        const xHigh = readX(cutShapeIdx.high);
-        if (xLow == null && xHigh == null) return;
-        if (strategy === "tertile" && setStrategy) setStrategy("percentile");
-        if (xLow != null) {
-          const pct = valueToPercentile(vals, xLow);
-          if (pct != null) {
-            const lo = Math.min(Math.max(Math.round(pct), 1), percentileHigh - 1);
-            setPercentileLow(lo);
-          }
-        }
-        if (xHigh != null) {
-          const pct = valueToPercentile(vals, xHigh);
-          if (pct != null) {
-            const hi = Math.max(Math.min(Math.round(pct), 99), percentileLow + 1);
-            setPercentileHigh(hi);
-          }
-        }
-      });
-    }
     // NOTE: no per-run Plotly.purge cleanup here. Purging before each re-run destroys the graph div,
     // which defeats the `uirevision: hist-${metricKey}` set below — the user's histogram zoom would
     // reset on every match-window / strategy drag. Plotly.react diffs in place, so the live recolor
@@ -645,6 +591,57 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : "No PSD scan index available — showing the daily PRO distribution."}
         </MDTypography>
       ) : null)}
+
+      {/* Percentile cut control — ONE slider bar with TWO handles (low + high endpoints), sitting
+          directly ABOVE the histogram so the dashed notch lines below track the handles. This is the
+          single source of truth for the cut points (the in-plot lines are display-only). Shown in
+          two-cut percentile/tertile mode when the parent supplies the setters. Dragging promotes a
+          tertile preset to "percentile" (same as the old slider onChange) so the custom cuts persist. */}
+      {(cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
+        <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
+          <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: LO }}>
+              {`low ≤ ${(strategy === "tertile" ? 33 : percentileLow)}th pct`}
+            </MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#8A929B", fontStyle: "italic" }}>
+              {"drag the two handles to set the cuts"}
+            </MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: HI }}>
+              {`high ≥ ${(strategy === "tertile" ? 67 : percentileHigh)}th pct`}
+            </MDTypography>
+          </MDBox>
+          <Slider
+            value={[
+              strategy === "tertile" ? 33 : percentileLow,
+              strategy === "tertile" ? 67 : percentileHigh,
+            ]}
+            min={1} max={99} step={1} size="small" valueLabelDisplay="auto"
+            disableSwap
+            getAriaLabel={(i) => (i === 0 ? "low percentile cut" : "high percentile cut")}
+            valueLabelFormat={(v) => `${v}th`}
+            onChange={(e, v) => {
+              if (!Array.isArray(v)) return;
+              let [lo, hi] = v;
+              // Keep a ≥1-pct gap so the cuts never cross (disableSwap holds order; this holds the gap).
+              lo = Math.min(Math.max(Math.round(lo), 1), 98);
+              hi = Math.max(Math.min(Math.round(hi), 99), lo + 1);
+              if (strategy === "tertile" && setStrategy) setStrategy("percentile");
+              setPercentileLow(lo);
+              setPercentileHigh(hi);
+            }}
+            sx={{
+              mt: 0.25,
+              // Two-tone track: the selected (mid-band) range is neutral grey, rail faint.
+              color: MID,
+              "& .MuiSlider-thumb": { height: 16, width: 16 },
+              // MUI stamps each thumb with data-index (0 = low, 1 = high) — color them to match the
+              // low/high classes and the dashed notch lines below.
+              "& .MuiSlider-thumb[data-index='0']": { backgroundColor: LO },
+              "& .MuiSlider-thumb[data-index='1']": { backgroundColor: HI },
+            }}
+          />
+        </MDBox>
+      ) : null}
 
       <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 340 }} />
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, textAlign: "center" }}>

@@ -494,9 +494,9 @@ function Biomarkers() {
                                 </FormControl>
                               </MDBox>
                               {strategy === "tertile" || strategy === "percentile" ? (
-                                // Cut percentiles are set by DRAGGING the dashed lines on the histogram
-                                // (right). These chips are the live readout of the current low/high cut —
-                                // no separate sliders, so the control and the plot can't drift apart.
+                                // Cut percentiles are set by the two-handle range slider above the
+                                // histogram (right panel). These chips are the live readout of the
+                                // current low/high cut — one control, so plot and readout can't drift.
                                 <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
                                   <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
                                     <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
@@ -518,9 +518,9 @@ function Biomarkers() {
                               ) : null}
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
                                 {strategy === "tertile"
-                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a cut line on the histogram to switch to adjustable percentile cuts."
+                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Move the range slider above the histogram to switch to adjustable percentile cuts."
                                   : strategy === "percentile"
-                                    ? "Drag the dashed cut lines on the histogram to set the cuts; samples between them are excluded from training."
+                                    ? "Set the cuts with the two-handle range slider above the histogram; samples between the handles are excluded from training."
                                     : strategy === "median"
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}

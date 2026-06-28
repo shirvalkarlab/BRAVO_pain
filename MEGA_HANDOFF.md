@@ -37,18 +37,33 @@
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
 
+**Binarization cut control: in-plot drag → two-handle range slider (2026-06-28).** The percentile
+cuts were set by dragging dashed lines INSIDE the histogram (`BinarizationPreview.js`), via Plotly
+`edits.shapePosition`. That boolean has no per-axis constraint, so a line drag moved in x AND y and
+could resize/tilt the line — the cut lines were draggable/resizable in all directions. REPLACED with a
+single MUI range slider (two handles, low + high) ABOVE the histogram; the in-plot lines are now
+DISPLAY-ONLY dashed notches that track the slider (shapePosition:false, relayout drag handler removed,
+dead `valueToPercentile`/`cutShapeIdx`/`draggableCuts` deleted). Slider drives the same
+`percentileLow/High` state and promotes a tertile preset to "percentile" on first move (disableSwap +
+≥1-pct gap so cuts never cross; handles colored LO/HI by data-index). Parent (`index.js`) chips +
+help text updated from "drag the dashed lines" to "range slider above the histogram". Frontend rebuilt
+(main.8cf360ff.js). NOTE: this supersedes the earlier-this-session "draggable cut-lines in Plotly"
+deliverable — direct in-plot dragging was the thing being removed.
+
 **`vas_min` KeyError regression FIXED (2026-06-28).** Any non-default `LabelMetric` (vas, mpq_sum,
 etc.) crashed `run_for_participant` with `Biomarker computation error: 'vas_min'` (the card rendered
 the "upload a Percept session / configure REDCap" fallback). ROOT: the scatter-dedup `rating_group`
 injection added in 2daf80e (`pipeline.run_timedomain_branch`) read `pro_df[label_col]` where
 `label_col = f"{label_metric}_{label_reduce}"` (= "vas_min") — but `pro_df` is the RAW REDCap frame
 whose columns are bare metric names (`vas`/`nrs`/`mpq_sum`); the `_min`/`_mean` suffixes exist only on
-`session_df` (adapter.align_pros). `nrs` worked only because `label_reduce` defaults made the column
-coincidentally present in some paths. FIX: map session labels back to PRO rows via the bare
-`pro_df[label_metric]` column (pd.to_numeric-coerced), guarded with `if label_metric in pro_df.columns`
-(else rating_group stays -1 → no dedup, no crash); invariant lookup hoisted out of the per-epoch loop.
-Repro'd + verified through the bridge on RCS08 with `LabelMetric=vas` (was KeyError → now message='',
-6 channels). Suite 253/253.
+`session_df` (adapter.align_pros), so ANY metric (including default `nrs`→"nrs_min") would hit this
+read. (Why the default path didn't crash for every user was NOT traced — possibly the dedup block was
+skipped or `pro_df` carried suffixed columns in some entry paths; unverified.) FIX: map session labels
+back to PRO rows via the bare `pro_df[label_metric]` column (pd.to_numeric-coerced), guarded with
+`if label_metric in pro_df.columns` (else rating_group stays -1 → no dedup, no crash); invariant lookup
+hoisted out of the per-epoch loop. Verified through the bridge on RCS08 with `LabelMetric=vas`: the
+request that previously errored now returns message='', 6 channels (the "after" half; the pre-fix
+KeyError is established by code inspection, not re-run). Suite 253/253.
 
 **Phase 1 + 3 + 4a + scatter dedup bug fix (2026-06-28, COMMITTED 2daf80e).**
 - **Scatter dedup bug FIXED.** TD-only channels (e.g., L 0⁻2⁺) were not deduplicated because `rating_group` was missing from the TD detail dict. User reported n=90 in title but only ~14 visible points. Root: `compute_psd_pain_correlation()` returns no `rating_group`; only `build_pooled_detail_from_matrix()` (PSD path) had it. FIX: inject `rating_group` in `pipeline.py run_timedomain_branch()` by mapping each session's matched PRO to its index in pro_df. Dedup now works for both TD and pooled paths.
