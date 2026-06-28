@@ -1155,6 +1155,7 @@ TD_PRODUCT_SOURCE_LABEL = {
 
 def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
                            td_recordings=None, event_psd_recordings=None,
+                           montage_psd_recordings=None,
                            window_s=None, max_missing_frac=0.10,
                            saturation_uv=PRO_LSB_SATURATION_UV):
     """Match-AGNOSTIC raw LSB spectrum cache for ONE channel — the decoupled source of truth.
@@ -1281,6 +1282,26 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
         psd_out["calibrated"].append([bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)])
         psd_out["source"].append(str(ev.get("source") or "PSD event"))
 
+    # ---- Montage/survey device-PSD windows (one per MedtronicPSD snapshot) ------------------------
+    # Same device-onboard-FFT unit and bridge constant (k=LSB_PER_DEVICE_PSD≈73.63) as the patient-
+    # event PSD above — validated paired same-recording vs the TD transform (ratio ≈0.99 in 8–30 Hz).
+    # Folded into the SAME psd family so a montage whose TD tile fails the quality gate still emits a
+    # bridge LSB window. Kept here (not merged into event_psd_recordings) only so the caller can pass
+    # the two sources independently; cache-side they are identical schema {channel, t, freq, power}.
+    for ev in (montage_psd_recordings or []):
+        if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+            continue
+        te = _to_epoch(ev.get("t"))
+        if te is None:
+            continue
+        bp = np.atleast_1d(analytics.device_psd_band_power(
+            ev.get("freq"), ev.get("power"), centers, half_hz=half))
+        lsb = np.where(np.isfinite(bp) & (bp > 0), analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
+        psd_out["t"].append(float(te))
+        psd_out["lsb"].append([float(v) if np.isfinite(v) else None for v in lsb])
+        psd_out["calibrated"].append([bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)])
+        psd_out["source"].append(str(ev.get("source") or "Montage PSD"))
+
     # time-sort each family (tiles are already roughly ordered, but recordings may interleave)
     def _sort_family(fam, keys):
         if not fam["t"]:
@@ -1298,21 +1319,29 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
 
 
 def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
-                            psd_tol_s=120.0):
+                            psd_tol_s=120.0, allow_window_reuse=False):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
     record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
-    matching done at request time and the no-reuse-across-PROs rule enforced.
+    matching done at request time and (by default) the no-reuse-across-PROs rule enforced.
 
     MATCHING (vectorized; the performance directive):
-      * Each raw window (TD tile OR PSD event) is assigned to its NEAREST PRO whose rating-centred
-        extent covers it — TD within ±extent_s/2 (default TRANSFORM_CENTERED_EXTENT_SECONDS = 30 s,
-        configurable), PSD within ±psd_tol_s (the bridge's established native tolerance). Nearest is
-        found with np.searchsorted over sorted PRO times (left/right neighbour, min |Δt|); ties break
-        deterministically to the earlier PRO. Because each window maps to exactly ONE PRO, NO
-        individual 3 s-TD or PSD LSB vector is reused across >1 PRO — the rule holds BY CONSTRUCTION,
-        not by post-hoc dedup.
+      * STRICT mode (allow_window_reuse=False, default): each raw window (TD tile OR PSD event) is
+        assigned to its NEAREST PRO whose rating-centred extent covers it — TD within ±extent_s/2
+        (default TRANSFORM_CENTERED_EXTENT_SECONDS = 30 s, configurable), PSD within ±psd_tol_s (the
+        bridge's established native tolerance). Nearest is found with np.searchsorted over sorted PRO
+        times (left/right neighbour, min |Δt|); ties break deterministically to the earlier PRO.
+        Because each window maps to exactly ONE PRO, NO individual 3 s-TD or PSD LSB vector is reused
+        across >1 PRO — the rule holds BY CONSTRUCTION, not by post-hoc dedup.
+      * REUSE mode (allow_window_reuse=True): each window is matched to EVERY PRO whose extent covers
+        it (TD within ±extent_s/2, PSD within ±psd_tol_s), so one window can contribute to several
+        overlapping PROs. This trades the independence guarantee for sample size; the resulting
+        pseudoreplication is visible as n_td_used / n_psd_used exceeding n_td_windows / n_psd_windows.
+        TD-preferred-within-PRO still holds (a PRO with ≥1 TD window is TD-tier). NOTE the per-modality
+        non-reuse property is independent of this flag: TD and PSD are matched in separate passes, so a
+        montage's TD tile and its co-timestamped device-PSD window can serve two different PROs in BOTH
+        modes — this flag only governs reuse of the SAME window+modality across PROs.
       * TD is PREFERRED over PSD within a window: a PRO that owns ≥1 ok TD window is td_transform tier
         (its spectrum = the per-band nan-MEDIAN over its assigned TD windows = median-over-extent);
         only a PRO with zero assigned TD windows falls to psd_bridge (nan-median over its assigned PSD
@@ -1365,6 +1394,29 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
         nn[dist > tol] = -1
         return nn
 
+    def _windows_in_extent(win_t, valid_mask, tol):
+        """REUSE mode: per-PRO list of window indices whose |t - pro_t| <= tol (a window may appear
+        under several PROs). Vectorized via searchsorted bounds on the sorted window times — O(W log W
+        + total matches), not the O(P·W) full outer product. Returns a list-of-arrays indexed by ORIG
+        PRO order, each holding ORIG window indices."""
+        out = [np.empty(0, dtype=int) for _ in range(nP)]
+        if nP == 0 or win_t.size == 0:
+            return out
+        vi = np.where(valid_mask)[0]                  # orig window indices that are valid
+        if vi.size == 0:
+            return out
+        wt = win_t[vi]
+        wo = np.argsort(wt, kind="stable")
+        wt_sorted = wt[wo]
+        vi_sorted = vi[wo]
+        lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
+        hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
+        for p in range(nP):
+            a, b = int(lo_idx[p]), int(hi_idx[p])
+            if b > a:
+                out[p] = vi_sorted[a:b]
+        return out
+
     def _to_mat(rows):
         """[W][C] list-with-None -> float [W×C] with NaN; empty -> (0,nC)."""
         if not rows:
@@ -1385,15 +1437,21 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
     td_mat = _to_mat(td.get("lsb") or [])
     n_td_windows = int(td_t.size)
     td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
-    nn_td = np.full(td_t.size, -1, dtype=int)
-    if td_valid.any():
-        nn_td[td_valid] = _nearest_pro(td_t[td_valid], half_ext)
-    n_td_assigned = int((nn_td >= 0).sum())
+    # STRICT: each valid window -> its single nearest PRO (nn_td). REUSE: each PRO -> every valid
+    # window inside its extent (td_sel_by_pro); a window may then appear under multiple PROs.
+    if allow_window_reuse:
+        td_sel_by_pro = _windows_in_extent(td_t, td_valid, half_ext)
+        n_td_assigned = int(sum(s.size for s in td_sel_by_pro))
+    else:
+        nn_td = np.full(td_t.size, -1, dtype=int)
+        if td_valid.any():
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], half_ext)
+        n_td_assigned = int((nn_td >= 0).sum())
 
     n_td_used = 0
     td_tier_pro = np.zeros(nP, dtype=bool)
     for p in range(nP):
-        sel = np.where(nn_td == p)[0]
+        sel = td_sel_by_pro[p] if allow_window_reuse else np.where(nn_td == p)[0]
         if sel.size == 0:
             continue
         med = np.nanmedian(td_mat[sel], axis=0)
@@ -1414,16 +1472,20 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
     psd_mat = _to_mat(psd.get("lsb") or [])
     n_psd_windows = int(psd_t.size)
     psd_valid = np.isfinite(psd_t)
-    nn_psd = np.full(psd_t.size, -1, dtype=int)
-    if psd_valid.any():
-        nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], psd_tol_s)
-    n_psd_assigned = int((nn_psd >= 0).sum())
+    if allow_window_reuse:
+        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, psd_tol_s)
+        n_psd_assigned = int(sum(s.size for s in psd_sel_by_pro))
+    else:
+        nn_psd = np.full(psd_t.size, -1, dtype=int)
+        if psd_valid.any():
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], psd_tol_s)
+        n_psd_assigned = int((nn_psd >= 0).sum())
 
     n_psd_used = 0
     for p in range(nP):
         if td_tier_pro[p]:
             continue                                  # TD preferred — PSD here stays unused
-        sel = np.where(nn_psd == p)[0]
+        sel = psd_sel_by_pro[p] if allow_window_reuse else np.where(nn_psd == p)[0]
         if sel.size == 0:
             continue
         med = np.nanmedian(psd_mat[sel], axis=0)
@@ -1444,7 +1506,8 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
              "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
              "n_td_assigned": n_td_assigned, "n_td_used": n_td_used,
              "n_psd_assigned": n_psd_assigned, "n_psd_used": n_psd_used,
-             "extent_s": float(extent_s), "psd_tol_s": psd_tol_s}
+             "extent_s": float(extent_s), "psd_tol_s": psd_tol_s,
+             "allow_window_reuse": bool(allow_window_reuse)}
     return recs, stats
 
 

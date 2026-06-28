@@ -13,6 +13,7 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 """
 
 import os
+import re
 import json
 import math
 import logging
@@ -633,6 +634,68 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_i
     return blocks
 
 
+# Strip a SensingElectrodeConfigDef.* / HemisphereLocationDef.* enum to its bare token.
+_ENUM_TAIL_RE = re.compile(r"\.([A-Za-z_]+)$")
+
+
+def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
+    """Build PSD->LSB bridge input blocks from MONTAGE/SURVEY device-PSD snapshots.
+
+    Each MedtronicBrainSenseSurvey / Montage recording carries, in
+    `Descriptor.MedtronicPSD`, a per-contact device-onboard PSD spectrum
+    (`LFPFrequency` [Hz] + `LFPMagnitude` [linear µV], 100 points), alongside its
+    raw 250 Hz TD. The TD already feeds the transform route (k=352.62); this surfaces
+    the device PSD as a SEPARATE psd_bridge window so a montage contributes LSB even
+    when its TD tile fails the cache quality gate (too short / saturated / >max_missing).
+
+    Calibration: LFPMagnitude is the SAME linear-µV onboard-FFT unit as the
+    patient-event FFTBinData, so the SAME bridge constant LSB_PER_DEVICE_PSD≈73.63
+    applies (paired same-recording validation: device-PSD LSB / TD-transform LSB
+    median 0.993, IQR [0.966,1.020] in 8–30 Hz). Each MedtronicPSD entry is mapped to
+    its canonical channel via SensingElectrodes (+ Hemisphere); ring pairs go through
+    _EVENT_SENSE_CONTACT, segmented contacts fall to _canon_channel. The whole-recording
+    StartTime is the window timestamp (the survey sweep is a near-instant snapshot).
+
+    Returns a list of {channel, t, freq, power, source} — the schema
+    raw_lsb_spectrum_cache consumes for its PSD family. `source` is tagged
+    MONTAGE_PSD_SOURCE so the cache/hover can distinguish montage from patient-event PSD.
+    """
+    if montage_recordings is None:
+        montage_recordings = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    blocks = []
+    for r in (montage_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        mp = (r.get("Descriptor") or {}).get("MedtronicPSD")
+        if not isinstance(mp, list):
+            continue
+        t0 = availability._to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        for e in mp:
+            if not isinstance(e, dict):
+                continue
+            freq = e.get("LFPFrequency")
+            power = e.get("LFPMagnitude")
+            if freq is None or power is None:
+                continue
+            # Canonical channel from the device sensing config + hemisphere.
+            se = str(e.get("SensingElectrodes") or "")
+            hemi = str(e.get("Hemisphere") or "")
+            mse = _ENUM_TAIL_RE.search(se)
+            pair = mse.group(1) if mse else ""
+            pair = _EVENT_SENSE_CONTACT.get(pair, pair)   # ring-pair → canonical; segmented unchanged
+            h = "LEFT" if "Left" in hemi else ("RIGHT" if "Right" in hemi else "")
+            if not pair or not h:
+                continue
+            ch = _canon_channel(f"{pair}_{h}")
+            if not ch:
+                continue
+            blocks.append({"channel": ch, "t": float(t0),
+                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE})
+    return blocks
+
+
 def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
                         sensing_hz_by_channel):
     """One per-PRO LSB selection series per channel for the timeline (CS-4 consumer of per_pro_lsb).
@@ -708,16 +771,18 @@ _RAW_LSB_CACHE_MEMO_MAX = 8
 _RAW_LSB_CACHE_MEMO_LOCK = threading.Lock()
 
 
-def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers):
-    """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event recording
-    identities + the band-center grid. Any change to the PROs, the recordings feeding the transform/
-    bridge, or the centers misses the memo and recomputes."""
+def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers,
+                            montage_psd_blocks=None):
+    """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event/montage
+    recording identities + the band-center grid. Any change to the PROs, the recordings feeding the
+    transform/bridge, or the centers misses the memo and recomputes."""
     import hashlib
     h = hashlib.sha1()
     h.update(str(participant_uid).encode())
     h.update(_pro_set_signature(pro_times).encode())
     # recording identity: StartTime + channel names + sample count is enough to detect a content change
-    for tag, recs in (("td", td_recordings or []), ("ev", event_psd_blocks or [])):
+    for tag, recs in (("td", td_recordings or []), ("ev", event_psd_blocks or []),
+                      ("mt", montage_psd_blocks or [])):
         h.update(tag.encode())
         for r in recs:
             if not isinstance(r, dict):
@@ -802,15 +867,17 @@ def _stamp_td_product(td_recordings):
 
 
 def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
-                          *, centers=_LSB_SPECTRUM_CENTERS):
+                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS):
     """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
     (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
-    { raw_channel: availability.raw_lsb_spectrum_cache(...) }."""
+    { raw_channel: availability.raw_lsb_spectrum_cache(...) }. montage_psd_blocks (the montage/survey
+    device-PSD snapshots) are folded into the cache's PSD family alongside the patient-event PSDs."""
     if not channels:
         return {}
     # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
     sig = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
-                                  td_recordings, event_psd_blocks, centers) + "|raw"
+                                  td_recordings, event_psd_blocks, centers,
+                                  montage_psd_blocks=montage_psd_blocks) + "|raw"
     with _RAW_LSB_CACHE_MEMO_LOCK:
         cached = _RAW_LSB_CACHE_MEMO.get(sig)
     if cached is not None:
@@ -821,7 +888,8 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
         key = availability._canon_channel(raw_ch)
         try:
             out[raw_ch] = availability.raw_lsb_spectrum_cache(
-                key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+                key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
+                montage_psd_recordings=montage_psd_blocks)
         except Exception as e:
             _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
     with _RAW_LSB_CACHE_MEMO_LOCK:
@@ -835,7 +903,8 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
 
 
 def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
-                           *, centers=_LSB_SPECTRUM_CENTERS, extent_s=None):
+                           *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS, extent_s=None,
+                           allow_window_reuse=False):
     """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
     against it per channel with availability.live_lsb_spectrum_match (median-over-extent, TD preferred
     in-window, no LSB vector reused across >1 PRO). Drop-in for _pro_lsb_spectrum_cached: returns
@@ -848,14 +917,15 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
         return {}, {}
     _stamp_td_product(td_recordings)
     raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
-                                      centers=centers)
+                                      montage_psd_blocks=montage_psd_blocks, centers=centers)
     spectra, stats = {}, {}
     for raw_ch in channels:
         raw_cache = raw_by_ch.get(raw_ch)
         if raw_cache is None:
             continue
         try:
-            recs, st = availability.live_lsb_spectrum_match(pt, raw_cache, extent_s=extent_s)
+            recs, st = availability.live_lsb_spectrum_match(
+                pt, raw_cache, extent_s=extent_s, allow_window_reuse=allow_window_reuse)
             spectra[raw_ch] = recs
             stats[raw_ch] = st
         except Exception as e:
@@ -2816,6 +2886,9 @@ def run_for_participant(request_data):
     use_live_matching = str(request_data.get("UseLiveMatching", "")).lower() in ("1", "true", "yes", "on")
     match_extent_s = _float_param(request_data, "MatchExtentSec", default=float(
         analytics.TRANSFORM_CENTERED_EXTENT_SECONDS), lo=3.0, hi=300.0)
+    # When ON, a raw window may match EVERY PRO whose extent covers it (not just its nearest), trading
+    # the no-reuse independence guarantee for sample size. Default OFF (strict one-window-one-PRO).
+    allow_window_reuse = str(request_data.get("AllowWindowReuse", "")).lower() in ("1", "true", "yes", "on")
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
@@ -2864,17 +2937,24 @@ def run_for_participant(request_data):
     _scan_sensing_idx = _build_sensing_config_index(list(td or []))
     _scan_event_blocks = _event_psd_lsb_blocks(participant_uid,
                                                sensing_index=_scan_sensing_idx)
+    # Montage/survey device-PSD snapshots (Descriptor.MedtronicPSD) as their own bridge windows, so a
+    # montage contributes a PSD-tier LSB even when its TD tile fails the cache quality gate. Same unit /
+    # bridge constant as the patient-event PSD (validated paired vs the TD transform).
+    _scan_montage_blocks = _montage_psd_lsb_blocks(participant_uid,
+                                                   montage_recordings=_scan_psd_list)
     _scan_channels = list(dict.fromkeys(
         availability._canon_channel(ch) for ch in (chan_order or [])))
     _scan_pro_times = (pro_match[0] if pro_match is not None else None)
     _have_scan_inputs = (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels)
     live_match_stats = None
     if _have_scan_inputs and use_live_matching:
-        # LIVE path: match PROs against the match-agnostic raw cache (no LSB reuse across PROs).
+        # LIVE path: match PROs against the match-agnostic raw cache (no LSB reuse across PROs unless
+        # AllowWindowReuse is on). Montage device-PSD windows fold into the cache's PSD family.
         pro_lsb_spectrum, live_match_stats = _live_pro_lsb_spectrum(
             participant_uid, _scan_pro_times, _scan_channels,
             list(td or []) + list(_scan_psd_list or []),
-            _scan_event_blocks, extent_s=match_extent_s)
+            _scan_event_blocks, montage_psd_blocks=_scan_montage_blocks,
+            extent_s=match_extent_s, allow_window_reuse=allow_window_reuse)
     elif _have_scan_inputs:
         # LEGACY path: per-PRO LSB spectrum (matching done inside per_pro_lsb_spectrum).
         pro_lsb_spectrum = _pro_lsb_spectrum_cached(
@@ -2904,6 +2984,7 @@ def run_for_participant(request_data):
     out["match_direction"] = match_direction
     out["use_live_matching"] = bool(use_live_matching)
     out["match_extent_s"] = float(match_extent_s)
+    out["allow_window_reuse"] = bool(allow_window_reuse)
     if live_match_stats is not None:
         # Pooled independence stats across channels: with live matching every PRO contributes ONE LSB
         # vector (no reuse), so pseudoreplication collapses. Surface the totals for the UI before/after.

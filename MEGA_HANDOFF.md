@@ -20,9 +20,9 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `d521acd`** (scatter dedup + live matching + Phase 1/3/4a committed + pushed 2026-06-28), **suite 253/253 PASS** (initial
-> run FAIL=1 in scatter test due to log10→raw expectation mismatch; test fixed, retested PASS=253 FAIL=0,
-> committed + amended). Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
+> **HEAD `0e1f3c8`** (binarization range-slider + vas_min fix; montage device-PSD coverage + window-reuse
+> toggle staged uncommitted on top), **suite 257/257 PASS** (4 new live-matcher tests added this session).
+> Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
 > (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
@@ -36,6 +36,27 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Montage device-PSD coverage + window-reuse toggle (2026-06-28).** The raw LSB cache routed
+montage/survey recordings only through the TD-transform path (×352.62) and treated them as having "no
+PSD to bridge" — but every `MedtronicBrainSenseSurvey`/Montage carries a full device PSD in
+`Descriptor.MedtronicPSD[]` (`LFPFrequency`/`LFPMagnitude`, 100-pt, per contact; the "PSD snapshot from
+montage" the timeline hover shows). That spectrum was ignored by the LSB cache. FIX: new
+`bravo_service._montage_psd_lsb_blocks()` extracts each `MedtronicPSD` entry → `{channel,t,freq,power,
+source="Montage PSD"}` (channel via `SensingElectrodes`+`Hemisphere` → `_EVENT_SENSE_CONTACT`/
+`_canon_channel`); `availability.raw_lsb_spectrum_cache(montage_psd_recordings=…)` folds them into the
+PSD family via `device_psd_band_power × LSB_PER_DEVICE_PSD≈73.63`. CALIBRATION VALIDATED: paired
+same-recording device-PSD LSB / TD-transform LSB = median 0.993, IQR [0.966,1.020] in 8–30 Hz (n=204) —
+LFPMagnitude is the same linear-µV onboard-FFT unit as patient-event FFTBinData, so the bridge constant
+is correct (an earlier unpaired 1.5× gap was time-coverage mismatch, not calibration). RESULT
+(2e3c75c0): `ZERO_THREE_LEFT` PSD windows 15→232 (+217); live API `n_pro_psd` 86→110 (+24 PROs reach the
+bridge tier that previously had no LSB), `n_pro_td=123` unchanged (TD still preferred). New
+**`AllowWindowReuse`** request param (default OFF): when ON, `live_lsb_spectrum_match` matches each
+window to EVERY PRO whose extent covers it (vectorized `_windows_in_extent`) instead of nearest-only —
+trades the no-reuse independence guarantee for sample size; default preserves strict one-window-one-PRO.
+Per-modality non-reuse (a montage's TD tile and its device-PSD window can serve two different PROs) holds
+in BOTH modes because TD/PSD match in separate passes. 4 regression tests added
+(`test_per_pro_lsb.py`), suite 257/257. **STAGED, not yet committed at the time of writing.**
 
 **Binarization cut control: in-plot drag → two-handle range slider (2026-06-28).** The percentile
 cuts were set by dragging dashed lines INSIDE the histogram (`BinarizationPreview.js`), via Plotly
