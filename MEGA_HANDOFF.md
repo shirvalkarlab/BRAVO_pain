@@ -22,7 +22,8 @@
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
 > **HEAD `7ce588d`** (biomarker accuracy remediation R1/R2/R11/R12 — signed AUC, per-contact best-band
 > table, unique-PRO binarization cut, derivable montage whitelist; committed + pushed). 3 new analytics
-> tests; local analytics suite 96 pass (5 pre-existing Django-import-only failures). Frontend rebuilt
+> tests; local analytics suite 94 pass / 5 fail (the 5 are pre-existing Django-import-only tests, not
+> regressions; commit `7ce588d`'s message says "96 pass" — that was a miscount, the real number is 94). Frontend rebuilt
 > (chunk `434.45559227`). NOTE: the orbstack bridge watcher was DOWN this session (heartbeat stale,
 > not restartable from the sandbox) so the full in-container suite was NOT run — backend changes are
 > pure analytics functions verified by the local Django-free suite; HUP-reload the workers + run the
