@@ -1057,6 +1057,16 @@ def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=
             "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
 
 
+def test_freq_extrapolated_guard_agrees_with_frozen_model():
+    """The deployment fallback and the frozen per-band model must share ONE definition of 'outside the
+    calibrated range', so a band flagged extrapolated by one is flagged by the other. The invariant was
+    previously asserted inside the (now-deleted) psd_band_to_lsb guard test; restored standalone here so
+    the agreement stays covered. Spans the validated edges (7.8 / 28.3 Hz) and points either side."""
+    from Biomarkers.routines import psd_lsb_model as plm
+    for c in (5.0, 7.0, 7.8, 18.0, 28.3, 29.0, 55.5):
+        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
+
+
 def test_forward_chaining_validates_stationary_band():
     """Audit C2: a genuinely stationary band (same sign + strength across all weeks) trains on the
     past and predicts the future well — the held-out AUC stays high, its bootstrap CI clears 0.5, and
@@ -1515,13 +1525,15 @@ def test_modeled_lsb_threshold_fallback_ladder():
     from modules.Biomarkers import bravo_service as bs
     sigma = analytics.MODELED_LSB_SIGMA_FOLD     # ≈1.26
 
-    # (1) measured native threshold present -> estimate never built
-    assert bs._modeled_lsb_threshold_estimate(
-        123.0, 200.0, 12, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    # Signature is now (thr_lsb, modeled_thr, n_modeled, center_hz, percentile): the cut-point is no
+    # longer passed — the caller models the LSB line off raw TD at the ROC band and passes the
+    # percentile-anchored value in as modeled_thr (the single units-consistent modeled tier).
 
-    # (2)+(3) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
-    r1 = bs._modeled_lsb_threshold_estimate(
-        None, 210.0, 15, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
+    # (1) measured native threshold present -> estimate never built
+    assert bs._modeled_lsb_threshold_estimate(123.0, 200.0, 12, 20.0, 70.0) is None
+
+    # (2)+(3) TIER 1: a modeled-timeline value present -> modeled_timeline tier, ±1σ band
+    r1 = bs._modeled_lsb_threshold_estimate(None, 210.0, 15, 20.0, 70.0)
     assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
     assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
     assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
@@ -1529,16 +1541,13 @@ def test_modeled_lsb_threshold_fallback_ladder():
     assert r1["k_effective"] == analytics.LSB_PER_UV2_TRANSFORM   # timeline runs transform×352.62
     assert r1["slope_b"] is None                   # no proportional-fit slope applied at read time
 
-    # (4) FAIL-CLOSED: no modeled timeline, no frozen model (participant=None) -> indeterminate (None),
-    #     regardless of cut-point magnitude or whether the center is in/out of the validated range.
-    assert bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
-    assert bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    # (4) FAIL-CLOSED: no modeled value (modeled_thr=None, e.g. no TD for the channel) -> indeterminate
+    #     (None), regardless of whether the center is in/out of the validated range.
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 20.0, 70.0) is None
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 50.0, 70.0) is None
 
     # (5) nothing to estimate from -> honest None (panel shows the no-anchor message)
-    assert bs._modeled_lsb_threshold_estimate(
-        None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 20.0, None) is None
 
 
 def test_deployment_summary_identity_is_json_serializable():
@@ -2041,7 +2050,6 @@ def test_td_to_lsb_applies_transform_constant_and_guards():
     """td_to_lsb == LSB_PER_UV2_TRANSFORM (352.62, NOT 269) × transform band power, with the 1 s
     (one-window) minimum and non-positive guards returning NaN."""
     import math
-    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9
     assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9                 # transform route k
     sr = 250.0
     t = np.arange(3000) / sr

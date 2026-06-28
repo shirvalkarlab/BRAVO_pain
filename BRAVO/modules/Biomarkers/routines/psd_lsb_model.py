@@ -113,6 +113,14 @@ def has_model(participant, channel=None):
 def estimate_lsb(participant, channel, center_hz, psd_uv2):
     """Estimate device LSB from a physical PSD band power (uV^2) via the frozen model.
 
+    ⚠ INPUT CONTRACT: `psd_uv2` MUST be a LINEAR µV² band power (the model computes
+    lsb = 10**(a + b·log10(clip(psd_uv2, 1e-12)))). NEVER pass a z-scored, log, dB, or ROC cut-point
+    feature — those are dimensionless and frequently negative, so a z≤0 clips to 1e-12 (lsb≈0) and a
+    z>0 is silently misread as µV². This exact mistake (feeding the deployment ROC cut-point here) was
+    the units bug removed 2026-06-28; the deployment fallback now models LSB off raw TD via
+    availability.modeled_lsb_at_center and anchors by rank, never calling this on a cut-point. As of
+    2026-06-28 this function has NO production caller — it is retained as a tested µV²→LSB utility.
+
     Returns a dict ALWAYS carrying `estimated` and `tier`:
         {available, estimated=True, tier, lsb, k_effective, slope_b, center_hz,
          model_center_hz, r2, note}

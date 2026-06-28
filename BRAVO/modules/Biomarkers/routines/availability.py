@@ -700,6 +700,121 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
     return out
 
 
+def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordings=None,
+                          half_hz=2.5):
+    """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center), via the SAME
+    primary routes the exploration timeline uses — applied at an ARBITRARY center the deployment ROC
+    chose, not only the montage's configured sensing bands.
+
+    Units-consistent replacement for the retired µV²-cut-point fallback (the old TIER-2
+    estimate_lsb(cutpoint) path, removed 2026-06-28): instead of pushing a z-scored ROC cut-point
+    through a µV²-expecting converter, model the LSB line off the RAW µV TD the ROC was built from, at
+    the ROC's own band, then anchor a threshold by RANK (percentile) exactly like the native and
+    montage-modeled tiers. Both inputs feed shared primitives exploration already calls — this
+    function only CALLS them, so lsb_series and the exploration timeline are untouched.
+
+      * td_recordings  — raw-µV TD-bearing recordings (today: the montage/survey sweeps at 250 Hz; pass
+        BrainSense streaming TD too if/when a caller loads it). ONLY columns whose ChannelName
+        canonicalizes to `channel` are converted, via the PRIMARY transform route
+        analytics.td_to_lsb(col, fs, center_hz) (×LSB_PER_UV2_TRANSFORM = 352.62). Power-domain records
+        (SamplingRate ≤ 0, e.g. ChronicBrainSense) and unnamed/extra columns are skipped — they are not
+        raw TD. Because the center is the deployment band (not the montage's configured sensing band),
+        this yields a modeled point at ANY band the ROC can score, including bands the montage never
+        swept (8.8/40/55 Hz).
+      * psd_recordings  — PSD-only events (onboard FFT, no TD). The matching channel's spectrum is
+        converted with the bridge route analytics.device_psd_to_lsb (×LSB_PER_DEVICE_PSD ≈ 73.63),
+        gated to the deployable band like the timeline's bridge tier.
+
+    Returns a 1-D float array of in-band modeled LSB values for `channel` (may be empty). The caller
+    reads a threshold off it at the cut-point's percentile — no µV²↔LSB conversion of the cut-point,
+    which is the units bug this removes.
+    """
+    # Honor the deployment ROC's CHOSEN band center exactly — do NOT snap to a device FFT bin. The
+    # transform DSP (td_to_lsb) and the bridge (device_psd_to_lsb) integrate band power at any center
+    # via the PSD, so a high-gamma ROC winner (e.g. 55 Hz) must be converted at 55 Hz, not clamped to
+    # the 26.4 Hz top of the sensing-bin table (snap_freq is for timeline-display bin alignment only).
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return np.asarray([], dtype=float)
+    if not np.isfinite(cz) or cz <= 0:
+        return np.asarray([], dtype=float)
+    target = _canon_channel(channel)
+    vals = []
+
+    # --- TD tier: transform route (×352.62) at the deployment center, off montage/survey TD ---
+    # Convert ONLY columns whose ChannelName canonicalizes to `target`, mirroring the reference
+    # lsb_series montage tier (iterate over names; ignore extra/unnamed columns). An unnamed column is
+    # NEVER converted as `target` — that would let a malformed packet (Data columns > ChannelNames) or a
+    # foreign/power-domain column leak into the percentile-anchored DEPLOYABLE threshold. fs is sanity-
+    # guarded so a power-domain record (SamplingRate=-1, e.g. ChronicBrainSense) can never reach td_to_lsb.
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        if not names:
+            continue                         # no channel labels -> can't scope to `target`; skip
+        data = r.get("Data")
+        if data is None:
+            continue
+        data = np.asarray(data, dtype=float)
+        if data.ndim == 1:
+            data = data[:, None]
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        fs = float(r.get("SamplingRate") or r.get("SampleRateInHz") or 250.0) or 250.0
+        if not np.isfinite(fs) or fs <= 0:
+            continue                         # power-domain / malformed cadence (e.g. -1) -> not raw TD
+        # TD is (n_samples, n_channels); guard either orientation against the ChannelNames length.
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        min_n = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue                     # more names than columns (malformed packet) -> ignore
+            if _canon_channel(nm) != target:
+                continue                     # only the requested channel's column is converted
+            col = data[:, ci]
+            col = col[np.isfinite(col)]
+            if col.size < min_n:
+                continue
+            lsb = analytics.td_to_lsb(col, fs, float(cz), half_hz=half_hz)
+            if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                vals.append(float(lsb))
+
+    # --- PSD-only tier: bridge route (≈73.63), deployable-band gated, for events with no TD ---
+    if analytics.LSB_VALIDATED_HZ_LO <= float(cz) <= analytics.LSB_DEPLOYABLE_HZ_HI:
+        for r in (psd_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames", []) or [])
+            if not names:
+                continue                     # no labels -> can't scope to `target`; skip
+            psd = r.get("PSD") if r.get("PSD") is not None else r.get("Data")
+            freqs = r.get("Frequencies")
+            if freqs is None:
+                freqs = r.get("FrequenciesInHertz")
+            if psd is None or freqs is None:
+                continue
+            psd = np.asarray(psd, dtype=float)
+            freqs = np.asarray(freqs, dtype=float)
+            if psd.ndim == 1:
+                psd = psd[None, :]
+            for ci, nm in enumerate(names):
+                if ci >= psd.shape[0]:
+                    continue
+                if _canon_channel(nm) != target:
+                    continue                 # only the requested channel's spectrum is converted
+                row = np.asarray(psd[ci], dtype=float)
+                if row.shape != freqs.shape:
+                    continue
+                lsb = analytics.device_psd_to_lsb(freqs, row, float(cz), half_hz=half_hz)
+                if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                    vals.append(float(lsb))
+
+    return np.asarray(vals, dtype=float)
+
+
 def _missing_per_sample(missing, nsamp):
     """Collapse a recording's `Missing` field to a per-sample (n_samples,) 0/1 flag, or None — the
     any-channel-missing rule (FixBreaking/dropped-packet zero-fill spans all channels). Mirrors

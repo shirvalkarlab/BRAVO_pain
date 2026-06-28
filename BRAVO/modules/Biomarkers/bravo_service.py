@@ -3903,23 +3903,24 @@ def _sensing_hz_for_pd(pd_rec, contact):
         return None
 
 
-def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
-                                    center_hz, percentile, participant, channel):
-    """Shared modeled-LSB fallback ladder (audit: deployment_fallback).
+def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, percentile):
+    """Shared modeled-LSB fallback (audit: deployment_fallback).
 
     When the device never sensed THIS (channel, band) long enough to read a deployable threshold
-    straight off its own native LSB Timeline (`thr_lsb is None`), estimate the LSB threshold from
-    progressively coarser modeled sources and flag it ESTIMATED with its tier, so a clinician never
-    mistakes a modeled threshold for a measured one. Returns the `thr_estimate` dict (or None).
+    straight off its own native LSB Timeline (`thr_lsb is None`), return the modeled LSB estimate and
+    flag it ESTIMATED, so a clinician never mistakes a modeled threshold for a measured one. Returns the
+    `thr_estimate` dict (or None).
 
     Both deployment endpoints call THIS one function so the measured→modeled fallback can never drift
-    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary):
+    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary).
 
-      TIER 1  modeled_timeline   — montage/survey transform×352.62 in-band points at the same percentile
-                                   (the hollow-diamond series the timeline draws). Closest to measured.
-      TIER 2  frozen PSD→LSB     — per-participant frozen conversion applied to the µV² cut-point.
-      (TIER-3 population-constant last resort retired 2026-06-28: no fitted per-participant model ->
-       modeled threshold is INDETERMINATE, fail-closed, rather than a population-average guess.)
+    SINGLE modeled tier (`modeled_timeline`): the caller models the LSB line off the RAW µV TD the ROC
+    was built from, AT the ROC's own band center (availability.modeled_lsb_at_center — transform ×352.62
+    / bridge ≈73.63), and passes the percentile-anchored value in as `modeled_thr`. This is units-
+    consistent (no µV²↔LSB conversion of the z-scored cut-point) and covers any band the ROC can score.
+      (The old TIER-2 frozen-model-on-µV²-cut-point and TIER-3 population-constant k=269 tiers were both
+       retired 2026-06-28: when there is no TD/PSD for the channel `modeled_thr` is None and the modeled
+       threshold is INDETERMINATE, fail-closed, rather than a units-mismatched or population-average guess.)
 
     `thr_lsb` (measured native threshold) ALWAYS wins; this is only consulted when it is None.
     """
@@ -3932,8 +3933,10 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
     # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
     # for a sensed value.
     if thr_lsb is None and modeled_thr is not None:
-        fextrap = bool(center_hz is not None and (
-            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+        # Shared definition of "outside the validated calibration range" — the SAME predicate the
+        # frozen per-band model uses (analytics._freq_extrapolated mirrors psd_lsb_model._freq_extrapolated,
+        # asserted equal by test), so the sign-off card's extrapolation warning is consistent across tiers.
+        fextrap = analytics._freq_extrapolated(center_hz)
         note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
                 "montage/survey sweeps converted via the transform DSP × %.2f LSB/µV² (the same "
                 "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
@@ -3956,33 +3959,17 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
             "note": note,
             "method": "modeled from montage/survey LSB timeline (transform DSP × k=352.62)",
         }
-    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
-    # only if there were no modeled timeline points to read either.
-    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
-        from modules.Biomarkers.routines import psd_lsb_model as _plm
-        est = _plm.estimate_lsb(participant, channel, center_hz, float(cutpoint))
-        if est.get("available"):
-            sigma = est.get("resid_log_sigma_fold") or analytics.MODELED_LSB_SIGMA_FOLD
-            est_lsb = float(est["lsb"])
-            thr_estimate = {
-                "estimated_upper_lsb": round(est_lsb, 1),
-                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
-                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
-                "sigma_fold": round(float(sigma), 3),
-                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
-                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
-                "r2": est.get("r2"), "note": est.get("note"),
-                # Carry the conversion's frequency-coverage flag: True when the band is outside the
-                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
-                # warns that the LSB is extrapolated, not calibrated.
-                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
-                "validated_hz_range": est.get("validated_hz_range"),
-                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
-            }
-        # No per-participant frozen-model entry for this band -> indeterminate. The population-constant
-        # last resort (k=269) was retired 2026-06-28: a modeled threshold is returned ONLY when a fitted
-        # per-participant conversion exists; otherwise the caller surfaces "no deployable LSB threshold"
-        # (fail-closed) rather than a population-average guess. thr_estimate stays None.
+    # The old TIER-2 (per-participant frozen model applied to the µV² cut-point) and TIER-3
+    # (population constant k=269) were both REMOVED 2026-06-28. TIER-2 fed the deployment ROC cut-point
+    # — a within-(channel,source) z-scored log-power feature (dimensionless, frequently negative) —
+    # into psd_lsb_model.estimate_lsb, which expects a LINEAR µV² band power: a negative z clipped to
+    # 1e-12 (LSB≈0) and a positive z was silently misread as µV². The units-correct replacement is the
+    # single modeled tier above: model the LSB line off the RAW TD the ROC was built from, at the ROC's
+    # OWN band center (transform ×352.62 over streaming + montage TD; bridge ≈73.63 for PSD-only
+    # events), then anchor by RANK (percentile) exactly like the native path — no µV²↔LSB conversion of
+    # the cut-point. When there is genuinely no TD/PSD for the channel the modeled tier yields < 8
+    # in-band points and `modeled_thr` stays None -> thr_estimate stays None (fail-closed), rather than
+    # a units-mismatched or population-average guess.
     return thr_estimate
 
 
@@ -4055,10 +4042,18 @@ def band_lsb_and_power(request_data):
                       else np.zeros(y.size, bool))
         band_lsb_vals = y[bmask & ~is_modeled]
         n_native = int(band_lsb_vals.size)
-        # MODELED in-band points gathered regardless; used only if there's no native threshold.
-        mvals = y[bmask & is_modeled]; n_modeled = int(mvals.size)
-        if mvals.size >= 8 and percentile is not None:
-            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # MODELED in-band points: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
+    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # then anchor by percentile like native. Universal — covers any band the ROC can score, not only the
+    # montage's configured sensing bands — and units-consistent (replaces the retired µV²-cut-point
+    # estimate_lsb fallback, removed 2026-06-28). `psd_list` is the montage/survey TD (raw µV); chronic
+    # is power-domain so it is NOT a TD source. Used only if there's no native threshold.
+    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+                                      td_recordings=list(psd_list or []),
+                                      psd_recordings=None, half_hz=half)
+    n_modeled = int(mvals.size)
+    if mvals.size >= 8 and percentile is not None:
+        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
     if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
         # MEASURED, native device-sensed threshold — the deployable number, always preferred.
         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
@@ -4077,14 +4072,15 @@ def band_lsb_and_power(request_data):
         }
     else:
         # No native threshold: default to the MODELED LSB estimate via the shared fallback ladder
-        # (modeled timeline → frozen PSD→LSB model → validated k=269 constant), the IDENTICAL helper
-        # deployment_summary uses, so the per-panel number can never drift from the sign-off card.
+        # (single modeled tier: LSB line modeled off the raw TD at the ROC band — transform ×352.62 /
+        # bridge ≈73.63 — then percentile-anchored; population-constant k=269 tier retired 2026-06-28,
+        # so an uncovered band is fail-closed). The IDENTICAL helper deployment_summary uses, so the
+        # per-panel number can never drift from the sign-off card.
         # Flagged estimated=True so the frontend renders it with its ESTIMATED tier + ±1σ band and
         # never as a measured value (audit C8 fail-closed: a modeled value is for PLANNING, not a
         # measured prerequisite).
         thr_estimate = _modeled_lsb_threshold_estimate(
-            thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
-            rd.get("Participant"), channel)
+            thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
         n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
         if thr_estimate is not None:
             threshold_lsb = {
@@ -4346,24 +4342,25 @@ def deployment_summary(request_data):
         vals = y[native_m]; n_tl = int(vals.size)
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
-        # MODELED points in-band (the montage-survey transform×352.62 series) — gathered regardless, used
-        # only if there's no native threshold (handled below).
-        mvals = y[bandm & is_modeled]; n_modeled = int(mvals.size)
-        if mvals.size >= 8 and percentile is not None:
-            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # MODELED points in-band: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
+    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # then anchor by percentile like native. Universal across any band the ROC can score and units-
+    # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
+    # `psd_list` is the montage/survey TD (raw µV); chronic is power-domain so it is NOT a TD source.
+    # Gathered regardless; used only if there's no native threshold (handled below).
+    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+                                      td_recordings=list(psd_list or []),
+                                      psd_recordings=None, half_hz=half)
+    n_modeled = int(mvals.size)
+    if mvals.size >= 8 and percentile is not None:
+        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
 
-    # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
-    # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
-    # have the physical uV^2 cut-point. Estimate the LSB threshold from the per-participant frozen
-    # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
-    # mistakes a modeled threshold for a measured one.
     # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
     # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
     # have modeled LSB sources. Delegate to the SHARED ladder so this path can never drift from the
     # per-panel LSB readout (band_lsb_and_power) which calls the identical helper.
     thr_estimate = _modeled_lsb_threshold_estimate(
-        thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
-        rd.get("Participant"), channel)
+        thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
 
     # Native-vs-modeled cross-check: REMOVED 2026-06-28 with the k=269 population constant. It compared
     # the measured Timeline LSB against lsb_from_uv2(cutpoint, k=269); with k=269 retired there is no

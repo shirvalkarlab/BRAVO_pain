@@ -397,3 +397,121 @@ def test_event_markers_category_defaults_to_label_when_untagged():
     out = av.event_markers([{"name": "Medication", "t": T0, "psds": []}])
     e = out["events"][0]
     assert e["category"] == "Medication" and out["categories"] == ["Medication"]
+
+
+def _td_rec(channel, center_hz, fs=250.0, secs=30, amp=8.0, noise=2.0, seed=0,
+            start=None, names=None, ncols=None):
+    """Synthetic raw-µV montage-TD record: a `center_hz` oscillation + broadband noise on `channel`.
+
+    `names`/`ncols` let a test force a column/name mismatch (malformed packet) to exercise the guard.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(fs * secs)
+    tsec = np.arange(n) / fs
+    sig = amp * np.sin(2 * np.pi * center_hz * tsec) + rng.normal(0, noise, n)
+    nm = names if names is not None else [channel]
+    cols = ncols if ncols is not None else len(nm)
+    data = np.zeros((n, cols), dtype=float)
+    for c in range(cols):
+        data[:, c] = sig if c == 0 else rng.normal(0, noise, n)
+    return {"ChannelNames": nm, "Data": data, "SamplingRate": fs,
+            "StartTime": (T0 if start is None else start), "PeakFrequencyInHertz": center_hz}
+
+
+def test_modeled_lsb_at_center_named_match_equals_td_to_lsb():
+    """A named TD column matching the requested channel yields exactly analytics.td_to_lsb on that
+    column at the requested center — the single conversion path, modeling at the ROC's OWN band."""
+    from modules.Biomarkers.routines import analytics
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=1)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec], half_hz=2.5)
+    assert out.size == 1
+    # The helper honors the ROC's chosen center EXACTLY (no snap-to-bin), so compare against td_to_lsb
+    # at the raw center.
+    expect = analytics.td_to_lsb(rec["Data"][:, 0], fs, center, half_hz=2.5)
+    assert abs(float(out[0]) - float(expect)) < 1e-9
+
+
+def test_modeled_lsb_at_center_excludes_foreign_channel():
+    """A record naming a DIFFERENT channel contributes nothing — no cross-channel contamination of the
+    deployable threshold."""
+    rec = _td_rec("ZERO_THREE_LEFT", 20.0, seed=2)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_power_domain_record_skipped():
+    """A power-domain/malformed-cadence record (SamplingRate <= 0, e.g. ChronicBrainSense) is NOT raw
+    TD and must never reach td_to_lsb, even if its name canonicalizes to the target."""
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0)
+    rec["SamplingRate"] = -1
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_malformed_extra_columns_no_leak():
+    """A malformed packet with MORE Data columns than ChannelNames must not convert the unnamed extra
+    columns as the target — only the single named matching column is used."""
+    # 1 name, 3 data columns: extras are foreign/unnamed and must be ignored.
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0, names=["ZERO_THREE_RIGHT"], ncols=3, seed=3)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 1                      # exactly the one named column, not 3
+
+
+def test_modeled_lsb_at_center_orientation_transpose():
+    """(n_channels, n_samples) orientation resolves the same as (n_samples, n_channels)."""
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=4)
+    flipped = {k: v for k, v in rec.items()}
+    flipped["Data"] = rec["Data"].T           # now (1, n_samples) — names length 1 == rows
+    a = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec])
+    b = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[flipped])
+    assert a.size == 1 and b.size == 1 and abs(float(a[0]) - float(b[0])) < 1e-9
+
+
+def test_modeled_lsb_at_center_short_column_skipped():
+    """A column shorter than the transform's one-window minimum is skipped (no spurious point)."""
+    from modules.Biomarkers.routines import analytics
+    fs = 250.0
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0, fs=fs, secs=30)
+    rec["Data"] = rec["Data"][: int(round(fs * analytics.TRANSFORM_WIN_SECONDS)) - 1, :]
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_empty_is_fail_closed():
+    """No recordings -> empty array (caller reads < 8 points -> fail-closed, no modeled threshold)."""
+    assert av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[]).size == 0
+    assert av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=None).size == 0
+
+
+def test_modeled_lsb_at_center_psd_tier_band_gated_and_freq_first():
+    """The PSD-only tier converts the matching channel's spectrum via device_psd_to_lsb(freq, mag,...)
+    and is gated to the deployable band: an out-of-band center yields nothing from a PSD record."""
+    from modules.Biomarkers.routines import analytics
+    freqs = np.arange(0, 100, 0.5)
+    mag = np.full_like(freqs, 5.0)            # flat device PSD
+    psd_rec = {"ChannelNames": ["ZERO_THREE_RIGHT"], "PSD": mag.reshape(1, -1),
+               "Frequencies": freqs, "StartTime": T0}
+    inband = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0,
+                                      psd_recordings=[psd_rec], half_hz=2.5)
+    assert inband.size == 1
+    expect = analytics.device_psd_to_lsb(freqs, mag, 20.0, half_hz=2.5)
+    assert abs(float(inband[0]) - float(expect)) < 1e-9
+    # 80 Hz is above LSB_DEPLOYABLE_HZ_HI -> bridge tier is gated off (PSD-only conversion is only
+    # validated inside the deployable band).
+    oob = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 80.0, psd_recordings=[psd_rec])
+    assert oob.size == 0
+
+
+def test_modeled_lsb_at_center_honors_high_gamma_center_no_snap():
+    """A high-gamma ROC band (55 Hz, above the 26.4 Hz top of the device sensing-bin table) must be
+    converted at the ACTUAL center via the TD transform, NOT silently clamped to a sensing bin. Guards
+    the deployment path against the snap_freq display-binning that would mis-band a high-gamma winner."""
+    from modules.Biomarkers.routines import analytics
+    fs = 250.0
+    rec = _td_rec("ZERO_THREE_RIGHT", 55.0, fs=fs, secs=30, seed=7)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 55.0, td_recordings=[rec], half_hz=2.5)
+    assert out.size == 1
+    expect = analytics.td_to_lsb(rec["Data"][:, 0], fs, 55.0, half_hz=2.5)   # raw center, no snap
+    assert abs(float(out[0]) - float(expect)) < 1e-9
