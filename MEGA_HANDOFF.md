@@ -20,10 +20,10 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `0e1f3c8`** (binarization range-slider + vas_min fix; montage device-PSD coverage + window-reuse
-> toggle staged uncommitted on top), **suite 257/257 PASS** (4 new live-matcher tests added this session).
-> Frontend built and deployed. No-agent-commits rule RETIRED — agent now commits + pushes
-> (bravo-session-rules Rule 4).
+> **HEAD `d2f0d8a`** (montage device-PSD coverage + window-reuse toggle backend `b6f660f` + frontend
+> `d2f0d8a`, committed + pushed), **suite 257/257 PASS** (4 new live-matcher tests added this session).
+> Frontend built and deployed; container workers HUP-reloaded so the montage coverage fix is live.
+> No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`; the
@@ -56,7 +56,11 @@ window to EVERY PRO whose extent covers it (vectorized `_windows_in_extent`) ins
 trades the no-reuse independence guarantee for sample size; default preserves strict one-window-one-PRO.
 Per-modality non-reuse (a montage's TD tile and its device-PSD window can serve two different PROs) holds
 in BOTH modes because TD/PSD match in separate passes. 4 regression tests added
-(`test_per_pro_lsb.py`), suite 257/257. **STAGED, not yet committed at the time of writing.**
+(`test_per_pro_lsb.py`), suite 257/257. Backend committed `b6f660f`; frontend `AllowWindowReuse`
+toggle (No-reuse/Allow-reuse, near the LSB-matching control) committed `d2f0d8a`; both pushed. Workers
+HUP-reloaded so the montage coverage fix is live. NOTE: the live-matching caption is built as a plain
+string variable, NOT a JSX-embedded nested-ternary template literal — the latter makes the react-hooks
+eslint pass mis-scope every later hook as conditional and fails `npm run build`.
 
 **Binarization cut control: in-plot drag → two-handle range slider (2026-06-28).** The percentile
 cuts were set by dragging dashed lines INSIDE the histogram (`BinarizationPreview.js`), via Plotly
