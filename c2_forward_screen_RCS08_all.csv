@@ -1,0 +1,13 @@
+metric,channel,center_hz,verdict,in_sample_auc,held_out_auc,held_out_lo,held_out_hi,optimism,n_folds,n_test_clusters,beats_chance_forward
+nrs,ONE_THREE_RIGHT,55.5,VALIDATED (stim-stable),0.644,0.67,0.51,0.911,-0.027,6,21,True
+mpq_sum,ZERO_THREE_RIGHT,83.5,VALIDATED (narrow-CI — re-check),0.669,0.67,0.495,0.782,-0.0,12,37,False
+mpq_sum,ZERO_THREE_RIGHT,32.5,VALIDATED (stim-dependent),0.666,0.625,0.456,0.76,0.041,12,37,False
+nrs,ONE_THREE_LEFT,17.5,VALIDATED (narrow-CI — re-check),0.574,0.649,0.442,0.802,-0.074,7,27,False
+mpq_sum,ZERO_THREE_RIGHT,51.5,VALIDATED (stim-stable),0.606,0.612,0.442,0.75,-0.005,12,37,False
+nrs,ZERO_THREE_RIGHT,84.5,VALIDATED (stim-stable),0.629,0.603,0.442,0.739,0.026,13,52,False
+nrs,ONE_THREE_LEFT,38.5,VALIDATED (narrow-CI — re-check),0.642,0.649,0.429,0.817,-0.007,7,27,False
+nrs,ONE_THREE_RIGHT,34.5,VALIDATED (narrow-CI — re-check),0.535,0.587,0.367,0.833,-0.052,6,21,False
+vas,ZERO_TWO_LEFT,40.5,VALIDATED (stim-dependent),0.706,0.574,0.206,0.903,0.133,3,13,False
+nrs,ZERO_TWO_RIGHT,45.5,VALIDATED (narrow-CI — re-check),0.686,0.462,0.19,0.803,0.224,6,21,False
+vas,ONE_THREE_LEFT,45.5,VALIDATED (stim-dependent),0.667,0.345,0.152,0.577,0.322,3,13,False
+vas,ZERO_TWO_LEFT,61.5,VALIDATED (stim-stable),0.666,0.368,0.034,1.0,0.298,3,13,False

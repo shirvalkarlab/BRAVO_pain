@@ -248,7 +248,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
         "center_hz": [12.7, 12.7, 12.7, 19.5],               # 19.5 is an exact Percept FFT bin
         "source": ["streaming", "streaming", "streaming", "psd_modeled"],
         "modeled": [False, False, False, True],
-        "method": [None, None, None, "welch256_band_integral_x_k=269"]}}
+        "method": [None, None, None, "td_transform_x_k=352.62"]}}
     ov = av.lsb_overview(lsb)
     d = ov["ZERO_THREE_LEFT"]
     # streaming session block holds ONLY the 3 native samples; the modeled point is excluded
@@ -256,7 +256,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
     # modeled layer carries the one hollow point, with its (FFT-bin-snapped) center and method tag
     assert len(d["modeled"]) == 1
     assert d["modeled"][0]["y"] == 9000.0 and d["modeled"][0]["center_hz"] == 19.5
-    assert d["modeled"][0]["method"] == "welch256_band_integral_x_k=269"
+    assert d["modeled"][0]["method"] == "td_transform_x_k=352.62"
     # the native y-window is set by sensed samples only — the 9000 outlier does NOT widen it
     assert d["y_hi"] < 1000.0
 

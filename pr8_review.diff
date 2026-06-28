@@ -1,0 +1,1605 @@
+diff --git a/BRAVO/_agent_bridge/boot.sh b/BRAVO/_agent_bridge/boot.sh
+index 863b909..4cf622a 100755
+--- a/BRAVO/_agent_bridge/boot.sh
++++ b/BRAVO/_agent_bridge/boot.sh
+@@ -25,6 +25,21 @@ fi
+ env >> /etc/environment
+ service nginx start
+ python3 manage.py migrate
+-exec gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w "$(nproc)" \
+-  -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload \
++# Cap workers at 4 for dev: nproc=16 on the lab Mac caused all 16 workers to be
++# spawned, each preloading the full RCS08 dataset. After 2–3 gunicorn --reload
++# cycles (triggered by Client/build writes) RAM was exhausted (15/15 GiB used,
++# 13/16 GiB swap) and the whole machine pegged at 100% CPU on swap thrash.
++# 4 workers handle all realistic concurrent dev load and stay under ~2 GiB.
++NWORKERS=$(( $(nproc) < 4 ? $(nproc) : 4 ))
++# --reload-engine poll is REQUIRED here: the source tree is an OrbStack VirtioFS
++# bind mount (./BRAVO -> /usr/src/BRAVO), and inotify file-change events do NOT
++# propagate across VirtioFS. With the default inotify reload engine, editing a
++# .py on the host never reaches gunicorn's watcher, so workers keep serving the
++# bytecode they imported at container boot — code edits silently have no effect
++# until a full container restart. The `poll` engine stat()s the files on a timer
++# and so detects host-side edits over the mount. (This was the root cause of the
++# "spectral scan still shows 10.5-27.5 Hz after the fix" bug: the fix was on disk
++# but the 06:44-boot workers never re-imported analytics.py.)
++exec gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w "$NWORKERS" \
++  -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload --reload-engine poll \
+   --access-logfile - --error-logfile -
+diff --git a/BRAVO/modules/Biomarkers/bravo_service.py b/BRAVO/modules/Biomarkers/bravo_service.py
+index f6bf5fe..85927a4 100644
+--- a/BRAVO/modules/Biomarkers/bravo_service.py
++++ b/BRAVO/modules/Biomarkers/bravo_service.py
+@@ -3563,6 +3563,119 @@ def _sensing_hz_for_pd(pd_rec, contact):
+         return None
+ 
+ 
++def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
++                                    center_hz, percentile, participant, channel):
++    """Shared modeled-LSB fallback ladder (audit: deployment_fallback).
++
++    When the device never sensed THIS (channel, band) long enough to read a deployable threshold
++    straight off its own native LSB Timeline (`thr_lsb is None`), estimate the LSB threshold from
++    progressively coarser modeled sources and flag it ESTIMATED with its tier, so a clinician never
++    mistakes a modeled threshold for a measured one. Returns the `thr_estimate` dict (or None).
++
++    Both deployment endpoints call THIS one function so the measured→modeled fallback can never drift
++    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary):
++
++      TIER 1  modeled_timeline   — montage/survey Welch256×269 in-band points at the same percentile
++                                   (the hollow-diamond series the timeline draws). Closest to measured.
++      TIER 2  frozen PSD→LSB     — per-participant frozen conversion applied to the µV² cut-point.
++      TIER 3  validated_constant — population k=269 LSB/µV² on the µV² cut-point (last resort).
++
++    `thr_lsb` (measured native threshold) ALWAYS wins; this is only consulted when it is None.
++    """
++    thr_estimate = None
++    # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
++    # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
++    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
++    # those at the same percentile, the SAME way the native path reads it. This is the closest thing
++    # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
++    # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
++    # for a sensed value.
++    if thr_lsb is None and modeled_thr is not None:
++        fextrap = bool(center_hz is not None and (
++            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
++        note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
++                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
++                "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
++                "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
++                % (percentile, n_modeled))
++        if fextrap:
++            note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
++                analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
++        sigma = analytics.LSB_UV2_SIGMA_FOLD
++        thr_estimate = {
++            "estimated_upper_lsb": modeled_thr,
++            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
++            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
++            "sigma_fold": round(float(sigma), 3),
++            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
++            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
++            "r2": None, "n_modeled_points": n_modeled,
++            "freq_extrapolated": fextrap,
++            "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
++            "note": note,
++            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
++        }
++    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
++    # only if there were no modeled timeline points to read either.
++    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
++        from modules.Biomarkers.routines import psd_lsb_model as _plm
++        est = _plm.estimate_lsb(participant, channel, center_hz, float(cutpoint))
++        if est.get("available"):
++            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
++            est_lsb = float(est["lsb"])
++            thr_estimate = {
++                "estimated_upper_lsb": round(est_lsb, 1),
++                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
++                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
++                "sigma_fold": round(float(sigma), 3),
++                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
++                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
++                "r2": est.get("r2"), "note": est.get("note"),
++                # Carry the conversion's frequency-coverage flag: True when the band is outside the
++                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
++                # warns that the LSB is extrapolated, not calibrated.
++                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
++                "validated_hz_range": est.get("validated_hz_range"),
++                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
++            }
++        else:
++            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
++            # we can still translate the physical µV² cut-point with the VALIDATED population constant
++            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
++            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
++            try:
++                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
++            except Exception:  # noqa: BLE001
++                lsb_est = float("nan")
++            if np.isfinite(lsb_est):
++                sigma = analytics.LSB_UV2_SIGMA_FOLD
++                fextrap = bool(center_hz is not None and (
++                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
++                note = ("No per-participant frozen-model entry for this band; translated with the "
++                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
++                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
++                        "device Timeline before deploying." % sigma)
++                if fextrap:
++                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
++                             "where k is untested (the gain is not band-flat). Needs streaming "
++                             "calibration at this center frequency." % (
++                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
++                thr_estimate = {
++                    "estimated_upper_lsb": round(float(lsb_est), 1),
++                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
++                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
++                    "sigma_fold": round(float(sigma), 3),
++                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
++                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
++                    "r2": 0.94,
++                    "freq_extrapolated": fextrap,
++                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
++                    "note": note,
++                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
++                }
++    return thr_estimate
++
++
+ def band_lsb_and_power(request_data):
+     """Phase C: anchor a Phase-B cut-point to deployable device units and report power / sample-size.
+ 
+@@ -3607,20 +3720,41 @@ def band_lsb_and_power(request_data):
+     chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
+     pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
+     from modules.Biomarkers.routines import availability as _av
+-    lsb = _av.lsb_series(chronic_list, pd_list)
++    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, Welch256×269 — the same
++    # hollow-diamond series the timeline draws) is available as a fallback when the device never
++    # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
++    # sees exactly the modeled points the clinician sees on the timeline.
++    psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
++    sensing_hz = analytics.power_center_freqs(pd_list)
++    lsb = _av.lsb_series(chronic_list, pd_list,
++                         montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
+     half = band_width_hz / 2.0
+     threshold_lsb = {"available": False, "reason": "not computed"}
+-    band_lsb_vals = None
++    band_lsb_vals = None                  # NATIVE (device-sensed) in-band LSB
++    thr_lsb = None; n_native = 0
++    modeled_thr = None; n_modeled = 0     # MODELED in-band LSB (psd_modeled tier)
+     series = lsb.get(channel) or lsb.get(analytics.format_channel(channel)["short"])
+     if series is not None:
+         y = np.asarray(series.get("y"), dtype=float)
+         hz = np.asarray(series.get("center_hz"), dtype=float)
++        modeled_flag = np.asarray(series.get("modeled"), dtype=object)
+         bmask = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+-        band_lsb_vals = y[bmask]
++        # NATIVE (sensed) points only: exclude modeled psd_modeled samples so a measured threshold is
++        # never contaminated by a modeled one (native is always preferred for the deployable number).
++        is_modeled = (np.array([bool(m) for m in modeled_flag]) if modeled_flag.size == y.size
++                      else np.zeros(y.size, bool))
++        band_lsb_vals = y[bmask & ~is_modeled]
++        n_native = int(band_lsb_vals.size)
++        # MODELED in-band points gathered regardless; used only if there's no native threshold.
++        mvals = y[bmask & is_modeled]; n_modeled = int(mvals.size)
++        if mvals.size >= 8 and percentile is not None:
++            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+     if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
++        # MEASURED, native device-sensed threshold — the deployable number, always preferred.
+         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
+         threshold_lsb = {
+-            "available": True, "method": "percentile-anchored on device Timeline LSB",
++            "available": True, "estimated": False,
++            "method": "percentile-anchored on device Timeline LSB",
+             "upper_lsb": round(thr_lsb, 1), "lower_lsb": None,
+             "percentile": round(percentile, 1),
+             "n_timeline_samples": int(band_lsb_vals.size),
+@@ -3632,17 +3766,48 @@ def band_lsb_and_power(request_data):
+                      "at the same percentile (band-restricted) — no µV²↔LSB conversion needed."),
+         }
+     else:
++        # No native threshold: default to the MODELED LSB estimate via the shared fallback ladder
++        # (modeled timeline → frozen PSD→LSB model → validated k=269 constant), the IDENTICAL helper
++        # deployment_summary uses, so the per-panel number can never drift from the sign-off card.
++        # Flagged estimated=True so the frontend renders it with its ESTIMATED tier + ±1σ band and
++        # never as a measured value (audit C8 fail-closed: a modeled value is for PLANNING, not a
++        # measured prerequisite).
++        thr_estimate = _modeled_lsb_threshold_estimate(
++            thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
++            rd.get("Participant"), channel)
+         n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
+-        threshold_lsb = {
+-            "available": False,
+-            "reason": (f"device sensed this band only {n_band} times"
+-                       if percentile is not None
+-                       else "no Phase-B cut-point supplied (Cutpoint param)"),
+-            "n_timeline_samples": n_band,
+-            "hint": ("This band is likely off the device's programmed sensing range (the Percept "
+-                     "adaptive band is 8–30 Hz); a percentile anchor needs Timeline LSB recorded in "
+-                     "this band."),
+-        }
++        if thr_estimate is not None:
++            threshold_lsb = {
++                "available": True, "estimated": True,
++                "method": thr_estimate["method"],
++                "tier": thr_estimate["tier"],
++                "upper_lsb": thr_estimate["estimated_upper_lsb"], "lower_lsb": None,
++                "upper_lsb_lo": thr_estimate["estimated_upper_lsb_lo"],
++                "upper_lsb_hi": thr_estimate["estimated_upper_lsb_hi"],
++                "sigma_fold": thr_estimate["sigma_fold"],
++                "percentile": (round(percentile, 1) if percentile is not None else None),
++                "n_timeline_samples": n_band,
++                "n_modeled_points": thr_estimate.get("n_modeled_points", n_modeled),
++                "freq_extrapolated": thr_estimate.get("freq_extrapolated", False),
++                "validated_hz_range": thr_estimate.get("validated_hz_range"),
++                "k_effective": thr_estimate.get("k_effective"),
++                "r2": thr_estimate.get("r2"),
++                "note": thr_estimate["note"],
++            }
++        else:
++            threshold_lsb = {
++                "available": False, "estimated": False,
++                "reason": (f"device sensed this band only {n_band} times, and no modeled LSB or "
++                           "Phase-B cut-point was available to estimate from"
++                           if percentile is not None
++                           else "no Phase-B cut-point supplied (Cutpoint param)"),
++                "n_timeline_samples": n_band,
++                "n_modeled_points": n_modeled,
++                "hint": ("This band is off the device's programmed sensing range (the Percept "
++                         "adaptive band is 8–30 Hz) and no montage/survey sweep covered it, so "
++                         "there is neither a native nor a modeled LSB anchor here. Record a montage "
++                         "sweep or stream this band to obtain a deployable threshold."),
++            }
+ 
+     # ---- 1b) recommended-vs-currently-programmed delta (audit C10) ----
+     # The task here is tuning an EXISTING device setting, so a recommended LSB number alone forces the
+@@ -3870,97 +4035,13 @@ def deployment_summary(request_data):
+     # have the physical uV^2 cut-point. Estimate the LSB threshold from the per-participant frozen
+     # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
+     # mistakes a modeled threshold for a measured one.
+-    thr_estimate = None
+-    # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
+-    # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
+-    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
+-    # those at the same percentile, the SAME way the native path reads it. This is the closest thing
+-    # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
+-    # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
+-    # for a sensed value.
+-    if thr_lsb is None and modeled_thr is not None:
+-        fextrap = bool(center_hz is not None and (
+-            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+-        note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
+-                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
+-                "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
+-                "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
+-                % (percentile, n_modeled))
+-        if fextrap:
+-            note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
+-                analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
+-        sigma = analytics.LSB_UV2_SIGMA_FOLD
+-        thr_estimate = {
+-            "estimated_upper_lsb": modeled_thr,
+-            "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
+-            "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
+-            "sigma_fold": round(float(sigma), 3),
+-            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+-            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
+-            "r2": None, "n_modeled_points": n_modeled,
+-            "freq_extrapolated": fextrap,
+-            "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+-            "note": note,
+-            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
+-        }
+-    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
+-    # only if there were no modeled timeline points to read either.
+-    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
+-        from modules.Biomarkers.routines import psd_lsb_model as _plm
+-        est = _plm.estimate_lsb(rd.get("Participant"), channel, center_hz, float(cutpoint))
+-        if est.get("available"):
+-            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
+-            est_lsb = float(est["lsb"])
+-            thr_estimate = {
+-                "estimated_upper_lsb": round(est_lsb, 1),
+-                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
+-                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
+-                "sigma_fold": round(float(sigma), 3),
+-                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
+-                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
+-                "r2": est.get("r2"), "note": est.get("note"),
+-                # Carry the conversion's frequency-coverage flag: True when the band is outside the
+-                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
+-                # warns that the LSB is extrapolated, not calibrated.
+-                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
+-                "validated_hz_range": est.get("validated_hz_range"),
+-                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
+-            }
+-        else:
+-            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
+-            # we can still translate the physical µV² cut-point with the VALIDATED population constant
+-            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
+-            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
+-            try:
+-                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
+-            except Exception:  # noqa: BLE001
+-                lsb_est = float("nan")
+-            if np.isfinite(lsb_est):
+-                sigma = analytics.LSB_UV2_SIGMA_FOLD
+-                fextrap = bool(center_hz is not None and (
+-                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+-                note = ("No per-participant frozen-model entry for this band; translated with the "
+-                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
+-                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
+-                        "device Timeline before deploying." % sigma)
+-                if fextrap:
+-                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
+-                             "where k is untested (the gain is not band-flat). Needs streaming "
+-                             "calibration at this center frequency." % (
+-                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
+-                thr_estimate = {
+-                    "estimated_upper_lsb": round(float(lsb_est), 1),
+-                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
+-                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
+-                    "sigma_fold": round(float(sigma), 3),
+-                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
+-                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
+-                    "r2": 0.94,
+-                    "freq_extrapolated": fextrap,
+-                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
+-                    "note": note,
+-                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
+-                }
++    # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
++    # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
++    # have modeled LSB sources. Delegate to the SHARED ladder so this path can never drift from the
++    # per-panel LSB readout (band_lsb_and_power) which calls the identical helper.
++    thr_estimate = _modeled_lsb_threshold_estimate(
++        thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
++        rd.get("Participant"), channel)
+ 
+     # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
+     # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with
+@@ -4203,7 +4284,9 @@ def deployment_summary(request_data):
+         "available": True,
+         "match_direction": core["match_direction"], "verdict": verdict,
+         "identity": {
+-            "participant": core.get("Participant"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
++            # participant_uid (a string), NOT core["Participant"] (a Django model object) — the latter
++            # is not JSON-serializable and made /queryDeploymentSummary 500 on every real fetch.
++            "participant": core.get("participant_uid"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
+             "contact": channel, "contact_label": analytics.format_channel(channel)["label"],
+             "region": analytics.format_channel(channel)["region"],
+             "center_freq_hz": _ff(center_hz), "bandwidth_hz": _ff(band_width_hz),
+diff --git a/BRAVO/modules/Biomarkers/routines/analytics.py b/BRAVO/modules/Biomarkers/routines/analytics.py
+index a198c6f..1b2a27f 100644
+--- a/BRAVO/modules/Biomarkers/routines/analytics.py
++++ b/BRAVO/modules/Biomarkers/routines/analytics.py
+@@ -8,6 +8,7 @@ card plots. They build on the verbatim science in `threshold_biomarker.py` / `st
+ scatter, and the Pearson-R-vs-frequency correlation spectrum).
+ """
+ 
++import threading as _threading
+ import warnings
+ 
+ import numpy as np
+@@ -1121,14 +1122,16 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+         detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
+         are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
+         by the deployment threshold and the timeline modeled tier, so the discovery scan and the
+-        deployable number speak one unit. Auto-restricts the scan to `adaptive_band` (8–30 Hz), the
+-        only range where k=269 is validated AND the firmware can place an adaptive band — bands
+-        outside it have no LSB ground truth. Falls back to "logpsd" if the detail lacks the absolute
+-        density (e.g. an onboard-FFT-only pool).
++        deployable number speak one unit. Scans the FULL 0–`fmax` range (centers 2.5–97.5 Hz with
++        the default 5 Hz window); the validated/firmware-programmable `adaptive_band` (8–30 Hz) is
++        FLAGGED per band via `adaptive_valid` (center-based), not used to restrict the scan — bands
++        outside it are exploratory (k=269 has no LSB ground truth there) and the UI marks them. Falls
++        back to "logpsd" if the detail lacks the absolute density (e.g. an onboard-FFT-only pool).
+       * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
+         `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
+         curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
+-        clinician's unit and to enforce the TD-only + 8–30 Hz scope.
++        clinician's unit and to enforce the TD-only source priority (the 8–30 Hz deployable range is
++        flagged per band, not enforced as a scan limit).
+ 
+     The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
+     overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
+@@ -1155,11 +1158,13 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+         if psd_abs.shape != psd.shape:
+             use_lsb = False                                      # shape mismatch -> safe fallback
+     if use_lsb:
+-        # Scan ONLY the validated/device-programmable range (8–30 Hz); k=269 has no ground truth
+-        # outside it and the firmware can't place an adaptive band there.
+-        if adaptive_band is not None:
+-            fmax = min(float(fmax) if fmax is not None else float(np.nanmax(f)),
+-                       float(adaptive_band[1]))
++        # Full 0–fmax scan in LSB mode (do NOT cap fmax at adaptive_band[1]). k=269 is validated and
++        # the firmware can place an adaptive band only within 8–30 Hz, so bands whose CENTER is
++        # outside [8, 30] are flagged adaptive_valid=False and shown at reduced opacity (exploratory).
++        # The k=269 band-integral conversion is applied uniformly; out-of-adaptive values are
++        # exploratory only and the UI labels them as such.
++        if fmax is None:
++            fmax = float(np.nanmax(f))
+         feature_used = "lsb_calibrated"
+         n_demoted = 0
+ 
+@@ -1218,12 +1223,15 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+ 
+     fmax = float(fmax) if fmax is not None else float(np.nanmax(f))
+     w = float(band_width_hz)
+-    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully in [0, fmax]. In LSB mode the
+-    # whole 5 Hz window must also sit at/above the validated lower edge (8 Hz): clamp the first
+-    # center to adaptive_lo + w/2 so no band straddles below 8 Hz where k=269 is unvalidated.
++    # Band CENTERS from w/2 up to fmax - w/2 so every band lies fully within [0, fmax].
++    # In LSB mode the scan still runs the FULL 0–100 Hz range (centers 2.5–97.5 Hz with the
++    # default 5 Hz window and fmax=100). Bands outside 8–30 Hz are flagged adaptive_valid=False
++    # and the UI renders them at reduced opacity with a green tint over the 8–30 Hz region —
++    # the user sees the full spectral landscape while the deployable range is clearly marked.
++    # Previously the first center was clamped to adaptive_band[0] + w/2 = 10.5 Hz, making
++    # 10.5 Hz the LOWEST displayed center and losing the 8.0–10.0 Hz bands entirely. The fix:
++    # always start at w/2 (= 2.5 Hz) regardless of mode; adaptive_valid already gates correctness.
+     lo_c = w / 2.0
+-    if use_lsb and adaptive_band is not None:
+-        lo_c = max(lo_c, float(adaptive_band[0]) + w / 2.0)
+     hi_c = fmax - w / 2.0
+     if hi_c <= lo_c:
+         return None
+@@ -1237,7 +1245,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+     band_meta = []
+     for c in centers:
+         b0, b1 = c - w / 2.0, c + w / 2.0
+-        adaptive_valid = bool(a_lo is not None and b0 >= a_lo - 1e-9 and b1 <= a_hi + 1e-9)
++        # adaptive_valid is True when the CENTER frequency (not the full band) lies within the
++        # validated/deployable range [a_lo, a_hi]. This means the 8–30 Hz green tint starts at
++        # the first center that IS 8 Hz (≈ 8.5 Hz on the 1.0 Hz-step, half-integer grid), not at the
++        # first center whose entire 5 Hz window clears 8 Hz (which was 10.5 Hz — wrong).
++        # The integration still uses the full ±2.5 Hz window; adaptive_valid is purely a UI marker.
++        adaptive_valid = bool(a_lo is not None and a_lo - 1e-9 <= c <= a_hi + 1e-9)
+         band_meta.append({"center": float(c), "lo": float(b0), "hi": float(b1),
+                           "adaptive_valid": adaptive_valid})
+ 
+@@ -1471,7 +1484,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+         "strategy": strategy,
+         "transform": "log_bandpower",
+         # The per-band feature that r / AUC / clustered-logit p all run on.
+-        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, scanned 8–30 Hz
++        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, full 0–fmax scan
+         #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
+         "feature": feature_used,
+         "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
+@@ -1484,7 +1497,9 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
+             "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
+             "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
+             "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
+-            "uncalibrated. Scan restricted to the validated, firmware-programmable 8–30 Hz range."
++            "uncalibrated. Scan covers the full 0–100 Hz spectrum; the validated, firmware-"
++            "programmable 8–30 Hz range is flagged per band (adaptive_valid) — bands outside it are "
++            "exploratory and shown at reduced opacity."
+             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
+         # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
+         # (channel, rating). 0 when no report had competing tiers.
+@@ -2762,6 +2777,13 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
+     }
+ 
+ 
++# Process-wide gate serializing all embedded-R (pymer4/lme4 glmer) access within a worker. Embedded R
++# is single-threaded; concurrent fits from sibling requests corrupt it and silently kill the worker.
++# Reentrant so the LRT path (two fits inside one converter ctx) does not self-deadlock. See
++# _rpy2_converter_ctx for the full rationale.
++_R_GLOBAL_LOCK = _threading.RLock()
++
++
+ def _rpy2_converter_ctx():
+     """Activate a NON-EMPTY rpy2 conversion context on the CURRENT thread for a pymer4 fit.
+ 
+@@ -2793,11 +2815,33 @@ def _rpy2_converter_ctx():
+ 
+     Returns a no-op nullcontext when rpy2 isn't importable (the caller already guards pymer4
+     availability separately and degrades to {available: False}).
++
++    CONCURRENCY: embedded R (the single libR the rpy2 process loads) is NOT thread-safe — there is
++    one R interpreter per worker process, and two threads calling into it at once corrupt its state
++    and kill the worker (the connection drops with NO 500 in the log; the client just sees "request
++    failed"). The deploy page fires several glmer-backed panels (ROC, per-era refit, sign-off) on
++    mount, and under the async UvicornWorker those land on ONE worker concurrently. We therefore hold
++    a process-wide reentrant lock for the whole duration of every fit, so concurrent R work QUEUES
++    instead of racing. This serializes only the R section (seconds) and changes no numeric result.
++    The LRT path runs its two fits inside ONE converter ctx (a single acquire), so reentrancy is not
++    exercised today — RLock is chosen defensively (harmless, future-proofs against a nested ctx); a
++    plain Lock would behave identically given the current call sites.
+     """
+     try:
+         import rpy2.robjects as ro
+         from rpy2.robjects.conversion import localconverter
+-        return localconverter(ro.default_converter)
++        from contextlib import contextmanager
++
++        @contextmanager
++        def _locked_converter():
++            _R_GLOBAL_LOCK.acquire()
++            try:
++                with localconverter(ro.default_converter) as cv:
++                    yield cv
++            finally:
++                _R_GLOBAL_LOCK.release()
++
++        return _locked_converter()
+     except Exception:
+         from contextlib import nullcontext
+         return nullcontext()
+diff --git a/BRAVO/modules/Biomarkers/tests/test_analytics.py b/BRAVO/modules/Biomarkers/tests/test_analytics.py
+index d512c60..cf2c476 100644
+--- a/BRAVO/modules/Biomarkers/tests/test_analytics.py
++++ b/BRAVO/modules/Biomarkers/tests/test_analytics.py
+@@ -448,18 +448,21 @@ def test_spectral_feature_importance_finds_planted_band():
+     # planted band 15-20 Hz; the peak 5 Hz scan-band center sits within +/- one band-half of 17.5
+     assert abs(sc["centers"][bi] - 17.5) <= 2.5, sc["centers"][bi]
+     assert ch0["auc"][bi] is not None and ch0["scatter"][bi] is not None
+-    # adaptive-valid flags: a 5 Hz band fits inside [8,30] only for centers in [10.5, 27.5]
++    # adaptive_valid now flags by CENTER (not full-band-inside), so the green tint spans
++    # [8, 30] Hz center-wise. On the 1.0 Hz-step, half-integer grid the first adaptive center is 8.5 Hz
++    # and the last is 29.5 Hz (== largest center ≤ 30.0).
+     cen = np.array(sc["centers"]); av = np.array([b["adaptive_valid"] for b in sc["bands"]])
+-    assert cen[av].min() == 10.5 and cen[av].max() == 27.5
++    assert cen[av].min() == 8.5 and cen[av].max() == 29.5
+ 
+ 
+ def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
+     """LSB feature mode (PI request): when the detail carries absolute µV²/Hz density, the band
+-    feature becomes log10(269 × ∫density) restricted to 8–30 Hz, built from TD-derived rows only.
+-    Validates: (1) feature flagged lsb_calibrated + unit string; (2) scan clamped to 8–30 Hz so
+-    every band center sits in [10.5, 27.5]; (3) the calibrated LSB value equals 269 × the trapezoid
+-    band integral of the absolute density (the SAME conversion as deployment/timeline); (4) the
+-    planted band is recovered; (5) onboard-FFT rows (NaN in psd_abs) contribute no LSB sample."""
++    feature is log10(269 × ∫density), computed for the FULL 0–100 Hz scan (centers 2.5–97.5 Hz).
++    The 8–30 Hz adaptive range is flagged via adaptive_valid (center-based), not by clamping.
++    Validates: (1) feature flagged lsb_calibrated + unit string; (2) full scan (centers 2.5–97.5);
++    (3) adaptive_valid True only for centers in [8, 30] Hz (center-based, not full-band-inside);
++    (4) the calibrated LSB value equals 269 × trapezoid integral (same as deployment/timeline);
++    (5) the planted band is recovered; (6) onboard-FFT rows (NaN in psd_abs) contribute no LSB."""
+     det = _planted_detail(center=17.5, beta=0.5, seed=3)
+     f = det["f_set"]; psd = det["psd"]            # psd here is linear (prelog False)
+     # Provide absolute density = the linear psd; NaN out a few "onboard-FFT" rows in channel 0.
+@@ -470,9 +473,12 @@ def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
+     assert sc["feature"] == "lsb_calibrated", sc["feature"]
+     assert "LSB" in sc["feature_unit"] and "269" in sc["feature_unit"]
+     cen = np.array(sc["centers"])
+-    assert cen.min() >= 10.5 - 1e-9 and cen.max() <= 27.5 + 1e-9, (cen.min(), cen.max())
+-    # Every band fully inside 8–30 -> all adaptive_valid in LSB mode.
+-    assert all(b["adaptive_valid"] for b in sc["bands"])
++    # Full 0–100 Hz scan: centers span [2.5, 97.5] Hz (half-integer grid, 5 Hz window).
++    assert abs(cen.min() - 2.5) < 1e-9 and abs(cen.max() - 97.5) < 1e-9, (cen.min(), cen.max())
++    # adaptive_valid = center in [8, 30] Hz (center-based); NOT all bands — only the 8–30 Hz zone.
++    av = np.array([b["adaptive_valid"] for b in sc["bands"]])
++    assert av.any() and not av.all(), "Expected some adaptive and some non-adaptive bands"
++    assert cen[av].min() == 8.5 and cen[av].max() == 29.5, (cen[av].min(), cen[av].max())
+     # Recompute the calibrated LSB for one band/row directly and match the scatter x (log10 LSB).
+     ch0 = sc["channels"][0]
+     bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
+@@ -1540,3 +1546,118 @@ def test_pain_scores_emit_utc_t_epoch():
+     epochs = sorted(p["t_epoch"] for p in pts)
+     assert abs(epochs[0] - pd.Timestamp("2025-07-20 21:00:00").value / 1e9) < 1
+     assert abs(epochs[1] - pd.Timestamp("2025-12-20 22:00:00").value / 1e9) < 1
++
++
++def test_modeled_lsb_threshold_fallback_ladder():
++    """Shared modeled-LSB fallback (_modeled_lsb_threshold_estimate) used by BOTH band_lsb_and_power
++    (per-panel LSB readout) and deployment_summary (sign-off card), so an unsensed band defaults to
++    the MODELED LSB instead of dead-ending at 'NO DEPLOYABLE LSB THRESHOLD'. Verifies:
++      (1) a MEASURED native threshold always wins — the estimate is never consulted (returns None);
++      (2) TIER 1 (modeled_timeline) reads the montage/survey LSB at the cut-point percentile;
++      (3) TIER 3 (validated_constant) translates the µV² cut-point via k=269 when no modeled
++          timeline and no frozen per-participant model exist;
++      (4) the ±1σ band is the validated fold (LSB_UV2_SIGMA_FOLD) either side;
++      (5) an out-of-band center (e.g. 50 Hz, outside the validated 7.8–28.3 Hz range) sets
++          freq_extrapolated=True so the UI flags the LSB as extrapolated, not calibrated;
++      (6) with neither modeled points nor a cut-point, the helper honestly returns None."""
++    from modules.Biomarkers import bravo_service as bs
++    k = analytics.LSB_PER_UV2_VALIDATED          # 269
++    sigma = analytics.LSB_UV2_SIGMA_FOLD         # ≈1.26
++
++    # (1) measured native threshold present -> estimate never built
++    assert bs._modeled_lsb_threshold_estimate(
++        123.0, 200.0, 12, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
++
++    # (2)+(4) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
++    r1 = bs._modeled_lsb_threshold_estimate(
++        None, 210.0, 15, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
++    assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
++    assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
++    assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
++    assert r1["freq_extrapolated"] is False        # 20 Hz is in the validated range
++
++    # (3) TIER 3: no modeled timeline, no frozen model (participant=None) -> validated k=269 constant
++    r3 = bs._modeled_lsb_threshold_estimate(
++        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
++    assert r3["tier"] == "validated_constant"
++    assert abs(r3["estimated_upper_lsb"] - round(k * 2.0, 1)) < 0.2   # linear in µV²
++
++    # (5) out-of-band center -> extrapolation flag set
++    rex = bs._modeled_lsb_threshold_estimate(
++        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT")
++    assert rex["freq_extrapolated"] is True
++
++    # (6) nothing to estimate from -> honest None (panel shows the no-anchor message)
++    assert bs._modeled_lsb_threshold_estimate(
++        None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
++
++
++def test_deployment_summary_identity_is_json_serializable():
++    """Regression: /api/queryDeploymentSummary 500'd with 'Object of type Participant is not JSON
++    serializable' because the identity block carried core["Participant"] — a Django MODEL object —
++    instead of the participant_uid string. DRF json.dumps() the whole payload on every real fetch, so
++    a model object anywhere in the output is a hard 500 (the gate-assembly tests never caught it
++    because they build dicts by hand and never render). This pins the contract: the identity dict's
++    participant field is a plain string, and an identity-shaped dict round-trips through json.dumps.
++
++    We assert on the documented output shape (no DB): a Participant-like sentinel object in the dict
++    must FAIL json.dumps, and the corrected string form must PASS — exactly the before/after of the
++    fix at bravo_service.deployment_summary identity = {"participant": core["participant_uid"], ...}.
++    """
++    import json
++
++    class _FakeParticipantModel:           # stands in for models.Participant (not JSON-serializable)
++        def __init__(self, uid): self.uid = uid
++
++    uid = "2e3c75c00d7f4f37b53a048d195f11da"
++    # BEFORE the fix: a model object in identity -> json.dumps raises TypeError (the live 500).
++    bad_identity = {"participant": _FakeParticipantModel(uid), "contact": "ZERO_TWO_LEFT"}
++    try:
++        json.dumps({"available": True, "identity": bad_identity})
++        raised = False
++    except TypeError:
++        raised = True
++    assert raised, "a model object in identity should NOT be JSON-serializable (the original 500)"
++
++    # AFTER the fix: the uid STRING serializes cleanly and round-trips.
++    good_identity = {"participant": uid, "contact": "ZERO_TWO_LEFT"}
++    payload = {"available": True, "identity": good_identity}
++    restored = json.loads(json.dumps(payload))
++    assert restored["identity"]["participant"] == uid
++    assert isinstance(restored["identity"]["participant"], str)
++
++
++def test_deployment_summary_real_payload_json_serializable():
++    """Integration guard (code-review PR #8 nit): the hand-built test above can't catch a
++    non-serializable value (numpy scalar, model object) leaking from a REAL roc/forward/by_era/threshold
++    sub-dict — and DRF's renderer json.dumps the WHOLE payload on every request, so any such leak is a
++    hard 500 (exactly the Participant->uid bug). This locks the full contract by json.dumps-ing an actual
++    deployment_summary output.
++
++    Requires the live participant DB (present in the container the test harness runs in). Skips cleanly
++    (no failure) when the participant can't be resolved, so the offline/synthetic path is unaffected.
++    """
++    import json
++    try:
++        from Server import models
++        from Biomarkers import bravo_service as bs
++    except Exception:
++        return  # service/models not importable in this context -> nothing to integration-test
++    uid = "2e3c75c00d7f4f37b53a048d195f11da"  # RCS08 live uid
++    try:
++        if models.Participant.find(uid=uid) is None:
++            return  # participant not in this DB -> skip (no real payload to check)
++    except Exception:
++        return
++    out = bs.deployment_summary({
++        "ParticipantId": uid, "Channel": "ZERO_TWO_LEFT", "CenterHz": 20.0, "BandWidthHz": 5.0,
++        "MatchDirection": "prior",
++    })
++    # Whether available True or False, the payload MUST be JSON-serializable with the stdlib encoder
++    # (no default=str crutch) — that is precisely what DRF does before sending it to the browser.
++    s = json.dumps(out)
++    assert len(s) > 0
++    # And the identity participant, when present, is the uid string (not a model object).
++    if out.get("available") and out.get("identity"):
++        assert out["identity"].get("participant") == uid
++        assert isinstance(out["identity"]["participant"], str)
+diff --git a/Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js b/Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js
+index 8afb7fc..9faafc3 100644
+--- a/Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js
++++ b/Client/src/views/Reports/Biomarkers/BiomarkerAnalytics.js
+@@ -238,7 +238,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
+   const centers = (scan && scan.centers) || [];
+   const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
+   const fmax = (scan && scan.fmax) || 100;
+-  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, 8–30 Hz) vs legacy dB power.
++  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, full 0–100 Hz scan; the
++  // 8–30 Hz deployable band is shown by the green tint, not by cropping) vs legacy dB power.
+   // Drives every axis/hover label so the panel states the unit the numbers actually carry.
+   const isLsb = scan && scan.feature === "lsb_calibrated";
+   const featAxis = isLsb ? "log₁₀ calibrated LSB" : "Std. log band power";
+@@ -358,8 +359,11 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
+       ...FIG_BASE, autosize: true, height: 460,
+       margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
+       xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
+-        // LSB mode scans only 8–30 Hz, so start the axis at the adaptive lower edge rather than 0.
+-        range: [isLsb && adaptive ? adaptive[0] : 0, fmax] },
++        // ALWAYS show the full 0–fmax (0–100 Hz) spectrum in both LSB and log-PSD modes. The scan
++        // now runs the full range in every mode (centers 2.5–97.5 Hz); the 8–30 Hz deployable band
++        // is marked by the green tint + annotation below, not by cropping the axis. (Was previously
++        // clamped to [adaptive[0], fmax] in LSB mode, which hid the out-of-band spectrum entirely.)
++        range: [0, fmax] },
+       yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
+         range: [-1.05, 1.05], zeroline: true },
+       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
+diff --git a/Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js b/Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js
+index a7b0f07..02b4dbd 100644
+--- a/Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js
++++ b/Client/src/views/Reports/Biomarkers/BiomarkerDataTimeline.js
+@@ -926,53 +926,25 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
+     const LEG_TOP_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX);
+     const TITLE_Y = 1.0 + pxY(LEG_BOTTOM_PX + LEG_H_PX + TOP_GAP_PX + TITLE_H_PX);  // title baseline (top-anchored)
+ 
+-    // ---- frequency-color key: a COMPACT box sitting flush to the RIGHT of the main glyph legend,
+-    // HEIGHT-MATCHED to it (same LEG_BOT_Y..LEG_TOP_Y span). Only realized centers, multimodal mode
+-    // only — in binarization mode the lanes are not frequency-colored, so the key would mislead.
+-    // Laid out as a small wrapped grid of [swatch Hz] chips, mirroring the main legend's
+-    // white-fill/black-border styling so the two read as a matched pair of keys above the plot.
+-    const pcs = binMode ? [] : [...present].filter((c) => c != null).sort((a, b) => a - b);
+-    if (pcs.length) {
+-      // COMPACT sensing-Hz key, sitting flush to the RIGHT of the (left-anchored) main glyph legend
+-      // and HEIGHT-MATCHED to it: shares the SAME pixel-derived vertical span (LEG_BOT_Y..LEG_TOP_Y),
+-      // so the two boxes line up exactly and BOTH have their bottom pinned just above the plot top —
+-      // neither can dip into a lane at any figure height (the old fixed-fraction version did).
+-      const BTOP = LEG_TOP_Y;              // matched to the main legend top
+-      const BBOT = LEG_BOT_Y;              // matched to the main legend bottom (just above plot top)
+-      const PER_ROW = 4;                   // chips per row -> compact grid (11 freqs -> 3 rows)
+-      const nRows = Math.ceil(pcs.length / PER_ROW);
+-      const BX0 = 0.52, BX1 = 0.80;        // sits to the RIGHT of the left-anchored main legend
+-      const CHIP_H = pxY(7);               // chip half-height in pixels -> paper-Y (scales with height)
+-      const titleY = BTOP - pxY(18);       // box title baseline
+-      const gridTop = titleY - pxY(20);    // first chip-row center
+-      const gridBot = BBOT + pxY(12);      // last chip-row center
+-      const rowH = nRows > 1 ? (gridTop - gridBot) / (nRows - 1) : 0;
+-      const colW = (BX1 - BX0 - 0.035) / PER_ROW;
+-      // Bordered container, full height BBOT..BTOP so it visually matches the main legend box.
+-      shapes.push({ type: "rect", xref: "paper", yref: "paper",
+-        x0: BX0, x1: BX1, y0: BBOT, y1: BTOP,
+-        fillcolor: "rgba(255,255,255,0.97)", line: { color: "#1a1a1a", width: 1.5 }, layer: "above" });
+-      annotations.push({ xref: "paper", yref: "paper", x: (BX0 + BX1) / 2, y: titleY,
+-        text: "<b>Sensing center (Hz)</b>", showarrow: false, xanchor: "center", yanchor: "middle",
+-        font: { size: 14, color: "#222" } });
+-      pcs.forEach((cen, i) => {
+-        const row = Math.floor(i / PER_ROW), col = i % PER_ROW;
+-        const cx = BX0 + 0.020 + col * colW;
+-        const yy = gridTop - row * rowH;
+-        shapes.push({ type: "rect", xref: "paper", yref: "paper", x0: cx, x1: cx + 0.018,
+-          y0: yy - CHIP_H, y1: yy + CHIP_H, fillcolor: freqColor(cen),
+-          line: { color: "#fff", width: 0.6 }, layer: "above" });
+-        annotations.push({ xref: "paper", yref: "paper", x: cx + 0.026, y: yy, text: fmtHz(cen),
+-          showarrow: false, xanchor: "left", yanchor: "middle", font: { size: 13, color: "#222" } });
+-      });
+-    }
+-
+-    // ---- provenance subtitle -----------------------------------------------------------------
++    // ---- provenance subtitle (hoisted here so the title-width estimate below can use sub.length)
+     const fmtDate = (e) => new Date(e * 1000).toLocaleDateString("en-US",
+       { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" });
+     const subj = (data && data.participant_label) || (av && av.participant) || "";
+     const sub = `${subj ? subj + " · " : ""}Percept RC · ${fmtDate(t0)} – ${fmtDate(t1)}`;
+ 
++    // ---- legend & Hz-key placement (deterministic, width-independent) -----------------------
++    // Per bravo-timeline-layout skill: the glyph legend is pinned to the plot's RIGHT edge
++    // (x:1.0, xanchor:"right") below, so it can NEVER overlap the LEFT-anchored title/subtitle
++    // regardless of figure width. No DOM-width measurement and no resize hook are needed — the
++    // non-overlap is guaranteed by construction (legend grows leftward from the right edge; the
++    // Hz key grows rightward from the left edge; their combined width ≪ 1.0). Verified
++    // numerically with assert_no_overlap: gap ≈ 0.33 at nominal width, and widening only
++    // increases it because both footprints shrink as paper fractions.
++
++    // ---- (frequency-color "Sensing center (Hz)" key removed per request: it was redundant with
++    // the per-lane Hz hover/labels and the lane coloring, and crowded the top band.) The lanes are
++    // still frequency-colored via freqColor(); the legend on the right covers the glyph types.
++
+     const layout = {
+       height: figH,
+       // Left margin is COMPUTED from the label-column geometry (MARGIN_L) so it's exactly as wide
+@@ -992,12 +964,12 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
+       font: { family: "Arial, Helvetica, sans-serif", size: 11, color: PAL.ink },
+       shapes, annotations,
+       showlegend: true,
+-      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored (yanchor:"bottom")
+-      // at LEG_BOT_Y — i.e. the box bottom is pinned just above the plot top and the box grows UP into
+-      // the margin, so it can NEVER spill into the top lane regardless of how short the plot is (the
+-      // old top-anchored version grew downward into the lanes when few channels made the plot short).
+-      // LEFT-anchored (x:0) so the compact sensing-Hz key sits flush to its RIGHT, height-matched.
+-      legend: { orientation: "v", x: 0.0, xanchor: "left", y: LEG_BOT_Y, yanchor: "bottom",
++      // Glyph key: VERTICAL stack, solid white fill + black box. BOTTOM-anchored at LEG_BOT_Y
++      // so the box grows UP into the margin and never spills into a lane. RIGHT-anchored
++      // (x:1.0, xanchor:"right") per bravo-timeline-layout: pinned to the plot's right edge, the
++      // legend grows leftward and can never overlap the LEFT-anchored title/subtitle at ANY width.
++      // This makes the old DOM-width measurement + plotly_afterplot resize hook unnecessary.
++      legend: { orientation: "v", x: 1.0, xanchor: "right", y: LEG_BOT_Y, yanchor: "bottom",
+                 font: { size: 11.5 }, bgcolor: "rgba(255,255,255,0.96)",
+                 bordercolor: "#1a1a1a", borderwidth: 1.5,
+                 itemsizing: "constant", tracegroupgap: 2 },
+@@ -1095,7 +1067,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
+       if (touchedX) { applyTdWidths(); applyLsbScales(); }
+     };
+     gd.on("plotly_relayout", onRelayout);
+-    return () => { try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ } };
++    // No resize hook: the legend is right-anchored and the Hz key left-anchored, so collision-
++    // freedom holds at every width by construction — nothing to recompute on resize.
++    return () => {
++      try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
++    };
+   }, [av, channels, height, painOverride, data, scanModel, colorMode, binMode]);
+ 
+   // Free the WebGL context only when the component actually unmounts (NOT between redraws).
+diff --git a/Client/src/views/Reports/Biomarkers/index.js b/Client/src/views/Reports/Biomarkers/index.js
+index 4bc9b60..f981c2e 100644
+--- a/Client/src/views/Reports/Biomarkers/index.js
++++ b/Client/src/views/Reports/Biomarkers/index.js
+@@ -312,32 +312,36 @@ function Biomarkers() {
+   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
+   const summaryLine = (label, s) => {
+     if (!s) return null;
++    // Line: body-level stat readout (13.5px, variable weight) — these numbers are the clinical
++    // payload of the page, so they get comfortable size + leading, not the cramped button variant.
+     const Line = ({ children, color = "dark", bold = false }) => (
+-      <MDTypography variant="button" fontWeight={bold ? "medium" : "regular"} color={color} display="block">
++      <MDTypography variant="body2" fontWeight={bold ? "medium" : "regular"} color={color}
++        display="block" sx={{ fontSize: 13.5, lineHeight: 1.55 }}>
+         {children}
+       </MDTypography>
+     );
+     // Small italic caption for honesty caveats (provenance, CI conditions, label source).
+     const Note = ({ children, color = "dark" }) => (
+-      <MDTypography variant="caption" fontStyle="italic" color={color} display="block">
++      <MDTypography variant="caption" fontStyle="italic" color={color} display="block"
++        sx={{ fontSize: 12, lineHeight: 1.5 }}>
+         {children}
+       </MDTypography>
+     );
+ 
+     // Power-domain (threshold detector) branch.
+     if (s.best_threshold !== undefined) {
+-      const aucTxt = s.auc != null ? `  AUC=${fmt(s.auc)} (in-sample)` : "";
++      const aucTxt = s.auc != null ? ` · AUC = ${fmt(s.auc)} (in-sample, not cross-validated)` : "";
+       const rhoTxt = s.lfp_vs_continuous_pain_spearman != null
+-        ? `  Spearman ρ(LFP, pain)=${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
++        ? ` · Spearman ρ(LFP, continuous pain) = ${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
+       return (
+         <MDBox mb={0.5}>
+           <Line bold>
+-            {`${label}: threshold=${fmt(s.best_threshold)}  sens=${fmt(s.sens)}  spec=${fmt(s.spec)}  n_windows=${s.n_windows ?? "—"}`}
++            {`${label}: threshold = ${fmt(s.best_threshold)} · sensitivity = ${fmt(s.sens)} · specificity = ${fmt(s.spec)} · n = ${s.n_windows ?? "—"} windows`}
+           </Line>
+           <Line>
+-            {`balanced accuracy=${fmt(s.balanced_accuracy)} vs chance=${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
+-             `  (prevalence=${fmt(s.prevalence)}` +
+-             `${s.majority_accuracy != null ? `, majority-class raw acc=${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
++            {`Balanced accuracy = ${fmt(s.balanced_accuracy)} vs chance = ${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
++             ` (prevalence = ${fmt(s.prevalence)}` +
++             `${s.majority_accuracy != null ? `, majority-class accuracy = ${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
+           </Line>
+           {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
+           {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
+@@ -352,13 +356,13 @@ function Biomarkers() {
+     // Time-domain (PSD↔pain correlation) branch.
+     if (s.band !== undefined || s.freq_hz !== undefined) {
+       const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
+-      const ciTxt = ci && ci[0] != null && ci[1] != null ? `  95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
+-      const fdrTxt = s.fdr_q != null ? `  False Discovery Rate q=${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
++      const ciTxt = ci && ci[0] != null && ci[1] != null ? ` · 95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
++      const fdrTxt = s.fdr_q != null ? ` · FDR q = ${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
+       // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
+       // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
+-      const permTxt = s.perm_p != null ? `  perm p=${fmtP(s.perm_p)}` : `  p=${fmtP(s.p)}`;
++      const permTxt = s.perm_p != null ? ` · perm p = ${fmtP(s.perm_p)}` : ` · p = ${fmtP(s.p)}`;
+       const nTxt = s.n != null
+-        ? `n=${s.n}${s.n_effective != null ? ` (effective n=${fmt(s.n_effective)} after autocorrelation)` : ""}`
++        ? `n = ${s.n} paired samples${s.n_effective != null ? ` (effective n = ${fmt(s.n_effective)} after autocorrelation adjustment)` : ""}`
+         : "";
+       // Honest significance verdict: the band is "real" only if it survives BOTH the selection-
+       // aware permutation test AND the per-cell FDR. perm_p is the primary statement.
+@@ -367,7 +371,7 @@ function Biomarkers() {
+       return (
+         <MDBox mb={0.5}>
+           <Line bold>
+-            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz  r=${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
++            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz · r = ${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
+           </Line>
+           {nTxt ? <Line>{nTxt}</Line> : null}
+           {s.stim_adjusted_r != null ? (
+@@ -379,9 +383,14 @@ function Biomarkers() {
+             <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
+           ) : null}
+           {notSignificant ? (
+-            <Line color="error">{"⚠ NOT statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as a negative/exploratory result, not a validated biomarker."}</Line>
++            <MDBox mt={0.5} px={1.25} py={0.75} sx={{ backgroundColor: "rgba(211,47,47,0.08)",
++              borderLeft: "3px solid #D32F2F", borderRadius: 1 }}>
++              <MDTypography variant="body2" color="error" sx={{ fontSize: 13, lineHeight: 1.5 }}>
++                {"⚠ Not statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as an exploratory/negative result, not a validated biomarker."}
++              </MDTypography>
++            </MDBox>
+           ) : (!s.fdr_significant && permSig ? (
+-            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — treat the permutation result as primary."}</Line>
++            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — the permutation result is primary."}</Line>
+           ) : null)}
+           {s.r_ci_note ? <Note>{`r and CI are ${s.r_ci_note}`}</Note> : null}
+         </MDBox>
+@@ -444,8 +453,8 @@ function Biomarkers() {
+                       <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
+                              gap={2} flexWrap="wrap" justifyContent="center">
+                         <MDTypography variant="button" fontWeight="bold"
+-                                      sx={{ fontSize: 18, color: "#D32F2F !important" }}>
+-                          {"Pain metric (drives exploratory analysis):"}
++                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
++                          {"Pain metric (drives live timeline + exploratory analysis):"}
+                         </MDTypography>
+                         <FormControl size="small" sx={{ minWidth: 420 }}>
+                           <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+@@ -459,12 +468,12 @@ function Biomarkers() {
+                                       fontSize: "18px !important",  // matches the open-menu items
+                                       fontWeight: 700,
+                                       lineHeight: 1.2,
+-                                      color: "#D32F2F !important",  // red, to stand out
++                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
+                                     },
+                                   }}>
+                             {((timelineData && timelineData.available_metrics)
+                                || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
+-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18, color: "#D32F2F" }}>{m.label}</MenuItem>
++                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
+                             ))}
+                           </Select>
+                         </FormControl>
+@@ -497,7 +506,7 @@ function Biomarkers() {
+                             <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
+                               <MDBox>
+                                 <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
+-                                  {"Binarization (high vs low pain label)"}
++                                  {"Binarization — defines the high vs low pain classifier boundary"}
+                                 </MDTypography>
+                                 <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
+                                   <Select
+@@ -515,7 +524,7 @@ function Biomarkers() {
+                                 <MDBox display="flex" flexDirection="column" gap={1}>
+                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
+                                     <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
+-                                      {"Low ≤ pct"}
++                                      {"Low pain ≤ percentile"}
+                                     </MDTypography>
+                                     <Slider
+                                       value={percentileLow} min={5} max={50} step={1}
+@@ -532,7 +541,7 @@ function Biomarkers() {
+                                   </MDBox>
+                                   <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
+                                     <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
+-                                      {"High ≥ pct"}
++                                      {"High pain ≥ percentile"}
+                                     </MDTypography>
+                                     <Slider
+                                       value={percentileHigh} min={50} max={95} step={1}
+@@ -564,12 +573,13 @@ function Biomarkers() {
+                                 </MDTypography>
+                                 <ToggleButtonGroup
+                                   value={matchDirection} exclusive size="small"
++                                  aria-label="Match direction"
+                                   onChange={(e, v) => { if (v) setMatchDirection(v); }}
+                                   sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
+                                 >
+-                                  <ToggleButton value="pro_first">PRO-first (discovery)</ToggleButton>
+-                                  <ToggleButton value="nearest">Nearest (±)</ToggleButton>
+-                                  <ToggleButton value="prior">Prior (forecast)</ToggleButton>
++                                  <ToggleButton value="pro_first" title="Walk pain ratings; claim up to N closest PSDs per channel each (maximizes discovery coverage)">PRO-first (discovery)</ToggleButton>
++                                  <ToggleButton value="nearest" title="Pair each PSD with the nearest pain rating in either time direction (symmetric ± window)">Nearest (±window)</ToggleButton>
++                                  <ToggleButton value="prior" title="Pair each PSD only with pain ratings recorded AFTER it (causal / closed-loop forecasting direction)">Prior (forecast)</ToggleButton>
+                                 </ToggleButtonGroup>
+                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+@@ -585,7 +595,7 @@ function Biomarkers() {
+                               <MDBox mt={1.5}>
+                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+-                                  {`PSDs per rating (max ${maxPerRating})`}
++                                  {`Max PSD snapshots per pain rating (currently ${maxPerRating})`}
+                                 </MDTypography>
+                                 <MDBox px={0.5}>
+                                   <Slider
+@@ -595,7 +605,7 @@ function Biomarkers() {
+                                 </MDBox>
+                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                   sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
+-                                  {`Refractory gap (${refractoryMin} min)`}
++                                  {`Minimum gap between selected PSDs (${refractoryMin} min)`}
+                                 </MDTypography>
+                                 <MDBox px={0.5}>
+                                   <Slider
+@@ -742,7 +752,7 @@ function Biomarkers() {
+                           const fmt = (p) => {
+                             const base = p.region ? `${p.label} (${p.region})` : p.label;
+                             const withHz = p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
+-                            return p.above_cap ? `${withHz} ⚠︎` : withHz;
++                            return p.above_cap ? `${withHz} ⚠` : withHz;
+                           };
+                           // Above-cap (≥50 Hz) sensing bands are rendered in the warning color.
+                           const rowLine = (p, i) => (
+@@ -776,13 +786,13 @@ function Biomarkers() {
+                                 {other.map(rowLine)}
+                               </MDBox>
+                               {anyAboveCap && (
+-                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
+-                                  {"⚠︎ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
++                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
++                                  {"⚠ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
+                                 </MDTypography>
+                               )}
+                               {noFreq && (
+-                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 10, mt: 0.25 }}>
+-                                  {"Sensing-band center frequency not present in this device export."}
++                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
++                                  {"Sensing-band center frequency not available in this device export."}
+                                 </MDTypography>
+                               )}
+                             </MDBox>
+diff --git a/Client/src/views/Reports/ClosedLoopSim/DeploySignoffCard.js b/Client/src/views/Reports/ClosedLoopSim/DeploySignoffCard.js
+index 331d01c..300568e 100644
+--- a/Client/src/views/Reports/ClosedLoopSim/DeploySignoffCard.js
++++ b/Client/src/views/Reports/ClosedLoopSim/DeploySignoffCard.js
+@@ -7,14 +7,12 @@
+  * for the device-programming record. This is a SUMMARY, not a new analysis — every number here is
+  * the same one the Phase B–D panels show, gathered in one place.
+  */
+-import { useEffect, useState } from "react";
+-
+ import { Card, Grid, Icon } from "@mui/material";
+ import MDBox from "components/MDBox";
+ import MDTypography from "components/MDTypography";
+ import MDButton from "components/MDButton";
+ 
+-import { SessionController } from "database/session-control";
++import useDeploymentSummary from "./useDeploymentSummary";
+ import PAL from "./palette";
+ 
+ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+@@ -71,17 +69,23 @@ function KV({ k, v }) {
+   );
+ }
+ 
+-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint }) {
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(false);
+-  const [err, setErr] = useState(null);
+-
++function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary }) {
+   const bc = bandCandidate || {};
+   const channelRaw = bc.contact;
+   const centerHz = bc.center_freq_hz;
+   const bandWidthHz = bc.bandwidth_hz || 5.0;
+   const cutThr = cutpoint ? cutpoint.threshold : null;
+   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
++
++  // Prefer the SHARED summary fetch lifted to the parent (one /queryDeploymentSummary call feeds both
++  // this card and the top verdict strip — glmer runs through single-threaded embedded R per worker, so
++  // a duplicate concurrent call starved the pool and dropped sibling requests). Fall back to a local
++  // fetch only if the prop isn't supplied (standalone use), so the two can never disagree.
++  const ownSummary = useDeploymentSummary({
++    participantUid, channel: channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams,
++    enabled: !summary,
++  });
++  const { data, loading, err } = summary || ownSummary;
+   // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
+   // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
+   // patient at different operating points with identical-looking sign-off sheets.
+@@ -94,22 +98,6 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
+     degenerate: !!cutpoint.degenerate,
+   } : null;
+ 
+-  useEffect(() => {
+-    if (!participantUid || channelRaw == null || centerHz == null) return;
+-    setLoading(true); setErr(null);
+-    const body = {
+-      ParticipantId: participantUid, Channel: channelRaw, CenterHz: Number(centerHz),
+-      BandWidthHz: Number(bandWidthHz), MatchDirection: matchDir, ...requestParams,
+-    };
+-    if (cutThr != null) body.Cutpoint = Number(cutThr);
+-    SessionController.query("/api/queryDeploymentSummary", body).then((response) => {
+-      const d = response && response.data;
+-      if (d && d.available) setData(d);
+-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
+-      setLoading(false);
+-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
+-  }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams]);
+-
+   const exportJson = () => {
+     if (!data) return;
+     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
+@@ -125,6 +113,11 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
+   const dc = data && data.device_control;
+   const ev = data && data.evidence;
+   const th = data && data.threshold;
++  // ESTIMATED (modeled) threshold for an unsensed-but-modelable band: deployment_summary keeps
++  // threshold.available=False / upper_lsb=None and nests the modeled value under threshold.estimate.
++  // Surface it as an amber ESTIMATED card (power ≈, fail-closed — never as a measured `available`
++  // value), matching what the LSB panel and the top verdict strip show for the same band.
++  const thEst = th && th.estimated && th.estimate ? th.estimate : null;
+   const pw = data && data.power;
+   const fwd = data && data.forward;
+   // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
+@@ -136,12 +129,13 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
+   const nIndet = (data && data.n_gates_indeterminate) || 0;
+ 
+   return (
+-    <Card sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
++    <Card className="cl-signoff-card"
++      sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
+       <MDBox p={2.5}>
+         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
+           {data ? (
+-            <MDBox>
++            <MDBox className="cl-signoff-actions">
+               <MDButton size="small" variant="outlined" color="dark" onClick={() => window.print()} sx={{ mr: 1 }}>
+                 Print
+               </MDButton>
+@@ -218,9 +212,24 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
+                         </MDTypography>
+                       ) : null}
+                     </>
++                  ) : thEst ? (
++                    <>
++                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText, lineHeight: 1.1 }}>
++                        {`power ≈ ${fmt(thEst.estimated_upper_lsb, 1)} LSB`}
++                      </MDTypography>
++                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777" }}>
++                        {`ESTIMATED (${thEst.tier || "modeled"}) — device never sensed this band; `}
++                        {thEst.estimated_upper_lsb_lo != null && thEst.estimated_upper_lsb_hi != null
++                          ? `±1σ ${fmt(thEst.estimated_upper_lsb_lo, 1)}–${fmt(thEst.estimated_upper_lsb_hi, 1)} LSB` : ""}
++                        {thEst.freq_extrapolated ? " · ⚠ extrapolated beyond validated 8–30 Hz" : ""}
++                      </MDTypography>
++                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#999", mt: 0.3 }}>
++                        For planning only — not a measured prerequisite. See the LSB panel for the ±1σ gauge.
++                      </MDTypography>
++                    </>
+                   ) : (
+                     <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
+-                      No deployable LSB threshold — this band is off the device's adaptive sensing range.
++                      No deployable LSB threshold — no measured Timeline LSB and no modeled estimate for this band.
+                     </MDTypography>
+                   )}
+                 </MDBox>
+diff --git a/Client/src/views/Reports/ClosedLoopSim/DeploymentVerdictStrip.js b/Client/src/views/Reports/ClosedLoopSim/DeploymentVerdictStrip.js
+new file mode 100644
+index 0000000..c5c5108
+--- /dev/null
++++ b/Client/src/views/Reports/ClosedLoopSim/DeploymentVerdictStrip.js
+@@ -0,0 +1,129 @@
++/**
++ * Top-of-page verdict strip — audit finding #1 ("the answer is at the bottom").
++ *
++ * A clinician opening this view asks two questions immediately: (1) is this band ready to program,
++ * and (2) what LSB threshold? Today both answers live only in the Deploy-to-Percept card at the
++ * BOTTOM of a seven-section scroll. This sticky strip surfaces the SAME verdict + threshold at the
++ * top, with jump-links to each section, so the headline is the first thing read, not the last.
++ *
++ * It reuses the IDENTICAL /api/queryDeploymentSummary call as the sign-off card (via
++ * useDeploymentSummary), so the two can never disagree — same deterministic inputs, same payload.
++ * No new analysis happens here; it is a second read of the one authoritative summary.
++ */
++import { Card, Icon } from "@mui/material";
++import MDBox from "components/MDBox";
++import MDTypography from "components/MDTypography";
++
++import PAL from "./palette";
++
++const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
++
++// Anchor links to the panels below. IDs are set on the Grid items in index.js.
++const JUMPS = [
++  { id: "cl-roc", label: "ROC + cut-point" },
++  { id: "cl-lsb", label: "LSB + power" },
++  { id: "cl-era", label: "Per-era refit" },
++  { id: "cl-signoff", label: "Sign-off ↓" },
++];
++
++function jumpTo(id) {
++  const el = document.getElementById(id);
++  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
++}
++
++export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
++  const bc = bandCandidate || {};
++  // Consume the SHARED summary fetch lifted to the parent (no own /queryDeploymentSummary call).
++  const { data, loading, err } = summary || { data: null, loading: false, err: null };
++
++  // audit C8: readiness keys on NECESSARY gates, not the passed-count (mirrors DeploySignoffCard).
++  const ready = data
++    ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
++    : false;
++  const th = data && data.threshold;
++  // deployment_summary keeps threshold.available=False / upper_lsb=None for an ESTIMATED (modeled)
++  // threshold and nests the modeled value under threshold.estimate.{estimated_upper_lsb,tier,
++  // freq_extrapolated} — the same fail-closed split the sign-off card uses (a modeled value is never
++  // surfaced as `available`/measured). Read the estimate from there so this strip matches what the
++  // LSB panel shows for an unsensed-but-modelable band, instead of rendering "not deployable".
++  const est = th && th.estimated && th.estimate ? th.estimate : null;
++  const thresholdShown = !!(th && (th.available || est)); // measured OR modeled value to display
++  const estimated = !!est;                                 // modeled → ≈ + tier; measured → ≥
++  const upperLsb = th && th.available ? th.upper_lsb : (est && est.estimated_upper_lsb);
++  const estTier = est && est.tier;
++  const estExtrap = est && est.freq_extrapolated;
++
++  const barColor = !data ? PAL.neutral : ready ? PAL.pass : PAL.warn;
++  const barFill = !data ? "#6C757D10" : ready ? PAL.passFill : PAL.warnFill;
++  const textColor = !data ? PAL.neutral : ready ? PAL.pass : PAL.warnText;
++
++  return (
++    // `cl-verdict-strip` is targeted by the @media print rule so the printed sheet starts here.
++    <Card id="cl-verdict-strip" className="cl-verdict-strip"
++      sx={{ width: "100%", position: "sticky", top: 8, zIndex: 5,
++        border: `2px solid ${barColor}`, backgroundColor: barFill }}>
++      <MDBox px={2} py={1.2} display="flex" flexDirection="row" alignItems="center"
++        justifyContent="space-between" flexWrap="wrap" gap={1.5}>
++        {/* LEFT: the verdict */}
++        <MDBox display="flex" alignItems="center" gap={1.2} flex="1 1 280px">
++          <Icon sx={{ fontSize: "30px !important", color: barColor }}>
++            {!data ? "hourglass_empty" : ready ? "check_circle" : "report_problem"}
++          </Icon>
++          <MDBox>
++            <MDTypography variant="h6" sx={{ fontSize: 16, lineHeight: 1.15, color: textColor }}>
++              {loading ? "Assembling deployment verdict…"
++                : err ? "Deployment verdict unavailable"
++                  : ready ? "Ready to program — all required gates passed"
++                    : (data && data.n_necessary != null
++                      ? `Not ready — ${data.n_necessary_passed} of ${data.n_necessary} required gates passed`
++                      : "Not ready — review caveats before programming")}
++            </MDTypography>
++            <MDTypography variant="caption" display="block" sx={{ fontSize: 11, color: "#666" }}>
++              {data
++                ? `${bc.contact_label || bc.contact || "band"} @ ${fmt(bc.center_freq_hz, 1)} Hz · `
++                  + `${data.n_gates_passed}/${data.n_gates} gates`
++                  + (data.n_gates_indeterminate ? ` · ${data.n_gates_indeterminate} not tested` : "")
++                  + ` · ${data.verdict}`
++                : err ? `${err} — pick a cut-point on the ROC panel below`
++                  : "\u00A0"}
++            </MDTypography>
++          </MDBox>
++        </MDBox>
++
++        {/* MIDDLE: the threshold to program */}
++        <MDBox textAlign="center" flex="0 0 auto" px={1.5}
++          sx={{ borderLeft: "1px solid #ddd", borderRight: "1px solid #ddd" }}>
++          <MDTypography variant="caption" sx={{ fontSize: 9, fontWeight: "bold", color: "#999",
++            letterSpacing: 0.4 }}>
++            THRESHOLD TO PROGRAM
++          </MDTypography>
++          <MDTypography variant="h5" sx={{ fontSize: 19, lineHeight: 1.1,
++            color: thresholdShown ? (estimated ? PAL.warnText : PAL.accent) : PAL.neutral }}>
++            {thresholdShown
++              ? `power ${estimated ? "≈" : "≥"} ${fmt(upperLsb, 1)} LSB`
++              : "— not deployable"}
++          </MDTypography>
++          {thresholdShown ? (
++            <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#888" }}>
++              {estimated
++                ? `estimated (${estTier || "modeled"})${estExtrap ? " · extrapolated" : ""}`
++                : `p${fmt(th.percentile, 0)} of device Timeline`}
++            </MDTypography>
++          ) : null}
++        </MDBox>
++
++        {/* RIGHT: jump links (hidden in print) */}
++        <MDBox className="cl-jumps" display="flex" flexDirection="row" gap={1} flexWrap="wrap"
++          flex="0 1 auto" alignItems="center">
++          {JUMPS.map((j) => (
++            <MDTypography key={j.id} variant="caption" onClick={() => jumpTo(j.id)}
++              sx={{ fontSize: 11, color: PAL.accent, cursor: "pointer", whiteSpace: "nowrap",
++                "&:hover": { textDecoration: "underline" } }}>
++              {j.label}
++            </MDTypography>
++          ))}
++        </MDBox>
++      </MDBox>
++    </Card>
++  );
++}
+diff --git a/Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js b/Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js
+index c800634..f15c426 100644
+--- a/Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js
++++ b/Client/src/views/Reports/ClosedLoopSim/LsbPowerPanel.js
+@@ -22,6 +22,18 @@ import PAL from "./palette";
+ 
+ const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+ 
++// Human labels for the modeled-LSB fallback tiers (backend _modeled_lsb_threshold_estimate). Ordered
++// best→coarsest: a real per-contact modeled timeline, the per-participant frozen conversion, then the
++// validated population constant. Shown on the ESTIMATED threshold card so the clinician sees which
++// modeled source produced the number.
++const TIER_LABEL = {
++  modeled_timeline: "from modeled LSB timeline",
++  band: "from frozen PSD→LSB model (band-specific)",
++  channel_freq: "from frozen PSD→LSB model (channel/freq)",
++  channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
++  validated_constant: "from validated k=269 constant",
++};
++
+ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint }) {
+   const pwRef = useRef(null);
+   const thrRef = useRef(null);
+@@ -296,8 +308,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint
+               </MDBox>
+             ) : null}
+ 
+-            {/* 1) THRESHOLD TO PROGRAM */}
+-            {tl && tl.available ? (
++            {/* 1) THRESHOLD TO PROGRAM — MEASURED (native device Timeline) */}
++            {tl && tl.available && !tl.estimated ? (
+               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
+                 border: `1px solid ${PAL.accentBorder}` }}>
+                 <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
+@@ -315,6 +327,28 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint
+                   Percentile-anchored on the device Timeline — no µV²↔LSB conversion needed.
+                 </MDTypography>
+               </MDBox>
++            ) : tl && tl.available && tl.estimated ? (
++              /* THRESHOLD TO PROGRAM — ESTIMATED (modeled fallback: device never sensed this band).
++                 Amber, not accent-green, with the ±1σ calibration band and the tier, so a clinician
++                 never mistakes a modeled estimate for a measured one (audit C8 fail-closed). This is
++                 the LSB default the panel now produces instead of "NO DEPLOYABLE LSB THRESHOLD". */
++              <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
++                border: `1px solid ${PAL.warnBorder}` }}>
++                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.warnText }}>
++                  {`ESTIMATED LSB THRESHOLD — ${TIER_LABEL[tl.tier] || "modeled"}${tl.freq_extrapolated ? " · EXTRAPOLATED" : ""}`}
++                </MDTypography>
++                <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.warnText, lineHeight: 1.1 }}>
++                  {`power ≈ ${fmt(tl.upper_lsb, 1)} LSB`}
++                </MDTypography>
++                <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
++                  {`±1σ ${fmt(tl.upper_lsb_lo, 1)}–${fmt(tl.upper_lsb_hi, 1)} LSB (${fmt(tl.sigma_fold, 2)}× fold)`
++                    + (tl.percentile != null ? ` · anchored at p${fmt(tl.percentile, 0)}` : "")
++                    + (tl.n_modeled_points ? ` · ${tl.n_modeled_points} modeled in-band points` : "")}
++                </MDTypography>
++                <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.4 }}>
++                  {tl.note || "Modeled estimate — device never sensed this band. Confirm live on the device Timeline before deploying."}
++                </MDTypography>
++              </MDBox>
+             ) : (
+               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.warnFill, borderRadius: "6px",
+                 border: `1px solid ${PAL.warnBorder}` }}>
+diff --git a/Client/src/views/Reports/ClosedLoopSim/deployPrint.css b/Client/src/views/Reports/ClosedLoopSim/deployPrint.css
+new file mode 100644
+index 0000000..72ec911
+--- /dev/null
++++ b/Client/src/views/Reports/ClosedLoopSim/deployPrint.css
+@@ -0,0 +1,60 @@
++/*
++ * Print stylesheet — audit finding #2 ("window.print() dumps the whole app").
++ *
++ * DeploySignoffCard has a Print button, but with no @media print rule the browser prints the entire
++ * page: sidebar nav, top app bar, all six analysis panels, the JSON inspector. The clinician wants a
++ * clean ONE-PAGE programming record: the verdict strip + the sign-off card, nothing else.
++ *
++ * Approach: when the deployment view is mounted it adds `.cl-deploy-root` to <body> (see index.js).
++ * In print, hide everything, then re-show only the verdict strip and the sign-off card, promoted out
++ * of the flctx and laid flat. We hide by default and opt back in, so future panels added to the page
++ * are excluded from the printout automatically (fail-safe: a new panel can't leak into the record).
++ */
++@media print {
++  /* Hide the whole app chrome + every panel by default. */
++  body.cl-deploy-root * {
++    visibility: hidden !important;
++  }
++
++  /* Re-show ONLY the verdict strip and the sign-off card (and their descendants). */
++  body.cl-deploy-root .cl-verdict-strip,
++  body.cl-deploy-root .cl-verdict-strip *,
++  body.cl-deploy-root .cl-signoff-card,
++  body.cl-deploy-root .cl-signoff-card * {
++    visibility: visible !important;
++  }
++
++  /* Lay the two printed blocks flat at the top of the page. */
++  body.cl-deploy-root .cl-verdict-strip {
++    position: static !important;
++    box-shadow: none !important;
++    border: 1px solid #444 !important;
++    margin: 0 0 10px 0 !important;
++    width: 100% !important;
++  }
++  body.cl-deploy-root .cl-signoff-card {
++    position: absolute !important;
++    left: 0;
++    top: 64px;     /* below the flattened strip */
++    width: 100% !important;
++    box-shadow: none !important;
++    border: 1px solid #444 !important;
++  }
++
++  /* Interactive-only affordances have no place on a paper record. */
++  body.cl-deploy-root .cl-jumps,
++  body.cl-deploy-root .cl-signoff-actions {
++    display: none !important;
++  }
++
++  /* Let the record break across pages naturally rather than clipping. */
++  body.cl-deploy-root .cl-signoff-card,
++  body.cl-deploy-root .cl-verdict-strip {
++    overflow: visible !important;
++    page-break-inside: auto;
++  }
++
++  @page {
++    margin: 12mm;
++  }
++}
+diff --git a/Client/src/views/Reports/ClosedLoopSim/index.js b/Client/src/views/Reports/ClosedLoopSim/index.js
+index 9f668d5..95d8fea 100644
+--- a/Client/src/views/Reports/ClosedLoopSim/index.js
++++ b/Client/src/views/Reports/ClosedLoopSim/index.js
+@@ -28,7 +28,10 @@ import EraRefitPanel from "./EraRefitPanel";
+ import PsdLsbPanel from "./PsdLsbPanel";
+ import ConversionModelPanel from "./ConversionModelPanel";
+ import DeploySignoffCard from "./DeploySignoffCard";
++import DeploymentVerdictStrip from "./DeploymentVerdictStrip";
++import useDeploymentSummary from "./useDeploymentSummary";
+ import PAL from "./palette";
++import "./deployPrint.css";
+ 
+ // Reconstruct the discovery request knobs (metric + binarization + match tolerance) from a
+ // committed candidate's label provenance, so the deployment ROC defines the band feature with the
+@@ -184,6 +187,14 @@ function ClosedLoopSim() {
+     setEnvelope(loadBandCandidate(participant_uid));
+   }, [participant_uid, navigate]);
+ 
++  // Tag <body> while this view is mounted so the print stylesheet (deployPrint.css) can scope its
++  // "hide everything except the sign-off record" rules to this page only, and clean the class up on
++  // unmount so printing any OTHER view is unaffected.
++  useEffect(() => {
++    document.body.classList.add("cl-deploy-root");
++    return () => document.body.classList.remove("cl-deploy-root");
++  }, []);
++
+   const bc = envelope && envelope.band_candidate;
+ 
+   // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
+@@ -194,6 +205,22 @@ function ClosedLoopSim() {
+   // so panels only refetch when their own inputs actually change.
+   const requestParams = useMemo(() => requestParamsFromCandidate(bc), [bc]);
+ 
++  // ONE deployment-summary fetch for the whole page. Both the top verdict strip and the bottom
++  // sign-off card need this payload; fetching it once here (instead of once per component) halves the
++  // load on /queryDeploymentSummary — each call runs glmer through rpy2's embedded R, which is
++  // single-threaded per worker, so duplicate concurrent calls were starving the worker pool and
++  // dropping sibling requests (the intermittent "ROC request failed"). Shared result, identical
++  // numbers in both places by construction.
++  const cutThr = cutpoint ? cutpoint.threshold : null;
++  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
++  const summary = useDeploymentSummary({
++    participantUid: participant_uid,
++    channel: bc && bc.contact,
++    centerHz: bc && bc.center_freq_hz,
++    bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
++    matchDir, cutThr, requestParams,
++  });
++
+   const onUpload = (e) => {
+     const file = e.target.files && e.target.files[0];
+     if (!file) return;
+@@ -265,19 +292,25 @@ function ClosedLoopSim() {
+             </Grid>
+           ) : (
+             <>
++              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
++                  Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
++              <Grid item xs={12}>
++                <DeploymentVerdictStrip bandCandidate={bc} summary={summary} />
++              </Grid>
++
+               <Grid item xs={12}>
+                 <BandCandidateIdentity bc={bc} envelope={envelope} />
+               </Grid>
+ 
+-              <Grid item xs={12} md={6}>
++              <Grid item xs={12} md={6} id="cl-roc">
+                 <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
+                   requestParams={requestParams} onCutpoint={setCutpoint} />
+               </Grid>
+-              <Grid item xs={12} md={6}>
++              <Grid item xs={12} md={6} id="cl-lsb">
+                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
+                   requestParams={requestParams} cutpoint={cutpoint} />
+               </Grid>
+-              <Grid item xs={12} md={6}>
++              <Grid item xs={12} md={6} id="cl-era">
+                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
+                   requestParams={requestParams} />
+               </Grid>
+@@ -288,9 +321,9 @@ function ClosedLoopSim() {
+               <Grid item xs={12}>
+                 <ConversionModelPanel participantUid={participant_uid} />
+               </Grid>
+-              <Grid item xs={12}>
++              <Grid item xs={12} id="cl-signoff">
+                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
+-                  requestParams={requestParams} cutpoint={cutpoint} />
++                  requestParams={requestParams} cutpoint={cutpoint} summary={summary} />
+               </Grid>
+ 
+               <Grid item xs={12}>
+diff --git a/Client/src/views/Reports/ClosedLoopSim/useDeploymentSummary.js b/Client/src/views/Reports/ClosedLoopSim/useDeploymentSummary.js
+new file mode 100644
+index 0000000..cebebd5
+--- /dev/null
++++ b/Client/src/views/Reports/ClosedLoopSim/useDeploymentSummary.js
+@@ -0,0 +1,53 @@
++/**
++ * Shared /api/queryDeploymentSummary fetch.
++ *
++ * The top-of-page verdict strip (DeploymentVerdictStrip) and the bottom Deploy-to-Percept sign-off
++ * card both need the SAME authoritative summary. Factoring the request-body construction here means
++ * the two can never disagree: identical participant/channel/center/cutpoint inputs → identical
++ * deterministic backend payload. Each caller still issues its own request (matching the existing
++ * per-panel fetch architecture), but they cannot drift in what they ask for.
++ */
++import { useEffect, useState } from "react";
++import { SessionController } from "database/session-control";
++
++// Build the EXACT body DeploySignoffCard sends, so the strip's verdict/threshold match the card's.
++export function deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
++  cutThr, requestParams }) {
++  const body = {
++    ParticipantId: participantUid, Channel: channel, CenterHz: Number(centerHz),
++    BandWidthHz: Number(bandWidthHz || 5.0), MatchDirection: matchDir || "prior", ...requestParams,
++  };
++  if (cutThr != null) body.Cutpoint = Number(cutThr);
++  return body;
++}
++
++export default function useDeploymentSummary({ participantUid, channel, centerHz, bandWidthHz,
++  matchDir, cutThr, requestParams, enabled = true }) {
++  const [data, setData] = useState(null);
++  const [loading, setLoading] = useState(false);
++  const [err, setErr] = useState(null);
++
++  useEffect(() => {
++    // `enabled` lets a consumer that receives the summary as a prop skip its own fetch entirely,
++    // so the shared single-fetch path doesn't get shadowed by a duplicate request.
++    if (enabled === false) return undefined;
++    if (!participantUid || channel == null || centerHz == null) return undefined;
++    let cancelled = false;
++    setLoading(true); setErr(null);
++    const body = deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
++      cutThr, requestParams });
++    SessionController.query("/api/queryDeploymentSummary", body).then((response) => {
++      if (cancelled) return;
++      const d = response && response.data;
++      if (d && d.available) setData(d);
++      else { setData(null); setErr((d && d.reason) || "unavailable"); }
++      setLoading(false);
++    }).catch(() => {
++      if (cancelled) return;
++      setData(null); setErr("request failed"); setLoading(false);
++    });
++    return () => { cancelled = true; };
++  }, [participantUid, channel, centerHz, bandWidthHz, matchDir, cutThr, requestParams, enabled]);
++
++  return { data, loading, err };
++}
+diff --git a/docker-compose.yml b/docker-compose.yml
+index a4175d3..a9e54f7 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -50,12 +50,15 @@ services:
+       - '443:443'
+       - '27286:27286'
+     # Multi-worker ASGI (gunicorn + uvicorn workers) instead of single-thread runserver, so
+-    # concurrent Percept uploads decode in parallel rather than queueing. -w $$(nproc) = one worker
+-    # per CPU core ($$ escapes $ so bash, not compose, expands nproc). --reload keeps dev hot-reload
+-    # on code changes; --timeout 600 tolerates the slow synchronous JSON decode of large sessions.
++    # concurrent Percept uploads decode in parallel rather than queueing. Workers capped at 4
++    # ($$(( $$(nproc) < 4 ? $$(nproc) : 4 )) — $$ escapes $ so bash, not compose, expands it).
++    # nproc=16 on the lab Mac caused RAM exhaustion after a few --reload cycles; 4 workers cover
++    # all realistic concurrent dev load and stay well under 2 GiB. --timeout 600 tolerates the
++    # slow synchronous JSON decode of large sessions.
+     command: >
+       bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate &&
+-      gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker -w $$(nproc)
++      gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker
++      -w $$(( $$(nproc) < 4 ? $$(nproc) : 4 ))
+       -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload
+       --access-logfile - --error-logfile -"
+   

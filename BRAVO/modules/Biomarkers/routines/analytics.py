@@ -2598,7 +2598,7 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
                                    if v["fft_size"] == CONVERSION_FFT_SIZE)  # ("Dual","SingleInverse")
 
 
-# ── welch256 route — PSD→LSB EXPLORATION BACKUP ONLY (NOT the primary TD→LSB route) ──────────────
+# ── population PSD→LSB scalar k=269 — DEPLOYMENT last-resort fallback ONLY (NOT primary TD→LSB) ──
 # Power-domain LSB <-> µV² calibration, VALIDATED on RCS08 ground truth (on-demand BrainSense
 # Streaming: BrainSenseLfp device LSB + BrainSenseTimeDomain 250 Hz TD on the SAME signal, 50 stim-off
 # paired blocks). Welch 256-pt PSD of the TD integrated over the sensed band, regressed on the device's
@@ -2612,13 +2612,19 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
 # own Timeline LSB percentile anchor for the actual deployed threshold; use this only to translate a
 # physical µV² target into LSB when the device never sensed the band).
 #
-# ROUTE STATUS (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md): k=269 is the
-# **welch256 route**, demoted to the PSD→LSB EXPLORATION BACKUP — used only to turn a power-domain
-# PSD into LSB when NO coincident time-domain stream exists for a match. The PRIMARY TD→LSB source of
-# truth is now the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62** (below). Do NOT feed a
-# transform-DSP µV² through k=269, and do NOT feed a welch256 µV² through 352.62 — each DSP carries its
-# own scale (see ERROR 3 in the handoff). The two are NOT interchangeable.
-LSB_PER_UV2_VALIDATED = 269.0          # k, welch256 route — PSD→LSB exploration backup ONLY
+# ROUTE STATUS (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md): the PRIMARY TD→LSB
+# source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62** (below); the PSD-only
+# no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 73.63** (CS-3, below). The standalone
+# Welch-256 PSD→LSB DSP helpers (psd_band_to_lsb / welch256_density) were the original exploration
+# backup and were REMOVED 2026-06-27 once the bridge superseded them — they had no production caller.
+# k=269 itself SURVIVES as a SCALAR population constant for ONE narrow live path: the deployment
+# fallback ladder (bravo_service._modeled_lsb_threshold_estimate / deployment_summary), which converts
+# a frozen-model OFFLINE µV² cut-point to LSB via lsb_from_uv2(cutpoint, k=269) as a last resort when
+# neither a native device threshold nor the frozen PSD→LSB model is available. That cut-point is an
+# offline-Welch band power, so k=269 (the Welch-256 fit) is the physically correct scale there — do
+# NOT feed a transform-DSP µV² through k=269, nor an offline-Welch µV² through 352.62 (each DSP carries
+# its own scale; see ERROR 3 in the handoff). The two are NOT interchangeable.
+LSB_PER_UV2_VALIDATED = 269.0          # k, Welch-256 fit — deployment µV²→LSB fallback scalar ONLY
 UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
 LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
 LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
@@ -2743,124 +2749,6 @@ def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI
     if not np.isfinite(c):
         return False
     return bool(c < float(lo) or c > float(hi))
-
-
-def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_VALIDATED,
-                    threshold_mode="Dual"):
-    """Convert a physical PSD (µV²/Hz) to device power-domain LSB over a band, via the Welch256
-    band-integral × k=269 route. This is the **PSD→LSB EXPLORATION BACKUP** — used only to turn a
-    power-domain PSD into LSB when NO coincident time-domain stream exists for a match. When TD is
-    available, the PRIMARY route is td_to_lsb (transform DSP × LSB_PER_UV2_TRANSFORM = 352.62); do not
-    route a TD trace through here.
-
-    This is a MODELED value either way — native device LSB (Timeline / BrainSenseLfp) is always
-    preferred when the band was actually sensed (see DESIGN §4). The default k=269 is RCS08-validated
-    and approximately band-flat across 7.8–28.3 Hz; outside that range the conversion is an untested
-    extrapolation and is flagged (never silently trusted).
-
-    Route history (do not re-litigate): a 2026-06-25 "Step-0" pass chose fixed-269 over the transform
-    for the timeline. That decision was SUPERSEDED on 2026-06-27 (PI; HANDOFF_TD_LSB_calibration_
-    2026-06-27.md): the transform route (k=352.62), reproduced bit-for-bit against the lab repo, is now
-    the primary TD→LSB source of truth for the EXPLORATION timeline (availability.lsb_series, switched
-    in CS-1). The k switch is safe there because k cancels in the r/AUC curves (it is multiplicative on
-    a log band-power feature) — only the absolute displayed LSB moves to the lab-consistent scale.
-
-    SCOPE (as of CS-1): the bravo_service DEPLOYMENT modeled fallback is NOT switched — it converts a
-    frozen-model physical µV² cut-point via lsb_from_uv2 (k=269, the population constant), not a TD
-    trace, so it legitimately keeps k=269 (each DSP carries its own scale; do not feed a cut-point
-    through 352.62). This psd_band_to_lsb function itself currently has NO production caller after the
-    CS-1 switch — it is the intended PSD→LSB backup for the no-TD case, but that backup is NOT yet
-    wired and the welch256 DSP is anyway the wrong front end for a device PSD (it re-derives a PSD from
-    TD; a device montage/event PSD is in a different normalization). The proper no-TD backup needs its
-    OWN device-PSD→LSB refit — tracked as a follow-up, see INGEST/HANDOFF notes — not this function.
-
-    Parameters
-    ----------
-    psd_uv2_per_hz, freq : array-like
-        PSD power density (µV²/Hz) and matching frequency axis (Hz). Same length.
-    center_hz : float
-        Band center frequency (Hz). Snapped to nothing here — caller picks the sensing center.
-    half_hz : float, default 2.5
-        Half-bandwidth; the integral runs over [center-half, center+half) (≈5 Hz device band).
-    k : float, default 269 (LSB_PER_UV2_VALIDATED)
-        Proportional LSB/µV² constant. Pass a participant-specific k once one is fitted.
-    threshold_mode : str, default "Dual"
-        Percept adaptive mode whose FFT size the k assumes. k=269 is a 256-pt-equivalent fit, valid
-        only for COMPATIBLE_THRESHOLD_MODES (256-pt: Dual, SingleInverse). The 64-pt Single mode
-        integrates a different set of bins, so the conversion is flagged fft_incompatible there.
-
-    Returns
-    -------
-    dict with keys:
-        lsb : float | nan          modeled device LSB (nan if band has <2 bins or non-positive power)
-        uv2 : float | nan          integrated band power in µV²
-        k_used : float             the k applied
-        freq_extrapolated : bool   center outside the validated 7.8–28.3 Hz range
-        fft_compatible : bool      threshold_mode's FFT size matches the 256-pt calibration
-        validated_hz_range : [lo, hi]
-        method : str               provenance label
-        note : str                 human-readable caveat (extrapolation / fft-incompat / ok)
-    """
-    f = np.asarray(freq, dtype=float)
-    P = np.asarray(psd_uv2_per_hz, dtype=float)
-    extrap = _freq_extrapolated(center_hz)
-    fft_compatible = str(threshold_mode) in COMPATIBLE_THRESHOLD_MODES
-    out = {
-        "lsb": float("nan"), "uv2": float("nan"), "k_used": float(k),
-        "freq_extrapolated": bool(extrap), "fft_compatible": bool(fft_compatible),
-        "validated_hz_range": [LSB_VALIDATED_HZ_LO, LSB_VALIDATED_HZ_HI],
-        "method": f"welch256_band_integral_x_k={float(k):.0f}",
-        "note": "",
-    }
-    if f.ndim != 1 or P.ndim != 1 or f.size != P.size or f.size < 2:
-        out["note"] = "PSD/freq axis missing, mismatched, or too short (<2 bins)"
-        return out
-
-    uv2 = _band_power_notched(f, P, float(center_hz), float(half_hz))
-    out["uv2"] = uv2
-    if not np.isfinite(uv2) or uv2 <= 0:
-        out["note"] = f"band [{center_hz - half_hz:.1f}, {center_hz + half_hz:.1f}) Hz has <2 bins or non-positive power"
-        return out
-
-    out["lsb"] = lsb_from_uv2(uv2, k=k)
-
-    notes = []
-    if extrap:
-        notes.append(
-            f"center {float(center_hz):.1f} Hz is EXTRAPOLATED beyond the validated "
-            f"{LSB_VALIDATED_HZ_LO:.1f}–{LSB_VALIDATED_HZ_HI:.1f} Hz range; k is an untested "
-            f"extrapolation here (needs streaming calibration at this frequency)")
-    if not fft_compatible:
-        notes.append(
-            f"threshold_mode={threshold_mode} uses a non-256-pt FFT; k=269 is a 256-pt-equivalent "
-            f"fit and does NOT translate to this mode's band (Medtronic: LFP Power is not comparable "
-            f"across threshold modes)")
-    out["note"] = " · ".join(notes) if notes else "in validated range, 256-pt-compatible"
-    return out
-
-
-def welch256_density(samples_uv, fs):
-    """Welch 256-pt power-density PSD of a time-domain µV trace — the EXACT transform the k=269
-    calibration was fit against (scipy welch, hann window, nperseg=256, detrend='constant',
-    scaling='density'). Returns (freq, psd_uv2_per_hz) or (None, None) if the trace is too short.
-
-    This is the load-bearing detail for the timeline's psd_modeled tier: k=269 maps a *Welch-256
-    band integral* of the 250 Hz TD to device LSB. The device's own montage/event `FFTBinData` is a
-    DIFFERENT normalization and must NOT be fed to psd_band_to_lsb with k=269 — convert from TD via
-    this helper instead. No mains notch (implanted device; matches _band_power_notched default).
-    """
-    try:
-        from scipy.signal import welch as _welch
-    except Exception:
-        return None, None
-    v = np.asarray(samples_uv, dtype=float)
-    v = v[np.isfinite(v)]
-    fs = float(fs)
-    if v.size < 256 or fs <= 0:
-        return None, None
-    f, p = _welch(v, fs=fs, window="hann", nperseg=min(256, v.size),
-                  detrend="constant", scaling="density")
-    return f, p
 
 
 # Default sliding-window geometry for the transform DSP (the PRIMARY TD→LSB route). A 1-second

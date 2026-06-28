@@ -1,0 +1,20 @@
+{
+ "channel": "ZERO_THREE_RIGHT",
+ "n_pairs": 1446,
+ "match_window_h": 1,
+ "loglog_slope": 1.0845997673214123,
+ "loglog_slope_ci": [
+  1.0139745905135147,
+  1.1552249441293099
+ ],
+ "loglog_intercept": 1.98116932301625,
+ "r2": 0.3859226857698791,
+ "proportional_k_lsb_per_uv2": 74.12299035920205,
+ "k_ci": [
+  73.04704784114988,
+  75.74580086021399
+ ],
+ "uv2_per_lsb": 0.013491090890342828,
+ "rule_of_thumb_uv2_per_lsb": 0.01,
+ "spearman": 0.6750307313136887
+}
