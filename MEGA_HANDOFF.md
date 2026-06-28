@@ -20,7 +20,8 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `e8a0d3f`** (in sync with origin), **suite 239/239 PASS** (in-container runner).
+> **HEAD `e8a0d3f`** (in sync with origin) + **uncommitted** changeset (event-PSD resolver + modeled-LSB
+> symbol fix + Bug 3/4 in-progress; §0 newest entry), **suite 249/249 PASS** (in-container runner).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-27.md`; the TD→LSB
@@ -33,6 +34,53 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Bug 1: Event-PSD channel resolver + Bug 2: Modeled-LSB symbol fix (2026-06-28, UNCOMMITTED). Suite 249/249.**
+
+*Bug 1 root cause:* `_event_block_channel` guessed Right→`ZERO_THREE` / Left→`ONE_THREE` statically for blocks lacking a `SenseID`. On RCS08 84% of the 3,119 event PSD blocks (2,635/3,119) had no `SenseID`, and 86% of all blocks are Right-hemisphere, so ~86% of all event PSDs were dumped onto **R 0-3** — contaminating that channel's binarization scan pool and starving others. This is a biomarker-accuracy bug, not just display.
+
+*Fix:* Replaced the static guess with an **active-sensing resolver**:
+- `_build_sensing_config_index(decoded_recs)` — builds a per-hemisphere sorted `[(epoch_s, channel)]` list from `BrainSenseTimeDomain` + `BrainSensePowerDomain` records (single-channel sessions only; IndefiniteStream and montage sweeps — which sense all pairs simultaneously — are excluded by a `len(chans)==1` guard).
+- `_build_sensing_config_index_from_rows(psd_rows)` — companion builder for the cached-assembly path where decoded dicts aren't available (builds from flat Welch rows, TD-streaming source only).
+- `_resolve_event_channel(hemi_key, sense_id, t_event, sensing_index)` — priority 1: SenseID (authoritative); 2: most-recent prior config in 90-day window; 3: nearest-after config; 4: None (skip, never guess).
+- `_EVENT_HEMI_DEFAULT_CONTACT` fully removed from all production paths. `_event_block_channel` reduced to a SenseID-only shim for backward compat.
+- Wired into all 5 call sites: `_event_psd_rows`, `_event_psd_index`, `_event_psd_lsb_blocks` → availability timeline tick path, binarization scan pool (both `_assemble_psd_rows_cached` and the warm-cache path), and the deployment scan path.
+- Sensing index sources: streaming TD only for `_assemble_psd_rows*`; TD + PowerDomain for the availability payload where `powerdomain_list` is in scope.
+- Architecture: channel assignment stays at **analysis time** (not ingestion) — new JSONs automatically benefit; richer index as sessions accumulate.
+
+*Live RCS08 validation:* Before → 484/3119 (16%) routed via SenseID; After → **3119/3119 (100%)** routed. L 1-3 went from 34 → 407 events. 421 bilateral events (both L+R) resolved to correct independent contacts (R=0-3 + L=1-3 dominant; R=0-3 + L=0-3 in 14 events when Left was sensing 0-3 that session). 0 unresolved.
+
+*Bug 2 root cause:* The lane-level modeled tier used `symbol: "diamond-open"` for ALL methods. The per-rating tier already distinguished `td_transform→circle-open` / `psd_bridge→diamond-open` via `TIER_SYMBOL` but the lane tier did not, so TD-modeled points were invisible behind PSD-bridge diamonds.
+
+*Fix (BiomarkerDataTimeline.js):* Lane-level modeled tier now partitions each frequency group by method and pushes two traces: `circle-open` for `td_transform`, `diamond-open` for `event_psd_bridge`. Non-binMode legend split into two entries (one per symbol). Redundant `matched ≥1 PSD` / `no neural match` pain-rating swatches removed from binMode glyph key (binarization mode already communicates this via color encoding). `nLegRows`: binMode 7→5, non-binMode 8→9.
+
+*Bug 3 (BinarizationPreview.js line 346):* `scanModel` was missing from the `useEffect` dep array. `proIdxByBin` is computed inside that effect from `scanModel.samples`, but since `scanModel` wasn't listed, it went stale after any scanModel rebuild (e.g. `matchDirection` change) that didn't also change another listed dep. Fix: `scanModel` added to dep array. The 187/106 discrepancy the user saw was this stale render — `proIdxByBin.low` (unique rating indices per bin, a Set) and `counts.n_low` (total matched PSDs) are legitimately different units and both correct; the stale dep caused one to be from a prior model.
+
+*Bug 4 (BiomarkerAnalytics.js):* (a) Scatter title showed `sc.x.length` (capped at max_scatter=400) rather than `ch.n_channel` (true per-channel matched count). Title now shows `ch.n_channel` with ` shown: N` suffix only when the scatter was subsampled. (b) When `matchDirty` (slider window changed since last scan run), the scatter title now shows `· scan at prior window` inline. `matchDirty` prop threaded from `index.js → BiomarkerAnalytics → SpectralFeatureImportance`.
+
+*Bug 4 null-guard addendum (BiomarkerAnalytics.js):* cap-disclosure condition `nShown < (ch.n_channel || nShown)` was always false when `ch.n_channel` is null. Fixed to `(ch.n_channel != null && nShown < ch.n_channel)`. Frontend rebuilt.
+
+*Tests added (9):* `test_resolver_returns_none_when_no_sense_id_and_no_index`, `test_resolver_uses_sense_id_when_present`, `test_resolver_picks_nearest_prior_config_from_index`, `test_resolver_falls_back_to_nearest_after_when_no_prior`, `test_resolver_respects_window_and_returns_none_when_too_far`, `test_resolver_excludes_all_pair_sweeps_from_index`, `test_resolver_left_hemi_key`, `test_build_sensing_config_index_accepts_power_domain_records`, `test_build_sensing_config_index_from_rows_basic`. Suite: **249/249 PASS**.
+
+---
+
+**Deployment modeled-LSB now pools ALL TD products, not just montage/survey (2026-06-28, UNCOMMITTED).**
+The TIER-1 rewrite below wired the modeled-LSB helper correctly but the two **deployment** endpoints
+(`band_lsb_and_power`, `deployment_summary`) only loaded montage/survey TD (`psd_list`,
+`AVAILABILITY_PSD_TYPES`) and passed `td_recordings=list(psd_list or [])` — while the **exploration
+timeline** feeds the helper the full TD superset (streaming `td_list` = `MedtronicBrainSenseTimeDomain`
++ `MedtronicIndefiniteStream`, PLUS `psd_list`). So any band the device only ever **streamed** (never
+montage-swept) silently lost those TD samples from the deployable percentile-anchored threshold. Fix:
+both endpoints now also load `streaming_td = _load_recordings(uid, TIMEDOMAIN_TYPES)` and pass
+`td_for_modeled = streaming_td + psd_list` to `modeled_lsb_at_center`. Power-domain records and
+unnamed/foreign columns are still excluded by the helper's fs/ChannelName guards; native-preferred
+precedence unchanged; exploration timeline byte-unchanged. E2E on RCS08 ZERO_THREE_RIGHT: in-band
+modeled pool **156 → 469** (335 streaming recs added = 232 BrainSenseTimeDomain + **103 IndefiniteStream**;
+IndefiniteStream carries all 6 contacts so it adds a uniform +102 pts to EVERY channel and is the
+DOMINANT streaming source for the 0-2/1-3 contacts), deployable p50 moves a few % (8.8 Hz 496.3→515.1,
+26.4 Hz 102.5→105.4) — a real coverage gap, not a no-op. +1 test (`test_modeled_lsb_at_center_pools_streaming_and_montage_td`), suite **240/240**.
+No frontend rebuild needed (only the modeled threshold's numeric value moved). Per-session detail:
+`SESSION_HANDOFF_2026-06-28_all_TD_modeled.md`.
 
 **Deployment LSB fallback → universal TIER-1 off raw TD; z-scored units bug fixed (2026-06-28, `09798f7` + build `e8a0d3f`).**
 A cross-module LSB-consistency code review found a **CRITICAL units bug** in the deployment threshold
@@ -361,7 +409,7 @@ TD→LSB validation + PSD→TD→LSB back-translation; impedance `c=1.02` (rejec
 
 ## 5. Test & build status
 
-- **Backend suite: 239/239 PASS** in the live container via the bridge:
+- **Backend suite: 240/240 PASS** in the live container via the bridge:
   `python3 _agent_bridge/run_tests.py`. **No pytest in the container** — `run_tests.py` is the
   authoritative runner (globs `test_*.py`, sets up Django, reloads the module). `test_analytics.py`
   holds ~96 of the test functions.
@@ -519,7 +567,7 @@ sklearn 1.5.2.
 
 ---
 
-*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`e8a0d3f`**, suite **239/239**.
+*End of mega-handoff. Branch `PS_closedloop_deployment` @ **`e8a0d3f`** + 1 uncommitted changeset, suite **240/240**.
 Authoritative sources: `RCS08.json`, the dated `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files,
 and the current `analytics.py`. Preserve exact numbers, SHAs, paths, and dates when editing —
 and verify constants against source (`grep`), not against this doc, before relying on a line number.*

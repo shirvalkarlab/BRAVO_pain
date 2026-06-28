@@ -713,8 +713,9 @@ def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordi
     montage-modeled tiers. Both inputs feed shared primitives exploration already calls — this
     function only CALLS them, so lsb_series and the exploration timeline are untouched.
 
-      * td_recordings  — raw-µV TD-bearing recordings (today: the montage/survey sweeps at 250 Hz; pass
-        BrainSense streaming TD too if/when a caller loads it). ONLY columns whose ChannelName
+      * td_recordings  — raw-µV TD-bearing recordings: BrainSense streaming TD + IndefiniteStream AND
+        the montage/survey sweeps (all 250 Hz TD), the same superset the exploration timeline pools.
+        ONLY columns whose ChannelName
         canonicalizes to `channel` are converted, via the PRIMARY transform route
         analytics.td_to_lsb(col, fs, center_hz) (×LSB_PER_UV2_TRANSFORM = 352.62). Power-domain records
         (SamplingRate ≤ 0, e.g. ChronicBrainSense) and unnamed/extra columns are skipped — they are not

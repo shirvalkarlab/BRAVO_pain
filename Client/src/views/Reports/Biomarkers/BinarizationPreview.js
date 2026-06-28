@@ -343,7 +343,9 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     // reset on every match-window / strategy drag. Plotly.react diffs in place, so the live recolor
     // works without a purge; we purge only on unmount (separate effect below), mirroring
     // BiomarkerDataTimeline's deliberate same pattern.
-  }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey]);
+  // scanModel added: proIdxByBin reads scanModel.samples; omitting it caused stale per-bin
+  // rating counts after scanModel rebuilt (e.g. matchDirection change) without other deps changing.
+  }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey, scanModel]);
 
   // Purge ONCE on unmount only (not before every recompute) so zoom survives live recolors.
   useEffect(() => {

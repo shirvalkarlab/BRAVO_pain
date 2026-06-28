@@ -515,3 +515,163 @@ def test_modeled_lsb_at_center_honors_high_gamma_center_no_snap():
     assert out.size == 1
     expect = analytics.td_to_lsb(rec["Data"][:, 0], fs, 55.0, half_hz=2.5)   # raw center, no snap
     assert abs(float(out[0]) - float(expect)) < 1e-9
+
+
+def test_modeled_lsb_at_center_pools_streaming_and_montage_td():
+    """Regression: the deployment modeled tier must pool EVERY raw-µV TD product for the channel —
+    BrainSense streaming TD + IndefiniteStream AND the montage/survey sweeps — not just the montage
+    list. Two same-channel TD records (one streaming-shaped, one montage-shaped, at distinct times)
+    contribute two points; the percentile anchor reads off the union. Guards against the deployment
+    endpoints feeding only psd_list (montage) and dropping streamed-only bands."""
+    fs, center = 250.0, 20.0
+    streaming = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=11, start=T0)
+    montage = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=22,
+                      start=T0 + 3600.0)
+    both = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center,
+                                    td_recordings=[streaming, montage], half_hz=2.5)
+    only_montage = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center,
+                                            td_recordings=[montage], half_hz=2.5)
+    assert both.size == 2 and only_montage.size == 1
+    # The streamed record's point is genuinely in the union (not a duplicate of the montage one).
+    assert set(np.round(both, 6)) >= set(np.round(only_montage, 6))
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 regression: active-sensing event-channel resolver
+# ---------------------------------------------------------------------------
+# Import the resolver functions directly from bravo_service (Django-free paths).
+import importlib, pathlib as _pl, sys as _sys
+
+def _import_service():
+    """Import bravo_service without Django, monkey-patching the ORM stubs it references at
+    module level.  We only need the pure-Python resolver helpers."""
+    _root = _pl.Path(__file__).resolve().parents[3]
+    if str(_root) not in _sys.path:
+        _sys.path.insert(0, str(_root))
+    # Provide minimal stubs so the top-level imports don't fail without Django.
+    import types, unittest.mock as _mock
+    # Stub 'models' and 'Database' referenced at import time
+    for mod in ("Server", "Server.models", "modules.Database"):
+        if mod not in _sys.modules:
+            _sys.modules[mod] = _mock.MagicMock()
+    # analytics and availability are real; stub pipeline/adapter/redcap
+    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter",
+                "modules.Biomarkers.routines.redcap_client"):
+        if mod not in _sys.modules:
+            _sys.modules[mod] = _mock.MagicMock()
+    import modules.Biomarkers.bravo_service as _bs
+    return _bs
+
+
+def _make_td_rec(channel, start, secs=30):
+    """Minimal decoded streaming-TD dict with a single channel."""
+    return {"ChannelNames": [channel], "StartTime": float(start),
+            "SamplingRate": 250, "Data": np.zeros((int(secs * 250), 1))}
+
+
+def _make_pd_rec(channel, start):
+    """Minimal decoded power-domain dict (single sensing channel, Power suffix)."""
+    return {"ChannelNames": [f"{channel} Power"], "StartTime": float(start),
+            "SamplingRate": 2, "Data": np.zeros((100, 1))}
+
+
+def test_resolver_returns_none_when_no_sense_id_and_no_index():
+    """Without a SenseID and without a sensing index, _resolve_event_channel returns None —
+    never the old static R0-3/L1-3 guess."""
+    bs = _import_service()
+    result = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                       t_event=T0, sensing_index=None)
+    assert result is None, f"Expected None for unresolvable block, got {result!r}"
+
+
+def test_resolver_uses_sense_id_when_present():
+    """SenseID takes priority over everything else — the device's own authoritative answer."""
+    bs = _import_service()
+    ch = bs._resolve_event_channel(
+        "HemisphereLocationDef.Right",
+        "SensingElectrodeConfigDef.ONE_AND_THREE",
+        t_event=T0, sensing_index=None)
+    assert ch == "ONE_THREE_RIGHT", f"Got {ch!r}"
+
+
+def test_resolver_picks_nearest_prior_config_from_index():
+    """When SenseID is absent, the resolver picks the most-recent config record BEFORE the event."""
+    bs = _import_service()
+    recs = [
+        _make_td_rec("ZERO_THREE_RIGHT", T0 - 3600),   # 1 h before event → should win
+        _make_td_rec("ONE_THREE_RIGHT",  T0 - 86400),  # 1 day before → older, lose
+    ]
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ZERO_THREE_RIGHT", f"Expected ZERO_THREE_RIGHT (most-recent prior), got {ch!r}"
+
+
+def test_resolver_falls_back_to_nearest_after_when_no_prior():
+    """When the event predates all session records, the resolver uses the nearest-after config."""
+    bs = _import_service()
+    recs = [_make_td_rec("ONE_THREE_RIGHT", T0 + 7200)]   # 2 h AFTER event
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ONE_THREE_RIGHT", f"Expected ONE_THREE_RIGHT (nearest-after fallback), got {ch!r}"
+
+
+def test_resolver_respects_window_and_returns_none_when_too_far():
+    """A config record beyond _SENSING_WINDOW_S (90 days) in either direction is ignored."""
+    bs = _import_service()
+    recs = [_make_td_rec("ZERO_THREE_RIGHT", T0 - (91 * 86400))]  # 91 days prior → outside window
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch is None, f"Expected None (config too old), got {ch!r}"
+
+
+def test_resolver_excludes_all_pair_sweeps_from_index():
+    """IndefiniteStream / montage records that sense ALL contacts simultaneously must be excluded
+    from the sensing index — they don't indicate which pair was *the* active sensing pair."""
+    bs = _import_service()
+    # IndefiniteStream: all 6 contacts in one record → excluded (len(chans) != 1 per hemi)
+    all_pairs = _make_td_rec("ZERO_THREE_RIGHT", T0 - 3600)
+    all_pairs["ChannelNames"] = [
+        "ZERO_THREE_RIGHT", "ONE_THREE_RIGHT", "ZERO_TWO_RIGHT",
+        "ZERO_THREE_LEFT",  "ONE_THREE_LEFT",  "ZERO_TWO_LEFT",
+    ]
+    all_pairs["Data"] = np.zeros((int(30 * 250), 6))
+    idx = bs._build_sensing_config_index([all_pairs])
+    assert idx["RIGHT"] == [] and idx["LEFT"] == [], \
+        f"All-pair sweeps must be excluded from the sensing index, got {idx}"
+
+
+def test_resolver_left_hemi_key():
+    """Hemisphere resolution from the Left key string."""
+    bs = _import_service()
+    recs = [_make_td_rec("ONE_THREE_LEFT", T0 - 1800)]
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Left", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ONE_THREE_LEFT", f"Got {ch!r}"
+
+
+def test_build_sensing_config_index_accepts_power_domain_records():
+    """Power-domain records (ChannelNames like 'ZERO_THREE_RIGHT Power') are valid single-channel
+    configs and must appear in the index after suffix-stripping."""
+    bs = _import_service()
+    recs = [_make_pd_rec("ZERO_TWO_RIGHT", T0 - 900)]
+    idx = bs._build_sensing_config_index(recs)
+    assert len(idx["RIGHT"]) == 1
+    assert idx["RIGHT"][0][1] == "ZERO_TWO_RIGHT"
+
+
+def test_build_sensing_config_index_from_rows_basic():
+    """_build_sensing_config_index_from_rows builds the index from flat Welch-row dicts
+    (the cached-assembly path where decoded dicts aren't available)."""
+    bs = _import_service()
+    rows = [
+        {"channel": "ZERO_THREE_RIGHT", "source": "TD streaming", "t": float(T0 - 600)},
+        {"channel": "ONE_THREE_LEFT",   "source": "TD streaming", "t": float(T0 - 300)},
+        {"channel": "ZERO_THREE_RIGHT", "source": "Montage/survey", "t": float(T0)},  # excluded
+    ]
+    idx = bs._build_sensing_config_index_from_rows(rows)
+    assert len(idx["RIGHT"]) == 1 and idx["RIGHT"][0][1] == "ZERO_THREE_RIGHT"
+    assert len(idx["LEFT"])  == 1 and idx["LEFT"][0][1] == "ONE_THREE_LEFT"

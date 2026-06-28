@@ -226,7 +226,7 @@ function ValidationReadout({ validation, validating, emitContext }) {
 }
 
 
-function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams }) {
+function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams, matchDirty }) {
   const ref = useRef(null);
   const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
   // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
@@ -518,10 +518,13 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
         + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
 
-      // Number of samples actually drawn in the left scatter (the dot count = all matched
-      // continuous samples for this channel+band). Use the plotted length so the title's n always
-      // matches what the eye sees, not a separately-tracked count.
-      const nShown = sc.x.length;
+      // Number of samples drawn in both the left scatter AND the right violin. Derived from the
+      // server-side per-group counts (sc.n_grp) — the same source that allocates the violin's
+      // per-group ys arrays — so the title's n is arithmetically identical to the violin caption's
+      // group breakdown (nlo + nhi + nmid). Using sc.x.length would also be equal in practice
+      // (sc.x is built from the same idx), but binding to n_grp makes the identity explicit and
+      // keeps both panels locked to one source even if a future filter is added on either side.
+      const nShown = nlo + nhi + nmid;
       scatterNode = (
         <MDBox mt={1}>
           {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
@@ -537,7 +540,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                 reads cleaner than splitting freq onto the stat line. */}
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
-              {`${ch.short} (n=${nShown}) @ ${center.toFixed(1)} Hz`}
+              {`${ch.short} (n=${ch.n_channel != null ? ch.n_channel : nShown}${(ch.n_channel != null && nShown < ch.n_channel) ? ` shown: ${nShown}` : ""}) @ ${center.toFixed(1)} Hz`}
+              {matchDirty && <span style={{ fontSize: 13, fontWeight: 400, color: "#6c757d", marginLeft: 6 }}>{"· scan at prior window"}</span>}
             </MDTypography>
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
@@ -564,7 +568,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                 {effLine}
               </MDTypography>
               <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-                {`Groups: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
+                {`n=${nShown}: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
                  + "Power is z-scored within channel/source, so Δ is in SD units; "
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
@@ -763,7 +767,7 @@ const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").repla
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
   binStrategy: previewStrategy, binMetricKey: previewMetricKey,
   binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
-  participantUid, requestParams }) {
+  participantUid, requestParams, matchDirty }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -1031,7 +1035,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
       <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
-        participantUid={participantUid} requestParams={requestParams} />
+        participantUid={participantUid} requestParams={requestParams} matchDirty={matchDirty} />
     );
   }
 
