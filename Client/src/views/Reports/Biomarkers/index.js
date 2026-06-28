@@ -123,6 +123,12 @@ function Biomarkers() {
   // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
   // view where causal direction is the right semantics.
   const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
+  // Live LSB matching (default OFF): when on, the spectral scan's per-rating LSB spectrum is built by
+  // matching each pain rating LIVE against the match-agnostic raw 3 s-window LSB cache — median over a
+  // rating-centered extent (matchExtentSec), TD windows preferred over PSD in-window, and no individual
+  // LSB vector reused across more than one rating. Off path keeps the legacy per-rating LSB build.
+  const [useLiveMatching, setUseLiveMatching] = useState(P.useLiveMatching != null ? P.useLiveMatching : false);
+  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -162,6 +168,8 @@ function Biomarkers() {
     MaxPerRating: maxPerRating,
     RefractoryMin: refractoryMin,
     MatchDirection: matchDirection,
+    UseLiveMatching: useLiveMatching,
+    MatchExtentSec: matchExtentSec,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
@@ -486,44 +494,33 @@ function Biomarkers() {
                                 </FormControl>
                               </MDBox>
                               {strategy === "tertile" || strategy === "percentile" ? (
-                                <MDBox display="flex" flexDirection="column" gap={1}>
-                                  <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"Low pain ≤ percentile"}
+                                // Cut percentiles are set by DRAGGING the dashed lines on the histogram
+                                // (right). These chips are the live readout of the current low/high cut —
+                                // no separate sliders, so the control and the plot can't drift apart.
+                                <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
+                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+                                      {"Low pain ≤"}
                                     </MDTypography>
-                                    <Slider
-                                      value={percentileLow} min={5} max={50} step={1}
-                                      valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => {
-                                        // Tertile is the FIXED 33.3/66.7 preset (ignores these cuts, by
-                                        // design — matches the backend). Dragging a slider means the user
-                                        // wants an adjustable cut, so promote to "percentile" (which both
-                                        // the live preview AND the backend honor) so the cut actually moves.
-                                        if (strategy === "tertile") setStrategy("percentile");
-                                        const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo);
-                                      }}
-                                    />
+                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#0072B2" }}>
+                                      {`${(strategy === "tertile" ? 33.3 : percentileLow).toFixed(0)}ᵗʰ pct`}
+                                    </MDTypography>
                                   </MDBox>
-                                  <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"High pain ≥ percentile"}
+                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+                                      {"High pain ≥"}
                                     </MDTypography>
-                                    <Slider
-                                      value={percentileHigh} min={50} max={95} step={1}
-                                      valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => {
-                                        if (strategy === "tertile") setStrategy("percentile");
-                                        const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi);
-                                      }}
-                                    />
+                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#D55E00" }}>
+                                      {`${(strategy === "tertile" ? 66.7 : percentileHigh).toFixed(0)}ᵗʰ pct`}
+                                    </MDTypography>
                                   </MDBox>
                                 </MDBox>
                               ) : null}
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
                                 {strategy === "tertile"
-                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a slider to switch to adjustable percentile cuts."
+                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a cut line on the histogram to switch to adjustable percentile cuts."
                                   : strategy === "percentile"
-                                    ? "Samples between the cuts are excluded from training."
+                                    ? "Drag the dashed cut lines on the histogram to set the cuts; samples between them are excluded from training."
                                     : strategy === "median"
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}
@@ -560,7 +557,12 @@ function Biomarkers() {
                               <MDBox mt={1.5}>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Max PSD snapshots per pain rating (currently ${maxPerRating})`}
+                                  {`Max LSB samples per pain rating (currently ${maxPerRating})`}
+                                  {maxPerRating > 1 && (
+                                    <span style={{ fontWeight: 400, fontSize: 11.5, color: "#6c757d", display: "block" }}>
+                                      {"When > 1, the rating's LSB is the median over its samples within the rating-centred window."}
+                                    </span>
+                                  )}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -570,7 +572,7 @@ function Biomarkers() {
                                 </MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
-                                  {`Minimum gap between selected PSDs (${refractoryMin} min)`}
+                                  {`Minimum gap between selected LSBs (${refractoryMin} min)`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -595,6 +597,56 @@ function Biomarkers() {
                                       : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
                                 </MDTypography>
                               </MDBox>
+
+                              {/* Live LSB matching toggle. Off = legacy per-rating LSB build; on = match
+                                  each rating LIVE against the match-agnostic raw 3 s-window cache (median
+                                  over the rating-centered extent, TD preferred in-window, no LSB vector
+                                  reused across >1 rating). Sits next to the match controls it modifies. */}
+                              <MDBox mt={1.5}>
+                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                    sx={{ fontSize: 13 }}>
+                                    {"LSB matching"}
+                                  </MDTypography>
+                                  <ToggleButtonGroup
+                                    value={useLiveMatching ? "live" : "legacy"} exclusive size="small"
+                                    aria-label="LSB matching mode"
+                                    onChange={(e, v) => { if (v) setUseLiveMatching(v === "live"); }}
+                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
+                                  >
+                                    <ToggleButton value="legacy" title="Per-rating LSB recomputed at match time (legacy path)">Legacy</ToggleButton>
+                                    <ToggleButton value="live" title="Match each rating against the match-agnostic raw 3 s-window LSB cache; median over the rating-centered extent; no LSB vector reused across ratings">Live cache</ToggleButton>
+                                  </ToggleButtonGroup>
+                                </MDBox>
+                                {useLiveMatching && (
+                                  <MDBox mt={0.75}>
+                                    <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                      sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                      {`Rating-centered extent (±${(matchExtentSec / 2).toFixed(0)} s · ${matchExtentSec} s window)`}
+                                    </MDTypography>
+                                    <MDBox px={0.5}>
+                                      <Slider
+                                        value={matchExtentSec} min={3} max={120} step={3}
+                                        valueLabelDisplay="auto" size="small"
+                                        onChange={(e, v) => setMatchExtentSec(v)} />
+                                    </MDBox>
+                                  </MDBox>
+                                )}
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {useLiveMatching
+                                    ? `Each rating's LSB spectrum is the median of the raw 3 s windows within ±${(matchExtentSec / 2).toFixed(0)} s of it (time-domain windows preferred over PSD). No LSB window is shared between ratings, so each rating is one independent observation of the cache.`
+                                    : "Legacy: per-rating LSB recomputed from the recordings at match time. Turn on Live cache to match against the decoupled raw-LSB cache with the no-reuse rule."}
+                                </MDTypography>
+                                {data && data.live_match_stats && (
+                                  <MDTypography variant="caption" color="text" display="block"
+                                    sx={{ fontSize: 12, mt: 0.5 }}>
+                                    {`Matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
+                                     + `${data.live_match_stats.n_pro_psd || 0} to PSD LSB`
+                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}.`}
+                                  </MDTypography>
+                                )}
+                              </MDBox>
                             </MDBox>
                           </Grid>
 
@@ -614,6 +666,9 @@ function Biomarkers() {
                                 scanModel={scanModel}
                                 matchedLoading={availLoading}
                                 matchDirty={dirty}
+                                setPercentileLow={setPercentileLow}
+                                setPercentileHigh={setPercentileHigh}
+                                setStrategy={setStrategy}
                               />
                             </MDBox>
                           </Grid>
@@ -723,8 +778,20 @@ function Biomarkers() {
                         {(() => {
                           const sfi = data.analytics && data.analytics.timedomain
                             && data.analytics.timedomain.spectral_feature_importance;
-                          const chans = (sfi && sfi.channels) || [];
-                          if (!chans.length) return null;
+                          const chansRaw = (sfi && sfi.channels) || [];
+                          if (!chansRaw.length) return null;
+                          // Group all LEFT channels first, then all RIGHT (stable within each side),
+                          // so the list reads L … L, R … R rather than interleaved by backend order.
+                          const sideRank = (c) => {
+                            const s = String((c && c.short) || "").trim().toUpperCase();
+                            if (s[0] === "L") return 0;
+                            if (s[0] === "R") return 1;
+                            return 2;
+                          };
+                          const chans = chansRaw
+                            .map((c, i) => [c, i])
+                            .sort((a, b) => (sideRank(a[0]) - sideRank(b[0])) || (a[1] - b[1]))
+                            .map((pair) => pair[0]);
                           const bin = (sfi && sfi.binarization) || {};
                           return (
                             <MDBox mt={0.5} mb={0.5}>

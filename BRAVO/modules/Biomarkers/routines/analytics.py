@@ -1270,7 +1270,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             if _cs:
                 ch_n_td = int(sum(1 for sp in _cs if sp and sp.get("tier") == "td_transform"))
                 ch_n_psd = int(sum(1 for sp in _cs if sp and sp.get("tier") == "psd_bridge"))
-        # `p_pearson_curve` is the independence-assuming Pearson p (treats every PSD as independent).
+        # `p_pearson_curve` is the independence-assuming naive p (Spearman p for LSB, Pearson p for logpsd);
+        # the legacy key name is kept for payload back-compat. It treats every matched sample as independent.
         # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
         # it only so the FDR pass below can quantify the pseudoreplication inflation (naive bands
         # at FDR vs rigorous bands at FDR), which is the rigor-pass UI annotation.
@@ -1357,18 +1358,43 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 else:
                     bp = np.nanmean(psd[:, ci, bmask], axis=1)   # (E,) mean linear power in band
                     bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
-            band_power_by_center.append(bp_log)
-            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization). We also
-            # compute the naive two-sided Pearson p here so the rigor pass can quantify the
-            # pseudoreplication inflation (it is the independence-assuming p, not the inferential
-            # number to report — that's `p_curve`).
-            m = np.isfinite(bp_log) & np.isfinite(labels)
+            # DISPLAY vs FIT feature are DECOUPLED for LSB (2026-06-28, PI). The CV-logistic AUC and
+            # its cluster-robust logit-p keep their feature LOG-scaled (`bp_log`) purely for numerical
+            # conditioning — bridge-verified that feeding raw heavy-tailed LSB to the regularized
+            # logistic shifts AUC by a non-trivial amount that is an artifact of conditioning, not
+            # signal (z-scoring raw does not fix the skew). What the USER sees — scatter/violin axis
+            # and the correlation — uses RAW linear LSB, matching the Percept device's linear operating
+            # scale (no onboard log10). `bp_disp` is the raw feature for display; `bp_log` is the fit
+            # feature. For the non-LSB power features the two coincide (the feature already IS log/dB).
+            if use_lsb:
+                bp_disp = np.power(10.0, bp_log)   # raw linear LSB; NaN stays NaN
+            else:
+                bp_disp = bp_log
+            band_power_by_center.append(bp_disp)
+            # Spearman rank correlation vs CONTINUOUS label (ALL matched samples — no binarization).
+            # SPEARMAN, not Pearson (2026-06-28, PI): the LSB feature is heavy-tailed (~0.1–15000), so
+            # Pearson on raw LSB is outlier-dominated while Pearson on log10 would report a statistic on
+            # a different scale than the raw scatter shows. Spearman is rank-invariant, so it is the
+            # SAME number whether the feature is raw or log10 — display (raw) and statistic agree. We
+            # also keep the naive two-sided p here so the rigor pass can quantify the pseudoreplication
+            # inflation (it is the independence-assuming p, not the inferential number to report —
+            # that's `p_curve`). Computed on `bp_disp` (raw), but rank-identical to `bp_log`.
+            m = np.isfinite(bp_disp) & np.isfinite(labels)
             n_r_curve.append(int(m.sum()))
             r = p_pearson = None
-            if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
-                from scipy.stats import pearsonr as _pr
-                _r, _p = _pr(bp_log[m], labels[m])
-                r = float(_r); p_pearson = float(_p)
+            if m.sum() >= 4 and np.nanstd(bp_disp[m]) > 0 and np.nanstd(labels[m]) > 0:
+                if use_lsb:
+                    # LSB feature: SPEARMAN (rank-invariant → same value on raw or log10, robust to the
+                    # heavy tail). This is the displayed correlation.
+                    from scipy.stats import spearmanr as _sr
+                    _res = _sr(bp_disp[m], labels[m])
+                    r = float(_res.correlation); p_pearson = float(_res.pvalue)
+                else:
+                    # Non-LSB log-power feature: ordinary Pearson on the (already log/dB) feature, as
+                    # before — unchanged by the LSB raw-display revert.
+                    from scipy.stats import pearsonr as _pr
+                    _r, _p = _pr(bp_disp[m], labels[m])
+                    r = float(_r); p_pearson = float(_p)
             r_curve.append(_f(r) if r is not None else None)
             p_pearson_curve.append(_f(p_pearson) if (p_pearson is not None and np.isfinite(p_pearson)) else None)
             # AUC vs BINARIZED label (CV logistic) + its cluster-robust logit-p inference twin are the
@@ -1418,10 +1444,16 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
         out_channels.append({
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
-            "r": r_curve,            # Pearson r vs continuous PRO, per band center
-            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
+            "r": r_curve,            # corr vs continuous PRO per band: Spearman Ï (LSB) or Pearson r (logpsd); see corr_method
+            # Which correlation `r`/`p_pearson` carry: "spearman" for LSB (rank-invariant, robust to the
+            # heavy tail; displayed on raw LSB) or "pearson" for the non-LSB log-power feature.
+            "corr_method": ("spearman" if use_lsb else "pearson"),
+            # Scale of the DISPLAYED feature (scatter/violin axis + correlation): raw linear LSB for the
+            # LSB feature (matches the Percept device scale), or log/dB for the power feature.
+            "feature_scale": ("raw" if use_lsb else "log"),
+            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center (fit on log10 LSB)
             "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
-            "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
+            "n_r": n_r_curve,        # correlation samples per band (ALL matched continuous, this channel)
             "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
             # Per-band naive Pearson p (independence-assuming) — kept so the FDR pass below can
             # quantify the pseudoreplication inflation vs the rating-clustered logit p.

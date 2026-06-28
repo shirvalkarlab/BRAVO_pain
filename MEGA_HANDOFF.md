@@ -20,10 +20,10 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `8c8f976`** (audit [5] + [42] committed + pushed) + **uncommitted** changeset (biomarker
-> count-integrity + hover-N audit + UI-text overhaul + raw match-agnostic LSB cache; §0 newest entry),
-> **suite 253/253 PASS** (in-container runner). No-agent-commits rule RETIRED — agent now commits +
-> pushes (bravo-session-rules Rule 4).
+> **HEAD `53bdb06`** + **uncommitted** changeset (indefinite-stream mislabel fix + log10→raw/Spearman revert
+> + text-revision phase + Phase 1 frontend + Phase 4a backend; §0 newest entry), **suite 253/253 PASS**
+> (built + retested 2026-06-28), frontend built + ready to commit. No-agent-commits rule RETIRED — agent
+> now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
 > synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`; the
@@ -37,7 +37,14 @@
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
 
-**Biomarker count integrity + hover-N audit + UI-text overhaul + raw LSB cache (2026-06-28). Suite 253/253.**
+**Biomarker count integrity + UI-text overhaul + raw LSB cache → live matching + Phase-1 frontend (2026-06-28, UNCOMMITTED).**
+- **Live matching wired in.** `live_lsb_spectrum_match()` assigns each raw 3 s window to NEAREST PRO (TD ±30 s, PSD ±120 s, no-reuse by construction). Toggle `UseLiveMatching` (default OFF for A/B), param `MatchExtentSec` (3–300 s). FDR naive 401 vs legacy 428 — no-reuse doesn't collapse over-reporting (root: MaxPerRating on separate PSD match). AUC unchanged.
+- **Phase-1 frontend: toggle + draggable histogram + hover.** Toggle (Legacy/Live-cache) + extent Slider + stats readout. Draggable cut-lines in Plotly (replace disconnected sliders with chips). Histogram hover: day-count pinned top, then TD/PSD source splits.
+- **Indefinite-stream mislabel (pre-existing).** 103 IndefiniteStream recs mislabeled BrainSense — decoded payloads carry no type field. FIX: stamp `RecordingType` from DB onto dict in `_decode`; discriminators now key off `RecordingType=='MedtronicIndefiniteStream'`. Index: `{BS 326, Indef 624, Montage 1174, Event 3119}`.
+- **Text revision (Phase 3).** log10→raw + Pearson→Spearman ρ (rank-invariant); AUC fit stays log10 internally. Slider relabel: "Max LSB samples per Pain rating". FDR annotation reworded (MaxPerRating, not LSB reuse). Power-domain section removed. Feature-importance height +25 %; super-title spacing fixed.
+
+---
+
 - **Scatter/violin overplot fixed (root cause).** In LSB mode the click-scatter plots `x=log10(modeled
   LSB)` (modeled PER RATING) vs `y=PRO rating`, so every matched PSD sharing a rating collapses onto
   the same (x,y) — overplotting, not dropped points — while the title summed `n_grp` over ALL matched

@@ -613,16 +613,16 @@ def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band(
     assert scat10 and scat10.get("dedup_by_rating") is True, scat10
     assert scat10["n_obs"] == 3 and scat10["n_rows"] == 6, (scat10["n_obs"], scat10["n_rows"])
     ng = scat10["n_grp"]; assert ng["high"] + ng["low"] + ng["mid"] == 3, ng
-    # At the 10.5 Hz band: PRO0 -> log10(200); PRO1 -> log10(300); PRO2 -> log10(500) (one each).
+    # At the 10.5 Hz band: PRO0 -> 200.0; PRO1 -> 300.0; PRO2 -> 500.0 (raw LSB, one each).
     xs10 = sorted(v for v in (scat10["x"] if scat10 else []) if v is not None)
-    exp10 = sorted([np.log10(200.0), np.log10(300.0), np.log10(500.0)])
+    exp10 = sorted([200.0, 300.0, 500.0])
     assert len(xs10) == 3, xs10
     assert all(abs(a - b) < 1e-6 for a, b in zip(xs10, exp10)), (xs10, exp10)
     # At the 40.5 Hz band: the SAME PROs map to the 40-band LSBs (distinct from 10-band), de-duped.
     bi40 = int(np.argmin(np.abs(cen - 40.5)))
     scat40 = ch0["scatter"][bi40]
     xs40 = sorted(v for v in (scat40["x"] if scat40 else []) if v is not None)
-    exp40 = sorted([np.log10(700.0), np.log10(800.0), np.log10(900.0)])
+    exp40 = sorted([700.0, 800.0, 900.0])
     assert len(xs40) == 3, xs40
     assert all(abs(a - b) < 1e-6 for a, b in zip(xs40, exp40)), (xs40, exp40)
 

@@ -371,6 +371,16 @@ def _load_recordings(participant_uid, types):
                             d.setdefault("FreqScheduleHz", fsched)
                         if csched is not None:
                             d.setdefault("ContactSchedule", csched)
+            # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
+            # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
+            # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
+            # Recording.type from the query — without this, indefinite streams are indistinguishable
+            # from BrainSense streaming downstream and silently mislabel.
+            rtype = getattr(rec, "type", None)
+            if rtype is not None:
+                for d in (data if isinstance(data, list) else [data]):
+                    if isinstance(d, dict):
+                        d.setdefault("RecordingType", rtype)
             return data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
@@ -690,6 +700,13 @@ _LSB_SPECTRUM_MEMO_MAX = 8
 # the lock across the heavy DSP would serialize all participants behind one slow request.
 _LSB_SPECTRUM_MEMO_LOCK = threading.Lock()
 
+# Match-AGNOSTIC raw LSB cache memo (availability.raw_lsb_spectrum_cache). Keyed WITHOUT any PRO set —
+# the cache tiles the whole recording independent of ratings, so one entry serves every metric /
+# strategy / match policy. Live matching (live_lsb_spectrum_match) runs cheaply on top per request.
+_RAW_LSB_CACHE_MEMO = {}
+_RAW_LSB_CACHE_MEMO_MAX = 8
+_RAW_LSB_CACHE_MEMO_LOCK = threading.Lock()
+
 
 def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers):
     """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event recording
@@ -767,6 +784,83 @@ def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings
             _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
         _LSB_SPECTRUM_MEMO[sig] = out
     return out
+
+
+def _stamp_td_product(td_recordings):
+    """Tag each decoded TD recording dict with a `product` key (streaming_td / indefinite) IN PLACE so
+    the raw cache can label its window source (TD_PRODUCT_SOURCE_LABEL). Decoded payloads carry the
+    indefinite/streaming discriminator (`Source`=='indefinite' or an `IndefiniteStream` flag) but no
+    `product`; montage/survey TD passed in separately is tagged montage_td. Idempotent."""
+    for r in (td_recordings or []):
+        if not isinstance(r, dict) or r.get("product"):
+            continue
+        if r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream"):
+            r["product"] = "indefinite"
+        else:
+            r["product"] = "streaming_td"
+    return td_recordings
+
+
+def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
+                          *, centers=_LSB_SPECTRUM_CENTERS):
+    """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
+    (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
+    { raw_channel: availability.raw_lsb_spectrum_cache(...) }."""
+    if not channels:
+        return {}
+    # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
+    sig = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
+                                  td_recordings, event_psd_blocks, centers) + "|raw"
+    with _RAW_LSB_CACHE_MEMO_LOCK:
+        cached = _RAW_LSB_CACHE_MEMO.get(sig)
+    if cached is not None:
+        return cached
+    cen = np.asarray(centers, dtype=float)
+    out = {}
+    for raw_ch in channels:
+        key = availability._canon_channel(raw_ch)
+        try:
+            out[raw_ch] = availability.raw_lsb_spectrum_cache(
+                key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
+    with _RAW_LSB_CACHE_MEMO_LOCK:
+        existing = _RAW_LSB_CACHE_MEMO.get(sig)
+        if existing is not None:
+            return existing
+        if len(_RAW_LSB_CACHE_MEMO) >= _RAW_LSB_CACHE_MEMO_MAX:
+            _RAW_LSB_CACHE_MEMO.pop(next(iter(_RAW_LSB_CACHE_MEMO)), None)
+        _RAW_LSB_CACHE_MEMO[sig] = out
+    return out
+
+
+def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
+                           *, centers=_LSB_SPECTRUM_CENTERS, extent_s=None):
+    """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
+    against it per channel with availability.live_lsb_spectrum_match (median-over-extent, TD preferred
+    in-window, no LSB vector reused across >1 PRO). Drop-in for _pro_lsb_spectrum_cached: returns
+    { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract the spectral scan consumes.
+
+    Also returns a per-channel independence stats dict so the caller can report the pseudoreplication
+    reduction (live matching gives n_clusters == n_obs by construction). Returns (spectra, stats)."""
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0 or not channels:
+        return {}, {}
+    _stamp_td_product(td_recordings)
+    raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
+                                      centers=centers)
+    spectra, stats = {}, {}
+    for raw_ch in channels:
+        raw_cache = raw_by_ch.get(raw_ch)
+        if raw_cache is None:
+            continue
+        try:
+            recs, st = availability.live_lsb_spectrum_match(pt, raw_cache, extent_s=extent_s)
+            spectra[raw_ch] = recs
+            stats[raw_ch] = st
+        except Exception as e:
+            _log.warning("Biomarkers: live LSB match failed for %s (%s)", raw_ch, e)
+    return spectra, stats
 
 
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
@@ -1059,9 +1153,13 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     half_s = _sp.WELCH_MAX_SECONDS / 2.0
 
     def _index(recs, source_label, centered=False):
+        # source_label may be a string (same for all recordings) OR a callable r -> str so a mixed
+        # list (e.g. td_list = BrainSense streaming + Indefinite) is labeled per recording. This finer
+        # provenance feeds the binarization-histogram hover's TD source breakdown.
         for r in recs or []:
             if not isinstance(r, dict):
                 continue
+            lbl = source_label(r) if callable(source_label) else source_label
             names = list(r.get("ChannelNames") or [])
             keep = [n for n in names if _canon_channel(n) in _MAIN_BIPOLAR]
             if not keep:
@@ -1087,7 +1185,7 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
                         for tk in kept:
                             for n in keep:
                                 out.append({"t": float(tk), "channel": _canon_channel(n),
-                                            "source": source_label})
+                                            "source": lbl})
                         emitted = kept.size > 0
             if not emitted:
                 # No rating overlaps this session's real coverage (or all dropped by the floor) ->
@@ -1096,10 +1194,17 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
                 # for short sessions too (without it, every short-session TD lane greys out).
                 for n in keep:
                     out.append({"t": float(t0), "channel": _canon_channel(n),
-                                "source": source_label})
+                                "source": lbl})
 
-    _index(td_list, "TD streaming", centered=(pt is not None))
-    _index(psd_list, "Montage/survey")
+    # TD-streaming provenance: split BrainSense streaming vs Indefinite stream per recording so the
+    # binarization hover can break the time-domain count down by source. The discriminator mirrors
+    # _stamp_td_product (decoded payload carries Source=='indefinite' or an IndefiniteStream flag).
+    def _td_label(r):
+        if r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream"):
+            return "Indefinite stream"
+        return "BrainSense streaming"
+    _index(td_list, _td_label, centered=(pt is not None))
+    _index(psd_list, "Montage")
     return out
 
 
@@ -2375,7 +2480,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         for r in td_list or []:
             if not isinstance(r, dict):
                 continue
-            (ind if (r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
+            (ind if (r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
         psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
         recs_by_type = {
             "MedtronicBrainSenseTimeDomain": bs,
@@ -2703,6 +2808,14 @@ def run_for_participant(request_data):
     # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
     # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
     aggregate = "all"
+    # Live-matching toggle (default OFF): when on, the spectral scan's per-PRO LSB spectrum is built
+    # by matching PROs LIVE against the match-agnostic raw 3 s-window cache (median over a configurable
+    # rating-centered extent, TD preferred in-window, NO LSB vector reused across >1 PRO) instead of
+    # the legacy per-PRO _pro_lsb_spectrum_cached path. Off until the before/after r/AUC A/B is signed
+    # off, since live matching reduces pseudoreplication and shifts r/AUC.
+    use_live_matching = str(request_data.get("UseLiveMatching", "")).lower() in ("1", "true", "yes", "on")
+    match_extent_s = _float_param(request_data, "MatchExtentSec", default=float(
+        analytics.TRANSFORM_CENTERED_EXTENT_SECONDS), lo=3.0, hi=300.0)
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
@@ -2754,13 +2867,22 @@ def run_for_participant(request_data):
     _scan_channels = list(dict.fromkeys(
         availability._canon_channel(ch) for ch in (chan_order or [])))
     _scan_pro_times = (pro_match[0] if pro_match is not None else None)
-    pro_lsb_spectrum = (
-        _pro_lsb_spectrum_cached(
+    _have_scan_inputs = (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels)
+    live_match_stats = None
+    if _have_scan_inputs and use_live_matching:
+        # LIVE path: match PROs against the match-agnostic raw cache (no LSB reuse across PROs).
+        pro_lsb_spectrum, live_match_stats = _live_pro_lsb_spectrum(
+            participant_uid, _scan_pro_times, _scan_channels,
+            list(td or []) + list(_scan_psd_list or []),
+            _scan_event_blocks, extent_s=match_extent_s)
+    elif _have_scan_inputs:
+        # LEGACY path: per-PRO LSB spectrum (matching done inside per_pro_lsb_spectrum).
+        pro_lsb_spectrum = _pro_lsb_spectrum_cached(
             participant_uid, _scan_pro_times, _scan_channels,
             list(td or []) + list(_scan_psd_list or []),
             _scan_event_blocks)
-        if (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels) else {}
-    )
+    else:
+        pro_lsb_spectrum = {}
 
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
@@ -2780,6 +2902,19 @@ def run_for_participant(request_data):
     out["max_per_rating"] = max_per_rating
     out["refractory_min"] = refractory_min
     out["match_direction"] = match_direction
+    out["use_live_matching"] = bool(use_live_matching)
+    out["match_extent_s"] = float(match_extent_s)
+    if live_match_stats is not None:
+        # Pooled independence stats across channels: with live matching every PRO contributes ONE LSB
+        # vector (no reuse), so pseudoreplication collapses. Surface the totals for the UI before/after.
+        _pooled = {"n_pro": 0, "n_pro_td": 0, "n_pro_psd": 0, "n_pro_unmatched": 0,
+                   "n_td_assigned": 0, "n_td_used": 0, "n_psd_assigned": 0, "n_psd_used": 0}
+        for _st in live_match_stats.values():
+            for _k in _pooled:
+                _pooled[_k] += int(_st.get(_k, 0) or 0)
+        _pooled["extent_s"] = float(match_extent_s)
+        _pooled["per_channel"] = live_match_stats
+        out["live_match_stats"] = _pooled
     out["available_metrics"] = BIOMARKER_METRICS
     out["label_strategy"] = label_strategy
     out["available_strategies"] = BINARIZATION_STRATEGIES

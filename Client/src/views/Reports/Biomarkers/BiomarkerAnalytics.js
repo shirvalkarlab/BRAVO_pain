@@ -257,8 +257,15 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
   // 2026-06-27) or legacy "lsb_calibrated" (269 × TD Welch band integral, kept for back-compat) vs
   // "logpsd_db". Drives every axis/hover label so the panel states the unit the numbers carry.
   const isLsb = scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated");
-  const featAxis = isLsb ? "log₁₀ calibrated LSB" : "Std. log band power";
-  const featHover = isLsb ? "log₁₀ LSB" : "log power";
+  // LSB is shown on the RAW (linear) scale — the Percept device applies no onboard log10, so the
+  // axis matches the scale the closed-loop threshold operates on (2026-06-28). Power features stay on
+  // the log/dB scale they are computed on.
+  const featAxis = isLsb ? "Calibrated LSB" : "Std. log band power";
+  const featHover = isLsb ? "LSB" : "log power";
+  // Correlation statistic shown for this feature: Spearman ρ for LSB (rank-based, robust to the
+  // heavy-tailed LSB distribution), Pearson r for the log-power feature. Backend stamps corr_method
+  // per channel; fall back to the feature type when absent.
+  const corrName = isLsb ? "Spearman ρ" : "Pearson r";
 
   // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
   const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
@@ -377,7 +384,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     // emptied gd.data before the visibility carry-over could read it). This effect omits `sel`.
 
     const layout = {
-      ...FIG_BASE, autosize: true, height: 460,
+      ...FIG_BASE, autosize: true, height: 575,
       margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
       xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
         // ALWAYS show the full 0–fmax (0–100 Hz) spectrum in both LSB and log-PSD modes. The scan
@@ -385,7 +392,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         // is marked by the green tint + annotation below, not by cropping the axis. (Was previously
         // clamped to [adaptive[0], fmax] in LSB mode, which hid the out-of-band spectrum entirely.)
         range: [0, fmax] },
-      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
+      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `${corrName} vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
       yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
         overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
@@ -557,12 +564,17 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         <MDBox mt={1}>
           {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
               it reads as the heading for the whole selected-band readout below it. Line 1: contact
-              + samples shown. Line 2: center frequency + Pearson r (with its p-value when available). */}
+              + samples shown + center frequency. Line 2: the correlation (Spearman ρ for LSB,
+              Pearson r for log-power) with its p-value when available. */}
           {/* pt gives the first line room so its ascenders aren't clipped by the panel edge; the
               generous lineHeight (1.45) keeps each line's glyph box taller than the bumped-up
               fontSize so neither line is cut at the top (the MUI variant's default line-height is
               tighter than these sizes, which was clipping the second line). */}
-          <MDBox sx={{ textAlign: "center", mb: 1, pt: 1 }}>
+          {/* mt + extra pt give the super-title clearance from the panel/card edge above it. At narrow
+              widths line 1 wraps to two physical lines, which previously pushed the block into the
+              edge and clipped the top line's ascenders; the added top space keeps it clear at every
+              window size. */}
+          <MDBox sx={{ textAlign: "center", mb: 1, mt: 2, pt: 1.5 }}>
             {/* Line 1: contact + sample count + center frequency (the WHAT). Line 2: the Pearson
                 statistic (the RESULT). Grouping the band identity on line 1 and the stat on line 2
                 reads cleaner than splitting freq onto the stat line. */}
@@ -573,7 +585,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
             </MDTypography>
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
-              {`Pearson r = ${r != null ? r.toFixed(2) : "—"}`
+              {`${(ch.corr_method === "spearman" ? "Spearman ρ" : (ch.corr_method === "pearson" ? "Pearson r" : corrName))} = ${r != null ? r.toFixed(2) : "—"}`
                + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
             </MDTypography>
           </MDBox>
@@ -660,10 +672,11 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
               before the detailed (backend-supplied) note. Font bumped from caption (~12px) to 14px
               with key phrases bold so the caveats are not lost in a wall of small grey text. */}
           <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
-            <strong>Each frequency band is screened two ways</strong>: Pearson&nbsp;<em>r</em> vs the
+            <strong>Each frequency band is screened two ways</strong>:{` ${corrName} vs the`}
             {` continuous ${pain} score (all matched samples) and a cross-validated logistic `}
             <strong>AUC</strong> on the high-vs-low split.{" "}
-            <strong>Exploratory screen — neither r nor AUC is a validated biomarker.</strong>
+            {isLsb && <span>{"LSB is shown on the raw (linear) device scale; ρ is rank-based, robust to its heavy tail. "}</span>}
+            <strong>Exploratory screen — neither the correlation nor AUC is a validated biomarker.</strong>
           </MDTypography>
           {scan && scan.note && (
             <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
@@ -718,8 +731,8 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
                + `${scan.pro_independence.max_reuse}×). `
                + (scan.auc_mode === "rating_grouped"
-                  ? "AUC folds are grouped by rating so AUC is corrected; Pearson r still pools all samples — treat r as exploratory."
-                  : "Effective sample size is well below the matched n — treat both r and AUC as exploratory.")}
+                  ? `AUC folds are grouped by rating so AUC is corrected; ${corrName} still pools all samples — treat the correlation as exploratory.`
+                  : `Effective sample size is well below the matched n — treat both the correlation and AUC as exploratory.`)}
             </MDTypography>
           )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />
@@ -982,10 +995,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // config). The chronic 10-min trend is band power at a FIXED frequency, so state it. Different
   // from the streaming power-domain center frequencies shown per recorded-power channel.
   const chronicHz = pdRoot.chronic_center_hz || {};
-  const chronicHzText = Object.keys(chronicHz).length
-    ? " Chronic 10-min trend sensing frequency (distinct from the per-contact recorded bands below): "
-        + Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
-    : "";
+  // chronicHzText REMOVED with the Power-domain section (2026-06-28, PI).
 
   // Short on-plot provenance string: which sensing band (center frequency) and which contact the
   // power-domain signal comes from, so a reader never has to ask "power from WHERE?".
@@ -1809,97 +1819,22 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     });
   }
 
-  if (tdPanels.length === 0 && chPanels.length === 0) return null;
+  if (tdPanels.length === 0) return null;
 
-  // Channel selector — visible only when the backend split the chronic stream into per-channel
-  // analytics. Default "Pooled" preserves the legacy single-detector view; the other buttons swap
-  // the LFP histogram / sliding window / ROC / honest-perf panels to that channel.
-  const channelToggle = channelKeys.length >= 1 ? (
-    <Grid item xs={12}>
-      <MDBox mt={2} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-        <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-          {"Sensing contact (bipolar):"}
-        </MDTypography>
-        <ToggleButtonGroup value={safeChSel} exclusive size="small"
-          onChange={(_, v) => { if (v) { setChSel(v); setFreqSel(null); } }}>
-          {/* No cross-hemisphere "All contacts" pool — you program one contact at a time, and Left
-              (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
-              per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
-              single "pooled" button appears only when there is no per-contact split at all. */}
-          {selectableKeys.length === 0
-            ? <ToggleButton value="pooled">All data</ToggleButton> : null}
-          {/* Chronic around-the-clock streams first per hemisphere (the 24/7 biomarker), then the
-              per-hemisphere streaming mean, then each streaming contact. */}
-          {leftChronic.map((k) => (
-            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
-          ))}
-          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere (mean)</ToggleButton> : null}
-          {leftContacts.map((k) => (
-            <ToggleButton key={k} value={k}>{k}</ToggleButton>
-          ))}
-          {rightChronic.map((k) => (
-            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
-          ))}
-          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere (mean)</ToggleButton> : null}
-          {rightContacts.map((k) => (
-            <ToggleButton key={k} value={k}>{k}</ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-          {safeChSel === "pooled"
-            ? "Single combined series (no per-channel split available for this run)."
-            : isHemiSel
-              ? `${selHemi} hemisphere — mean over its streaming bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together). The chronic 24/7 stream is analyzed separately on its own.`
-              : isChronicKey(safeChSel)
-                ? `Showing only ${safeChSel} — the BrainSense Timeline ~10-min around-the-clock LFP-power stream${bestContact === safeChSel ? " (most discriminative channel, shown by default)" : ""}. ROC, optimal threshold, distribution, and sliding-window are all computed on this 24/7 series. Program its threshold on the Percept RC.`
-                : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC channel, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
-        </MDTypography>
-      </MDBox>
-      {/* FREQUENCY sub-selector — only for a single implementable channel with >1 sensing band. The
-          analysis unit is (channel, frequency): selecting a band restricts ROC / threshold /
-          distribution / binarization to chronic + streaming samples recorded AT THAT BAND, never
-          pooling 7.8 Hz with 22.5 Hz. "All bands" = the legacy whole-channel decode. */}
-      {freqSelectable && availFreqs.length > 0 ? (
-        <MDBox mt={1} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-          <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-            {"Sensing frequency:"}
-          </MDTypography>
-          <ToggleButtonGroup value={freqSel == null ? "all" : freqKey(freqSel)} exclusive size="small"
-            onChange={(_, v) => { if (v) setFreqSel(v === "all" ? null : Number(v)); }}>
-            <ToggleButton value="all">All bands</ToggleButton>
-            {availFreqs.map((a) => {
-              const k = freqKey(a.frequency_hz);
-              return (
-                <ToggleButton key={k} value={k}>
-                  {`${Number(a.frequency_hz).toFixed(1)} Hz`}
-                  <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>
-                    {`(${a.n_labeled}/${a.n_samples} samp · ${a.n_days_labeled}/${a.n_days} d)`}
-                  </span>
-                </ToggleButton>
-              );
-            })}
-          </ToggleButtonGroup>
-          <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-            {freqSel == null
-              ? `All sensing bands of ${safeChSel} pooled — counts above show labeled/total samples and labeled/total days per band. Pick a band to decode it alone.`
-              : (selFreqDecode
-                  ? `Decoding ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz only — ${selFreqDecode.n_labeled} labeled samples across ${selFreqDecode.binarization.n_days_labeled} days (chronic + streaming combined at this band). ROC, threshold, distribution, and the binarization split below are computed on this band alone.`
-                  : `No decode available for ${Number(freqSel).toFixed(1)} Hz.`)}
-          </MDTypography>
-        </MDBox>
-      ) : null}
-    </Grid>
-  ) : null;
+  // Channel selector (channelToggle) REMOVED with the Power-domain section (2026-06-28, PI):
+  // it only drove the chronic ROC / distribution / sliding-window panels, which are gone.
 
   // Rigor-pass annotation: if the backend supplied a band x channel BH-FDR summary, append the
   // naive-vs-rigorous count contrast to the subtitle. This is the headline pseudoreplication
-  // honesty number — naive Pearson over-reports significance because every PSD is treated as
-  // independent, while the rating-clustered logistic q accounts for the ~7-8 PSDs that share each
-  // pain report. Reads as e.g. "[N bands FDR-significant by rating-clustered logistic vs M by
-  // naive Pearson over a 558-cell grid; ringed dots above mark the validated bands]".
+  // honesty number. The naive family treats every matched neural sample as independent, but each
+  // pain rating contributes UP TO MaxPerRating samples (the cap on the slider) — so the naive FDR
+  // over-reports. The rating-clustered logistic q accounts for the samples that share a rating. This
+  // holds whether or not LSB vectors are reused: the no-reuse rule changes each sample's FEATURE
+  // VALUE, not how many samples a rating contributes (that is the MaxPerRating cap). Reads as e.g.
+  // "[N bands survive rating-clustered FDR vs M under naive FDR; ringed dots mark the survivors]".
   const fdrSummary = scan && scan.fdr_summary;
   const rigorAnnotation = fdrSummary
-    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive naive Pearson FDR (treats every PSD as independent — over-reports because of pseudoreplication). Ringed dots above mark the rigorous-FDR survivors.`
+    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive the naive per-sample FDR, which treats each matched sample as independent and over-reports because one rating contributes up to MaxPerRating samples. Ringed dots above mark the rigorous-FDR survivors.`
     : "";
 
   return (
@@ -1907,16 +1842,14 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
                subtitle={(scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated")
                  ? (scan.feature === "lsb_cs14"
-                   ? "Per matched (channel, rating) pair: 30 s rating-centred window through the transform DSP (k\u202f=\u202f352.62) when a time-domain recording covers the rating; CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events. Full 0\u2013100\u202fHz 5\u202fHz-sliding scan; green shading marks the validated 7.8\u201330\u202fHz range. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
-                   : "Every neural recording matched to the nearest pain report, scanned with a 5 Hz sliding band. Band feature: calibrated LSB (269 \u00d7 TD Welch band integral). Per band: Pearson r and logistic AUC; click a band for scatter.")
-                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter.") + rigorAnnotation}
+                   ? "One LSB per matched (channel, rating) pair: 30 s rating-centred window through the transform DSP (k\u202f=\u202f352.62) when a time-domain recording covers the rating, else the CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events. Raw (linear) LSB on the device scale, full 0\u2013100\u202fHz in a 5\u202fHz sliding band; green shading marks the validated 7.8\u201330\u202fHz range. Per band: Spearman \u03c1 vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter."
+                   : "Every neural recording matched to the nearest pain report, scanned in a 5\u202fHz sliding band. Feature: raw calibrated LSB (269\u202f\u00d7 TD Welch band integral). Per band: Spearman \u03c1 and logistic AUC; click a band for its scatter.")
+                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned in a 5\u202fHz sliding band. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter.") + rigorAnnotation}
                panels={tdPanels} />
-      <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
-               subtitle={(slidingActive
-                 ? "Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, power distribution, and pain clusters."
-                 : "ROC, power distribution, and pain clusters (turn on the sliding window for performance-over-time).") + chronicHzText}
-               panels={chPanels}
-               header={channelToggle} />
+      {/* Power-domain analysis section (chronic 10-min trend + per-session band power) REMOVED
+          (2026-06-28, PI): chronic LSB averaging is irrelevant to closed-loop deployment, so the
+          ROC / power-distribution / sliding-window / pain-cluster panels and their builders were
+          dropped. The closed-loop signal is the per-rating LSB scanned above. */}
     </>
   );
 }

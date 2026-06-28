@@ -1297,6 +1297,157 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
 
 
+def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
+                            psd_tol_s=120.0):
+    """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
+
+    Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
+    record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
+    matching done at request time and the no-reuse-across-PROs rule enforced.
+
+    MATCHING (vectorized; the performance directive):
+      * Each raw window (TD tile OR PSD event) is assigned to its NEAREST PRO whose rating-centred
+        extent covers it — TD within ±extent_s/2 (default TRANSFORM_CENTERED_EXTENT_SECONDS = 30 s,
+        configurable), PSD within ±psd_tol_s (the bridge's established native tolerance). Nearest is
+        found with np.searchsorted over sorted PRO times (left/right neighbour, min |Δt|); ties break
+        deterministically to the earlier PRO. Because each window maps to exactly ONE PRO, NO
+        individual 3 s-TD or PSD LSB vector is reused across >1 PRO — the rule holds BY CONSTRUCTION,
+        not by post-hoc dedup.
+      * TD is PREFERRED over PSD within a window: a PRO that owns ≥1 ok TD window is td_transform tier
+        (its spectrum = the per-band nan-MEDIAN over its assigned TD windows = median-over-extent);
+        only a PRO with zero assigned TD windows falls to psd_bridge (nan-median over its assigned PSD
+        events). A PSD event whose nearest PRO turned out TD-tier is left unused (reported), never
+        re-handed to a second PRO.
+
+    Returns (records, stats):
+      records : list in pro_times order, each {"t","tier","lsb"[C linear|None],"calibrated"[C bool],
+                "center_hz"[C],"used_s","saturated","reason","n_td_used","n_psd_used"}.
+      stats   : {"n_pro","n_pro_td","n_pro_psd","n_pro_unmatched","n_td_windows","n_psd_windows",
+                 "n_td_assigned","n_td_used","n_psd_assigned","n_psd_used","extent_s","psd_tol_s"}
+                — n_*_assigned minus n_*_used is the count of windows claimed by a PRO that ended up
+                using the other source (the only "wasted" windows; still never reused elsewhere).
+    """
+    if extent_s is None:
+        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
+    half_ext = float(extent_s) / 2.0
+    psd_tol_s = float(psd_tol_s)
+    centers = np.atleast_1d(np.asarray(raw_cache.get("centers_hz"), dtype=float))
+    nC = centers.size
+    window_s = float(raw_cache.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS)
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+
+    pro = np.atleast_1d(np.asarray(pro_times, dtype=float))
+    nP = pro.size
+    order = np.argsort(pro, kind="stable")
+    pro_sorted = pro[order]
+
+    none_vec = [None] * nC
+    recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
+             "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
+             "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
+            for tp in pro]
+
+    def _nearest_pro(win_t, tol):
+        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol."""
+        if win_t.size == 0 or nP == 0:
+            return np.full(win_t.size, -1, dtype=int)
+        pos = np.searchsorted(pro_sorted, win_t)
+        left = np.clip(pos - 1, 0, nP - 1)
+        right = np.clip(pos, 0, nP - 1)
+        dl = np.abs(win_t - pro_sorted[left])
+        dr = np.abs(win_t - pro_sorted[right])
+        take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
+        nn_sorted = np.where(take_left, left, right)
+        dist = np.where(take_left, dl, dr)
+        nn = order[nn_sorted]
+        nn[dist > tol] = -1
+        return nn
+
+    def _to_mat(rows):
+        """[W][C] list-with-None -> float [W×C] with NaN; empty -> (0,nC)."""
+        if not rows:
+            return np.empty((0, nC), dtype=float)
+        m = np.full((len(rows), nC), np.nan, dtype=float)
+        for i, row in enumerate(rows):
+            if row is None:
+                continue
+            for j, v in enumerate(row[:nC]):
+                if v is not None:
+                    m[i, j] = v
+        return m
+
+    # ---- TD assignment ---------------------------------------------------------------------------
+    td = raw_cache.get("td") or {}
+    td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
+    td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    td_mat = _to_mat(td.get("lsb") or [])
+    n_td_windows = int(td_t.size)
+    td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
+    nn_td = np.full(td_t.size, -1, dtype=int)
+    if td_valid.any():
+        nn_td[td_valid] = _nearest_pro(td_t[td_valid], half_ext)
+    n_td_assigned = int((nn_td >= 0).sum())
+
+    n_td_used = 0
+    td_tier_pro = np.zeros(nP, dtype=bool)
+    for p in range(nP):
+        sel = np.where(nn_td == p)[0]
+        if sel.size == 0:
+            continue
+        med = np.nanmedian(td_mat[sel], axis=0)
+        rec = recs[p]
+        rec["tier"] = PRO_LSB_TIER_TD
+        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+        rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
+        rec["n_td_used"] = int(sel.size)
+        rec["used_s"] = float(sel.size * window_s)
+        rec["reason"] = ("live TD->LSB median over %d window(s) within +/-%.0fs (k=%.2f)"
+                         % (sel.size, half_ext, analytics.LSB_PER_UV2_TRANSFORM))
+        td_tier_pro[p] = True
+        n_td_used += int(sel.size)
+
+    # ---- PSD assignment (only PROs with no TD become psd_bridge) ----------------------------------
+    psd = raw_cache.get("psd") or {}
+    psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
+    psd_mat = _to_mat(psd.get("lsb") or [])
+    n_psd_windows = int(psd_t.size)
+    psd_valid = np.isfinite(psd_t)
+    nn_psd = np.full(psd_t.size, -1, dtype=int)
+    if psd_valid.any():
+        nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], psd_tol_s)
+    n_psd_assigned = int((nn_psd >= 0).sum())
+
+    n_psd_used = 0
+    for p in range(nP):
+        if td_tier_pro[p]:
+            continue                                  # TD preferred — PSD here stays unused
+        sel = np.where(nn_psd == p)[0]
+        if sel.size == 0:
+            continue
+        med = np.nanmedian(psd_mat[sel], axis=0)
+        rec = recs[p]
+        rec["tier"] = PRO_LSB_TIER_BRIDGE
+        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+        rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
+        rec["n_psd_used"] = int(sel.size)
+        rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
+                         "calibrated only in [%.1f,%.1f] Hz"
+                         % (sel.size, psd_tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+        n_psd_used += int(sel.size)
+
+    n_pro_td = int(td_tier_pro.sum())
+    n_pro_psd = int(sum(1 for r in recs if r["tier"] == PRO_LSB_TIER_BRIDGE))
+    stats = {"n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
+             "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
+             "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
+             "n_td_assigned": n_td_assigned, "n_td_used": n_td_used,
+             "n_psd_assigned": n_psd_assigned, "n_psd_used": n_psd_used,
+             "extent_s": float(extent_s), "psd_tol_s": psd_tol_s}
+    return recs, stats
+
+
 def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half_hz=2.5,
                         extent_s=None, missing=None, max_missing_frac=0.10,
                         saturation_uv=PRO_LSB_SATURATION_UV):

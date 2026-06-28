@@ -42,6 +42,17 @@ function percentile(values, q) {
   return a[lo] + (a[hi] - a[lo]) * (idx - lo);
 }
 
+// Inverse of percentile(): the empirical-CDF percentile rank (0..100) of a pain value x over the
+// SAME finite-value array the histogram is built on. Used when the user DRAGS a cut line: the dragged
+// pain-value is converted back to the percentile knob (percentileLow/High) so the line, the sliders,
+// and the backend labeler stay byte-consistent (cut = percentile(vals, pct); pct = cdf(vals, cut)).
+function valueToPercentile(values, x) {
+  if (!values || values.length === 0 || !Number.isFinite(x)) return null;
+  let c = 0;
+  for (const v of values) if (v <= x) c += 1;
+  return (c / values.length) * 100;
+}
+
 // Compute cuts given strategy + percentile state (legacy daily-mode fallback only; matched mode
 // takes its cuts straight from the scanModel so they are byte-identical to the backend labeler).
 function computeCuts(vals, strategy, lowPct, highPct) {
@@ -93,7 +104,8 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
                                metricLabel, metricKey, loading,
                                matchTolerance, setMatchTolerance, matchDirty,
-                               scanModel, matchedLoading }) {
+                               scanModel, matchedLoading,
+                               setPercentileLow, setPercentileHigh, setStrategy }) {
   const ref = useRef(null);
   const hasTolControl = typeof setMatchTolerance === "function";
 
@@ -205,6 +217,41 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       cnt[i] += 1;
     }
     const centers = cnt.map((_, i) => (edges[i] + edges[i + 1]) / 2);
+
+    // Per-bar provenance for the hover (matched mode only). Re-bin the matched samples into the SAME
+    // edges and, per bar, tally: distinct calendar days, the TIME-DOMAIN source split (BrainSense /
+    // Indefinite), and the PSD-origin split (Montage / Patient-trigger / other). The scan pools full-
+    // spectrum PSDs whose ORIGIN is either Welch'd-from-raw-TD (BrainSense/Indefinite streaming) or a
+    // native device PSD (Montage Welch, Patient-event onboard FFT) — so the two groups below are
+    // "derived from time-domain" vs "native PSD", which is the provenance the hover surfaces.
+    const binOf = (v) => { let i = 0; while (i < nBins - 1 && v >= edges[i + 1]) i += 1; return i; };
+    const srcGroup = (src) => {
+      const s = String(src || "").toLowerCase();
+      if (s.indexOf("brainsense") >= 0 || (s.indexOf("td") >= 0 && s.indexOf("stream") >= 0)) return ["td", "BrainSense"];
+      if (s.indexOf("indefinite") >= 0) return ["td", "Indefinite"];
+      if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return ["psd", "Montage"];
+      if (s.indexOf("patient") >= 0 || s.indexOf("event") >= 0) return ["psd", "Patient-trigger"];
+      return ["psd", "Other"];
+    };
+    const barProv = matchedMode
+      ? (() => {
+          const z = () => ({ days: new Set(),
+                             td: { BrainSense: 0, Indefinite: 0 },
+                             psd: { Montage: 0, "Patient-trigger": 0, Other: 0 } });
+          const acc = Array.from({ length: nBins }, z);
+          for (const s of (scanModel.samples || [])) {
+            if (s.v == null || !Number.isFinite(s.v) || s.bin === "unmatched") continue;
+            const bi = binOf(s.v);
+            if (bi < 0 || bi >= nBins) continue;
+            const day = Number.isFinite(s.t) ? new Date(s.t * 1000).toISOString().slice(0, 10) : null;
+            if (day) acc[bi].days.add(day);
+            const [grp, label] = srcGroup(s.source);
+            if (acc[bi][grp] && acc[bi][grp][label] != null) acc[bi][grp][label] += 1;
+          }
+          return acc;
+        })()
+      : null;
+
     let colors;
     if (cuts.kind === "two-cut") {
       colors = centers.map((c) => (c <= cuts.lowCut ? LO : (c >= cuts.highCut ? HI : MID)));
@@ -217,16 +264,25 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const widths = cnt.map((_, i) => (edges[i + 1] - edges[i]) * 0.96);
     const shapes = [];
     const annotations = [];
-    const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center") => {
+    // Cut lines are user-DRAGGABLE in two-cut percentile/tertile mode (when the parent passes the
+    // percentile setters): dragging a line is equivalent to moving the matching percentile slider —
+    // the relayout handler below converts the dragged pain-value back to its empirical-CDF percentile
+    // and writes percentileLow/High, so line + slider + backend labeler stay in lock-step. Record the
+    // shape index of each cut line so the handler can tell low from high. (Idx map reset each render.)
+    const cutShapeIdx = { low: null, high: null, single: null };
+    const draggableCuts = (cuts.kind === "two-cut") && !!setPercentileLow && !!setPercentileHigh;
+    const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center", role = null) => {
+      const idx = shapes.length;
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1,
                     line: { color, width: 2, dash: "dash" } });
+      if (role) cutShapeIdx[role] = idx;
       annotations.push({ x, yref: "paper", y: yLevel, xanchor, yanchor: "bottom",
                          text: `${x.toFixed(1)} (${label})`, showarrow: false,
                          font: { size: 10, color } });
     };
     if (cuts.kind === "two-cut") {
-      pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right");
-      pushCutLine(cuts.highCut, cuts.highLabel, HI, 1.13, "left");
+      pushCutLine(cuts.lowCut, cuts.lowLabel, LO, 1.02, "right", "low");
+      pushCutLine(cuts.highCut, cuts.highLabel, HI, 1.13, "left", "high");
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: cuts.lowCut, x1: cuts.highCut,
                     y0: 0, y1: 1, fillcolor: MID, opacity: 0.10, line: { width: 0 } });
     } else if (cuts.kind === "one-cut") {
@@ -311,11 +367,50 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
     const yTitle = matchedMode ? "Matched neural samples" : "Days";
     const hoverUnit = matchedMode ? "samples" : "days";
-    const traces = [{
-      x: centers, y: cnt, type: "bar",
-      marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
-      hovertemplate: `${metricLabel || "pain"}=%{x:.1f}<br>%{y:,} ${hoverUnit}<extra></extra>`,
-    }];
+    // Hover: in matched mode, lead with the calendar-day count for the bar (the unit the reviewer
+    // cares about — how many DAYS contribute), then the time-domain source split (BrainSense /
+    // Indefinite) and the PSD-origin split (Montage / Patient-trigger / other). customdata carries
+    // the pre-rendered breakdown lines so the hovertemplate stays declarative.
+    const className = (c) => (cuts.kind === "two-cut")
+      ? (c <= cuts.lowCut ? "Low pain" : (c >= cuts.highCut ? "High pain" : "Excluded (mid)"))
+      : (cuts.kind === "one-cut" ? (c <= cuts.cut ? "Low pain" : "High pain") : "");
+    let traces;
+    if (matchedMode && barProv) {
+      const fmtGrp = (obj) => {
+        const parts = Object.entries(obj).filter(([, n]) => n > 0)
+          .map(([k, n]) => `${k} ${n.toLocaleString()}`);
+        return parts.length ? parts.join(" · ") : "—";
+      };
+      const customdata = centers.map((c, i) => {
+        const p = barProv[i];
+        const nDays = p ? p.days.size : 0;
+        const tdN = p ? (p.td.BrainSense + p.td.Indefinite) : 0;
+        const psdN = p ? (p.psd.Montage + p.psd["Patient-trigger"] + p.psd.Other) : 0;
+        return [
+          nDays.toLocaleString(),                          // 0: distinct days (pinned on top)
+          className(c),                                    // 1: class label
+          tdN.toLocaleString(), p ? fmtGrp(p.td) : "—",    // 2,3: TD total + split
+          psdN.toLocaleString(), p ? fmtGrp(p.psd) : "—",  // 4,5: PSD total + split
+        ];
+      });
+      traces = [{
+        x: centers, y: cnt, type: "bar",
+        marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
+        customdata,
+        hovertemplate:
+          "<b>%{customdata[0]} days</b> · %{y:,} samples<br>"
+          + `${metricLabel || "pain"} ≈ %{x:.1f}  ·  %{customdata[1]}<br>`
+          + "<span style='color:#555'>Time-domain (%{customdata[2]}):</span> %{customdata[3]}<br>"
+          + "<span style='color:#555'>PSD (%{customdata[4]}):</span> %{customdata[5]}"
+          + "<extra></extra>",
+      }];
+    } else {
+      traces = [{
+        x: centers, y: cnt, type: "bar",
+        marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
+        hovertemplate: `${metricLabel || "pain"}=%{x:.1f}<br>%{y:,} ${hoverUnit}<extra></extra>`,
+      }];
+    }
     const layout = {
       // Preserve any zoom the user applied to the histogram across live recolors; reset only when
       // the metric changes (different value domain).
@@ -335,9 +430,56 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
       shapes, annotations, showlegend: false,
     };
+    // When the cut lines are draggable, advertise it with a small hint and enable shape-position
+    // edits in the config (Plotly makes all line/rect shapes draggable; the handler below acts ONLY
+    // on the two cut-line indices, so dragging the shaded mid-band rect is ignored and snaps back on
+    // the next state-driven render).
+    if (draggableCuts) {
+      annotations.push({ xref: "paper", yref: "paper", x: 0.5, y: -0.16, xanchor: "center",
+                         yanchor: "top", text: "drag the dashed cut lines to set the percentiles",
+                         showarrow: false, font: { size: 9.5, color: "#8A929B" } });
+    }
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false, displayModeBar: false,
+      edits: { shapePosition: draggableCuts },
     });
+
+    // Drag → percentile. Reading shapes[idx].x0 (a pain VALUE) back to its empirical-CDF percentile
+    // over the histogrammed `vals` keeps the dragged line, the slider, and the backend cut consistent.
+    // Re-bound each render so the closure captures the current `vals`/`cutShapeIdx`. Tertile is the
+    // fixed 33.3/66.7 preset, so a drag promotes strategy→percentile (same as the slider's onChange).
+    const gd = ref.current;
+    if (gd && gd.removeAllListeners) gd.removeAllListeners("plotly_relayout");
+    if (gd && draggableCuts && gd.on) {
+      gd.on("plotly_relayout", (e) => {
+        if (!e) return;
+        const readX = (idx) => {
+          if (idx == null) return null;
+          const x0 = e[`shapes[${idx}].x0`];
+          const x1 = e[`shapes[${idx}].x1`];
+          const x = (x0 != null) ? x0 : x1;
+          return (x != null && Number.isFinite(Number(x))) ? Number(x) : null;
+        };
+        const xLow = readX(cutShapeIdx.low);
+        const xHigh = readX(cutShapeIdx.high);
+        if (xLow == null && xHigh == null) return;
+        if (strategy === "tertile" && setStrategy) setStrategy("percentile");
+        if (xLow != null) {
+          const pct = valueToPercentile(vals, xLow);
+          if (pct != null) {
+            const lo = Math.min(Math.max(Math.round(pct), 1), percentileHigh - 1);
+            setPercentileLow(lo);
+          }
+        }
+        if (xHigh != null) {
+          const pct = valueToPercentile(vals, xHigh);
+          if (pct != null) {
+            const hi = Math.max(Math.min(Math.round(pct), 99), percentileLow + 1);
+            setPercentileHigh(hi);
+          }
+        }
+      });
+    }
     // NOTE: no per-run Plotly.purge cleanup here. Purging before each re-run destroys the graph div,
     // which defeats the `uirevision: hist-${metricKey}` set below — the user's histogram zoom would
     // reset on every match-window / strategy drag. Plotly.react diffs in place, so the live recolor
