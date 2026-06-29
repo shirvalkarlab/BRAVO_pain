@@ -343,6 +343,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     ? (offsets.length % 2 ? offsets[(offsets.length - 1) / 2]
         : (offsets[offsets.length / 2 - 1] + offsets[offsets.length / 2]) / 2)
     : null;
+  // Full span of per-rating match offsets (same |Δt| distribution as the median) so the UI can show
+  // "median X min (range lo to hi min)". offsets is already sorted ascending.
+  const minOffset = offsets.length ? offsets[0] : null;
+  const maxOffset = offsets.length ? offsets[offsets.length - 1] : null;
 
   return {
     samples, binByKey, matchedValues, cuts, painMatched,
@@ -356,6 +360,8 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,
+      min_abs_offset_min: minOffset,
+      max_abs_offset_min: maxOffset,
       max_per_rating: maxPerRating,
       refractory_min: refractoryMin,
       match_direction: matchDirection,

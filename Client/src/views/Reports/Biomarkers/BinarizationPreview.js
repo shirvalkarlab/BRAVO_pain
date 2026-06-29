@@ -452,14 +452,20 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
 
   // Footer caption.
+  // Full range of the per-rating match offsets (same |Δt| distribution as the median). Appended ONLY
+  // to the "X of Y pain reports … median match offset" line below, per PI — not the other offset texts.
+  const rangeTxt = (counts.min_abs_offset_min != null && counts.max_abs_offset_min != null)
+    ? ` (range ${counts.min_abs_offset_min.toFixed(1)} to ${counts.max_abs_offset_min.toFixed(1)} min)`
+    : "";
+  const offsetSummary = counts.median_abs_offset_min != null
+    ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".";
   const footerCaption = (() => {
     if (matchedMode) {
       if (cuts.kind === "two-cut") {
         // When the matched values are too few / too discrete (integer NRS) to form a middle tertile,
         // the excluded-middle bin is empty by construction — say so, so the missing grey isn't a mystery.
         const emptyMiddle = (counts.n_excluded_middle || 0) === 0;
-        const offsetTxt = counts.median_abs_offset_min != null
-          ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".";
+        const offsetTxt = offsetSummary;
         if (emptyMiddle) {
           return `Cut at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — no excluded-middle bin: ` +
             `the matched values are too discrete (e.g. integer NRS) to form a middle tertile, so every matched sample is high or low` + offsetTxt;
@@ -469,7 +475,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       }
       if (cuts.kind === "one-cut") {
         return `Matched neural samples cut at ${cuts.cut?.toFixed(1)} — every matched sample is labeled (none excluded)` +
-          (counts.median_abs_offset_min != null ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".");
+          offsetSummary;
       }
       return "No neural sample matched a pain report at this window — widen the match window.";
     }
@@ -535,7 +541,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               <b>{`(${su.pct_pro_used}%)`}</b>
               {` paired with neural data within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
-                ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
+                ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min${rangeTxt}` : ""}
               {`. Each paired rating carries ${su.psd_per_pro_mean} PSDs on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
             </>
           ) : (

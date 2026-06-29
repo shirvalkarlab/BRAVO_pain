@@ -1268,22 +1268,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # The pooled matched count (`n_pooled`) splits across the C bipolar montages because each
         # PSD recording captures one montage, so this is the max n any band on this channel's curve
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
-        chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
-        n_channel = int(chan_fin.sum())
-        # Per-channel binarization split of the MATCHED samples on this montage (the summary the PI
-        # asked to surface above the scan): high / low / excluded-middle by the SAME y_bin the AUC
-        # uses (1=high, 0=low, NaN=excluded). Counts matched PSD rows on this channel, so they sum
-        # to n_channel. (The de-duplicated independent-rating counts live on the scatter payload.)
-        ch_n_high = int(np.nansum((y_bin == 1.0) & chan_fin))
-        ch_n_low = int(np.nansum((y_bin == 0.0) & chan_fin))
-        ch_n_excl = int(n_channel - ch_n_high - ch_n_low)   # NaN y_bin among matched rows
         # LSB-source split for THIS channel: how many of this channel's resolved per-rating LSB
         # vectors came from the TD-transform route (k=352.62) vs the CS-3 PSD bridge (k≈73.63).
         # Only modeled/real LSB values (a resolved tier) feed the spectral feature-importance scan;
-        # tier=None ratings contribute nothing and are not counted. Source: the per-(channel,PRO)
-        # cache `ch_spectra` resolved in the use_lsb pre-build below — recomputed here defensively
-        # so the field is correct whether or not the pre-build ran for this channel.
+        # tier=None ratings contribute nothing. Source: the per-(channel,PRO) cache `ch_spectra`.
         ch_n_td = ch_n_psd = None
+        _cs = None
         if use_lsb:
             _cs = _lsb_cache.get(raw)
             if _cs is None:
@@ -1292,6 +1282,35 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             if _cs:
                 ch_n_td = int(sum(1 for sp in _cs if sp and sp.get("tier") == "td_transform"))
                 ch_n_psd = int(sum(1 for sp in _cs if sp and sp.get("tier") == "psd_bridge"))
+        # Per-channel counts in DISTINCT-RATING units (PI 2026-06-28): the matched-samples table counts
+        # one observation per distinct PRO that resolved to a real LSB on this channel, classified by the
+        # SAME tertile cut the AUC uses (high=1, low=0, excluded=NaN-middle). Counting distinct PROs (not
+        # pseudoreplicated epoch rows, and not pooled-PSD rows) makes the table internally consistent:
+        # n_high + n_low + n_excluded == n_td + n_psd_bridge. logpsd mode (no LSB cache) keeps the legacy
+        # pooled-PSD-finite epoch-row definition.
+        if use_lsb and _cs is not None:
+            n_pro_cs = len(_cs)
+            pro_has_lsb = np.array([bool(sp and sp.get("tier")) for sp in _cs], dtype=bool)
+            rg_cf = np.asarray(td_detail.get("rating_group", []))
+            # Per-PRO binary label: y_bin is constant within a rating_group, so take the first finite
+            # epoch's y_bin for each PRO index.
+            pro_ybin = np.full(n_pro_cs, np.nan)
+            _rows = np.where(label_fin_all & (np.arange(psd.shape[0]) < rg_cf.size))[0]
+            if _rows.size:
+                _pidx = rg_cf[_rows].astype(int)
+                _ok = (_pidx >= 0) & (_pidx < n_pro_cs)
+                # last-write-wins is fine (constant within group); seed in row order
+                pro_ybin[_pidx[_ok]] = y_bin[_rows[_ok]]
+            ch_n_high = int(np.nansum(pro_has_lsb & (pro_ybin == 1.0)))
+            ch_n_low = int(np.nansum(pro_has_lsb & (pro_ybin == 0.0)))
+            n_channel = int(pro_has_lsb.sum())
+            ch_n_excl = int(n_channel - ch_n_high - ch_n_low)   # LSB PROs in the excluded middle
+        else:
+            chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
+            n_channel = int(chan_fin.sum())
+            ch_n_high = int(np.nansum((y_bin == 1.0) & chan_fin))
+            ch_n_low = int(np.nansum((y_bin == 0.0) & chan_fin))
+            ch_n_excl = int(n_channel - ch_n_high - ch_n_low)
         # `p_pearson_curve` is the independence-assuming naive p (Spearman p for LSB, Pearson p for logpsd);
         # the legacy key name is kept for payload back-compat. It treats every matched sample as independent.
         # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
@@ -1502,7 +1521,7 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             # Per-band naive Pearson p (independence-assuming) — kept so the FDR pass below can
             # quantify the pseudoreplication inflation vs the rating-clustered logit p.
             "p_pearson": p_pearson_curve,
-            "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
+            "n_channel": n_channel,  # ratings carrying a resolved LSB on THIS channel (= n_td + n_psd_bridge)
             # Per-channel matched-sample binarization split (sums to n_channel) and LSB-source split.
             # Surfaced so the UI can show "high / low / excluded per channel" and "# TD-transform vs
             # # PSD-bridge LSBs" without recomputing client-side. n_td/n_psd are None in logpsd mode.

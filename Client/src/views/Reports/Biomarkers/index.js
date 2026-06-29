@@ -123,11 +123,14 @@ function Biomarkers() {
   // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
   // view where causal direction is the right semantics.
   const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
-  // Live LSB matching (default OFF): when on, the spectral scan's per-rating LSB spectrum is built by
-  // matching each pain rating LIVE against the match-agnostic raw 3 s-window LSB cache — median over a
-  // rating-centered extent (matchExtentSec), TD windows preferred over PSD in-window, and no individual
-  // LSB vector reused across more than one rating. Off path keeps the legacy per-rating LSB build.
-  const [useLiveMatching, setUseLiveMatching] = useState(P.useLiveMatching != null ? P.useLiveMatching : false);
+  // Cache-based LSB matching is now the ONLY path (PI 2026-06-28; the legacy real-time recompute is
+  // retired). The spectral scan's per-rating LSB spectrum is built by matching each pain rating against
+  // the pre-computed match-agnostic raw 3 s-tile LSB cache, using TWO windows:
+  //   • the MAIN match-tolerance slider (matchTolerance, minutes) = eligibility radius for BOTH TD & PSD;
+  //   • matchExtentSec = how many SECONDS of the nearest time-domain signal to aggregate (nearest
+  //     round(matchExtentSec/3) of the 3 s tiles -> their median). PSD has no quantity cap.
+  // useLiveMatching is pinned true (kept only as the request flag the backend still echoes).
+  const [useLiveMatching] = useState(true);
   const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
   const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
@@ -178,13 +181,18 @@ function Biomarkers() {
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
   const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
-  // Independence note shown under the live-matching control, switched by the window-reuse toggle.
-  const halfExtentTxt = (matchExtentSec / 2).toFixed(0);
+  // Caption shown under the matching controls. Two windows with DIFFERENT jobs:
+  //  • main match-tolerance slider = eligibility radius (how FAR from a rating a window may be);
+  //  • TD-signal slider (matchExtentSec) = how MUCH of the nearest time-domain signal to use.
+  const tdEpochs = Math.max(1, Math.round(matchExtentSec / 3));
   const reuseNote = allowWindowReuse
     ? "Window reuse is ON: a window may serve several overlapping ratings, raising n at the cost of independence."
     : "No LSB window is shared between ratings, so each rating is one independent observation of the cache.";
-  const liveMatchCaption = "Each rating's LSB spectrum is the median of the raw 3 s windows within \u00b1"
-    + halfExtentTxt + " s of it (time-domain windows preferred over PSD). " + reuseNote;
+  const liveMatchCaption =
+    `PSD-bridge LSB for a rating = median over every device-PSD event within the main match tolerance `
+    + `(\u00b1${matchTolerance} min). Time-domain LSB = median over the nearest ${tdEpochs} of the 3 s `
+    + `tiles (\u2248${matchExtentSec} s of signal) within that same tolerance — the TD slider sets how `
+    + `much signal to use, not how far to search. ` + reuseNote;
 
   useEffect(() => {
     if (!participant_uid) {
@@ -608,67 +616,48 @@ function Biomarkers() {
                                 </MDTypography>
                               </MDBox>
 
-                              {/* Live LSB matching toggle. Off = legacy per-rating LSB build; on = match
-                                  each rating LIVE against the match-agnostic raw 3 s-window cache (median
-                                  over the rating-centered extent, TD preferred in-window, no LSB vector
-                                  reused across >1 rating). Sits next to the match controls it modifies. */}
+                              {/* TD-signal-quantity slider + window-reuse toggle. Matching always runs
+                                  against the pre-computed raw 3 s-tile LSB cache; the MAIN match-tolerance
+                                  slider (above) sets eligibility for both modalities, this slider sets how
+                                  much of the nearest time-domain signal each rating aggregates. */}
                               <MDBox mt={1.5}>
-                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  {`Time-domain signal per rating (${matchExtentSec} s \u2248 nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
+                                </MDTypography>
+                                <MDBox px={0.5}>
+                                  <Slider
+                                    value={matchExtentSec} min={3} max={300} step={3}
+                                    valueLabelDisplay="auto" size="small"
+                                    aria-label="time-domain signal per rating (seconds)"
+                                    onChange={(e, v) => setMatchExtentSec(v)} />
+                                </MDBox>
+                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
                                   <MDTypography variant="caption" fontWeight="bold" color="dark"
                                     sx={{ fontSize: 13 }}>
-                                    {"LSB matching"}
+                                    {"Window reuse"}
                                   </MDTypography>
                                   <ToggleButtonGroup
-                                    value={useLiveMatching ? "live" : "legacy"} exclusive size="small"
-                                    aria-label="LSB matching mode"
-                                    onChange={(e, v) => { if (v) setUseLiveMatching(v === "live"); }}
+                                    value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
+                                    aria-label="window reuse mode"
+                                    onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
                                     sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
                                   >
-                                    <ToggleButton value="legacy" title="Per-rating LSB recomputed at match time (legacy path)">Legacy</ToggleButton>
-                                    <ToggleButton value="live" title="Match each rating against the match-agnostic raw 3 s-window LSB cache; median over the rating-centered extent; no LSB vector reused across ratings">Live cache</ToggleButton>
+                                    <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
+                                    <ToggleButton value="reuse" title="Each raw window (per modality) is assigned to every rating whose match tolerance covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
                                   </ToggleButtonGroup>
                                 </MDBox>
-                                {useLiveMatching && (
-                                  <MDBox mt={0.75}>
-                                    <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                      sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                      {`Rating-centered extent (±${(matchExtentSec / 2).toFixed(0)} s · ${matchExtentSec} s window)`}
-                                    </MDTypography>
-                                    <MDBox px={0.5}>
-                                      <Slider
-                                        value={matchExtentSec} min={3} max={120} step={3}
-                                        valueLabelDisplay="auto" size="small"
-                                        onChange={(e, v) => setMatchExtentSec(v)} />
-                                    </MDBox>
-                                    <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
-                                      <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                        sx={{ fontSize: 13 }}>
-                                        {"Window reuse"}
-                                      </MDTypography>
-                                      <ToggleButtonGroup
-                                        value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
-                                        aria-label="window reuse mode"
-                                        onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
-                                        sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
-                                      >
-                                        <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
-                                        <ToggleButton value="reuse" title="Each raw window is assigned to every rating whose extent covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
-                                      </ToggleButtonGroup>
-                                    </MDBox>
-                                  </MDBox>
-                                )}
                                 <MDTypography variant="caption" color="dark" fontStyle="italic"
                                   sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {useLiveMatching
-                                    ? liveMatchCaption
-                                    : "Legacy: per-rating LSB recomputed from the recordings at match time. Turn on Live cache to match against the decoupled raw-LSB cache with the no-reuse rule."}
+                                  {liveMatchCaption}
                                 </MDTypography>
                                 {data && data.live_match_stats && (
                                   <MDTypography variant="caption" color="text" display="block"
                                     sx={{ fontSize: 12, mt: 0.5 }}>
-                                    {`Matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
+                                    {`Last computed: matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
                                      + `${data.live_match_stats.n_pro_psd || 0} to PSD LSB`
-                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}.`}
+                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}`
+                                     + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} TD tiles · ${data.live_match_stats.n_psd_used || 0} PSD events aggregated).` : "."}`}
                                   </MDTypography>
                                 )}
                               </MDBox>
@@ -817,7 +806,6 @@ function Biomarkers() {
                             .map((c, i) => [c, i])
                             .sort((a, b) => (sideRank(a[0]) - sideRank(b[0])) || (a[1] - b[1]))
                             .map((pair) => pair[0]);
-                          const bin = (sfi && sfi.binarization) || {};
                           return (
                             <MDBox mt={0.5} mb={0.5}>
                               <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
@@ -838,15 +826,25 @@ function Biomarkers() {
                                     : null}
                                 </MDTypography>
                               ))}
-                              {bin.n_high != null && (
-                                <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
-                                  sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
-                                  {`Pooled binarization: ${bin.n_high} high · ${bin.n_low} low · `
-                                   + `${bin.n_excluded_middle} excluded-middle. `
-                                   + "Only modeled/real LSB values (TD-transform or PSD-bridge) feed the "
-                                   + "spectral feature-importance scan."}
-                                </MDTypography>
-                              )}
+                              {chans.length > 0 && (() => {
+                                // Coherent pooled total = SUM of the per-channel distinct-LSB counts
+                                // above (NOT sfi.binarization, which is pooled epoch-rows in a different
+                                // unit) so this line reconciles with the rows it summarizes.
+                                const sH = chans.reduce((s, c) => s + (c.n_high || 0), 0);
+                                const sL = chans.reduce((s, c) => s + (c.n_low || 0), 0);
+                                const sE = chans.reduce((s, c) => s + (c.n_excluded || 0), 0);
+                                const sTD = chans.reduce((s, c) => s + (c.n_td || 0), 0);
+                                const sPSD = chans.reduce((s, c) => s + (c.n_psd_bridge || 0), 0);
+                                return (
+                                  <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
+                                    sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
+                                    {`All channels: ${sH} high · ${sL} low · ${sE} excluded-middle `
+                                     + `(${sTD} TD · ${sPSD} PSD LSBs). `
+                                     + "Each count is one distinct rating carrying a resolved LSB; only "
+                                     + "those feed the spectral feature-importance scan."}
+                                  </MDTypography>
+                                );
+                              })()}
                             </MDBox>
                           );
                         })()}

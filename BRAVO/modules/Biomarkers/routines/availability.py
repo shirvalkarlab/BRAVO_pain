@@ -1318,51 +1318,71 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
 
 
-def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
-                            psd_tol_s=120.0, allow_window_reuse=False):
+def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
+                            allow_window_reuse=False, extent_s=None, psd_tol_s=None):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
 
     Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
     record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
-    matching done at request time and (by default) the no-reuse-across-PROs rule enforced.
+    matching done at request time over the pre-computed 3 s LSB tiles.
 
-    MATCHING (vectorized; the performance directive):
-      * STRICT mode (allow_window_reuse=False, default): each raw window (TD tile OR PSD event) is
-        assigned to its NEAREST PRO whose rating-centred extent covers it — TD within ±extent_s/2
-        (default TRANSFORM_CENTERED_EXTENT_SECONDS = 30 s, configurable), PSD within ±psd_tol_s (the
-        bridge's established native tolerance). Nearest is found with np.searchsorted over sorted PRO
-        times (left/right neighbour, min |Δt|); ties break deterministically to the earlier PRO.
-        Because each window maps to exactly ONE PRO, NO individual 3 s-TD or PSD LSB vector is reused
-        across >1 PRO — the rule holds BY CONSTRUCTION, not by post-hoc dedup.
-      * REUSE mode (allow_window_reuse=True): each window is matched to EVERY PRO whose extent covers
-        it (TD within ±extent_s/2, PSD within ±psd_tol_s), so one window can contribute to several
-        overlapping PROs. This trades the independence guarantee for sample size; the resulting
-        pseudoreplication is visible as n_td_used / n_psd_used exceeding n_td_windows / n_psd_windows.
-        TD-preferred-within-PRO still holds (a PRO with ≥1 TD window is TD-tier). NOTE the per-modality
-        non-reuse property is independent of this flag: TD and PSD are matched in separate passes, so a
-        montage's TD tile and its co-timestamped device-PSD window can serve two different PROs in BOTH
-        modes — this flag only governs reuse of the SAME window+modality across PROs.
-      * TD is PREFERRED over PSD within a window: a PRO that owns ≥1 ok TD window is td_transform tier
-        (its spectrum = the per-band nan-MEDIAN over its assigned TD windows = median-over-extent);
-        only a PRO with zero assigned TD windows falls to psd_bridge (nan-median over its assigned PSD
-        events). A PSD event whose nearest PRO turned out TD-tier is left unused (reported), never
-        re-handed to a second PRO.
+    TWO-WINDOW MATCHING (PI 2026-06-28 — the modality split):
+      The matching uses TWO independent time controls with DIFFERENT jobs:
+
+      * `tol_s` (the MAIN match-tolerance slider, MatchToleranceMin × 60) is the ELIGIBILITY radius
+        for BOTH modalities — a raw window (TD tile OR PSD event) is eligible for a PRO only if it
+        falls within ±tol_s of the rating. This is the only PSD control: a PRO's PSD-bridge LSB is the
+        nan-median over EVERY eligible PSD event within ±tol_s (no quantity cap on PSD).
+
+      * `td_quantity_s` (the SEPARATE "rating-centered extent" slider) is NOT a ± tolerance — it is a
+        QUANTITY OF TD SIGNAL. After TD eligibility is decided by `tol_s`, a PRO keeps only the
+        `n_epochs = round(td_quantity_s / window_s)` TD tiles CLOSEST to the rating (window_s = 3 s
+        non-overlapping tiles, so 30 s → nearest 10 tiles), ranked by |tile_t − rating_t| regardless
+        of whether they fall before or after the rating, then takes their per-band nan-median. So the
+        slider dictates "how many seconds of the nearest TD signal to aggregate," not a search radius.
+
+    REUSE flag (per modality, independent of the two windows above):
+      * STRICT (allow_window_reuse=False, default): each eligible window is assigned to its single
+        NEAREST PRO within ±tol_s (searchsorted, ties → earlier PRO), so no TD tile or PSD event is
+        reused across >1 PRO. The TD nearest-N cap is then applied within each PRO's owned tiles.
+      * REUSE (allow_window_reuse=True): each PRO independently gathers EVERY eligible window within
+        ±tol_s (TD then capped to nearest-N), so one window may serve several overlapping PROs.
+      The per-modality non-reuse property is independent of this flag: TD and PSD are matched in
+      separate passes, so a montage's TD tile and its co-timestamped device-PSD window can serve two
+      different PROs in BOTH modes — the flag only governs reuse of the SAME window+modality.
+
+      TD is PREFERRED over PSD within a PRO: a PRO that owns ≥1 ok TD tile is td_transform tier (its
+      spectrum = the nan-median over its nearest-N TD tiles); only a PRO with zero eligible TD tiles
+      falls to psd_bridge. A PSD event whose nearest PRO turned out TD-tier is left unused (reported).
 
     Returns (records, stats):
       records : list in pro_times order, each {"t","tier","lsb"[C linear|None],"calibrated"[C bool],
                 "center_hz"[C],"used_s","saturated","reason","n_td_used","n_psd_used"}.
       stats   : {"n_pro","n_pro_td","n_pro_psd","n_pro_unmatched","n_td_windows","n_psd_windows",
-                 "n_td_assigned","n_td_used","n_psd_assigned","n_psd_used","extent_s","psd_tol_s"}
-                — n_*_assigned minus n_*_used is the count of windows claimed by a PRO that ended up
-                using the other source (the only "wasted" windows; still never reused elsewhere).
+                 "n_td_assigned","n_td_used","n_psd_assigned","n_psd_used","tol_s","td_quantity_s",
+                 "td_n_epochs_cap","extent_s","psd_tol_s","allow_window_reuse"}.
+                — n_td_assigned (eligible TD tiles owned within ±tol_s) minus n_td_used (after the
+                nearest-N quantity cap) is the count of eligible TD tiles dropped by the slider cap.
     """
-    if extent_s is None:
-        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
-    half_ext = float(extent_s) / 2.0
-    psd_tol_s = float(psd_tol_s)
+    # Back-compat: the old API passed extent_s (a ±half-window) and psd_tol_s. The new API passes
+    # tol_s (main eligibility) + td_quantity_s (TD quantity). If only the legacy args arrived, map
+    # them so old callers keep working: extent_s → both tol_s (its full width) and td_quantity_s.
+    if tol_s is None:
+        tol_s = (psd_tol_s if psd_tol_s is not None
+                 else (float(extent_s) if extent_s is not None
+                       else analytics.TRANSFORM_CENTERED_EXTENT_SECONDS))
+    if td_quantity_s is None:
+        td_quantity_s = (float(extent_s) if extent_s is not None
+                         else analytics.TRANSFORM_CENTERED_EXTENT_SECONDS)
+    tol_s = float(tol_s)
+    td_quantity_s = float(td_quantity_s)
     centers = np.atleast_1d(np.asarray(raw_cache.get("centers_hz"), dtype=float))
     nC = centers.size
     window_s = float(raw_cache.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS)
+    # TD quantity cap: how many nearest 3 s tiles to aggregate. round(quantity / window_s), >=1 so a
+    # sub-tile quantity still keeps the single closest tile. PSD has no quantity cap (median over all
+    # eligible events within tol_s).
+    td_n_epochs_cap = max(1, int(round(td_quantity_s / window_s))) if window_s > 0 else 1
     lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
     hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
     cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
@@ -1437,15 +1457,17 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
     td_mat = _to_mat(td.get("lsb") or [])
     n_td_windows = int(td_t.size)
     td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
-    # STRICT: each valid window -> its single nearest PRO (nn_td). REUSE: each PRO -> every valid
-    # window inside its extent (td_sel_by_pro); a window may then appear under multiple PROs.
+    # TD ELIGIBILITY uses tol_s (the main slider), NOT the quantity slider. STRICT: each eligible tile
+    # -> its single nearest PRO within +/-tol_s (nn_td). REUSE: each PRO -> every eligible tile within
+    # +/-tol_s (td_sel_by_pro); a tile may then appear under multiple PROs. The QUANTITY cap
+    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied per-PRO below, AFTER eligibility.
     if allow_window_reuse:
-        td_sel_by_pro = _windows_in_extent(td_t, td_valid, half_ext)
+        td_sel_by_pro = _windows_in_extent(td_t, td_valid, tol_s)
         n_td_assigned = int(sum(s.size for s in td_sel_by_pro))
     else:
         nn_td = np.full(td_t.size, -1, dtype=int)
         if td_valid.any():
-            nn_td[td_valid] = _nearest_pro(td_t[td_valid], half_ext)
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s)
         n_td_assigned = int((nn_td >= 0).sum())
 
     n_td_used = 0
@@ -1454,6 +1476,14 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
         sel = td_sel_by_pro[p] if allow_window_reuse else np.where(nn_td == p)[0]
         if sel.size == 0:
             continue
+        # QUANTITY CAP: of this PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the
+        # rating (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use"
+        # slider: 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to
+        # the earlier tile (stable argsort) so the choice is deterministic.
+        if sel.size > td_n_epochs_cap:
+            dt = np.abs(td_t[sel] - pro[p])
+            keep = np.argsort(dt, kind="stable")[:td_n_epochs_cap]
+            sel = sel[np.sort(keep)]                  # keep original tile order for a stable median
         med = np.nanmedian(td_mat[sel], axis=0)
         rec = recs[p]
         rec["tier"] = PRO_LSB_TIER_TD
@@ -1461,8 +1491,11 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
         rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
         rec["n_td_used"] = int(sel.size)
         rec["used_s"] = float(sel.size * window_s)
-        rec["reason"] = ("live TD->LSB median over %d window(s) within +/-%.0fs (k=%.2f)"
-                         % (sel.size, half_ext, analytics.LSB_PER_UV2_TRANSFORM))
+        rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
+                         "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
+                         % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
+                                       else int((nn_td == p).sum())),
+                            td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
         td_tier_pro[p] = True
         n_td_used += int(sel.size)
 
@@ -1472,13 +1505,15 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
     psd_mat = _to_mat(psd.get("lsb") or [])
     n_psd_windows = int(psd_t.size)
     psd_valid = np.isfinite(psd_t)
+    # PSD ELIGIBILITY also uses tol_s (the main slider) — the ONLY PSD control. No quantity cap: a
+    # PRO's PSD-bridge LSB is the nan-median over EVERY eligible PSD event within +/-tol_s.
     if allow_window_reuse:
-        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, psd_tol_s)
+        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, tol_s)
         n_psd_assigned = int(sum(s.size for s in psd_sel_by_pro))
     else:
         nn_psd = np.full(psd_t.size, -1, dtype=int)
         if psd_valid.any():
-            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], psd_tol_s)
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s)
         n_psd_assigned = int((nn_psd >= 0).sum())
 
     n_psd_used = 0
@@ -1496,7 +1531,7 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
         rec["n_psd_used"] = int(sel.size)
         rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
                          "calibrated only in [%.1f,%.1f] Hz"
-                         % (sel.size, psd_tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+                         % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
         n_psd_used += int(sel.size)
 
     n_pro_td = int(td_tier_pro.sum())
@@ -1506,7 +1541,9 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, extent_s=None,
              "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
              "n_td_assigned": n_td_assigned, "n_td_used": n_td_used,
              "n_psd_assigned": n_psd_assigned, "n_psd_used": n_psd_used,
-             "extent_s": float(extent_s), "psd_tol_s": psd_tol_s,
+             "tol_s": tol_s, "td_quantity_s": td_quantity_s, "td_n_epochs_cap": int(td_n_epochs_cap),
+             # legacy aliases kept so existing UI/echo readers don't KeyError:
+             "extent_s": td_quantity_s, "psd_tol_s": tol_s,
              "allow_window_reuse": bool(allow_window_reuse)}
     return recs, stats
 

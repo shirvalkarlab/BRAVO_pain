@@ -903,15 +903,16 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
 
 
 def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
-                           *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS, extent_s=None,
-                           allow_window_reuse=False):
+                           *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
+                           tol_s=None, td_quantity_s=None, allow_window_reuse=False):
     """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
-    against it per channel with availability.live_lsb_spectrum_match (median-over-extent, TD preferred
-    in-window, no LSB vector reused across >1 PRO). Drop-in for _pro_lsb_spectrum_cached: returns
-    { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract the spectral scan consumes.
+    against it per channel with availability.live_lsb_spectrum_match. Drop-in for the spectral scan:
+    returns { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract it consumes.
 
-    Also returns a per-channel independence stats dict so the caller can report the pseudoreplication
-    reduction (live matching gives n_clusters == n_obs by construction). Returns (spectra, stats)."""
+    TWO-WINDOW MATCHING (PI 2026-06-28): `tol_s` (the main MatchToleranceMin slider, in SECONDS) is
+    the eligibility radius for BOTH TD and PSD; `td_quantity_s` (the MatchExtentSec slider) caps how
+    many of the nearest 3 s TD tiles to median per PRO (PSD has no quantity cap). Matching runs on the
+    pre-computed raw 3 s-tile cache, so there is no real-time TD recompute. Returns (spectra, stats)."""
     pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
     if pt.size == 0 or not channels:
         return {}, {}
@@ -925,7 +926,8 @@ def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, 
             continue
         try:
             recs, st = availability.live_lsb_spectrum_match(
-                pt, raw_cache, extent_s=extent_s, allow_window_reuse=allow_window_reuse)
+                pt, raw_cache, tol_s=tol_s, td_quantity_s=td_quantity_s,
+                allow_window_reuse=allow_window_reuse)
             spectra[raw_ch] = recs
             stats[raw_ch] = st
         except Exception as e:
@@ -2966,20 +2968,21 @@ def run_for_participant(request_data):
     _scan_pro_times = (pro_match[0] if pro_match is not None else None)
     _have_scan_inputs = (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels)
     live_match_stats = None
-    if _have_scan_inputs and use_live_matching:
-        # LIVE path: match PROs against the match-agnostic raw cache (no LSB reuse across PROs unless
-        # AllowWindowReuse is on). Montage device-PSD windows fold into the cache's PSD family.
+    if _have_scan_inputs:
+        # CACHE-BASED MATCHING (PI 2026-06-28, now the ONLY path — the legacy real-time
+        # per_pro_lsb_spectrum recompute is retired): match PROs against the pre-computed match-agnostic
+        # raw 3 s-tile cache. TWO WINDOWS: tol_s = the main MatchToleranceMin slider (minutes->seconds)
+        # is the eligibility radius for BOTH TD and PSD; td_quantity_s = the MatchExtentSec slider caps
+        # how many of the nearest 3 s TD tiles to median per PRO (PSD has no quantity cap). The main
+        # tolerance can be None ("disable time-matching") — fall back to the extent so PSD still has a
+        # finite eligibility window rather than matching the whole record. AllowWindowReuse governs
+        # reuse of the same window+modality across PROs (per-modality, both passes).
+        _tol_s = (float(match_tol_min) * 60.0 if match_tol_min else float(match_extent_s))
         pro_lsb_spectrum, live_match_stats = _live_pro_lsb_spectrum(
             participant_uid, _scan_pro_times, _scan_channels,
             list(td or []) + list(_scan_psd_list or []),
             _scan_event_blocks, montage_psd_blocks=_scan_montage_blocks,
-            extent_s=match_extent_s, allow_window_reuse=allow_window_reuse)
-    elif _have_scan_inputs:
-        # LEGACY path: per-PRO LSB spectrum (matching done inside per_pro_lsb_spectrum).
-        pro_lsb_spectrum = _pro_lsb_spectrum_cached(
-            participant_uid, _scan_pro_times, _scan_channels,
-            list(td or []) + list(_scan_psd_list or []),
-            _scan_event_blocks)
+            tol_s=_tol_s, td_quantity_s=match_extent_s, allow_window_reuse=allow_window_reuse)
     else:
         pro_lsb_spectrum = {}
 
@@ -3012,7 +3015,10 @@ def run_for_participant(request_data):
         for _st in live_match_stats.values():
             for _k in _pooled:
                 _pooled[_k] += int(_st.get(_k, 0) or 0)
-        _pooled["extent_s"] = float(match_extent_s)
+        _pooled["extent_s"] = float(match_extent_s)        # legacy alias (== td_quantity_s)
+        _pooled["td_quantity_s"] = float(match_extent_s)   # TD nearest-N-seconds quantity slider
+        _pooled["tol_s"] = (float(match_tol_min) * 60.0 if match_tol_min else float(match_extent_s))
+        _pooled["match_tolerance_min"] = match_tol_min      # the main eligibility slider (minutes)
         _pooled["per_channel"] = live_match_stats
         out["live_match_stats"] = _pooled
     out["available_metrics"] = BIOMARKER_METRICS

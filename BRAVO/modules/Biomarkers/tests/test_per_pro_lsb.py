@@ -287,16 +287,50 @@ def test_live_match_strict_no_reuse_default():
 
 
 def test_live_match_reuse_toggle_increases_usage():
-    """REUSE: a window matches EVERY PRO whose extent covers it. The 1005 montage-PSD now also counts
-    against PRO0's window set (though PRO0 stays TD-tier), so n_psd_used rises vs strict. Toggle is the
-    only difference; default stays strict."""
+    """REUSE (two-window API): a PSD event matches EVERY PSD-tier PRO whose ELIGIBILITY window (tol_s,
+    the main slider) covers it. Fixture: one PSD event at t=0 sits 100 s from PRO_a(-100) and 100 s
+    from PRO_b(+100); with tol_s=200 BOTH claim it under reuse (n_psd_used 1->2), under strict it goes
+    to its single nearest PRO only."""
     centers = np.arange(8.0, 31.0, 1.0)
-    raw = _raw_cache_fixture(centers)
-    pro = np.array([1000.0, 1100.0, 5000.0])
-    _, st_strict = av.live_lsb_spectrum_match(pro, raw, extent_s=30.0, allow_window_reuse=False)
-    _, st_reuse = av.live_lsb_spectrum_match(pro, raw, extent_s=30.0, allow_window_reuse=True)
+    nC = len(centers); rowv = lambda v: [float(v)] * nC
+    raw = {
+        "td":  {"t": [], "ok": [], "lsb": [], "saturated": [], "source": []},
+        "psd": {"t": [0.0], "lsb": [rowv(280.0)], "calibrated": [[True] * nC], "source": ["PSD event"]},
+        "window_s": 3.0, "n_td_windows": 0, "n_psd_windows": 1,
+        "centers_hz": list(centers), "band_half_hz": 2.5, "channel": "ZERO_THREE_LEFT",
+    }
+    pro = np.array([-100.0, 100.0])
+    _, st_strict = av.live_lsb_spectrum_match(pro, raw, tol_s=200.0, td_quantity_s=30.0,
+                                              allow_window_reuse=False)
+    _, st_reuse = av.live_lsb_spectrum_match(pro, raw, tol_s=200.0, td_quantity_s=30.0,
+                                             allow_window_reuse=True)
     assert st_reuse["allow_window_reuse"] is True
-    assert st_reuse["n_psd_used"] > st_strict["n_psd_used"]
+    assert st_strict["n_psd_used"] == 1                 # one PRO claims the single event
+    assert st_reuse["n_psd_used"] == 2                  # both eligible PROs reuse it
+
+
+def test_live_match_td_quantity_caps_nearest_n_tiles():
+    """PI 2026-06-28 two-window split: td_quantity_s dictates HOW MANY of the nearest 3 s TD tiles to
+    median (not a +/- tolerance), while tol_s is the eligibility radius. A smaller quantity slider uses
+    FEWER tiles, and they must be the ones CLOSEST to the rating."""
+    centers = np.array([10.0, 20.0, 30.0])
+    td_t = list(np.arange(-300.0, 301.0, 3.0))           # 201 tiles, 3 s spacing, symmetric about 0
+    td_lsb = [[100.0 + abs(t) / 10.0, 200.0, 300.0] for t in td_t]   # band-0 grows with |t|
+    raw = {
+        "td": {"t": td_t, "ok": [True] * len(td_t), "lsb": td_lsb,
+               "saturated": [False] * len(td_t), "source": ["streaming"] * len(td_t)},
+        "psd": {"t": [], "lsb": [], "calibrated": [], "source": []},
+        "window_s": 3.0, "n_td_windows": len(td_t), "n_psd_windows": 0,
+        "centers_hz": list(centers), "band_half_hz": 2.5, "channel": "ZERO_THREE_LEFT",
+    }
+    pro = np.array([0.0])
+    r30, s30 = av.live_lsb_spectrum_match(pro, raw, tol_s=7200.0, td_quantity_s=30.0)
+    r60, s60 = av.live_lsb_spectrum_match(pro, raw, tol_s=7200.0, td_quantity_s=60.0)
+    assert s30["td_n_epochs_cap"] == 10 and r30[0]["n_td_used"] == 10   # 30 s / 3 s = nearest 10
+    assert s60["td_n_epochs_cap"] == 20 and r60[0]["n_td_used"] == 20   # 60 s / 3 s = nearest 20
+    assert r30[0]["lsb"][0] < r60[0]["lsb"][0]            # nearest-10 closer to 0 -> lower band-0
+    rT, _ = av.live_lsb_spectrum_match(pro, raw, tol_s=60.0, td_quantity_s=30.0)
+    assert rT[0]["n_td_used"] == 10                       # tol does NOT cap quantity
 
 
 def test_live_match_per_modality_independence():
