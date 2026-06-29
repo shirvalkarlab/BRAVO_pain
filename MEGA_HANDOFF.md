@@ -20,16 +20,21 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `7ce588d`** (biomarker accuracy remediation R1/R2/R11/R12 — signed AUC, per-contact best-band
-> table, unique-PRO binarization cut, derivable montage whitelist; committed + pushed). 3 new analytics
-> tests; local Django-free analytics suite 94 pass / 5 fail (the 5 are pre-existing Django-import-only
-> tests, not regressions; commit `7ce588d`'s message says "96 pass" — that was a miscount, the real
-> number is 94). **Full in-container suite: PASS=260 FAIL=0** (was 257; +3 new analytics tests) — run
-> after the bridge watcher came back up. Live `run_for_participant` on 2e3c75c0 confirms `auc_signed`
-> present on all 6 channels (R 1⁻3⁺ VIM signed AUC 0.63 / elevation; suppression contacts <0.5) and
-> `selected_band` per contact; workers HUP-reloaded so the new fields are live. Frontend rebuilt
-> (chunk `434.45559227`). Prior `edfd0b5` (binarization-hover zero-TD fix + reuse-modeled preview,
-> suite 257/257), `d2f0d8a` (montage device-PSD coverage + window-reuse toggle, backend `b6f660f`) are live.
+> **HEAD `b06b0e2`** (biomarker matching: TWO-WINDOW MODALITY SPLIT + cache-only path). The two match
+> windows now have distinct jobs: the **main MatchToleranceMin slider = eligibility radius for BOTH TD
+> and PSD** (PSD bridge no longer hard-locked to ±120 s); the **extent slider is repurposed into a
+> TD-signal QUANTITY knob** = how many of the nearest 3 s TD tiles to median per rating (nearest
+> round(q/3), |Δt|-ranked). The cache-based `live_lsb_spectrum_match` is now the ONLY scan path (legacy
+> real-time `per_pro_lsb_spectrum` recompute retired in the scan; still used by the timeline modeled
+> markers). Per-channel `n_high/n_low/n_excluded` now count DISTINCT PROs carrying a resolved LSB, so
+> `n_high+n_low+n_excluded == n_td+n_psd_bridge == n_channel` (fixes the per-channel/pooled mismatch AND
+> the per-channel dash bug). Frontend: Legacy/Live toggle removed (cache always on), extent slider
+> relabeled + max raised to 300 s, two-window caption, pooled line sums per-channel counts, match-offset
+> range added to the pro-report summary line. **Full in-container suite: PASS=261 FAIL=0.** Frontend
+> rebuilt (chunk `434.9f4cba51`, main `87e35786`). Live verify on 2e3c75c0: widening the main slider
+> 2→120 min grows matched PROs 258→927; the TD-quantity slider scales only n_td_used (×4 from 30→120 s),
+> PSD untouched. Prior `7ce588d` (R1/R2/R11/R12 accuracy remediation — signed AUC, per-contact best-band,
+> unique-PRO binarization cut, derivable montage whitelist; suite 260), `edfd0b5`, `d2f0d8a` are live.
 > No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
@@ -43,6 +48,34 @@
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
+
+**Matching two-window modality split + cache-only scan path (2026-06-28, `b06b0e2`).** The PI flagged
+that two time windows in the UI governed two DIFFERENT matched sets that did not cascade: the main
+`MatchToleranceMin` slider drove the pooled-PSD binarization population (up to 2 h), while ρ/AUC/scatter
+were computed on a separate LSB-spectrum window hard-locked to ±30 s (TD) / ±120 s (PSD) — so widening
+the slider grew the binarization histogram but had ZERO effect on the biomarker statistics. Resolution
+(Option B, split by modality): in `availability.live_lsb_spectrum_match`, **`tol_s` (the main slider) is
+now the eligibility radius for BOTH TD and PSD**; **`td_quantity_s` (the repurposed extent slider) is a
+QUANTITY-OF-SIGNAL knob** — after TD eligibility is decided by `tol_s`, each PRO keeps only the
+`round(td_quantity_s/3)` NEAREST 3 s tiles (|Δt|-ranked, before/after agnostic) and medians them; PSD has
+no quantity cap (median over every event within `tol_s`). The raw 3 s-tile cache is non-overlapping
+(`availability.py` ~line 83 tiles by raw sample index), so 30 s ⇒ nearest 10 tiles exactly. Back-compat
+shim maps the legacy `extent_s`/`psd_tol_s` kwargs. `bravo_service`: the cache matcher is now the ONLY
+scan path (legacy real-time `per_pro_lsb_spectrum` recompute retired in the scan; still feeds the timeline
+modeled markers — a separate viz, intentionally left). It passes `tol_s=match_tol_min*60`,
+`td_quantity_s=match_extent_s`. New data auto-extends the cache (signature already keys on recording
+StartTime/channels/sample-count). **Count consistency:** per-channel `n_high/n_low/n_excluded` were
+counted over pooled-PSD epoch rows (`chan_fin` from `psd[:,ci,:]`) while `n_td/n_psd_bridge` counted the
+LSB subset — diverging badly after the change (1190 vs 419). Now `chan_fin`/the split are counted over
+DISTINCT PROs carrying a resolved LSB tier, so `n_high+n_low+n_excluded == n_td+n_psd_bridge == n_channel`
+(also fixes the long-standing per-channel dash bug — those fields now reach the response). Frontend:
+removed the Legacy/Live toggle (cache always on, `useLiveMatching` pinned true), extent slider relabeled
+"Time-domain signal per rating (N s ≈ nearest N/3 tiles)" with max raised 120→300 s, two-window caption,
+pooled line now SUMS the per-channel distinct-LSB counts (was `sfi.binarization`, a different unit), and
+the match-offset full range "(range lo to hi min)" appended to the "X of Y pain reports … median match
+offset" line only. Live verify on 2e3c75c0: main slider 2→120 min grows matched PROs 258→927; TD-quantity
+30→120 s scales `n_td_used` ×4 with PSD untouched. New tests `test_live_match_td_quantity_caps_nearest_n_tiles`
++ rewritten reuse test; **container suite 261/261**. Frontend chunk `434.9f4cba51`, main `87e35786`.
 
 **Biomarker accuracy remediation — high-priority audit fixes (2026-06-28, `7ce588d`).** Four of the
 high-severity items from the stress-test audit (`remediation_action_plan.md`, artifact `488a4d02`).
