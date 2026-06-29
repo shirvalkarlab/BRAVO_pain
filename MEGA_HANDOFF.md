@@ -20,7 +20,14 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
+> **MERGED to `v3.1.0`** (2026-06-29, PR #9 → merge commit `39dfb2f`): the entire
+> `PS_closedloop_deployment` line (61 commits — two-window matching, R1/R2/R11/R12 accuracy
+> remediation, montage device-PSD coverage, binarization fixes) is now in the default branch. Code
+> review: mergeable_state `clean`, container suite 261/261, no CI configured on the repo. Branch is
+> retained (not deleted). Continue feature work on `PS_closedloop_deployment`; it is now 1 merge behind
+> `v3.1.0` only by the merge commit.
+>
+> **Branch HEAD `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
 > hoisted `rangeTxt`/`offsetSummary` in BinarizationPreview.js read `counts.min_abs_offset_min` before
 > the preview model loaded, throwing `Cannot read properties of null` and blanking the Biomarkers module.
 > Added `counts &&` guards; rebuilt chunk `434.861dc283`, main `8fa51c07`). Below = the two-window change
