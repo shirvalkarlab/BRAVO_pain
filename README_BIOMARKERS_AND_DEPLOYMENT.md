@@ -58,7 +58,7 @@ The biomarker module ingests multiple Percept recording types:
 | **ChronicBrainSense** | 10-min aggregated power trends (6 Hz – 100 Hz) | ~10 min intervals | Threshold-based detection (threshold_biomarker.py) |
 | **Montage/Survey PSD** | 100-point power spectra (device snapshots or clinical montages) | Discrete snapshots | LSB bridge calibration (device_psd_band_power) |
 
-Patient pain reports come from **REDCap**, timestamped with configurable pain metric (VAS, NRS, NPQ, or custom scale—selectable per site/module).
+Patient pain reports come from **REDCap**, timestamped with configurable pain metric (NRS, VAS, region-specific VAS, MPQ, or composite—selectable per site/module).
 
 ### 1.3 Two-Window Matching Logic (Critical)
 
