@@ -68,6 +68,22 @@
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
 
+**Documentation: v3.1.0 README fully corrected (2026-06-29, `621bc35`).** Six critical fixes applied to
+`README_BIOMARKERS_AND_DEPLOYMENT.md` in response to user feedback: (1) Added `MedtronicIndefiniteStream`
+to data-sources table (line 57) — the indefinite-duration TD recording type was core but missing from docs.
+(2) Rewrote TD-transform extent description (line 168) — changed from "fixed ±30 s centered" to "selectable
+via MatchExtentSec slider (default 30 s; range 3–300 s) controlling TD signal quantity per pain report."
+(3) Corrected PSD-bridge band integration (line 179) — was "linear interpolation to point sample," now
+"integrates power across ±2.5 Hz band (5 Hz total width)" per `device_psd_band_power` code at line 3186.
+(4) Added "Pain Metric Configuration" subsection (new §1.5a, line ~149) documenting support for VAS/NRS/NPQ
+/composite scales, configurable per site via `_resolve_biomarker_metric` in `bravo_service.py`. (5) Created
+new "Mixed-Model & Forward-Windows Workflow" subsection (§1.7b, line 287) describing temporal validation,
+fold-based CV, and per-contact ranking that precedes final deployment selection. (6) Added "Biomarker
+Discovery Workflow (Visualization)" diagram (§1.3b, line 99) showing the 5-phase pipeline from ingestion
+through deployment ranking — parallel structure to the existing Deployment module diagram (§2.3). README
+expanded 759 → 896 lines; all 6 items now grounded in code with line-number citations. Committed and pushed
+to `PS_closedloop_deployment` branch. No code changes; documentation only.
+
 **Matching two-window modality split + cache-only scan path (2026-06-28, `b06b0e2`).** The PI flagged
 that two time windows in the UI governed two DIFFERENT matched sets that did not cascade: the main
 `MatchToleranceMin` slider drove the pooled-PSD binarization population (up to 2 h), while ρ/AUC/scatter
