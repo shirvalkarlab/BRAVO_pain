@@ -27,6 +27,12 @@
 > retained (not deleted). Continue feature work on `PS_closedloop_deployment`; it is now 1 merge behind
 > `v3.1.0` only by the merge commit.
 >
+> **Documentation:** Comprehensive README created (`README_BIOMARKERS_AND_DEPLOYMENT.md`, 759 lines)
+> covering full v3.1.0 architecture: data sources, two-window matching semantics, LSB computation
+> (TD-transform k=352.62 + PSD-bridge), cache/matching flow, spectral feature importance, binarization
+> (unique-PRO tertiles), per-channel count semantics, deployment checklist, ClosedLoopSim UI/workflow,
+> configuration, testing, troubleshooting, and development guidelines.
+>
 > **Branch HEAD `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
 > hoisted `rangeTxt`/`offsetSummary` in BinarizationPreview.js read `counts.min_abs_offset_min` before
 > the preview model loaded, throwing `Cannot read properties of null` and blanking the Biomarkers module.

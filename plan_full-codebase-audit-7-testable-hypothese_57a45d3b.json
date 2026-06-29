@@ -1,0 +1,104 @@
+{
+  "version": 3,
+  "created_at": "2026-06-28T10:39:03.214Z",
+  "task_summary": "Full-codebase audit + 7 hypotheses + ranked literature-grounded remediation plan",
+  "agents": [],
+  "phases": [
+    {
+      "name": "Codebase audit",
+      "delegations": [
+        {
+          "name": "Audit",
+          "steps": [
+            {
+              "title": "Accuracy audit of stat + matching path",
+              "description": "Using code-review + ps-scientific-critical-thinking, audit analytics.py (Spearman/Pearson per-band, AUC, binarization), availability.py/streaming_psd.py (matching, min_per_group gate), and bravo_service.py (scan assembly). Flag correctness risks: silent NaN drops, one-class skips, cap-vs-stat-n coupling, reuse semantics."
+            },
+            {
+              "title": "Efficiency + flexibility review",
+              "description": "Assess workflow efficiency (redundant decodes, recompute triggers, memoization) and flexibility (hard-coded constants vs params: min_per_group, max_scatter, tolerance, band width). Produce a ranked findings list."
+            }
+          ]
+        }
+      ],
+      "id": "phase-0"
+    },
+    {
+      "name": "Hypotheses + pipeline runs",
+      "delegations": [
+        {
+          "name": "Hypothesis testing",
+          "steps": [
+            {
+              "title": "Instrument one shared run_for_participant",
+              "description": "Add lightweight counters via a bridge probe on participant 2e3c75c0: per-band n_pairs, NaN-r reasons (std=0 / n<3), one-class AUC skips, min_per_group drops, live-strict vs legacy pair counts. One instrumented run feeds multiple hypotheses."
+            },
+            {
+              "title": "H-T1: pair-count shrinkage = no-reuse + tolerance",
+              "description": "Test that live strict matching (nearest-only) yields far fewer PRO-neural pairs than legacy pooled match. Compare n_pro_matched, n_pooled, n_unmatched live vs legacy. Confirmed/refuted with numbers."
+            },
+            {
+              "title": "H-T2: min_per_group=3 strands sparse bands",
+              "description": "Test that the min_per_group=3 gate in streaming_psd._match drops (channel,band) groups with <3 matched samples before correlation, removing otherwise-usable neural data. Count groups dropped and samples stranded."
+            },
+            {
+              "title": "H-T3: max_scatter cap is display-only",
+              "description": "Verify the max_scatter=400 cap + dedup-by-rating affects only plotted points, not the r/AUC input n (or find it DOES truncate the stat). Compare stat-n vs plotted-n per channel."
+            },
+            {
+              "title": "H-T4: Spearman \u03c1 NaN from zero-variance LSB",
+              "description": "Test that bands with saturated/constant LSB (std(score)=0) or <3 finite pairs yield r=NaN and are dropped from the curve, a top blocker of the \u03c1 plot. Count NaN-r bands by cause."
+            },
+            {
+              "title": "H-T5: AUC skipped on one-class binarization",
+              "description": "Test that tertile binarization leaving all matched ratings in one class (no high OR no low) yields one-class folds \u2192 AUC skipped (n_skipped_test_one_class). Count skips and the bands affected."
+            },
+            {
+              "title": "H-S1: beta-band LSB tracks pain rating",
+              "description": "Scientific: test that beta-band (13-30 Hz) LSB power shows positive Spearman \u03c1 with pain rating in a subset of contacts, consistent with beta elevation in pain states. Report \u03c1 sign/magnitude per beta band."
+            },
+            {
+              "title": "H-S2: low-frequency power tracks pain",
+              "description": "Scientific: test that theta/alpha (4-12 Hz) band power correlates with pain rating in some contacts (affective pain processing). Report \u03c1 per low-freq band; mark confirmed/refuted/inconclusive."
+            }
+          ]
+        }
+      ],
+      "id": "phase-1"
+    },
+    {
+      "name": "Synthesis",
+      "delegations": [
+        {
+          "name": "Report",
+          "steps": [
+            {
+              "title": "Assemble stress-test report + suggestions",
+              "description": "Write the markdown stress-test summary: audit findings, per-hypothesis result (confirmed/refuted/inconclusive) with evidence, and ranked suggestions for prediction accuracy, workflow efficiency, and flexibility. Save report + per-hypothesis CSVs as artifacts."
+            },
+            {
+              "title": "Build ranked remediation action plan (pass 1)",
+              "description": "PRIMARY DELIVERABLE. Synthesize every audit finding + hypothesis result into a single ranked action plan of next steps, gap-fills, and flaw remediations. Rank each item code-review style: \ud83d\udd34 High / \ud83d\udfe1 Medium / \ud83d\udfe2 Low priority. Each item: problem, evidence (which finding/hypothesis), proposed fix, affected files."
+            },
+            {
+              "title": "Detail pass + literature grounding (pass 2)",
+              "description": "Iterate once more over the action plan and DOUBLE the detail/specification per item: concrete parameter values, code locations, acceptance tests, effort estimate. Where a spec is unclear/missing (e.g. min_per_group floor, tolerance window, band definitions, saturation threshold), search PubMed/literature via the pubmed-database + lit-search skills and prefer empirical literature-backed values over assumptions; cite sources inline. Save as the single cohesive ranked remediation deliverable."
+            }
+          ]
+        }
+      ],
+      "id": "phase-2"
+    }
+  ],
+  "desired_outputs": [
+    "PRIMARY: single cohesive ranked, detailed, literature-grounded remediation/enhancement action plan (\ud83d\udd34/\ud83d\udfe1/\ud83d\udfe2 priorities, two-pass detail) as a markdown artifact",
+    "Codebase stress-test summary (accuracy/efficiency/flexibility) as a markdown artifact",
+    "Improvement suggestions across prediction accuracy, workflow efficiency, and flexibility",
+    "7 labeled testable hypotheses (2 scientific + 5 technical), each with a pipeline-run result: confirmed / refuted / inconclusive",
+    "Per-hypothesis evidence tables (CSV) from instrumented bridge runs on participant 2e3c75c0"
+  ],
+  "feasibility": {
+    "confidence": "high",
+    "rationale": "All code is local and the live pipeline is reachable via the orbstack bridge; the matching/stat path was just inspected and the drop-gates (min_per_group=3, std>0, one-class AUC skip, no-reuse) are concrete and instrumentable. The capstone remediation plan is a synthesis step grounded in the audit + hypothesis evidence, with PubMed lookups to fill any unspecified parameter floors. Scientific-hypothesis confirmation depends on this single participant's data."
+  }
+}
