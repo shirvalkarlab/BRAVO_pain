@@ -454,10 +454,10 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
   // Footer caption.
   // Full range of the per-rating match offsets (same |Δt| distribution as the median). Appended ONLY
   // to the "X of Y pain reports … median match offset" line below, per PI — not the other offset texts.
-  const rangeTxt = (counts.min_abs_offset_min != null && counts.max_abs_offset_min != null)
+  const rangeTxt = (counts && counts.min_abs_offset_min != null && counts.max_abs_offset_min != null)
     ? ` (range ${counts.min_abs_offset_min.toFixed(1)} to ${counts.max_abs_offset_min.toFixed(1)} min)`
     : "";
-  const offsetSummary = counts.median_abs_offset_min != null
+  const offsetSummary = (counts && counts.median_abs_offset_min != null)
     ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".";
   const footerCaption = (() => {
     if (matchedMode) {
