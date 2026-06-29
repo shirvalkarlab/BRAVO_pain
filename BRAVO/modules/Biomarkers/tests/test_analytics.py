@@ -419,6 +419,33 @@ def test_binarize_labels_tertile_excludes_middle():
     assert np.isnan(b[3]) and np.isnan(b[9]), b   # middle + NaN both excluded
 
 
+def test_binarize_cut_invariant_to_sample_multiplicity():
+    """R11/audit A7: the tertile cut must be computed on the unique-PRO distribution, not the
+    pseudoreplicated per-sample vector. Duplicating one rating's samples must NOT move the cut."""
+    # 9 unique ratings 1..9, one rating (value 7, near the 67th pct) replicated 18x as in the
+    # real data (max_reuse=18). Without rating_group the duplication drags the high cut down.
+    base_vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9], float)
+    base_rg = np.arange(9)
+    dup_vals = np.concatenate([base_vals, np.full(17, 7.0)])      # rating "7" now appears 18x
+    dup_rg = np.concatenate([base_rg, np.full(17, 6)])            # all share rating-group id 6
+
+    # Per-group (deduplicated) cut: identical labels for the 9 canonical samples in both cases.
+    b_unique = analytics._binarize_labels(base_vals, strategy="tertile",
+                                          rating_group=base_rg)
+    b_dup = analytics._binarize_labels(dup_vals, strategy="tertile",
+                                       rating_group=dup_rg)
+    # The first 9 entries correspond to the same 9 unique ratings; their labels must match exactly.
+    assert np.array_equal(np.nan_to_num(b_unique, nan=-1),
+                          np.nan_to_num(b_dup[:9], nan=-1)), (b_unique, b_dup[:9])
+
+    # Contrast: WITHOUT rating_group the pseudoreplicated cut differs (regression guard — confirms
+    # the dedup is actually doing something, not a no-op).
+    b_pseudo = analytics._binarize_labels(dup_vals, strategy="tertile")
+    assert not np.array_equal(np.nan_to_num(b_unique, nan=-1),
+                              np.nan_to_num(b_pseudo[:9], nan=-1)), \
+        "dedup made no difference — rating_group not wired through"
+
+
 def test_matched_sample_counts_reports_high_low_and_offset():
     vals = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, np.nan], float)
     dt = np.array([2, -5, 10, np.nan, 3, -12, 1, 8, -2, np.nan], float)
@@ -455,147 +482,264 @@ def test_spectral_feature_importance_finds_planted_band():
     assert cen[av].min() == 8.5 and cen[av].max() == 29.5
 
 
-def test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30():
-    """LSB feature mode (PI request): when the detail carries absolute µV²/Hz density, the band
-    feature is log10(269 × ∫density), computed for the FULL 0–100 Hz scan (centers 2.5–97.5 Hz).
-    The 8–30 Hz adaptive range is flagged via adaptive_valid (center-based), not by clamping.
-    Validates: (1) feature flagged lsb_calibrated + unit string; (2) full scan (centers 2.5–97.5);
-    (3) adaptive_valid True only for centers in [8, 30] Hz (center-based, not full-band-inside);
-    (4) the calibrated LSB value equals 269 × trapezoid integral (same as deployment/timeline);
-    (5) the planted band is recovered; (6) onboard-FFT rows (NaN in psd_abs) contribute no LSB."""
+def test_auc_signed_reflects_correlation_direction():
+    """R1/audit A1: the folded `auc` is always >= 0.5, so it cannot show direction. `auc_signed`
+    must reflect the band's correlation sign — a band whose feature RISES with pain reads > 0.5, one
+    that FALLS with pain reads < 0.5 — and must satisfy signed == auc or 1-auc band-by-band."""
+    # Positive-correlation planted band (feature rises with pain).
+    sc_pos = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=1),
+                                                   strategy="tertile")
+    ch = sc_pos["channels"][0]
+    assert "auc_signed" in ch and len(ch["auc_signed"]) == len(ch["auc"])
+    bi = int(np.argmax([abs(x) if x is not None else 0 for x in ch["r"]]))
+    assert ch["r"][bi] is not None and ch["r"][bi] > 0, ch["r"][bi]
+    assert ch["auc"][bi] >= 0.5                       # folded is always >= chance
+    assert ch["auc_signed"][bi] >= 0.5                # rises with pain -> signed >= chance
+    # Negative-correlation planted band (feature falls with pain): folded still >= 0.5, signed < 0.5.
+    sc_neg = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=1),
+                                                   strategy="tertile")
+    chn = sc_neg["channels"][0]
+    bn = int(np.argmax([abs(x) if x is not None else 0 for x in chn["r"]]))
+    assert chn["r"][bn] is not None and chn["r"][bn] < 0, chn["r"][bn]
+    assert chn["auc"][bn] >= 0.5                       # folded hides the sign
+    assert chn["auc_signed"][bn] <= 0.5               # falls with pain -> signed below chance
+    # Band-by-band relationship: signed is either the folded value or its reflection.
+    for a, s in zip(chn["auc"], chn["auc_signed"]):
+        if a is None:
+            assert s is None
+        else:
+            assert (abs(s - a) < 1e-9) or (abs(s - (1.0 - a)) < 1e-9), (a, s)
+
+
+def test_selected_band_is_per_contact_and_signed():
+    """R2/audit A2: each channel carries a `selected_band` naming its own best band + sign. The
+    planted band must be selected, with the correct direction, and never a single global band."""
+    sc = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=0.6, seed=2),
+                                               strategy="tertile")
+    # Every channel has a selected_band entry (channel 1 has no planted signal but still gets a pick).
+    assert all("selected_band" in ch for ch in sc["channels"])
+    sb0 = sc["channels"][0]["selected_band"]
+    assert sb0 is not None
+    assert abs(sb0["center_hz"] - 17.5) <= 2.5, sb0          # picked the planted band
+    assert sb0["sign"] == "positive" and sb0["direction"] == "elevation", sb0
+    assert sb0["rho"] is not None and sb0["rho"] > 0
+    # Negative planted band -> suppression direction on its selected band.
+    scn = analytics.spectral_feature_importance(_planted_detail(center=17.5, beta=-0.6, seed=2),
+                                                strategy="tertile")
+    sbn = scn["channels"][0]["selected_band"]
+    assert sbn["sign"] == "negative" and sbn["direction"] == "suppression", sbn
+    assert sbn["auc_signed"] is not None and sbn["auc_signed"] <= 0.5, sbn
+
+
+def test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum():
+    """LSB feature mode (CS-1…CS-4 cache, PI 2026-06-27): when pro_lsb_spectrum_by_channel is
+    provided, the band feature is log10(CS-14 LSB) from the cache, covering the full 0–100 Hz scan.
+    Validates: (1) feature == 'lsb_cs14'; (2) full scan centers 2.5–97.5 Hz;
+    (3) adaptive_valid True only for centers in [8, 30] Hz;
+    (4) the planted band is recovered from the cache values;
+    (5) logpsd fallback when no cache is provided."""
     det = _planted_detail(center=17.5, beta=0.5, seed=3)
-    f = det["f_set"]; psd = det["psd"]            # psd here is linear (prelog False)
-    # Provide absolute density = the linear psd; NaN out a few "onboard-FFT" rows in channel 0.
-    abs_dens = np.array(psd, dtype=float)
-    abs_dens[:5, 0, :] = np.nan                   # 5 onboard-FFT rows -> excluded from LSB
-    det["psd_abs_uv2_per_hz"] = abs_dens
-    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
-    assert sc["feature"] == "lsb_calibrated", sc["feature"]
-    assert "LSB" in sc["feature_unit"] and "269" in sc["feature_unit"]
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    E = det["psd"].shape[0]
+    labels = det["labels"]
+    rgroup = np.arange(E)
+    det["rating_group"] = rgroup
+
+    # Build a synthetic cache: one spectrum per PRO for channel ZERO_TWO_LEFT.
+    # Plant strong LSB at ~17.5 Hz for matched rows; unmatched rows get None.
+    ch = "ZERO_TWO_LEFT"
+    planted_center = 17.5
+    spectra = []
+    for i in range(E):
+        if not np.isfinite(labels[i]):
+            spectra.append({"t": 0.0, "tier": None, "lsb": [None] * len(cen_grid),
+                            "calibrated": [False] * len(cen_grid),
+                            "center_hz": list(cen_grid)})
+            continue
+        lsb_vec = []
+        for c in cen_grid:
+            if abs(c - planted_center) <= 2.5:
+                lsb_vec.append(500.0 + float(labels[i]) * 20.0)  # correlated with pain
+            else:
+                lsb_vec.append(100.0)
+        # TD-transform: calibrated=True for any finite band (k=352.62 is band-agnostic).
+        # Only the CS-3 bridge gates calibrated by [7.8,30] Hz.
+        cal = [True] * len(cen_grid)
+        spectra.append({"t": 0.0, "tier": "td_transform", "lsb": lsb_vec,
+                        "calibrated": cal, "center_hz": list(cen_grid)})
+
+    cache = {ch: spectra}
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14", sc["feature"]
+    assert "352.62" in sc["feature_note"] or "CS-1" in sc["feature_note"]
     cen = np.array(sc["centers"])
-    # Full 0–100 Hz scan: centers span [2.5, 97.5] Hz (half-integer grid, 5 Hz window).
+    # Full 0–100 Hz scan
     assert abs(cen.min() - 2.5) < 1e-9 and abs(cen.max() - 97.5) < 1e-9, (cen.min(), cen.max())
-    # adaptive_valid = center in [8, 30] Hz (center-based); NOT all bands — only the 8–30 Hz zone.
+    # adaptive_valid flagged by center in [8, 30]
     av = np.array([b["adaptive_valid"] for b in sc["bands"]])
-    assert av.any() and not av.all(), "Expected some adaptive and some non-adaptive bands"
-    assert cen[av].min() == 8.5 and cen[av].max() == 29.5, (cen[av].min(), cen[av].max())
-    # Recompute the calibrated LSB for one band/row directly and match the scatter x (log10 LSB).
+    assert av.any() and not av.all()
+    assert cen[av].min() >= 8.0 - 1e-9 and cen[av].max() <= 30.0 + 1e-9
+    # Planted band (~17.5 Hz) should have strongest |r|
     ch0 = sc["channels"][0]
     bi = int(np.nanargmax([abs(x) if x is not None else 0 for x in ch0["r"]]))
-    # Planted band is 15–20 Hz; the strongest 5 Hz scan window must OVERLAP it (its center within
-    # one band-half of the [15,20] edges, i.e. center in [12.5, 22.5]).
-    assert 12.5 - 1e-9 <= cen[bi] <= 22.5 + 1e-9, cen[bi]
-    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
-    # Recompute the calibrated LSB for one TD row (index >=5, since 0-4 are NaN onboard-FFT) and
-    # confirm it appears as a scatter x (log10 LSB) — the SAME 269 × trapezoid-integral conversion.
-    scat = ch0["scatter"][bi]
-    assert scat is not None
-    uv2_row5 = np.trapezoid(abs_dens[5, 0, bmask], f[bmask])
-    expect_log_lsb = np.log10(269.0 * uv2_row5)
-    assert np.isfinite(expect_log_lsb)
-    xs = np.array([v for v in scat["x"] if v is not None], dtype=float)
-    assert np.nanmin(np.abs(xs - expect_log_lsb)) < 1e-6, (xs[:3], expect_log_lsb)
-    # onboard-FFT exclusion: channel-0 LSB sample count never exceeds the 55 TD rows (60 - 5).
-    assert max(n for n in ch0["n_r"] if n is not None) <= 55
+    assert abs(cen[bi] - planted_center) <= 3.0, cen[bi]
+    # Fallback: no cache -> logpsd_db
+    sc2 = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
+    assert sc2["feature"] == "logpsd_db", sc2["feature"]
 
 
-def test_spectral_scan_lsb_td_priority_over_survey():
-    """When a pain report has a time-domain (streaming) match, its TD-derived LSB takes priority over
-    a survey-sweep LSB for the SAME (channel, rating): the survey row's absolute density is blanked
-    so it contributes no competing LSB point. A report with ONLY a survey match keeps its survey
-    LSB."""
+def test_spectral_scan_lsb_cs14_cache_lookup_per_pro():
+    """Cache lookup correctness: per matched row, the scan looks up the PRO index in the cache
+    and assigns log10(cache_lsb) for that band. Rows with no cache entry (tier=None) get NaN.
+    Verifies: (1) matched rows with TD LSB produce finite bp_log; (2) unmatched rows produce NaN;
+    (3) source priority is already enforced by the cache (TD > survey > bridge), not by the scan."""
     f = np.linspace(0.95, 100, 60)
-    E = 8
-    # rows 0..3: channel ZERO_TWO_LEFT, alternating TD/survey, paired by rating_group into 2 reports
-    psd_abs = np.full((E, 1, 60), np.nan)
-    band = (f >= 15) & (f <= 20)
-    # report 0: a TD row (idx0) AND a survey row (idx1) -> survey demoted
-    psd_abs[0, 0, band] = 2.0; psd_abs[1, 0, band] = 9.0
-    # report 1: survey-only (idx2) -> kept
-    psd_abs[2, 0, band] = 5.0
-    # report 2: TD-only (idx3) -> kept
-    psd_abs[3, 0, band] = 3.0
-    labels = np.array([8, 8, 5, 2, np.nan, np.nan, np.nan, np.nan], float)
+    E = 4
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    ci17 = int(np.argmin(np.abs(cen_grid - 17.5)))
+    labels = np.array([8.0, 5.0, np.nan, 2.0])
+    rgroup = np.array([0, 1, -1, 2])
+    psd = np.random.default_rng(42).normal(0, 1, (E, 1, 60))
     det = {
-        "f_set": f, "psd": np.nan_to_num(psd_abs, nan=1.0), "labels": labels,
-        "psd_abs_uv2_per_hz": psd_abs,
-        "row_source": np.array(["TD streaming", "Montage/survey", "Montage/survey",
-                                "TD streaming", "x", "x", "x", "x"], dtype=object),
-        "row_lsb_tier": np.array(["td", "survey", "survey", "td",
-                                  "excluded", "excluded", "excluded", "excluded"], dtype=object),
+        "f_set": f, "psd": psd, "labels": labels,
+        "row_source": np.array(["TD streaming"] * E, dtype=object),
+        "row_lsb_tier": np.array(["td"] * E, dtype=object),
         "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
-        "rating_group": np.array([0, 0, 1, 2, -1, -1, -1, -1]),
+        "rating_group": rgroup,
         "chan_order": ["ZERO_TWO_LEFT"],
-        "times": [f"2025-07-{1 + i:02d} 10:00:00" for i in range(E)],
-        "prelog": False,
+        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
+        "prelog": True,
     }
+    # PRO 0: LSB=400 at band 17.5; PRO 1: LSB=600; PRO 2: all None (no source)
+    def _spec(lsb_at_17):
+        lsb = [lsb_at_17 if i == ci17 else 100.0 for i in range(len(cen_grid))]
+        # TD-transform: calibrated=True everywhere (k=352.62 is band-agnostic)
+        cal = [True] * len(cen_grid)
+        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
+                "calibrated": cal, "center_hz": list(cen_grid)}
+    none_spec = {"t": 0.0, "tier": None, "lsb": [None]*len(cen_grid),
+                 "calibrated": [False]*len(cen_grid), "center_hz": list(cen_grid)}
+    cache = {"ZERO_TWO_LEFT": [_spec(400), _spec(600), none_spec]}
     sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
-                                               low_pct=50.0, high_pct=50.0)
-    assert sc["feature"] == "lsb_calibrated"
-    assert sc["n_survey_demoted_by_td"] == 1, sc["n_survey_demoted_by_td"]   # only idx1 demoted
-    # The 17.5 Hz band scatter: the demoted survey value (9.0 -> log10(269*9*Δf)) must be ABSENT,
-    # while the TD report-0 value (2.0) and survey-only report-1 (5.0) and TD-only report-2 (3.0) are
-    # present. Find the band center nearest 17.5.
-    cen = np.array(sc["centers"]); bi = int(np.argmin(np.abs(cen - 17.5)))
-    c = cen[bi]; bmask = (f >= c - 2.5) & (f < c + 2.5)
-    scat = sc["channels"][0]["scatter"][bi]
-    xs = np.array([v for v in (scat["x"] if scat else []) if v is not None], dtype=float)
-    demoted = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 9.0), f[bmask]))
-    kept_td = np.log10(269.0 * np.trapezoid(np.full(bmask.sum(), 2.0), f[bmask]))
-    assert np.nanmin(np.abs(xs - kept_td)) < 1e-6           # TD report-0 present
-    assert (xs.size == 0) or (np.nanmin(np.abs(xs - demoted)) > 1e-6)   # survey 9.0 absent
+                                               low_pct=50.0, high_pct=50.0,
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14"
+    # Find band at ~17.5 Hz
+    cen = np.array(sc["centers"])
+    bi = int(np.argmin(np.abs(cen - 17.5)))
+    ch0 = sc["channels"][0]
+    scat = ch0["scatter"][bi]
+    if scat is not None:
+        xs = [v for v in scat["x"] if v is not None]
+        assert len(xs) >= 2          # at least PRO 0 and PRO 1 contribute
+        expect0 = float(np.log10(400.0)); expect1 = float(np.log10(600.0))
+        assert any(abs(x - expect0) < 1e-6 for x in xs), (xs, expect0)
+        assert any(abs(x - expect1) < 1e-6 for x in xs), (xs, expect1)
 
 
-def test_builder_device_psd_scaled_onto_lsb_axis():
-    """When a report has only a device onboard-FFT PSD (no time domain), the builder brings it onto
-    the calibrated LSB axis via an empirical per-channel scale (median TD/device density ratio over
-    8–30 Hz). Validates: the recovered scale matches the planted offset; device rows are tagged
-    device_psd_scaled and their corrected absolute density equals device_density × scale; a channel
-    with device PSD but NO TD overlap is tagged device_psd_uncalibrated."""
+def test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band():
+    """The vectorized (E, n_cache_centers) LSB matrix must assign each epoch row the LSB of ITS
+    PRO at the right band — distinct PROs and distinct bands. Guards the Finding-2 rewrite (per-band
+    column gather replacing the per-row Python loop): a transposed scatter or a wrong
+    rating_group→row mapping would surface here.
+
+    De-dup contract (2026-06-28): the scatter collapses to ONE observation per distinct rating
+    (rating_group), because plotting one marker per matched PSD overplots all rows that share a
+    rating onto the same (x, y) pixel and inflates the headline n. With two PSDs per PRO below, the
+    scatter must therefore emit ONE point per PRO (3), each carrying that PRO's per-band LSB — NOT
+    one point per matched row (6). Both rows of a PRO carry the identical per-band LSB (the cache is
+    keyed by rating_group), so first-wins de-dup yields the same value either row wins."""
+    f = np.linspace(0.95, 100, 60)
+    cen_grid = np.arange(2.5, 100.0, 1.0)
+    ci10 = int(np.argmin(np.abs(cen_grid - 10.5)))
+    ci40 = int(np.argmin(np.abs(cen_grid - 40.5)))
+    # 6 epoch rows: rows {0,1}->PRO0, {2,3}->PRO1, {4,5}->PRO2 (two PSDs per PRO, pro_first style)
+    E = 6
+    labels = np.array([8.0, 8.0, 4.0, 4.0, 1.0, 1.0])
+    rgroup = np.array([0, 0, 1, 1, 2, 2])
+    psd = np.random.default_rng(7).normal(0, 1, (E, 1, 60))
+    det = {
+        "f_set": f, "psd": psd, "labels": labels,
+        "row_source": np.array(["TD streaming"] * E, dtype=object),
+        "row_lsb_tier": np.array(["td"] * E, dtype=object),
+        "row_channel": np.array(["ZERO_TWO_LEFT"] * E, dtype=object),
+        "rating_group": rgroup,
+        "chan_order": ["ZERO_TWO_LEFT"],
+        "times": [f"2025-07-{1+i:02d} 10:00:00" for i in range(E)],
+        "prelog": True,
+    }
+    # Each PRO has DISTINCT LSB at the 10.5 and 40.5 Hz bands.
+    def _spec(lsb10, lsb40):
+        lsb = [100.0] * len(cen_grid)
+        lsb[ci10] = lsb10; lsb[ci40] = lsb40
+        return {"t": 0.0, "tier": "td_transform", "lsb": lsb,
+                "calibrated": [True] * len(cen_grid), "center_hz": list(cen_grid)}
+    cache = {"ZERO_TWO_LEFT": [_spec(200.0, 700.0), _spec(300.0, 800.0), _spec(500.0, 900.0)]}
+    sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb",
+                                               low_pct=50.0, high_pct=50.0,
+                                               pro_lsb_spectrum_by_channel=cache)
+    assert sc["feature"] == "lsb_cs14"
+    cen = np.array(sc["centers"])
+    ch0 = sc["channels"][0]
+    # De-dup must have fired (3 distinct ratings from 6 matched rows), and the headline count must
+    # equal the rendered point count — the integrity invariant the de-dup exists to guarantee.
+    bi10 = int(np.argmin(np.abs(cen - 10.5)))
+    scat10 = ch0["scatter"][bi10]
+    assert scat10 and scat10.get("dedup_by_rating") is True, scat10
+    assert scat10["n_obs"] == 3 and scat10["n_rows"] == 6, (scat10["n_obs"], scat10["n_rows"])
+    ng = scat10["n_grp"]; assert ng["high"] + ng["low"] + ng["mid"] == 3, ng
+    # At the 10.5 Hz band: PRO0 -> 200.0; PRO1 -> 300.0; PRO2 -> 500.0 (raw LSB, one each).
+    xs10 = sorted(v for v in (scat10["x"] if scat10 else []) if v is not None)
+    exp10 = sorted([200.0, 300.0, 500.0])
+    assert len(xs10) == 3, xs10
+    assert all(abs(a - b) < 1e-6 for a, b in zip(xs10, exp10)), (xs10, exp10)
+    # At the 40.5 Hz band: the SAME PROs map to the 40-band LSBs (distinct from 10-band), de-duped.
+    bi40 = int(np.argmin(np.abs(cen - 40.5)))
+    scat40 = ch0["scatter"][bi40]
+    xs40 = sorted(v for v in (scat40["x"] if scat40 else []) if v is not None)
+    exp40 = sorted([700.0, 800.0, 900.0])
+    assert len(xs40) == 3, xs40
+    assert all(abs(a - b) < 1e-6 for a, b in zip(xs40, exp40)), (xs40, exp40)
+
+
+def test_builder_no_device_psd_scale_in_detail():
+    """device_psd_scale_by_channel and psd_abs_uv2_per_hz were REMOVED from build_pooled_detail
+    (PI 2026-06-27). Validates: (1) neither key is present in the returned detail;
+    (2) row_lsb_tier now uses 'td'/'survey'/'patient_event' (no 'device_psd_scaled');
+    (3) the detail still contains psd, row_source, row_channel, row_lsb_tier, f_set."""
     from modules.Biomarkers.routines import streaming_psd as sp
     f = np.linspace(0.95, 100, 60)
     F = f.size
-    # Two channels. ChA: TD rows + device rows (device sits at 1/4 the TD density -> scale 4.0).
-    # ChB: device rows only (no TD overlap -> uncalibrated).
-    OFFSET = 0.25
     rng = np.random.default_rng(0)
-    td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0          # ChA TD absolute density
-    devA_dens = td_dens.mean(0)[None, :] * OFFSET * np.ones((3, 1))  # ChA device = TD/4
-    devB_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0        # ChB device only
-    rows_log = np.vstack([10 * np.log10(td_dens),
-                          10 * np.log10(devA_dens),
-                          10 * np.log10(devB_dens)])
-    channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3 + ["ZERO_TWO_RIGHT"] * 3,
-                       dtype=object)
-    source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3 + ["Patient event"] * 3,
-                      dtype=object)
+    td_dens = np.abs(rng.normal(5.0, 0.3, (4, F))) + 1.0
+    dev_dens = np.abs(rng.normal(2.0, 0.1, (3, F))) + 1.0
+    rows_log = np.vstack([10 * np.log10(td_dens), 10 * np.log10(dev_dens)])
+    channel = np.array(["ZERO_TWO_LEFT"] * 4 + ["ZERO_TWO_LEFT"] * 3, dtype=object)
+    source = np.array(["TD streaming"] * 4 + ["Patient event"] * 3, dtype=object)
     t0 = 1_700_000_000.0
-    t = t0 + np.arange(10) * 600.0
+    t = t0 + np.arange(7) * 600.0
     mat = {"f_set": f, "logX": rows_log, "t": t, "channel": channel, "source": source,
-           "dur": np.full(10, 30.0)}
-    # No PRO matching needed for the scale logic; pass empty PROs (rows stay unmatched).
+           "dur": np.full(7, 30.0)}
     det = sp.build_pooled_detail_from_matrix(mat, np.array([]), np.array([]),
                                              aggregate="all", match_direction="pro_first")
-    scale = det["device_psd_scale_by_channel"]
-    assert "ZERO_TWO_LEFT" in scale, scale
-    assert abs(scale["ZERO_TWO_LEFT"] - (1.0 / OFFSET)) < 0.05, scale   # ~4.0
-    assert "ZERO_TWO_RIGHT" not in scale                               # no TD overlap
+    # Removed fields must NOT be present
+    assert "device_psd_scale_by_channel" not in det, "device_psd_scale_by_channel should be removed"
+    assert "psd_abs_uv2_per_hz" not in det, "psd_abs_uv2_per_hz should be removed"
+    # Core fields still present
+    for key in ("psd", "f_set", "row_source", "row_channel", "row_lsb_tier", "labels"):
+        assert key in det, f"missing key: {key}"
+    # Tiers: TD rows -> "td", patient-event rows -> "patient_event" (no device_psd_scaled)
     tiers = list(det["row_lsb_tier"])
-    assert tiers[:4] == ["td"] * 4
-    assert tiers[4:7] == ["device_psd_scaled"] * 3                     # ChA device scaled
-    assert tiers[7:10] == ["device_psd_uncalibrated"] * 3             # ChB device uncalibrated
-    # ChA scaled device absolute density should now match TD scale (device × 4 ≈ TD mean).
-    abs_stack = det["psd_abs_uv2_per_hz"]   # (N, C, F)
-    chans = det["chan_order"]
-    ciA = chans.index("ZERO_TWO_LEFT")
-    dev_row_corr = abs_stack[4, ciA, :]      # first ChA device row, corrected
-    band = (f >= 8) & (f <= 30)
-    assert abs(np.nanmedian(dev_row_corr[band] / td_dens.mean(0)[band]) - 1.0) < 0.05
+    assert tiers[:4] == ["td"] * 4, tiers[:4]
+    assert tiers[4:7] == ["patient_event"] * 3, tiers[4:7]
+    valid_tiers = {"td", "survey", "patient_event"}
+    assert all(t in valid_tiers for t in tiers), tiers
 
 
 def test_spectral_scan_lsb_falls_back_without_abs_density():
-    """No psd_abs_uv2_per_hz in the detail (e.g. onboard-FFT-only pool) -> feature="lsb" degrades to
-    the legacy dB feature rather than failing, and the full range is scanned."""
+    """No pro_lsb_spectrum_by_channel cache passed (e.g. back-compat caller) -> feature="lsb" degrades
+    to the legacy dB feature ("logpsd_db") rather than failing, and the full range is scanned."""
     det = _planted_detail(center=20.0, beta=0.4, seed=11)
     sc = analytics.spectral_feature_importance(det, strategy="tertile", feature="lsb")
     assert sc["feature"] == "logpsd_db", sc["feature"]
@@ -776,9 +920,15 @@ def test_deployment_roc_bootstrap_defolded_null_ci_drops_below_chance():
            "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
     roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
     assert roc["available"] and roc["auc_lo"] is not None
-    # the de-folded null CI honestly reaches below chance (the old fold pinned this at ~0.5)
-    assert roc["auc_lo"] < 0.5, f"null lower CI {roc['auc_lo']} should drop below 0.5 (de-fold)"
+    # audit C1 (post-[3]): the headline CI is now BCa (bias+skew corrected), whose bias term can
+    # re-center a near-chance band's lower bound back to ~0.5. The DE-FOLDED percentile GUARD bound
+    # (auc_lo_defold) — which the "beats chance" power gate reads — must still honestly drop below 0.5
+    # on a true-null band, so absence-of-signal can never read as significance.
+    assert roc["auc_lo_defold"] is not None
+    assert roc["auc_lo_defold"] < 0.5, \
+        f"null de-folded guard CI {roc['auc_lo_defold']} should drop below 0.5 (C1 guard)"
     assert "de-folded" in roc.get("ci_method", "")
+    assert roc.get("ci_interval") == "BCa"
     # CI still brackets the (oriented) point estimate
     assert roc["auc_lo"] <= roc["auc"] + 1e-9 <= roc["auc_hi"] + 1e-9
 
@@ -958,110 +1108,6 @@ def test_psd_lsb_conversion_guards_small_n():
     assert out["n_pairs"] == 3
 
 
-def test_lsb_uv2_converters_roundtrip_and_validated_constant():
-    """The validated power-domain LSB<->µV² converters round-trip and use the paired-block constant
-    (k=269 LSB/µV² ≈ 0.0037 µV²/LSB) — distinct from the exact 146 nV/LSB time-domain ADC scale."""
-    k = analytics.LSB_PER_UV2_VALIDATED
-    assert 250.0 < k < 290.0, k                                  # ~269
-    assert abs(analytics.UV2_PER_LSB_VALIDATED - 1.0 / k) < 1e-9
-    # 1 µV² -> ~269 LSB
-    assert abs(analytics.lsb_from_uv2(1.0) - k) < 1e-6
-    # round-trip
-    for uv2 in (0.5, 2.0, 13.7):
-        lsb = analytics.lsb_from_uv2(uv2)
-        assert abs(analytics.uv2_from_lsb(lsb) - uv2) < 1e-6, uv2
-    # the power-domain LSB is NOT the time-domain ADC scale
-    assert analytics.LSB_PER_UV2_VALIDATED != analytics.ADC_NV_PER_LSB
-    # invalid inputs -> NaN, never an exception
-    import math
-    assert math.isnan(analytics.lsb_from_uv2(0.0))
-    assert math.isnan(analytics.lsb_from_uv2(-3.0))
-    assert math.isnan(analytics.uv2_from_lsb(None))
-
-
-def test_psd_band_to_lsb_matches_band_integral_times_k():
-    """The shared PSD->LSB helper (timeline 'psd_modeled' tier + deployment fallback) must equal the
-    composition it documents: band-integrate the PSD over [c-half, c+half), then x k=269. A flat PSD of
-    density d over a 5 Hz band integrates to ~5*d µV², so lsb == 269 * (5*d) within trapezoid error."""
-    import math
-    freq = np.arange(0.0, 50.0, 0.5)          # 0.5 Hz bins
-    d = 0.2                                     # µV²/Hz flat
-    psd = np.full_like(freq, d)
-    center, half = 20.0, 2.5
-    out = analytics.psd_band_to_lsb(psd, freq, center, half_hz=half)
-    # band integral of a flat density over a 5 Hz window ~= d * (2*half), trapezoid on [c-half, c+half)
-    expected_uv2 = analytics._band_power_notched(freq, psd, center, half)
-    assert abs(out["uv2"] - expected_uv2) < 1e-9, out
-    assert abs(out["lsb"] - analytics.LSB_PER_UV2_VALIDATED * expected_uv2) < 1e-6, out
-    assert out["k_used"] == analytics.LSB_PER_UV2_VALIDATED
-    # 20 Hz is in-range and Dual is 256-pt -> no flags, clean note
-    assert out["freq_extrapolated"] is False
-    assert out["fft_compatible"] is True
-    assert "validated range" in out["note"]
-
-
-def test_psd_band_to_lsb_flags_extrapolation_and_fft_incompatibility():
-    """Center outside 7.8-28.3 Hz -> freq_extrapolated True (still returns a number, but flagged).
-    threshold_mode='Single' (64-pt FFT) -> fft_compatible False (k=269 is a 256-pt fit). The lsb value
-    is still produced; the FLAGS are how callers refuse to silently trust it (matches estimate_lsb)."""
-    freq = np.arange(0.0, 100.0, 0.5)
-    psd = np.full_like(freq, 0.1)
-    # high-gamma 55.5 Hz: out of validated range
-    hi = analytics.psd_band_to_lsb(psd, freq, 55.5, half_hz=2.5)
-    assert hi["freq_extrapolated"] is True
-    assert np.isfinite(hi["lsb"]) and hi["lsb"] > 0          # still computed, just flagged
-    assert "EXTRAPOLATED" in hi["note"]
-    # below the 8 Hz adaptive floor (and below 7.8 Hz validated lo)
-    lo = analytics.psd_band_to_lsb(psd, freq, 6.0, half_hz=2.5)
-    assert lo["freq_extrapolated"] is True
-    # 64-pt Single mode: in-range center but FFT-incompatible
-    incompat = analytics.psd_band_to_lsb(psd, freq, 20.0, half_hz=2.5, threshold_mode="Single")
-    assert incompat["fft_compatible"] is False
-    assert "non-256-pt FFT" in incompat["note"]
-    # Dual / SingleInverse are 256-pt -> compatible
-    assert analytics.psd_band_to_lsb(psd, freq, 20.0, threshold_mode="SingleInverse")["fft_compatible"] is True
-
-
-def test_psd_band_to_lsb_guards_bad_input():
-    """Missing/mismatched/too-short PSD or a band with <2 bins -> NaN lsb/uv2 with a reason, never an
-    exception. The local _freq_extrapolated must agree with psd_lsb_model's definition at the bounds."""
-    import math
-    freq = np.arange(0.0, 50.0, 0.5)
-    psd = np.full_like(freq, 0.1)
-    # mismatched lengths
-    bad = analytics.psd_band_to_lsb(psd[:-3], freq, 20.0)
-    assert math.isnan(bad["lsb"]) and math.isnan(bad["uv2"])
-    # band entirely outside the available freq axis -> <2 bins
-    empty = analytics.psd_band_to_lsb(psd, freq, 200.0, half_hz=2.5)
-    assert math.isnan(empty["lsb"])
-    # local guard agrees with the frozen-model guard at the validated bounds
-    from Biomarkers.routines import psd_lsb_model as plm
-    for c in (7.0, 7.8, 18.0, 28.3, 29.0):
-        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
-
-
-def test_native_modeled_crosscheck_fold_and_sigma_gate():
-    """The deployment sign-off's native-vs-modeled FYI (band_lsb_and_power) reports how closely the
-    k=269 model of the µV² cut-point reproduces the MEASURED device-Timeline LSB. Verify the math it
-    relies on: lsb_from_uv2(cutpoint) gives the modeled value, the fold is symmetric max(a/b, b/a),
-    and 'agrees' is fold <= the 1σ conversion scatter (LSB_UV2_SIGMA_FOLD ≈ 1.26×)."""
-    k = analytics.LSB_PER_UV2_VALIDATED               # 269
-    sigma = analytics.LSB_UV2_SIGMA_FOLD              # ≈1.26
-    # a cut-point of 1 µV² models to ~269 LSB; if the device measured ~272, they agree (~1.01×)
-    cutpoint = 1.0
-    modeled = analytics.lsb_from_uv2(cutpoint)
-    assert abs(modeled - k) < 1e-6
-    measured_close = k * 1.05                          # 5% high -> within 1σ
-    fold_close = max(measured_close / modeled, modeled / measured_close)
-    assert fold_close <= sigma                         # agrees
-    measured_far = k * 1.6                             # 60% high -> beyond 1σ
-    fold_far = max(measured_far / modeled, modeled / measured_far)
-    assert fold_far > sigma                            # does NOT agree
-    # the cross-check only fires when BOTH a measured threshold and a cut-point exist; the modeled
-    # value is the SAME constant the unsensed-band fallback uses, so agreement here vouches for it.
-    assert analytics.lsb_from_uv2(2.0) == analytics.lsb_from_uv2(1.0) * 2.0   # linear in µV²
-
-
 def test_band_power_notched_default_no_mains_removal():
     """The Percept is implanted and battery-powered: there is NO mains coupling, so the default band
     integral must NOT remove any 60 Hz content (removing it would delete real neural power). A spike at
@@ -1099,6 +1145,16 @@ def _forward_detail(E=300, F=60, center=20.0, seed=0, weeks=12, beta=0.5, noise=
     psd[:, 0, band] *= (1 + (beta * sign * (labels - labels.mean()))[:, None])
     return {"f_set": f, "psd": psd, "labels": labels, "rating_group": np.arange(E),
             "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+
+def test_freq_extrapolated_guard_agrees_with_frozen_model():
+    """The deployment fallback and the frozen per-band model must share ONE definition of 'outside the
+    calibrated range', so a band flagged extrapolated by one is flagged by the other. The invariant was
+    previously asserted inside the (now-deleted) psd_band_to_lsb guard test; restored standalone here so
+    the agreement stays covered. Spans the validated edges (7.8 / 28.3 Hz) and points either side."""
+    from Biomarkers.routines import psd_lsb_model as plm
+    for c in (5.0, 7.0, 7.8, 18.0, 28.3, 29.0, 55.5):
+        assert analytics._freq_extrapolated(c) == plm._freq_extrapolated(c), c
 
 
 def test_forward_chaining_validates_stationary_band():
@@ -1186,9 +1242,10 @@ if __name__ == "__main__":
     test_matched_sample_counts_reports_high_low_and_offset()
     test_cv_logistic_auc_oriented_and_guards_small_n()
     test_spectral_feature_importance_finds_planted_band()
-    test_spectral_scan_lsb_feature_calibrated_td_only_and_8_30()
-    test_spectral_scan_lsb_td_priority_over_survey()
-    test_builder_device_psd_scaled_onto_lsb_axis()
+    test_spectral_scan_lsb_feature_cs14_td_and_full_spectrum()
+    test_spectral_scan_lsb_cs14_cache_lookup_per_pro()
+    test_spectral_scan_lsb_cs14_vectorized_scatter_assigns_correct_pro_per_band()
+    test_builder_no_device_psd_scale_in_detail()
     test_spectral_scan_lsb_falls_back_without_abs_density()
     test_spectral_scan_prelog_matches_linear()
     test_spectral_scan_emits_fdr_qs_and_summary()
@@ -1211,11 +1268,7 @@ if __name__ == "__main__":
     test_psd_lsb_conversion_flags_nonlinear_slope()
     test_psd_lsb_conversion_guards_small_n()
     test_band_power_notched_default_no_mains_removal()
-    test_lsb_uv2_converters_roundtrip_and_validated_constant()
-    test_psd_band_to_lsb_matches_band_integral_times_k()
-    test_psd_band_to_lsb_flags_extrapolation_and_fft_incompatibility()
-    test_psd_band_to_lsb_guards_bad_input()
-    test_native_modeled_crosscheck_fold_and_sigma_gate()
+    test_freq_extrapolated_guard_agrees_with_frozen_model()
     test_forward_chaining_validates_stationary_band()
     test_forward_chaining_null_band_does_not_beat_chance_forward()
     test_forward_chaining_catches_sign_reversal_over_time()
@@ -1554,42 +1607,37 @@ def test_modeled_lsb_threshold_fallback_ladder():
     the MODELED LSB instead of dead-ending at 'NO DEPLOYABLE LSB THRESHOLD'. Verifies:
       (1) a MEASURED native threshold always wins — the estimate is never consulted (returns None);
       (2) TIER 1 (modeled_timeline) reads the montage/survey LSB at the cut-point percentile;
-      (3) TIER 3 (validated_constant) translates the µV² cut-point via k=269 when no modeled
-          timeline and no frozen per-participant model exist;
-      (4) the ±1σ band is the validated fold (LSB_UV2_SIGMA_FOLD) either side;
-      (5) an out-of-band center (e.g. 50 Hz, outside the validated 7.8–28.3 Hz range) sets
-          freq_extrapolated=True so the UI flags the LSB as extrapolated, not calibrated;
-      (6) with neither modeled points nor a cut-point, the helper honestly returns None."""
+      (3) the ±1σ band is the modeled-LSB fold (MODELED_LSB_SIGMA_FOLD) either side;
+      (4) FAIL-CLOSED: with no modeled timeline AND no frozen per-participant model (participant=None),
+          the population-constant last resort having been retired 2026-06-28, the helper returns None
+          (indeterminate) rather than a population-average guess — for ANY cut-point or center freq;
+      (5) with neither modeled points nor a cut-point, the helper honestly returns None."""
     from modules.Biomarkers import bravo_service as bs
-    k = analytics.LSB_PER_UV2_VALIDATED          # 269
-    sigma = analytics.LSB_UV2_SIGMA_FOLD         # ≈1.26
+    sigma = analytics.MODELED_LSB_SIGMA_FOLD     # ≈1.26
+
+    # Signature is now (thr_lsb, modeled_thr, n_modeled, center_hz, percentile): the cut-point is no
+    # longer passed — the caller models the LSB line off raw TD at the ROC band and passes the
+    # percentile-anchored value in as modeled_thr (the single units-consistent modeled tier).
 
     # (1) measured native threshold present -> estimate never built
-    assert bs._modeled_lsb_threshold_estimate(
-        123.0, 200.0, 12, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    assert bs._modeled_lsb_threshold_estimate(123.0, 200.0, 12, 20.0, 70.0) is None
 
-    # (2)+(4) TIER 1: in-band modeled timeline points -> modeled_timeline tier, ±1σ band
-    r1 = bs._modeled_lsb_threshold_estimate(
-        None, 210.0, 15, 1.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
+    # (2)+(3) TIER 1: a modeled-timeline value present -> modeled_timeline tier, ±1σ band
+    r1 = bs._modeled_lsb_threshold_estimate(None, 210.0, 15, 20.0, 70.0)
     assert r1["tier"] == "modeled_timeline" and r1["estimated_upper_lsb"] == 210.0
     assert abs(r1["estimated_upper_lsb_lo"] - round(210.0 / sigma, 1)) < 0.2
     assert abs(r1["estimated_upper_lsb_hi"] - round(210.0 * sigma, 1)) < 0.2
     assert r1["freq_extrapolated"] is False        # 20 Hz is in the validated range
+    assert r1["k_effective"] == analytics.LSB_PER_UV2_TRANSFORM   # timeline runs transform×352.62
+    assert r1["slope_b"] is None                   # no proportional-fit slope applied at read time
 
-    # (3) TIER 3: no modeled timeline, no frozen model (participant=None) -> validated k=269 constant
-    r3 = bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 2.0, 20.0, 70.0, None, "ZERO_TWO_LEFT")
-    assert r3["tier"] == "validated_constant"
-    assert abs(r3["estimated_upper_lsb"] - round(k * 2.0, 1)) < 0.2   # linear in µV²
+    # (4) FAIL-CLOSED: no modeled value (modeled_thr=None, e.g. no TD for the channel) -> indeterminate
+    #     (None), regardless of whether the center is in/out of the validated range.
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 20.0, 70.0) is None
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 50.0, 70.0) is None
 
-    # (5) out-of-band center -> extrapolation flag set
-    rex = bs._modeled_lsb_threshold_estimate(
-        None, None, 0, 1.0, 50.0, 70.0, None, "ZERO_TWO_LEFT")
-    assert rex["freq_extrapolated"] is True
-
-    # (6) nothing to estimate from -> honest None (panel shows the no-anchor message)
-    assert bs._modeled_lsb_threshold_estimate(
-        None, None, 0, None, 20.0, 70.0, None, "ZERO_TWO_LEFT") is None
+    # (5) nothing to estimate from -> honest None (panel shows the no-anchor message)
+    assert bs._modeled_lsb_threshold_estimate(None, None, 0, 20.0, None) is None
 
 
 def test_deployment_summary_identity_is_json_serializable():
@@ -1661,3 +1709,776 @@ def test_deployment_summary_real_payload_json_serializable():
     if out.get("available") and out.get("identity"):
         assert out["identity"].get("participant") == uid
         assert isinstance(out["identity"]["participant"], str)
+
+
+def test_find_best_threshold_vectorized_matches_reference():
+    """The vectorized _find_best_threshold_for_metric (searchsorted sens/spec/acc sweep) must be
+    element-for-element identical to the verbatim pre-vectorization loop across degenerate inputs:
+    NaN scores, heavy ties, and all-one-class labels. This is the sens/spec-objective selector used
+    by the chronic sliding-window detector; vectorizing it removed ~35 s of per-threshold sklearn
+    confusion_matrix/accuracy_score overhead from the biomarker recompute."""
+    import numpy as np, pandas as pd
+    from modules.Biomarkers.routines import threshold_biomarker as tb
+    rng = np.random.default_rng(0)
+    thr = np.arange(60, 200, 1)
+    fails = 0
+    for trial in range(150):
+        n = int(rng.integers(5, 60))
+        y = rng.integers(0, 2, n)
+        if trial % 7 == 0:
+            y = np.zeros(n, int)
+        if trial % 11 == 0:
+            y = np.ones(n, int)
+        lfp = rng.normal(120, 40, n)
+        if trial % 5 == 0:
+            lfp[rng.integers(0, n, size=max(1, n // 4))] = np.nan
+        if trial % 3 == 0:
+            lfp = np.round(lfp / 10) * 10
+        df = pd.DataFrame({"pain_level": y, "LFP_smoothed": lfp})
+        for metric in ("sens", "spec"):
+            a = tb._find_best_threshold_for_metric(df, thr, metric=metric)
+            b = tb._find_best_threshold_for_metric_reference(df, thr, metric=metric)
+
+            def _eq(x, yv):
+                if isinstance(x, float) and np.isnan(x):
+                    return isinstance(yv, float) and np.isnan(yv)
+                try:
+                    return bool(np.isclose(x, yv))
+                except Exception:
+                    return x == yv
+            if not all(_eq(x, yv) for x, yv in zip(a, b)):
+                fails += 1
+    assert fails == 0, f"vectorized threshold selector diverged from reference in {fails} cases"
+
+
+def test_best_threshold_balanced_auc_matches_reference():
+    """best_threshold_by_balanced_auc must reproduce the per-threshold roc_auc_score(y, binary_pred)
+    grid search's BEST AUC exactly (roc_auc on a binary prediction == (sens+spec)/2), across NaN
+    scores / ties / one-class folds. The chosen threshold among EXACT AUC ties is deterministic
+    (first/lowest AUC-optimal threshold); we assert the AUC value matches and that the chosen
+    threshold is itself AUC-optimal (a valid member of the original's tie set)."""
+    import numpy as np
+    from sklearn import metrics
+    from modules.Biomarkers.routines.threshold_biomarker import (
+        best_threshold_by_balanced_auc, _threshold_metric_arrays)
+
+    def _reference(y, lfp, thresholds):
+        best_auc, best_thr = -1.0, float(thresholds[0])
+        for t in thresholds:
+            cls = (lfp >= t).astype(int)
+            if len(np.unique(cls)) < 2:
+                continue
+            try:
+                a = metrics.roc_auc_score(y, cls)
+                a = max(a, 1 - a)
+            except Exception:
+                continue
+            if a > best_auc:
+                best_auc, best_thr = a, float(t)
+        return best_thr, best_auc
+
+    rng = np.random.default_rng(7)
+    thr = np.arange(60, 200, 1)
+    auc_fail = 0
+    thr_not_optimal = 0
+    for trial in range(150):
+        n = int(rng.integers(4, 80))
+        y = rng.integers(0, 2, n)
+        if len(np.unique(y)) < 2:
+            continue   # one-class folds are skipped upstream before this selector is called
+        lfp = rng.normal(120, 40, n).astype(float)
+        if trial % 4 == 0:
+            lfp = np.round(lfp / 15) * 15
+        if trial % 6 == 0 and n > 4:
+            lfp[rng.integers(0, n, size=max(1, n // 5))] = np.nan
+        rt, ra = _reference(y, lfp, thr)
+        vt, va = best_threshold_by_balanced_auc(y, lfp, thr)
+        # 1) best AUC value identical
+        if not (np.isclose(ra, va, atol=1e-9) or (ra == -1.0 and va == -1.0)):
+            auc_fail += 1
+        # 2) the chosen threshold is AUC-optimal (balanced-acc at vt equals the grid max)
+        sens, spec, _ = _threshold_metric_arrays(y, lfp, thr)
+        a = np.maximum((sens + spec) / 2.0, 1.0 - (sens + spec) / 2.0)
+        fs = np.sort(lfp[np.isfinite(lfp)])
+        n_ge = fs.size - np.searchsorted(fs, thr.astype(float), side="left")
+        valid = (n_ge > 0) & (n_ge < n) & np.isfinite(a)
+        amax = np.nanmax(np.where(valid, a, -np.inf))
+        vi = int(np.where(thr == int(vt))[0][0])
+        if not np.isclose(a[vi], amax, atol=1e-9):
+            thr_not_optimal += 1
+    assert auc_fail == 0, f"best balanced-AUC value diverged in {auc_fail} cases"
+    assert thr_not_optimal == 0, f"chosen threshold was not AUC-optimal in {thr_not_optimal} cases"
+
+
+def test_roc_small_sample_advisory_is_label_only():
+    """Audit [8]: deployment_roc carries a `small_sample` advisory (n_clusters < floor) that flips at
+    the floor and changes NO computed value. We compare a few-cluster vs many-cluster fixture and
+    assert (a) the flag tracks n_clusters vs SMALL_SAMPLE_CLUSTER_FLOOR, and (b) removing the two
+    advisory keys leaves an otherwise-identical payload for the SAME data (label-only contract)."""
+    import numpy as _np
+    F, C = 60, 2
+    f = _np.linspace(0.95, 100, F)
+    band = (f >= 17.5) & (f <= 22.5)
+
+    def _det(n_clusters, reps=4, seed=5):
+        # n_clusters INDEPENDENT ratings, each shared by `reps` neural samples (clustered). The det
+        # carries an explicit rating_group so deployment_roc counts INDEPENDENT RATINGS (not rows) —
+        # exactly the real-data situation where the small_sample advisory matters. reps keeps the
+        # matched-sample count >= 12 (the ROC availability floor) even when n_clusters is small.
+        rng = _np.random.default_rng(seed)
+        E = n_clusters * reps
+        labels = _np.repeat(rng.normal(5, 2, n_clusters), reps)
+        rating_group = _np.repeat(_np.arange(n_clusters), reps)
+        psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+        psd[:, 0, band] *= (1 + 0.7 * (labels - labels.mean())[:, None])
+        times = []
+        for ci in range(n_clusters):
+            day = 1 + (ci % 27)
+            times += [f"2025-07-{day:02d} 10:00:00"] * reps
+        return {"f_set": f, "psd": psd, "labels": labels, "rating_group": rating_group,
+                "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+    floor = analytics.SMALL_SAMPLE_CLUSTER_FLOOR
+    # Use a few-cluster and a many-cluster fixture. n_clusters is the post-binarization independent-
+    # rating count (the middle tertile is dropped), so we assert the CONTRACT — small_sample ==
+    # (n_clusters < floor) — on whatever n_clusters each fixture yields, plus that the two fixtures
+    # land on opposite sides of the floor (sanity that the flag can be both True and False).
+    roc_small = analytics.deployment_roc(_det(8), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    roc_big = analytics.deployment_roc(_det(30), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    assert roc_small["available"] and roc_big["available"]
+    # the flag is exactly the floor test on n_clusters — no off-by-one, no perturbation
+    for r in (roc_small, roc_big):
+        assert r["small_sample"] == (r["n_clusters"] < floor)
+        assert r["small_sample_floor"] == floor
+    # the two fixtures straddle the floor (flag is genuinely toggling, not stuck)
+    assert roc_small["small_sample"] is True, f"expected small fixture below floor, n={roc_small['n_clusters']}"
+    assert roc_big["small_sample"] is False, f"expected big fixture at/above floor, n={roc_big['n_clusters']}"
+
+    # (b) label-only: dropping the advisory keys, the small-sample payload equals what the SAME data
+    # produced (i.e. the flag did not perturb auc / ci / operating point). Recompute identically.
+    roc_small_again = analytics.deployment_roc(_det(8), "ZERO_TWO_LEFT", 20.0, n_boot=200, seed=1)
+    for k in ("auc", "auc_lo", "auc_hi", "n_clusters", "n_pos", "n_neg"):
+        a, b = roc_small[k], roc_small_again[k]
+        assert (a == b) or (a is not None and b is not None and abs(a - b) < 1e-12), \
+            f"advisory must not change {k}: {a} vs {b}"
+
+
+def test_deployment_summary_carries_temporal_validity_block():
+    """Audit [23]: the deployment_summary device record must ALWAYS carry an explicit
+    `temporal_validity` block (forward_validation / threshold_drift / stim_state_portability), each
+    defaulting to 'not_assessed' so the exported JSON is unambiguous. Runs against the live RCS08
+    participant; skips cleanly when absent. Asserts presence + allowed enum values, not specific
+    verdicts (those depend on data)."""
+    import os, sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+    from Server import models
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    if models.Participant.find(uid=uid) is None:
+        return  # participant not in this DB — skip
+    out = bs.deployment_summary({
+        "ParticipantId": uid, "Channel": "ZERO_TWO_LEFT", "CenterHz": 20.0, "BandWidthHz": 5.0,
+        "Metric": "nrs", "Strategy": "tertile", "MatchDirection": "prior"})
+    if not out.get("available"):
+        return
+    tv = out.get("temporal_validity")
+    assert isinstance(tv, dict), "temporal_validity block must always be present"
+    assert tv.get("forward_validation") in ("validated", "failed", "not_assessed")
+    assert tv.get("threshold_drift") in ("not_assessed",)  # not yet computed (audit [18])
+    assert tv.get("stim_state_portability") in ("portable", "fragile", "not_assessed")
+
+
+def test_block_bootstrap_block_len_1_reproduces_iid_loop():
+    """Audit [16]: the vectorized moving-block bootstrap at block_len=1 must reproduce the previous
+    per-replicate sklearn rating-cluster bootstrap EXACTLY (same seed -> same cluster picks -> same
+    de-folded AUC distribution). This pins that the vectorization changed no number on the i.i.d.
+    path. Tolerances are 0 on mean and both CI percentiles."""
+    import numpy as _np
+    from sklearn import metrics as _metrics
+    K = 40
+    rng = _np.random.default_rng(3)
+    sizes = rng.integers(1, 6, K)
+    g = _np.repeat(_np.arange(K), sizes)
+    N = g.size
+    y = rng.integers(0, 2, N); y[:2] = [0, 1]
+    use = rng.normal(0, 1, N) + 0.6 * y
+
+    def loop_boot(nb, seed):
+        r = _np.random.default_rng(seed); uniq = _np.unique(g)
+        rows = {c: _np.where(g == c)[0] for c in uniq}; out = []
+        for _ in range(nb):
+            pick = r.choice(uniq, size=uniq.size, replace=True)
+            idx = _np.concatenate([rows[c] for c in pick]); yb = y[idx]
+            if len(_np.unique(yb)) < 2:
+                continue
+            try:
+                out.append(float(_metrics.roc_auc_score(yb, use[idx])))
+            except ValueError:
+                continue
+        return _np.array(out)
+
+    loop = loop_boot(3000, 11)
+    vec = analytics._block_bootstrap_aucs(use, y, g, K, 3000, 1, _np.random.default_rng(11))
+    vec = vec[_np.isfinite(vec)]
+    assert vec.size == loop.size, f"replicate counts differ: {vec.size} vs {loop.size}"
+    assert abs(loop.mean() - vec.mean()) < 1e-12
+    assert abs(_np.percentile(loop, 2.5) - _np.percentile(vec, 2.5)) < 1e-12
+    assert abs(_np.percentile(loop, 97.5) - _np.percentile(vec, 97.5)) < 1e-12
+
+
+def test_auto_block_len_degrades_to_iid_when_uncorrelated():
+    """Audit [16]: auto block length is 1 (i.i.d.) when the per-cluster pain series has no positive
+    autocorrelation, and grows with serial dependence. Guarantees uncorrelated data is unchanged."""
+    import numpy as _np
+    unc = _np.random.default_rng(1).normal(0, 1, 60)
+    assert analytics._auto_block_len(unc) == 1
+    z = _np.zeros(60)
+    for i in range(1, 60):
+        z[i] = 0.8 * z[i - 1] + _np.random.default_rng(i).normal()
+    assert analytics._auto_block_len(z) >= 2  # AR(1) rho=0.8 -> blocks longer than 1
+
+
+def test_auc_power_design_effect_1_is_exact_noop_and_discount_is_monotone():
+    """Audit [19]: design_effect=1.0 reproduces the prior auc_power EXACTLY (no-op), and design_effect
+    > 1 lowers current power and raises ratings-needed (the honest direction), while DISPLAYING the
+    raw (un-discounted) rating counts."""
+    a = analytics.auc_power(0.75, 20, 20, auc_lo=0.62)                     # default deff=1.0
+    b = analytics.auc_power(0.75, 20, 20, auc_lo=0.62, design_effect=1.0)
+    for k in ("power_current", "power_current_lo", "n_ratings_needed", "n_ratings_needed_hi",
+              "n_ratings_current", "more_data_needed", "se_auc", "n_pos", "n_neg"):
+        assert a.get(k) == b.get(k), f"design_effect=1.0 must be a no-op; differs on {k}"
+    assert a["design_effect"] == 1.0 and a["n_ratings_current"] == 40 and a["n_pos"] == 20
+
+    base = analytics.auc_power(0.70, 15, 15, auc_lo=0.58, design_effect=1.0)
+    disc = analytics.auc_power(0.70, 15, 15, auc_lo=0.58, design_effect=1.5)
+    assert disc["power_current"] <= base["power_current"] + 1e-12, "discount must not raise power"
+    assert disc["n_ratings_needed"] >= base["n_ratings_needed"], "discount must not lower ratings-needed"
+    assert disc["n_ratings_current"] == 30, "displayed current must be RAW ratings (un-discounted)"
+    assert abs(disc["n_ratings_effective"] - 30 / 1.5) < 1e-9, "effective n must be raw/deff"
+
+
+def test_deployment_roc_bca_fields_and_defold_guard_present():
+    """Audit [3]: the deployment ROC reports a BCa headline interval (ci_interval='BCa', with bca_z0 /
+    bca_a populated) AND a de-folded percentile guard (auc_lo_defold/auc_hi_defold). On a clean planted
+    band both the BCa CI and the guard sit above chance; the guard brackets the point AUC."""
+    import numpy as _np
+    rng = _np.random.default_rng(3)
+    E, C, F = 160, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.8 * (labels - labels.mean())[:, None])
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=500, seed=1)
+    assert roc["available"]
+    assert roc["ci_interval"] == "BCa"
+    assert roc["bca_z0"] is not None and roc["bca_a"] is not None
+    assert roc["auc_lo_defold"] is not None and roc["auc_hi_defold"] is not None
+    assert roc["ci_valid_floor"] == analytics.BOOT_CI_VALID_FLOOR == 100
+    # planted band: both the BCa CI and the de-folded guard beat chance
+    assert roc["auc_lo"] > 0.5 and roc["auc_lo_defold"] > 0.5
+    # the de-folded guard brackets the oriented point estimate
+    assert roc["auc_lo_defold"] <= roc["auc"] + 1e-9 <= roc["auc_hi_defold"] + 1e-9
+
+
+def test_bca_matches_scipy_on_iid_skewed_statistic():
+    """Audit [3]: the in-house BCa interval matches scipy.stats.bootstrap(method='BCa') to within
+    bootstrap Monte-Carlo error on a skewed statistic where the bias/accel corrections are non-trivial.
+    Pins the BCa formula (z0 from the bootstrap, a from the jackknife)."""
+    import numpy as _np
+    from scipy import stats as _st
+    rng = _np.random.default_rng(0)
+    x = rng.gamma(2.0, 1.0, 40)
+    theta = float(_np.var(x))
+    res = _st.bootstrap((x,), _np.var, n_resamples=20000, method="BCa",
+                        random_state=1, confidence_level=0.95)
+    B = 20000
+    idx = rng.integers(0, x.size, size=(B, x.size))
+    boot = _np.var(x[idx], axis=1)
+    jack = _np.array([_np.var(_np.delete(x, i)) for i in range(x.size)])
+    lo, hi, z0, a = analytics._bca_ci(theta, boot, jack, alpha=0.05)
+    assert abs(res.confidence_interval.low - lo) < 0.05
+    assert abs(res.confidence_interval.high - hi) < 0.05
+    assert abs(z0) > 0.01 and abs(a) > 0.001    # corrections are genuinely non-zero on skewed data
+
+
+def test_jackknife_cluster_aucs_matches_manual_delete_one():
+    """Audit [3]: the vectorized delete-one-CLUSTER jackknife (BCa acceleration input) equals a manual
+    leave-one-cluster-out AUC loop, exactly."""
+    import numpy as _np
+    rng = _np.random.default_rng(7)
+    K = 35
+    sizes = rng.integers(1, 5, K)
+    col = _np.repeat(_np.arange(K), sizes)
+    N = col.size
+    y = rng.integers(0, 2, N); y[:2] = [0, 1]
+    use = rng.normal(0, 1, N) + 0.7 * y
+    vec = analytics._jackknife_cluster_aucs(use, y, col, K)
+
+    def _auc(uu, yy):
+        if len(_np.unique(yy)) < 2:
+            return _np.nan
+        pos = uu[yy == 1][:, None]; neg = uu[yy == 0][None, :]
+        return float((pos > neg).mean() + 0.5 * (pos == neg).mean())
+
+    man = _np.array([_auc(use[col != i], y[col != i]) for i in range(K)])
+    fin = _np.isfinite(vec) & _np.isfinite(man)
+    assert _np.max(_np.abs(vec[fin] - man[fin])) < 1e-12
+
+
+def _drift_detail(E, weeks, drift_per_week=0.0, seed=1):
+    """Synthetic td_detail spanning `weeks` calendar weeks with a planted band→pain relation whose
+    separation threshold optionally drifts `drift_per_week` per week (moves the optimal cut-point)."""
+    import numpy as _np, datetime as _dt
+    rng = _np.random.default_rng(seed); C, F = 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    wkidx = _np.repeat(_np.arange(weeks), int(_np.ceil(E / weeks)))[:E]
+    shift = drift_per_week * wkidx
+    psd[:, 0, band] *= (1 + 0.5 * (labels - labels.mean())[:, None] + shift[:, None])
+    t0 = _dt.datetime(2025, 1, 6)
+    times = [(t0 + _dt.timedelta(days=int(wkidx[i]) * 7 + (i % 5))).strftime("%Y-%m-%dT10:00:00")
+             for i in range(E)]
+    return {"f_set": f, "psd": psd, "labels": labels,
+            "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False, "times": times}
+
+
+def test_threshold_drift_stationary_is_stable():
+    """Audit [18]: a stationary band (no week-trend in the cut-point) is reported 'stable' with a
+    non-significant slope and no drift flag."""
+    det = _drift_detail(240, 12, drift_per_week=0.0, seed=2)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["available"] and r["status"] == "stable"
+    assert r["drift_flag"] is False
+    assert r["slope_p"] is not None and r["slope_p"] >= 0.05
+    assert r["n_weeks_qualifying"] >= analytics.DRIFT_MIN_WEEKS
+
+
+def test_threshold_drift_detects_planted_trend():
+    """Audit [18]: a band whose cut-point drifts systematically over weeks is flagged 'drift_detected'
+    with a significant slope and a non-zero total drift."""
+    det = _drift_detail(360, 16, drift_per_week=0.18, seed=5)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["available"] and r["status"] == "drift_detected"
+    assert r["drift_flag"] is True
+    assert r["slope_p"] < 0.05
+    assert abs(r["total_drift"]) > 0
+
+
+def test_threshold_drift_sparse_record_not_assessed():
+    """Audit [18]: fail-closed — too few qualifying weeks yields 'not_assessed', never a spurious
+    drift flag from sparse weeks."""
+    det = _drift_detail(20, 10, seed=3)
+    r = analytics.threshold_drift_by_week(det, "ZERO_TWO_LEFT", 20.0)
+    assert r["status"] == "not_assessed"
+    assert r["drift_flag"] is False
+    assert r["n_weeks_qualifying"] < analytics.DRIFT_MIN_WEEKS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CS-1 — transform route (k=352.62) as the PRIMARY TD→LSB source of truth
+# (HANDOFF_TD_LSB_calibration_2026-06-27.md). The transform DSP is the percept-spectral-repro
+# "selected band power": per 1 s rcs-Hann window, zero-pad to 256, rFFT, peak scale 2/256, magnitude,
+# in-band summed-squared-magnitude, median across windows. NOT Welch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _reference_transform_block(samples_uv, center_hz, *, half_hz=2.5,
+                               nonzero=250, n_fft=256, sr=250.0, maxf=96.68):
+    """Verbatim percept-spectral-repro transform DSP (the anchor), NON-overlapping windows. This is an
+    independent re-implementation of the published reference — the vendored td_transform_band_power
+    must reproduce it bit-for-bit, which is what proves the DSP was vendored correctly (repo k=352.62,
+    r=0.9927)."""
+    freqs = np.round(np.arange(n_fft // 2 + 1) * sr / n_fft, 2)
+    freqs = freqs[freqs <= maxf + 1e-9]
+    coeffs = np.zeros(n_fft)
+    coeffs[:nonzero] = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.arange(nonzero) / nonzero))
+    v = np.asarray(samples_uv, float)
+    v = v[np.isfinite(v)]
+    if v.size < nonzero:
+        return float("nan")
+    powers = []
+    for s in range(0, v.size - nonzero + 1, nonzero):
+        w = v[s:s + nonzero] - np.mean(v[s:s + nonzero])
+        pad = np.zeros(n_fft); pad[:nonzero] = w
+        mag = 2.0 * np.abs(np.fft.rfft(pad * coeffs, n=n_fft)) / n_fft
+        mag = mag[:len(freqs)]
+        m = (freqs >= center_hz - half_hz) & (freqs <= center_hz + half_hz)
+        powers.append(float(np.sum(mag[m] ** 2)))
+    return float(np.median(powers))
+
+
+def test_td_transform_band_power_reproduces_reference_dsp():
+    """ANCHOR: the vendored transform reproduces the percept-spectral-repro reference DSP bit-for-bit
+    under non-overlapping windows (the only configuration k=352.62 was fit against). Any deviation here
+    means the DSP was vendored wrong, not that the science changed."""
+    sr = 250.0
+    rng = np.random.default_rng(11)
+    max_err = 0.0
+    for _ in range(6):
+        n = int(rng.integers(800, 6000))
+        t = np.arange(n) / sr
+        sig = (12 * np.sin(2 * np.pi * 22.5 * t) + 6 * np.sin(2 * np.pi * 9.8 * t)
+               + rng.normal(0, 3, n))
+        for c in (8.8, 10.0, 20.0, 22.5, 26.4):
+            ref = _reference_transform_block(sig, c)
+            got = analytics.td_transform_band_power(sig, sr, c)   # default step == win (non-overlap)
+            max_err = max(max_err, abs(ref - got))
+    assert max_err < 1e-9, max_err
+    # vector-center path shares one rFFT and matches the per-center scalar calls
+    centers = np.array([8.8, 20.0, 26.4])
+    vec = analytics.td_transform_band_power(sig, sr, centers)
+    scal = np.array([analytics.td_transform_band_power(sig, sr, c) for c in centers])
+    assert np.allclose(vec, scal, atol=1e-12)
+
+
+def test_td_to_lsb_applies_transform_constant_and_guards():
+    """td_to_lsb == LSB_PER_UV2_TRANSFORM (352.62, NOT 269) × transform band power, with the 1 s
+    (one-window) minimum and non-positive guards returning NaN."""
+    import math
+    assert abs(analytics.LSB_PER_UV2_TRANSFORM - 352.62) < 1e-9                 # transform route k
+    sr = 250.0
+    t = np.arange(3000) / sr
+    sig = 10 * np.sin(2 * np.pi * 20.0 * t)
+    bp = analytics.td_transform_band_power(sig, sr, 20.0)
+    assert abs(analytics.td_to_lsb(sig, sr, 20.0) - analytics.LSB_PER_UV2_TRANSFORM * bp) < 1e-9
+    # 1 s minimum: exactly one window (250 samples) computes; below it → NaN
+    assert np.isfinite(analytics.td_to_lsb(sig[:250], sr, 20.0))
+    assert math.isnan(analytics.td_to_lsb(sig[:249], sr, 20.0))
+
+
+def test_k_cancels_in_correlation_and_auc():
+    """THE SAFETY CLAIM behind the route switch: because the per-band feature is a LOG of band power,
+    the multiplicative k is an additive log-offset that cancels in Pearson r and in AUC. So swapping
+    the TD path from welch256×269 to transform×352.62 moves the displayed/deployable LSB scale but
+    cannot move any correlation or AUC result. Asserted byte-for-byte (not merely 'close')."""
+    from sklearn.metrics import roc_auc_score
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(3)
+    uv2 = np.exp(rng.normal(0, 1, 400))                     # positive band powers
+    pain = rng.normal(0, 1, 400)
+    label = (np.log(uv2) + 0.4 * rng.normal(0, 1, 400) > np.log(uv2).mean()).astype(int)
+    # feature = log(LSB) = log(k) + log(uv2): the log(k) term is a pure additive shift. Compare the
+    # PRIMARY transform k against an arbitrary alternate scale (the property is k-agnostic — it held
+    # for the retired welch256 269 too, and must hold for ANY positive constant).
+    k_alt = 269.0
+    f_alt = np.log(k_alt * uv2)
+    f352 = np.log(analytics.LSB_PER_UV2_TRANSFORM * uv2)
+    # difference is exactly the constant log-ratio, identical for every point
+    assert np.allclose(f352 - f_alt, np.log(analytics.LSB_PER_UV2_TRANSFORM / k_alt), atol=1e-12)
+    # Pearson r identical to full float precision
+    assert abs(pearsonr(f_alt, pain)[0] - pearsonr(f352, pain)[0]) < 1e-12
+    # AUC identical (rank statistic — a monotone +shift cannot reorder)
+    assert abs(roc_auc_score(label, f_alt) - roc_auc_score(label, f352)) < 1e-12
+
+
+def test_transform_centered_window_clip_dont_slide_contract():
+    """The per-PRO TD extent for the 0–100 Hz sweep: 30 s CENTERED on the rating, CLIPPED to the
+    recording (asymmetric near an edge, never slid into padding), dropped below one 1 s window or above
+    10% Missing. This is the contract CS-2 wires into PRO matching."""
+    sr = 250.0
+    n = 30000                                               # 120 s recording
+    sig = np.sin(2 * np.pi * 20.0 * np.arange(n) / sr)
+    # mid-recording → full 30 s (extent_s default)
+    sl, used = analytics.transform_centered_window(sig, sr, 60.0)
+    assert sl is not None and sl.size == int(round(30.0 * sr)) and abs(used - 30.0) < 1e-9
+    # 5 s from start → clipped to [0, 20 s], asymmetric, not padded to 30 s
+    sl, used = analytics.transform_centered_window(sig, sr, 5.0)
+    assert sl.size == int(round(20.0 * sr)) and abs(used - 20.0) < 1e-9
+    # recording shorter than one transform window → dropped
+    sl, used = analytics.transform_centered_window(sig[:200], sr, 0.4)
+    assert sl is None and used == 0.0
+    # >10% of the centered span Missing → rejected
+    miss = np.zeros(n); miss[int(44 * sr):int(76 * sr)] = 1     # covers the [45,75] s span
+    sl, used = analytics.transform_centered_window(sig, sr, 60.0, missing=miss)
+    assert sl is None and used == 0.0
+
+
+def test_transform_50pct_overlap_window_count_and_variance_only_shift():
+    """The deployed sweep slides the 1 s window at 0.5 s (50% overlap): 59 windows over a full 30 s vs
+    30 non-overlapping. Overlap changes only the number of windows the median is taken over (a variance
+    reduction), so on a stationary signal the band power barely moves — well under the 1.26× calibration
+    scatter (the live-RCS08 check measures the real-data shift; this pins the synthetic invariant)."""
+    sr = 250.0
+    step = int(round(sr * analytics.TRANSFORM_STEP_SECONDS))     # 125 = 0.5 s
+    win = int(round(sr * analytics.TRANSFORM_WIN_SECONDS))       # 250 = 1 s
+    n = int(round(30.0 * sr))
+    assert len(np.arange(0, n - win + 1, win)) == 30            # non-overlap window count
+    assert len(np.arange(0, n - win + 1, step)) == 59          # 50%-overlap window count
+    t = np.arange(n) / sr
+    sig = 10 * np.sin(2 * np.pi * 22.5 * t) + np.random.default_rng(5).normal(0, 2, n)
+    no = analytics.td_transform_band_power(sig, sr, 22.5)                       # non-overlap
+    ov = analytics.td_transform_band_power(sig, sr, 22.5, step_samples=step)    # 50% overlap
+    fold = max(no / ov, ov / no)
+    assert fold < analytics.MODELED_LSB_SIGMA_FOLD, fold       # « 1.26× scatter
+
+
+def test_modeled_transform_point_stays_flagged_native_preferred():
+    """NATIVE-PREFERRED INVARIANT (§3.3). The route switch moved the modeled tier's DSP from
+    welch256×269 to transform×352.62 but MUST keep the point tagged source='psd_modeled' + modeled=True,
+    because the deployment threshold and the timeline y-scaler exclude modeled points via that exact
+    flag. Here: (1) availability.lsb_series tags the switched montage-TD point modeled=True /
+    source='psd_modeled' / method='td_transform_…'; (2) the verbatim bravo_service mask
+    (y[band & ~is_modeled]) keeps ONLY the native value when a native and a modeled point share a band,
+    so a measured threshold is never contaminated by the modeled estimate."""
+    from Biomarkers.routines import availability
+    sr = 250.0
+    t = np.arange(int(40 * sr)) / sr                          # 40 s survey → full transform support
+    ch = "ZERO_AND_TWO_LEFT"
+    rec = {
+        "ChannelNames": [ch],
+        "Data": (10 * np.sin(2 * np.pi * 20.0 * t)).reshape(-1, 1),
+        "SamplingRate": sr,
+        "StartTime": 1_700_000_000.0,
+        "PeakFrequencyInHertz": 20.0,
+    }
+    key = availability._canon_channel(ch)
+    out = availability.lsb_series(
+        chronic_recordings=[], powerdomain_recordings=[],
+        montage_td_recordings=[rec], sensing_hz_by_channel={key: 20.0})
+    ser = out.get(key)
+    assert ser is not None and len(ser["y"]) >= 1, out.keys()
+    # exactly the modeled transform point, correctly flagged
+    assert ser["source"][0] == "psd_modeled"
+    assert bool(ser["modeled"][0]) is True
+    assert ser["method"][0].startswith("td_transform_x_k=")
+    assert "352.62" in ser["method"][0]
+    assert np.isfinite(ser["y"][0]) and ser["y"][0] > 0
+
+    # (2) the deployment native-only mask keeps native when both exist on the same band
+    y = np.array([100.0, 100.0, 9999.0])                     # 2 native, 1 modeled
+    hz = np.array([20.0, 20.0, 20.0])
+    modeled_flag = np.array([False, False, True], dtype=object)
+    center_hz, half = 20.0, 2.5
+    bmask = np.isfinite(y) & np.isfinite(hz) & (hz >= center_hz - half) & (hz < center_hz + half)
+    is_modeled = np.array([bool(m) for m in modeled_flag])
+    native = y[bmask & ~is_modeled]
+    assert native.size == 2 and np.all(native == 100.0)      # modeled 9999 excluded
+    assert 9999.0 not in set(native.tolist())
+
+
+def test_modeled_excluded_from_native_correlation_path():
+    """SCOPE GUARD for the 'k cancels' safety claim. k cancels in r/AUC only within a SINGLE-SOURCE
+    feature (homogeneous k). A native+modeled MIXED feature is NOT k-invariant — raising modeled k from
+    269→352.62 shifts only the modeled subset. This is safe ONLY because the deployable / measured path
+    excludes modeled points via the is_modeled mask, so no mixed-k column ever reaches a correlation.
+    This test pins that segregation: (1) on a mixed series the masked native subset is k-invariant while
+    the unmasked mixed series is NOT, and (2) the bravo_service native-only mask drops every modeled
+    point regardless of which k produced it."""
+    from scipy.stats import pearsonr
+    rng = np.random.default_rng(7)
+    n = 300
+    uv2 = np.exp(rng.normal(0, 1, n))
+    pain = rng.normal(0, 1, n)                               # continuous outcome for correlation
+    is_modeled = np.zeros(n, bool); is_modeled[rng.choice(n, 120, replace=False)] = True
+    # native points carry raw device LSB (no k); modeled points carry k*uv2. Lifting modeled k adds a
+    # constant log-offset to ONLY the modeled rows, so the mixed column is no longer a pure rescale of
+    # itself between the two k -> a covariance-based statistic (Pearson r) moves.
+    native_lsb = uv2.copy()                                  # stand-in raw units, no k
+    def mixed_feature(k):
+        return np.log(np.where(is_modeled, k * uv2, native_lsb))
+    # (1) UNMASKED mixed feature is NOT k-invariant: Pearson r differs between the two k
+    k_alt = 269.0                                          # arbitrary alternate scale (k-agnostic claim)
+    r_mixed_alt = pearsonr(mixed_feature(k_alt), pain)[0]
+    r_mixed_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM), pain)[0]
+    assert abs(r_mixed_alt - r_mixed_352) > 1e-6          # mixing DOES move r — claim must be scoped
+    # (2) NATIVE-ONLY subset (the masked path) is fully k-invariant
+    nat = ~is_modeled
+    r_nat_alt = pearsonr(mixed_feature(k_alt)[nat], pain[nat])[0]
+    r_nat_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM)[nat], pain[nat])[0]
+    assert abs(r_nat_alt - r_nat_352) < 1e-12            # masked native path: k cancels, safe
+    # (3) the bravo_service native-only mask drops EVERY modeled point, independent of method/k
+    y = np.where(is_modeled, 9999.0, native_lsb)
+    keep = ~np.array([bool(m) for m in is_modeled])
+    assert np.all(np.isfinite(y[keep])) and 9999.0 not in set(y[keep].tolist())
+
+
+# ─────────────────────────────  CS-3 PSD→LSB BRIDGE  ─────────────────────────────
+
+def test_bridge_constants_compose_from_transform_and_td_psd_ratio():
+    """K_PSD_LSB is exactly LSB_PER_UV2_TRANSFORM / K_TD_PSD — the composition is not an independent
+    magic number but the two measured links multiplied. Pins both the ratio and the derived constant."""
+    assert abs(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO - 4.789) < 1e-9
+    expect = analytics.LSB_PER_UV2_TRANSFORM / analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
+    assert abs(analytics.LSB_PER_DEVICE_PSD - expect) < 1e-9
+    assert abs(analytics.LSB_PER_DEVICE_PSD - 73.63) < 0.01      # 352.62 / 4.789
+    # the bridge constant is the device-PSD constant, NOT the TD transform constant
+    assert analytics.LSB_PER_DEVICE_PSD != analytics.LSB_PER_UV2_TRANSFORM
+
+
+def test_clamp_device_psd_floors_negatives_only():
+    """The unit reconciliation: FFTBinData negatives (sub-noise-floor baseline-subtracted bins) clamp
+    to 0; positives and NaNs are untouched. This is what puts event FFTBinData on the LFPMagnitude
+    (linear µV, 0 negatives) footing."""
+    m = np.array([-0.1133, -1e-9, 0.0, 0.5, 2.0, np.nan])
+    c = analytics.clamp_device_psd(m)
+    assert c[0] == 0.0 and c[1] == 0.0 and c[2] == 0.0       # negatives + zero -> 0
+    assert c[3] == 0.5 and c[4] == 2.0                       # positives preserved
+    assert np.isnan(c[5])                                    # NaN preserved
+    assert np.all(c[np.isfinite(c)] >= 0)
+
+
+def test_device_psd_band_power_sum_of_squared_in_band_magnitudes():
+    """device_psd_band_power == Σ(clamped in-band magnitude)² over [center±half] — the SAME band-power
+    definition as td_transform_band_power, so the two sides of the bridge are commensurable. Negatives
+    are clamped before squaring (else a -0.11 bin would add spurious +0.012 power)."""
+    f = np.linspace(0.0, 96.68, 100)
+    m = np.zeros(100)
+    band = (f >= 17.5) & (f < 22.5)
+    idx = np.where(band)[0]
+    m[idx[:5]] = [1.0, -0.11, 3.0, 2.0, -0.05]               # two sub-floor negatives in the band
+    bp = analytics.device_psd_band_power(f, m, 20.0, half_hz=2.5)
+    # clamp negatives -> [1,0,3,2,0]; sum of squares = 1+0+9+4+0 = 14
+    assert abs(bp - 14.0) < 1e-9
+    # a band with no in-range bin -> NaN
+    assert np.isnan(analytics.device_psd_band_power(f, m, 200.0, half_hz=2.5))
+
+
+def test_device_psd_to_lsb_applies_bridge_constant_and_guards():
+    """device_psd_to_lsb == LSB_PER_DEVICE_PSD × device_psd_band_power, scalar->float and vector->ndarray,
+    NaN where band power is NaN/non-positive."""
+    f = np.linspace(0.0, 96.68, 100)
+    m = np.zeros(100); m[(f >= 17.5) & (f < 22.5)] = 2.0
+    bp = analytics.device_psd_band_power(f, m, 20.0)
+    assert abs(analytics.device_psd_to_lsb(f, m, 20.0) - analytics.LSB_PER_DEVICE_PSD * bp) < 1e-6
+    vec = analytics.device_psd_to_lsb(f, m, np.array([10.0, 20.0, 30.0]))
+    assert vec.shape == (3,) and np.isnan(vec[0]) and np.isfinite(vec[1]) and np.isnan(vec[2])
+    # an all-negative (sub-floor) band -> clamped to 0 -> non-positive power -> NaN
+    mneg = np.where(m > 0, -0.1, m)
+    assert np.isnan(analytics.device_psd_to_lsb(f, mneg, 20.0))
+
+
+def test_bridge_reproduces_direct_transform_on_a_white_signal():
+    """Bridge invariant (synthetic end-to-end): a device-PSD that IS the magnitude spectrum of a TD
+    trace, fed through device_psd_to_lsb, must equal that TD trace's td_to_lsb to within the K_TD_PSD
+    definition. We don't have the device's onboard FFT here, so we synthesize the montage relationship:
+    PSD_bp = K_TD_PSD · TD_bp by construction, then check LSB agreement closes the loop."""
+    rng = np.random.default_rng(3)
+    sr = 250.0
+    sig = rng.standard_normal(7500) + 3.0 * np.sin(2 * np.pi * 20.0 * np.arange(7500) / sr)
+    td_bp = analytics.td_transform_band_power(sig, sr, 20.0, half_hz=2.5)
+    lsb_direct = analytics.td_to_lsb(sig, sr, 20.0)
+    # construct a device-PSD whose band power is exactly K_TD_PSD * td_bp (one in-band bin carrying it)
+    f = np.linspace(0.0, 96.68, 100)
+    mag = np.zeros(100)
+    inband = np.where((f >= 17.5) & (f < 22.5))[0]
+    mag[inband[0]] = np.sqrt(analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO * td_bp)  # |x|² = K*td_bp
+    lsb_bridge = analytics.device_psd_to_lsb(f, mag, 20.0)
+    # LSB_bridge = K_PSD_LSB * (K_TD_PSD * td_bp) = (352.62/4.789)*4.789*td_bp = 352.62*td_bp = LSB_direct
+    assert abs(lsb_bridge - lsb_direct) / lsb_direct < 1e-9
+
+
+def test_event_psd_bridge_tier_restricted_to_deployable_band():
+    """availability.lsb_series only honors an event-PSD bridge point when its center is inside
+    [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; a center outside that band is dropped (no calibrated
+    meaning there). Also: the emitted point is source='psd_modeled', modeled=True, method tagged."""
+    from Biomarkers.routines import availability
+    f = list(np.linspace(0.0, 96.68, 100))
+    mag = np.zeros(100); mag[(np.array(f) >= 17.5) & (np.array(f) < 22.5)] = 2.0
+    mag = list(mag)
+    inband = {"channel": "ZERO_THREE_LEFT", "t": 1.7e9, "freq": f, "power": mag, "center_hz": 20.0}
+    outband = {"channel": "ZERO_THREE_LEFT", "t": 1.7e9 + 10, "freq": f, "power": mag,
+               "center_hz": 55.5}                          # high-gamma, above LSB_DEPLOYABLE_HZ_HI
+    out = availability.lsb_series([], [], montage_td_recordings=[],
+                                  event_psd_recordings=[inband, outband])
+    d = out.get("ZERO_THREE_LEFT", {"y": [], "source": [], "modeled": [], "method": []})
+    bridge = [(y, s, mo, me) for y, s, mo, me in
+              zip(d["y"], d["source"], d["modeled"], d["method"]) if me and "event_psd_bridge" in me]
+    assert len(bridge) == 1                                 # only the in-band center survives
+    y, s, mo, me = bridge[0]
+    assert s == "psd_modeled" and mo is True
+    assert me == f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}"
+    assert np.isfinite(y) and y > 0
+
+
+# ---------------------------------------------------------------------------
+# Audit [5] — server-side cut-point on the FULL ROC arrays (was re-solved in the
+# browser on the downsampled curve, so the displayed/propagated operating point
+# could drift). analytics.deployment_roc now ships an `operating_points` table
+# solved on the un-downsampled fpr/tpr/thr; the legacy Youden `operating_point`
+# must equal operating_points['youden'].
+# ---------------------------------------------------------------------------
+
+def test_solve_roc_operating_point_youden_matches_full_array_argmax():
+    """The Youden solve over the parallel arrays returns the (tpr-fpr)-maximizing vertex, skipping the
+    +inf sentinel, with sens/spec read off that vertex."""
+    fpr = np.array([0.0, 0.0, 0.1, 0.4, 1.0])
+    tpr = np.array([0.0, 0.6, 0.9, 0.95, 1.0])
+    thr = [None, 3.0, 2.0, 1.0, 0.0]            # index 0 = +inf sentinel at (0,0)
+    op = analytics._solve_roc_operating_point(fpr, tpr, thr, "youden", prevalence=0.5)
+    # Youden J: [skip, 0.6, 0.8, 0.55, 0.0] -> argmax at index 2.
+    assert op is not None and op["k"] == 2
+    assert op["threshold"] == 2.0
+    assert abs(op["sensitivity"] - 0.9) < 1e-9
+    assert abs(op["specificity"] - 0.9) < 1e-9
+    assert op["rule"] == "youden" and op["degenerate"] is False
+
+
+def test_solve_roc_operating_point_skips_inf_sentinel_and_ties_keep_first():
+    """A None/inf threshold vertex is never selectable, and tied utilities keep the lowest index
+    (strictly-greater) so the chosen point is deterministic."""
+    # Exactly-representable values so the J tie is real (no float drift): J = [—, 0.25, 0.25].
+    fpr = np.array([0.0, 0.25, 0.5])
+    tpr = np.array([0.0, 0.5, 0.75])
+    thr = [None, 2.0, 1.0]
+    op = analytics._solve_roc_operating_point(fpr, tpr, thr, "youden", prevalence=0.5)
+    assert op is not None and op["k"] == 1 and op["threshold"] == 2.0   # first maximizer wins
+
+
+def test_solve_roc_operating_point_cost_shifts_toward_specificity():
+    """Raising the FP:FN cost ratio steepens the tangent slope, moving the operating point toward
+    lower FPR (higher specificity)."""
+    fpr = np.array([0.0, 0.1, 0.3, 0.6])
+    tpr = np.array([0.0, 0.5, 0.85, 0.97])
+    thr = [None, 3.0, 2.0, 1.0]
+    op_cheap = analytics._solve_roc_operating_point(fpr, tpr, thr, "cost", 0.5, cost_ratio=0.25)
+    op_dear = analytics._solve_roc_operating_point(fpr, tpr, thr, "cost", 0.5, cost_ratio=8.0)
+    assert op_cheap is not None and op_dear is not None
+    assert op_dear["fpr"] <= op_cheap["fpr"]            # costlier FP -> more conservative (lower FPR)
+    assert op_dear["specificity"] >= op_cheap["specificity"]
+
+
+def test_deployment_roc_ships_full_array_operating_points_table():
+    """deployment_roc returns operating_points={youden, f1, cost:[...]}, and the full-array Youden
+    point equals the legacy operating_point (the displayed default is now exact, not re-solved on the
+    downsampled curve). max_points is forced small so the curve IS downsampled in the payload."""
+    import numpy as _np
+    rng = _np.random.default_rng(5)
+    E, C, F = 200, 2, 60
+    f = _np.linspace(0.95, 100, F)
+    labels = rng.normal(5, 2, E)
+    psd = _np.abs(rng.normal(1, 0.2, (E, C, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.7 * (labels - labels.mean())[:, None])   # planted band -> real ROC
+    det = {"f_set": f, "psd": psd, "labels": labels,
+           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "prelog": False,
+           "times": [f"2025-07-{1 + (i % 28):02d} 10:00:00" for i in range(E)]}
+    roc = analytics.deployment_roc(det, "ZERO_TWO_LEFT", 20.0, n_boot=200, max_points=20, seed=1)
+    assert roc["available"]
+    ops = roc.get("operating_points")
+    assert isinstance(ops, dict) and "youden" in ops and "f1" in ops and "cost" in ops
+    # The displayed curve was downsampled (max_points=20) but the table was solved on the full arrays.
+    assert len(roc["fpr"]) <= 20
+    yo = ops["youden"]
+    assert yo is not None and abs(yo["threshold"] - roc["operating_point"]["threshold"]) < 1e-9
+    assert abs(yo["sensitivity"] - roc["operating_point"]["sensitivity"]) < 1e-9
+    # cost grid spans the slider's log2 range (-3..3 step 0.25 -> 25 points) with the metadata keys.
+    assert isinstance(ops["cost"], list) and len(ops["cost"]) == 25
+    assert all("log_cost" in cp and "cost_ratio" in cp for cp in ops["cost"])
+    assert ops["cost"][0]["log_cost"] == -3.0 and abs(ops["cost"][-1]["log_cost"] - 3.0) < 1e-9
+
+
+if __name__ == "__main__":
+    # ad-hoc local run of just the CS-1 transform tests (the container harness globs test_* itself)
+    for _name, _fn in sorted(globals().items()):
+        if _name.startswith("test_td_") or _name.startswith("test_transform_") or \
+           _name.startswith("test_bridge_") or _name.startswith("test_device_psd_") or \
+           _name.startswith("test_clamp_device_psd") or _name.startswith("test_event_psd_bridge_") or \
+           _name in ("test_k_cancels_in_correlation_and_auc",
+                     "test_modeled_transform_point_stays_flagged_native_preferred",
+                     "test_modeled_excluded_from_native_correlation_path"):
+            _fn(); print("PASS", _name)

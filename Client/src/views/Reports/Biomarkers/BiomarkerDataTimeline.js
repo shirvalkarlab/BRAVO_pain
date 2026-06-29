@@ -164,7 +164,7 @@ const HEMI2 = {
   LEFT: { col: "#5E3C99", td: "#C9BBDF", band: "rgba(94,60,153,0.05)" },
   RIGHT: { col: "#117733", td: "#B4D8C2", band: "rgba(17,119,51,0.05)" },
 };
-const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a" };
+const PAL = { pain: "#C44E00", stim: "#7E6BB0", ink: "#1a1a1a", proLsb: "#1F4E79" };
 
 // Categorical colors for PATIENT-EVENT labels (Higher Pain / Tingly-Burning / Feeling Good / …).
 // Pain-type labels lean red/orange; relief/medication lean blue/green; others fall through to a
@@ -267,7 +267,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           });
         }
         (d.sessions || []).forEach((s) => sessions.push(s));
-        // MODELED tier (psd_modeled): calibrated LSB from survey/streaming TD via Welch256 x269.
+        // MODELED tier (psd_modeled): calibrated LSB via the transform DSP (survey/montage TD →
+        // td_to_lsb ×352.62) or the CS-3 PSD→LSB bridge (×73.63); each point's `method` names which.
         // Kept separate so it renders as a DISTINCT HOLLOW marker, never a sensed session block.
         (d.modeled || []).forEach((m) => modeled.push(m));
         if (Number.isFinite(d.y_lo)) yLo = Math.min(yLo, d.y_lo);
@@ -286,6 +287,21 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       modeled.sort((a, b) => a.t - b.t);
       return { chronic, sessions, modeled,
                y_lo: Number.isFinite(yLo) ? yLo : 0, y_hi: Number.isFinite(yHi) ? yHi : 1 };
+    };
+    // CS-4 per-PRO LSB SELECTION for a lane: av.pro_lsb is keyed by RAW channel, one entry per pain
+    // rating tagged with the source TIER (native sensed > direct TD->LSB transform > PSD-only-event
+    // bridge) it was chosen from. Collapse raw keys onto the normalized lane and keep only the ratings
+    // that actually resolved to an LSB (tier != null). Returns [{t, lsb, tier, center_hz, saturated}].
+    const proLsbFor = (ch) => {
+      const pl = av.pro_lsb || {};
+      const keys = Object.keys(pl).filter((k) => normalizeChannel(k) === ch);
+      if (!keys.length) return [];
+      const pts = [];
+      keys.forEach((k) => (pl[k] || []).forEach((r) => {
+        if (r && r.lsb != null && r.tier) pts.push(r);
+      }));
+      pts.sort((a, b) => a.t - b.t);
+      return pts;
     };
     // a lane is "committed" (long-term sensing) if it carries many configured band-power records;
     // exploratory lanes (early channel-switching) get a thinner lane and lighter label.
@@ -570,15 +586,20 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               showlegend: false });
           });
         }
-        // MODELED tier (psd_modeled): calibrated LSB from montage-survey TD (Welch256 × 269), drawn
-        // as DISTINCT HOLLOW DIAMONDS so it is never read as a sensed value. These modeled points come
-        // from the montage/survey sweeps, which ARE pooled into the binarization scan — so unlike the
-        // sensed band-power LSB they CAN be assigned to a pain bin. In binarization mode we therefore
-        // color each diamond by its matched pain bin (via binOf on the modeled point's own timestamp),
-        // exactly like the PSD ticks, so the clinician can see which modeled LSB points fall in the
-        // high/low/excluded set; unmatched modeled points stay faint. In frequency mode they color by
-        // sensing center freq (same FREQ_PALETTE). They ride the lane's y-scale but did NOT set it
-        // (native-only window), so a modeled outlier clips at the lane edge rather than rescaling.
+        // MODELED tier (psd_modeled): a calibrated-but-not-sensed LSB, drawn as DISTINCT HOLLOW
+        // DIAMONDS so it is never read as a sensed value. Two DSP routes feed this tier and each point
+        // carries its `method` string (availability.lsb_series):
+        //   td_transform_x_k=352.62  -> montage/survey 250 Hz TD through the PRIMARY transform DSP
+        //                               (analytics.td_to_lsb, k=352.62). NOT Welch256×269 (removed
+        //                               2026-06-27); the hover names the actual route from m.method.
+        //   event_psd_bridge_x_k=73.63 -> a PSD-only patient event with no TD, through the CS-3
+        //                               PSD->LSB bridge (analytics.device_psd_to_lsb, k≈73.63).
+        // These modeled points are pooled into the binarization scan, so unlike the sensed band-power
+        // LSB they CAN be assigned to a pain bin. In binarization mode we color each diamond by its
+        // matched pain bin (via binOf on the point's own timestamp); unmatched modeled points stay
+        // faint. In frequency mode they color by sensing center freq (same FREQ_PALETTE). They ride the
+        // lane's y-scale but did NOT set it (native-only window), so a modeled outlier clips at the
+        // lane edge rather than rescaling.
         if (ov.modeled && ov.modeled.length) {
           const byFreqM = {};
           ov.modeled.forEach((m) => {
@@ -593,26 +614,40 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             const b = binOf(ch, m.t);
             return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
           };
+          // Human label for the DSP route a modeled point came from, read from its `method` string.
+          const routeLabel = (method) => {
+            const s = String(method || "");
+            if (s.startsWith("td_transform")) return "transform DSP ×352.62";
+            if (s.startsWith("event_psd_bridge")) return "PSD→LSB bridge ×73.63";
+            return "modeled";
+          };
           Object.keys(byFreqM).forEach((key) => {
             const ms = byFreqM[key];
             const c = key === "na" ? null : Number(key);
-            const cols = ms.map((m) => modeledColor(m, c));
-            // Matched modeled points read a touch larger in binMode so the assigned ones stand out.
-            const sizes = cols.map((col) => (binMode && col !== DIM_GREY_FAINT ? 9 : 7));
-            const lineCols = cols;
-            const mxRaw = ms.map((m) => m.y);
-            reg.traces.push({ idx: traces.length, raw: mxRaw });
-            traces.push({ type: "scattergl", mode: "markers",
-              x: ms.map((m) => D(m.t)), y: ms.map((m) => sc(m.y)),
-              marker: { symbol: "diamond-open", size: sizes, color: cols,
-                        line: { color: lineCols, width: 1.4 } },
-              customdata: ms.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c),
-                binMode ? (binOf(ch, m.t) || "unmatched") : ""]),
-              hovertemplate: `${prettyContact(labelFor(ch))} · modeled (survey PSD ×269) · %{customdata[1]} Hz<br>`
-                + `≈%{customdata[0]} LSB (modeled, not sensed)`
-                + (binMode ? `<br>bin: %{customdata[2]}` : "")
-                + `<br>%{x}<extra></extra>`,
-              showlegend: false });
+            // Split by DSP route: circle-open = td_transform, diamond-open = event_psd_bridge.
+            // This keeps the SAME reserved glyphs as the per-rating tier so both layers are consistent.
+            const ms_td  = ms.filter((m) => String(m.method || "").startsWith("td_transform"));
+            const ms_psd = ms.filter((m) => String(m.method || "").startsWith("event_psd_bridge"));
+            [[ms_td, "circle-open"], [ms_psd, "diamond-open"]].forEach(([pts, sym]) => {
+              if (!pts.length) return;
+              const cols = pts.map((m) => modeledColor(m, c));
+              // Matched modeled points read a touch larger in binMode so the assigned ones stand out.
+              const sizes = cols.map((col) => (binMode && col !== DIM_GREY_FAINT ? 9 : 7));
+              const lineCols = cols;
+              const mxRaw = pts.map((m) => m.y);
+              reg.traces.push({ idx: traces.length, raw: mxRaw });
+              traces.push({ type: "scattergl", mode: "markers",
+                x: pts.map((m) => D(m.t)), y: pts.map((m) => sc(m.y)),
+                marker: { symbol: sym, size: sizes, color: cols,
+                          line: { color: lineCols, width: 1.4 } },
+                customdata: pts.map((m) => [Math.round(m.y), key === "na" ? "?" : fmtHz(c),
+                  binMode ? (binOf(ch, m.t) || "unmatched") : "", routeLabel(m.method)]),
+                hovertemplate: `${prettyContact(labelFor(ch))} · modeled (%{customdata[3]}) · %{customdata[1]} Hz<br>`
+                  + `≈%{customdata[0]} LSB (modeled, not sensed)`
+                  + (binMode ? `<br>bin: %{customdata[2]}` : "")
+                  + `<br>%{x}<extra></extra>`,
+                showlegend: false });
+            });
           });
         }
         // Hz labels at each sensing-frequency transition across sessions (committed lanes)
@@ -645,6 +680,66 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         annotations.push({ xref: "paper", yref: Y, x: 0.5, y: yb + 0.5 * lh,
           text: "no band power configured · n.d.", showarrow: false,
           font: { size: 9.5, color: "#9AA0A6" } });
+      }
+
+      // CS-4 PER-RATING MODELED LSB — one MODELED point per pain rating, on its OWN independent,
+      // separable y-scale. This draws REGARDLESS of whether the lane had band-power overview geometry
+      // (it lives OUTSIDE the `if (ov)` block above), so streaming-only / survey-sparse periods
+      // (e.g. Feb–Mar 2026 onward) still get their per-rating markers.
+      //
+      // We deliberately DROP the native (sensed) tier here: native streamed LSB is ALREADY drawn as
+      // the colored per-lane band-power time series above, so re-plotting it as a marker would
+      // double-count the same measurement. Only the MODELED-at-rating values are shown, kept visually
+      // separable by source:
+      //   td_transform -> HOLLOW CIRCLE   (rating-centered 30 s TD through td_to_lsb, k=352.62)
+      //   psd_bridge   -> HOLLOW DIAMOND  (PSD-only patient event through the CS-3 bridge, k≈73.63)
+      // A saturated rating (TD window hit the ADC rail but a bridge value was still found) gets a red
+      // outline. The y-scale is this lane's own robust min/max over the modeled per-rating LSB values
+      // (independent of the band-power overview), registered for zoom-rescale like the other LSB layers.
+      const proPtsAll = proLsbFor(ch).filter((p) => p.tier && p.tier !== "native" && p.lsb != null);
+      if (proPtsAll.length) {
+        const pvals = proPtsAll.map((p) => p.lsb).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+        const q = (arr, f) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(f * (arr.length - 1))))];
+        // robust 5th–95th-pct window so a single outlier rating doesn't flatten the rest
+        const pLo = pvals.length ? q(pvals, 0.05) : 0;
+        const pHi = pvals.length ? q(pvals, 0.95) : 1;
+        const PRO_LO = yb + 0.04 * lh, PRO_HI = yb + 0.30 * lh;   // lower sub-band, separate from BP band
+        const scP = (v) => PRO_LO + (PRO_HI - PRO_LO)
+          * Math.min(Math.max((v - pLo) / (pHi - pLo + 1e-9), 0), 1);
+        const regP = { BP_LO: PRO_LO, BP_HI: PRO_HI, full_lo: pLo, full_hi: pHi,
+                       samples: [], traces: [], tickHiIdx: null, tickLoIdx: null };
+        const TIER_SYMBOL = { td_transform: "circle-open", psd_bridge: "diamond-open" };
+        const TIER_LABEL = { td_transform: "transform DSP ×352.62", psd_bridge: "PSD→LSB bridge ×73.63" };
+        const byTier = {};
+        proPtsAll.forEach((p) => { (byTier[p.tier] = byTier[p.tier] || []).push(p); });
+        Object.keys(byTier).forEach((tier) => {
+          const ps = byTier[tier];
+          // binMode: color by the rating's pain bin (so the high/low selection is visible); else a
+          // single steel tone (the marker SHAPE already encodes which DSP route produced the value).
+          const colOf = (p) => {
+            if (binMode) {
+              const b = binOf(ch, p.t);
+              return (b === "high" || b === "low" || b === "excluded") ? BIN_COLORS[b] : DIM_GREY_FAINT;
+            }
+            return PAL.proLsb || "#1F4E79";
+          };
+          const cols = ps.map(colOf);
+          const lineCols = ps.map((p, i) => (p.saturated ? "#C0392B" : cols[i]));
+          ps.forEach((p) => regP.samples.push({ t: p.t, v: p.lsb }));
+          regP.traces.push({ idx: traces.length, raw: ps.map((p) => p.lsb) });
+          traces.push({ type: "scattergl", mode: "markers",
+            x: ps.map((p) => D(p.t)), y: ps.map((p) => scP(p.lsb)),
+            marker: { symbol: TIER_SYMBOL[tier] || "circle-open", size: ps.map((p) => (p.saturated ? 9 : 7)),
+                      color: "rgba(0,0,0,0)", line: { color: lineCols, width: ps.map((p) => (p.saturated ? 2 : 1.4)) } },
+            customdata: ps.map((p) => [Math.round(p.lsb), fmtHz(p.center_hz), TIER_LABEL[tier] || tier,
+              p.saturated ? " · TD saturated" : "", binMode ? (binOf(ch, p.t) || "unmatched") : ""]),
+            hovertemplate: `${prettyContact(labelFor(ch))} · per-rating modeled LSB · %{customdata[2]}%{customdata[3]}<br>`
+              + `≈%{customdata[0]} LSB @ %{customdata[1]} Hz (modeled, not sensed)`
+              + (binMode ? `<br>bin: %{customdata[4]}` : "")
+              + `<br>%{x}<extra></extra>`,
+            showlegend: false });
+        });
+        if (regP.traces.length) lsbScaleRef.current.push(regP);
       }
 
       // (c) PSD ticks (montage/survey) — these ARE pooled into the binarization scan. In
@@ -696,7 +791,13 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // moment is locatable against every channel. Hover LEADS with the patient's label, then time,
     // peak Hz, and channel count. These corroborate only (DESIGN §2/§6) — never decode.
     const evWrap = av.events || { events: [] };
+    // The backend already separates the two PSD-event axes: `av.events.events` carries ONLY the
+    // labeled patient presses (the diamond row), and `av.events.streaming_count` is the number of auto
+    // 'Streaming' LFP snapshots — those render as per-lane event-PSD ticks (teal) from a SEPARATE
+    // payload (av.records), not here, so they don't flood the diamond row. We trust that contract
+    // rather than re-deriving the split by string-matching a category literal on the frontend.
     const evList = (evWrap.events || []).filter((e) => e && Number.isFinite(e.t));
+    const streamingCount = Number.isFinite(evWrap.streaming_count) ? evWrap.streaming_count : 0;
     if (evList.length) {
       // stable label order (by first appearance) so colors + legend are deterministic
       const labelOrder = [];
@@ -724,7 +825,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         text: "no patient events", showarrow: false, font: { size: 9, color: "#C2A0A0" } });
     }
     annotations.push({ xref: "paper", yref: Y, x: 0, xshift: X_CONTACT, y: eventY,
-      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} presses</span>` : ""}`,
+      text: `<b>EVENTS</b>${evList.length ? `<br><span style="font-size:13px;color:#999">${evList.length} labeled` +
+        `${streamingCount ? ` · ${streamingCount} streaming` : ""}</span>` : ""}`,
       showarrow: false, xanchor: "right", font: { size: 24, color: "#555" } });
 
     // ---- montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already shown as a
@@ -867,40 +969,57 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
         name: "not in binarized set  (no PRO in window / band-power)" });
-      // Pain-row encoding has a SECOND axis (symbol = matched/unmatched) layered on the class color
-      // above. Teach it with two neutral-grey style swatches so the reader composes color × symbol.
-      const su = bc.survey_usage || {};
+      // per-rating MODELED LSB still renders in binMode (colored by pain bin); document its shapes.
+      // Native is NOT shown here — it's the colored band-power lane trace; these are modeled-at-rating.
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
-        name: `pain rating · matched ≥1 PSD${su.n_pro_used != null ? `  ·  ${su.n_pro_used}` : ""}` });
-      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "circle-open", size: 10, color: DIM_GREY, line: { width: 1.6, color: DIM_GREY } },
-        name: `pain rating · no neural match${su.n_pro_unused != null ? `  ·  ${su.n_pro_unused}` : ""}` });
+        marker: { symbol: "circle-open", size: 9, color: "rgba(0,0,0,0)", line: { width: 1.4, color: DIM_GREY } },
+        name: "per-rating modeled LSB  (same symbols: ○ TD-transform · ◇ PSD-bridge; color = bin)" });
     } else {
       // Glyph key listed TOP→BOTTOM in the order the layers actually stack within a neural lane:
       // montage/PSD ticks at the TOP, then the chronic 24/7 LSB trend, then the streaming LSB session
       // blocks, then the raw TD coverage band at the BOTTOM. The two LSB families share a distinct
       // GREEN (#2CA02C) and are told apart by a non-color channel: chronic = squiggly/dashed line,
       // streaming = a solid block. (The lanes themselves stay colored by sensing Hz — right-side key.)
-      const LSB_GREEN = "#2CA02C";
+      // Neutral lane glyph color for the chronic/streaming/modeled LSB legend entries. Their REAL
+      // on-plot color is the sensing center frequency (FREQ_PALETTE, in the right-side Hz key), so the
+      // legend uses a neutral grey rather than a fixed hue that no rendered trace actually uses. (Was
+      // LSB_GREEN #2CA02C — removed: no LSB trace is drawn green, it only appeared in this legend.)
+      const LANE_NEUTRAL = DIM_GREY;
+      // PSD tick glyphs — TWO distinct sources that previously both read as "montage PSD":
+      //  • grey ticks = montage/survey + NeuralActivitySnapshot device PSDs (carry their own TD)
+      //  • teal ticks = patient-triggered EVENT PSDs (incl. the auto 'Streaming' snapshots), PSD-only
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "line-ns-open", size: 10, color: "#9AA0A6", line: { width: 1.4 } },
-        name: "montage PSD  (survey sweep + extra snapshots; hover → spectrum)" });
+        name: "montage PSD  (survey sweep + montage snapshot; hover → spectrum)" });
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "line-ns-open", size: 10, color: "#3B8A8F", line: { width: 1.4 } },
+        name: "streaming / event PSD  (patient-triggered LFP snapshot; PSD-only)" });
+      // Patient-event diamonds (the EVENTS row) — one filled diamond per LABELED press, colored by
+      // label. Add an explicit glyph so the row is documented (the per-label colors stay in the row).
+      traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+        marker: { symbol: "diamond", size: 10, color: "#888", line: { color: "rgba(0,0,0,0.45)", width: 0.6 } },
+        name: "patient event  (labeled press: Pain / Medication / …; color = label)" });
+      // Chronic 24/7 and streaming-LSB glyphs: the SHAPE is the identifying channel (dashdot squiggle
+      // vs solid block). Their real on-plot COLOR is the sensing center frequency (FREQ_PALETTE,
+      // documented in the right-side Hz key) — NOT green. The legend glyph is drawn NEUTRAL grey so it
+      // does not advertise a green that no rendered trace uses (the stale-symbol fix).
       traces.push({ x: [null], y: [null], mode: "lines", type: "scatter",
-        line: { color: LSB_GREEN, width: 2.5, dash: "dashdot", shape: "spline" },
+        line: { color: LANE_NEUTRAL, width: 2.5, dash: "dashdot", shape: "spline" },
         name: "chronic LSB · 24/7 trend  (squiggle; lane color = sensing Hz)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "square", size: 15, color: LSB_GREEN },
+        marker: { symbol: "square", size: 15, color: LANE_NEUTRAL },
         name: "streaming LSB session · block  (lane color = sensing Hz; hover → detail)" });
+      // CS-4 MODELED LSB (both the overview and per-rating layers share these two glyphs). One modeled
+      // point per rating; SHAPE = DSP route, COLOR = sensing Hz (overview) / steel-blue (per-rating),
+      // red ring = TD saturated. ○ TD-transform (k=352.62) · ◇ PSD→LSB bridge (k≈73.63). (Previously
+      // listed three times in stale green — collapsed to this single neutral, shape-accurate entry.)
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
-        marker: { symbol: "diamond-open", size: 11, color: LSB_GREEN, line: { width: 1.5, color: LSB_GREEN } },
-        name: "modeled LSB  (hollow; survey PSD × 269 — calibrated, NOT sensed)" });
+        marker: { symbol: "circle-open", size: 11, color: "rgba(0,0,0,0)", line: { width: 1.5, color: PAL.proLsb } },
+        name: "modeled LSB  (○ TD-transform ×352.62 · ◇ PSD-bridge ×73.63; red ring = TD saturated)" });
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "square", size: 12, color: "#C9BBDF" },
         name: "raw TD coverage  (streaming + montage/survey sweep; zoom → waveform)" });
     }
-    // Patient-event diamonds get their own per-label legend entries (added in the EVENT row above),
-    // so no generic event glyph is needed here.
 
     // ---- TOP-BAND GEOMETRY (title + the two flanking key boxes) -------------------------------
     // The legend and Hz key live in the top margin, ABOVE the plot. The previous version positioned
@@ -910,7 +1029,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 6 : 5;            // glyph-legend entries per mode (see traces above)
+    const nLegRows = binMode ? 5 : 7;            // glyph-legend entries per mode (see traces above)
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes

@@ -14,7 +14,22 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .threshold_biomarker import _sens_spec
+from .threshold_biomarker import _sens_spec, best_threshold_by_balanced_auc
+
+
+# Audit [8] — below this many independent ratings (rating clusters), the asymptotic-normal AUC
+# variance (Hanley–McNeil) and the Gaussian power approximation are only roughly valid, and the
+# clustered-bootstrap CI rests on few resamples. We do NOT change any computed value at small n;
+# we attach a `small_sample` advisory flag so the UI can tag the readout "small-sample, approximate".
+# 10 is a conventional floor for trusting asymptotic AUC inference; it is advisory, not a gate.
+SMALL_SAMPLE_CLUSTER_FLOOR = 10
+
+# Audit [3]-floor: minimum number of VALID (class-non-degenerate) bootstrap replicates required to
+# report an AUC confidence interval at all. Raised from the original 20 to 100 — below 100 surviving
+# replicates the percentile/BCa tails are too noisy to trust, so the CI is SUPPRESSED (auc_lo/hi=None)
+# rather than reported on a handful of resamples. The existing "[3]-display" tag already labels a CI
+# built on <100 replicates as "unstable"; this makes the suppression threshold match that warning.
+BOOT_CI_VALID_FLOOR = 100
 
 
 # --- Channel-name formatting -----------------------------------------------------------------
@@ -241,18 +256,9 @@ def _all_data_window(df, thresholds):
     min_count = int(data["pain_level"].value_counts().min())
     btr = pd.concat([data[data["pain_level"] == c].sample(min_count, random_state=42)
                      for c in data["pain_level"].unique()])
-    best_auc, best_thr = -1.0, float(thresholds[0])
-    for thr in thresholds:
-        cls = (btr["LFP_smoothed"] >= thr).astype(int)
-        if cls.nunique() < 2:
-            continue
-        try:
-            a = metrics.roc_auc_score(btr["pain_level"].astype(int).values, cls.values)
-            a = max(a, 1 - a)
-            if a > best_auc:
-                best_auc, best_thr = a, float(thr)
-        except Exception:
-            continue
+    # Threshold by balanced AUC, vectorized (see best_threshold_by_balanced_auc); identical selection.
+    best_thr, best_auc = best_threshold_by_balanced_auc(
+        btr["pain_level"].astype(int).values, btr["LFP_smoothed"].values, thresholds)
     true = data["pain_level"].astype(int).values
     score = data["LFP_smoothed"].astype(float).values
     pred = (score >= best_thr).astype(int)
@@ -379,18 +385,11 @@ def sliding_window_analytics(cv_df, *, thresholds=None, train_days=4, gap_days=2
         min_count = int(train["pain_level"].value_counts().min())
         btr = pd.concat([train[train["pain_level"] == c].sample(min_count, random_state=42)
                          for c in train["pain_level"].unique()])
-        best_auc, best_thr = -1.0, float(thresholds[0])
-        for thr in thresholds:
-            cls = (btr["LFP_smoothed"] >= thr).astype(int)
-            if cls.nunique() < 2:
-                continue
-            try:
-                a = metrics.roc_auc_score(btr["pain_level"].astype(int).values, cls.values)
-                a = max(a, 1 - a)
-                if a > best_auc:
-                    best_auc, best_thr = a, float(thr)
-            except Exception:
-                continue
+        # Threshold by train AUC (cell 14), vectorized: roc_auc_score on a BINARY prediction equals
+        # (sens+spec)/2, so the whole grid is one searchsorted pass instead of 140 sklearn calls.
+        # Selection (first-wins on strict-greater, single-class thresholds skipped) preserved exactly.
+        best_thr, best_auc = best_threshold_by_balanced_auc(
+            btr["pain_level"].astype(int).values, btr["LFP_smoothed"].values, thresholds)
 
         true = test["pain_level"].astype(int).values
         score = test["LFP_smoothed"].astype(float).values
@@ -907,12 +906,11 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
 
 # --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------
 def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                     pain_cutoff=None, finite_mask=None):
+                     pain_cutoff=None, finite_mask=None, rating_group=None):
     """Binary 0/1 label (NaN for the excluded middle) from a 1-D continuous PRO array.
 
     Mirrors adapter._threshold_pain_level but operates on a flat array (one value per matched
-    neural sample, NOT daily-broadcast — the matching already gave us one PRO per session). The cut
-    is computed on the FINITE values present:
+    neural sample). The cut is computed on the FINITE values present:
       * "tertile"/"percentile": <= low_pct quantile -> 0, >= high_pct quantile -> 1, middle -> NaN
       * "median": >= median -> 1 else 0
       * "cutoff": >= pain_cutoff (default = median) -> 1 else 0
@@ -922,6 +920,14 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
     to a subset of rows — used by the glmer/stim-stability click-validate path to binarize on a
     single channel's own labels (PARITY audit §6b), reproducing the offline per-channel cut. Rows
     outside the mask stay NaN. When None, the cut is global over all finite values (scan behaviour).
+
+    `rating_group` (optional int/str array, same shape) defeats pseudoreplication of the CUT
+    REFERENCE: when supplied, the tertile/median/cutoff threshold is computed on ONE value per
+    unique rating group (the unique daily PRO distribution) rather than on the per-sample vector,
+    where a rating matched by k neural windows would otherwise appear k times and pull the cut
+    toward whichever pain state had more recording activity (remediation R11 / audit A7). The
+    resulting thresholds are then applied to EVERY finite sample, so n_high/n_low still count
+    per-sample. Output labels are unchanged in shape; only the percentile reference is deduplicated.
     """
     v = np.asarray(values, dtype=float)
     out = np.full(v.shape, np.nan)
@@ -931,6 +937,18 @@ def _binarize_labels(values, strategy="tertile", low_pct=33.3333, high_pct=66.66
     ref = v[fin]
     if ref.size == 0:
         return out
+    # R11: build the cut REFERENCE from one representative value per unique rating group so the
+    # threshold reflects the PRO distribution, not the matched-sample multiplicity. Samples in the
+    # same group share their rating's PRO value, so the per-group representative is well-defined.
+    if rating_group is not None:
+        rg = np.asarray(rating_group)
+        if rg.shape == v.shape:
+            seen = {}
+            for gid, val, ok in zip(rg[fin], v[fin], np.ones(int(fin.sum()), dtype=bool)):
+                if gid not in seen:
+                    seen[gid] = float(val)
+            if seen:
+                ref = np.asarray(list(seen.values()), dtype=float)
     if strategy in ("tertile", "percentile"):
         lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
         hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
@@ -999,6 +1017,30 @@ def matched_sample_counts(labels, strategy="tertile", low_pct=33.3333, high_pct=
             out["median_abs_offset_min"] = float(np.median(np.abs(d)))
             out["max_abs_offset_min"] = float(np.max(np.abs(d)))
     return out
+
+
+def _spectral_cv_threads():
+    """Worker count for the per-band CV-AUC/logit-p parallel pass in spectral_feature_importance.
+
+    DEFAULTS TO 1 (serial) on purpose. spectral_feature_importance already runs as ONE task inside the
+    analytics `td_tasks` ThreadPool, CONCURRENT with the powerdomain pool's threshold work, and the
+    per-band fits are sklearn LogisticRegression + StratifiedGroupKFold — GIL- and BLAS-bound. With the
+    outer pools already saturating the cores, an inner thread pool here adds scheduling overhead for no
+    wall-clock gain (measured: 46.8 s serial vs 47.8 s at 16 threads end-to-end; per-band AUC/n/p are
+    bit-identical either way — the fixed-seed CV is order-independent). The parallel path is kept,
+    fully equivalence-tested, behind an explicit opt-in so it can be switched on if the outer threading
+    model changes (e.g. a process-pool refactor that frees the GIL): set BRAVO_SPECTRAL_CV_THREADS=N
+    (or the shared BRAVO_BIOMARKER_THREADS=N). Returns >= 1.
+    """
+    import os as _os
+    for var in ("BRAVO_SPECTRAL_CV_THREADS", "BRAVO_BIOMARKER_THREADS"):
+        try:
+            v = int(_os.environ.get(var, "0"))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    return 1
 
 
 def _cv_logistic_auc(x, y, n_splits=5, seed=0, groups=None):
@@ -1106,7 +1148,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                                 high_pct=66.6667, pain_cutoff=None, band_width_hz=5.0,
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
                                 region_map=None, n_peaks=6, max_scatter=400,
-                                rating_aware_auc=None, feature="lsb"):
+                                rating_aware_auc=None, feature="lsb",
+                                pro_lsb_spectrum_by_channel=None):
     """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
 
     Slides a `band_width_hz`-wide window in `step_hz` increments. For each (channel, band):
@@ -1117,21 +1160,19 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         the predictive analog of a per-rating random intercept (the "mixed-effects" readout)
 
     `feature` selects the per-band quantity all three readouts run on:
-      * "lsb" (DEFAULT, per PI): CALIBRATED device LSB. The band feature is
-        ``log10(269 × ∫ density dHz over the band)`` computed from the absolute µV²/Hz density the
-        detail carries in `psd_abs_uv2_per_hz` (Welch-from-TD sources ONLY — onboard-FFT device PSDs
-        are NaN there and never enter). This is the SAME Welch256-band-integral × 269 conversion used
-        by the deployment threshold and the timeline modeled tier, so the discovery scan and the
-        deployable number speak one unit. Scans the FULL 0–`fmax` range (centers 2.5–97.5 Hz with
-        the default 5 Hz window); the validated/firmware-programmable `adaptive_band` (8–30 Hz) is
-        FLAGGED per band via `adaptive_valid` (center-based), not used to restrict the scan — bands
-        outside it are exploratory (k=269 has no LSB ground truth there) and the UI marks them. Falls
-        back to "logpsd" if the detail lacks the absolute density (e.g. an onboard-FFT-only pool).
-      * "logpsd": the legacy feature — mean LINEAR PSD over the band, then 10*log10 (dB), scanned to
-        `fmax`. Kept for parity/debugging; on a log feature the 269 constant cancels in r/AUC, so the
-        curves match "lsb" wherever both are defined — "lsb" exists to express the feature in the
-        clinician's unit and to enforce the TD-only source priority (the 8–30 Hz deployable range is
-        flagged per band, not enforced as a scan limit).
+      * "lsb" (DEFAULT, per PI): CALIBRATED device LSB from the SHARED per-pair CS-1…CS-4 cache
+        (`pro_lsb_spectrum_by_channel`, required for this mode). Per matched (channel, PRO), the
+        LSB vector was computed once by `bravo_service._pro_lsb_spectrum_cached`:
+          - TD-transform route (k=352.62, analytics.td_transform_band_power): any TD-bearing recording
+            covering the rating → 30 s rating-centered window → vectorized rFFT over all centers.
+          - CS-3 PSD-bridge route (k≈73.63, analytics.device_psd_to_lsb): no TD + coincident PSD-only
+            patient event → device_psd_band_power over all centers. Full 0–100 Hz; bands outside
+            [7.8, 30] carry calibrated=False (exploratory; the UI flags them). Bridge shown full-
+            spectrum per PI 2026-06-27 ("calculate it anyway … make it clear outside 7.8–30 Hz
+            this hasn't been validated").
+        The old Welch-density × k=269 / device-FFT rescale path is REMOVED (PI 2026-06-27). Falls
+        back to "logpsd" if pro_lsb_spectrum_by_channel is None (e.g. back-compat callers).
+      * "logpsd": mean LINEAR PSD over the band → 10*log10 (dB). Kept for parity/debugging.
 
     The r and AUC curves are returned per channel on a shared band-center x-axis so the UI can
     overlay them; `adaptive_band` is flagged per band. Per band a compact click-scatter (band feature
@@ -1150,64 +1191,22 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     if f.size == 0 or psd.ndim != 3 or labels.size == 0:
         return None
 
-    # --- Feature selection: calibrated LSB (default) vs legacy log-PSD ----------------------------
-    psd_abs = td_detail.get("psd_abs_uv2_per_hz")
-    use_lsb = (str(feature).lower() == "lsb" and psd_abs is not None)
+    # --- Feature selection: CS-1…CS-4 shared LSB cache (default) vs legacy log-PSD ----------------
+    # "lsb" mode: per-band LSB comes from the shared per-pair spectrum cache
+    # (bravo_service._pro_lsb_spectrum_cached), threaded in as `pro_lsb_spectrum_by_channel`.
+    # The old psd_abs_uv2_per_hz × k=269 / device-FFT rescale path is REMOVED (PI 2026-06-27).
+    use_lsb = (str(feature).lower() == "lsb" and pro_lsb_spectrum_by_channel is not None)
     if use_lsb:
-        psd_abs = np.asarray(psd_abs, dtype=float)               # (E, C, F) absolute µV²/Hz, TD-only
-        if psd_abs.shape != psd.shape:
-            use_lsb = False                                      # shape mismatch -> safe fallback
-    if use_lsb:
-        # Full 0–fmax scan in LSB mode (do NOT cap fmax at adaptive_band[1]). k=269 is validated and
-        # the firmware can place an adaptive band only within 8–30 Hz, so bands whose CENTER is
-        # outside [8, 30] are flagged adaptive_valid=False and shown at reduced opacity (exploratory).
-        # The k=269 band-integral conversion is applied uniformly; out-of-adaptive values are
-        # exploratory only and the UI labels them as such.
         if fmax is None:
             fmax = float(np.nanmax(f))
-        feature_used = "lsb_calibrated"
-        n_demoted = 0
-
-        # --- SOURCE PRIORITY per matched report: TD > survey > scaled device-FFT > uncalibrated ----
-        # A report's calibrated LSB should come from its HIGHEST-fidelity neural match. The detail
-        # carries a per-row tier (`row_lsb_tier`): "td" (real time-domain Welch) > "survey" (montage
-        # sweep Welch) > "device_psd_scaled" (onboard FFT brought onto the LSB axis by the empirical
-        # per-channel scale) > "device_psd_uncalibrated" (onboard FFT with no overlap to scale from).
-        # For every (channel, matched-rating), keep only the rows of the best tier present and blank
-        # the absolute density of the lower-tier rows, so a survey or device-FFT reading never
-        # competes with a TD one for the same report. Reports whose only match is a device PSD keep
-        # that device LSB (PI: use the PSD when the time domain isn't available). Unmatched rows are
-        # untouched. In one_per_rating mode the builder already collapsed each cell to its top tier,
-        # so this loop finds nothing left to demote — it's the "all"-mode enforcement. This reshapes
-        # ONLY the LSB feature; the z-scored dB views and every non-LSB stat use the untouched `psd`.
-        _TIER_RANK = {"td": 0, "survey": 1, "device_psd_scaled": 2,
-                      "device_psd_uncalibrated": 3}
-        rgroup = td_detail.get("rating_group")
-        rtier = td_detail.get("row_lsb_tier")
-        rchannel = td_detail.get("row_channel")
-        if rgroup is not None and rtier is not None and rchannel is not None:
-            rgroup = np.asarray(rgroup)
-            rtier = np.asarray(rtier, dtype=object)
-            rchannel = np.asarray(rchannel, dtype=object)
-            if rgroup.shape[0] == psd_abs.shape[0] == rtier.shape[0] == rchannel.shape[0]:
-                # best (lowest-rank) tier present per (channel, rating) matched cell
-                best_tier = {}
-                for i in np.where(rgroup >= 0)[0]:
-                    rk = _TIER_RANK.get(str(rtier[i]), 9)
-                    key = (rchannel[i], int(rgroup[i]))
-                    if rk < best_tier.get(key, 99):
-                        best_tier[key] = rk
-                if best_tier:
-                    psd_abs = psd_abs.copy()
-                    for i in range(psd_abs.shape[0]):
-                        if rgroup[i] >= 0:
-                            key = (rchannel[i], int(rgroup[i]))
-                            if _TIER_RANK.get(str(rtier[i]), 9) > best_tier.get(key, 99):
-                                psd_abs[i, :, :] = np.nan   # lower tier loses this report
-                                n_demoted += 1
+        feature_used = "lsb_cs14"
+        # The per-band LSB is log10(cache_lsb[pro, nearest_center]). The heavy lifting (resolving the
+        # channel's spectra and scattering PRO LSB vectors into an (E, n_cache_centers) matrix) is
+        # done ONCE per channel inside the channel loop below (see lsb_log_mat); each band then reads
+        # a single column. Falls back to logpsd per band if a channel has no cache entry.
+        _lsb_cache = pro_lsb_spectrum_by_channel  # { raw_ch: [{t,tier,lsb,calibrated,...},...] }
     else:
         feature_used = "logpsd_db"
-        n_demoted = 0
 
     # Rating-aware AUC: in "all" mode many epochs share one pain rating (double-dipping), so the
     # binary classifier's cross-validation should keep each rating wholly within a fold (grouped CV)
@@ -1238,9 +1237,12 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     centers = np.arange(lo_c, hi_c + 1e-9, float(step_hz))
     a_lo, a_hi = (None, None) if adaptive_band is None else (float(adaptive_band[0]), float(adaptive_band[1]))
 
-    # Binarize the continuous label ONCE (same split for every band).
+    # Binarize the continuous label ONCE (same split for every band). R11: pass rating_group so the
+    # tertile cut is computed on the unique-PRO distribution, not the pseudoreplicated per-sample
+    # vector (rg has one entry per epoch; samples sharing a rating share an rg value).
     y_bin = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                             pain_cutoff=pain_cutoff)
+                             pain_cutoff=pain_cutoff,
+                             rating_group=(rg if (rg is not None and rg.size == labels.size) else None))
 
     band_meta = []
     for c in centers:
@@ -1266,15 +1268,105 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         # The pooled matched count (`n_pooled`) splits across the C bipolar montages because each
         # PSD recording captures one montage, so this is the max n any band on this channel's curve
         # / scatter can use. Surfaced so the UI can show pooled-vs-per-channel honestly.
-        chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
-        n_channel = int(chan_fin.sum())
-        # `p_pearson_curve` is the independence-assuming Pearson p (treats every PSD as independent).
+        # LSB-source split for THIS channel: how many of this channel's resolved per-rating LSB
+        # vectors came from the TD-transform route (k=352.62) vs the CS-3 PSD bridge (k≈73.63).
+        # Only modeled/real LSB values (a resolved tier) feed the spectral feature-importance scan;
+        # tier=None ratings contribute nothing. Source: the per-(channel,PRO) cache `ch_spectra`.
+        ch_n_td = ch_n_psd = None
+        _cs = None
+        if use_lsb:
+            _cs = _lsb_cache.get(raw)
+            if _cs is None:
+                _ru = str(raw).upper()
+                _cs = next((v for k, v in _lsb_cache.items() if str(k).upper() == _ru), None)
+            if _cs:
+                ch_n_td = int(sum(1 for sp in _cs if sp and sp.get("tier") == "td_transform"))
+                ch_n_psd = int(sum(1 for sp in _cs if sp and sp.get("tier") == "psd_bridge"))
+        # Per-channel counts in DISTINCT-RATING units (PI 2026-06-28): the matched-samples table counts
+        # one observation per distinct PRO that resolved to a real LSB on this channel, classified by the
+        # SAME tertile cut the AUC uses (high=1, low=0, excluded=NaN-middle). Counting distinct PROs (not
+        # pseudoreplicated epoch rows, and not pooled-PSD rows) makes the table internally consistent:
+        # n_high + n_low + n_excluded == n_td + n_psd_bridge. logpsd mode (no LSB cache) keeps the legacy
+        # pooled-PSD-finite epoch-row definition.
+        if use_lsb and _cs is not None:
+            n_pro_cs = len(_cs)
+            pro_has_lsb = np.array([bool(sp and sp.get("tier")) for sp in _cs], dtype=bool)
+            rg_cf = np.asarray(td_detail.get("rating_group", []))
+            # Per-PRO binary label: y_bin is constant within a rating_group, so take the first finite
+            # epoch's y_bin for each PRO index.
+            pro_ybin = np.full(n_pro_cs, np.nan)
+            _rows = np.where(label_fin_all & (np.arange(psd.shape[0]) < rg_cf.size))[0]
+            if _rows.size:
+                _pidx = rg_cf[_rows].astype(int)
+                _ok = (_pidx >= 0) & (_pidx < n_pro_cs)
+                # last-write-wins is fine (constant within group); seed in row order
+                pro_ybin[_pidx[_ok]] = y_bin[_rows[_ok]]
+            ch_n_high = int(np.nansum(pro_has_lsb & (pro_ybin == 1.0)))
+            ch_n_low = int(np.nansum(pro_has_lsb & (pro_ybin == 0.0)))
+            n_channel = int(pro_has_lsb.sum())
+            ch_n_excl = int(n_channel - ch_n_high - ch_n_low)   # LSB PROs in the excluded middle
+        else:
+            chan_fin = np.isfinite(psd[:, ci, :]).any(axis=1) & label_fin_all
+            n_channel = int(chan_fin.sum())
+            ch_n_high = int(np.nansum((y_bin == 1.0) & chan_fin))
+            ch_n_low = int(np.nansum((y_bin == 0.0) & chan_fin))
+            ch_n_excl = int(n_channel - ch_n_high - ch_n_low)
+        # `p_pearson_curve` is the independence-assuming naive p (Spearman p for LSB, Pearson p for logpsd);
+        # the legacy key name is kept for payload back-compat. It treats every matched sample as independent.
         # It is NOT the inferential headline — that's the rating-clustered logit `p_curve`. We keep
         # it only so the FDR pass below can quantify the pseudoreplication inflation (naive bands
         # at FDR vs rigorous bands at FDR), which is the rigor-pass UI annotation.
         r_curve, auc_curve, n_curve, n_r_curve, p_curve = [], [], [], [], []
         p_pearson_curve = []
         band_power_by_center = []   # (n_centers, E) log band power, for click-scatter
+        _cv_jobs = []               # (curve_index, bp_log) for the parallel CV-AUC + logit-p pass
+
+        # ---- LSB-cache pre-build (vectorized, once per channel) -------------------------------
+        # In lsb_cs14 mode the per-band feature is just log10(cache_lsb[pro, band_center]). Building
+        # an (E, n_cache_centers) log-LSB matrix ONCE here turns each band into a single column
+        # gather (lsb_log_mat[:, ci_cache]) instead of a Python loop over E rows per band — the
+        # O(bands × E) interpreter scatter the reviewer flagged collapses to one matrix build + a
+        # slice per band. cache_centers is constant across PROs, so its center→column map is built
+        # once too.
+        lsb_log_mat = None          # (E, n_cache_centers) log10(LSB); NaN where unmatched/unresolved
+        cache_centers = None        # the cache's own band-center grid (for nearest-center mapping)
+        if use_lsb:
+            ch_spectra = _lsb_cache.get(raw)
+            if ch_spectra is None:
+                raw_up = str(raw).upper()
+                ch_spectra = next(
+                    (v for k, v in _lsb_cache.items() if str(k).upper() == raw_up), None)
+            E = psd.shape[0]
+            rg_arr = np.asarray(td_detail.get("rating_group", []))
+            if ch_spectra:
+                _cspec0 = ch_spectra[0]
+                cache_centers = np.asarray((_cspec0 or {}).get("center_hz", []), dtype=float)
+                nC = cache_centers.size
+                if nC:
+                    # Stack each PRO's LSB vector into (n_pro, nC); rows with no/short vector → NaN.
+                    n_pro = len(ch_spectra)
+                    pro_lsb = np.full((n_pro, nC), np.nan)
+                    for pi in range(n_pro):
+                        sp = ch_spectra[pi]
+                        if not sp:
+                            continue
+                        vals = sp.get("lsb") or []
+                        m = min(len(vals), nC)
+                        if m:
+                            arr = np.array([v if (v is not None) else np.nan
+                                            for v in vals[:m]], dtype=float)
+                            pro_lsb[pi, :m] = arr
+                    pro_lsb[~(pro_lsb > 0)] = np.nan       # non-positive / zero → NaN (log undefined)
+                    pro_log = np.log10(pro_lsb)            # (n_pro, nC)
+                    # Scatter to epoch rows by rating_group; only matched rows with a valid PRO index.
+                    lsb_log_mat = np.full((E, nC), np.nan)
+                    valid = label_fin_all & (np.arange(E) < rg_arr.size)
+                    rows = np.where(valid)[0]
+                    if rows.size:
+                        pidx = rg_arr[rows].astype(int)
+                        ok = (pidx >= 0) & (pidx < n_pro)
+                        rr, pp = rows[ok], pidx[ok]
+                        lsb_log_mat[rr, :] = pro_log[pp, :]
         for c in centers:
             bmask = (f >= c - w / 2.0) & (f < c + w / 2.0)
             if not bmask.any():
@@ -1288,56 +1380,119 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 # "Mean of empty slice" RuntimeWarning is noise here, not a problem.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 if use_lsb:
-                    # CALIBRATED LSB feature: integrate the ABSOLUTE density (µV²/Hz) over the band
-                    # (trapezoid on the real freq axis — same op as _band_power_notched), × 269
-                    # LSB/µV² (lsb_from_uv2), then log10 so it lives on a comparable additive scale
-                    # to the dB feature. NaN where the band has <2 finite bins (e.g. onboard-FFT rows
-                    # are NaN in psd_abs and never contribute). One LSB scalar per session.
-                    sub_abs = psd_abs[:, ci, bmask]            # (E, nbins) absolute µV²/Hz
-                    fb = f[bmask]
-                    E = sub_abs.shape[0]
-                    uv2 = np.full(E, np.nan)
-                    for e in range(E):
-                        row = sub_abs[e]
-                        ok = np.isfinite(row)
-                        if ok.sum() >= 2:
-                            uv2[e] = np.trapezoid(row[ok], fb[ok])
-                    lsb = LSB_PER_UV2_VALIDATED * np.where(uv2 > 0, uv2, np.nan)
-                    bp_log = np.log10(np.where(lsb > 0, lsb, np.nan))   # log10 calibrated LSB
+                    # CS-1…CS-4 SHARED LSB CACHE: the per-band feature is log10(LSB) for each matched
+                    # (channel, PRO), read from the cache pre-built into lsb_log_mat above. The cache
+                    # came from bravo_service._pro_lsb_spectrum_cached (TD-transform k=352.62 / CS-3
+                    # bridge k≈73.63) on the SAME matched pairs this scan uses. Map this scan band's
+                    # center to the nearest cache center, then gather that column — one O(E) slice,
+                    # no per-row Python loop. Rows with no cache entry stay NaN. Bands outside the
+                    # calibrated range keep their value; the UI flags them via adaptive_valid.
+                    E = psd.shape[0]
+                    if lsb_log_mat is not None and cache_centers is not None and cache_centers.size:
+                        ci_cache = int(np.argmin(np.abs(cache_centers - c)))
+                        bp_log = lsb_log_mat[:, ci_cache].copy()
+                    else:
+                        bp_log = np.full(E, np.nan)
                 elif prelog:
                     # Already log (+ z-scored): the band feature is the mean over the band's bins.
                     bp_log = np.nanmean(psd[:, ci, bmask], axis=1)
                 else:
                     bp = np.nanmean(psd[:, ci, bmask], axis=1)   # (E,) mean linear power in band
                     bp_log = 10.0 * np.log10(np.where(bp > 0, bp, np.nan))
-            band_power_by_center.append(bp_log)
-            # Pearson r vs CONTINUOUS label (ALL matched samples — no binarization). We also
-            # compute the naive two-sided Pearson p here so the rigor pass can quantify the
-            # pseudoreplication inflation (it is the independence-assuming p, not the inferential
-            # number to report — that's `p_curve`).
-            m = np.isfinite(bp_log) & np.isfinite(labels)
+            # DISPLAY vs FIT feature are DECOUPLED for LSB (2026-06-28, PI). The CV-logistic AUC and
+            # its cluster-robust logit-p keep their feature LOG-scaled (`bp_log`) purely for numerical
+            # conditioning — bridge-verified that feeding raw heavy-tailed LSB to the regularized
+            # logistic shifts AUC by a non-trivial amount that is an artifact of conditioning, not
+            # signal (z-scoring raw does not fix the skew). What the USER sees — scatter/violin axis
+            # and the correlation — uses RAW linear LSB, matching the Percept device's linear operating
+            # scale (no onboard log10). `bp_disp` is the raw feature for display; `bp_log` is the fit
+            # feature. For the non-LSB power features the two coincide (the feature already IS log/dB).
+            if use_lsb:
+                bp_disp = np.power(10.0, bp_log)   # raw linear LSB; NaN stays NaN
+            else:
+                bp_disp = bp_log
+            band_power_by_center.append(bp_disp)
+            # Spearman rank correlation vs CONTINUOUS label (ALL matched samples — no binarization).
+            # SPEARMAN, not Pearson (2026-06-28, PI): the LSB feature is heavy-tailed (~0.1–15000), so
+            # Pearson on raw LSB is outlier-dominated while Pearson on log10 would report a statistic on
+            # a different scale than the raw scatter shows. Spearman is rank-invariant, so it is the
+            # SAME number whether the feature is raw or log10 — display (raw) and statistic agree. We
+            # also keep the naive two-sided p here so the rigor pass can quantify the pseudoreplication
+            # inflation (it is the independence-assuming p, not the inferential number to report —
+            # that's `p_curve`). Computed on `bp_disp` (raw), but rank-identical to `bp_log`.
+            m = np.isfinite(bp_disp) & np.isfinite(labels)
             n_r_curve.append(int(m.sum()))
             r = p_pearson = None
-            if m.sum() >= 4 and np.nanstd(bp_log[m]) > 0 and np.nanstd(labels[m]) > 0:
-                from scipy.stats import pearsonr as _pr
-                _r, _p = _pr(bp_log[m], labels[m])
-                r = float(_r); p_pearson = float(_p)
+            if m.sum() >= 4 and np.nanstd(bp_disp[m]) > 0 and np.nanstd(labels[m]) > 0:
+                if use_lsb:
+                    # LSB feature: SPEARMAN (rank-invariant → same value on raw or log10, robust to the
+                    # heavy tail). This is the displayed correlation.
+                    from scipy.stats import spearmanr as _sr
+                    _res = _sr(bp_disp[m], labels[m])
+                    r = float(_res.correlation); p_pearson = float(_res.pvalue)
+                else:
+                    # Non-LSB log-power feature: ordinary Pearson on the (already log/dB) feature, as
+                    # before — unchanged by the LSB raw-display revert.
+                    from scipy.stats import pearsonr as _pr
+                    _r, _p = _pr(bp_disp[m], labels[m])
+                    r = float(_r); p_pearson = float(_p)
             r_curve.append(_f(r) if r is not None else None)
             p_pearson_curve.append(_f(p_pearson) if (p_pearson is not None and np.isfinite(p_pearson)) else None)
-            # AUC vs BINARIZED label (CV logistic) — runs on the FINALIZED high-vs-low split only
-            # (the excluded-middle tertile is NaN in y_bin and dropped inside _cv_logistic_auc), so
-            # n_used here is generally < the Pearson n above. When rating-aware (default in "all"
-            # mode), folds are grouped by rating so no rating leaks across train/test and n_used is
-            # the count of INDEPENDENT ratings, not raw samples.
+            # AUC vs BINARIZED label (CV logistic) + its cluster-robust logit-p inference twin are the
+            # two expensive per-band fits (StratifiedGroupKFold + LogisticRegression). They depend only
+            # on this band's `bp_log` (y_bin/auc_groups are constant across bands) and are independent
+            # band-to-band, so we COLLECT them here and run them in parallel after the cheap pass below
+            # (see `_band_cv_stats`). Placeholders keep auc/n/p aligned with the curve indices; the
+            # parallel map overwrites them by index, so the result is identical to the serial loop.
+            auc_curve.append(None)
+            n_curve.append(0)
+            p_curve.append(None)
+            _cv_jobs.append((len(auc_curve) - 1, bp_log))
+
+        # --- Parallel CV pass: the per-band CV-logistic AUC and cluster-robust logit-p are the two
+        # heaviest fits in the scan and are independent across bands, so run them concurrently across
+        # cores (sklearn fits release the GIL). Results are written back BY INDEX, so auc/n/p land in
+        # exactly the positions the serial loop would have produced — numerically identical, only the
+        # wall-clock differs. Each job is self-contained (constant y_bin/auc_groups, this band's bp_log).
+        def _band_cv_stats(bp_log):
             auc, n_used = _cv_logistic_auc(bp_log, y_bin, groups=auc_groups)
-            auc_curve.append(_f(auc) if np.isfinite(auc) else None)
-            n_curve.append(int(n_used))
-            # Inference companion to the AUC: cluster-robust (rating-clustered) logistic Wald p when
-            # rating-aware, else ordinary logistic Wald p. Same band feature, same high-vs-low split.
             with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 p_band, _np_n, _np_g = _cluster_robust_logit_p(bp_log, y_bin, groups=auc_groups)
-            p_curve.append(_f(p_band) if np.isfinite(p_band) else None)
+            return (_f(auc) if np.isfinite(auc) else None, int(n_used),
+                    _f(p_band) if np.isfinite(p_band) else None)
+
+        if _cv_jobs:
+            n_workers = max(1, min(len(_cv_jobs), _spectral_cv_threads()))
+            if n_workers == 1:
+                results = [_band_cv_stats(bp) for _idx, bp in _cv_jobs]
+            else:
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                with _TPE(max_workers=n_workers) as _pool:
+                    results = list(_pool.map(lambda job: _band_cv_stats(job[1]), _cv_jobs))
+            for (idx, _bp), (auc_v, n_v, p_v) in zip(_cv_jobs, results):
+                auc_curve[idx] = auc_v
+                n_curve[idx] = n_v
+                p_curve[idx] = p_v
+
+        # R1 / audit A1: SIGNED AUC. `auc_curve` is folded to >= 0.5 (the notebook-parity orientation,
+        # max(auc, 1-auc)) — so a null band cannot read below chance and every band looks discriminative.
+        # `auc_signed` re-expresses each band's AUC in the direction of its OWN correlation sign: a band
+        # whose feature falls with pain (r < 0) reads AUC < 0.5, one that rises with pain reads > 0.5, and
+        # a true null sits at ~0.5 from both sides. This is a DISPLAY companion (the folded `auc` is left
+        # untouched for backward compatibility and for the omnibus screen); the frontend should plot
+        # `auc_signed` against a 0.5 chance line so direction and effect size read honestly together.
+        auc_signed_curve = []
+        for _bi, _a in enumerate(auc_curve):
+            if _a is None:
+                auc_signed_curve.append(None)
+                continue
+            _rv = r_curve[_bi] if _bi < len(r_curve) else None
+            # Orient by correlation sign: negative r -> reflect the folded AUC below 0.5.
+            if _rv is not None and _rv < 0:
+                auc_signed_curve.append(_f(1.0 - float(_a)))
+            else:
+                auc_signed_curve.append(_f(float(_a)))
 
         # Peaks on the |r| curve (continuous-signal peaks, the primary exploratory lens).
         from scipy.signal import find_peaks
@@ -1349,15 +1504,29 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
 
         out_channels.append({
             "name": fmt["label"], "short": fmt["short"], "region": fmt["region"], "raw": fmt["raw"],
-            "r": r_curve,            # Pearson r vs continuous PRO, per band center
-            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center
+            "r": r_curve,            # corr vs continuous PRO per band: Spearman Ï (LSB) or Pearson r (logpsd); see corr_method
+            # Which correlation `r`/`p_pearson` carry: "spearman" for LSB (rank-invariant, robust to the
+            # heavy tail; displayed on raw LSB) or "pearson" for the non-LSB log-power feature.
+            "corr_method": ("spearman" if use_lsb else "pearson"),
+            # Scale of the DISPLAYED feature (scatter/violin axis + correlation): raw linear LSB for the
+            # LSB feature (matches the Percept device scale), or log/dB for the power feature.
+            "feature_scale": ("raw" if use_lsb else "log"),
+            "auc": auc_curve,        # CV-logistic AUC vs binarized PRO, per band center (fit on log10 LSB); folded >=0.5
+            # R1/A1: signed-AUC display companion — same CV-AUC oriented by the band's correlation sign so a
+            # null band reads ~0.5 and a beta-suppression band reads <0.5. Plot this against a 0.5 chance line.
+            "auc_signed": auc_signed_curve,
             "n": n_curve,            # AUC samples used per band (binarized hi+lo, middle dropped)
-            "n_r": n_r_curve,        # Pearson samples per band (ALL matched continuous, this channel)
+            "n_r": n_r_curve,        # correlation samples per band (ALL matched continuous, this channel)
             "p": p_curve,            # rating-clustered logistic Wald p per band (AUC's inference twin)
             # Per-band naive Pearson p (independence-assuming) — kept so the FDR pass below can
             # quantify the pseudoreplication inflation vs the rating-clustered logit p.
             "p_pearson": p_pearson_curve,
-            "n_channel": n_channel,  # matched PSDs recorded on THIS channel (per-channel ceiling)
+            "n_channel": n_channel,  # ratings carrying a resolved LSB on THIS channel (= n_td + n_psd_bridge)
+            # Per-channel matched-sample binarization split (sums to n_channel) and LSB-source split.
+            # Surfaced so the UI can show "high / low / excluded per channel" and "# TD-transform vs
+            # # PSD-bridge LSBs" without recomputing client-side. n_td/n_psd are None in logpsd mode.
+            "n_high": ch_n_high, "n_low": ch_n_low, "n_excluded": ch_n_excl,
+            "n_td": ch_n_td, "n_psd_bridge": ch_n_psd,
             "peaks": peaks,
             # Keep the per-band log power around for click-to-scatter (server-side cache; the
             # frontend reads scatter via the band index). Stored compact (one row per center).
@@ -1370,15 +1539,58 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     for ch in out_channels:
         bp_list = ch.pop("_band_power")
         scat = []
+        # Per-epoch LSB SOURCE tier for THIS channel, so each band's scatter can report how many of
+        # its RENDERED points are TD-transform vs PSD-bridge LSBs (the only two values the PI wants
+        # surfaced). tier is decided once per (channel, PRO) in the cache; map PRO→epoch via rg.
+        epoch_tier = None
+        if use_lsb and rg is not None:
+            _csr = _lsb_cache.get(ch.get("raw"))
+            if _csr is None:
+                _ru = str(ch.get("raw")).upper()
+                _csr = next((v for k, v in _lsb_cache.items() if str(k).upper() == _ru), None)
+            if _csr:
+                _np_cache = len(_csr)
+                epoch_tier = [None] * len(labels)
+                for _i in range(len(labels)):
+                    _pi = int(rg[_i]) if _i < rg.size else -1
+                    if 0 <= _pi < _np_cache and _csr[_pi]:
+                        epoch_tier[_i] = _csr[_pi].get("tier")
         for bp_log in bp_list:
             if bp_log is None:
                 scat.append(None); continue
             m = np.isfinite(bp_log) & label_fin
-            idx = np.where(m)[0]
-            if idx.size < 3:
+            idx_all = np.where(m)[0]
+            if idx_all.size < 3:
                 scat.append(None); continue
+            # Raw count of matched PSD rows in this band on this channel (the pre-dedup denominator,
+            # surfaced as SECONDARY context only — never the headline n).
+            n_rows = int(idx_all.size)
+            # ---- De-duplicate to the UNIT OF ANALYSIS so rendered dots == the honest n ------------
+            # In rating-grouped mode (LSB / rating-aware AUC) the per-band feature is modeled ONCE per
+            # rating, so every matched PSD sharing a rating carries an IDENTICAL (x, y) — plotting one
+            # marker per matched row stacks them on a single pixel while the title counted the rows
+            # (the "n=84 but 2 dots" bug). The rating is the unit of analysis here, so collapse idx to
+            # ONE representative epoch per distinct rating (rg). This is lossless in LSB mode (shared x)
+            # and makes the rendered point count equal the independent-rating n. In non-rating mode
+            # (logpsd, each PSD genuinely distinct) we keep every epoch — there is no overplotting.
+            dedup_by_rating = (auc_groups is not None and rg is not None and rg.size == labels.size)
+            if dedup_by_rating:
+                seen = {}
+                for i in idx_all:
+                    key = int(rg[i])
+                    if key not in seen:          # first epoch wins; in LSB mode all share x/y anyway
+                        seen[key] = i
+                idx = np.array(sorted(seen.values()), dtype=int)
+            else:
+                idx = idx_all
+            # Distinct observations after de-dup but BEFORE the display cap (the true independent n).
+            n_distinct = int(idx.size)
             if idx.size > max_scatter:
                 idx = idx[np.linspace(0, idx.size - 1, max_scatter).astype(int)]
+            # Headline n = points ACTUALLY rendered. Taken AFTER the cap so it equals len(x) and the
+            # n_grp sum even when distinct ratings exceed max_scatter (the cap subsamples idx). When no
+            # cap fires n_obs == n_distinct. (n_distinct is surfaced too, so the UI can note subsampling.)
+            n_obs = int(idx.size)
             # Per-sample binarization group from the SAME high/low/excluded split the AUC uses
             # (y_bin: 1.0=high, 0.0=low, NaN=excluded middle), so the click panel's violin can
             # color points by pain group without recomputing the cut client-side.
@@ -1416,6 +1628,22 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 "median_delta": median_delta,               # median(high) - median(low), in SD units
                 "n_grp": {"high": int((ga == "high").sum()), "low": int((ga == "low").sum()),
                           "mid": int((ga == "mid").sum())},
+                # Count taxonomy so the UI labels honestly (see BiomarkerAnalytics title logic):
+                #   n_obs  — DISTINCT observations actually rendered (headline n; == len(x)).
+                #   n_rows — matched PSD rows before rating de-dup (secondary context only).
+                #   dedup_by_rating — whether n_obs collapsed multiple PSDs/rating to one point.
+                "n_obs": n_obs,
+                "n_distinct": n_distinct,                # distinct ratings before display cap
+                "n_rows": n_rows,
+                "dedup_by_rating": bool(dedup_by_rating),
+                # LSB-source split of the RENDERED points (the two values the PI wants in every count
+                # label): how many came from TD-transform (k=352.62) vs PSD-bridge (k≈73.63). None in
+                # logpsd mode (no LSB tiers). td + psd may be < n_obs if any rendered point's tier is
+                # unresolved (should be 0 in practice — every modeled LSB carries a tier).
+                "n_td": (int(sum(1 for i in idx if epoch_tier[i] == "td_transform"))
+                         if epoch_tier is not None else None),
+                "n_psd": (int(sum(1 for i in idx if epoch_tier[i] == "psd_bridge"))
+                          if epoch_tier is not None else None),
                 "dates": ([str(times[i]) for i in idx] if times is not None else None),
             })
         ch["scatter"] = scat
@@ -1471,6 +1699,47 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             "method": "BH-FDR",
             "family": "band x channel (per metric)",
         }
+
+    # R2 / audit A2: PER-CONTACT biomarker selection. The pain-tracking band AND its sign are
+    # contact-specific (e.g. RCS08: R 1-3+ VIM beta ELEVATES with pain, the GPi contacts SUPPRESS),
+    # so there is no single global "the beta biomarker". Each channel gets a `selected_band` dict
+    # naming its own best band: prefer the lowest-q band that survives rigorous BH-FDR (q < 0.05);
+    # if none clears FDR, fall back to the max-|rho| band, flagged fdr_significant=False. The sign
+    # is taken from that band's correlation. Never averaged across contacts (signs cancel).
+    for ch in out_channels:
+        rr = ch.get("r") or []
+        qq = ch.get("q") or []
+        aus = ch.get("auc_signed") or []
+        cen = centers
+        best_i = None
+        # 1) lowest-q FDR-significant band
+        sig = [(i, qq[i]) for i in range(len(qq))
+               if i < len(qq) and qq[i] is not None and qq[i] < 0.05
+               and i < len(rr) and rr[i] is not None]
+        if sig:
+            best_i = min(sig, key=lambda t: t[1])[0]
+            fdr_sig = True
+        else:
+            # 2) fall back to max |rho|
+            cand = [(i, abs(rr[i])) for i in range(len(rr)) if rr[i] is not None]
+            if cand:
+                best_i = max(cand, key=lambda t: t[1])[0]
+            fdr_sig = False
+        if best_i is None:
+            ch["selected_band"] = None
+        else:
+            _r = rr[best_i]
+            ch["selected_band"] = {
+                "center_hz": float(cen[best_i]),
+                "rho": _f(_r),
+                "auc_signed": (_f(aus[best_i]) if best_i < len(aus) and aus[best_i] is not None else None),
+                "q": (_f(qq[best_i]) if best_i < len(qq) and qq[best_i] is not None else None),
+                "sign": ("positive" if (_r is not None and _r > 0) else
+                         "negative" if (_r is not None and _r < 0) else "flat"),
+                "direction": ("elevation" if (_r is not None and _r > 0) else
+                              "suppression" if (_r is not None and _r < 0) else "none"),
+                "fdr_significant": bool(fdr_sig),
+            }
     # --------------------------------------------------------------------------------------------
 
     return {
@@ -1484,29 +1753,24 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "strategy": strategy,
         "transform": "log_bandpower",
         # The per-band feature that r / AUC / clustered-logit p all run on.
-        #   "lsb_calibrated" -> log10(269 × ∫ TD-density dHz), TD-derived sources only, full 0–fmax scan
-        #   "logpsd_db"      -> 10*log10(mean band PSD), legacy (269 cancels on a log feature)
+        #   "lsb_cs14"  -> log10(CS-1…CS-4 shared LSB cache): TD-transform k=352.62 or CS-3 bridge
+        #                   k≈73.63, per matched (channel, PRO), rating-centered 30 s window.
+        #   "logpsd_db" -> 10*log10(mean band PSD), legacy fallback
         "feature": feature_used,
-        "feature_unit": ("log10 LSB (calibrated 269 LSB/µV², TD-derived; device-FFT scale-corrected)"
+        "feature_unit": ("log10 LSB (CS-1…CS-4: TD-transform k=352.62 / PSD-bridge k≈73.63)"
                          if use_lsb else "dB (10·log10 band PSD)"),
         "feature_note": (
-            "Band feature is the CALIBRATED device LSB: 269 × the band integral of the Welch density "
-            "of the time domain, the same conversion as the deployment threshold and timeline modeled "
-            "tier. Per matched report the LSB comes from the highest-fidelity source available: real "
-            "time-domain streaming, then montage/survey sweep, then — when NO time domain exists for "
-            "that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical "
-            "per-channel scale (median TD/device-FFT density ratio over the 8–30 Hz overlap). "
-            "Device-FFT points on channels with no overlap to calibrate from are kept but flagged "
-            "uncalibrated. Scan covers the full 0–100 Hz spectrum; the validated, firmware-"
-            "programmable 8–30 Hz range is flagged per band (adaptive_valid) — bands outside it are "
-            "exploratory and shown at reduced opacity."
+            "Band feature is the CALIBRATED device LSB from the shared CS-1…CS-4 per-pair cache "
+            "(bravo_service._pro_lsb_spectrum_cached). Per matched (channel, PRO) report: "
+            "TD-bearing recordings (streaming, montage/survey, all 250 Hz) → 30 s rating-centered "
+            "window → transform DSP (Hann-windowed zero-padded FFT, 50% overlap) × k=352.62 "
+            "(LSB_PER_UV2_TRANSFORM). PSD-only patient events with no coincident TD → CS-3 bridge "
+            "(device_psd_band_power × k≈73.63). Full 0–100 Hz per PI 2026-06-27. "
+            "TD-transform bands are calibrated across the full spectrum (k=352.62 is band-agnostic). "
+            "CS-3 bridge bands outside [7.8, 30] Hz carry calibrated=False (exploratory, shown at "
+            "reduced opacity — the bridge has no validated meaning there). "
+            "The old Welch-density × k=269 / per-channel device-FFT rescale path is REMOVED."
             if use_lsb else "Legacy dB band-power feature; not LSB-calibrated."),
-        # How many lower-fidelity rows were demoted because a higher-tier match existed for the same
-        # (channel, rating). 0 when no report had competing tiers.
-        "n_survey_demoted_by_td": int(n_demoted),
-        # Per-channel empirical device-FFT -> Welch-density scale used to put onboard-FFT PSDs on the
-        # calibrated LSB axis (from the detail; {} when no device PSDs or no overlap to calibrate).
-        "device_psd_scale_by_channel": (td_detail.get("device_psd_scale_by_channel") or {}),
         # Rigor-pass output: BH-FDR over the full band x channel grid for both the inferential
         # (rating-clustered logit) and naive (Pearson) families. Per-band q lives on each channel
         # dict; this summary is the UI's pseudoreplication-contrast annotation source.
@@ -1587,6 +1851,193 @@ def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5
     return bp_log, labels, rg, tt
 
 
+def _auto_block_len(cluster_series):
+    """Auto block length for the moving-block bootstrap (audit [16]/[19]), chosen from the temporal
+    autocorrelation of the per-cluster pain series (clusters in TIME ORDER).
+
+    Returns 1 when there is no meaningful positive autocorrelation — so uncorrelated ratings reproduce
+    the i.i.d. rating-cluster bootstrap EXACTLY (the prior behaviour). Otherwise returns the larger of
+    the n^(1/3) rule-of-thumb and the autocorrelation decay length (first lag where the ACF drops below
+    0.1), capped at K//3 so a block never spans most of the record. `cluster_series` is the mean
+    continuous pain value per cluster, ordered by time.
+    """
+    x = np.asarray(cluster_series, dtype=float)
+    x = x[np.isfinite(x)]
+    K = x.size
+    if K < 8:
+        return 1
+    x = x - x.mean()
+    denom = float(np.dot(x, x))
+    if denom <= 0:
+        return 1
+    maxlag = int(min(K // 2, 20))
+    acf = np.array([float(np.dot(x[:-k], x[k:])) / denom for k in range(1, maxlag + 1)])
+    if acf.size == 0 or acf[0] <= 0.1:
+        return 1                                  # no positive lag-1 autocorrelation -> i.i.d.
+    below = np.where(acf < 0.1)[0]
+    decay = int(below[0] + 1) if below.size else maxlag   # first lag with ACF < 0.1 (1-indexed)
+    n13 = max(2, int(round(K ** (1.0 / 3.0))))
+    return int(min(max(decay, n13), max(2, K // 3)))
+
+
+def _block_bootstrap_aucs(use_score, y, cluster_of_row, K, n_boot, block_len, rng):
+    """Vectorized (moving-)block bootstrap of the DE-FOLDED AUC over rating clusters.
+
+    `cluster_of_row` maps each row to a cluster index 0..K-1 in TIME ORDER. With block_len<=1 this is
+    the i.i.d. rating-cluster bootstrap (resample whole clusters with replacement); with block_len>1
+    it is a circular moving-block bootstrap (Politis–Romano) that preserves serial dependence across
+    adjacent ratings. Each replicate's AUC is the fixed-orientation (de-folded, audit C1) tie-aware
+    Mann–Whitney statistic on the cluster multiplicities — computed for ALL replicates at once with
+    a single sort + segment-sum (np.add.reduceat), no Python per-replicate loop and no sklearn call.
+
+    Returns a (n_boot,) float array; replicates that lose a class are NaN (caller filters them).
+    """
+    B = int(n_boot)
+    # ---- draw cluster picks: (B, K) cluster indices ----
+    if block_len is None or block_len <= 1:
+        picks = rng.integers(0, K, size=(B, K))
+    else:
+        L = int(block_len)
+        n_blocks = int(np.ceil(K / L))
+        starts = rng.integers(0, K, size=(B, n_blocks))
+        offs = np.arange(L)
+        idx = (starts[:, :, None] + offs[None, None, :]) % K     # circular blocks
+        picks = idx.reshape(B, -1)[:, :K]
+    # ---- per-replicate cluster multiplicities -> per-row weights (B, N) ----
+    cl_counts = np.zeros((B, K), dtype=np.float64)
+    np.add.at(cl_counts, (np.arange(B)[:, None], picks), 1.0)
+    W = cl_counts[:, cluster_of_row]                              # (B, N)
+    return _weighted_auc_matrix(use_score, y, W)
+
+
+def _weighted_auc_matrix(use_score, y, W):
+    """De-folded, tie-aware Mann–Whitney AUC for EVERY row of a (B, N) weight matrix at once.
+
+    `W[b, j]` is the (non-negative) multiplicity of row j in replicate b — integer counts for a
+    bootstrap, 0/1 masks for a jackknife. Fixed orientation (no per-row re-fold, audit C1). Returns a
+    (B,) float array; rows that lose a class are NaN. One mergesort + np.add.reduceat segment-sum; no
+    Python loop over replicates.
+    """
+    W = np.asarray(W, dtype=np.float64)
+    perm = np.argsort(use_score, kind="mergesort")
+    ss = use_score[perm]
+    ys = y[perm]
+    Wp = W[:, perm]
+    pos_w = Wp * (ys == 1)[None, :]
+    neg_w = Wp * (ys == 0)[None, :]
+    npos = pos_w.sum(1)
+    nneg = neg_w.sum(1)
+    # group boundaries at distinct score values (ss is sorted ascending)
+    bounds = np.concatenate([[0], np.where(np.diff(ss) > 0)[0] + 1])
+    gpos = np.add.reduceat(pos_w, bounds, axis=1)                 # (B, G)
+    gneg = np.add.reduceat(neg_w, bounds, axis=1)
+    cum_before = np.cumsum(gneg, axis=1) - gneg                   # neg weight strictly before group
+    U = (gpos * (cum_before + 0.5 * gneg)).sum(1)                 # ties get 0.5 credit
+    auc = np.full(W.shape[0], np.nan)
+    ok = (npos > 0) & (nneg > 0)
+    auc[ok] = U[ok] / (npos[ok] * nneg[ok])
+    return auc
+
+
+def _jackknife_cluster_aucs(use_score, y, cluster_of_row, K):
+    """Delete-one-CLUSTER jackknife AUCs (de-folded), vectorized. Row i of the (K, N) weight matrix is
+    all-ones with cluster i zeroed -> the AUC on every sample EXCEPT cluster i. Used for the BCa
+    acceleration term (the empirical influence/skew of the AUC), which is a property of the statistic
+    and so is estimated the same way regardless of the block-resampling scheme."""
+    W = np.ones((K, use_score.size), dtype=np.float64)
+    for i in range(K):
+        W[i, cluster_of_row == i] = 0.0
+    return _weighted_auc_matrix(use_score, y, W)
+
+
+def _bca_ci(theta_hat, boot, jack, alpha=0.05):
+    """Bias-corrected & accelerated (BCa) percentile interval (Efron). `boot` is the REPORTED
+    bootstrap distribution (here the moving-block resamples) and `jack` the delete-one-cluster
+    jackknife estimates for the acceleration. Returns (lo, hi, z0, a). The BCa percentile shift is read
+    from `boot`, so the interval keeps the block bootstrap's honest width while correcting median bias
+    (z0) and skew (a). Falls back to a plain percentile interval (z0=a=0) when bias/accel are
+    undefined (all replicates on one side of theta, or a degenerate jackknife)."""
+    from scipy import stats as _st
+    boot = np.asarray(boot, dtype=float); boot = boot[np.isfinite(boot)]
+    jack = np.asarray(jack, dtype=float); jack = jack[np.isfinite(jack)]
+    if boot.size < 2:
+        return None, None, 0.0, 0.0
+    prop = float(np.mean(boot < theta_hat))
+    z0 = 0.0 if (prop <= 0.0 or prop >= 1.0) else float(_st.norm.ppf(prop))
+    a = 0.0
+    if jack.size >= 3:
+        jbar = jack.mean()
+        d = jbar - jack
+        den = 6.0 * (np.sum(d * d) ** 1.5)
+        if den != 0:
+            a = float(np.sum(d ** 3) / den)
+    zlo = float(_st.norm.ppf(alpha / 2.0)); zhi = float(_st.norm.ppf(1.0 - alpha / 2.0))
+
+    def _adj(zq):
+        denom = 1.0 - a * (z0 + zq)
+        if denom == 0:
+            denom = 1e-12
+        return float(_st.norm.cdf(z0 + (z0 + zq) / denom))
+
+    a1, a2 = _adj(zlo), _adj(zhi)
+    lo = float(np.percentile(boot, 100.0 * a1))
+    hi = float(np.percentile(boot, 100.0 * a2))
+    return lo, hi, z0, a
+
+
+def _solve_roc_operating_point(fpr, tpr, thr_device, rule, prevalence, cost_ratio=1.0):
+    """Pick the operating-point vertex on the ROC for one cut-point rule.
+
+    Audit [5]: this is the SAME selection the deployment ROC frontend used to run in the browser
+    (Youden J / max-F1 / cost-sensitive tangent), lifted server-side so it can run on the FULL,
+    un-downsampled fpr/tpr/thr arrays. The browser previously re-solved on the DOWNSAMPLED curve, so
+    its chosen vertex could differ slightly from the backend's own full-array Youden default and that
+    drift propagated to Phases C–E. `thr_device` is the oriented log-power threshold (rule: power >=
+    thr) aligned index-for-index with fpr/tpr; the +inf/-inf sentinel vertex at the (0,0) corner is
+    skipped. Strictly-greater keeps the first (lowest-index) maximizer so ties never flip.
+
+    Returns {k, fpr, tpr, threshold, sensitivity, specificity, rule, degenerate} or None.
+    """
+    n = len(fpr)
+    if n == 0:
+        return None
+    p = prevalence
+    p_ok = (p is not None) and np.isfinite(p) and (0.0 < p < 1.0)
+    best_k, best_u = -1, -np.inf
+    for i in range(n):
+        t = thr_device[i]
+        if t is None or not np.isfinite(t):
+            continue                                   # skip the +/-inf sentinel at (0,0)
+        f_i = float(fpr[i]); t_i = float(tpr[i])
+        if rule == "f1":
+            if not p_ok:
+                u = t_i - f_i
+            else:
+                tp = t_i * p; fp = f_i * (1.0 - p); fn = (1.0 - t_i) * p
+                denom = 2.0 * tp + fp + fn
+                u = (2.0 * tp) / denom if denom > 0 else -np.inf
+        elif rule == "cost":
+            # Cost-sensitive tangent: maximize tpr - slope*fpr, slope = cost_ratio*(1-p)/p.
+            u = (t_i - f_i) if not p_ok else (t_i - (cost_ratio * (1.0 - p) / p) * f_i)
+        else:                                          # youden (default / unknown rule)
+            u = t_i - f_i
+        if u > best_u:
+            best_u, best_k = u, i
+    if best_k < 0:
+        return None
+    sens = float(tpr[best_k]); fpr_k = float(fpr[best_k]); spec = 1.0 - fpr_k
+    # Same degeneracy guard as the frontend: a tangent at an extreme cost ratio (or F1 at high
+    # prevalence) can land on an ROC corner — "alarm almost always" (spec~0) or "almost never"
+    # (sens~0) — a valid optimum but a useless controller. Flag it so the UI can warn.
+    degenerate = (spec < 0.10) or (sens < 0.30) or (fpr_k > 0.95) or (fpr_k < 0.02 and sens < 0.5)
+    return {
+        "k": int(best_k), "fpr": fpr_k, "tpr": sens,
+        "threshold": float(thr_device[best_k]),
+        "sensitivity": sens, "specificity": spec,
+        "rule": rule, "degenerate": bool(degenerate),
+    }
+
+
 def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                    strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
                    n_boot=500, max_points=300, seed=0):
@@ -1650,26 +2101,76 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # gates inherit this CI, so the de-fold is what makes those downstream readouts honest too.
     rng = np.random.default_rng(seed)
     uniq_clusters = np.unique(g)
-    # Precompute per-cluster row indices once.
-    cluster_rows = {c: np.where(g == c)[0] for c in uniq_clusters}
-    boot_aucs = []
     n_cl = len(uniq_clusters)
-    for _b in range(int(n_boot)):
-        pick = rng.choice(uniq_clusters, size=n_cl, replace=True)
-        idx = np.concatenate([cluster_rows[c] for c in pick])
-        yb = y[idx]
-        if len(np.unique(yb)) < 2:
-            continue
-        try:
-            ab = metrics.roc_auc_score(yb, use_score[idx])
-            boot_aucs.append(float(ab))          # fixed orientation — do NOT re-fold with max()
-        except ValueError:
-            continue
-    if len(boot_aucs) >= 20:
-        auc_lo = float(np.percentile(boot_aucs, 2.5))
-        auc_hi = float(np.percentile(boot_aucs, 97.5))
+
+    # ---- order clusters in TIME so a moving block spans temporally-adjacent ratings ----
+    # Per-cluster representative time = the first parseable sample time in that cluster. Clusters whose
+    # times don't parse keep their natural (id) order, which for rating_group ids is already the
+    # match order. The block bootstrap below preserves serial dependence across adjacent ratings.
+    g_masked = g
+    t_rows = _times[m] if (_times is not None and len(_times) == len(bp_log)) else None
+    if t_rows is not None:
+        cl_time = {}
+        t_epoch = pd.to_datetime(pd.Series([str(s) for s in t_rows]), errors="coerce", utc=True)
+        t_sec = t_epoch.astype("int64").to_numpy() / 1e9  # NaT -> large negative; masked out below
+        for c in uniq_clusters:
+            vals = t_sec[g_masked == c]
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            cl_time[c] = float(vals.min()) if vals.size else np.inf
+        order = sorted(range(n_cl), key=lambda i: (cl_time[uniq_clusters[i]], uniq_clusters[i]))
+    else:
+        order = list(range(n_cl))
+    ordered_clusters = uniq_clusters[np.asarray(order, dtype=int)]
+    cl_pos = {c: i for i, c in enumerate(ordered_clusters)}
+    cluster_of_row = np.array([cl_pos[c] for c in g_masked], dtype=int)
+
+    # Per-cluster mean pain label (time-ordered) drives the auto block length from autocorrelation.
+    cl_mean_label = np.array([float(np.nanmean(labels[m][g_masked == c])) for c in ordered_clusters])
+    block_len = _auto_block_len(cl_mean_label)
+
+    # ---- moving-block bootstrap CI (audit [16]); i.i.d. cluster bootstrap retained for DEFF ----
+    # The block CI is the honest interval (it absorbs serial autocorrelation in the weekly ratings);
+    # the i.i.d. CI is computed too, ONLY so the design effect DEFF = var_block / var_iid can discount
+    # the effective n in the power readout (audit [19]). Both use the SAME de-folded, tie-aware,
+    # fully-vectorized AUC engine; at block_len==1 the block path reproduces the i.i.d. path exactly.
+    boot_block = _block_bootstrap_aucs(use_score, y, cluster_of_row, n_cl, n_boot, block_len, rng)
+    boot_block = boot_block[np.isfinite(boot_block)]
+    rng_iid = np.random.default_rng(seed)  # independent stream so DEFF isn't self-correlated
+    boot_iid = _block_bootstrap_aucs(use_score, y, cluster_of_row, n_cl, n_boot, 1, rng_iid)
+    boot_iid = boot_iid[np.isfinite(boot_iid)]
+    boot_aucs = boot_block                                       # the CI we report is the block CI
+
+    # ---- BCa interval on the reported (block) bootstrap (audit [3]) ----
+    # Bias-corrected & accelerated percentile interval. z0 corrects median bias in the block
+    # distribution; the acceleration `a` comes from a delete-one-CLUSTER jackknife (the empirical
+    # influence of the AUC — a property of the statistic, so the same regardless of the block scheme).
+    # The CI is SUPPRESSED below BOOT_CI_VALID_FLOOR valid replicates (audit [3]-floor) rather than
+    # reported on a noisy handful. ci_lo/hi_bca falls back to plain percentiles when bias/accel are
+    # undefined (handled inside _bca_ci).
+    # The de-folded PLAIN percentile bounds are the audit-C1 guard: because the score is oriented once
+    # on the full sample, this lower bound can honestly fall below 0.5 on a true-null band. BCa's bias
+    # term (z0) re-centers on the orientation-inflated point AUC, which near chance pushes the BCa lower
+    # bound back up to ~0.5 — re-creating the "manufactured beats-chance floor" C1 removed. So the
+    # headline CI is full BCa (bias + skew corrected, audit [3]), but the "beats chance" gate reads the
+    # de-folded percentile guard below, NOT the BCa bound, so absence-of-signal can never read as
+    # significance. Both are reported.
+    bca_z0 = bca_a = None
+    auc_lo_defold = auc_hi_defold = None
+    if len(boot_block) >= BOOT_CI_VALID_FLOOR:
+        auc_lo_defold = float(np.percentile(boot_block, 2.5))
+        auc_hi_defold = float(np.percentile(boot_block, 97.5))
+        jack = _jackknife_cluster_aucs(use_score, y, cluster_of_row, n_cl)
+        auc_lo, auc_hi, bca_z0, bca_a = _bca_ci(auc, boot_block, jack, alpha=0.05)
     else:
         auc_lo = auc_hi = None
+    # Design effect: variance inflation from serial dependence. >=1 by construction (block widens);
+    # clamped to [1, 5] defensively and set to 1.0 when either resample is degenerate or block_len==1.
+    var_iid = float(np.var(boot_iid)) if len(boot_iid) >= 20 else 0.0
+    var_block = float(np.var(boot_block)) if len(boot_block) >= 20 else 0.0
+    if block_len > 1 and var_iid > 0 and var_block > 0:
+        deff = float(min(5.0, max(1.0, var_block / var_iid)))
+    else:
+        deff = 1.0
 
     # ---- default operating point: Youden's J ----
     op = None
@@ -1686,6 +2187,27 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
             "direction": "ge",
             "rule": "youden",
         }
+
+    # ---- full-array operating points (audit [5]) ----
+    # Solve every cut-point rule the frontend offers on the FULL (un-downsampled) curve, so the
+    # displayed/propagated operating point is exact rather than re-solved on the downsampled arrays.
+    # `youden` and `f1` are prevalence-determined (no slider); `cost` is solved at a grid of cost
+    # ratios so the slider can snap to the nearest precomputed full-array point. The frontend keeps
+    # its live solver as a fallback for older payloads, but prefers operating_points when present.
+    thr_dev_list = [None if not np.isfinite(t) else float(t) for t in thr_device]
+    operating_points = {
+        "youden": _solve_roc_operating_point(fpr, tpr, thr_dev_list, "youden", prevalence),
+        "f1": _solve_roc_operating_point(fpr, tpr, thr_dev_list, "f1", prevalence),
+    }
+    # Cost-sensitive points across the slider's log2 range (-3..3, step 0.25 — matches the UI Slider).
+    cost_points = []
+    for log_cost in np.arange(-3.0, 3.0 + 1e-9, 0.25):
+        cr = float(2.0 ** log_cost)
+        cp = _solve_roc_operating_point(fpr, tpr, thr_dev_list, "cost", prevalence, cost_ratio=cr)
+        if cp is not None:
+            cp = dict(cp); cp["log_cost"] = float(log_cost); cp["cost_ratio"] = cr
+            cost_points.append(cp)
+    operating_points["cost"] = cost_points
 
     # ---- downsample the curve (keep thr parallel) ----
     fpr_o, tpr_o, thr_o = fpr, tpr, thr_device
@@ -1726,15 +2248,43 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
         "prevalence": prevalence, "n_pos": n_pos, "n_neg": n_neg,
         "n_samples": int(m.sum()), "n_clusters": n_clusters,
+        # Audit [8]: advisory only — flags that asymptotic AUC inference / Gaussian power are
+        # approximate below SMALL_SAMPLE_CLUSTER_FLOOR independent ratings. Changes no computed value.
+        "small_sample": bool(n_clusters < SMALL_SAMPLE_CLUSTER_FLOOR),
+        "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
+        # Audit [16]/[19]: moving-block bootstrap parameters. `block_len` is the auto-chosen block
+        # length (1 = ratings uncorrelated -> identical to the i.i.d. cluster bootstrap). `deff` is the
+        # design effect (var_block / var_iid, >=1) used downstream to discount the effective n in the
+        # power readout. `auc_lo_iid`/`auc_hi_iid` retain the i.i.d. CI for transparency/regression.
+        "block_len": int(block_len), "deff": float(deff),
+        "auc_lo_iid": (float(np.percentile(boot_iid, 2.5)) if len(boot_iid) >= 20 else None),
+        "auc_hi_iid": (float(np.percentile(boot_iid, 97.5)) if len(boot_iid) >= 20 else None),
+        # Audit [3]: BCa interval. ci_method names the resampling scheme; the interval itself is
+        # bias-corrected & accelerated (bca_z0 = bias correction, bca_a = acceleration from the
+        # delete-one-cluster jackknife). CI suppressed (auc_lo/hi None) below BOOT_CI_VALID_FLOOR.
+        "ci_interval": "BCa", "bca_z0": (None if bca_z0 is None else float(bca_z0)),
+        "bca_a": (None if bca_a is None else float(bca_a)),
+        "ci_valid_floor": int(BOOT_CI_VALID_FLOOR),
+        # Audit C1 guard: de-folded PLAIN percentile bounds. The "beats chance" gate reads
+        # auc_lo_defold (never the BCa auc_lo), so a true-null band's lower bound can honestly fall
+        # below 0.5 instead of being re-floored by BCa's bias correction. See CI block comment.
+        "auc_lo_defold": (None if auc_lo_defold is None else float(auc_lo_defold)),
+        "auc_hi_defold": (None if auc_hi_defold is None else float(auc_hi_defold)),
         "operating_point": op, "flip": bool(flip), "feature_hist": feature_hist,
-        "ci_method": "rating-clustered bootstrap (de-folded; fixed orientation)",
+        # Audit [5]: full-array operating-point table (solved on the un-downsampled curve). Keys:
+        # 'youden', 'f1' (single points), 'cost' (list across the slider's log2 cost-ratio grid).
+        # The frontend snaps to these instead of re-solving on the downsampled fpr/tpr/thr.
+        "operating_points": operating_points,
+        "ci_method": (("moving-block bootstrap, BCa (de-folded; fixed orientation; block_len=%d)" % int(block_len))
+                      if block_len > 1 else "rating-clustered bootstrap, BCa (de-folded; fixed orientation)"),
         "feature_units": "oriented log10 band power (z-scored within channel/source on the detail); Phase C maps to LSB",
-        "note": (f"Rating-clustered bootstrap ({len(boot_aucs)}/{int(n_boot)} valid replicates over "
-                 f"{n_clusters} independent ratings). The point AUC is oriented >= 0.5 and is "
-                 f"optimistic near chance for borderline bands; the CI is de-folded (fixed "
-                 f"orientation), so its lower bound can honestly fall below 0.5 when the band does "
-                 f"not beat chance. Class-collapsed replicates are dropped (mildly narrows the CI "
-                 f"at low prevalence)."),
+        "note": (f"Rating-clustered {'moving-block ' if block_len > 1 else ''}bootstrap, BCa interval "
+                 f"({len(boot_aucs)}/{int(n_boot)} valid replicates over {n_clusters} independent "
+                 f"ratings; CI suppressed below {int(BOOT_CI_VALID_FLOOR)}). The point AUC is oriented "
+                 f">= 0.5 and is optimistic near chance for borderline bands; the BCa CI is de-folded "
+                 f"(fixed orientation) and bias/skew-corrected, so its lower bound can honestly fall "
+                 f"below 0.5 when the band does not beat chance. Class-collapsed replicates are "
+                 f"dropped (mildly narrows the CI at low prevalence)."),
     }
 
 
@@ -1886,8 +2436,9 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
                 ab = metrics.roc_auc_score(y[ii], use[ii]); baucs.append(float(ab))
             except ValueError:
                 continue
-        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= 20 else None
-        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= 20 else None
+        # Audit [3]-floor: suppress the era CI below BOOT_CI_VALID_FLOOR valid replicates (was 20).
+        lo = float(np.percentile(baucs, 2.5)) if len(baucs) >= BOOT_CI_VALID_FLOOR else None
+        hi = float(np.percentile(baucs, 97.5)) if len(baucs) >= BOOT_CI_VALID_FLOOR else None
         # INFERENTIAL reversal: the era's band→pain direction is confidently opposite the pooled sign
         # only when the ENTIRE 95% CI lies below chance (upper bound < 0.5). If the CI straddles 0.5
         # the era is merely uninformative under the pooled orientation, not a proven reversal — that
@@ -1967,6 +2518,120 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
                  "CIs miss the pooled CI is a fragile controller anchor even with a strong pooled "
                  "AUC. Eras share band_stim_stability's boundaries."),
     }
+
+
+# Audit [18]: per-week threshold-drift diagnostic gates.
+DRIFT_MIN_SAMPLES_PER_WEEK = 6     # a week needs >= this many matched samples to yield a cut-point
+DRIFT_MIN_WEEKS = 4                # need >= this many qualifying weeks to fit a calendar-time trend
+
+
+def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
+                            strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                            pain_cutoff=None):
+    """Audit [18]: does the deployment cut-point DRIFT over calendar time?
+
+    The deployment threshold is fit once on all data; if the optimal Youden cut-point moves
+    systematically week-to-week (non-stationarity), a single fixed device threshold will be
+    miscalibrated in later weeks. This buckets the matched samples by ELAPSED WEEK (the same index the
+    offline random-intercept uses), computes each qualifying week's Youden cut-point under the POOLED
+    orientation (so all weekly cut-points share one signed scale), and runs a trend test: OLS of weekly
+    cut-point on week index. Drift is FLAGGED when the slope is significantly non-zero.
+
+    A week qualifies only with >= DRIFT_MIN_SAMPLES_PER_WEEK matched samples AND both pain-high and
+    pain-low present (a cut-point is otherwise undefined). The trend test needs >= DRIFT_MIN_WEEKS
+    qualifying weeks; below that the diagnostic is 'not_assessed' (fail-closed — never a spurious flag
+    from sparse weeks).
+
+    Returns {available, status, n_weeks_qualifying, slope_per_week, slope_p, total_drift, drift_flag,
+    weekly:[{week, threshold, n, prevalence}], pooled_threshold, note} or {available: False, reason}.
+    status is one of 'stable' | 'drift_detected' | 'not_assessed'.
+    """
+    from sklearn import metrics
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} / band not found", "status": "not_assessed"}
+    bp_log, labels, _rating_group, times = feat
+    y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                             pain_cutoff=pain_cutoff)
+    weeks_all = _elapsed_week_cluster(times, len(bp_log))
+    m = np.isfinite(bp_log) & np.isfinite(y_all) & (weeks_all >= 0)
+    if m.sum() < DRIFT_MIN_SAMPLES_PER_WEEK * 2 or len(np.unique(y_all[m])) < 2:
+        return {"available": False, "reason": "too few matched samples for a drift assessment",
+                "status": "not_assessed"}
+    x = bp_log[m].astype(float)
+    y = y_all[m].astype(int)
+    wk = weeks_all[m].astype(int)
+
+    # Orient ONCE on the pooled fit so every weekly cut-point is on the same signed scale.
+    raw_auc = float(metrics.roc_auc_score(y, x))
+    flip = raw_auc < 0.5
+    use = -x if flip else x
+
+    def _youden_cut(uu, yy):
+        """Youden-J optimal cut-point on the oriented score; mapped back to the original log-power
+        scale (rule power >= thr). None when a class is absent."""
+        if len(np.unique(yy)) < 2:
+            return None
+        fpr, tpr, thr = metrics.roc_curve(yy, uu)
+        j = tpr - fpr
+        j[~np.isfinite(thr)] = -np.inf
+        k = int(np.argmax(j))
+        t = thr[k]
+        if not np.isfinite(t):
+            return None
+        return float(-t if flip else t)
+
+    pooled_thr = _youden_cut(use, y)
+
+    weekly = []
+    for w in np.unique(wk):
+        sel = wk == w
+        if int(sel.sum()) < DRIFT_MIN_SAMPLES_PER_WEEK:
+            continue
+        yy = y[sel]
+        if len(np.unique(yy)) < 2:
+            continue
+        t = _youden_cut(use[sel], yy)
+        if t is None:
+            continue
+        weekly.append({"week": int(w), "threshold": float(t), "n": int(sel.sum()),
+                       "prevalence": float(np.mean(yy == 1))})
+
+    n_weeks = len(weekly)
+    if n_weeks < DRIFT_MIN_WEEKS:
+        return {"available": True, "status": "not_assessed",
+                "n_weeks_qualifying": int(n_weeks), "pooled_threshold": pooled_thr,
+                "weekly": weekly, "slope_per_week": None, "slope_p": None, "total_drift": None,
+                "drift_flag": False,
+                "note": (f"Only {n_weeks} week(s) had >= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples "
+                         f"with both classes (need >= {DRIFT_MIN_WEEKS}); calendar-time drift not "
+                         f"assessed.")}
+
+    # OLS trend test: weekly cut-point ~ week index. Significant non-zero slope = systematic drift.
+    wks = np.array([d["week"] for d in weekly], dtype=float)
+    thrs = np.array([d["threshold"] for d in weekly], dtype=float)
+    from scipy import stats as _st
+    lin = _st.linregress(wks, thrs)
+    slope = float(lin.slope); slope_p = float(lin.pvalue)
+    span = float(wks.max() - wks.min())
+    total_drift = float(slope * span)
+    drift_flag = bool(slope_p < 0.05 and np.isfinite(slope))
+    status = "drift_detected" if drift_flag else "stable"
+    verdict_txt = ("DRIFT DETECTED — a single fixed device threshold will be miscalibrated in later "
+                   "weeks; consider periodic recalibration." if drift_flag else
+                   "No significant calendar-time drift; the pooled cut-point is stationary over the "
+                   "record.")
+    return {"available": True, "status": status,
+            "n_weeks_qualifying": int(n_weeks),
+            "pooled_threshold": pooled_thr,
+            "slope_per_week": slope, "slope_p": slope_p, "total_drift": total_drift,
+            "week_span": span, "drift_flag": drift_flag,
+            "weekly": weekly,
+            "note": (f"Youden cut-point trend over {n_weeks} qualifying weeks "
+                     f"(>= {DRIFT_MIN_SAMPLES_PER_WEEK} matched samples, both classes each). "
+                     f"Slope {slope:+.3g}/week (p={slope_p:.3g}); total drift {total_drift:+.3g} over "
+                     f"{span:.0f} weeks on the oriented log-power scale. " + verdict_txt),
+            }
 
 
 def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
@@ -2131,7 +2796,7 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
                 boot.append(float(metrics.roc_auc_score(yb, oof_score[idx])))
             except ValueError:
                 continue
-        if len(boot) >= 20:
+        if len(boot) >= BOOT_CI_VALID_FLOOR:   # audit [3]-floor: was 20
             held_out_auc_lo = float(np.percentile(boot, 2.5))
             held_out_auc_hi = float(np.percentile(boot, 97.5))
 
@@ -2233,22 +2898,24 @@ COMPATIBLE_THRESHOLD_MODES = tuple(m for m, v in THRESHOLD_MODES.items()
                                    if v["fft_size"] == CONVERSION_FFT_SIZE)  # ("Dual","SingleInverse")
 
 
-# Power-domain LSB <-> µV² calibration, VALIDATED on RCS08 ground truth (on-demand BrainSense
-# Streaming: BrainSenseLfp device LSB + BrainSenseTimeDomain 250 Hz TD on the SAME signal, 50 stim-off
-# paired blocks). Welch 256-pt PSD of the TD integrated over the sensed band, regressed on the device's
-# own LFP power: k = 269 LSB/µV² (1 LSB ≈ 0.0037 µV²), log-log slope 0.835, R² 0.94, 5-fold CV fold-
-# error 1.19×, 1σ multiplicative scatter 1.26×. This MATCHES the design-ledger empirical 0.0034 µV²/LSB
-# to within 9% and is 0.37× the Medtronic 0.01-µV²/LSB rule of thumb. It is far tighter than the older
-# empirical_lsb_ratio FYI (which was rated to ~3×) because TD and LSB come from the identical signal —
-# no time-matching slop. This is the time-domain ADC LSB's DISTINCT power-domain sibling: 146 nV/LSB
-# (ADC_NV_PER_LSB) is the exact time-domain count scale; the constant below is the firmware's band-
-# power LSB, which is normalization-dependent and remains a CONFIDENCE-RATED estimate (use the device's
-# own Timeline LSB percentile anchor for the actual deployed threshold; use this only to translate a
-# physical µV² target into LSB when the device never sensed the band).
-LSB_PER_UV2_VALIDATED = 269.0          # k, RCS08 stim-off paired-block fit
-UV2_PER_LSB_VALIDATED = 1.0 / LSB_PER_UV2_VALIDATED   # ≈ 0.00372 µV²/LSB
-LSB_UV2_LOGLOG_SLOPE = 0.835           # firmware power-law slope (≠1: device band ≠ offline band exactly)
-LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calibration
+# ── TD→LSB conversion routes (PI decision 2026-06-27, HANDOFF_TD_LSB_calibration_2026-06-27.md) ──
+# The PRIMARY TD→LSB source of truth is the **transform route, k = LSB_PER_UV2_TRANSFORM = 352.62**
+# (below); the PSD-only no-TD case uses the **device-PSD bridge, LSB_PER_DEVICE_PSD = 73.63** (CS-3,
+# below). The deployment fallback ladder anchors an offline-Welch µV² cut-point to LSB via the
+# per-participant frozen PSD→LSB model (psd_lsb_model.estimate_lsb), which is itself fit on the SAME
+# offline-Welch µV²→device-LSB mapping (RCS08.json), so the cut-point and the converter share units.
+#
+# REMOVED 2026-06-28: the standalone Welch-256 population constant k=269 (LSB_PER_UV2_VALIDATED /
+# UV2_PER_LSB_VALIDATED / LSB_UV2_LOGLOG_SLOPE) and its converters lsb_from_uv2 / uv2_from_lsb, plus
+# the Welch-256 DSP helpers psd_band_to_lsb / welch256_density (all without a production caller after
+# the bridge + frozen-model rewire). The deployment last-resort population-constant TIER was retired:
+# when neither a native device threshold nor a frozen per-participant model entry exists, the modeled
+# threshold is now returned as indeterminate (fail-closed) rather than a population-average guess.
+# 146 nV/LSB (ADC_NV_PER_LSB) remains the exact time-domain count scale — a DISTINCT quantity from the
+# power-domain band-power LSB the conversion routes above produce.
+MODELED_LSB_SIGMA_FOLD = 1.26          # 1σ multiplicative scatter of the modeled-LSB conversion (±band
+                                       # on TIER-1/TIER-2 estimates; per-participant resid_log_sigma_fold
+                                       # overrides it when the frozen model carries one)
 # Frequency range over which the PSD→LSB gain is actually calibrated on RCS08 paired blocks.
 # Outside this range the conversion (whether the population k or a per-band model intercept) is an
 # UNTESTED EXTRAPOLATION — the device gain anchor is not band-flat (it falls ≈0.80 log10/decade
@@ -2258,52 +2925,71 @@ LSB_UV2_SIGMA_FOLD = 1.26              # 1σ multiplicative scatter of the calib
 LSB_VALIDATED_HZ_LO = 7.8
 LSB_VALIDATED_HZ_HI = 28.3
 
+# ── transform route — PRIMARY TD→LSB source of truth (PI decision 2026-06-27) ─────────────────────
+# k for the percept-spectral-repro "transform" DSP (RC+S-Hann / 256-pt zero-padded FFT / peak-
+# amplitude / mean-magnitude band power), reproduced bit-for-bit on the user's Stage-1 RCS08 JSONs:
+# all-stim median k = 352.62, r = 0.9927, RMSE 60.6 LSB (see HANDOFF_TD_LSB_calibration_2026-06-27.md,
+# transform_3s_blocks.csv). This is the deployable + exploratory TD→LSB constant. The stim-off variant
+# (356.61) is recorded for provenance ONLY and is NOT deployed — use 352.62 exactly, do not round.
+# k is multiplicative on a LOG band-power feature, so within a SINGLE-SOURCE feature (every point
+# scaled by the same k) it CANCELS inside Pearson r / AUC — the correlation/AUC panels are identical
+# whether k is 269, 352.62, or 1. SCOPE: this holds only when the feature column is homogeneous in k.
+# It does NOT hold for a feature that POOLS native device LSB (raw units, no k) with modeled points
+# (k=352.62) on the same axis — there, raising modeled k from 269→352.62 shifts only the modeled
+# subset by +log(352.62/269)≈+0.272 relative to native, which CAN move r/AUC. The native-preferred
+# masking (is_modeled) keeps modeled points out of the deployable threshold and the measured-r path, so
+# no mixed feature reaches a correlation; test_k_cancels_in_correlation_and_auc pins the single-source
+# case and test_modeled_excluded_from_native_correlation_path pins the segregation. k matters only for
+# (a) the absolute LSB values displayed and (b) the deployable LSB threshold — which is why switching
+# the exploration TD path from welch256×269 to transform×352.62 moves the displayed scale to the
+# lab-consistent value WITHOUT moving any r/AUC result.
+LSB_PER_UV2_TRANSFORM = 352.62         # k, transform route — RCS08 all-stim median; PRIMARY TD→LSB
+# Device adaptive-sensing ceiling. Distinct from LSB_VALIDATED_HZ_HI (28.3 Hz = where paired-block
+# CALIBRATION ground truth exists, used by the extrapolation guard _freq_extrapolated). 30 Hz is the
+# firmware HARD limit on where an adaptive sensing band can be placed: a deployable modeled LSB is
+# offered only in [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; the 0–100 Hz exploration sweep is not
+# band-restricted (k cancels in r/AUC; displayed LSB is illustrative). Keep these two bounds separate —
+# 28.3 is a data-coverage fact, 30.0 is a device-capability fact; do not collapse them.
+# NOTE (CS-1): FORWARD DECLARATION — no code reads this yet. CS-2 wires the [LO, 30.0] band gate on the
+# deployable modeled path; until then this constant only documents the intended invariant.
+LSB_DEPLOYABLE_HZ_HI = 30.0
 
-def lsb_from_uv2(uv2, *, k=LSB_PER_UV2_VALIDATED):
-    """Translate an offline band power in µV² to device power-domain LSB using the validated
-    proportional constant k (default = RCS08 stim-off fit, 269 LSB/µV²). Pass a participant-specific
-    k when one has been fitted. Returns float LSB, or NaN for non-positive/invalid input.
 
-    This is the DIRECT route the back-translation analysis confirmed is sufficient: device LFP Power is
-    the band integral of the PSD, and a band integral is phase-independent, so reconstructing a time
-    series from the PSD (PSD→TD→LSB) cannot add information — band power from a phase-randomized
-    reconstruction matched the direct integral to within 0.8% across 113 RCS08 blocks. Only the 256-pt
-    FFT modes (Dual, Single-Inverse) are valid targets; Single Threshold's 64-pt band is a different
-    quantity (see THRESHOLD_MODES / COMPATIBLE_THRESHOLD_MODES).
-
-    **Frequency coverage:** the default k (269) is validated on RCS08 paired blocks at 7.8–28.3 Hz
-    only (approximately band-flat within that range, 1.23× span excluding the anomalous 7.8 Hz n=4
-    point). Bands outside ~8–28 Hz have NO ground truth — k there is an untested extrapolation. This
-    is not clinically restrictive for the adaptive modes (firmware-limited to 8–30 Hz), but sensing-
-    only bands at higher frequencies (e.g. high-gamma) would need their own streaming calibration.
-    """
-    try:
-        x = float(uv2)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(x) or x <= 0:
-        return float("nan")
-    return float(k) * x
-
-
-def uv2_from_lsb(lsb, *, k=LSB_PER_UV2_VALIDATED):
-    """Inverse of lsb_from_uv2: device power-domain LSB → offline band power in µV². Returns NaN for
-    non-positive/invalid input."""
-    try:
-        x = float(lsb)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(x) or x <= 0 or k == 0:
-        return float("nan")
-    return float(x) / float(k)
+# ── PSD→LSB BRIDGE (CS-3) — for PSD-ONLY patient-triggered snapshot events ───────────────────────────
+# The device emits a frequency-domain "onboard FFT" magnitude spectrum on its montage surveys
+# (Descriptor.MedtronicPSD[].LFPMagnitude, linear µV, 0 negatives) AND on patient-triggered LFP
+# snapshot events (PatientControllerEvent metadata FFTBinData, same linear-µV unit but baseline-
+# subtracted so ~1/3 of bins read slightly negative). Patient events carry NO time-domain, so they
+# cannot use the direct TD→LSB transform; this bridge converts their device-PSD band power to LSB.
+#
+# Derivation (RCS08, 2026-06-27 — CS3_FFTBinData_units_recon doc + paired montage fit, n=10476
+# contact-band points across 219 surveys; ps-statsmodels rigor):
+#   1. UNITS: event FFTBinData ≡ survey LFPMagnitude (same linear-µV onboard-FFT magnitude). Paired
+#      log-log slope 1.0 (CI brackets ~1), proportionality ≈1.04 — i.e. identity after clamping the
+#      negative (sub-noise-floor) bins to 0. So both device-PSDs use ONE band-power definition:
+#      bp = Σ(in-band magnitude)²  (negatives clamped first).
+#   2. MONTAGE TD↔PSD LAW: on surveys (TD + device-PSD on the SAME recording), device-PSD band power is
+#      proportional to the TD-transform band power: PSD_bp = K_TD_PSD · TD_bp, K_TD_PSD = 4.789
+#      (geomean, 95% CI [4.772, 4.806]; slope 1.022, r=0.987; offset 6.80 dB ≈ the onboard-FFT-vs-Welch
+#      ~6 dB note; per-contact K 4.73–4.87, fold 1.22× < the 1.26× calibration scatter).
+#   3. COMPOSE: TD→LSB is LSB = LSB_PER_UV2_TRANSFORM · TD_bp (= 352.62 · TD_bp). Substituting
+#      TD_bp = PSD_bp / K_TD_PSD gives LSB = (352.62 / 4.789) · PSD_bp = K_PSD_LSB · PSD_bp.
+# End-to-end check on montage (LSB via this bridge vs direct TD→LSB): geomean fold 1.000 (unbiased),
+# scatter 1.21×, r=0.987. The bridge reproduces the direct transform to within calibration scatter.
+#
+# Apply ONLY to PSD-only patient-triggered snapshot events. Montage/survey/snapshot products carry their
+# own TD and MUST use td_to_lsb (k=352.62) directly — they are this bridge's CALIBRATION SOURCE, never
+# a consumer of it. The event PSD must be negative-clamped (clamp_device_psd) before band-integration.
+LSB_PER_UV2_DEVICE_PSD_TD_RATIO = 4.789   # K_TD_PSD: device-PSD band power / TD-transform band power
+LSB_PER_DEVICE_PSD = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO  # K_PSD_LSB ≈ 73.63
 
 
 def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI):
     """True iff center_hz is outside the validated [7.8, 28.3] Hz calibration range (None -> False).
 
-    Mirrors psd_lsb_model._freq_extrapolated so the proportional (k=269) route and the frozen per-band
-    model share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to
-    avoid a routines->routines import cycle; the two constants are asserted equal by test.
+    Mirrors psd_lsb_model._freq_extrapolated so the deployment fallback and the frozen per-band model
+    share ONE definition of "outside the calibrated range". Kept module-local (vs imported) to avoid
+    a routines->routines import cycle; the two constants are asserted equal by test.
     """
     try:
         c = float(center_hz)
@@ -2314,112 +3000,221 @@ def _freq_extrapolated(center_hz, lo=LSB_VALIDATED_HZ_LO, hi=LSB_VALIDATED_HZ_HI
     return bool(c < float(lo) or c > float(hi))
 
 
-def psd_band_to_lsb(psd_uv2_per_hz, freq, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_VALIDATED,
-                    threshold_mode="Dual"):
-    """Convert a physical PSD (µV²/Hz) to device power-domain LSB over a band, via the Step-0-chosen
-    Welch256 band-integral × k=269 route. ONE conversion path shared by the Biomarker timeline's
-    ``psd_modeled`` tier (availability.lsb_series) and the deployment module's modeled fallback
-    (bravo_service band_lsb_and_power), so survey/montage/event PSD bands that carry NO native device
-    LSB still get a calibrated, range-guarded LSB value.
+# Default sliding-window geometry for the transform DSP (the PRIMARY TD→LSB route). A 1-second
+# (TRANSFORM_WIN_SECONDS) rcs-Hann window, zero-padded to 256 points, is the percept-spectral-repro
+# "transform" unit; the repo reproduction slides it NON-overlapping (step = win). The deployed
+# per-PRO sweep slides it at TRANSFORM_STEP_SECONDS = 0.5 s (50% overlap) across a ~30 s rating-
+# centered extent and takes the median band power, which only reduces estimator variance (the 50%-
+# vs non-overlap median band power agrees to ≪ the 1.26× calibration scatter — verified on RCS08).
+TRANSFORM_N_FFT = 256
+TRANSFORM_WIN_SECONDS = 1.0
+TRANSFORM_STEP_SECONDS = 0.5
+TRANSFORM_MAX_FREQ_HZ = 96.68          # repo percept_frequency_bins ceiling (bins ≤ this are kept)
 
-    This is the MODELED fallback only — native device LSB (Timeline / BrainSenseLfp) is always
-    preferred when the band was actually sensed (see DESIGN §4 / Step-0 verdict). The default k=269 is
-    RCS08-validated and approximately band-flat across 7.8–28.3 Hz; outside that range the conversion
-    is an untested extrapolation and is flagged (never silently trusted).
 
-    Step-0 verdict (2026-06-25): of transform+CV-k vs Welch256×269, the fixed-269 route was chosen for
-    the timeline on accuracy (in 8–30 Hz it ties/beats the fitted transform on typical/median-fold
-    error and trails only on outlier RMSE), stability (its implied k sits on the existing fixed 269 —
-    no new fitted/maintained scale), and single-source-of-truth (same constant the deployment threshold
-    uses). See ANALYSIS_percept_spectral_repro_comparison.md "Timeline method decision".
+def _rcs_hann(nonzero):
+    """RC+S Hann taper over `nonzero` samples: 0.5*(1 - cos(2πn/nonzero)). Verbatim from
+    percept-spectral-repro (note the period is `nonzero`, NOT nonzero-1 — matches the device)."""
+    n = np.arange(int(nonzero))
+    return 0.5 * (1.0 - np.cos(2.0 * np.pi * n / float(nonzero)))
+
+
+def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
+                            win_samples=None, step_samples=None,
+                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median"):
+    """Transform-DSP band power (µV²) of a time-domain µV trace — the PRIMARY TD→LSB front end.
+
+    This is the percept-spectral-repro "transform": per sliding sub-window, mean-detrend → rcs-Hann
+    taper over `win_samples` nonzero samples → ZERO-PAD to `n_fft` → rFFT → peak scale (2/n_fft) →
+    magnitude → band power = sum of squared magnitudes over [center−half_hz, center+half_hz].
+    Aggregated (median, default) across sub-windows. This is a Hann-windowed zero-padded FFT, **not**
+    Welch — do not confuse with welch256_density. A NON-overlapping call (step == win) reproduces the
+    lab repo bit-for-bit (k=352.62, r=0.9927); the deployed sweep passes a 50%-overlap step.
+
+    Fully vectorized: one strided window matrix → ONE batched rFFT over all windows → one band-mask
+    matmul over all requested centers → median across the window axis. No per-window or per-band loop,
+    so the whole 0–100 Hz / 1 Hz-step sweep shares a single rFFT per extent.
 
     Parameters
     ----------
-    psd_uv2_per_hz, freq : array-like
-        PSD power density (µV²/Hz) and matching frequency axis (Hz). Same length.
-    center_hz : float
-        Band center frequency (Hz). Snapped to nothing here — caller picks the sensing center.
+    samples_uv : array-like
+        1-D time-domain trace in µV (non-finite samples are dropped first).
+    fs : float
+        Sampling rate (Hz). win/step default to 1 s / 1 s in samples when not given.
+    center_hz : float or array-like
+        Band center(s) in Hz. Scalar in → float out; array in → ndarray out (shared FFT).
     half_hz : float, default 2.5
-        Half-bandwidth; the integral runs over [center-half, center+half) (≈5 Hz device band).
-    k : float, default 269 (LSB_PER_UV2_VALIDATED)
-        Proportional LSB/µV² constant. Pass a participant-specific k once one is fitted.
-    threshold_mode : str, default "Dual"
-        Percept adaptive mode whose FFT size the k assumes. k=269 is a 256-pt-equivalent fit, valid
-        only for COMPATIBLE_THRESHOLD_MODES (256-pt: Dual, SingleInverse). The 64-pt Single mode
-        integrates a different set of bins, so the conversion is flagged fft_incompatible there.
+        Half-bandwidth; the band is [center−half, center+half] (≈5 Hz device band).
+    win_samples, step_samples : int, optional
+        Window length / hop in SAMPLES. Defaults: win = round(fs*TRANSFORM_WIN_SECONDS) (=250 @ 250
+        Hz), step = win (non-overlapping). Pass step = round(fs*TRANSFORM_STEP_SECONDS) for 50% overlap.
+    n_fft : int, default 256
+        Zero-pad / FFT length. The k=352.62 calibration assumes 256.
+    maxf : float, default 96.68
+        Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
+    agg : {"median","mean","none"}, default "median"
+        Across-window aggregation. The repo and the deployed sweep both use the median. "none" returns
+        the PER-WINDOW band power without aggregating — shape (W,) for a scalar center, (W, C) for a
+        vector center — for the sliding-window overlay / within-window QC (CS-4). The window start
+        times are `arange(0, n-win+1, step)`.
 
     Returns
     -------
-    dict with keys:
-        lsb : float | nan          modeled device LSB (nan if band has <2 bins or non-positive power)
-        uv2 : float | nan          integrated band power in µV²
-        k_used : float             the k applied
-        freq_extrapolated : bool   center outside the validated 7.8–28.3 Hz range
-        fft_compatible : bool      threshold_mode's FFT size matches the 256-pt calibration
-        validated_hz_range : [lo, hi]
-        method : str               provenance label
-        note : str                 human-readable caveat (extrapolation / fft-incompat / ok)
+    float (scalar center) or ndarray (vector center) of band power in µV² for agg in {median,mean}.
+    For agg="none": ndarray of per-window band power, (W,) scalar-center or (W, C) vector-center.
+    NaN / all-NaN when the trace has fewer than `win_samples` finite samples (the 1-window / 1-second
+    minimum), or when win > n_fft / fs<=0. A center whose band lies entirely ABOVE `maxf` (≈96.68 Hz)
+    has no kept bins and returns ~0 BY DESIGN (td_to_lsb then maps it to NaN via its >0 guard) — read
+    that as out-of-range, not a real null.
     """
-    f = np.asarray(freq, dtype=float)
-    P = np.asarray(psd_uv2_per_hz, dtype=float)
-    extrap = _freq_extrapolated(center_hz)
-    fft_compatible = str(threshold_mode) in COMPATIBLE_THRESHOLD_MODES
-    out = {
-        "lsb": float("nan"), "uv2": float("nan"), "k_used": float(k),
-        "freq_extrapolated": bool(extrap), "fft_compatible": bool(fft_compatible),
-        "validated_hz_range": [LSB_VALIDATED_HZ_LO, LSB_VALIDATED_HZ_HI],
-        "method": f"welch256_band_integral_x_k={float(k):.0f}",
-        "note": "",
-    }
-    if f.ndim != 1 or P.ndim != 1 or f.size != P.size or f.size < 2:
-        out["note"] = "PSD/freq axis missing, mismatched, or too short (<2 bins)"
-        return out
-
-    uv2 = _band_power_notched(f, P, float(center_hz), float(half_hz))
-    out["uv2"] = uv2
-    if not np.isfinite(uv2) or uv2 <= 0:
-        out["note"] = f"band [{center_hz - half_hz:.1f}, {center_hz + half_hz:.1f}) Hz has <2 bins or non-positive power"
-        return out
-
-    out["lsb"] = lsb_from_uv2(uv2, k=k)
-
-    notes = []
-    if extrap:
-        notes.append(
-            f"center {float(center_hz):.1f} Hz is EXTRAPOLATED beyond the validated "
-            f"{LSB_VALIDATED_HZ_LO:.1f}–{LSB_VALIDATED_HZ_HI:.1f} Hz range; k is an untested "
-            f"extrapolation here (needs streaming calibration at this frequency)")
-    if not fft_compatible:
-        notes.append(
-            f"threshold_mode={threshold_mode} uses a non-256-pt FFT; k=269 is a 256-pt-equivalent "
-            f"fit and does NOT translate to this mode's band (Medtronic: LFP Power is not comparable "
-            f"across threshold modes)")
-    out["note"] = " · ".join(notes) if notes else "in validated range, 256-pt-compatible"
-    return out
-
-
-def welch256_density(samples_uv, fs):
-    """Welch 256-pt power-density PSD of a time-domain µV trace — the EXACT transform the k=269
-    calibration was fit against (scipy welch, hann window, nperseg=256, detrend='constant',
-    scaling='density'). Returns (freq, psd_uv2_per_hz) or (None, None) if the trace is too short.
-
-    This is the load-bearing detail for the timeline's psd_modeled tier: k=269 maps a *Welch-256
-    band integral* of the 250 Hz TD to device LSB. The device's own montage/event `FFTBinData` is a
-    DIFFERENT normalization and must NOT be fed to psd_band_to_lsb with k=269 — convert from TD via
-    this helper instead. No mains notch (implanted device; matches _band_power_notched default).
-    """
-    try:
-        from scipy.signal import welch as _welch
-    except Exception:
-        return None, None
     v = np.asarray(samples_uv, dtype=float)
     v = v[np.isfinite(v)]
     fs = float(fs)
-    if v.size < 256 or fs <= 0:
-        return None, None
-    f, p = _welch(v, fs=fs, window="hann", nperseg=min(256, v.size),
-                  detrend="constant", scaling="density")
-    return f, p
+    scalar_in = np.ndim(center_hz) == 0
+    centers = np.atleast_1d(np.asarray(center_hz, dtype=float))
+    win = int(win_samples) if win_samples else int(round(fs * TRANSFORM_WIN_SECONDS))
+    step = int(step_samples) if step_samples else win
+    # win > n_fft would overflow the zero-pad buffer (buf[:, :win] broadcast error). At the percept
+    # 250 Hz TD, win=250 < 256, so this never triggers in production; the guard keeps the scalar-in ->
+    # NaN-out contract intact for an unexpected fs (>256) instead of raising.
+    if win <= 0 or step <= 0 or fs <= 0 or win > n_fft or v.size < win:
+        nan = float("nan")
+        if agg == "none":
+            # no windows -> empty per-window series (preserve center axis for vector centers)
+            return np.empty((0,), dtype=float) if scalar_in else np.empty((0, centers.size), dtype=float)
+        return nan if scalar_in else np.full(centers.size, nan)
+
+    # Strided window matrix (W, win): one row per sub-window. No Python loop over windows.
+    starts = np.arange(0, v.size - win + 1, step)
+    M = v[starts[:, None] + np.arange(win)[None, :]]
+    M = M - M.mean(axis=1, keepdims=True)                  # per-window mean detrend
+    buf = np.zeros((M.shape[0], n_fft), dtype=float)
+    buf[:, :win] = M * _rcs_hann(win)[None, :]             # rcs-Hann taper + zero pad
+    mag = 2.0 * np.abs(np.fft.rfft(buf, n=n_fft, axis=-1)) / n_fft   # ONE batched rFFT (W, n_fft//2+1)
+    freqs = np.round(np.arange(n_fft // 2 + 1) * fs / n_fft, 2)
+    if maxf is not None:
+        keep = freqs <= float(maxf) + 1e-9
+        mag = mag[:, keep]; freqs = freqs[keep]
+    p2 = mag ** 2                                          # (W, Fb) squared magnitudes
+    # Band-mask matrix (C, Fb); one matmul → in-band summed power for every center at once.
+    band = ((freqs[None, :] >= centers[:, None] - half_hz) &
+            (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
+    pw = p2 @ band.T                                       # (W, C)
+    if agg == "none":
+        # per-window band power, no aggregation (sliding-window overlay / QC). (W,) scalar, (W,C) vector.
+        return pw[:, 0] if scalar_in else pw
+    out = (np.median(pw, axis=0) if agg == "median" else np.mean(pw, axis=0))
+    return float(out[0]) if scalar_in else out
+
+
+TRANSFORM_CENTERED_EXTENT_SECONDS = 30.0   # rating-centered TD extent fed to the per-PRO LSB sweep
+# Tile width for the match-AGNOSTIC raw LSB cache (availability.raw_lsb_spectrum_cache). The whole
+# recording is sliced into fixed RAW_LSB_WINDOW_SECONDS non-overlapping tiles, INDEPENDENT of any PRO;
+# each tile's LSB is the validated 1 s-Hann/256-FFT transform (k=352.62) median across its internal
+# 50%-overlap sub-windows. Matching (median of the tiles falling inside a rating-centered extent) is
+# done LIVE downstream, not baked into this cache. 3 s holds ~5 sub-windows per tile.
+RAW_LSB_WINDOW_SECONDS = 3.0
+
+
+def transform_centered_window(samples_uv, fs, center_offset_s, *,
+                              extent_s=TRANSFORM_CENTERED_EXTENT_SECONDS,
+                              missing=None, max_missing_frac=0.10):
+    """Cut the rating-centered TD extent for the per-PRO transform LSB sweep (CS-2 consumer).
+
+    For a PRO whose timestamp sits `center_offset_s` seconds into this recording, return the slice of
+    `samples_uv` spanning [center − extent_s/2, center + extent_s/2], CLIPPED to the recording bounds
+    (asymmetric near an edge; never slid across into padding) — i.e. 30 s centered on the rating, or
+    "whatever's available" when the recording is shorter. The caller then runs td_transform_band_power
+    / td_to_lsb on the returned slice with a 50%-overlap step (step_samples = round(fs*
+    TRANSFORM_STEP_SECONDS)); the transform's own ≥1-window rule enforces the 1 s minimum.
+
+    Mirrors streaming_psd.welch_rating_centered's clip-don't-slide contract and its >max_missing_frac
+    Missing rejection (FixBreaking zero-fill protection), but for the transform DSP rather than Welch.
+
+    Returns (slice_uv, used_seconds) or (None, 0.0) when the clipped extent is below one transform
+    window or is more than `max_missing_frac` Missing.
+    """
+    v = np.asarray(samples_uv, dtype=float)
+    fs = float(fs)
+    n = v.size
+    win = int(round(fs * TRANSFORM_WIN_SECONDS))
+    if n < win or fs <= 0:
+        return None, 0.0
+    half = int(round(extent_s * fs / 2.0))
+    ci = int(round(float(center_offset_s) * fs))
+    lo = max(0, ci - half)
+    hi = min(n, ci + half)
+    if hi - lo < win:
+        return None, 0.0
+    if missing is not None:
+        miss = np.asarray(missing, dtype=float).ravel()
+        # FAIL CLOSED on a malformed mask: a missing array that does not cover the cut span cannot be
+        # trusted to certify the window clean (a short/misaligned FixBreaking mask would otherwise skip
+        # the rejection and pass possibly-corrupt samples downstream). Drop the window instead.
+        if miss.size < hi:
+            return None, 0.0
+        frac = float(np.mean(miss[lo:hi] > 0))
+        if frac > float(max_missing_frac):
+            return None, 0.0
+    return v[lo:hi], (hi - lo) / fs
+
+
+def td_to_lsb(samples_uv, fs, center_hz, *, half_hz=2.5, k=LSB_PER_UV2_TRANSFORM, **win_kw):
+    """PRIMARY TD→LSB: device power-domain LSB from a time-domain µV trace via the transform DSP ×
+    k (default LSB_PER_UV2_TRANSFORM = 352.62). One helper, one constant, used by both the Biomarker
+    exploration panels and the deployment modeled fallback. `win_kw` forwards win_samples/step_samples/
+    agg to td_transform_band_power (pass step_samples for the 50%-overlap deployed sweep). Returns
+    float LSB (or ndarray for a vector center); NaN where the band power is NaN/non-positive."""
+    uv2 = td_transform_band_power(samples_uv, fs, center_hz, half_hz=half_hz, **win_kw)
+    arr = np.atleast_1d(np.asarray(uv2, dtype=float))
+    lsb = np.where(np.isfinite(arr) & (arr > 0), float(k) * arr, np.nan)
+    return float(lsb[0]) if np.ndim(uv2) == 0 else lsb
+
+
+def clamp_device_psd(magnitude):
+    """Reconcile a device onboard-FFT magnitude spectrum into the linear-µV frame the bridge expects.
+
+    The device's montage-survey PSD (LFPMagnitude) is already linear µV with no negatives; the
+    patient-event PSD (FFTBinData) is the SAME unit but baseline-subtracted, so sub-noise-floor bins
+    read slightly negative (down to about −1 quantum). Clamping those to 0 puts both on the same linear
+    magnitude footing (CS3_FFTBinData_units recon: paired FFTBinData↔LFPMagnitude slope≈1, ratio≈1.04).
+    Returns a float ndarray with negatives set to 0; NaNs preserved."""
+    m = np.asarray(magnitude, dtype=float)
+    return np.where(m < 0, 0.0, m)
+
+
+def device_psd_band_power(freq, magnitude, center_hz, *, half_hz=2.5):
+    """Band power of a device onboard-FFT magnitude spectrum over [center±half_hz], in the SAME
+    definition as td_transform_band_power: Σ(in-band magnitude)² after negative-clamping, with the
+    band edges inclusive on both sides exactly as that function masks them (so the K_TD_PSD ratio the
+    bridge composes is measured between commensurable band-power definitions). Vectorized: one
+    band-mask sum over all centers, no per-center Python loop. Works for a scalar center (→ float) or
+    a vector of centers (→ ndarray). NaN if no in-band bin."""
+    f = np.asarray(freq, dtype=float)
+    m = clamp_device_psd(magnitude)
+    c = np.atleast_1d(np.asarray(center_hz, dtype=float))
+    finite = np.isfinite(m)
+    p2 = np.where(finite, m, 0.0) ** 2                       # squared clamped in-band magnitudes
+    # Band-mask matrix (C, Fb); one masked sum -> in-band power for every center at once. Edges
+    # [center-half, center+half] INCLUSIVE on both sides, IDENTICAL to td_transform_band_power's
+    # mask (the bridge's calibration partner) so the two sides stay commensurable at the band edge.
+    band = ((f[None, :] >= c[:, None] - half_hz) &
+            (f[None, :] <= c[:, None] + half_hz) & finite[None, :])
+    out = np.where(band.any(axis=1), (band * p2[None, :]).sum(axis=1), np.nan)
+    return float(out[0]) if np.ndim(center_hz) == 0 else out
+
+
+def device_psd_to_lsb(freq, magnitude, center_hz, *, half_hz=2.5, k=LSB_PER_DEVICE_PSD):
+    """PSD→LSB BRIDGE (CS-3): device power-domain LSB from a PSD-ONLY patient-triggered snapshot event's
+    onboard-FFT magnitude spectrum (Frequency + FFTBinData), via device_psd_band_power × k
+    (default LSB_PER_DEVICE_PSD ≈ 73.63 = LSB_PER_UV2_TRANSFORM / LSB_PER_UV2_DEVICE_PSD_TD_RATIO).
+
+    Use ONLY for PSD-only patient events (no TD). Montage/survey/snapshot products carry TD → td_to_lsb.
+    Returns float LSB (or ndarray for a vector center); NaN where band power is NaN/non-positive."""
+    pbp = device_psd_band_power(freq, magnitude, center_hz, half_hz=half_hz)
+    arr = np.atleast_1d(np.asarray(pbp, dtype=float))
+    lsb = np.where(np.isfinite(arr) & (arr > 0), float(k) * arr, np.nan)
+    return float(lsb[0]) if np.ndim(center_hz) == 0 else lsb
 
 
 def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=ADC_NV_PER_LSB,
@@ -2432,12 +3227,11 @@ def empirical_lsb_ratio(td_recs, pd_recs, sensing_hz_for_pd, *, adc_nv_per_lsb=A
 
     This is a CONFIDENCE-RATED FYI cross-check, NOT the deployable threshold. NOTE: a later paired-
     block validation (BrainSenseLfp + BrainSenseTimeDomain on the SAME signal, 50 RCS08 stim-off
-    blocks) pinned this far more tightly than the "~3×" caveat once suggested — k = 269 LSB/µV²
-    (≈ 0.0037 µV²/LSB), R² 0.94, CV fold-error 1.19×, i.e. 0.37× the 0.01 rule of thumb (see
-    LSB_PER_UV2_VALIDATED / lsb_from_uv2). The absolute constant is still normalization-dependent, so
-    the deployable threshold remains percentile-anchored on the device's own Timeline LSB (see the
-    service layer); use the validated constant only to translate a physical µV² target into LSB when
-    the device never sensed the band. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
+    blocks) pinned the µV²↔LSB scatter far more tightly than the "~3×" caveat once suggested (R² 0.94,
+    CV fold-error 1.19×). The absolute ratio is still normalization-dependent, so the deployable
+    threshold remains percentile-anchored on the device's own Timeline LSB (see the service layer);
+    an offline µV² cut-point is translated to LSB only via the per-participant frozen PSD→LSB model
+    (psd_lsb_model.estimate_lsb) on bands the device never sensed natively. `sensing_hz_for_pd(pd_rec, contact)` resolves a PowerDomain
     recording's sensing center frequency for a contact (the TD recording itself carries no Therapy
     snapshot).
 
@@ -2662,7 +3456,7 @@ def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
     }
 
 
-def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, design_effect=1.0):
     """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
     clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
 
@@ -2687,12 +3481,23 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     except Exception as e:
         return {"available": False, "reason": f"scipy unavailable: {e}"}
     auc = float(max(auc, 1.0 - auc))
-    n_pos = int(n_pos); n_neg = int(n_neg)
-    if n_pos < 2 or n_neg < 2:
+    n_pos_raw = int(n_pos); n_neg_raw = int(n_neg)
+    if n_pos_raw < 2 or n_neg_raw < 2:
         return {"available": False, "reason": "too few independent ratings for a power estimate"}
+    # Audit [19] — DESIGN-EFFECT DISCOUNT. Weekly pain ratings are serially autocorrelated, so the
+    # independent-rating count overstates the information content. `design_effect` (DEFF >= 1, the
+    # moving-block/i.i.d. bootstrap variance ratio from deployment_roc) discounts the EFFECTIVE n:
+    # the Hanley–McNeil variance scales ~1/N, so dividing each class count by DEFF inflates the
+    # variance by DEFF (= the block bootstrap's honest variance). DEFF==1 reproduces the prior math
+    # EXACTLY (no-op), so uncorrelated ratings and all existing fixtures are unchanged. The RAW counts
+    # are retained for display; only the inference math runs on the discounted counts.
+    deff = float(design_effect) if (design_effect and design_effect >= 1.0) else 1.0
+    n_pos = max(2.0, n_pos_raw / deff)
+    n_neg = max(2.0, n_neg_raw / deff)
     if auc <= 0.5:
         return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
-                "n_ratings_current": n_pos + n_neg, "n_ratings_needed": None,
+                "n_ratings_current": n_pos_raw + n_neg_raw, "n_ratings_needed": None,
+                "design_effect": deff,
                 "more_data_needed": True, "alpha": alpha, "target_power": target_power,
                 "curve": None,
                 "note": "AUC at or below chance — no power to detect a real effect."}
@@ -2706,10 +3511,14 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     za = float(_st.norm.ppf(1 - alpha / 2.0))
     zb = float(_st.norm.ppf(target_power))
     power = float(_st.norm.cdf((auc - 0.5) / se - za * se0 / se))
-    N0 = n_pos + n_neg
+    N0 = n_pos + n_neg            # EFFECTIVE total (discounted); drives all the power math below
+    N0_raw = n_pos_raw + n_neg_raw  # REAL ratings the clinician has; what we DISPLAY as "current"
     # SE^2 * N is ~constant in N; solve (auc-0.5)*sqrt(N) = za*sqrt(se0^2 N0) + zb*sqrt(se^2 N0).
     rhs = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se * se * N0)
-    n_need = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    n_need_eff = int(np.ceil((rhs / (auc - 0.5)) ** 2))
+    # Effective ratings needed -> REAL ratings the clinician must collect (each real rating is worth
+    # 1/deff effective under autocorrelation). At deff==1 this is the identity.
+    n_need = int(np.ceil(n_need_eff * deff))
 
     # ---- audit C4: conservative power band at the de-folded CI lower bound -----------------------
     # Re-run the SAME Hanley–McNeil math at auc_lo (the clustered-bootstrap CI lower bound). This is
@@ -2730,18 +3539,21 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
             se_l = float(np.sqrt(max(var_l, 1e-12)))
             power_lo = float(_st.norm.cdf((a_lo - 0.5) / se_l - za * se0 / se_l))
             rhs_l = za * np.sqrt(se0 * se0 * N0) + zb * np.sqrt(se_l * se_l * N0)
-            n_need_hi = int(np.ceil((rhs_l / (a_lo - 0.5)) ** 2))
+            n_need_hi_eff = int(np.ceil((rhs_l / (a_lo - 0.5)) ** 2))
+            n_need_hi = int(np.ceil(n_need_hi_eff * deff))   # -> real ratings (deff==1 -> identity)
         elif a_lo is not None and np.isfinite(a_lo) and a_lo <= 0.5:
             # CI lower bound touches/crosses chance: conservatively, no power and ratings-needed is
             # undefined (the band could be null). Gate must not pass.
             auc_lo_used = a_lo; power_lo = float(alpha); n_need_hi = None
 
     # The gate reads the conservative bound when we have one: more data is needed unless we clear the
-    # target at the CI lower bound. With no auc_lo, fall back to the point-AUC requirement.
+    # target at the CI lower bound. Comparisons are in REAL ratings (n_need_* already × deff, N0_raw
+    # is the real current count) — equivalent to comparing effective-vs-effective, so deff cancels in
+    # the gate logic and the gate is unchanged at deff==1.
     if auc_lo_used is not None:
-        more_data = bool(n_need_hi is None or n_need_hi > N0 or (power_lo is not None and power_lo < target_power))
+        more_data = bool(n_need_hi is None or n_need_hi > N0_raw or (power_lo is not None and power_lo < target_power))
     else:
-        more_data = bool(n_need > N0)
+        more_data = bool(n_need > N0_raw)
 
     # ---- power-vs-N curve (replaces the 3-number readout with a sufficiency curve) ----
     # Sample total ratings N from a small floor up past whichever is larger of the current count and
@@ -2750,11 +3562,14 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
     # line, the current-N marker and the needed-N marker on it. Prevalence is held at n_pos/N0 so
     # n_pos(N) and n_neg(N) scale together the way more ratings would actually accrue.
     prev = float(n_pos) / float(N0) if N0 > 0 else 0.5
-    n_top = int(max(N0, n_need) * 1.35) + 4
+    # x-axis is REAL ratings the clinician collects; power is evaluated at the corresponding EFFECTIVE
+    # count N/deff (autocorrelation discount, audit [19]). At deff==1 these coincide -> identical curve.
+    n_top = int(max(N0_raw, n_need) * 1.35) + 4
     n_grid = np.unique(np.clip(np.linspace(4, n_top, 40).astype(int), 4, None))
     curve_n, curve_p = [], []
     for N in n_grid:
-        np_i = int(round(N * prev)); nn_i = int(N - np_i)
+        N_eff = max(4.0, N / deff)
+        np_i = int(round(N_eff * prev)); nn_i = int(round(N_eff - np_i))
         pw = _hm_auc_power_at(auc, np_i, nn_i, za)
         if pw is not None:
             curve_n.append(int(N)); curve_p.append(float(pw))
@@ -2763,15 +3578,30 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None):
 
     note = ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
             "effective n). Power to reject AUC = 0.5.")
+    if deff > 1.0:
+        note += (f" Effective n is DISCOUNTED by a design effect of {deff:.2f} (audit [16]/[19]): "
+                 "weekly ratings are serially autocorrelated, so the moving-block bootstrap variance "
+                 "exceeds the i.i.d. cluster bootstrap by this factor. Power and ratings-needed are "
+                 "reported on the discounted effective n; the x-axis is real ratings collected.")
     if auc_lo_used is not None:
         note += (" Power BAND reported across [auc_lo, auc]; the 'powered' gate reads the "
                  "conservative auc_lo end (audit C4) so it cannot pass on the optimistic point AUC.")
     return {
-        "available": True, "auc": auc, "auc_lo": auc_lo_used, "n_pos": n_pos, "n_neg": n_neg,
+        "available": True, "auc": auc, "auc_lo": auc_lo_used,
+        # DISPLAY the real (un-discounted) class counts; the discounted effective counts are exposed
+        # separately so a reader can see both. (audit [19])
+        "n_pos": n_pos_raw, "n_neg": n_neg_raw,
         "se_auc": se,
         "power_current": power, "power_current_lo": power_lo,
-        "n_ratings_current": int(N0), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
+        "n_ratings_current": int(N0_raw), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
         "more_data_needed": more_data, "alpha": alpha, "target_power": target_power,
+        # Audit [19]: design-effect discount. design_effect==1.0 -> no discount (identical to prior).
+        "design_effect": deff,
+        "n_ratings_effective": float(N0_raw / deff),
+        # Audit [8]: advisory only — Gaussian power approximation is rough below the cluster floor.
+        # Keyed on REAL ratings (what the clinician has), consistent with n_ratings_current.
+        "small_sample": bool(N0_raw < SMALL_SAMPLE_CLUSTER_FLOOR),
+        "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
         "curve": curve,
         "note": note,
     }

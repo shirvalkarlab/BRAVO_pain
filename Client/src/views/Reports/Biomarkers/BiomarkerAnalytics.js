@@ -138,39 +138,54 @@ function ValidationReadout({ validation, validating, emitContext }) {
     .join("  ·  ") : null;
   return (
     <MDBox mt={1}>
-      <MDBox display="flex" alignItems="center" gap={1} mb={0.5}>
-        <MDBox px={1.2} py={0.3} sx={{ backgroundColor: badgeColor, color: "white",
-          borderRadius: "10px", fontSize: 10.5, fontWeight: "bold", letterSpacing: 0.2 }}>
+      <MDBox display="flex" alignItems="center" gap={1.2} mb={0.5} flexWrap="wrap">
+        <MDBox px={1.6} py={0.5} sx={{ backgroundColor: badgeColor, color: "white",
+          borderRadius: "12px", fontSize: 14, fontWeight: "bold", letterSpacing: 0.3 }}>
           {verdict}
         </MDBox>
         {dirLine ? (
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 11 }}>{dirLine}</MDTypography>
+          <MDTypography color="dark" sx={{ fontSize: 15, fontWeight: "bold" }}>{dirLine}</MDTypography>
         ) : null}
       </MDBox>
+      {/* Enlarged + bold headline of the mixed-effects result — the takeaway the PI wants to read at
+          a glance (OR per 1 SD, 95% CI, p, cluster n). The full method prose stays below in small text. */}
+      {g.available !== false && g.odds_ratio != null && (
+        <MDTypography color="dark" display="block" mb={0.5}
+          sx={{ fontSize: 16, fontWeight: "bold", lineHeight: 1.4 }}>
+          {`OR = ${fmt(g.odds_ratio)} per 1 SD`
+           + (g.or_lo != null && g.or_hi != null ? `  (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)})` : "")
+           + `  ·  p = ${fmtP(g.p)}`}
+          <span style={{ fontSize: 12.5, fontWeight: 400, color: "#6c757d" }}>
+            {`   across ${g.n_clusters} weekly eras (n = ${g.n})`}
+          </span>
+        </MDTypography>
+      )}
       {g.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
-          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era): `
-           + `odds ratio per 1 SD increase in band power = ${fmt(g.odds_ratio)}`
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
+          {`Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era). `
+           + `Full fit: OR = ${fmt(g.odds_ratio)}`
            + (g.or_lo != null && g.or_hi != null
               ? ` (95% CI ${fmt(g.or_lo)}–${fmt(g.or_hi)}), ` : ", ")
-           + `p = ${fmtP(g.p)}, n = ${g.n} samples across ${g.n_clusters} weekly eras.`}
+           + `p = ${fmtP(g.p)}, n = ${g.n} across ${g.n_clusters} weekly eras.`}
         </MDTypography>
       ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
           {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
         </MDTypography>
       )}
       {s.available !== false ? (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
-          {`Band × stim-era interaction (likelihood-ratio test): `
-           + `χ² = ${fmt(s.chisq)}, p = ${fmtP(s.lrt_p)} `
-           + `(${s.stim_stable ? "stim-stable" : "stim-dependent"}). `
-           + `Per-era odds ratio (n samples): ${erasArr}. `
-           + `Stim eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
+          <strong style={{ fontSize: 13, color: s.stim_stable ? "#0a7f3f" : "#B17500" }}>
+            {`Stim ${s.stim_stable ? "stable" : "dependent"}`}
+          </strong>
+          {` — band × stim-era interaction LRT: χ² = ${fmt(s.chisq)}, `}
+          <strong>{`p = ${fmtP(s.lrt_p)}`}</strong>
+          {`. Per-era OR (n): ${erasArr}. `
+           + `Eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
            + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
         </MDTypography>
       ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11 }}>
+        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
           {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
         </MDTypography>
       )}
@@ -226,7 +241,7 @@ function ValidationReadout({ validation, validating, emitContext }) {
 }
 
 
-function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams }) {
+function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams, matchDirty }) {
   const ref = useRef(null);
   const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
   // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
@@ -238,12 +253,19 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
   const centers = (scan && scan.centers) || [];
   const adaptive = scan && scan.adaptive_band;            // [lo, hi] | null
   const fmax = (scan && scan.fmax) || 100;
-  // Feature the scan ran on: "lsb_calibrated" (269 × TD band integral, full 0–100 Hz scan; the
-  // 8–30 Hz deployable band is shown by the green tint, not by cropping) vs legacy dB power.
-  // Drives every axis/hover label so the panel states the unit the numbers actually carry.
-  const isLsb = scan && scan.feature === "lsb_calibrated";
-  const featAxis = isLsb ? "log₁₀ calibrated LSB" : "Std. log band power";
-  const featHover = isLsb ? "log₁₀ LSB" : "log power";
+  // Feature the scan ran on: "lsb_cs14" (CS-1…CS-4 transform/bridge, k=352.62/73.63, new as of
+  // 2026-06-27) or legacy "lsb_calibrated" (269 × TD Welch band integral, kept for back-compat) vs
+  // "logpsd_db". Drives every axis/hover label so the panel states the unit the numbers carry.
+  const isLsb = scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated");
+  // LSB is shown on the RAW (linear) scale — the Percept device applies no onboard log10, so the
+  // axis matches the scale the closed-loop threshold operates on (2026-06-28). Power features stay on
+  // the log/dB scale they are computed on.
+  const featAxis = isLsb ? "Calibrated LSB" : "Std. log band power";
+  const featHover = isLsb ? "LSB" : "log power";
+  // Correlation statistic shown for this feature: Spearman ρ for LSB (rank-based, robust to the
+  // heavy-tailed LSB distribution), Pearson r for the log-power feature. Backend stamps corr_method
+  // per channel; fall back to the feature type when absent.
+  const corrName = isLsb ? "Spearman ρ" : "Pearson r";
 
   // Hemisphere coloring: Left = blue family, Right = vermillion family (matches the rest of the card).
   const hemiOf = (ch) => { const s = (ch.short || ch.name || "").trim(); return s[0] === "R" ? "Right" : "Left"; };
@@ -298,18 +320,29 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       });
     orderedChannels.forEach(({ ch, ci }) => {
       const color = hemiOf(ch) === "Right" ? HI : LO;
-      // Per-channel matched-sample ceiling: the pooled matched count splits across the bipolar
-      // montages (one montage per recording), so each channel's curve uses only its own PSDs.
-      const nch = (ch.n_channel != null) ? ` (n=${ch.n_channel})` : "";
+      // Per-channel count shown in the legend AND echoed into the curve hover (the hovertemplate's
+      // <extra> renders fullData.name). The honest count is the number of INDEPENDENT LSB vectors
+      // feeding this channel's analysis, split into the only two sources the PI wants surfaced:
+      // time-domain-derived (n_td) vs PSD-derived (n_psd_bridge). This is NOT ch.n_channel — that
+      // counts matched PSD ROWS (e.g. 278) and massively overstates the independent vectors (e.g.
+      // 17 TD + 3 PSD = 20), which is exactly why the old hover N never matched rendered points.
+      const nch = (ch.n_td != null || ch.n_psd_bridge != null)
+        ? ` (${ch.n_td || 0} TD · ${ch.n_psd_bridge || 0} PSD)`
+        : (ch.n_channel != null ? ` (n=${ch.n_channel})` : "");   // logpsd fallback
       // r curve (solid, left axis) + AUC curve (dashed, right axis), shared legend group per channel.
       traces.push({ x: centers, y: ch.r, name: `${ch.short}${nch} · r`, type: "scattergl", mode: "lines",
         line: { width: 2, color }, connectgaps: false, legendgroup: ch.short, yaxis: "y",
         customdata: centers.map((c, bi) => [ci, bi]),
         hovertemplate: "%{x:.1f} Hz · r=%{y:.2f}<extra>%{fullData.name}</extra>" });
-      traces.push({ x: centers, y: ch.auc, name: `${ch.short}${nch} · AUC`, type: "scattergl", mode: "lines",
+      // R1/A1: plot the SIGNED AUC (oriented by the band's correlation sign) so a band whose power
+      // FALLS with pain reads below the 0.5 chance line and a null band sits at ~0.5 — the folded
+      // `auc` (always >= 0.5) made every band look discriminative. Fall back to folded auc if absent.
+      traces.push({ x: centers,
+        y: (ch.auc_signed && ch.auc_signed.length === centers.length) ? ch.auc_signed : ch.auc,
+        name: `${ch.short}${nch} · AUC (signed)`, type: "scattergl", mode: "lines",
         line: { width: 1.6, color, dash: "dot" }, connectgaps: false, legendgroup: ch.short, yaxis: "y2",
         customdata: centers.map((c, bi) => [ci, bi]),
-        hovertemplate: "%{x:.1f} Hz · AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
+        hovertemplate: "%{x:.1f} Hz · signed AUC=%{y:.2f}<extra>%{fullData.name}</extra>" });
       // Rigor-pass overlay: solid black-outlined markers at every band whose rating-clustered
       // logit p survives BH-FDR over the band x channel grid (`is_fdr_sig` from the backend).
       // The markers sit on the r curve (left axis) — same color as the channel, with a black ring
@@ -350,13 +383,17 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
       shapes.push({ type: "rect", xref: "x", yref: "paper", x0: adaptive[0], x1: adaptive[1],
         y0: 0, y1: 1, fillcolor: "#009E73", opacity: 0.10, line: { width: 0 }, layer: "below" });
     }
+    // R1/A1: chance line at signed-AUC 0.5 (right axis) so direction reads against an explicit
+    // reference — bands below discriminate in the pain-DOWN direction, above it pain-UP.
+    shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y2", y0: 0.5, y1: 0.5,
+      line: { width: 1, color: "#9AA0A6", dash: "dash" }, layer: "below" });
     // The selected-band vertical guide is NOT drawn here. It is applied by a separate
     // Plotly.relayout effect keyed on `sel` (below), so that clicking a band never rebuilds the
     // traces — a rebuild is what used to wipe the user's legend on/off state (the cleanup purge
     // emptied gd.data before the visibility carry-over could read it). This effect omits `sel`.
 
     const layout = {
-      ...FIG_BASE, autosize: true, height: 460,
+      ...FIG_BASE, autosize: true, height: 575,
       margin: { ...FIG_BASE.margin, b: 96 },   // room for the larger two-group legend
       xaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Band-center frequency (Hz)" },
         // ALWAYS show the full 0–fmax (0–100 Hz) spectrum in both LSB and log-PSD modes. The scan
@@ -364,10 +401,10 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         // is marked by the green tint + annotation below, not by cropping the axis. (Was previously
         // clamped to [adaptive[0], fmax] in LSB mode, which hid the out-of-band spectrum entirely.)
         range: [0, fmax] },
-      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `Pearson r vs ${pain}` },
+      yaxis: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: `${corrName} vs ${pain}` },
         range: [-1.05, 1.05], zeroline: true },
-      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Logistic AUC (binarized)" },
-        overlaying: "y", side: "right", range: [0.4, 1.0], showgrid: false },
+      yaxis2: { ...AXIS_BASE, title: { ...AXIS_BASE.title, text: "Signed logistic AUC (binarized · 0.5 = chance)" },
+        overlaying: "y", side: "right", range: [0.0, 1.0], showgrid: false },
       legend: { orientation: "h", y: -0.20, groupclick: "togglegroup",
                 // Single-click toggles a group on/off; that's the only legend gesture that changes
                 // visibility. Double-click-to-isolate is disabled — without this, a double-click
@@ -518,30 +555,46 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
         + `,  median Δ = ${md != null ? md.toFixed(2) : "—"} SD,  `
         + `${scan && scan.auc_mode === "rating_grouped" ? "rating-clustered " : ""}p = ${fmtP(pBand)}`;
 
-      // Number of samples actually drawn in the left scatter (the dot count = all matched
-      // continuous samples for this channel+band). Use the plotted length so the title's n always
-      // matches what the eye sees, not a separately-tracked count.
-      const nShown = sc.x.length;
+      // Headline n = DISTINCT observations actually rendered. The server de-duplicates the scatter
+      // to one point per rating in rating-grouped (LSB) mode, so n_obs == sc.x.length == the violin's
+      // jittered-point count == nlo+nhi+nmid. This is the honest count the title must show — NOT the
+      // pre-dedup matched-PSD-row count (sc.n_rows) and NOT the montage match ceiling (ch.n_channel),
+      // both of which were previously printed as the headline and exceeded the rendered dots (the
+      // "n=84 but 2 dots" bug). Those two are kept as SECONDARY context only.
+      const nShown = nlo + nhi + nmid;                 // == sc.n_obs by construction
+      // LSB-source split of the rendered points — the two counts the PI wants on every label:
+      // how many rendered LSB vectors are time-domain-derived vs PSD-derived. null in logpsd mode.
+      const nTD = (sc.n_td != null) ? sc.n_td : null;
+      const nPSD = (sc.n_psd != null) ? sc.n_psd : null;
+      const hasSrc = nTD != null && nPSD != null;
+      const srcLbl = hasSrc ? `${nTD} TD · ${nPSD} PSD` : null;   // e.g. "16 TD · 83 PSD"
+      const subsampled = (sc.n_distinct != null) && (sc.n_distinct > nShown); // display cap fired
       scatterNode = (
         <MDBox mt={1}>
           {/* Big, bold two-line title centered over BOTH the left scatter and the right violin, so
               it reads as the heading for the whole selected-band readout below it. Line 1: contact
-              + samples shown. Line 2: center frequency + Pearson r (with its p-value when available). */}
+              + samples shown + center frequency. Line 2: the correlation (Spearman ρ for LSB,
+              Pearson r for log-power) with its p-value when available. */}
           {/* pt gives the first line room so its ascenders aren't clipped by the panel edge; the
               generous lineHeight (1.45) keeps each line's glyph box taller than the bumped-up
               fontSize so neither line is cut at the top (the MUI variant's default line-height is
               tighter than these sizes, which was clipping the second line). */}
-          <MDBox sx={{ textAlign: "center", mb: 1, pt: 1 }}>
+          {/* mt + extra pt give the super-title clearance from the panel/card edge above it. At narrow
+              widths line 1 wraps to two physical lines, which previously pushed the block into the
+              edge and clipped the top line's ascenders; the added top space keeps it clear at every
+              window size. */}
+          <MDBox sx={{ textAlign: "center", mb: 1, mt: 2, pt: 1.5 }}>
             {/* Line 1: contact + sample count + center frequency (the WHAT). Line 2: the Pearson
                 statistic (the RESULT). Grouping the band identity on line 1 and the stat on line 2
                 reads cleaner than splitting freq onto the stat line. */}
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 22, lineHeight: 1.45, display: "block" }}>
-              {`${ch.short} (n=${nShown}) @ ${center.toFixed(1)} Hz`}
+              {`${ch.short} (n=${nShown}${srcLbl ? `: ${srcLbl}` : ""}${subsampled ? ` of ${sc.n_distinct}` : ""}) @ ${center.toFixed(1)} Hz`}
+              {matchDirty && <span style={{ fontSize: 13, fontWeight: 400, color: "#6c757d", marginLeft: 6 }}>{"· scan at prior window"}</span>}
             </MDTypography>
             <MDTypography fontWeight="bold" color="dark"
               sx={{ fontSize: 18, lineHeight: 1.45, display: "block" }}>
-              {`Pearson r = ${r != null ? r.toFixed(2) : "—"}`
+              {`${(ch.corr_method === "spearman" ? "Spearman ρ" : (ch.corr_method === "pearson" ? "Pearson r" : corrName))} = ${r != null ? r.toFixed(2) : "—"}`
                + (pPearson != null ? ` (p = ${fmtP(pPearson)})` : "")}
             </MDTypography>
           </MDBox>
@@ -564,7 +617,9 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                 {effLine}
               </MDTypography>
               <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-                {`Groups: ${nlo} low · ${nhi} high · ${nmid} excluded-middle. `
+                {`n=${nShown}: ${nlo} low · ${nhi} high · ${nmid} excluded-middle`
+                 + (srcLbl ? ` · LSB source: ${srcLbl}` : "")
+                 + (subsampled ? ` (subsampled from ${sc.n_distinct} for display). ` : ". ")
                  + "Power is z-scored within channel/source, so Δ is in SD units; "
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
@@ -595,75 +650,148 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
     <Grid item xs={12}>
       <Card sx={{ width: "100%", scrollMarginTop: "96px" }}>
         <MDBox p={2}>
-          <MDTypography variant="h6" fontSize={17} mb={0.25}>
+          <MDTypography variant="h6" fontSize={19} fontWeight="bold" mb={0.25}>
             {`Spectral feature importance — which band tracks ${pain}? (click a band for its scatter)`}
           </MDTypography>
-          <MDTypography variant="caption" color="text" display="block" mb={0.5}>
-            {scan && scan.note}
+          {/* LSB-SOURCE INDICATOR: every value feeding this panel is a modeled/real LSB vector derived
+              from a time-domain recording (TD-transform, k=352.62) OR a PSD-only patient event (CS-3
+              bridge, k≈73.63), computed across the full 0–100 Hz. The chip below pools the independent
+              TD- vs PSD-derived LSB counts across the displayed channels so the provenance mix is
+              explicit (the per-channel split is in the summary above and on each scatter title). */}
+          {(() => {
+            const ch = channels || [];
+            const tdN = ch.reduce((a, c) => a + (c.n_td || 0), 0);
+            const psdN = ch.reduce((a, c) => a + (c.n_psd_bridge || 0), 0);
+            if (tdN + psdN === 0) return null;
+            return (
+              <MDBox display="inline-flex" alignItems="center" gap={0.75} mb={0.75} px={1} py={0.4}
+                sx={{ backgroundColor: "rgba(44,82,130,0.06)", border: "1px solid rgba(44,82,130,0.25)",
+                      borderRadius: "8px" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#2C5282" }}>{"LSB source"}</span>
+                <span style={{ fontSize: 12.5, color: "#33475b" }}>
+                  {`derived from TD + PSD sections (0–100 Hz):  `}
+                  <strong>{`${tdN} TD-transform`}</strong>{`  ·  `}
+                  <strong>{`${psdN} PSD-bridge`}</strong>
+                  {`  independent LSB vectors`}
+                </span>
+              </MDBox>
+            );
+          })()}
+          {/* Bold one-line takeaway: state exactly what the two curves are and the headline caveat,
+              before the detailed (backend-supplied) note. Font bumped from caption (~12px) to 14px
+              with key phrases bold so the caveats are not lost in a wall of small grey text. */}
+          <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
+            <strong>Each frequency band is screened two ways</strong>:{` ${corrName} vs the`}
+            {` continuous ${pain} score (all matched samples) and a cross-validated logistic `}
+            <strong>AUC</strong> on the high-vs-low split.{" "}
+            {isLsb && <span>{"LSB is shown on the raw (linear) device scale; ρ is rank-based, robust to its heavy tail. "}</span>}
+            <strong>Exploratory screen — neither the correlation nor AUC is a validated biomarker.</strong>
           </MDTypography>
-          {/* Matching policy — one concise line stating exactly how PSDs were paired to ratings. */}
+          {/* R2/A2: per-contact biomarker selection — the pain-tracking band AND its direction are
+              contact-specific, so name each contact's own best band rather than implying one global
+              biomarker. Direction from the sign of ρ; ✓ marks bands clearing rigorous BH-FDR. Built
+              as a self-contained IIFE (the proven JSX pattern here) to avoid the react-hooks eslint
+              false-positive that a component-body const+map triggers. */}
+          {(() => {
+            const rows = ((scan && Array.isArray(scan.channels)) ? scan.channels : [])
+              .filter((c) => c.selected_band);
+            if (!rows.length) return null;
+            return (
+              <MDBox mb={1} mt={0.5} sx={{ overflowX: "auto" }}>
+                <MDTypography variant="caption" display="block" fontWeight="bold" mb={0.5} sx={{ fontSize: 12.5 }}>
+                  {"Per-contact best band (no single global biomarker — band & direction differ by contact):"}
+                </MDTypography>
+                <table style={{ borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #cfd6dd", textAlign: "left" }}>
+                      {["Contact", "Band", "Direction", "\u03c1", "Signed AUC", "q (FDR)"].map((h) => (
+                        <th key={h} style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((c) => {
+                      const sb = c.selected_band;
+                      const dc = sb.sign === "positive" ? "#D55E00" : sb.sign === "negative" ? "#0072B2" : "#9AA0A6";
+                      const dl = sb.direction === "elevation" ? "\u2191 elevation"
+                        : sb.direction === "suppression" ? "\u2193 suppression" : "\u2014 flat";
+                      return (
+                        <tr key={c.short} style={{ borderBottom: "1px solid #eef1f4" }}>
+                          <td style={{ padding: "2px 10px 2px 0", fontWeight: 600 }}>{c.short}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{`${sb.center_hz.toFixed(1)} Hz`}</td>
+                          <td style={{ padding: "2px 10px 2px 0", color: dc, fontWeight: 600 }}>{dl}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.rho == null ? "\u2014" : sb.rho.toFixed(2)}</td>
+                          <td style={{ padding: "2px 10px 2px 0" }}>{sb.auc_signed == null ? "\u2014" : sb.auc_signed.toFixed(2)}</td>
+                          <td style={{ padding: "2px 10px 2px 0", fontWeight: sb.fdr_significant ? 700 : 400,
+                                       color: sb.fdr_significant ? "#0a7f3f" : "#6c757d" }}>
+                            {sb.q == null ? "\u2014" : `${sb.q.toFixed(3)}${sb.fdr_significant ? " \u2713" : ""}`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <MDTypography variant="caption" display="block" mt={0.3} sx={{ fontSize: 11, fontStyle: "italic", color: "#6c757d" }}>
+                  {"\u2713 = survives band\u00d7channel BH-FDR (q<0.05); others are the contact's strongest exploratory band. Signed AUC <0.5 = power falls with pain."}
+                </MDTypography>
+              </MDBox>
+            );
+          })()}
+          {scan && scan.note && (
+            <MDTypography variant="body2" color="text" display="block" fontSize={14} mb={0.5}>
+              {scan.note}
+            </MDTypography>
+          )}
+          {/* Condensed methods line: matching policy + survey usage in ONE compact statement. The
+              per-channel high/low/excluded + TD/PSD-LSB counts now live in the summary above the
+              scan and on each scatter title, so this line states only the pooled method facts. */}
           {scan && scan.max_per_rating != null && (
-            <MDTypography variant="caption" display="block" mb={0.5}
-              sx={{ color: "#2C5282", fontWeight: "bold" }}>
-              {`Matching: each pain rating is paired with up to ${scan.max_per_rating} PSD`
-               + `${scan.max_per_rating > 1 ? "s" : ""} per channel `
-               + (scan.match_direction === "nearest"
-                  ? "closest in time (either direction), within the match window"
-                  : "recorded just BEFORE it (forecasting), within the match window")
-               + (scan.max_per_rating > 1 && scan.refractory_min
-                  ? `, no two closer than ${scan.refractory_min} min` : "")
-               + (scan.n_capped_dropped ? ` — ${scan.n_capped_dropped} extra PSDs dropped by the cap.` : ".")
-               + (scan.max_per_rating > 1
-                  ? " AUC is cross-validated with folds grouped by rating, so its n is the count of independent ratings; a band's scatter p is the rating-clustered logistic Wald p."
-                  : " Every sample is an independent (channel, rating) pair; a band's scatter p is the logistic Wald p.")}
-            </MDTypography>
-          )}
-          {/* Survey usage — the rating-centric view the clinician asked for. */}
-          {scan && scan.survey_usage && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
-              {`Pain surveys used: ${scan.survey_usage.n_pro_used} of ${scan.survey_usage.n_pro_total} available `
-               + `(${scan.survey_usage.pct_pro_used}%); ${scan.survey_usage.n_pro_reused} were assigned to more than one neural sample.`}
-            </MDTypography>
-          )}
-          {scan && scan.n_pooled != null && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
-              {`${scan.n_pooled} PSDs matched a rating across all channels. Each channel's curve uses only the PSDs `
-               + `recorded on that montage (the per-channel n in the legend), so any single curve draws on a fraction of that total.`}
-            </MDTypography>
-          )}
-          {scan && scan.binarization && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5}>
-              {`Logistic AUC runs on the finalized split: ${scan.binarization.n_high} high + ${scan.binarization.n_low} low`
-               + (scan.binarization.n_excluded_middle > 0
-                  ? ` (${scan.binarization.n_excluded_middle} middle excluded). `
-                  : ` (no middle excluded — discrete ratings collapse the ${scan.binarization.strategy} cut). `)
-               + `Pearson r uses all matched samples.`
-               + (scan.td_welch_duration
-                  ? ` TD epochs Welch'd over ${scan.td_welch_duration.mean_s}±${scan.td_welch_duration.sd_s} s `
-                    + `(n=${scan.td_welch_duration.n}), matching the ~30 s onboard event/montage PSDs.`
+            <MDTypography variant="body2" display="block" mb={0.5} fontSize={13.5}
+              sx={{ color: "#2C5282" }}>
+              <strong>{"Matching: "}</strong>
+              {(scan.match_direction === "pro_first"
+                  ? `PRO-first — each rating claims ≤${scan.max_per_rating} closest PSD${scan.max_per_rating > 1 ? "s" : ""}/channel in the window`
+                  : scan.match_direction === "nearest"
+                    ? "each PSD → nearest rating either direction"
+                    : scan.match_direction === "prior"
+                      ? "each PSD → next rating after it (forecasting)"
+                      : `≤${scan.max_per_rating} PSD${scan.max_per_rating > 1 ? "s" : ""}/rating (legacy payload)`)
+               + (scan.max_per_rating > 1 && scan.refractory_min ? `, ≥${scan.refractory_min} min apart` : "")
+               + (scan.n_capped_dropped ? `, ${scan.n_capped_dropped} excess dropped` : "")
+               + ". "
+               + (scan.auc_mode === "rating_grouped"
+                  ? "AUC folds grouped by rating (effective n = independent ratings)."
+                  : "Every matched sample treated as independent.")
+               + (scan.survey_usage
+                  ? ` Surveys used: ${scan.survey_usage.n_pro_used}/${scan.survey_usage.n_pro_total} (${scan.survey_usage.pct_pro_used}%).`
                   : "")}
             </MDTypography>
           )}
-          {scan && scan.feature === "lsb_calibrated" && scan.device_psd_scale_by_channel
-            && Object.keys(scan.device_psd_scale_by_channel).length > 0 && (
-            <MDTypography variant="caption" color="text" display="block" mb={0.5} sx={{ fontStyle: "italic" }}>
-              {`Reports with no time-domain match used the device onboard-FFT PSD, rescaled onto the LSB axis `
-               + `by an empirical per-channel factor (${Object.entries(scan.device_psd_scale_by_channel)
-                    .map(([ch, s]) => `${ch}: ×${Number(s).toFixed(2)}`).join(", ")}). `
-               + `These are approximate LSB — lower fidelity than the time-domain-derived points.`}
+          {/* One-line LSB provenance + validated-range note (only in LSB mode). */}
+          {scan && scan.feature === "lsb_cs14" && (
+            <MDTypography variant="body2" color="text" display="block" mb={0.5} fontSize={13.5} sx={{ fontStyle: "italic" }}>
+              {"LSB per rating: TD-transform (k\u202f=\u202f352.62) when a time-domain recording covers it, "
+               + "else CS-3 PSD bridge (k\u202f\u2248\u202f73.63). Full 0\u2013100\u202fHz; green shading = validated 7.8\u201330\u202fHz."}
             </MDTypography>
           )}
-          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0 && (
-            <MDTypography variant="caption" display="block" mb={0.5}
+          {/* Double-dipping: only suppress when PRO-first + rating-grouped AUC already handles it.
+              In PRO-first mode each rating is the unit of analysis and the AUC groups folds by rating,
+              so multi-PSD-per-rating is intentional and the AUC n is already the independent count.
+              Show the warning for every other direction — INCLUDING legacy payloads with no
+              match_direction field (cached prior/nearest scans), where double-dipping is real and
+              hiding it would mislead the clinician. Only the explicit "pro_first" string suppresses. */}
+          {scan && scan.pro_independence && scan.pro_independence.n_excess_matches > 0
+            && scan.match_direction !== "pro_first" && (
+            <MDTypography variant="body2" display="block" mb={0.5} fontSize={14}
               sx={{ color: scan.pro_independence.pct_nonindependent >= 50 ? "#B7791F" : "text.secondary",
                     fontWeight: scan.pro_independence.pct_nonindependent >= 50 ? "bold" : "regular" }}>
-              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched neural samples `
-               + `map to only ${scan.pro_independence.n_unique_pro} unique pain scores `
+              {`⚠ PRO double-dipping: ${scan.pro_independence.n_matched} matched samples `
+               + `cover only ${scan.pro_independence.n_unique_pro} unique pain scores `
                + `(${scan.pro_independence.pct_nonindependent}% non-independent; worst score reused `
                + `${scan.pro_independence.max_reuse}×). `
                + (scan.auc_mode === "rating_grouped"
-                  ? "The AUC already corrects for this (folds grouped by rating); the Pearson r still pools all matched samples, so treat r as exploratory."
-                  : "Effective sample size is well below the matched n — treat r/AUC as exploratory, not as independent observations.")}
+                  ? `AUC folds are grouped by rating so AUC is corrected; ${corrName} still pools all samples — treat the correlation as exploratory.`
+                  : `Effective sample size is well below the matched n — treat both the correlation and AUC as exploratory.`)}
             </MDTypography>
           )}
           <div ref={ref} style={{ width: "100%", height: 420 }} />
@@ -744,7 +872,7 @@ const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").repla
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
   binStrategy: previewStrategy, binMetricKey: previewMetricKey,
   binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
-  participantUid, requestParams }) {
+  participantUid, requestParams, matchDirty }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -926,10 +1054,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   // config). The chronic 10-min trend is band power at a FIXED frequency, so state it. Different
   // from the streaming power-domain center frequencies shown per recorded-power channel.
   const chronicHz = pdRoot.chronic_center_hz || {};
-  const chronicHzText = Object.keys(chronicHz).length
-    ? " Chronic 10-min trend sensing frequency (distinct from the per-contact recorded bands below): "
-        + Object.keys(chronicHz).map((h) => `${h.replace("Hemisphere", "")} ${chronicHz[h]} Hz`).join(", ") + "."
-    : "";
+  // chronicHzText REMOVED with the Power-domain section (2026-06-28, PI).
 
   // Short on-plot provenance string: which sensing band (center frequency) and which contact the
   // power-domain signal comes from, so a reader never has to ask "power from WHERE?".
@@ -1012,7 +1137,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
       <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
-        participantUid={participantUid} requestParams={requestParams} />
+        participantUid={participantUid} requestParams={requestParams} matchDirty={matchDirty} />
     );
   }
 
@@ -1753,112 +1878,37 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     });
   }
 
-  if (tdPanels.length === 0 && chPanels.length === 0) return null;
+  if (tdPanels.length === 0) return null;
 
-  // Channel selector — visible only when the backend split the chronic stream into per-channel
-  // analytics. Default "Pooled" preserves the legacy single-detector view; the other buttons swap
-  // the LFP histogram / sliding window / ROC / honest-perf panels to that channel.
-  const channelToggle = channelKeys.length >= 1 ? (
-    <Grid item xs={12}>
-      <MDBox mt={2} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-        <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-          {"Sensing contact (bipolar):"}
-        </MDTypography>
-        <ToggleButtonGroup value={safeChSel} exclusive size="small"
-          onChange={(_, v) => { if (v) { setChSel(v); setFreqSel(null); } }}>
-          {/* No cross-hemisphere "All contacts" pool — you program one contact at a time, and Left
-              (GPi) vs Right (VIM) are distinct targets that must never be averaged together. The
-              per-hemisphere mean (below) is the only aggregate, kept for orientation. The legacy
-              single "pooled" button appears only when there is no per-contact split at all. */}
-          {selectableKeys.length === 0
-            ? <ToggleButton value="pooled">All data</ToggleButton> : null}
-          {/* Chronic around-the-clock streams first per hemisphere (the 24/7 biomarker), then the
-              per-hemisphere streaming mean, then each streaming contact. */}
-          {leftChronic.map((k) => (
-            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
-          ))}
-          {hasLeft ? <ToggleButton value="hemi:Left">Left hemisphere (mean)</ToggleButton> : null}
-          {leftContacts.map((k) => (
-            <ToggleButton key={k} value={k}>{k}</ToggleButton>
-          ))}
-          {rightChronic.map((k) => (
-            <ToggleButton key={k} value={k}>{`${k} (24/7)`}</ToggleButton>
-          ))}
-          {hasRight ? <ToggleButton value="hemi:Right">Right hemisphere (mean)</ToggleButton> : null}
-          {rightContacts.map((k) => (
-            <ToggleButton key={k} value={k}>{k}</ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-          {safeChSel === "pooled"
-            ? "Single combined series (no per-channel split available for this run)."
-            : isHemiSel
-              ? `${selHemi} hemisphere — mean over its streaming bipolar contacts, with the individual contacts behind it (the two hemispheres are distinct targets and are never averaged together). The chronic 24/7 stream is analyzed separately on its own.`
-              : isChronicKey(safeChSel)
-                ? `Showing only ${safeChSel} — the BrainSense Timeline ~10-min around-the-clock LFP-power stream${bestContact === safeChSel ? " (most discriminative channel, shown by default)" : ""}. ROC, optimal threshold, distribution, and sliding-window are all computed on this 24/7 series. Program its threshold on the Percept RC.`
-                : `Showing only contact ${safeChSel}${bestContact === safeChSel ? " (highest-AUC channel, shown by default)" : ""} — independent threshold, AUC, and sliding-window curve for that bipolar pair. Program this contact's threshold on the Percept RC.`}
-        </MDTypography>
-      </MDBox>
-      {/* FREQUENCY sub-selector — only for a single implementable channel with >1 sensing band. The
-          analysis unit is (channel, frequency): selecting a band restricts ROC / threshold /
-          distribution / binarization to chronic + streaming samples recorded AT THAT BAND, never
-          pooling 7.8 Hz with 22.5 Hz. "All bands" = the legacy whole-channel decode. */}
-      {freqSelectable && availFreqs.length > 0 ? (
-        <MDBox mt={1} mb={0.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-          <MDTypography variant="button" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-            {"Sensing frequency:"}
-          </MDTypography>
-          <ToggleButtonGroup value={freqSel == null ? "all" : freqKey(freqSel)} exclusive size="small"
-            onChange={(_, v) => { if (v) setFreqSel(v === "all" ? null : Number(v)); }}>
-            <ToggleButton value="all">All bands</ToggleButton>
-            {availFreqs.map((a) => {
-              const k = freqKey(a.frequency_hz);
-              return (
-                <ToggleButton key={k} value={k}>
-                  {`${Number(a.frequency_hz).toFixed(1)} Hz`}
-                  <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>
-                    {`(${a.n_labeled}/${a.n_samples} samp · ${a.n_days_labeled}/${a.n_days} d)`}
-                  </span>
-                </ToggleButton>
-              );
-            })}
-          </ToggleButtonGroup>
-          <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-            {freqSel == null
-              ? `All sensing bands of ${safeChSel} pooled — counts above show labeled/total samples and labeled/total days per band. Pick a band to decode it alone.`
-              : (selFreqDecode
-                  ? `Decoding ${safeChSel} @ ${Number(freqSel).toFixed(1)} Hz only — ${selFreqDecode.n_labeled} labeled samples across ${selFreqDecode.binarization.n_days_labeled} days (chronic + streaming combined at this band). ROC, threshold, distribution, and the binarization split below are computed on this band alone.`
-                  : `No decode available for ${Number(freqSel).toFixed(1)} Hz.`)}
-          </MDTypography>
-        </MDBox>
-      ) : null}
-    </Grid>
-  ) : null;
+  // Channel selector (channelToggle) REMOVED with the Power-domain section (2026-06-28, PI):
+  // it only drove the chronic ROC / distribution / sliding-window panels, which are gone.
 
   // Rigor-pass annotation: if the backend supplied a band x channel BH-FDR summary, append the
   // naive-vs-rigorous count contrast to the subtitle. This is the headline pseudoreplication
-  // honesty number — naive Pearson over-reports significance because every PSD is treated as
-  // independent, while the rating-clustered logistic q accounts for the ~7-8 PSDs that share each
-  // pain report. Reads as e.g. "[N bands FDR-significant by rating-clustered logistic vs M by
-  // naive Pearson over a 558-cell grid; ringed dots above mark the validated bands]".
+  // honesty number. The naive family treats every matched neural sample as independent, but each
+  // pain rating contributes UP TO MaxPerRating samples (the cap on the slider) — so the naive FDR
+  // over-reports. The rating-clustered logistic q accounts for the samples that share a rating. This
+  // holds whether or not LSB vectors are reused: the no-reuse rule changes each sample's FEATURE
+  // VALUE, not how many samples a rating contributes (that is the MaxPerRating cap). Reads as e.g.
+  // "[N bands survive rating-clustered FDR vs M under naive FDR; ringed dots mark the survivors]".
   const fdrSummary = scan && scan.fdr_summary;
   const rigorAnnotation = fdrSummary
-    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive naive Pearson FDR (treats every PSD as independent — over-reports because of pseudoreplication). Ringed dots above mark the rigorous-FDR survivors.`
+    ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive the naive per-sample FDR, which treats each matched sample as independent and over-reports because one rating contributes up to MaxPerRating samples. Ringed dots above mark the rigorous-FDR survivors.`
     : "";
 
   return (
     <>
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
-               subtitle={(scan && scan.feature === "lsb_calibrated"
-                 ? "Every neural recording matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band over 8–30 Hz. The band feature is the CALIBRATED device LSB (269 × the band integral of the time-domain Welch density — the same conversion as the deployment threshold), NOT the raw PSD. Each report uses its highest-fidelity source: real time-domain streaming, then montage/survey sweep, then — only when no time domain exists for that report — the device's onboard-FFT PSD brought onto the LSB axis by an empirical per-channel scale. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter."
-                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned with a 5 Hz sliding band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score, overlaid; click a band for its scatter.") + rigorAnnotation}
+               subtitle={(scan && (scan.feature === "lsb_cs14" || scan.feature === "lsb_calibrated")
+                 ? (scan.feature === "lsb_cs14"
+                   ? "One LSB per matched (channel, rating) pair: 30 s rating-centred window through the transform DSP (k\u202f=\u202f352.62) when a time-domain recording covers the rating, else the CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events. Raw (linear) LSB on the device scale, full 0\u2013100\u202fHz in a 5\u202fHz sliding band; green shading marks the validated 7.8\u201330\u202fHz range. Per band: Spearman \u03c1 vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter."
+                   : "Every neural recording matched to the nearest pain report, scanned in a 5\u202fHz sliding band. Feature: raw calibrated LSB (269\u202f\u00d7 TD Welch band integral). Per band: Spearman \u03c1 and logistic AUC; click a band for its scatter.")
+                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned in a 5\u202fHz sliding band. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter.") + rigorAnnotation}
                panels={tdPanels} />
-      <Section title="Power-domain analysis (Chronic 10-min trend + per-session band power)"
-               subtitle={(slidingActive
-                 ? "Sliding-window classifier (AUC / R / sensitivity / specificity / threshold), ROC, power distribution, and pain clusters."
-                 : "ROC, power distribution, and pain clusters (turn on the sliding window for performance-over-time).") + chronicHzText}
-               panels={chPanels}
-               header={channelToggle} />
+      {/* Power-domain analysis section (chronic 10-min trend + per-session band power) REMOVED
+          (2026-06-28, PI): chronic LSB averaging is irrelevant to closed-loop deployment, so the
+          ROC / power-distribution / sliding-window / pain-cluster panels and their builders were
+          dropped. The closed-loop signal is the per-rating LSB scanned above. */}
     </>
   );
 }

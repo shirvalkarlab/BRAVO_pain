@@ -330,3 +330,43 @@ BRAVO/_pro_dump/
 
 # Local Claude/Operon agent state (project memory, settings).
 .claude/
+
+# ── Agent-bridge scratch & session output files ─────────────────────────────
+# These are ephemeral working files written by Claude sessions / the agent bridge.
+# They are intentionally NOT source-controlled.
+BRAVO/_agent_bridge/_*.py
+BRAVO/_agent_bridge/*.py
+!BRAVO/_agent_bridge/bridge_client.py
+!BRAVO/_agent_bridge/run_tests.py
+BRAVO/_agent_bridge/transform_repro.py
+BRAVO/_agent_bridge/sliding_window_calib.py
+BRAVO/_agent_bridge/transform_3s_hybrid.py
+BRAVO/_agent_bridge/extract_offsets.py
+BRAVO/_agent_bridge/vec_auc_check.py
+
+# Session output artifacts at repo root (generated data, not source)
+handoff/
+*.patch
+*.diff
+AUDIT_TRIAGE_*.md
+SESSION_HANDOFF_TD_*.md
+HANDOFF_*.md
+!HANDOFF_TD_LSB_calibration_2026-06-27.md
+!MEGA_HANDOFF.md
+HANDOFF_TD_*.md
+HANDOFF_*.md
+!HANDOFF_TD_LSB_calibration_2026-06-27.md
+!MEGA_HANDOFF.md
+INGEST_*.md
+cs[0-9]*.diff
+pr[0-9]*.diff
+scan_*.json
+scan_live.json
+spectral_*.html
+spectral_importance*.html
+rcs08_*.png
+rcs08_*.csv
+c2_*.png
+c2_*.csv
+sc[0-9]_*.png
+handoff_*.png

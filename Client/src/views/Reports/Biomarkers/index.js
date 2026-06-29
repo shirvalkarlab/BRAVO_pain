@@ -22,6 +22,9 @@ import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 import { computeMatchedScanModel } from "./binarizationModel";
+import {
+  saveControls, loadControls, putHeavy, getHeavy, underMemoryPressure, memoryInfo,
+} from "./biomarkerStateStore";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -75,14 +78,25 @@ function Biomarkers() {
   const { language } = controller;
   const { participant_uid } = useParams();
 
-  const [data, setData] = useState(false);
+  // Persisted controls for THIS participant (localStorage), read once so the state defaults below
+  // restore the exact panel config the user left when they navigated to the deployment view. null
+  // on first-ever visit -> the documented defaults apply. The heavy ~19 MB result is restored
+  // separately from the in-memory cache (see the hydration effect), never from localStorage.
+  const persisted = useMemo(() => loadControls(participant_uid), [participant_uid]);
+  const P = persisted || {};
+
+  // The heavy result is restored from the module-level LRU cache (survives route unmount/mount).
+  // If a fresh cached bundle exists for this participant, seed `data` with it on the very first
+  // render so the page paints the full analysis immediately instead of the loading view.
+  const cachedHeavy = useMemo(() => getHeavy(participant_uid), [participant_uid]);
+  const [data, setData] = useState((cachedHeavy && cachedHeavy.bundle) || false);
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
-  const [metric, setMetric] = useState("nrs");
-  const [strategy, setStrategy] = useState("tertile");   // binarization labeler (default tertile)
-  const [percentileLow, setPercentileLow] = useState(33.3);   // tertile/percentile low cut
-  const [percentileHigh, setPercentileHigh] = useState(66.7);  // tertile/percentile high cut
+  const [metric, setMetric] = useState(P.metric || "nrs");
+  const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
+  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
+  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
   // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
   // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
   // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
@@ -92,15 +106,15 @@ function Biomarkers() {
   // ~80% of the otherwise-usable PSDs. Combined with the new direction='pro_first' default, this
   // lifts PRO coverage to 290/682 (42.5%) of the matched discovery pool (measured on RCS08, vas,
   // pro_first, ±60 min — matching the offline validation pool; see FIXHANDOUT_pro_timezone_mismatch).
-  const [matchTolerance, setMatchTolerance] = useState(60);
+  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
   //   maxPerRating = 1  -> one PSD per rating (the old "one per rating": maximally independent)
   //   maxPerRating > 1  -> up to N nearest-prior PSDs per rating; AUC stays rating-grouped on top.
   // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
-  const [maxPerRating, setMaxPerRating] = useState(3);
-  const [refractoryMin, setRefractoryMin] = useState(2);
+  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : 3);
+  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : 2);
   // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
   // tolerance; pairs the closest PSD in either time direction). Default "prior".
   // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
@@ -108,17 +122,31 @@ function Biomarkers() {
   // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
   // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
   // view where causal direction is the right semantics.
-  const [matchDirection, setMatchDirection] = useState("pro_first");
+  const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
+  // Cache-based LSB matching is now the ONLY path (PI 2026-06-28; the legacy real-time recompute is
+  // retired). The spectral scan's per-rating LSB spectrum is built by matching each pain rating against
+  // the pre-computed match-agnostic raw 3 s-tile LSB cache, using TWO windows:
+  //   • the MAIN match-tolerance slider (matchTolerance, minutes) = eligibility radius for BOTH TD & PSD;
+  //   • matchExtentSec = how many SECONDS of the nearest time-domain signal to aggregate (nearest
+  //     round(matchExtentSec/3) of the 3 s tiles -> their median). PSD has no quantity cap.
+  // useLiveMatching is pinned true (kept only as the request flag the backend still echoes).
+  const [useLiveMatching] = useState(true);
+  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
+  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
   // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
-  const [timelineColorMode, setTimelineColorMode] = useState("multimodal");
+  const [timelineColorMode, setTimelineColorMode] = useState(P.timelineColorMode || "multimodal");
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
   // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
-  const [requestParams, setRequestParams] = useState(null);
+  // Restore the last-computed requestParams so a return visit isn't "dirty" and the results show
+  // without re-clicking Compute. If the in-memory heavy cache is fresh we already seeded `data`, so
+  // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
+  const [requestParams, setRequestParams] = useState(
+    (persisted && persisted.requestParams) || null);
   const [computing, setComputing] = useState(false);
   const [alert, setAlert] = useState(null);
 
@@ -144,12 +172,27 @@ function Biomarkers() {
     MaxPerRating: maxPerRating,
     RefractoryMin: refractoryMin,
     MatchDirection: matchDirection,
+    UseLiveMatching: useLiveMatching,
+    MatchExtentSec: matchExtentSec,
+    AllowWindowReuse: allowWindowReuse,
     SlidingWindow: slidingWindow,
   });
   const compute = () => setRequestParams(snapshot());
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
   const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
+  // Caption shown under the matching controls. Two windows with DIFFERENT jobs:
+  //  • main match-tolerance slider = eligibility radius (how FAR from a rating a window may be);
+  //  • TD-signal slider (matchExtentSec) = how MUCH of the nearest time-domain signal to use.
+  const tdEpochs = Math.max(1, Math.round(matchExtentSec / 3));
+  const reuseNote = allowWindowReuse
+    ? "Window reuse is ON: a window may serve several overlapping ratings, raising n at the cost of independence."
+    : "No LSB window is shared between ratings, so each rating is one independent observation of the cache.";
+  const liveMatchCaption =
+    `PSD-bridge LSB for a rating = median over every device-PSD event within the main match tolerance `
+    + `(\u00b1${matchTolerance} min). Time-domain LSB = median over the nearest ${tdEpochs} of the 3 s `
+    + `tiles (\u2248${matchExtentSec} s of signal) within that same tolerance — the TD slider sets how `
+    + `much signal to use, not how far to search. ` + reuseNote;
 
   useEffect(() => {
     if (!participant_uid) {
@@ -162,18 +205,50 @@ function Biomarkers() {
   // Fetch ONLY when a compute was requested (requestParams set by the Compute button). Progress is
   // shown INLINE (a labeled bar in the card) instead of the generic "loading data" overlay.
   useEffect(() => {
-    if (!participant_uid || !requestParams) return;
+    if (!participant_uid || !requestParams) return undefined;
+    const requestKey = JSON.stringify(requestParams);
+
+    // CACHE HIT: the in-memory LRU holds the heavy result for THIS exact requestParams (e.g. we just
+    // came back from the deployment view). Restore it with zero recompute — instant, identical view.
+    const cached = getHeavy(participant_uid);
+    if (cached && cached.request_key === requestKey) {
+      setData((prev) => (prev === cached.bundle ? prev : cached.bundle));
+      setComputing(false);
+      return undefined;
+    }
+
+    // CACHE MISS: compute (or recompute after a controls change / hard reload). The backend caches
+    // the PSD inputs, so even the ~19 MB analysis returns quickly on a return visit.
+    let cancelled = false;
     setComputing(true);
     SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
     }).then((response) => {
+      if (cancelled) return;
       setData(response.data);
       setComputing(false);
+      // Stash in the heap cache (memory-guarded — declines under pressure) so the next return is
+      // instant. Persist the controls+requestParams so a hard reload restores the view too.
+      putHeavy(participant_uid, response.data, requestKey);
     }).catch((error) => {
+      if (cancelled) return;
       setComputing(false);
       SessionController.displayError(error, setAlert);
     });
+    return () => { cancelled = true; };
   }, [participant_uid, requestParams]);
+
+  // Persist the lightweight control panel + the last-computed requestParams to localStorage whenever
+  // they change, so navigating to the deployment view and back (or a hard reload) restores the exact
+  // view config. This is the small, always-safe layer; the heavy result rides the in-memory cache.
+  useEffect(() => {
+    if (!participant_uid) return;
+    saveControls(participant_uid, {
+      metric, strategy, percentileLow, percentileHigh, matchTolerance,
+      maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+    });
+  }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
+    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -303,101 +378,17 @@ function Biomarkers() {
       scanIndex, painSeries: painSeriesLive, toleranceMin: matchToleranceD,
       strategy, percentileLow: percentileLowD, percentileHigh: percentileHighD,
       maxPerRating: maxPerRatingD, refractoryMin: refractoryMinD, matchDirection,
+      allowWindowReuse,
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
-      maxPerRatingD, refractoryMinD, matchDirection]);
+      maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
 
   // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
   // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
   // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
-  const summaryLine = (label, s) => {
-    if (!s) return null;
-    // Line: body-level stat readout (13.5px, variable weight) — these numbers are the clinical
-    // payload of the page, so they get comfortable size + leading, not the cramped button variant.
-    const Line = ({ children, color = "dark", bold = false }) => (
-      <MDTypography variant="body2" fontWeight={bold ? "medium" : "regular"} color={color}
-        display="block" sx={{ fontSize: 13.5, lineHeight: 1.55 }}>
-        {children}
-      </MDTypography>
-    );
-    // Small italic caption for honesty caveats (provenance, CI conditions, label source).
-    const Note = ({ children, color = "dark" }) => (
-      <MDTypography variant="caption" fontStyle="italic" color={color} display="block"
-        sx={{ fontSize: 12, lineHeight: 1.5 }}>
-        {children}
-      </MDTypography>
-    );
-
-    // Power-domain (threshold detector) branch.
-    if (s.best_threshold !== undefined) {
-      const aucTxt = s.auc != null ? ` · AUC = ${fmt(s.auc)} (in-sample, not cross-validated)` : "";
-      const rhoTxt = s.lfp_vs_continuous_pain_spearman != null
-        ? ` · Spearman ρ(LFP, continuous pain) = ${fmt(s.lfp_vs_continuous_pain_spearman)}` : "";
-      return (
-        <MDBox mb={0.5}>
-          <Line bold>
-            {`${label}: threshold = ${fmt(s.best_threshold)} · sensitivity = ${fmt(s.sens)} · specificity = ${fmt(s.spec)} · n = ${s.n_windows ?? "—"} windows`}
-          </Line>
-          <Line>
-            {`Balanced accuracy = ${fmt(s.balanced_accuracy)} vs chance = ${fmt(s.chance_accuracy != null ? s.chance_accuracy : 0.5)}` +
-             ` (prevalence = ${fmt(s.prevalence)}` +
-             `${s.majority_accuracy != null ? `, majority-class accuracy = ${fmt(s.majority_accuracy)}` : ""})${aucTxt}${rhoTxt}`}
-          </Line>
-          {s.overfit_warning ? <Line color="warning">{`⚠ ${s.overfit_warning}`}</Line> : null}
-          {s.batch_confound_warning ? <Line color="warning">{`⚠ ${s.batch_confound_warning}`}</Line> : null}
-          {s.in_sample ? (
-            <Line color="warning">{`⚠ ${s.note || "All-data fit: scored on the same data (in-sample, optimistic — not a generalization estimate)."}`}</Line>
-          ) : null}
-          {s.pain_level_note ? <Note>{s.pain_level_note}</Note> : null}
-        </MDBox>
-      );
-    }
-
-    // Time-domain (PSD↔pain correlation) branch.
-    if (s.band !== undefined || s.freq_hz !== undefined) {
-      const ci = Array.isArray(s.r_ci) ? s.r_ci : null;
-      const ciTxt = ci && ci[0] != null && ci[1] != null ? ` · 95% CI [${fmt(ci[0])}, ${fmt(ci[1])}]` : "";
-      const fdrTxt = s.fdr_q != null ? ` · FDR q = ${fmtP(s.fdr_q)}${s.fdr_significant ? " ✓" : ""}` : "";
-      // Lead with the selection- and autocorrelation-aware permutation p (the only honest headline
-      // significance for a selected band); fall back to the raw per-test p only if perm p is absent.
-      const permTxt = s.perm_p != null ? ` · perm p = ${fmtP(s.perm_p)}` : ` · p = ${fmtP(s.p)}`;
-      const nTxt = s.n != null
-        ? `n = ${s.n} paired samples${s.n_effective != null ? ` (effective n = ${fmt(s.n_effective)} after autocorrelation adjustment)` : ""}`
-        : "";
-      // Honest significance verdict: the band is "real" only if it survives BOTH the selection-
-      // aware permutation test AND the per-cell FDR. perm_p is the primary statement.
-      const permSig = s.perm_p != null && s.perm_p < 0.05;
-      const notSignificant = (s.perm_p != null || s.fdr_q != null) && !permSig && !s.fdr_significant;
-      return (
-        <MDBox mb={0.5}>
-          <Line bold>
-            {`${label}: ${s.channel || ""} ${fmt(s.freq_hz)} Hz · r = ${fmt(s.r)}${ciTxt}${permTxt}${fdrTxt}`}
-          </Line>
-          {nTxt ? <Line>{nTxt}</Line> : null}
-          {s.stim_adjusted_r != null ? (
-            <Line>{`stim-adjusted r=${fmt(s.stim_adjusted_r)} (partial correlation removing stim amplitude)`}</Line>
-          ) : s.stim_adjusted_note ? (
-            <Line>{`stim adjustment: ${s.stim_adjusted_note}`}</Line>
-          ) : null}
-          {s.narrow_peak_warning ? (
-            <Line color="warning">{"⚠ Correlation is concentrated in a single ~1 Hz bin on a stimulated lead — check for a stim/sensing line artifact, not a broad neural rhythm."}</Line>
-          ) : null}
-          {notSignificant ? (
-            <MDBox mt={0.5} px={1.25} py={0.75} sx={{ backgroundColor: "rgba(211,47,47,0.08)",
-              borderLeft: "3px solid #D32F2F", borderRadius: 1 }}>
-              <MDTypography variant="body2" color="error" sx={{ fontSize: 13, lineHeight: 1.5 }}>
-                {"⚠ Not statistically significant after correcting for the band search (permutation p) and temporal autocorrelation (FDR q). This correlation is consistent with chance — treat as an exploratory/negative result, not a validated biomarker."}
-              </MDTypography>
-            </MDBox>
-          ) : (!s.fdr_significant && permSig ? (
-            <Line color="warning">{"Significant by the selection-corrected permutation test but not the more conservative per-cell FDR — the permutation result is primary."}</Line>
-          ) : null)}
-          {s.r_ci_note ? <Note>{`r and CI are ${s.r_ci_note}`}</Note> : null}
-        </MDBox>
-      );
-    }
-    return null;
-  };
+  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary it
+  // generated was replaced by the concise per-channel matched-sample + TD/PSD-LSB summary
+  // rendered inline below the Recompute button (see the spectral_feature_importance block).
 
   return (
     <>
@@ -521,44 +512,33 @@ function Biomarkers() {
                                 </FormControl>
                               </MDBox>
                               {strategy === "tertile" || strategy === "percentile" ? (
-                                <MDBox display="flex" flexDirection="column" gap={1}>
-                                  <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"Low pain ≤ percentile"}
+                                // Cut percentiles are set by the two-handle range slider above the
+                                // histogram (right panel). These chips are the live readout of the
+                                // current low/high cut — one control, so plot and readout can't drift.
+                                <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
+                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+                                      {"Low pain ≤"}
                                     </MDTypography>
-                                    <Slider
-                                      value={percentileLow} min={5} max={50} step={1}
-                                      valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => {
-                                        // Tertile is the FIXED 33.3/66.7 preset (ignores these cuts, by
-                                        // design — matches the backend). Dragging a slider means the user
-                                        // wants an adjustable cut, so promote to "percentile" (which both
-                                        // the live preview AND the backend honor) so the cut actually moves.
-                                        if (strategy === "tertile") setStrategy("percentile");
-                                        const lo = Math.min(v, percentileHigh - 1); setPercentileLow(lo);
-                                      }}
-                                    />
+                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#0072B2" }}>
+                                      {`${(strategy === "tertile" ? 33.3 : percentileLow).toFixed(0)}ᵗʰ pct`}
+                                    </MDTypography>
                                   </MDBox>
-                                  <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.5}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ minWidth: 80, fontSize: 14 }}>
-                                      {"High pain ≥ percentile"}
+                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
+                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
+                                      {"High pain ≥"}
                                     </MDTypography>
-                                    <Slider
-                                      value={percentileHigh} min={50} max={95} step={1}
-                                      valueLabelDisplay="auto" size="small" sx={{ flex: 1 }}
-                                      onChange={(e, v) => {
-                                        if (strategy === "tertile") setStrategy("percentile");
-                                        const hi = Math.max(v, percentileLow + 1); setPercentileHigh(hi);
-                                      }}
-                                    />
+                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#D55E00" }}>
+                                      {`${(strategy === "tertile" ? 66.7 : percentileHigh).toFixed(0)}ᵗʰ pct`}
+                                    </MDTypography>
                                   </MDBox>
                                 </MDBox>
                               ) : null}
                               <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
                                 {strategy === "tertile"
-                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Drag a slider to switch to adjustable percentile cuts."
+                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Move the range slider above the histogram to switch to adjustable percentile cuts."
                                   : strategy === "percentile"
-                                    ? "Samples between the cuts are excluded from training."
+                                    ? "Set the cuts with the two-handle range slider above the histogram; samples between the handles are excluded from training."
                                     : strategy === "median"
                                       ? "Every sample is labeled at the median split (~50/50)."
                                       : "Legacy 2-cluster KMeans labeler."}
@@ -595,7 +575,12 @@ function Biomarkers() {
                               <MDBox mt={1.5}>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Max PSD snapshots per pain rating (currently ${maxPerRating})`}
+                                  {`Max LSB samples per pain rating (currently ${maxPerRating})`}
+                                  {maxPerRating > 1 && (
+                                    <span style={{ fontWeight: 400, fontSize: 11.5, color: "#6c757d", display: "block" }}>
+                                      {"When > 1, the rating's LSB is the median over its samples within the rating-centred window."}
+                                    </span>
+                                  )}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -605,7 +590,7 @@ function Biomarkers() {
                                 </MDBox>
                                 <MDTypography variant="caption" fontWeight="bold" color="dark"
                                   sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
-                                  {`Minimum gap between selected PSDs (${refractoryMin} min)`}
+                                  {`Minimum gap between selected LSBs (${refractoryMin} min)`}
                                 </MDTypography>
                                 <MDBox px={0.5}>
                                   <Slider
@@ -630,6 +615,52 @@ function Biomarkers() {
                                       : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
                                 </MDTypography>
                               </MDBox>
+
+                              {/* TD-signal-quantity slider + window-reuse toggle. Matching always runs
+                                  against the pre-computed raw 3 s-tile LSB cache; the MAIN match-tolerance
+                                  slider (above) sets eligibility for both modalities, this slider sets how
+                                  much of the nearest time-domain signal each rating aggregates. */}
+                              <MDBox mt={1.5}>
+                                <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
+                                  {`Time-domain signal per rating (${matchExtentSec} s \u2248 nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
+                                </MDTypography>
+                                <MDBox px={0.5}>
+                                  <Slider
+                                    value={matchExtentSec} min={3} max={300} step={3}
+                                    valueLabelDisplay="auto" size="small"
+                                    aria-label="time-domain signal per rating (seconds)"
+                                    onChange={(e, v) => setMatchExtentSec(v)} />
+                                </MDBox>
+                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
+                                    sx={{ fontSize: 13 }}>
+                                    {"Window reuse"}
+                                  </MDTypography>
+                                  <ToggleButtonGroup
+                                    value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
+                                    aria-label="window reuse mode"
+                                    onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
+                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
+                                  >
+                                    <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
+                                    <ToggleButton value="reuse" title="Each raw window (per modality) is assigned to every rating whose match tolerance covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
+                                  </ToggleButtonGroup>
+                                </MDBox>
+                                <MDTypography variant="caption" color="dark" fontStyle="italic"
+                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
+                                  {liveMatchCaption}
+                                </MDTypography>
+                                {data && data.live_match_stats && (
+                                  <MDTypography variant="caption" color="text" display="block"
+                                    sx={{ fontSize: 12, mt: 0.5 }}>
+                                    {`Last computed: matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
+                                     + `${data.live_match_stats.n_pro_psd || 0} to PSD LSB`
+                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}`
+                                     + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} TD tiles · ${data.live_match_stats.n_psd_used || 0} PSD events aggregated).` : "."}`}
+                                  </MDTypography>
+                                )}
+                              </MDBox>
                             </MDBox>
                           </Grid>
 
@@ -649,6 +680,9 @@ function Biomarkers() {
                                 scanModel={scanModel}
                                 matchedLoading={availLoading}
                                 matchDirty={dirty}
+                                setPercentileLow={setPercentileLow}
+                                setPercentileHigh={setPercentileHigh}
+                                setStrategy={setStrategy}
                               />
                             </MDBox>
                           </Grid>
@@ -686,6 +720,20 @@ function Biomarkers() {
                         <MDTypography variant="caption" color="dark">
                           {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
                         </MDTypography>
+                      ) : null}
+                      {/* Persistence status: tells the user this view will survive a trip to the
+                          deployment view. Green when the heavy result is cached in memory (instant
+                          restore); amber when memory is tight so it'll recompute on return instead. */}
+                      {data && !computing ? (
+                        underMemoryPressure() ? (
+                          <MDTypography variant="caption" sx={{ color: "#8A6100", fontStyle: "italic" }}>
+                            {`⚠ memory tight${memoryInfo() ? ` (${memoryInfo().usedMB.toFixed(0)}/${memoryInfo().limitMB.toFixed(0)} MB)` : ""} — view will recompute on return`}
+                          </MDTypography>
+                        ) : (
+                          <MDTypography variant="caption" sx={{ color: "#0a7f3f", fontStyle: "italic" }}>
+                            {"✓ view retained — returns instantly from the deployment page"}
+                          </MDTypography>
+                        )
                       ) : null}
                     </MDBox>
                   </Grid>
@@ -735,8 +783,71 @@ function Biomarkers() {
                               : ""}
                           </MDTypography>
                         ) : null}
-                        {summaryLine("Time-domain", data.summary.timedomain)}
-                        {summaryLine("Power-domain", data.summary.powerdomain)}
+                        {/* Concise per-channel matched-sample summary (replaces the legacy dual-
+                            pipeline Time-/Power-domain prose). For each bipolar channel: how many
+                            matched samples fell HIGH / LOW / excluded-middle by the active cut, and
+                            how many of the channel's LSB vectors are time-domain-derived vs PSD-
+                            derived. Only modeled/real LSB values feed the spectral feature-importance
+                            scan, so these two source counts ARE the analyzable-sample budget. */}
+                        {(() => {
+                          const sfi = data.analytics && data.analytics.timedomain
+                            && data.analytics.timedomain.spectral_feature_importance;
+                          const chansRaw = (sfi && sfi.channels) || [];
+                          if (!chansRaw.length) return null;
+                          // Group all LEFT channels first, then all RIGHT (stable within each side),
+                          // so the list reads L … L, R … R rather than interleaved by backend order.
+                          const sideRank = (c) => {
+                            const s = String((c && c.short) || "").trim().toUpperCase();
+                            if (s[0] === "L") return 0;
+                            if (s[0] === "R") return 1;
+                            return 2;
+                          };
+                          const chans = chansRaw
+                            .map((c, i) => [c, i])
+                            .sort((a, b) => (sideRank(a[0]) - sideRank(b[0])) || (a[1] - b[1]))
+                            .map((pair) => pair[0]);
+                          return (
+                            <MDBox mt={0.5} mb={0.5}>
+                              <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
+                                {"Matched samples per channel "}
+                                <span style={{ fontWeight: 400, color: "#6c757d" }}>
+                                  {"(high / low / excluded · LSB source TD / PSD)"}
+                                </span>
+                              </MDTypography>
+                              {chans.map((c, i) => (
+                                <MDTypography key={i} variant="caption" color="text" display="block"
+                                  sx={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                                  <strong>{c.short}</strong>
+                                  {`: ${c.n_high != null ? c.n_high : "—"} high · `
+                                   + `${c.n_low != null ? c.n_low : "—"} low · `
+                                   + `${c.n_excluded != null ? c.n_excluded : "—"} excluded`}
+                                  {(c.n_td != null || c.n_psd_bridge != null)
+                                    ? <span style={{ color: "#6c757d" }}>{`  ·  ${c.n_td || 0} TD / ${c.n_psd_bridge || 0} PSD LSBs`}</span>
+                                    : null}
+                                </MDTypography>
+                              ))}
+                              {chans.length > 0 && (() => {
+                                // Coherent pooled total = SUM of the per-channel distinct-LSB counts
+                                // above (NOT sfi.binarization, which is pooled epoch-rows in a different
+                                // unit) so this line reconciles with the rows it summarizes.
+                                const sH = chans.reduce((s, c) => s + (c.n_high || 0), 0);
+                                const sL = chans.reduce((s, c) => s + (c.n_low || 0), 0);
+                                const sE = chans.reduce((s, c) => s + (c.n_excluded || 0), 0);
+                                const sTD = chans.reduce((s, c) => s + (c.n_td || 0), 0);
+                                const sPSD = chans.reduce((s, c) => s + (c.n_psd_bridge || 0), 0);
+                                return (
+                                  <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
+                                    sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
+                                    {`All channels: ${sH} high · ${sL} low · ${sE} excluded-middle `
+                                     + `(${sTD} TD · ${sPSD} PSD LSBs). `
+                                     + "Each count is one distinct rating carrying a resolved LSB; only "
+                                     + "those feed the spectral feature-importance scan."}
+                                  </MDTypography>
+                                );
+                              })()}
+                            </MDBox>
+                          );
+                        })()}
                         {data.powerdomain_pooled_warning ? (
                           <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
                             {`⚠ ${data.powerdomain_pooled_warning}`}
@@ -814,6 +925,7 @@ function Biomarkers() {
                 binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
                 participantUid={participant_uid}
                 requestParams={requestParams}
+                matchDirty={dirty}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
@@ -824,19 +936,7 @@ function Biomarkers() {
   );
 }
 
-function fmt(x) {
-  if (x === null || x === undefined || Number.isNaN(x)) return "—";
-  if (typeof x === "number") return Math.abs(x) >= 100 ? x.toFixed(1) : x.toFixed(3);
-  return String(x);
-}
-
-// Compact p-value formatter: scientific notation for tiny p, 3 decimals otherwise.
-function fmtP(x) {
-  if (x === null || x === undefined || Number.isNaN(x)) return "—";
-  const n = Number(x);
-  if (!Number.isFinite(n)) return "—";
-  if (n > 0 && n < 1e-3) return n.toExponential(1);
-  return n.toFixed(3);
-}
+// [removed] module-level fmt()/fmtP() — their only consumer was summaryLine(), removed above.
+// The recorded-power list uses its own local fmt(); other panels format inline.
 
 export default Biomarkers;

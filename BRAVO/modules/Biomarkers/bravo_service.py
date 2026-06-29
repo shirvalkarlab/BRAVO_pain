@@ -13,9 +13,11 @@ so `Database.loadSourceFile(...)` output is fed straight into run_biomarker.
 """
 
 import os
+import re
 import json
 import math
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -44,32 +46,219 @@ POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # Patient-triggered LABELED events: button presses the patient annotated ("Higher Pain",
 # "Tingly/Burning", "Feeling Good", "Medication", ...). Stored as PatientControllerEvent rows whose
 # `metadata` carries, per hemisphere, the event DateTime + a full-band PSD (Frequency/FFTBinData).
-# Auto-generated "Streaming" markers are excluded. These only corroborate (DESIGN §2/§6), never feed
-# the decoder, but are demarcated (with their label) on the timeline.
 PATIENT_EVENT_TYPE = "PatientControllerEvent"
-_EVENT_NAME_EXCLUDE = {"streaming"}   # auto-markers, not patient annotations (timeline display only)
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
                           "MedtronicStimulationMontages"]
 
-# Source label for PSDs harvested from PatientControllerEvent markers (incl. "Streaming" markers the
-# patient was instructed to fire around each survey). These carry the device's ONBOARD FFT
-# (Frequency/FFTBinData on the row metadata) rather than a Welch-of-time-domain spectrum, so they sit
-# ~6 dB higher than the TD/Montage Welch PSDs on the same channel. That constant offset is removed
-# automatically because the matrix builder z-scores within (channel, source): tagging events as their
-# own source makes them poolable with the rest without re-scaling. (psd_rows_to_matrix already lists
-# "Patient event" as a recognised source.)
-EVENT_PSD_SOURCE = "Patient event"
+# ── PSD-source taxonomy — single source of truth (verified on RCS08 JSONs, 2026-06-27) ────────────
+# Several products carry a frequency-domain PSD. They differ along TWO axes that the pipeline must not
+# conflate:
+#
+#   (1) UNITS / POOLING identity — what scale the spectrum is in, hence which rows z-score together and
+#       which conversion applies. Patient-triggered events carry the device's ONBOARD FFT
+#       (Frequency/FFTBinData on the ORM row metadata). CS-3 (paired montage fit, RCS08 2026-06-27)
+#       established this is LINEAR µV magnitude, the SAME unit as the montage device-PSD (LFPMagnitude),
+#       but BASELINE-SUBTRACTED so sub-noise-floor bins read slightly negative (~1/3 of bins, down to
+#       ~−1 quantum); LFPMagnitude clamps those ≥0. Paired FFTBinData↔LFPMagnitude slope≈1, ratio≈1.04
+#       (≈ identity after clamping negatives to 0). The onboard-FFT band power sits ~6 dB (×4.79) above
+#       a Welch-of-time-domain band power on the same channel — a constant absorbed by the within-
+#       (channel, pooling_source) z-score in psd_rows_to_matrix for the SCAN, and applied explicitly as
+#       the bridge constant for LSB (see CS-3 below). Montage/survey PSDs are the same LFPMagnitude unit.
+#
+#   (2) LSB ROUTE — decided by whether the product ALSO carries time-domain (TD). LSB lives only in the
+#       PROGRAMMED products (on-demand BrainSenseLfp streaming + Timeline). A product WITH TD gets LSB
+#       from the direct, validated TD→LSB transform (analytics.td_to_lsb, k=352.62). A PSD-ONLY product
+#       (patient-triggered snapshot events) has no TD, so it gets LSB only via the PSD→LSB BRIDGE (CS-3):
+#       the montage TD↔PSD law composed with the TD→LSB transform. Montage/survey products are the
+#       bridge's CALIBRATION SOURCE — never a consumer of it.
+#
+# POOLING-source tags (used by the biomarker matrix; events share onboard-FFT units, so they pool as one):
+EVENT_PSD_SOURCE = "Patient event"          # any PatientControllerEvent PSD (labeled OR Streaming)
+MONTAGE_PSD_SOURCE = "Montage PSD"          # NeuralActivitySnapshot / montage-survey device PSD
+#
+# DISPLAY categories (timeline lane + legend; distinct identities the user must be able to tell apart):
+DISPLAY_PATIENT_EVENT   = "Patient event"        # labeled patient-triggered events (Medication, Pain, …)
+DISPLAY_STREAMING_EVENT = "Streaming event PSD"  # auto patient-triggered LFP snapshots fired around surveys
+DISPLAY_MONTAGE_SNAPSHOT = "Montage PSD"         # NeuralActivitySnapshot automatic ~20 s montage sweep
+#
+# The name the device gives auto-fired streaming snapshots (a PatientControllerEvent, NOT a manual label):
+STREAMING_EVENT_NAME = "streaming"
+#
+# Declarative taxonomy: every PSD-bearing source, its origin and routing. Consumed by the event loaders,
+# the timeline assembler, and the CS-3 bridge so all paths agree on one classification.
+PSD_SOURCE_TAXONOMY = {
+    "patient_event": {
+        "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": False,
+        "origin": "Patient-triggered LFP snapshot, manually labeled button press",
+        "units": "onboard FFTBinData (linear µV magnitude, baseline-subtracted; ~6 dB above Welch)",
+        "has_td": False, "has_psd": True, "has_lsb": False,
+        "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
+        "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_PATIENT_EVENT,
+    },
+    "streaming_event": {
+        "db_type": PATIENT_EVENT_TYPE, "name_is_streaming": True,
+        "origin": "Auto LFP frequency snapshot fired around surveys (name='Streaming')",
+        "units": "onboard FFTBinData (linear µV magnitude, baseline-subtracted; ~6 dB above Welch)",
+        "has_td": False, "has_psd": True, "has_lsb": False,
+        "lsb_route": "psd_bridge",                 # PSD-only → CS-3 bridge
+        "pooling_source": EVENT_PSD_SOURCE, "display": DISPLAY_STREAMING_EVENT,
+    },
+    "montage_snapshot": {
+        "db_type": "NeuralActivitySnapshot", "name_is_streaming": None,
+        "origin": "Automatic ~20 s montage sweep (full-band PSD over reference montage)",
+        "units": "device LFPMagnitude (linear µV) + carries 250 Hz TD",
+        "has_td": True, "has_psd": True, "has_lsb": False,
+        "lsb_route": "td_transform",               # has TD → direct k=352.62; bridge CALIBRATION source
+        "pooling_source": MONTAGE_PSD_SOURCE, "display": DISPLAY_MONTAGE_SNAPSHOT,
+    },
+}
 
-# Map a patient-event PSD block to its canonical bipolar channel. The block's identity lives in
-# SenseID (a SensingElectrodeConfigDef, e.g. "...ZERO_AND_THREE") plus the hemisphere key; SenseID is
-# frequently blank, so we fall back to the hemisphere's habitual sensing pair, established empirically
-# on RCS08: Right hemisphere always sensed ZERO_AND_THREE (-> ZERO_THREE_RIGHT) across all groups;
-# Left hemisphere sensed ONE_AND_THREE (-> ONE_THREE_LEFT). An explicit SenseID overrides the default.
+
+def _event_display_category(event_name):
+    """Map a PatientControllerEvent's name to its DISPLAY category. Auto 'Streaming' snapshots get
+    their own category (DISPLAY_STREAMING_EVENT); every other (manually labeled) press is a patient
+    event. Both share the EVENT_PSD_SOURCE pooling tag (same onboard-FFT units)."""
+    nm = (event_name or "").strip().lower()
+    return DISPLAY_STREAMING_EVENT if nm == STREAMING_EVENT_NAME else DISPLAY_PATIENT_EVENT
+
+# ---- Active-sensing config resolver for patient-event PSD channel assignment -----------------
+# Each PatientControllerEvent PSD block carries the active sensing contact pair in SenseID when
+# the device firmware wrote it. On RCS08, 84% of blocks (2,635/3,119) have SenseID absent.
+# The OLD approach guessed RIGHT→ZERO_THREE / LEFT→ONE_THREE statically, dumping ~86% of all
+# event PSDs onto R0-3. The NEW approach resolves the active pair from the nearest decoded
+# BrainSenseTimeDomain or BrainSensePowerDomain record on the same hemisphere at press time.
+# ALL-PAIR sweeps (IndefiniteStream, montage/survey) are EXCLUDED from the resolver; blocks
+# that remain unresolvable return None (skipped) — no static guess is ever applied.
+
 _EVENT_SENSE_CONTACT = {
     "ZERO_AND_THREE": "ZERO_THREE", "ONE_AND_THREE": "ONE_THREE",
     "ZERO_AND_TWO": "ZERO_TWO", "ONE_AND_TWO": "ONE_TWO",
 }
-_EVENT_HEMI_DEFAULT_CONTACT = {"Right": "ZERO_THREE", "Left": "ONE_THREE"}
+# How far in seconds to search for a sensing config record relative to an event. 90 days covers
+# any realistic inter-session gap on a monthly outpatient programme.
+_SENSING_WINDOW_S = 90 * 86400
+
+
+def _build_sensing_config_index(decoded_recs):
+    """Build a per-hemisphere sorted list of (epoch_s, channel) entries from single-channel
+    sensing records, for use by the active-sensing event-channel resolver.
+
+    Only records whose ChannelNames map to EXACTLY ONE main-bipolar channel per hemisphere are
+    included.  This automatically excludes IndefiniteStream and montage sweeps (which sense every
+    contact simultaneously) without needing an explicit type filter.
+
+    Returns:
+        {"RIGHT": [(epoch_s, canonical_ch), ...], "LEFT": [...]} sorted ascending by epoch_s.
+    """
+    idx = {"RIGHT": [], "LEFT": []}
+    for r in (decoded_recs or []):
+        if not isinstance(r, dict):
+            continue
+        t = availability._to_epoch(r.get("StartTime"))
+        if t is None:
+            continue
+        names = r.get("ChannelNames") or []
+        by_hemi = {}          # hemi -> list of main-bipolar channels in this record
+        for nm in names:
+            s = str(nm)
+            # Strip power-domain suffixes: "ZERO_THREE_LEFT Power" → "ZERO_THREE_LEFT"
+            for suf in (" Power", " LFP", " Amplitude", " Stimulation"):
+                if s.upper().endswith(suf.upper()):
+                    s = s[: -len(suf)].strip()
+                    break
+            canon = availability._canon_channel(s)
+            if canon not in _MAIN_BIPOLAR:
+                continue
+            h = "RIGHT" if "RIGHT" in canon else "LEFT"
+            by_hemi.setdefault(h, []).append(canon)
+        # Include only hemispheres with exactly one configured channel (= active sensing pair).
+        for h, chans in by_hemi.items():
+            if len(chans) == 1:
+                idx[h].append((t, chans[0]))
+    for hemi in idx:
+        idx[hemi].sort()
+    return idx
+
+
+def _build_sensing_config_index_from_rows(psd_rows):
+    """Build a per-hemisphere sensing-config index from already-computed Welch PSD rows.
+
+    Companion to _build_sensing_config_index for call sites (e.g. _assemble_psd_rows_cached) where
+    decoded recording dicts are not available but the flat {channel, source, t} rows already are.
+    Accepts only rows whose source is \"TD streaming\" (single-channel sessions), mirroring the
+    decoded-dict version's ChannelNames==1 guard; montage/IndefiniteStream rows carry all six
+    contacts and are excluded.
+
+    Returns {"RIGHT": [(epoch_s, ch), ...], "LEFT": [...]} sorted ascending.
+    """
+    # Group TD-streaming rows by (t_rounded, hemi) and keep only single-channel groups.
+    from collections import defaultdict
+    by_t_hemi = defaultdict(list)   # (t_rounded, hemi) -> [ch, ...]
+    for row in (psd_rows or []):
+        if row.get("source") != "TD streaming":
+            continue
+        ch = row.get("channel")
+        t = row.get("t")
+        if ch is None or t is None:
+            continue
+        h = "RIGHT" if "RIGHT" in str(ch).upper() else ("LEFT" if "LEFT" in str(ch).upper() else None)
+        if h is None:
+            continue
+        key = (round(float(t)), h)
+        if ch not in by_t_hemi[key]:
+            by_t_hemi[key].append(ch)
+    idx = {"RIGHT": [], "LEFT": []}
+    for (t_r, h), chans in by_t_hemi.items():
+        if len(chans) == 1 and chans[0] in _MAIN_BIPOLAR:
+            idx[h].append((float(t_r), chans[0]))
+    for hemi in idx:
+        idx[hemi].sort()
+    return idx
+
+
+def _resolve_event_channel(hemi_key, sense_id, t_event, sensing_index=None):
+    """Resolve a patient-event PSD block's canonical bipolar channel.
+
+    Resolution priority:
+      1. SenseID when present — the device's own authoritative contact-pair identifier.
+      2. Sensing-config index: most-recent record with t_config ≤ t_event within
+         _SENSING_WINDOW_S (90 days). Falls back to nearest-after when no prior record exists
+         in the window (covers events fired before the first decoded session).
+      3. None — the block is skipped; no static hemisphere guess is ever applied.
+
+    Args:
+        hemi_key      : e.g. 'HemisphereLocationDef.Right'
+        sense_id      : e.g. 'SensingElectrodeConfigDef.ZERO_AND_THREE' or None/''
+        t_event       : epoch seconds of the event
+        sensing_index : output of _build_sensing_config_index, or None (SenseID-only mode)
+    """
+    import bisect
+    hemi = ("Right" if str(hemi_key).endswith("Right")
+            else ("Left" if str(hemi_key).endswith("Left") else None))
+    if hemi is None:
+        return None
+    # Priority 1: explicit SenseID (authoritative)
+    if sense_id:
+        tail = str(sense_id).split(".")[-1]
+        contact = _EVENT_SENSE_CONTACT.get(tail)
+        if contact:
+            name = f"{contact}_{hemi.upper()}"
+            return name if name in _MAIN_BIPOLAR else None
+    # Priority 2: active-sensing index lookup
+    if sensing_index is not None and t_event is not None:
+        entries = sensing_index.get(hemi.upper(), [])   # [(t, ch), ...] sorted asc
+        if entries:
+            ts = [e[0] for e in entries]
+            # Most-recent prior config (t_config ≤ t_event)
+            pos = bisect.bisect_right(ts, t_event) - 1
+            if pos >= 0 and (t_event - ts[pos]) <= _SENSING_WINDOW_S:
+                return entries[pos][1]
+            # No prior in window → try nearest-after (event fired before first session)
+            pos2 = bisect.bisect_left(ts, t_event)
+            if pos2 < len(entries) and (ts[pos2] - t_event) <= _SENSING_WINDOW_S:
+                return entries[pos2][1]
+    # Priority 3: unresolvable — skip, do not guess
+    return None
 
 # How many worker threads the recording loader uses. Decoding each .bdat is independent and
 # largely GIL-friendly (file I/O + numpy), so threads give near-linear speedup. Defaults to all
@@ -183,6 +372,16 @@ def _load_recordings(participant_uid, types):
                             d.setdefault("FreqScheduleHz", fsched)
                         if csched is not None:
                             d.setdefault("ContactSchedule", csched)
+            # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
+            # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
+            # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
+            # Recording.type from the query — without this, indefinite streams are indistinguishable
+            # from BrainSense streaming downstream and silently mislabel.
+            rtype = getattr(rec, "type", None)
+            if rtype is not None:
+                for d in (data if isinstance(data, list) else [data]):
+                    if isinstance(d, dict):
+                        d.setdefault("RecordingType", rtype)
             return data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
@@ -207,15 +406,21 @@ def _load_recordings(participant_uid, types):
 def _load_patient_events(participant_uid):
     """Load patient-annotated LFP snapshot events for the availability timeline.
 
-    These are PatientControllerEvent rows — button presses the patient labeled ("Higher Pain",
-    "Tingly/Burning", "Feeling Good", "Medication", ...). Unlike the .bdat recordings, the event's
-    time and per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with
-    `DateTime`, `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
+    These are PatientControllerEvent rows — both manually LABELED button presses ("Higher Pain",
+    "Tingly/Burning", "Feeling Good", "Medication", ...) AND the auto-fired "Streaming" LFP snapshots
+    the patient triggers around each survey. Unlike the .bdat recordings, the event's time and
+    per-hemisphere PSD live on the ROW's `metadata` (one subdict per hemisphere, each with `DateTime`,
+    `Frequency`, `FFTBinData`), so we read them off the ORM directly — no file decode.
 
-    The auto-generated "Streaming" markers are excluded (not patient annotations). The authoritative
-    timestamp is the per-hemisphere `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
+    Streaming events are NO LONGER dropped (2026-06-27, PI): on RCS08 they are the dominant
+    PSD-bearing modality (~2477 vs ~221 labeled) and the primary closed-loop signal, so they are
+    surfaced as their OWN display category (`category=DISPLAY_STREAMING_EVENT`) rather than being
+    discarded or folded into the montage-PSD markers. Each returned event carries a `category` tag
+    (DISPLAY_STREAMING_EVENT for Streaming, DISPLAY_PATIENT_EVENT for labeled presses) so the timeline
+    can render them as distinct rows/glyphs. The authoritative timestamp is the per-hemisphere
+    `DateTime` (ISO-Z); we fall back to the row's `date` if absent.
 
-    Returns [{"name": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
+    Returns [{"name": str, "category": str, "t": epoch_s, "psds": [(freq_list, power_list), ...]}, ...].
     """
     import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
@@ -228,7 +433,7 @@ def _load_patient_events(participant_uid):
     out = []
     for r in rows:
         name = getattr(r, "name", "") or ""
-        if not name or name.strip().lower() in _EVENT_NAME_EXCLUDE:
+        if not name:
             continue
         md = getattr(r, "metadata", None)
         if not isinstance(md, dict):
@@ -253,44 +458,39 @@ def _load_patient_events(participant_uid):
             t = getattr(r, "date", None)
         if t is None:
             continue
-        out.append({"name": name, "t": float(t), "psds": psds})
+        # Streaming events are surfaced (no longer dropped) under their own display category; labeled
+        # presses keep their annotation as the patient-event category. Both share onboard-FFT units.
+        out.append({"name": name, "category": _event_display_category(name),
+                    "t": float(t), "psds": psds})
     return out
 
 
 def _event_block_channel(hemi_key, sense_id):
-    """Resolve a patient-event PSD block's canonical bipolar channel (e.g. 'ZERO_THREE_RIGHT').
-
-    `hemi_key` is the metadata key for this block (e.g. 'HemisphereLocationDef.Right'); `sense_id`
-    is its SenseID (e.g. 'SensingElectrodeConfigDef.ZERO_AND_THREE' or '' / None). The contact pair
-    comes from SenseID when present, else from the hemisphere's habitual sensing pair
-    (`_EVENT_HEMI_DEFAULT_CONTACT`). Returns a name in `_MAIN_BIPOLAR`, or None if it can't be
-    resolved to one of the six main bipolar channels."""
-    hemi = "Right" if str(hemi_key).endswith("Right") else ("Left" if str(hemi_key).endswith("Left") else None)
-    if hemi is None:
-        return None
-    contact = None
-    if sense_id:
-        tail = str(sense_id).split(".")[-1]
-        contact = _EVENT_SENSE_CONTACT.get(tail)
-    if contact is None:
-        contact = _EVENT_HEMI_DEFAULT_CONTACT.get(hemi)
-    if contact is None:
-        return None
-    name = f"{contact}_{hemi.upper()}"
-    return name if name in _MAIN_BIPOLAR else None
+    """SenseID-only shim — kept for backward compat.  Prefer _resolve_event_channel with a
+    sensing_index (built by _build_sensing_config_index) for accurate per-block channel lookup
+    when SenseID is absent (the common case on RCS08: 84% of blocks lack SenseID)."""
+    return _resolve_event_channel(hemi_key, sense_id, t_event=None, sensing_index=None)
 
 
-def _event_psd_rows(participant_uid):
+def _event_psd_rows(participant_uid, sensing_index=None):
     """Harvest EVERY PatientControllerEvent PSD (incl. the auto 'Streaming' markers) as poolable
     PSD rows for the per-channel biomarker scan.
 
-    Unlike `_load_patient_events` (timeline display, which drops 'Streaming' and pools hemispheres
-    without channel identity), this assigns each per-hemisphere FFT block to its canonical bipolar
-    channel (`_event_block_channel`) so the spectra join the same per-channel pool as TD/Montage.
+    Unlike `_load_patient_events` (timeline display, which pools hemispheres without channel
+    identity and tags each event a display `category`), this assigns each per-hemisphere FFT block
+    to its canonical bipolar channel so the spectra join the same per-channel pool as TD/Montage.
+    Channel resolution priority (see `_resolve_event_channel`):
+      1. SenseID when present — the device's authoritative contact-pair identifier.
+      2. Active-sensing config index (sensing_index from _build_sensing_config_index): the
+         most-recent single-channel sensing config for this hemisphere at event time.
+      3. Unresolvable → block skipped; no static hemisphere guess is ever applied.
     The onboard-FFT vs Welch scale offset is absorbed by the within-(channel, source) z-score, since
     every row here is tagged `source=EVENT_PSD_SOURCE`. No .bdat decode — the spectra live on the
     ORM row `metadata`, one subdict per hemisphere with `DateTime` / `Frequency` / `FFTBinData`.
 
+    Args:
+        sensing_index : optional output of _build_sensing_config_index(decoded_td_recs).
+                        Pass it to activate per-timestamp channel resolution for no-SenseID blocks.
     Returns a list of {"channel", "source", "t": epoch_s, "freq", "power"} rows — the SAME schema
     `_welch_rows_into` emits, ready for `streaming_psd.psd_rows_to_matrix`.
     """
@@ -309,14 +509,12 @@ def _event_psd_rows(participant_uid):
         for hemi_key, hb in md.items():
             if not isinstance(hb, dict):
                 continue
-            ch = _event_block_channel(hemi_key, hb.get("SenseID"))
-            if ch is None:
-                continue
             freq = hb.get("Frequency")
             power = hb.get("FFTBinData")
             if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
                     and len(freq) == len(power) and len(freq) > 0):
                 continue
+            # Parse event timestamp first so the resolver can do the temporal lookup.
             t = None
             if hb.get("DateTime"):
                 try:
@@ -328,18 +526,27 @@ def _event_psd_rows(participant_uid):
                 t = getattr(r, "date", None)
             if t is None:
                 continue
+            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
+                                        t_event=float(t), sensing_index=sensing_index)
+            if ch is None:
+                continue
             rows.append({"channel": ch, "source": EVENT_PSD_SOURCE, "t": float(t),
                          "freq": np.asarray(freq, dtype=float),
                          "power": np.asarray(power, dtype=float)})
     return rows
 
 
-def _event_psd_index(participant_uid):
+def _event_psd_index(participant_uid, sensing_index=None):
     """Lightweight {t, channel, source} index of the patient-event PSDs (incl. 'Streaming'), one
     entry per (event, hemisphere block) assigned to its canonical bipolar channel — the SAME set
     `_event_psd_rows` pools into the matrix, minus the freq/power arrays. Feeds `psd_scan_index` so
     the imported event PSDs render as tick marks on their contact lanes and the live binarization
-    preview counts them, mirroring the backend pool (TD + montage + Patient event)."""
+    preview counts them, mirroring the backend pool (TD + montage + Patient event).
+
+    Args:
+        sensing_index : optional output of _build_sensing_config_index; enables per-timestamp
+                        channel resolution for no-SenseID blocks (the 84% majority on RCS08).
+    """
     import datetime as _dt
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
@@ -356,9 +563,6 @@ def _event_psd_index(participant_uid):
         for hemi_key, hb in md.items():
             if not isinstance(hb, dict):
                 continue
-            ch = _event_block_channel(hemi_key, hb.get("SenseID"))
-            if ch is None:
-                continue
             freq = hb.get("Frequency"); power = hb.get("FFTBinData")
             if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
                     and len(freq) == len(power) and len(freq) > 0):
@@ -374,9 +578,361 @@ def _event_psd_index(participant_uid):
                 t = getattr(r, "date", None)
             if t is None:
                 continue
+            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
+                                        t_event=float(t), sensing_index=sensing_index)
+            if ch is None:
+                continue
             out.append({"t": float(t), "channel": ch, "source": EVENT_PSD_SOURCE,
                         "name": ev_name})
     return out
+
+def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_index=None):
+    """Build CS-3 PSD->LSB BRIDGE input blocks from the PSD-only patient-triggered snapshot events.
+
+    These events (PatientControllerEvent metadata: per-hemisphere Frequency/FFTBinData) carry a device
+    onboard-FFT spectrum but NO time domain, so they are the bridge's sole consumer (montage/survey
+    products carry TD -> direct transform; never routed here). Reuses `_event_psd_rows` for the
+    channel-assigned {channel, t, freq, power} spectra, then attaches a `center_hz`:
+      - the contact's configured sensing center (sensing_hz_by_channel) when known — so the modeled
+        event LSB lands on the SAME band the device would deploy; else
+      - the event spectrum's own in-[LO,DEPLOYABLE_HI] peak frequency (device acts in that band).
+    availability.lsb_series applies analytics.device_psd_to_lsb (k~=73.63) and keeps the result inside
+    [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; blocks whose center can't be resolved are dropped there.
+
+    Args:
+        sensing_index : optional output of _build_sensing_config_index; passed through to
+                        _event_psd_rows so no-SenseID blocks get accurate channel assignment.
+    Returns a list of {channel, t, freq, power, center_hz}.
+    """
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    lo = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    blocks = []
+    for row in _event_psd_rows(participant_uid, sensing_index=sensing_index):
+        ch = row.get("channel")
+        freq = row.get("freq"); power = row.get("power")
+        if ch is None or freq is None or power is None:
+            continue
+        center = sensing_hz_by_channel.get(ch) or sensing_hz_by_channel.get(str(ch))
+        if center is None:
+            # No configured sensing center: fall back to a device-blessed band — the peak of THIS
+            # event's clamped magnitude, SEARCHED ONLY within [lo, hi] so the fallback can never pick a
+            # high-frequency noise peak the bridge couldn't calibrate. (This is the peak-SEARCH bound;
+            # availability.lsb_series applies the SAME [lo, hi] as the FINAL gate on whatever center
+            # arrives — sensing-config centers bypass this search but still face that gate, so both the
+            # configured and the fallback path are bounded identically. The constants are the single
+            # source: analytics.LSB_VALIDATED_HZ_LO / LSB_DEPLOYABLE_HZ_HI.)
+            f = np.asarray(freq, dtype=float)
+            m = analytics.clamp_device_psd(power)
+            band = (f >= lo) & (f <= hi) & np.isfinite(m)
+            if band.any():
+                center = float(f[band][int(np.argmax(m[band]))])
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        blocks.append({"channel": ch, "t": row.get("t"),
+                       "freq": freq, "power": power, "center_hz": float(center)})
+    return blocks
+
+
+# Strip a SensingElectrodeConfigDef.* / HemisphereLocationDef.* enum to its bare token.
+_ENUM_TAIL_RE = re.compile(r"\.([A-Za-z_]+)$")
+
+
+def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
+    """Build PSD->LSB bridge input blocks from MONTAGE/SURVEY device-PSD snapshots.
+
+    Each MedtronicBrainSenseSurvey / Montage recording carries, in
+    `Descriptor.MedtronicPSD`, a per-contact device-onboard PSD spectrum
+    (`LFPFrequency` [Hz] + `LFPMagnitude` [linear µV], 100 points), alongside its
+    raw 250 Hz TD. The TD already feeds the transform route (k=352.62); this surfaces
+    the device PSD as a SEPARATE psd_bridge window so a montage contributes LSB even
+    when its TD tile fails the cache quality gate (too short / saturated / >max_missing).
+
+    Calibration: LFPMagnitude is the SAME linear-µV onboard-FFT unit as the
+    patient-event FFTBinData, so the SAME bridge constant LSB_PER_DEVICE_PSD≈73.63
+    applies (paired same-recording validation: device-PSD LSB / TD-transform LSB
+    median 0.993, IQR [0.966,1.020] in 8–30 Hz). Each MedtronicPSD entry is mapped to
+    its canonical channel via SensingElectrodes (+ Hemisphere); ring pairs go through
+    _EVENT_SENSE_CONTACT, segmented contacts fall to _canon_channel. The whole-recording
+    StartTime is the window timestamp (the survey sweep is a near-instant snapshot).
+
+    Returns a list of {channel, t, freq, power, source} — the schema
+    raw_lsb_spectrum_cache consumes for its PSD family. `source` is tagged
+    MONTAGE_PSD_SOURCE so the cache/hover can distinguish montage from patient-event PSD.
+    """
+    if montage_recordings is None:
+        montage_recordings = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    blocks = []
+    for r in (montage_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        mp = (r.get("Descriptor") or {}).get("MedtronicPSD")
+        if not isinstance(mp, list):
+            continue
+        t0 = availability._to_epoch(r.get("StartTime"))
+        if t0 is None:
+            continue
+        for e in mp:
+            if not isinstance(e, dict):
+                continue
+            freq = e.get("LFPFrequency")
+            power = e.get("LFPMagnitude")
+            if freq is None or power is None:
+                continue
+            # Canonical channel from the device sensing config + hemisphere.
+            se = str(e.get("SensingElectrodes") or "")
+            hemi = str(e.get("Hemisphere") or "")
+            mse = _ENUM_TAIL_RE.search(se)
+            pair = mse.group(1) if mse else ""
+            pair = _EVENT_SENSE_CONTACT.get(pair, pair)   # ring-pair → canonical; segmented unchanged
+            h = "LEFT" if "Left" in hemi else ("RIGHT" if "Right" in hemi else "")
+            if not pair or not h:
+                continue
+            ch = _canon_channel(f"{pair}_{h}")
+            if not ch:
+                continue
+            blocks.append({"channel": ch, "t": float(t0),
+                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE})
+    return blocks
+
+
+def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
+                        sensing_hz_by_channel):
+    """One per-PRO LSB selection series per channel for the timeline (CS-4 consumer of per_pro_lsb).
+
+    For each channel that has a resolvable sensing center, run availability.per_pro_lsb over the PRO
+    timestamps with the SAME inputs the inline lsb_series uses:
+      * native_lsb_series = that channel's lsb_series entry (NATIVE samples are selected inside
+        per_pro_lsb via its modeled-mask, so the modeled/bridge points in the series are ignored for
+        the native tier and only the sensed samples can win tier 1);
+      * td_recordings = TD-bearing recordings (streaming + montage/survey, all 250 Hz TD) for tier 2;
+      * event_psd_recordings = the CS-3 PSD-only event blocks for tier 3.
+
+    The per-channel center is the configured sensing center (sensing_hz_by_channel, canonical key),
+    falling back to the channel's own series center_hz (first finite). Channels with no center resolve
+    to nothing (the band is undefined). Returns { raw_channel: [ {t,lsb,tier,center_hz,used_s,
+    saturated,reason}, ... ] } — one entry per PRO, in PRO order; empty dict when there are no PROs.
+    """
+    out = {}
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0:
+        return out
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    for raw_ch, series in (lsb or {}).items():
+        key = availability._canon_channel(raw_ch)
+        # ONE center per channel — the configured sensing center (deployment 'one band' semantics).
+        # CAVEAT: if a channel's sensing band was RETUNED over the implant, native samples recorded at
+        # an earlier band fall outside [center±half] and silently demote to TD/bridge/None for PROs near
+        # that period. The per-PRO center_hz is returned in the payload so this is auditable downstream.
+        # `is not None` (not `or`) so a stored 0.0 Hz doesn't silently fall through to the series center.
+        center = sensing_hz_by_channel.get(key)
+        if center is None:
+            center = sensing_hz_by_channel.get(raw_ch)
+        if center is None:
+            # fall back to the first finite center the inline series carries for this channel
+            for hz in (series.get("center_hz") or []):
+                if hz is not None and np.isfinite(hz) and float(hz) > 0:
+                    center = float(hz); break
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        try:
+            out[raw_ch] = availability.per_pro_lsb(
+                pt, series, key, float(center),
+                td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: per-PRO LSB failed for %s (%s)", raw_ch, e)
+    return out
+
+
+# Default band-center grid for the shared per-pair LSB spectrum: full 0–100 Hz, the same span the
+# spectral feature-importance scan covers. Centers on the half-integer grid at 1 Hz step (matching the
+# scan's default w/2 start); callers can request a different grid (e.g. the timeline's exact sensing
+# center) from the SAME builder, so a timeline marker and a spectral point at one center are identical.
+_LSB_SPECTRUM_CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
+
+# In-process memo for the per-pair LSB spectrum, keyed on a content signature. The timeline
+# (_build_availability) and the spectral scan both build the SAME spectrum from the SAME decoded
+# recordings within a request; this avoids the second consumer recomputing it. Bounded so a long-lived
+# worker doesn't grow unboundedly across participants/PRO-sets.
+_LSB_SPECTRUM_MEMO = {}
+_LSB_SPECTRUM_MEMO_MAX = 8
+# Guards the memo check/evict/insert sequence. Under gunicorn thread workers the read-check-write
+# around the dict is not atomic (two threads can both pass the size test, or both evict), so the
+# "bounded at MAX" guarantee is only soft without it. The per-channel compute stays OUTSIDE the lock
+# — a duplicated compute under contention is harmless (last writer wins, same content), and holding
+# the lock across the heavy DSP would serialize all participants behind one slow request.
+_LSB_SPECTRUM_MEMO_LOCK = threading.Lock()
+
+# Match-AGNOSTIC raw LSB cache memo (availability.raw_lsb_spectrum_cache). Keyed WITHOUT any PRO set —
+# the cache tiles the whole recording independent of ratings, so one entry serves every metric /
+# strategy / match policy. Live matching (live_lsb_spectrum_match) runs cheaply on top per request.
+_RAW_LSB_CACHE_MEMO = {}
+_RAW_LSB_CACHE_MEMO_MAX = 8
+_RAW_LSB_CACHE_MEMO_LOCK = threading.Lock()
+
+
+def _lsb_spectrum_signature(participant_uid, pro_times, td_recordings, event_psd_blocks, centers,
+                            montage_psd_blocks=None):
+    """Content signature for the per-pair LSB spectrum: participant + PRO set + the TD/event/montage
+    recording identities + the band-center grid. Any change to the PROs, the recordings feeding the
+    transform/bridge, or the centers misses the memo and recomputes."""
+    import hashlib
+    h = hashlib.sha1()
+    h.update(str(participant_uid).encode())
+    h.update(_pro_set_signature(pro_times).encode())
+    # recording identity: StartTime + channel names + sample count is enough to detect a content change
+    for tag, recs in (("td", td_recordings or []), ("ev", event_psd_blocks or []),
+                      ("mt", montage_psd_blocks or [])):
+        h.update(tag.encode())
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+            st = r.get("StartTime") if "StartTime" in r else r.get("t")
+            names = r.get("ChannelNames") or r.get("channel") or ""
+            data = r.get("Data")
+            freq = r.get("freq")
+            if data is not None:
+                n = np.asarray(data).shape[0]
+            elif freq is not None:
+                n = np.asarray(freq).size
+            else:
+                n = 0
+            h.update(f"{st}|{names}|{n};".encode())
+    h.update(np.asarray(centers, dtype=float).tobytes())
+    return h.hexdigest()[:16]
+
+
+def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings,
+                             event_psd_blocks, *, centers=_LSB_SPECTRUM_CENTERS):
+    """The per-(channel, PRO) full-spectrum modeled LSB, computed and memoized. Consumed by the
+    timeline modeled markers (via _build_availability) and the spectral feature-importance panel
+    (via run_for_participant).
+
+    For each channel, runs availability.per_pro_lsb_spectrum (TD-transform k=352.62 where TD covers the
+    rating, CS-3 bridge k≈73.63 from a coincident PSD-only event otherwise) over the band-center grid.
+    Returns { raw_channel: [ per-PRO spectrum dict, ... ] } where each dict carries
+    {t, tier, lsb:[per-center], calibrated:[per-center], center_hz:[centers], used_s, saturated, reason}.
+
+    The two consumers pass DIFFERENT pro_times (the timeline uses pain["t"], the metric-agnostic PRO
+    set; the scan uses pro_match[0], the metric-filtered set whose indices populate `rating_group`), so
+    they land in SEPARATE memo entries under different signatures — this is NOT one shared slot. The
+    numbers nevertheless agree on any PRO they have in common, because per_pro_lsb_spectrum is a pure
+    function of (pro_time, channel, recordings, centers): same PRO time + same recordings → identical
+    LSB regardless of which consumer asked. The memo bounds per-worker memory; it is not the thing that
+    makes the two views consistent. The scan's bounds invariant len(value) == len(pro_match[0]) is
+    documented at the run_for_participant call site.
+    """
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0 or not channels:
+        return {}
+    sig = _lsb_spectrum_signature(participant_uid, pt, td_recordings, event_psd_blocks, centers)
+    with _LSB_SPECTRUM_MEMO_LOCK:
+        cached = _LSB_SPECTRUM_MEMO.get(sig)
+    if cached is not None:
+        return cached
+    out = {}
+    cen = np.asarray(centers, dtype=float)
+    for raw_ch in channels:
+        key = availability._canon_channel(raw_ch)
+        try:
+            out[raw_ch] = availability.per_pro_lsb_spectrum(
+                pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: per-PRO LSB spectrum failed for %s (%s)", raw_ch, e)
+    # bound the memo (FIFO-ish): drop the oldest entry when full. Check/evict/insert under the lock so
+    # the size guarantee is hard even when two threads finish computing the same/different sigs at once.
+    with _LSB_SPECTRUM_MEMO_LOCK:
+        existing = _LSB_SPECTRUM_MEMO.get(sig)
+        if existing is not None:
+            return existing                       # another thread won the race; reuse its result
+        if len(_LSB_SPECTRUM_MEMO) >= _LSB_SPECTRUM_MEMO_MAX:
+            _LSB_SPECTRUM_MEMO.pop(next(iter(_LSB_SPECTRUM_MEMO)), None)
+        _LSB_SPECTRUM_MEMO[sig] = out
+    return out
+
+
+def _stamp_td_product(td_recordings):
+    """Tag each decoded TD recording dict with a `product` key (streaming_td / indefinite) IN PLACE so
+    the raw cache can label its window source (TD_PRODUCT_SOURCE_LABEL). Decoded payloads carry the
+    indefinite/streaming discriminator (`Source`=='indefinite' or an `IndefiniteStream` flag) but no
+    `product`; montage/survey TD passed in separately is tagged montage_td. Idempotent."""
+    for r in (td_recordings or []):
+        if not isinstance(r, dict) or r.get("product"):
+            continue
+        if r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream"):
+            r["product"] = "indefinite"
+        else:
+            r["product"] = "streaming_td"
+    return td_recordings
+
+
+def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
+                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS):
+    """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
+    (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
+    { raw_channel: availability.raw_lsb_spectrum_cache(...) }. montage_psd_blocks (the montage/survey
+    device-PSD snapshots) are folded into the cache's PSD family alongside the patient-event PSDs."""
+    if not channels:
+        return {}
+    # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
+    sig = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
+                                  td_recordings, event_psd_blocks, centers,
+                                  montage_psd_blocks=montage_psd_blocks) + "|raw"
+    with _RAW_LSB_CACHE_MEMO_LOCK:
+        cached = _RAW_LSB_CACHE_MEMO.get(sig)
+    if cached is not None:
+        return cached
+    cen = np.asarray(centers, dtype=float)
+    out = {}
+    for raw_ch in channels:
+        key = availability._canon_channel(raw_ch)
+        try:
+            out[raw_ch] = availability.raw_lsb_spectrum_cache(
+                key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
+                montage_psd_recordings=montage_psd_blocks)
+        except Exception as e:
+            _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
+    with _RAW_LSB_CACHE_MEMO_LOCK:
+        existing = _RAW_LSB_CACHE_MEMO.get(sig)
+        if existing is not None:
+            return existing
+        if len(_RAW_LSB_CACHE_MEMO) >= _RAW_LSB_CACHE_MEMO_MAX:
+            _RAW_LSB_CACHE_MEMO.pop(next(iter(_RAW_LSB_CACHE_MEMO)), None)
+        _RAW_LSB_CACHE_MEMO[sig] = out
+    return out
+
+
+def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
+                           *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
+                           tol_s=None, td_quantity_s=None, allow_window_reuse=False):
+    """LIVE per-(channel, PRO) LSB spectrum: build the match-agnostic raw cache once, then match PROs
+    against it per channel with availability.live_lsb_spectrum_match. Drop-in for the spectral scan:
+    returns { raw_channel: [ per-PRO spectrum dict, ... ] } in the SAME contract it consumes.
+
+    TWO-WINDOW MATCHING (PI 2026-06-28): `tol_s` (the main MatchToleranceMin slider, in SECONDS) is
+    the eligibility radius for BOTH TD and PSD; `td_quantity_s` (the MatchExtentSec slider) caps how
+    many of the nearest 3 s TD tiles to median per PRO (PSD has no quantity cap). Matching runs on the
+    pre-computed raw 3 s-tile cache, so there is no real-time TD recompute. Returns (spectra, stats)."""
+    pt = np.asarray([] if pro_times is None else pro_times, dtype=float)
+    if pt.size == 0 or not channels:
+        return {}, {}
+    _stamp_td_product(td_recordings)
+    raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
+                                      montage_psd_blocks=montage_psd_blocks, centers=centers)
+    spectra, stats = {}, {}
+    for raw_ch in channels:
+        raw_cache = raw_by_ch.get(raw_ch)
+        if raw_cache is None:
+            continue
+        try:
+            recs, st = availability.live_lsb_spectrum_match(
+                pt, raw_cache, tol_s=tol_s, td_quantity_s=td_quantity_s,
+                allow_window_reuse=allow_window_reuse)
+            spectra[raw_ch] = recs
+            stats[raw_ch] = st
+        except Exception as e:
+            _log.warning("Biomarkers: live LSB match failed for %s (%s)", raw_ch, e)
+    return spectra, stats
 
 
 def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
@@ -390,8 +946,15 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
     `dedup_times` (the montage/survey PSD record StartTimes). The remainder — montage sweeps with no
     matching survey/montage recording — are surfaced as their own markers.
 
+    These are a DISTINCT source from the patient-triggered events: NeuralActivitySnapshot carries its
+    own 250 Hz TD (it is a montage product, LSB route = direct TD→LSB transform), whereas patient
+    events are PSD-only. They are tagged `category=DISPLAY_MONTAGE_SNAPSHOT` so the timeline keeps them
+    separate from the Streaming/labeled patient-event rows (which previously shared the bare
+    "Montage PSD" label and caused the mislabel: Streaming-event ticks reading as montage PSDs).
+
     Returns events normalized for `availability.event_markers`:
-        [{"name": "Montage PSD", "t": epoch_s, "psds": [(freq, power), ...]}, ...]
+        [{"name": DISPLAY_MONTAGE_SNAPSHOT, "category": DISPLAY_MONTAGE_SNAPSHOT,
+          "t": epoch_s, "psds": [(freq, power), ...]}, ...]
     """
     snaps = _load_recordings(participant_uid, ["NeuralActivitySnapshot"])
     dedup = sorted(float(t) for t in (dedup_times or []) if t is not None)
@@ -417,17 +980,37 @@ def _load_montage_psd_events(participant_uid, dedup_times=None, tol_s=5.0):
                 f, m = p.get("Frequency"), p.get("Power")
                 if f is not None and m is not None and len(f) == len(m) and len(f) > 0:
                     psds.append((list(f), list(m)))
-        out.append({"name": "Montage PSD", "t": float(t0), "psds": psds})
+        out.append({"name": DISPLAY_MONTAGE_SNAPSHOT, "category": DISPLAY_MONTAGE_SNAPSHOT,
+                    "t": float(t0), "psds": psds})
     return out
 
 
-# The six main bipolar sensing pairs (per hemisphere). The exploratory spectral scan is restricted
-# to these — ring/segment montages and reference-electrode channels are dropped (they aren't the
+# The main bipolar sensing pairs (per hemisphere). The exploratory spectral scan is restricted to
+# these — ring/segment montages and reference-electrode channels are dropped (they aren't the
 # closed-loop sensing channels and don't map to a single bipolar pair). DESIGN: channel is the gate.
-_MAIN_BIPOLAR = {
-    "ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT", "ONE_THREE_RIGHT",
-    "ZERO_TWO_LEFT", "ZERO_TWO_RIGHT",
-}
+#
+# R12 / audit F5: this set is now DERIVED from a pair list × hemispheres rather than hand-listed, and
+# is OVERRIDABLE per participant/site via the BRAVO_MAIN_BIPOLAR env var (comma-separated canonical
+# channel names) — so onboarding a participant with a different sensing montage (e.g. ZERO_ONE,
+# TWO_THREE, or a custom pair) no longer requires a code edit. The default reproduces the original
+# six pairs exactly. Pairs are the contiguous + skip-one bipoles available on a 4-contact Percept
+# lead; extend `_DEFAULT_BIPOLAR_PAIRS` (or set the env var) for non-standard configurations.
+_DEFAULT_BIPOLAR_PAIRS = ("ZERO_THREE", "ONE_THREE", "ZERO_TWO")
+_HEMISPHERES = ("LEFT", "RIGHT")
+
+
+def _build_main_bipolar():
+    """Canonical bipolar channel set: env override if present, else pairs × hemispheres default."""
+    import os as _os
+    override = _os.environ.get("BRAVO_MAIN_BIPOLAR", "").strip()
+    if override:
+        names = {n.strip().upper() for n in override.split(",") if n.strip()}
+        if names:
+            return names
+    return {f"{p}_{h}" for p in _DEFAULT_BIPOLAR_PAIRS for h in _HEMISPHERES}
+
+
+_MAIN_BIPOLAR = _build_main_bipolar()
 
 # Bump when the channel-canonicalization rule below changes — folded into the PSD-matrix cache
 # signature so a rule change forces a re-Welch instead of serving the stale pre-fix matrix.
@@ -515,10 +1098,13 @@ def _assemble_psd_rows(participant_uid, td_list, psd_list):
     rows = []
     _welch_rows_into(rows, td_list, "TD streaming", _sp)
     _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
-    # Patient-event PSDs (ORM metadata, no decode) — keeps this legacy path consistent with the
-    # cached assembly so a matrix built either way carries the same "Patient event" source.
+    # Patient-event PSDs (ORM metadata, no decode) — assigned to their real bipolar channel via
+    # the active-sensing resolver. Index built from td_list only (single-channel BrainSense
+    # streaming records); psd_list is montage/survey sweeps that sense ALL pairs simultaneously
+    # and would be excluded by _build_sensing_config_index's single-channel guard anyway.
     try:
-        rows.extend(_event_psd_rows(participant_uid))
+        _ev_idx = _build_sensing_config_index(list(td_list or []))
+        rows.extend(_event_psd_rows(participant_uid, sensing_index=_ev_idx))
     except Exception:
         pass
     return rows
@@ -658,9 +1244,13 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
     half_s = _sp.WELCH_MAX_SECONDS / 2.0
 
     def _index(recs, source_label, centered=False):
+        # source_label may be a string (same for all recordings) OR a callable r -> str so a mixed
+        # list (e.g. td_list = BrainSense streaming + Indefinite) is labeled per recording. This finer
+        # provenance feeds the binarization-histogram hover's TD source breakdown.
         for r in recs or []:
             if not isinstance(r, dict):
                 continue
+            lbl = source_label(r) if callable(source_label) else source_label
             names = list(r.get("ChannelNames") or [])
             keep = [n for n in names if _canon_channel(n) in _MAIN_BIPOLAR]
             if not keep:
@@ -686,7 +1276,7 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
                         for tk in kept:
                             for n in keep:
                                 out.append({"t": float(tk), "channel": _canon_channel(n),
-                                            "source": source_label})
+                                            "source": lbl})
                         emitted = kept.size > 0
             if not emitted:
                 # No rating overlaps this session's real coverage (or all dropped by the floor) ->
@@ -695,10 +1285,17 @@ def _psd_sample_index(td_list, psd_list, pro_times=None):
                 # for short sessions too (without it, every short-session TD lane greys out).
                 for n in keep:
                     out.append({"t": float(t0), "channel": _canon_channel(n),
-                                "source": source_label})
+                                "source": lbl})
 
-    _index(td_list, "TD streaming", centered=(pt is not None))
-    _index(psd_list, "Montage/survey")
+    # TD-streaming provenance: split BrainSense streaming vs Indefinite stream per recording so the
+    # binarization hover can break the time-domain count down by source. The discriminator mirrors
+    # _stamp_td_product (decoded payload carries Source=='indefinite' or an IndefiniteStream flag).
+    def _td_label(r):
+        if r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream"):
+            return "Indefinite stream"
+        return "BrainSense streaming"
+    _index(td_list, _td_label, centered=(pt is not None))
+    _index(psd_list, "Montage")
     return out
 
 
@@ -915,8 +1512,11 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None):
     # Patient-event PSDs (incl. Streaming markers): read off ORM metadata, no decode/Welch, so they
     # need no per-recording cache. Appended on every assembly — newly-ingested files with event
     # markers therefore enter the pool automatically (the matrix signature below tracks them).
+    # Build the sensing index from the already-computed TD rows so event blocks with no SenseID
+    # get their contact pair from the actual per-timestamp sensing config.
     try:
-        ev_rows = _event_psd_rows(participant_uid)
+        _ev_idx = _build_sensing_config_index_from_rows(rows)
+        ev_rows = _event_psd_rows(participant_uid, sensing_index=_ev_idx)
         rows.extend(ev_rows)
         if ev_rows:
             _log.info("Biomarkers: appended %d patient-event PSD rows for %s", len(ev_rows),
@@ -1101,7 +1701,8 @@ def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_t
     _welch_rows_into(rows, td_list, "TD streaming", _sp, pro_times=pro_times)
     _welch_rows_into(rows, psd_list, "Montage/survey", _sp)
     try:
-        rows.extend(_event_psd_rows(participant_uid))   # ORM metadata only, no decode
+        _ev_idx = _build_sensing_config_index(list(td_list or []))  # td only; psd_list = sweeps
+        rows.extend(_event_psd_rows(participant_uid, sensing_index=_ev_idx))
     except Exception:
         pass
     mat = _sp.psd_rows_to_matrix(rows)
@@ -1517,7 +2118,7 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        train_days=None, step_days=None, sliding=True, region_map=None,
                        match_tolerance_min=None, psd_matrix=None, pro_match=None,
                        aggregate="all", max_per_rating=3, refractory_min=2.0,
-                       match_direction="prior"):
+                       match_direction="prior", pro_lsb_spectrum_by_channel=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -1568,7 +2169,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "psd_spectra": lambda: analytics.psd_spectra(det, region_map=region_map),
                 "spectral_feature_importance": lambda: analytics.spectral_feature_importance(
                     scan_src, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
-                    region_map=region_map),
+                    region_map=region_map,
+                    pro_lsb_spectrum_by_channel=pro_lsb_spectrum_by_channel),
                 "matched_sample_counts": count_task,
                 "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
@@ -1969,7 +2571,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         for r in td_list or []:
             if not isinstance(r, dict):
                 continue
-            (ind if (r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
+            (ind if (r.get("RecordingType") == "MedtronicIndefiniteStream" or r.get("Source") == "indefinite" or r.get("IndefiniteStream")) else bs).append(r)
         psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
         recs_by_type = {
             "MedtronicBrainSenseTimeDomain": bs,
@@ -1979,20 +2581,28 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
             "MedtronicBaselineMontages": [r for r in (psd_list or []) if isinstance(r, dict)],
         }
         records = availability.extract_availability(recs_by_type, region_map=region_map)
+        # Build the active-sensing config index from already-decoded single-channel records
+        # (BrainSenseTimeDomain + PowerDomain). Used by the event-PSD channel resolver so that
+        # the 84% of event blocks with no SenseID get their contact pair from the device's actual
+        # sensing config at press time, rather than a static per-hemisphere guess. Built once here
+        # and reused by _event_psd_index, _event_psd_lsb_blocks, and the scan pool below.
+        _sensing_idx = _build_sensing_config_index(
+            list(td_list or []) + list(powerdomain_list or []))
         # Patient-event PSDs (incl. 'Streaming') are imported into the per-channel scan pool, so they
         # must also render as PSD TICKS on their contact lanes (DESIGN: "a PSD mark at those
         # contacts"). Append one synthetic dtype="psd" record per (event, hemisphere block) on its
         # assigned bipolar channel — same record schema extract_availability emits, product tagged
         # "patient_event" so the lane draws them as ticks alongside montage/survey PSDs.
         try:
-            for ev in _event_psd_index(participant_uid):
+            for ev in _event_psd_index(participant_uid, sensing_index=_sensing_idx):
                 ch = ev["channel"]
                 fmt = availability.analytics.format_channel(ch, region=region_map.get(ch))
                 records.append({
                     "channel": ch, "label": fmt.get("short", ch),
                     "hemisphere": availability._hemisphere(ch),
                     "dtype": "psd", "product": "patient_event",
-                    "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming")
+                    "event_name": ev.get("name", "Event"),   # the marker's own name (e.g. "Streaming");
+                                                             # the lane tick keys on product/event_name
                     "t_start": float(ev["t"]), "dur_s": 30.0,
                     "meta": {"center_hz": None, "peak_hz": None, "n": None},
                 })
@@ -2005,31 +2615,74 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # ~10-min) per channel, each sample tagged with its sensing center freq, so the timeline
         # draws the true trace (not a placeholder). Keyed by raw channel; frontend normalizes.
         #
-        # MODELED fallback (psd_modeled tier, Step-0 verdict): the MONTAGE SURVEY is the device-blessed
+        # MODELED fallback (psd_modeled tier): the MONTAGE SURVEY is the device-blessed
         # modeled source — it sweeps ALL bipolar contacts STIM-OFF, carries raw 250 Hz TD (in
         # Recording["Data"]) AND the device's own per-contact peak frequency (Descriptor.MedtronicPSD),
         # but produces NO native device LSB scalar. So those contacts have no LSB point without this:
-        # convert via Welch-256 -> psd_band_to_lsb (k=269) at each contact's configured sensing center
-        # (falling back to the device peak). `psd_list` is the montage/survey products
+        # convert via the transform DSP -> td_to_lsb (k=352.62, CS-1 2026-06-27; was Welch-256 ->
+        # psd_band_to_lsb k=269) at each contact's configured sensing center (falling back to the
+        # device peak). `psd_list` is the montage/survey products
         # (MedtronicBrainSenseSurvey + Baseline/Stimulation montages), all carrying TD. Tagged
         # source="psd_modeled" so the frontend draws it with a distinct hollow marker; NEVER preferred
         # over a sensed value. Deployment threshold is unaffected (stays native/frozen) — exploratory
         # timeline display only. (Montage TD is already ingested under MedtronicBrainSenseSurvey; this
         # is what surfaces it on the timeline.)
         sensing_hz = availability.analytics.power_center_freqs(powerdomain_list)
+        # CS-3 PSD->LSB bridge: PSD-only patient-triggered snapshot events (no TD) -> modeled LSB.
+        # Montage/survey (psd_list) carry TD and go through montage_td_recordings above; this is the
+        # exclusive consumer of the bridge.
+        event_psd_blocks = _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=sensing_hz,
+                                                  sensing_index=_sensing_idx)
         lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map,
                                       montage_td_recordings=psd_list,
-                                      sensing_hz_by_channel=sensing_hz)
+                                      sensing_hz_by_channel=sensing_hz,
+                                      event_psd_recordings=event_psd_blocks)
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
+        # CS-4 per-PRO LSB SELECTION: one LSB per pain rating per channel, chosen by the strict source
+        # precedence (native sensed > direct TD->LSB transform > PSD-only-event bridge), each tagged
+        # with its tier + saturation flag so the timeline can colour each rating's biomarker point by
+        # trust. TD-bearing recordings for tier 2 = streaming TD (td_list) + montage/survey TD
+        # (psd_list, all 250 Hz TD); the PSD-only event bridge is tier 3 (event_psd_blocks).
+        _pro_t_lsb = np.asarray(pain.get("t") or [], dtype=float) if isinstance(pain, dict) else None
+        pro_lsb = _pro_lsb_by_channel(
+            _pro_t_lsb, lsb, list(td_list or []) + list(psd_list or []),
+            event_psd_blocks, sensing_hz) if (_pro_t_lsb is not None and _pro_t_lsb.size) else {}
+        # SHARED per-pair full-spectrum LSB cache (0–100 Hz). Both this timeline payload AND the
+        # spectral feature-importance scan read from it (same computation, same source of truth).
+        # td_recordings = ALL TD-bearing recordings (streaming + montage/survey, every product at 250 Hz
+        # TD) → TD-transform route (k=352.62). Per PI 2026-06-27: montage/survey PSDs are NEVER passed
+        # to event_psd_recordings here — they carry TD and always go through the transform route;
+        # the bridge is ONLY for patient-event FFT blocks (PatientControllerEvent, PSD-only, no TD).
+        _pro_all_channels = sorted({availability._canon_channel(r) for r in (lsb or {}).keys()})
+        pro_lsb_spectrum = (
+            _pro_lsb_spectrum_cached(
+                participant_uid, _pro_t_lsb,
+                _pro_all_channels,
+                list(td_list or []) + list(psd_list or []),  # ALL TD-bearing: streaming + montage/survey
+                event_psd_blocks)                             # PSD-only patient events (bridge only)
+            if (_pro_t_lsb is not None and _pro_t_lsb.size and _pro_all_channels) else {}
+        )
         bands = availability.present_freq_bands(records)
-        # Patient-annotated events (labeled button presses) — demarcated on the timeline.
+        # Patient-triggered events. _load_patient_events returns BOTH the labeled button presses
+        # (category=DISPLAY_PATIENT_EVENT) AND the auto 'Streaming' LFP snapshots
+        # (category=DISPLAY_STREAMING_EVENT). The diamond EVENTS row only renders the LABELED presses;
+        # the Streaming snapshots render as per-lane PSD ticks from a SEPARATE payload (av.records via
+        # _event_psd_index). So we run the (PSD-averaging) event_markers on the labeled events ONLY and
+        # surface the Streaming count separately — avoids the (many) wasted decimated-PSD/peak
+        # computations for Streaming markers the diamond row never draws.
         event_list = _load_patient_events(participant_uid)
-        events = availability.event_markers(event_list)
-        # Montage-PSD events: NeuralActivitySnapshot montage sweeps NOT already represented by a
-        # montage/survey PSD recording (de-duplicated against those StartTimes so we don't double-
-        # count). Surfaced as their own marker row, separate from the labeled patient events.
+        labeled_events = [e for e in event_list
+                          if e.get("category") != DISPLAY_STREAMING_EVENT]
+        streaming_count = sum(1 for e in event_list
+                              if e.get("category") == DISPLAY_STREAMING_EVENT)
+        events = availability.event_markers(labeled_events)
+        events["streaming_count"] = streaming_count
+        # Montage-PSD events: NeuralActivitySnapshot montage sweeps (category=DISPLAY_MONTAGE_SNAPSHOT;
+        # a montage product carrying its OWN TD, distinct from the PSD-only patient events) NOT already
+        # represented by a montage/survey PSD recording (de-duplicated against those StartTimes so we
+        # don't double-count). Surfaced as their own marker row.
         psd_times = [availability._to_epoch(r.get("StartTime")) for r in (psd_list or [])
                      if isinstance(r, dict)]
         montage_events = availability.event_markers(
@@ -2064,7 +2717,8 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # them here too — they render as ticks on their contact lanes and the live binarization
         # preview counts them, matching the backend pool (TD + montage + Patient event).
         try:
-            psd_scan_index = psd_scan_index + _event_psd_index(participant_uid)
+            psd_scan_index = psd_scan_index + _event_psd_index(participant_uid,
+                                                                sensing_index=_sensing_idx)
         except Exception as e:
             _log.warning("Biomarkers: event PSD index failed (%s)", e)
 
@@ -2087,12 +2741,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
 
         return {"records": records, "pain": pain, "stim": stim, "freq_bands": bands,
                 "span": span, "samples": samples, "lsb_overview": lsb_overview,
+                "pro_lsb": pro_lsb, "pro_lsb_spectrum": pro_lsb_spectrum,
                 "events": events, "montage_events": montage_events,
                 "psd_scan_index": psd_scan_index}
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
         return {"records": [], "pain": {"metric": label_metric, "t": [], "y": []},
                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": [], "lsb_overview": {},
+                "pro_lsb": {}, "pro_lsb_spectrum": {},
                 "events": {"events": [], "n": 0},
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
@@ -2243,6 +2899,17 @@ def run_for_participant(request_data):
     # 1 IS one-per-rating, so callers no longer send the old Aggregate toggle. Keep "all" here so the
     # cap (not a pre-aggregation collapse) governs sample independence, with rating-grouped AUC on top.
     aggregate = "all"
+    # Live-matching toggle (default OFF): when on, the spectral scan's per-PRO LSB spectrum is built
+    # by matching PROs LIVE against the match-agnostic raw 3 s-window cache (median over a configurable
+    # rating-centered extent, TD preferred in-window, NO LSB vector reused across >1 PRO) instead of
+    # the legacy per-PRO _pro_lsb_spectrum_cached path. Off until the before/after r/AUC A/B is signed
+    # off, since live matching reduces pseudoreplication and shifts r/AUC.
+    use_live_matching = str(request_data.get("UseLiveMatching", "")).lower() in ("1", "true", "yes", "on")
+    match_extent_s = _float_param(request_data, "MatchExtentSec", default=float(
+        analytics.TRANSFORM_CENTERED_EXTENT_SECONDS), lo=3.0, hi=300.0)
+    # When ON, a raw window may match EVERY PRO whose extent covers it (not just its nearest), trading
+    # the no-reuse independence guarantee for sample size. Default OFF (strict one-window-one-PRO).
+    allow_window_reuse = str(request_data.get("AllowWindowReuse", "")).lower() in ("1", "true", "yes", "on")
     train_days, step_days, sliding, window_months, window_step_months = _window_params(request_data)
     rb_kwargs = {"sliding": sliding, "label_strategy": label_strategy,
                  "low_pct": low_pct, "high_pct": high_pct,
@@ -2275,6 +2942,50 @@ def run_for_participant(request_data):
     pro_match = _pro_match_arrays(pro_df, label_metric)
     psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
 
+    # Per-pair LSB spectrum cache for the SPECTRAL SCAN. The per-band LSB the scan reads is indexed by
+    # `rating_group`, which is the position of each matched PSD's PRO in `pro_match[0]` (the
+    # metric-FILTERED PRO set — only ratings with a finite label_metric). So the cache MUST be built
+    # from that exact array: _scan_pro_times = pro_match[0]. analytics.spectral_feature_importance does
+    # `ch_spectra[int(rating_group[i])]`, so len(ch_spectra) == len(pro_match[0]) is the bounds
+    # invariant — do not substitute pain["t"] (the metric-AGNOSTIC set the timeline uses) here, or the
+    # index would point at the wrong PRO. The timeline's modeled markers build their OWN cache entry
+    # from pain["t"] in _build_availability under a DIFFERENT signature; the two entries agree on any
+    # shared PRO because per_pro_lsb_spectrum is deterministic in (pro_time, channel, recordings) — the
+    # numbers match by construction, NOT by sharing one memo slot. td_recordings = ALL TD-bearing
+    # products (streaming + montage/survey, 250 Hz); event_psd_blocks = PatientControllerEvent FFT only.
+    _scan_psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    # Index from streaming TD only — psd_list is montage sweeps (all pairs, excluded by guard).
+    _scan_sensing_idx = _build_sensing_config_index(list(td or []))
+    _scan_event_blocks = _event_psd_lsb_blocks(participant_uid,
+                                               sensing_index=_scan_sensing_idx)
+    # Montage/survey device-PSD snapshots (Descriptor.MedtronicPSD) as their own bridge windows, so a
+    # montage contributes a PSD-tier LSB even when its TD tile fails the cache quality gate. Same unit /
+    # bridge constant as the patient-event PSD (validated paired vs the TD transform).
+    _scan_montage_blocks = _montage_psd_lsb_blocks(participant_uid,
+                                                   montage_recordings=_scan_psd_list)
+    _scan_channels = list(dict.fromkeys(
+        availability._canon_channel(ch) for ch in (chan_order or [])))
+    _scan_pro_times = (pro_match[0] if pro_match is not None else None)
+    _have_scan_inputs = (_scan_pro_times is not None and _scan_pro_times.size and _scan_channels)
+    live_match_stats = None
+    if _have_scan_inputs:
+        # CACHE-BASED MATCHING (PI 2026-06-28, now the ONLY path — the legacy real-time
+        # per_pro_lsb_spectrum recompute is retired): match PROs against the pre-computed match-agnostic
+        # raw 3 s-tile cache. TWO WINDOWS: tol_s = the main MatchToleranceMin slider (minutes->seconds)
+        # is the eligibility radius for BOTH TD and PSD; td_quantity_s = the MatchExtentSec slider caps
+        # how many of the nearest 3 s TD tiles to median per PRO (PSD has no quantity cap). The main
+        # tolerance can be None ("disable time-matching") — fall back to the extent so PSD still has a
+        # finite eligibility window rather than matching the whole record. AllowWindowReuse governs
+        # reuse of the same window+modality across PROs (per-modality, both passes).
+        _tol_s = (float(match_tol_min) * 60.0 if match_tol_min else float(match_extent_s))
+        pro_lsb_spectrum, live_match_stats = _live_pro_lsb_spectrum(
+            participant_uid, _scan_pro_times, _scan_channels,
+            list(td or []) + list(_scan_psd_list or []),
+            _scan_event_blocks, montage_psd_blocks=_scan_montage_blocks,
+            tol_s=_tol_s, td_quantity_s=match_extent_s, allow_window_reuse=allow_window_reuse)
+    else:
+        pro_lsb_spectrum = {}
+
     out = _serialize_run(run, _compute_analytics(run, chronic, pro_df, label_metric=label_metric,
                                                  kmeans_features=kmeans_features,
                                                  label_strategy=label_strategy,
@@ -2285,13 +2996,31 @@ def run_for_participant(request_data):
                                                  psd_matrix=psd_matrix, pro_match=pro_match,
                                                  aggregate=aggregate, max_per_rating=max_per_rating,
                                                  refractory_min=refractory_min,
-                                                 match_direction=match_direction),
+                                                 match_direction=match_direction,
+                                                 pro_lsb_spectrum_by_channel=pro_lsb_spectrum),
                          label_metric=label_metric)
     out["label_metric"] = label_metric
     out["aggregate"] = aggregate
     out["max_per_rating"] = max_per_rating
     out["refractory_min"] = refractory_min
     out["match_direction"] = match_direction
+    out["use_live_matching"] = bool(use_live_matching)
+    out["match_extent_s"] = float(match_extent_s)
+    out["allow_window_reuse"] = bool(allow_window_reuse)
+    if live_match_stats is not None:
+        # Pooled independence stats across channels: with live matching every PRO contributes ONE LSB
+        # vector (no reuse), so pseudoreplication collapses. Surface the totals for the UI before/after.
+        _pooled = {"n_pro": 0, "n_pro_td": 0, "n_pro_psd": 0, "n_pro_unmatched": 0,
+                   "n_td_assigned": 0, "n_td_used": 0, "n_psd_assigned": 0, "n_psd_used": 0}
+        for _st in live_match_stats.values():
+            for _k in _pooled:
+                _pooled[_k] += int(_st.get(_k, 0) or 0)
+        _pooled["extent_s"] = float(match_extent_s)        # legacy alias (== td_quantity_s)
+        _pooled["td_quantity_s"] = float(match_extent_s)   # TD nearest-N-seconds quantity slider
+        _pooled["tol_s"] = (float(match_tol_min) * 60.0 if match_tol_min else float(match_extent_s))
+        _pooled["match_tolerance_min"] = match_tol_min      # the main eligibility slider (minutes)
+        _pooled["per_channel"] = live_match_stats
+        out["live_match_stats"] = _pooled
     out["available_metrics"] = BIOMARKER_METRICS
     out["label_strategy"] = label_strategy
     out["available_strategies"] = BINARIZATION_STRATEGIES
@@ -3563,116 +4292,73 @@ def _sensing_hz_for_pd(pd_rec, contact):
         return None
 
 
-def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, cutpoint,
-                                    center_hz, percentile, participant, channel):
-    """Shared modeled-LSB fallback ladder (audit: deployment_fallback).
+def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, percentile):
+    """Shared modeled-LSB fallback (audit: deployment_fallback).
 
     When the device never sensed THIS (channel, band) long enough to read a deployable threshold
-    straight off its own native LSB Timeline (`thr_lsb is None`), estimate the LSB threshold from
-    progressively coarser modeled sources and flag it ESTIMATED with its tier, so a clinician never
-    mistakes a modeled threshold for a measured one. Returns the `thr_estimate` dict (or None).
+    straight off its own native LSB Timeline (`thr_lsb is None`), return the modeled LSB estimate and
+    flag it ESTIMATED, so a clinician never mistakes a modeled threshold for a measured one. Returns the
+    `thr_estimate` dict (or None).
 
     Both deployment endpoints call THIS one function so the measured→modeled fallback can never drift
-    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary):
+    between the per-panel LSB readout (band_lsb_and_power) and the one-shot sign-off (deployment_summary).
 
-      TIER 1  modeled_timeline   — montage/survey Welch256×269 in-band points at the same percentile
-                                   (the hollow-diamond series the timeline draws). Closest to measured.
-      TIER 2  frozen PSD→LSB     — per-participant frozen conversion applied to the µV² cut-point.
-      TIER 3  validated_constant — population k=269 LSB/µV² on the µV² cut-point (last resort).
+    SINGLE modeled tier (`modeled_timeline`): the caller models the LSB line off the RAW µV TD the ROC
+    was built from, AT the ROC's own band center (availability.modeled_lsb_at_center — transform ×352.62
+    / bridge ≈73.63), and passes the percentile-anchored value in as `modeled_thr`. This is units-
+    consistent (no µV²↔LSB conversion of the z-scored cut-point) and covers any band the ROC can score.
+      (The old TIER-2 frozen-model-on-µV²-cut-point and TIER-3 population-constant k=269 tiers were both
+       retired 2026-06-28: when there is no TD/PSD for the channel `modeled_thr` is None and the modeled
+       threshold is INDETERMINATE, fail-closed, rather than a units-mismatched or population-average guess.)
 
     `thr_lsb` (measured native threshold) ALWAYS wins; this is only consulted when it is None.
     """
     thr_estimate = None
     # TIER 1 of the fallback ladder: the MODELED-LSB Timeline (psd_modeled). When the device never
     # sensed this band natively but the montage-survey sweeps DID give us calibrated modeled LSB
-    # points in-band (Welch256×269 — the hollow diamonds on the timeline), read the threshold off
+    # points in-band (transform×352.62 — the hollow diamonds on the timeline), read the threshold off
     # those at the same percentile, the SAME way the native path reads it. This is the closest thing
     # to a measured threshold for an unsensed band — a real per-contact LSB time series — so it
     # outranks the µV²-cut-point model below. Flagged modeled so the sign-off card never mistakes it
     # for a sensed value.
     if thr_lsb is None and modeled_thr is not None:
-        fextrap = bool(center_hz is not None and (
-            center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
+        # Shared definition of "outside the validated calibration range" — the SAME predicate the
+        # frozen per-band model uses (analytics._freq_extrapolated mirrors psd_lsb_model._freq_extrapolated,
+        # asserted equal by test), so the sign-off card's extrapolation warning is consistent across tiers.
+        fextrap = analytics._freq_extrapolated(center_hz)
         note = ("Device never sensed this band; threshold read from the MODELED LSB timeline — the "
-                "montage/survey sweeps converted via Welch-256 band-integral × 269 LSB/µV² (the same "
+                "montage/survey sweeps converted via the transform DSP × %.2f LSB/µV² (the same "
                 "calibrated series shown as hollow diamonds on the timeline), at the %g-th percentile "
                 "of %d in-band modeled points. Confirm live on the device Timeline before deploying."
-                % (percentile, n_modeled))
+                % (analytics.LSB_PER_UV2_TRANSFORM, percentile, n_modeled))
         if fextrap:
             note += (" EXTRAPOLATED: outside the validated %.1f–%.1f Hz range." % (
                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-        sigma = analytics.LSB_UV2_SIGMA_FOLD
+        sigma = analytics.MODELED_LSB_SIGMA_FOLD
         thr_estimate = {
             "estimated_upper_lsb": modeled_thr,
             "estimated_upper_lsb_lo": round(modeled_thr / sigma, 1),
             "estimated_upper_lsb_hi": round(modeled_thr * sigma, 1),
             "sigma_fold": round(float(sigma), 3),
-            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
-            "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": center_hz,
+            "tier": "modeled_timeline", "k_effective": analytics.LSB_PER_UV2_TRANSFORM,
+            "slope_b": None, "model_center_hz": center_hz,
             "r2": None, "n_modeled_points": n_modeled,
             "freq_extrapolated": fextrap,
             "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
             "note": note,
-            "method": "modeled from montage/survey LSB timeline (Welch256 band-integral × k=269)",
+            "method": "modeled from montage/survey LSB timeline (transform DSP × k=352.62)",
         }
-    # TIER 2: the per-participant frozen PSD→LSB model applied to the physical µV² cut-point — used
-    # only if there were no modeled timeline points to read either.
-    if thr_lsb is None and thr_estimate is None and cutpoint is not None:
-        from modules.Biomarkers.routines import psd_lsb_model as _plm
-        est = _plm.estimate_lsb(participant, channel, center_hz, float(cutpoint))
-        if est.get("available"):
-            sigma = est.get("resid_log_sigma_fold") or analytics.LSB_UV2_SIGMA_FOLD
-            est_lsb = float(est["lsb"])
-            thr_estimate = {
-                "estimated_upper_lsb": round(est_lsb, 1),
-                "estimated_upper_lsb_lo": round(est_lsb / sigma, 1),
-                "estimated_upper_lsb_hi": round(est_lsb * sigma, 1),
-                "sigma_fold": round(float(sigma), 3),
-                "tier": est.get("tier"), "k_effective": est.get("k_effective"),
-                "slope_b": est.get("slope_b"), "model_center_hz": est.get("model_center_hz"),
-                "r2": est.get("r2"), "note": est.get("note"),
-                # Carry the conversion's frequency-coverage flag: True when the band is outside the
-                # validated 7.8-28.3 Hz range (e.g. a 55.5 Hz high-gamma winner), so the sign-off card
-                # warns that the LSB is extrapolated, not calibrated.
-                "freq_extrapolated": bool(est.get("freq_extrapolated", False)),
-                "validated_hz_range": est.get("validated_hz_range"),
-                "method": "modeled from physical µV² cut-point via frozen PSD→LSB conversion",
-            }
-        else:
-            # Last-resort fallback: the frozen per-participant model has no entry for this band, but
-            # we can still translate the physical µV² cut-point with the VALIDATED population constant
-            # (k=269 LSB/µV², RCS08 stim-off paired-block fit, ≈0.0037 µV²/LSB; R²0.94, CV 1.19×).
-            # Clearly tiered BELOW the frozen model so a clinician never mistakes it for a fitted value.
-            try:
-                lsb_est = analytics.lsb_from_uv2(float(cutpoint))
-            except Exception:  # noqa: BLE001
-                lsb_est = float("nan")
-            if np.isfinite(lsb_est):
-                sigma = analytics.LSB_UV2_SIGMA_FOLD
-                fextrap = bool(center_hz is not None and (
-                    center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-                note = ("No per-participant frozen-model entry for this band; translated with the "
-                        "validated population constant k=269 LSB/µV² (RCS08 stim-off paired-block "
-                        "fit, 1σ %.2f×). Coarser than a fitted band model — confirm live on the "
-                        "device Timeline before deploying." % sigma)
-                if fextrap:
-                    note += (" EXTRAPOLATED: this band is outside the validated %.1f–%.1f Hz range, "
-                             "where k is untested (the gain is not band-flat). Needs streaming "
-                             "calibration at this center frequency." % (
-                                 analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI))
-                thr_estimate = {
-                    "estimated_upper_lsb": round(float(lsb_est), 1),
-                    "estimated_upper_lsb_lo": round(float(lsb_est) / sigma, 1),
-                    "estimated_upper_lsb_hi": round(float(lsb_est) * sigma, 1),
-                    "sigma_fold": round(float(sigma), 3),
-                    "tier": "validated_constant", "k_effective": analytics.LSB_PER_UV2_VALIDATED,
-                    "slope_b": analytics.LSB_UV2_LOGLOG_SLOPE, "model_center_hz": None,
-                    "r2": 0.94,
-                    "freq_extrapolated": fextrap,
-                    "validated_hz_range": [analytics.LSB_VALIDATED_HZ_LO, analytics.LSB_VALIDATED_HZ_HI],
-                    "note": note,
-                    "method": "modeled from physical µV² cut-point via validated population LSB constant",
-                }
+    # The old TIER-2 (per-participant frozen model applied to the µV² cut-point) and TIER-3
+    # (population constant k=269) were both REMOVED 2026-06-28. TIER-2 fed the deployment ROC cut-point
+    # — a within-(channel,source) z-scored log-power feature (dimensionless, frequently negative) —
+    # into psd_lsb_model.estimate_lsb, which expects a LINEAR µV² band power: a negative z clipped to
+    # 1e-12 (LSB≈0) and a positive z was silently misread as µV². The units-correct replacement is the
+    # single modeled tier above: model the LSB line off the RAW TD the ROC was built from, at the ROC's
+    # OWN band center (transform ×352.62 over streaming + montage TD; bridge ≈73.63 for PSD-only
+    # events), then anchor by RANK (percentile) exactly like the native path — no µV²↔LSB conversion of
+    # the cut-point. When there is genuinely no TD/PSD for the channel the modeled tier yields < 8
+    # in-band points and `modeled_thr` stays None -> thr_estimate stays None (fail-closed), rather than
+    # a units-mismatched or population-average guess.
     return thr_estimate
 
 
@@ -3720,11 +4406,18 @@ def band_lsb_and_power(request_data):
     chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
     pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
     from modules.Biomarkers.routines import availability as _av
-    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, Welch256×269 — the same
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
     # sees exactly the modeled points the clinician sees on the timeline.
     psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
+    # ALL raw-uV TD for the modeled tier: BrainSense streaming TD + IndefiniteStream (TIMEDOMAIN_TYPES)
+    # AND the montage/survey sweeps (psd_list). The exploration timeline already pools every TD product
+    # into the modeled LSB; the deployment fallback must see the same superset so no modeled point is
+    # dropped just because the band was only ever streamed, never montage-swept. Power-domain records
+    # (chronic/powerdomain) are NOT raw TD and are excluded by the helper's fs/name guards.
+    streaming_td = _load_recordings(core["participant_uid"], TIMEDOMAIN_TYPES)
+    td_for_modeled = list(streaming_td or []) + list(psd_list or [])
     sensing_hz = analytics.power_center_freqs(pd_list)
     lsb = _av.lsb_series(chronic_list, pd_list,
                          montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
@@ -3745,10 +4438,19 @@ def band_lsb_and_power(request_data):
                       else np.zeros(y.size, bool))
         band_lsb_vals = y[bmask & ~is_modeled]
         n_native = int(band_lsb_vals.size)
-        # MODELED in-band points gathered regardless; used only if there's no native threshold.
-        mvals = y[bmask & is_modeled]; n_modeled = int(mvals.size)
-        if mvals.size >= 8 and percentile is not None:
-            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # MODELED in-band points: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
+    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # then anchor by percentile like native. Universal — covers any band the ROC can score, not only the
+    # montage's configured sensing bands — and units-consistent (replaces the retired µV²-cut-point
+    # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
+    # montage/survey); chronic/powerdomain are power-domain, not TD, and excluded by the helper guards.
+    # Used only if there's no native threshold.
+    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+                                      td_recordings=td_for_modeled,
+                                      psd_recordings=None, half_hz=half)
+    n_modeled = int(mvals.size)
+    if mvals.size >= 8 and percentile is not None:
+        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
     if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
         # MEASURED, native device-sensed threshold — the deployable number, always preferred.
         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
@@ -3767,14 +4469,15 @@ def band_lsb_and_power(request_data):
         }
     else:
         # No native threshold: default to the MODELED LSB estimate via the shared fallback ladder
-        # (modeled timeline → frozen PSD→LSB model → validated k=269 constant), the IDENTICAL helper
-        # deployment_summary uses, so the per-panel number can never drift from the sign-off card.
+        # (single modeled tier: LSB line modeled off the raw TD at the ROC band — transform ×352.62 /
+        # bridge ≈73.63 — then percentile-anchored; population-constant k=269 tier retired 2026-06-28,
+        # so an uncovered band is fail-closed). The IDENTICAL helper deployment_summary uses, so the
+        # per-panel number can never drift from the sign-off card.
         # Flagged estimated=True so the frontend renders it with its ESTIMATED tier + ±1σ band and
         # never as a measured value (audit C8 fail-closed: a modeled value is for PLANNING, not a
         # measured prerequisite).
         thr_estimate = _modeled_lsb_threshold_estimate(
-            thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
-            rd.get("Participant"), channel)
+            thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
         n_band = int(band_lsb_vals.size) if band_lsb_vals is not None else 0
         if thr_estimate is not None:
             threshold_lsb = {
@@ -3870,7 +4573,13 @@ def band_lsb_and_power(request_data):
             n_pos_eff = int(round(n_clu * prev)); n_neg_eff = n_clu - n_pos_eff
             # audit C4: pass the de-folded CI lower bound so power is reported as a band and the
             # gate reads the conservative end (never powered on the optimistic point AUC alone).
-            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=roc.get("auc_lo"))
+            # audit C1 guard: the "powered/beats-chance" gate reads the DE-FOLDED percentile lower
+            # bound (auc_lo_defold), NOT the BCa headline bound — BCa's bias term re-floors a null band
+            # at ~0.5, which must never let absence-of-signal read as significance. Falls back to the
+            # BCa bound only if the guard is absent (CI suppressed below the valid-replicate floor).
+            _gate_auc_lo = roc.get("auc_lo_defold", roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos_eff, n_neg_eff, auc_lo=_gate_auc_lo,
+                                        design_effect=roc.get("deff", 1.0))
 
     # ---- 4) THRESHOLD-MODE awareness (audit: mode determines FFT size + adaptive averaging) --------
     # The percentile-anchored threshold above is read off the device Timeline LSB, which is a 10-MINUTE
@@ -3987,6 +4696,12 @@ def deployment_summary(request_data):
         pooled, channel, center_hz, band_width_hz=band_width_hz,
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"],
         n_boot=n_boot)
+    # Audit [18]: per-week threshold-drift diagnostic. Does the optimal Youden cut-point move
+    # systematically over calendar time? A single fixed device threshold fit on all data would be
+    # miscalibrated in later weeks if so. Fail-closed to 'not_assessed' when too few weeks qualify.
+    drift = analytics.threshold_drift_by_week(
+        pooled, channel, center_hz, band_width_hz=band_width_hz,
+        strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"])
 
     # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
     cutpoint = _float_param(rd, "Cutpoint", default=None)
@@ -3999,11 +4714,16 @@ def deployment_summary(request_data):
     chronic_list = _load_recordings(core["participant_uid"], CHRONIC_TYPES)
     pd_list = _load_recordings(core["participant_uid"], POWERDOMAIN_TYPES)
     from modules.Biomarkers.routines import availability as _av
-    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, Welch256×269 — the same
+    # Include the montage-survey TD so the MODELED LSB tier (psd_modeled, transform×352.62 — the same
     # hollow-diamond series the timeline draws) is available as a fallback when the device never
     # sensed THIS band natively. Mirrors the timeline caller so the deployment fallback sees exactly
     # the modeled points the clinician sees on the timeline.
     psd_list = _load_recordings(core["participant_uid"], AVAILABILITY_PSD_TYPES)
+    # ALL raw-uV TD for the modeled tier (see band_lsb_and_power): BrainSense streaming TD +
+    # IndefiniteStream (TIMEDOMAIN_TYPES) AND the montage/survey sweeps. Mirror the exploration
+    # timeline's TD superset so no modeled point is dropped for a streamed-only band.
+    streaming_td = _load_recordings(core["participant_uid"], TIMEDOMAIN_TYPES)
+    td_for_modeled = list(streaming_td or []) + list(psd_list or [])
     sensing_hz = analytics.power_center_freqs(pd_list)
     lsb = _av.lsb_series(chronic_list, pd_list,
                          montage_td_recordings=psd_list, sensing_hz_by_channel=sensing_hz)
@@ -4024,61 +4744,31 @@ def deployment_summary(request_data):
         vals = y[native_m]; n_tl = int(vals.size)
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
-        # MODELED points in-band (the montage-survey Welch256×269 series) — gathered regardless, used
-        # only if there's no native threshold (handled below).
-        mvals = y[bandm & is_modeled]; n_modeled = int(mvals.size)
-        if mvals.size >= 8 and percentile is not None:
-            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # MODELED points in-band: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
+    # own band center (transform ×352.62 over the montage/survey TD; bridge ≈73.63 for PSD-only events),
+    # then anchor by percentile like native. Universal across any band the ROC can score and units-
+    # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
+    # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are
+    # power-domain, not TD. Gathered regardless; used only if there's no native threshold (below).
+    mvals = _av.modeled_lsb_at_center(channel, center_hz,
+                                      td_recordings=td_for_modeled,
+                                      psd_recordings=None, half_hz=half)
+    n_modeled = int(mvals.size)
+    if mvals.size >= 8 and percentile is not None:
+        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
 
-    # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
-    # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
-    # have the physical uV^2 cut-point. Estimate the LSB threshold from the per-participant frozen
-    # PSD->LSB conversion model and flag it ESTIMATED with its fallback tier, so the clinician never
-    # mistakes a modeled threshold for a measured one.
     # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
     # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
     # have modeled LSB sources. Delegate to the SHARED ladder so this path can never drift from the
     # per-panel LSB readout (band_lsb_and_power) which calls the identical helper.
     thr_estimate = _modeled_lsb_threshold_estimate(
-        thr_lsb, modeled_thr, n_modeled, cutpoint, center_hz, percentile,
-        rd.get("Participant"), channel)
+        thr_lsb, modeled_thr, n_modeled, center_hz, percentile)
 
-    # Native-vs-modeled cross-check (FYI, audit deployment_fallback): when the device DID sense this
-    # band (thr_lsb measured) AND we also hold the physical µV² cut-point, convert that cut-point with
-    # the SAME population constant the modeled fallback uses (k=269, via analytics.lsb_from_uv2 — the
-    # scalar form of the shared psd_band_to_lsb path) and report the fold-agreement. This is purely
-    # informational: it never changes the deployable number (the measured Timeline value always wins),
-    # but it tells the clinician how well the modeled route would have reproduced the measured
-    # threshold here — i.e. how much to trust the modeled LSB on bands the device never sensed. Good
-    # agreement (≈1×) means the k=269 fallback is reliable for this participant/band; a large fold
-    # means the modeled tier should be treated with extra caution.
+    # Native-vs-modeled cross-check: REMOVED 2026-06-28 with the k=269 population constant. It compared
+    # the measured Timeline LSB against lsb_from_uv2(cutpoint, k=269); with k=269 retired there is no
+    # population-constant model of a sensed band's cut-point to compare against (the frozen per-participant
+    # model is per-band, not a single scalar). Kept as None so the payload contract is unchanged.
     native_modeled_check = None
-    if thr_lsb is not None and cutpoint is not None:
-        try:
-            modeled_from_cutpoint = analytics.lsb_from_uv2(float(cutpoint))
-        except Exception:  # noqa: BLE001
-            modeled_from_cutpoint = float("nan")
-        if np.isfinite(modeled_from_cutpoint) and modeled_from_cutpoint > 0 and thr_lsb > 0:
-            fold = max(thr_lsb / modeled_from_cutpoint, modeled_from_cutpoint / thr_lsb)
-            fextrap_cc = bool(center_hz is not None and (
-                center_hz < analytics.LSB_VALIDATED_HZ_LO or center_hz > analytics.LSB_VALIDATED_HZ_HI))
-            native_modeled_check = {
-                "measured_upper_lsb": round(float(thr_lsb), 1),
-                "modeled_upper_lsb": round(float(modeled_from_cutpoint), 1),
-                "fold_disagreement": round(float(fold), 3),
-                "agrees": bool(fold <= analytics.LSB_UV2_SIGMA_FOLD),   # within the 1σ fold (≈1.26×)
-                "k_used": analytics.LSB_PER_UV2_VALIDATED,
-                "freq_extrapolated": fextrap_cc,
-                "method": "FYI cross-check: measured device-Timeline LSB vs k=269 model of the same µV² cut-point",
-                "note": (
-                    "Measured %.0f LSB vs modeled %.0f LSB (%.2f× apart). %s The deployable value is the "
-                    "MEASURED one; this only gauges how well the k=269 modeled fallback reproduces it here."
-                    % (thr_lsb, modeled_from_cutpoint, fold,
-                       ("Within the 1σ %.2f× conversion scatter — modeled fallback is reliable for this band."
-                        % analytics.LSB_UV2_SIGMA_FOLD) if fold <= analytics.LSB_UV2_SIGMA_FOLD else
-                       ("Exceeds the 1σ %.2f× conversion scatter — treat modeled LSB on unsensed bands with "
-                        "extra caution for this participant." % analytics.LSB_UV2_SIGMA_FOLD))),
-            }
 
     # Power on the clustered effective n.
     power = {"available": False, "reason": "ROC unavailable"}
@@ -4087,7 +4777,10 @@ def deployment_summary(request_data):
         if n_clu >= 4 and prev is not None and 0 < prev < 1:
             # audit C4: power band on the de-folded CI lower bound; gate reads the conservative end.
             n_pos = int(round(n_clu * prev))
-            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=roc.get("auc_lo"))
+            # audit C1 guard: gate reads the de-folded percentile lower bound, not the BCa bound.
+            _gate_auc_lo = roc.get("auc_lo_defold", roc.get("auc_lo"))
+            power = analytics.auc_power(roc["auc"], n_pos, n_clu - n_pos, auc_lo=_gate_auc_lo,
+                                        design_effect=roc.get("deff", 1.0))
 
     # Device-control mapping (same as build_band_candidate).
     or_val = g.get("odds_ratio"); coef = g.get("coef")
@@ -4230,6 +4923,14 @@ def deployment_summary(request_data):
             caveats.append(f"Per-era fragility: AUC swings {round(by_era.get('auc_spread') or 0,2)} / "
                            f"cut-point swings {round(by_era.get('cutpoint_spread') or 0,2)} across "
                            "OFF/LOW/HIGH — the threshold may not hold once stim changes.")
+    # Audit [18]: calendar-time threshold drift. A significant weekly trend in the optimal cut-point
+    # means a single fixed device threshold will be miscalibrated in later weeks.
+    if drift.get("available") and drift.get("drift_flag"):
+        caveats.append(f"Threshold drift over time: the optimal cut-point trends "
+                       f"{round(drift.get('slope_per_week') or 0, 3):+} /week "
+                       f"(p={round(drift.get('slope_p') or 1, 3)}) across "
+                       f"{drift.get('n_weeks_qualifying')} weeks — a fixed device threshold will be "
+                       "miscalibrated in later weeks; plan periodic recalibration.")
     if power.get("available") and power.get("more_data_needed"):
         caveats.append(f"Underpowered: ~{(power.get('n_ratings_needed',0) - power.get('n_ratings_current',0))} "
                        "more independent pain ratings needed for 80% power.")
@@ -4265,7 +4966,7 @@ def deployment_summary(request_data):
             f"Forward validation not possible ({forward.get('reason', 'insufficient temporal span')}): "
             "every reported AUC is in-sample. Out-of-sample generalization is UNCONFIRMED.")
     if thr_lsb is None and thr_estimate is not None:
-        _src_phrase = ("read from the MODELED LSB timeline (montage/survey sweeps, Welch256×269)"
+        _src_phrase = ("read from the MODELED LSB timeline (montage/survey sweeps, transform×352.62)"
                        if thr_estimate.get("tier") == "modeled_timeline"
                        else "MODELED from the physical µV² cut-point via the frozen PSD→LSB conversion")
         caveats.append(
@@ -4315,9 +5016,8 @@ def deployment_summary(request_data):
             # measured upper_lsb; present only when `available` is False.
             "estimated": (thr_estimate is not None and thr_lsb is None),
             "estimate": thr_estimate,
-            # FYI agreement check (only when the band was BOTH measured AND has a µV² cut-point):
-            # how closely the k=269 modeled fallback reproduces the measured Timeline threshold here.
-            # Never changes the deployable number; gauges trust in the modeled tier for unsensed bands.
+            # FYI agreement check: retired 2026-06-28 with the k=269 constant; always None now (the
+            # payload key is retained for API-contract stability; no frontend consumer).
             "native_modeled_check": native_modeled_check,
             # Threshold-mode awareness (audit): which Percept mode this number is valid for, the
             # FFT-size compatibility, and the 10-min-Timeline vs adaptive-averaging caveat.
@@ -4361,6 +5061,37 @@ def deployment_summary(request_data):
                                       "available": v.get("available", False)}
                                   for k, v in (by_era.get("eras") or {}).items()}}
                         if by_era.get("available") else {"available": False, "reason": by_era.get("reason")}),
+        # Audit [23] — explicit, single-place temporal-validity status for the exported DEVICE RECORD,
+        # so a reader of the JSON never has to infer it from the nested forward/portability dicts.
+        # Every field defaults to "not_assessed" when the corresponding analysis didn't run, so the
+        # record is unambiguous either way. Derived from already-computed results — no new computation.
+        "temporal_validity": {
+            "forward_validation": (
+                ("validated" if forward.get("beats_chance_forward") else "failed")
+                if forward.get("available") else "not_assessed"),
+            "forward_held_out_auc": _ff(forward.get("held_out_auc")) if forward.get("available") else None,
+            "forward_reliable": (bool(forward.get("reliable")) if forward.get("available") else None),
+            # Audit [18]: per-week cut-point drift over CALENDAR time (distinct from stim-state
+            # portability below). 'stable' / 'drift_detected' / 'not_assessed'.
+            "threshold_drift": (drift.get("status", "not_assessed")
+                                if drift.get("available") else "not_assessed"),
+            "threshold_drift_slope_per_week": (_ff(drift.get("slope_per_week"))
+                                               if drift.get("available") else None),
+            "threshold_drift_p": (_ff(drift.get("slope_p")) if drift.get("available") else None),
+            "threshold_drift_total": (_ff(drift.get("total_drift")) if drift.get("available") else None),
+            "threshold_drift_n_weeks": (drift.get("n_weeks_qualifying")
+                                        if drift.get("available") else None),
+            "stim_state_portability": (
+                ("portable" if by_era.get("portable_by_ci") else "fragile")
+                if (by_era.get("available") and by_era.get("portable_by_ci") is not None)
+                else "not_assessed"),
+            "note": ("forward_validation = expanding-window weekly forward-chaining held-out AUC vs "
+                     "chance (audit C2). stim_state_portability = per-era CI-overlap + LRT (audit C3); "
+                     "this is robustness to stim STATE. threshold_drift = OLS trend test of the weekly "
+                     "Youden cut-point vs week index (audit [18]); 'drift_detected' means the cut-point "
+                     "moves systematically over calendar time and a fixed device threshold needs "
+                     "periodic recalibration."),
+        },
         "gates": gates, "caveats": caveats,
         "n_gates_passed": int(sum(1 for x in gates if x["pass"])), "n_gates": len(gates),
         "n_gates_indeterminate": int(sum(1 for x in gates if x.get("state") == "indeterminate")),

@@ -303,9 +303,15 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
       * peak_power: band power at that peak (raw FFT-bin units), for the hover.
       * a decimated averaged PSD ({freq, mag}) so the frontend hover-overview can draw the spectrum.
 
-    Returns {"events": [{"t", "label", "peak_hz", "peak_power", "n_chan",
+    Each event also carries a `category` (DISPLAY_STREAMING_EVENT / DISPLAY_PATIENT_EVENT /
+    DISPLAY_MONTAGE_SNAPSHOT) from the loader, so the frontend can render the three PSD-event sources
+    on distinct rows/glyphs. The auto-fired "Streaming" snapshots are now included (no longer dropped)
+    under DISPLAY_STREAMING_EVENT.
+
+    Returns {"events": [{"t", "label", "category", "peak_hz", "peak_power", "n_chan",
                          "psd": {"freq", "mag"} | None}, ...],
-             "labels": [distinct labels, sorted], "n": int}  sorted by time.
+             "labels": [distinct labels, sorted],
+             "categories": [distinct categories, sorted], "n": int}  sorted by time.
     """
     events = []
     for e in events_raw or []:
@@ -315,6 +321,12 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         if t0 is None:
             continue
         label = str(e.get("name") or "event")
+        # display category (DISPLAY_STREAMING_EVENT vs DISPLAY_PATIENT_EVENT vs DISPLAY_MONTAGE_SNAPSHOT)
+        # carried from the loader so the frontend can render each source on its own row/glyph. Falls
+        # back to the label when a caller didn't tag one. (Both event loaders tag `category` explicitly
+        # now; the montage loader's marker name == DISPLAY_MONTAGE_SNAPSHOT, so even an untagged montage
+        # marker would fall back to the correct category — intentional belt-and-suspenders, not luck.)
+        category = str(e.get("category") or label)
         # average the per-hemisphere PSDs onto a common frequency grid
         freq = None
         mags = []
@@ -347,6 +359,7 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         events.append({
             "t": float(t0),
             "label": label,
+            "category": category,
             "peak_hz": peak_hz,
             "peak_power": peak_power,
             "n_chan": len(mags),
@@ -354,7 +367,8 @@ def event_markers(events_raw, *, fmin=2.0, fmax=100.0):
         })
     events.sort(key=lambda e: e["t"])
     labels = sorted({e["label"] for e in events})
-    return {"events": events, "labels": labels, "n": len(events)}
+    categories = sorted({e["category"] for e in events})
+    return {"events": events, "labels": labels, "categories": categories, "n": len(events)}
 
 
 def _decimate(arr, n=2000):
@@ -427,7 +441,8 @@ _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power
 
 
 def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
-               montage_td_recordings=None, sensing_hz_by_channel=None):
+               montage_td_recordings=None, sensing_hz_by_channel=None,
+               event_psd_recordings=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
 
     Unlike `extract_availability` (which emits one metadata RECORD per recording), this returns the
@@ -443,14 +458,29 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         Both pooled in RAW device units (no scaling, same convention as the decoder).
       * MODELED LSB (fallback — the band has a spectrum but NO native device LSB):
         - Montage survey TD (`montage_td_recordings`, stim-off, all contacts): the timeline's
-          ``psd_modeled`` tier. Welch-256 the 250 Hz TD (analytics.welch256_density) and route the
-          band integral through analytics.psd_band_to_lsb (k=269, the Step-0-chosen conversion) so
-          survey contacts that the device never produced an LSB scalar for still get a calibrated LSB
-          point on the trace. NEVER preferred over native LSB; tagged source="psd_modeled" so the
-          frontend draws it with a distinct hollow marker and never confuses it with a sensed value.
+          ``psd_modeled`` tier. Convert the 250 Hz TD to LSB via the PRIMARY transform route
+          (analytics.td_to_lsb = transform DSP x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27,
+          superseding the old welch256 x269 path) so survey contacts that the device never produced an
+          LSB scalar for still get a calibrated LSB point on the trace. NEVER preferred over native
+          LSB; the tier enum stays source="psd_modeled" (downstream native-preferred masking keys on
+          it) so the frontend draws it with a distinct hollow marker; the DSP route is in `method`.
+
+        - Patient-triggered snapshot events (`event_psd_recordings`, PSD-ONLY — no TD): the CS-3
+          PSD->LSB BRIDGE. These device onboard-FFT snapshots (FFTBinData) have a spectrum but NO time
+          domain, so the direct transform cannot run; convert the device-PSD band power to LSB via
+          analytics.device_psd_to_lsb (LSB_PER_DEVICE_PSD ~= 73.63 = k=352.62 / the montage TD<->PSD
+          ratio 4.79). Same psd_modeled tier + modeled=True flag (never preferred over native, never
+          deployable); the DSP route is recorded in `method` as event_psd_bridge_x_k=73.63. Restricted
+          to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] -- the bridge is only honored where a deployable
+          band can sit. Montage/survey products are NOT routed here (they carry TD -> the modeled tier
+          above); the bridge is for the PSD-only events that are otherwise LSB-less.
 
     `sensing_hz_by_channel` maps a raw channel -> its configured sensing center (Hz); the psd_modeled
     tier converts at that center when known, else the montage record's own peak frequency.
+
+    `event_psd_recordings` is a list of PSD-only event blocks already assigned to a canonical channel:
+        [{ "channel": canon_ch, "t": epoch_s, "freq": [Hz], "power": [FFTBinData], "center_hz": hz }]
+    (center_hz optional; falls back to sensing_hz_by_channel[channel]).
 
     Returns dict keyed by RAW channel name:
         { channel: { "t":[epoch_s], "y":[lsb], "center_hz":[hz|None],
@@ -568,10 +598,11 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         for i in np.where(~bad)[0]:
             _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
-    # --- MODELED tier (fallback): montage survey TD -> Welch-256 -> psd_band_to_lsb (k=269) ---
+    # --- MODELED tier (fallback): montage survey TD -> transform DSP -> td_to_lsb (k=352.62) ---
     # Survey contacts carry a full-spectrum TD but NO native device LSB scalar, so without this they
-    # would have no LSB point at all. We convert via the Step-0-chosen route so the timeline can show
-    # a calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
+    # would have no LSB point at all. We convert via the PRIMARY TD->LSB route (the percept-spectral-
+    # repro transform x LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27) so the timeline can show a
+    # calibrated (modeled) LSB for every sensed band, distinctly marked. Only contacts that already
     # have NO native LSB sample get a modeled point per record (native is always preferred): if a
     # contact has any streaming/chronic LSB we still ADD the modeled survey point (different time), but
     # tag it modeled so the frontend renders it hollow — it never overrides a sensed value at its time.
@@ -600,7 +631,8 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                 continue
             col = data[:, ci]
             col = col[np.isfinite(col)]
-            if col.size < 256:
+            # transform minimum = one 1 s (round(fs)) rcs-Hann window; td_to_lsb returns NaN below this
+            if col.size < int(round(fs * analytics.TRANSFORM_WIN_SECONDS)):
                 continue
             # land the modeled sample on the SAME lane key as native LSB: canonicalize the ring/sweep
             # name (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT). _canon_channel-equivalent.
@@ -614,15 +646,51 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                       or sensing_hz_by_channel.get(str(nm)) or contact_peak or rec_peak)
             if center is None or not np.isfinite(center) or float(center) <= 0:
                 continue
-            f, psd = analytics.welch256_density(col, fs)
-            if f is None:
-                continue
-            conv = analytics.psd_band_to_lsb(psd, f, float(center))
-            lsb = conv.get("lsb")
+            # PRIMARY TD->LSB: transform DSP (median over 1 s rcs-Hann/256-pt windows across the whole
+            # survey) x k=352.62. The survey is stamped at one StartTime (no PRO centering here), so the
+            # whole column is the analysis extent — the direct transform analog of the old whole-column
+            # Welch. Range/fft guards live downstream on the deployable threshold, not on this display
+            # point (the exploration timeline is not band-restricted; k cancels in r/AUC).
+            lsb = analytics.td_to_lsb(col, fs, float(center))
             if lsb is None or not np.isfinite(lsb) or lsb <= 0:
                 continue
+            # source stays the "psd_modeled" TIER enum (the native-preferred masking at the y-window
+            # scaler + the deployment threshold + the frontend all key on it); the DSP ROUTE that
+            # produced the value is recorded in `method` (now transform x352.62, was welch256 x269).
             _push(key, t0, lsb, center, "psd_modeled",
-                  modeled=True, method=conv.get("method"))
+                  modeled=True, method=f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}")
+
+    # --- MODELED tier (CS-3 PSD->LSB BRIDGE): PSD-ONLY patient-triggered snapshot events ---
+    # These events carry a device onboard-FFT spectrum (FFTBinData) but NO time domain, so they cannot
+    # use the direct transform. Convert the device-PSD band power to LSB via the bridge constant
+    # (device_psd_to_lsb, k ~= 73.63). Same psd_modeled tier + modeled=True (never preferred over native,
+    # never deployable). Restricted to [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]: outside that band a
+    # deployable adaptive band cannot sit, and the bridge has no calibrated meaning there, so we drop the
+    # point rather than show an LSB the device could never act on. Montage/survey products are NOT here —
+    # they carry TD and went through the modeled tier above; this tier is exclusively for the PSD-only
+    # events that would otherwise have no LSB at all.
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict):
+            continue
+        key = ev.get("channel")
+        t0 = _to_epoch(ev.get("t"))
+        freq = ev.get("freq"); power = ev.get("power")
+        if key is None or t0 is None or freq is None or power is None:
+            continue
+        center = ev.get("center_hz") or sensing_hz_by_channel.get(key) \
+            or sensing_hz_by_channel.get(str(key))
+        if center is None or not np.isfinite(center) or float(center) <= 0:
+            continue
+        # honor the bridge only inside the deployable band — outside it the conversion is uncalibrated
+        if not (analytics.LSB_VALIDATED_HZ_LO <= float(center) <= analytics.LSB_DEPLOYABLE_HZ_HI):
+            continue
+        # scalar center -> device_psd_to_lsb returns a float (never None/ndarray); NaN if the band power
+        # is non-positive (e.g. an all-sub-floor band clamped to 0).
+        lsb = analytics.device_psd_to_lsb(freq, power, float(center))
+        if not np.isfinite(lsb) or lsb <= 0:
+            continue
+        _push(key, t0, lsb, center, "psd_modeled",
+              modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
 
     # time-sort each channel's pooled samples
     for ch, d in out.items():
@@ -630,6 +698,923 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
             d[k_] = [d[k_][i] for i in order]
     return out
+
+
+def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordings=None,
+                          half_hz=2.5):
+    """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center), via the SAME
+    primary routes the exploration timeline uses — applied at an ARBITRARY center the deployment ROC
+    chose, not only the montage's configured sensing bands.
+
+    Units-consistent replacement for the retired µV²-cut-point fallback (the old TIER-2
+    estimate_lsb(cutpoint) path, removed 2026-06-28): instead of pushing a z-scored ROC cut-point
+    through a µV²-expecting converter, model the LSB line off the RAW µV TD the ROC was built from, at
+    the ROC's own band, then anchor a threshold by RANK (percentile) exactly like the native and
+    montage-modeled tiers. Both inputs feed shared primitives exploration already calls — this
+    function only CALLS them, so lsb_series and the exploration timeline are untouched.
+
+      * td_recordings  — raw-µV TD-bearing recordings: BrainSense streaming TD + IndefiniteStream AND
+        the montage/survey sweeps (all 250 Hz TD), the same superset the exploration timeline pools.
+        ONLY columns whose ChannelName
+        canonicalizes to `channel` are converted, via the PRIMARY transform route
+        analytics.td_to_lsb(col, fs, center_hz) (×LSB_PER_UV2_TRANSFORM = 352.62). Power-domain records
+        (SamplingRate ≤ 0, e.g. ChronicBrainSense) and unnamed/extra columns are skipped — they are not
+        raw TD. Because the center is the deployment band (not the montage's configured sensing band),
+        this yields a modeled point at ANY band the ROC can score, including bands the montage never
+        swept (8.8/40/55 Hz).
+      * psd_recordings  — PSD-only events (onboard FFT, no TD). The matching channel's spectrum is
+        converted with the bridge route analytics.device_psd_to_lsb (×LSB_PER_DEVICE_PSD ≈ 73.63),
+        gated to the deployable band like the timeline's bridge tier.
+
+    Returns a 1-D float array of in-band modeled LSB values for `channel` (may be empty). The caller
+    reads a threshold off it at the cut-point's percentile — no µV²↔LSB conversion of the cut-point,
+    which is the units bug this removes.
+    """
+    # Honor the deployment ROC's CHOSEN band center exactly — do NOT snap to a device FFT bin. The
+    # transform DSP (td_to_lsb) and the bridge (device_psd_to_lsb) integrate band power at any center
+    # via the PSD, so a high-gamma ROC winner (e.g. 55 Hz) must be converted at 55 Hz, not clamped to
+    # the 26.4 Hz top of the sensing-bin table (snap_freq is for timeline-display bin alignment only).
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return np.asarray([], dtype=float)
+    if not np.isfinite(cz) or cz <= 0:
+        return np.asarray([], dtype=float)
+    target = _canon_channel(channel)
+    vals = []
+
+    # --- TD tier: transform route (×352.62) at the deployment center, off montage/survey TD ---
+    # Convert ONLY columns whose ChannelName canonicalizes to `target`, mirroring the reference
+    # lsb_series montage tier (iterate over names; ignore extra/unnamed columns). An unnamed column is
+    # NEVER converted as `target` — that would let a malformed packet (Data columns > ChannelNames) or a
+    # foreign/power-domain column leak into the percentile-anchored DEPLOYABLE threshold. fs is sanity-
+    # guarded so a power-domain record (SamplingRate=-1, e.g. ChronicBrainSense) can never reach td_to_lsb.
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        if not names:
+            continue                         # no channel labels -> can't scope to `target`; skip
+        data = r.get("Data")
+        if data is None:
+            continue
+        data = np.asarray(data, dtype=float)
+        if data.ndim == 1:
+            data = data[:, None]
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        fs = float(r.get("SamplingRate") or r.get("SampleRateInHz") or 250.0) or 250.0
+        if not np.isfinite(fs) or fs <= 0:
+            continue                         # power-domain / malformed cadence (e.g. -1) -> not raw TD
+        # TD is (n_samples, n_channels); guard either orientation against the ChannelNames length.
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        min_n = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue                     # more names than columns (malformed packet) -> ignore
+            if _canon_channel(nm) != target:
+                continue                     # only the requested channel's column is converted
+            col = data[:, ci]
+            col = col[np.isfinite(col)]
+            if col.size < min_n:
+                continue
+            lsb = analytics.td_to_lsb(col, fs, float(cz), half_hz=half_hz)
+            if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                vals.append(float(lsb))
+
+    # --- PSD-only tier: bridge route (≈73.63), deployable-band gated, for events with no TD ---
+    if analytics.LSB_VALIDATED_HZ_LO <= float(cz) <= analytics.LSB_DEPLOYABLE_HZ_HI:
+        for r in (psd_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames", []) or [])
+            if not names:
+                continue                     # no labels -> can't scope to `target`; skip
+            psd = r.get("PSD") if r.get("PSD") is not None else r.get("Data")
+            freqs = r.get("Frequencies")
+            if freqs is None:
+                freqs = r.get("FrequenciesInHertz")
+            if psd is None or freqs is None:
+                continue
+            psd = np.asarray(psd, dtype=float)
+            freqs = np.asarray(freqs, dtype=float)
+            if psd.ndim == 1:
+                psd = psd[None, :]
+            for ci, nm in enumerate(names):
+                if ci >= psd.shape[0]:
+                    continue
+                if _canon_channel(nm) != target:
+                    continue                 # only the requested channel's spectrum is converted
+                row = np.asarray(psd[ci], dtype=float)
+                if row.shape != freqs.shape:
+                    continue
+                lsb = analytics.device_psd_to_lsb(freqs, row, float(cz), half_hz=half_hz)
+                if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                    vals.append(float(lsb))
+
+    return np.asarray(vals, dtype=float)
+
+
+def _missing_per_sample(missing, nsamp):
+    """Collapse a recording's `Missing` field to a per-sample (n_samples,) 0/1 flag, or None — the
+    any-channel-missing rule (FixBreaking/dropped-packet zero-fill spans all channels). Mirrors
+    bravo_service._missing_time_vector; kept local so availability has no upward import."""
+    if missing is None:
+        return None
+    m = np.asarray(missing)
+    if m.size == 0:
+        return None
+    if m.ndim == 2:
+        axis = 1 if m.shape[0] == nsamp else (0 if m.shape[1] == nsamp else 1)
+        m = (m > 0).any(axis=axis)
+    return np.asarray(m).ravel()
+
+
+# Per-PRO LSB selection tiers (in strict precedence order). The frontend keys on these to colour /
+# annotate each PRO's biomarker point by how trustworthy its LSB is.
+PRO_LSB_TIER_NATIVE = "native"        # device actually sensed this band near the rating (preferred)
+PRO_LSB_TIER_TD = "td_transform"      # a TD-bearing recording overlapped the rating -> direct k=352.62
+PRO_LSB_TIER_BRIDGE = "psd_bridge"    # PSD-only patient event coincided -> CS-3 bridge (last resort)
+
+# ADC rail for the Percept TD (±, in µV). A 1 s window whose samples touch the rail is saturated /
+# clipped — its transform band power is unreliable. Wide bound (the device's full-scale input range);
+# real LFP rarely exceeds a few hundred µV, so touching this is a hardware-limit artifact, not signal.
+PRO_LSB_SATURATION_UV = 4000.0
+
+
+def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
+                td_recordings=None, event_psd_recordings=None,
+                native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
+                saturation_uv=PRO_LSB_SATURATION_UV):
+    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
+
+    For each PRO timestamp, walk the precedence and stop at the first tier that yields a value:
+      (1) NATIVE device LSB  — if `native_lsb_series` (a channel's lsb_series entry, NATIVE samples
+          only) has a sensed in-band sample within `native_tol_s` of the rating. The band was actually
+          measured; nothing models better than that.
+      (2) DIRECT TD->LSB transform (k=352.62) — if ANY TD-bearing recording in `td_recordings`
+          (streaming / montage / survey / snapshot — all carry 250 Hz TD) overlaps the rating: cut the
+          rating-centered 30 s extent (analytics.transform_centered_window: clip-don't-slide, 1 s-min,
+          fail-closed >`max_missing_frac` Missing) and run analytics.td_to_lsb at 50 % overlap. A
+          saturated window (samples at the ADC rail) is flagged and skipped.
+      (3) PSD->LSB BRIDGE (CS-3) — ONLY if the coincident record is a PSD-only patient-triggered
+          snapshot event (`event_psd_recordings`, no TD): analytics.device_psd_to_lsb (k~=73.63).
+
+    Montage/survey TD NEVER uses the bridge — it carries TD and is served by tier 2 (the bridge is for
+    PSD-only events alone; montage/survey are the bridge's calibration source). The PSD bridge is honored
+    only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] (same gate as lsb_series' bridge tier).
+
+    Returns a list (PRO order) of dicts:
+        {"t": pro_epoch_s, "lsb": float|None, "tier": one of PRO_LSB_TIER_*|None,
+         "center_hz": hz, "used_s": float, "saturated": bool, "reason": str}
+    A PRO with no source in any tier returns lsb=None, tier=None (honestly unmatched).
+    """
+    if extent_s is None:
+        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
+    half = float(band_half_hz)
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    # Canonicalize the target channel ONCE so all three tiers match on the same key: tier 2 already
+    # canonicalizes each recording's raw ring/sweep name (_canon_channel below), so the native series,
+    # the TD recordings, and the event records are all compared in canonical form regardless of whether
+    # the caller passed a raw ring name or a canonical one.
+    channel = _canon_channel(channel)
+
+    # --- pre-index NATIVE in-band sensed samples for this channel (tier 1) ---
+    nat_t = np.empty(0); nat_y = np.empty(0)
+    if native_lsb_series is not None:
+        y = np.asarray(native_lsb_series.get("y"), dtype=float)
+        hz = np.asarray(native_lsb_series.get("center_hz"), dtype=float)
+        modeled = native_lsb_series.get("modeled") or []
+        # FAIL CLOSED: the native tier must NEVER promote a CS-1/CS-3 modeled ESTIMATE to a measured
+        # value. If the `modeled` array is missing or misaligned we cannot certify any point native, so
+        # treat every point as modeled (is_modeled=True) and let the lower tiers serve the PRO instead.
+        is_modeled = (np.array([bool(m) for m in modeled], dtype=bool)
+                      if len(modeled) == y.size else np.ones(y.size, bool))
+        t = np.asarray(native_lsb_series.get("t"), dtype=float)
+        # band edges INCLUSIVE on both sides, matching the DSP band-power mask (a native sample exactly
+        # at center+half is in-band on the modeling side, so it must be in-band for selection too).
+        band = (np.isfinite(y) & np.isfinite(hz) & ~is_modeled
+                & (hz >= center_hz - half) & (hz <= center_hz + half))
+        nat_t = t[band]; nat_y = y[band]
+
+    # --- prep TD recordings ONCE for tier 2 (PERF): a recording's Data->float column, t0, dur, fs, and
+    # missing vector are PRO-independent, so materialize them a single time here instead of re-converting
+    # per PRO. Keep ONLY recordings that carry this channel; sort by t0 so the PRO scan can stop early.
+    td_prepped = []   # [{t0, t1, fs, col, miss, step}]
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+        if ci is None:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T  # -> (n_samples, n_ch)
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None or ci >= data.shape[1]:
+            continue
+        nsamp = data.shape[0]
+        dur_s = nsamp / fs if fs > 0 else 0.0
+        td_prepped.append({
+            "t0": t0, "t1": t0 + dur_s, "fs": fs,
+            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
+            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
+    td_prepped.sort(key=lambda d: d["t0"])
+    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)   # sorted; for searchsorted
+
+    out = []
+    for tp in np.asarray(pro_times, dtype=float):
+        rec = {"t": float(tp), "lsb": None, "tier": None, "center_hz": float(center_hz),
+               "used_s": 0.0, "saturated": False, "reason": ""}
+
+        # (1) NATIVE
+        if nat_t.size:
+            d = np.abs(nat_t - tp)
+            j = int(np.argmin(d))
+            if d[j] <= native_tol_s:
+                rec.update(lsb=float(nat_y[j]), tier=PRO_LSB_TIER_NATIVE, reason="device-sensed in band")
+                out.append(rec); continue
+
+        # (2) DIRECT TD->LSB — the rating must fall inside a TD recording's real coverage. Only
+        # recordings with t0 <= tp can cover the PRO; searchsorted skips the rest (sorted by t0).
+        matched_td = False
+        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
+        for pr in td_prepped[:hi]:
+            if not (pr["t0"] <= tp <= pr["t1"]):
+                continue
+            fs = pr["fs"]
+            slice_uv, used_s = analytics.transform_centered_window(
+                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
+                max_missing_frac=max_missing_frac)
+            if slice_uv is None:
+                continue
+            # saturation QC: any sample at/over the ADC rail -> clipped window, skip (flag it)
+            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
+                rec["saturated"] = True
+                rec["reason"] = "TD window saturated (ADC rail)"
+                continue
+            lsb = analytics.td_to_lsb(slice_uv, fs, float(center_hz), half_hz=half,
+                                      step_samples=pr["step"])
+            if lsb is None or not np.isfinite(lsb) or lsb <= 0:
+                continue
+            # A clean conversion here OVERRIDES any saturated flag a PRIOR overlapping recording's
+            # railed window may have set — the PRO is served by THIS recording, so its trust label
+            # must reflect THIS recording, not a discarded earlier one.
+            rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_TD, used_s=float(used_s), saturated=False,
+                       reason="direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM)
+            matched_td = True
+            break
+        if matched_td:
+            out.append(rec); continue
+
+        # (3) PSD->LSB BRIDGE — only a PSD-only patient event, only inside the deployable band.
+        # NOTE: if tier 2 matched a TD recording but every overlapping window was SATURATED (matched_td
+        # stayed False, rec["saturated"]=True), we DO fall through to the bridge here. A clean coincident
+        # device-FFT reading is a better estimate than a clipped TD window (whose band power is
+        # harmonic-contaminated and was discarded). The saturated flag stays set, so the frontend can
+        # still annotate that the rating's TD was clipped even though a bridge value was used.
+        if lo_hz <= float(center_hz) <= hi_hz:
+            best = None
+            for ev in (event_psd_recordings or []):
+                if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+                    continue
+                te = _to_epoch(ev.get("t"))
+                if te is None or abs(te - tp) > native_tol_s:
+                    continue
+                if best is None or abs(te - tp) < abs(best[0] - tp):
+                    best = (te, ev)
+            if best is not None:
+                ev = best[1]
+                lsb = analytics.device_psd_to_lsb(ev.get("freq"), ev.get("power"), float(center_hz),
+                                                  half_hz=half)
+                if lsb is not None and np.isfinite(lsb) and lsb > 0:
+                    rec.update(lsb=float(lsb), tier=PRO_LSB_TIER_BRIDGE,
+                               reason="PSD-only event bridge (k=%.2f)" % analytics.LSB_PER_DEVICE_PSD)
+                    out.append(rec); continue
+
+        rec["reason"] = rec["reason"] or "no source in any tier"
+        out.append(rec)
+    return out
+
+
+def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
+                         td_recordings=None, event_psd_recordings=None,
+                         native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
+                         saturation_uv=PRO_LSB_SATURATION_UV):
+    """Per-matched-pair FULL-SPECTRUM modeled LSB — the SHARED source of truth for both the timeline
+    modeled markers and the spectral feature-importance panel. For each PRO and a vector of band
+    centers, return the 0–100 Hz LSB vector via the SAME CS-1…CS-4 routes per_pro_lsb uses, but
+    computed for EVERY center in one vectorized pass instead of a single sensing band.
+
+    Per (channel, PRO), source preference is decided ONCE for the whole spectrum (not per band):
+      * TD-TRANSFORM (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): if any TD-bearing recording
+        covers the rating, cut the rating-centered extent ONCE (transform_centered_window:
+        clip-don't-slide, 1 s-min, fail-closed >max_missing_frac Missing) and run
+        analytics.td_transform_band_power over ALL centers at 50 % overlap (median across windows),
+        then × 352.62. A saturated window is flagged + skipped (falls through to the bridge).
+      * PSD-BRIDGE (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): else the nearest coincident PSD-only
+        patient event's onboard FFT through analytics.device_psd_band_power over ALL centers, × 73.63.
+
+    Unlike per_pro_lsb's single-band bridge (gated to [7.8,30]), the bridge spectrum is computed across
+    the FULL 0–100 Hz for exploration (PI 2026-06-27). Each band carries a per-band `calibrated` flag:
+    True only where the center is within [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI] (the bridge has no
+    validated meaning in the delta/gamma bands outside it). The TD-transform route is calibrated across
+    the whole spectrum (k=352.62 is band-agnostic), so its `calibrated` is True everywhere a band has
+    signal. The NATIVE tier is intentionally NOT used here — a native device reading is a single sensed
+    band, not a full spectrum; the full-spectrum modeled LSB is exactly the TD-transform / bridge view.
+
+    Returns a list (PRO order) of dicts:
+        {"t": pro_epoch_s, "tier": "td_transform"|"psd_bridge"|None,
+         "lsb": [float|None per center],            # LINEAR LSB (NOT logged) per band center
+         "calibrated": [bool per center],
+         "center_hz": [float per center],           # echoes centers_hz
+         "used_s": float, "saturated": bool, "reason": str}
+    A PRO with neither a covering TD recording nor a coincident PSD event → tier=None, lsb all None.
+    """
+    if extent_s is None:
+        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
+    half = float(band_half_hz)
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    channel = _canon_channel(channel)
+    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    nC = centers.size
+    # per-band calibration validity: same gate as the single-band bridge tier, applied per center.
+    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+
+    # prep TD recordings ONCE (identical to per_pro_lsb): channel column, t0/t1, fs, missing, step.
+    td_prepped = []
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+        if ci is None:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None or ci >= data.shape[1]:
+            continue
+        nsamp = data.shape[0]
+        td_prepped.append({
+            "t0": t0, "t1": t0 + (nsamp / fs if fs > 0 else 0.0), "fs": fs,
+            "col": data[:, ci], "miss": _missing_per_sample(r.get("Missing"), nsamp),
+            "step": int(round(fs * analytics.TRANSFORM_STEP_SECONDS))})
+    td_prepped.sort(key=lambda d: d["t0"])
+    td_t0 = np.array([d["t0"] for d in td_prepped], dtype=float)
+
+    none_vec = [None] * nC
+    out = []
+    for tp in np.asarray(pro_times, dtype=float):
+        rec = {"t": float(tp), "tier": None, "lsb": list(none_vec),
+               "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
+               "used_s": 0.0, "saturated": False, "reason": ""}
+
+        # (1) TD-TRANSFORM spectrum — rating must fall inside a TD recording's real coverage.
+        matched_td = False
+        hi = int(np.searchsorted(td_t0, tp, side="right")) if td_t0.size else 0
+        for pr in td_prepped[:hi]:
+            if not (pr["t0"] <= tp <= pr["t1"]):
+                continue
+            fs = pr["fs"]
+            slice_uv, used_s = analytics.transform_centered_window(
+                pr["col"], fs, tp - pr["t0"], extent_s=extent_s, missing=pr["miss"],
+                max_missing_frac=max_missing_frac)
+            if slice_uv is None:
+                continue
+            if np.nanmax(np.abs(slice_uv)) >= saturation_uv:
+                rec["saturated"] = True
+                rec["reason"] = "TD window saturated (ADC rail)"
+                continue
+            # ONE strided rFFT over the whole centered window -> band power for ALL centers at once.
+            bp = np.atleast_1d(analytics.td_transform_band_power(
+                slice_uv, fs, centers, half_hz=half, step_samples=pr["step"]))
+            lsb = np.where(np.isfinite(bp) & (bp > 0),
+                           analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
+            rec["tier"] = PRO_LSB_TIER_TD
+            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
+            # transform route is band-agnostic-calibrated: any band with signal is calibrated.
+            rec["calibrated"] = [bool(np.isfinite(v)) for v in lsb]
+            rec["used_s"] = float(used_s)
+            rec["saturated"] = False
+            rec["reason"] = "direct TD->LSB transform (k=%.2f)" % analytics.LSB_PER_UV2_TRANSFORM
+            matched_td = True
+            break
+        if matched_td:
+            out.append(rec); continue
+
+        # (2) PSD-BRIDGE spectrum — nearest coincident PSD-only patient event, FULL 0–100 Hz.
+        best = None
+        for ev in (event_psd_recordings or []):
+            if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+                continue
+            te = _to_epoch(ev.get("t"))
+            if te is None or abs(te - tp) > native_tol_s:
+                continue
+            if best is None or abs(te - tp) < abs(best[0] - tp):
+                best = (te, ev)
+        if best is not None:
+            ev = best[1]
+            bp = np.atleast_1d(analytics.device_psd_band_power(
+                ev.get("freq"), ev.get("power"), centers, half_hz=half))
+            lsb = np.where(np.isfinite(bp) & (bp > 0),
+                           analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
+            rec["tier"] = PRO_LSB_TIER_BRIDGE
+            rec["lsb"] = [float(v) if np.isfinite(v) else None for v in lsb]
+            # bridge is only VALIDATED inside [7.8,30]; outside is exploratory (computed, flagged).
+            rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)]
+            rec["reason"] = "PSD-only event bridge (k=%.2f); calibrated only in [%.1f,%.1f] Hz" % (
+                analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz)
+            out.append(rec); continue
+
+        rec["reason"] = "no TD coverage and no coincident PSD event"
+        out.append(rec)
+    return out
+
+
+# Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the
+# human source-subtype label the binarization-hover breakdown wants. PSD events carry their own
+# `source` string already. Kept here so the cache tags each window's provenance once, at build time.
+TD_PRODUCT_SOURCE_LABEL = {
+    "streaming_td": "BrainSense streaming",
+    "indefinite":   "Indefinite stream",
+    "montage_td":   "Montage",
+}
+
+
+def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
+                           td_recordings=None, event_psd_recordings=None,
+                           montage_psd_recordings=None,
+                           window_s=None, max_missing_frac=0.10,
+                           saturation_uv=PRO_LSB_SATURATION_UV):
+    """Match-AGNOSTIC raw LSB spectrum cache for ONE channel — the decoupled source of truth.
+
+    Tiles the ENTIRE recording history into fixed `window_s` (default RAW_LSB_WINDOW_SECONDS = 3 s)
+    NON-OVERLAPPING windows and computes the full 0–100 Hz LSB vector for every window, INDEPENDENT of
+    any pain rating / PRO. Matching (which window or windows serve which rating, with the median-over-
+    extent aggregation) is performed LIVE downstream — NOT baked in here. Because nothing about a PRO
+    set enters this function, the cache key is purely (channel, recordings, centers): the SAME cache
+    serves every metric / strategy / match policy, and no LSB vector is pre-assigned to any rating.
+
+    Two window families, kept SEPARATE by source so a downstream matcher can prefer TD over PSD inside
+    a match window and so the no-reuse-across-PROs rule can be applied per individual vector:
+
+      * TD-derived (tier td_transform, k=LSB_PER_UV2_TRANSFORM=352.62): each TD recording is cut into
+        consecutive `window_s` tiles indexed by WALL-CLOCK SAMPLE position (so a tile's timestamp is
+        correct even when the trace has dropped/NaN samples — unlike the finite-sample-space window
+        axis of td_transform_band_power(agg="none")). Within each tile the VALIDATED transform runs at
+        its native 1 s rcs-Hann / 256-FFT, 50 % overlap, median across the (~5 for a 3 s tile) internal
+        sub-windows, × 352.62. A tile with < 1 s finite signal, or more than `max_missing_frac` non-
+        finite samples, or any sample at the ADC rail (≥ saturation_uv), emits an all-NaN row flagged
+        (`saturated` / insufficient) rather than a misleading value.
+
+      * PSD-derived (tier psd_bridge, k=LSB_PER_DEVICE_PSD≈73.63): each PSD-only event is ONE window at
+        its own onboard-FFT timestamp, device_psd_band_power over all centers × 73.63. Per-band
+        `calibrated` is True only inside [LSB_VALIDATED_HZ_LO, LSB_DEPLOYABLE_HZ_HI]; outside is
+        exploratory (computed and flagged), matching per_pro_lsb_spectrum's bridge contract.
+
+    Parameters mirror per_pro_lsb_spectrum (same recording dict schema, same constants) MINUS pro_times
+    and extent_s — there is no rating and no extent at cache-build time.
+
+    Returns a dict (zero-length axes, never None, when a family is empty so the [W × C] shape holds):
+        {"channel": canon, "centers_hz": [C floats], "window_s": float, "band_half_hz": float,
+         "td":  {"t": [Wt window-CENTER epoch_s], "lsb": [[C] × Wt], "saturated": [Wt bool],
+                 "source": [Wt label], "n_finite_s": [Wt float], "ok": [Wt bool]},
+         "psd": {"t": [Wp epoch_s], "lsb": [[C] × Wp], "calibrated": [[C bool] × Wp],
+                 "source": [Wp label]},
+         "n_td_windows": Wt, "n_psd_windows": Wp}
+    """
+    if window_s is None:
+        window_s = analytics.RAW_LSB_WINDOW_SECONDS
+    window_s = float(window_s)
+    half = float(band_half_hz)
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    channel = _canon_channel(channel)
+    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    nC = centers.size
+    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+
+    td_out = {"t": [], "lsb": [], "saturated": [], "source": [], "n_finite_s": [], "ok": []}
+    psd_out = {"t": [], "lsb": [], "calibrated": [], "source": []}
+
+    # ---- TD-derived tiles -------------------------------------------------------------------------
+    for r in (td_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames") or [])
+        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+        if ci is None:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2:
+            continue
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        t0 = _to_epoch(r.get("StartTime"))
+        if t0 is None or ci >= data.shape[1] or fs <= 0:
+            continue
+        col = data[:, ci]
+        nsamp = col.shape[0]
+        miss = _missing_per_sample(r.get("Missing"), nsamp)
+        src = TD_PRODUCT_SOURCE_LABEL.get(r.get("product"), r.get("product") or "time-domain")
+        win_tile = int(round(fs * window_s))
+        step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))   # 50% overlap sub-window hop
+        min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))  # ≥1 sub-window (1 s) to score
+        if win_tile <= 0:
+            continue
+        # Non-overlapping tiles by RAW sample index. A trailing partial tile is kept only if it can
+        # still hold ≥1 transform sub-window; shorter remainders are dropped (no valid LSB).
+        for start in range(0, nsamp, win_tile):
+            end = min(start + win_tile, nsamp)
+            seg = col[start:end]
+            seg_miss = miss[start:end] if miss is not None else None
+            fin = np.isfinite(seg)
+            n_fin = int(fin.sum())
+            t_center = t0 + ((start + end) / 2.0) / fs
+            # Default: a NaN row we will overwrite on success. Keeps Wt aligned with the tile grid.
+            row = [None] * nC
+            saturated = False
+            ok = False
+            if n_fin >= min_finite:
+                miss_frac = (float(np.mean(seg_miss)) if seg_miss is not None and seg_miss.size
+                             else 1.0 - n_fin / max(seg.size, 1))
+                if np.nanmax(np.abs(seg)) >= saturation_uv:
+                    saturated = True
+                elif miss_frac <= max_missing_frac:
+                    bp = np.atleast_1d(analytics.td_transform_band_power(
+                        seg, fs, centers, half_hz=half, step_samples=step_sub, agg="median"))
+                    lsb = np.where(np.isfinite(bp) & (bp > 0),
+                                   analytics.LSB_PER_UV2_TRANSFORM * bp, np.nan)
+                    row = [float(v) if np.isfinite(v) else None for v in lsb]
+                    ok = any(v is not None for v in row)
+            td_out["t"].append(float(t_center))
+            td_out["lsb"].append(row)
+            td_out["saturated"].append(bool(saturated))
+            td_out["source"].append(src)
+            td_out["n_finite_s"].append(round(n_fin / fs, 3))
+            td_out["ok"].append(bool(ok))
+
+    # ---- PSD-derived windows (one per event) ------------------------------------------------------
+    for ev in (event_psd_recordings or []):
+        if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+            continue
+        te = _to_epoch(ev.get("t"))
+        if te is None:
+            continue
+        bp = np.atleast_1d(analytics.device_psd_band_power(
+            ev.get("freq"), ev.get("power"), centers, half_hz=half))
+        lsb = np.where(np.isfinite(bp) & (bp > 0), analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
+        psd_out["t"].append(float(te))
+        psd_out["lsb"].append([float(v) if np.isfinite(v) else None for v in lsb])
+        psd_out["calibrated"].append([bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)])
+        psd_out["source"].append(str(ev.get("source") or "PSD event"))
+
+    # ---- Montage/survey device-PSD windows (one per MedtronicPSD snapshot) ------------------------
+    # Same device-onboard-FFT unit and bridge constant (k=LSB_PER_DEVICE_PSD≈73.63) as the patient-
+    # event PSD above — validated paired same-recording vs the TD transform (ratio ≈0.99 in 8–30 Hz).
+    # Folded into the SAME psd family so a montage whose TD tile fails the quality gate still emits a
+    # bridge LSB window. Kept here (not merged into event_psd_recordings) only so the caller can pass
+    # the two sources independently; cache-side they are identical schema {channel, t, freq, power}.
+    for ev in (montage_psd_recordings or []):
+        if not isinstance(ev, dict) or _canon_channel(ev.get("channel")) != channel:
+            continue
+        te = _to_epoch(ev.get("t"))
+        if te is None:
+            continue
+        bp = np.atleast_1d(analytics.device_psd_band_power(
+            ev.get("freq"), ev.get("power"), centers, half_hz=half))
+        lsb = np.where(np.isfinite(bp) & (bp > 0), analytics.LSB_PER_DEVICE_PSD * bp, np.nan)
+        psd_out["t"].append(float(te))
+        psd_out["lsb"].append([float(v) if np.isfinite(v) else None for v in lsb])
+        psd_out["calibrated"].append([bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(lsb)])
+        psd_out["source"].append(str(ev.get("source") or "Montage PSD"))
+
+    # time-sort each family (tiles are already roughly ordered, but recordings may interleave)
+    def _sort_family(fam, keys):
+        if not fam["t"]:
+            return
+        order = np.argsort(np.asarray(fam["t"], dtype=float), kind="stable")
+        for k in keys:
+            fam[k] = [fam[k][i] for i in order]
+    _sort_family(td_out, ["t", "lsb", "saturated", "source", "n_finite_s", "ok"])
+    _sort_family(psd_out, ["t", "lsb", "calibrated", "source"])
+
+    return {"channel": channel, "centers_hz": [float(c) for c in centers],
+            "window_s": window_s, "band_half_hz": half,
+            "td": td_out, "psd": psd_out,
+            "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
+
+
+def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
+                            allow_window_reuse=False, extent_s=None, psd_tol_s=None):
+    """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
+
+    Consumes one channel's `raw_lsb_spectrum_cache(...)` output and produces the SAME per-PRO
+    record list `per_pro_lsb_spectrum` returns (drop-in for the spectral scan), but with the
+    matching done at request time over the pre-computed 3 s LSB tiles.
+
+    TWO-WINDOW MATCHING (PI 2026-06-28 — the modality split):
+      The matching uses TWO independent time controls with DIFFERENT jobs:
+
+      * `tol_s` (the MAIN match-tolerance slider, MatchToleranceMin × 60) is the ELIGIBILITY radius
+        for BOTH modalities — a raw window (TD tile OR PSD event) is eligible for a PRO only if it
+        falls within ±tol_s of the rating. This is the only PSD control: a PRO's PSD-bridge LSB is the
+        nan-median over EVERY eligible PSD event within ±tol_s (no quantity cap on PSD).
+
+      * `td_quantity_s` (the SEPARATE "rating-centered extent" slider) is NOT a ± tolerance — it is a
+        QUANTITY OF TD SIGNAL. After TD eligibility is decided by `tol_s`, a PRO keeps only the
+        `n_epochs = round(td_quantity_s / window_s)` TD tiles CLOSEST to the rating (window_s = 3 s
+        non-overlapping tiles, so 30 s → nearest 10 tiles), ranked by |tile_t − rating_t| regardless
+        of whether they fall before or after the rating, then takes their per-band nan-median. So the
+        slider dictates "how many seconds of the nearest TD signal to aggregate," not a search radius.
+
+    REUSE flag (per modality, independent of the two windows above):
+      * STRICT (allow_window_reuse=False, default): each eligible window is assigned to its single
+        NEAREST PRO within ±tol_s (searchsorted, ties → earlier PRO), so no TD tile or PSD event is
+        reused across >1 PRO. The TD nearest-N cap is then applied within each PRO's owned tiles.
+      * REUSE (allow_window_reuse=True): each PRO independently gathers EVERY eligible window within
+        ±tol_s (TD then capped to nearest-N), so one window may serve several overlapping PROs.
+      The per-modality non-reuse property is independent of this flag: TD and PSD are matched in
+      separate passes, so a montage's TD tile and its co-timestamped device-PSD window can serve two
+      different PROs in BOTH modes — the flag only governs reuse of the SAME window+modality.
+
+      TD is PREFERRED over PSD within a PRO: a PRO that owns ≥1 ok TD tile is td_transform tier (its
+      spectrum = the nan-median over its nearest-N TD tiles); only a PRO with zero eligible TD tiles
+      falls to psd_bridge. A PSD event whose nearest PRO turned out TD-tier is left unused (reported).
+
+    Returns (records, stats):
+      records : list in pro_times order, each {"t","tier","lsb"[C linear|None],"calibrated"[C bool],
+                "center_hz"[C],"used_s","saturated","reason","n_td_used","n_psd_used"}.
+      stats   : {"n_pro","n_pro_td","n_pro_psd","n_pro_unmatched","n_td_windows","n_psd_windows",
+                 "n_td_assigned","n_td_used","n_psd_assigned","n_psd_used","tol_s","td_quantity_s",
+                 "td_n_epochs_cap","extent_s","psd_tol_s","allow_window_reuse"}.
+                — n_td_assigned (eligible TD tiles owned within ±tol_s) minus n_td_used (after the
+                nearest-N quantity cap) is the count of eligible TD tiles dropped by the slider cap.
+    """
+    # Back-compat: the old API passed extent_s (a ±half-window) and psd_tol_s. The new API passes
+    # tol_s (main eligibility) + td_quantity_s (TD quantity). If only the legacy args arrived, map
+    # them so old callers keep working: extent_s → both tol_s (its full width) and td_quantity_s.
+    if tol_s is None:
+        tol_s = (psd_tol_s if psd_tol_s is not None
+                 else (float(extent_s) if extent_s is not None
+                       else analytics.TRANSFORM_CENTERED_EXTENT_SECONDS))
+    if td_quantity_s is None:
+        td_quantity_s = (float(extent_s) if extent_s is not None
+                         else analytics.TRANSFORM_CENTERED_EXTENT_SECONDS)
+    tol_s = float(tol_s)
+    td_quantity_s = float(td_quantity_s)
+    centers = np.atleast_1d(np.asarray(raw_cache.get("centers_hz"), dtype=float))
+    nC = centers.size
+    window_s = float(raw_cache.get("window_s") or analytics.RAW_LSB_WINDOW_SECONDS)
+    # TD quantity cap: how many nearest 3 s tiles to aggregate. round(quantity / window_s), >=1 so a
+    # sub-tile quantity still keeps the single closest tile. PSD has no quantity cap (median over all
+    # eligible events within tol_s).
+    td_n_epochs_cap = max(1, int(round(td_quantity_s / window_s))) if window_s > 0 else 1
+    lo_hz = float(analytics.LSB_VALIDATED_HZ_LO)
+    hi_hz = float(analytics.LSB_DEPLOYABLE_HZ_HI)
+    cal_band = (centers >= lo_hz - 1e-9) & (centers <= hi_hz + 1e-9)
+
+    pro = np.atleast_1d(np.asarray(pro_times, dtype=float))
+    nP = pro.size
+    order = np.argsort(pro, kind="stable")
+    pro_sorted = pro[order]
+
+    none_vec = [None] * nC
+    recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
+             "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
+             "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
+            for tp in pro]
+
+    def _nearest_pro(win_t, tol):
+        """Vectorized nearest-PRO index (orig order) per window time, -1 if beyond tol."""
+        if win_t.size == 0 or nP == 0:
+            return np.full(win_t.size, -1, dtype=int)
+        pos = np.searchsorted(pro_sorted, win_t)
+        left = np.clip(pos - 1, 0, nP - 1)
+        right = np.clip(pos, 0, nP - 1)
+        dl = np.abs(win_t - pro_sorted[left])
+        dr = np.abs(win_t - pro_sorted[right])
+        take_left = dl <= dr                       # tie -> earlier PRO (deterministic)
+        nn_sorted = np.where(take_left, left, right)
+        dist = np.where(take_left, dl, dr)
+        nn = order[nn_sorted]
+        nn[dist > tol] = -1
+        return nn
+
+    def _windows_in_extent(win_t, valid_mask, tol):
+        """REUSE mode: per-PRO list of window indices whose |t - pro_t| <= tol (a window may appear
+        under several PROs). Vectorized via searchsorted bounds on the sorted window times — O(W log W
+        + total matches), not the O(P·W) full outer product. Returns a list-of-arrays indexed by ORIG
+        PRO order, each holding ORIG window indices."""
+        out = [np.empty(0, dtype=int) for _ in range(nP)]
+        if nP == 0 or win_t.size == 0:
+            return out
+        vi = np.where(valid_mask)[0]                  # orig window indices that are valid
+        if vi.size == 0:
+            return out
+        wt = win_t[vi]
+        wo = np.argsort(wt, kind="stable")
+        wt_sorted = wt[wo]
+        vi_sorted = vi[wo]
+        lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
+        hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
+        for p in range(nP):
+            a, b = int(lo_idx[p]), int(hi_idx[p])
+            if b > a:
+                out[p] = vi_sorted[a:b]
+        return out
+
+    def _to_mat(rows):
+        """[W][C] list-with-None -> float [W×C] with NaN; empty -> (0,nC)."""
+        if not rows:
+            return np.empty((0, nC), dtype=float)
+        m = np.full((len(rows), nC), np.nan, dtype=float)
+        for i, row in enumerate(rows):
+            if row is None:
+                continue
+            for j, v in enumerate(row[:nC]):
+                if v is not None:
+                    m[i, j] = v
+        return m
+
+    # ---- TD assignment ---------------------------------------------------------------------------
+    td = raw_cache.get("td") or {}
+    td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
+    td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    td_mat = _to_mat(td.get("lsb") or [])
+    n_td_windows = int(td_t.size)
+    td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
+    # TD ELIGIBILITY uses tol_s (the main slider), NOT the quantity slider. STRICT: each eligible tile
+    # -> its single nearest PRO within +/-tol_s (nn_td). REUSE: each PRO -> every eligible tile within
+    # +/-tol_s (td_sel_by_pro); a tile may then appear under multiple PROs. The QUANTITY cap
+    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied per-PRO below, AFTER eligibility.
+    if allow_window_reuse:
+        td_sel_by_pro = _windows_in_extent(td_t, td_valid, tol_s)
+        n_td_assigned = int(sum(s.size for s in td_sel_by_pro))
+    else:
+        nn_td = np.full(td_t.size, -1, dtype=int)
+        if td_valid.any():
+            nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s)
+        n_td_assigned = int((nn_td >= 0).sum())
+
+    n_td_used = 0
+    td_tier_pro = np.zeros(nP, dtype=bool)
+    for p in range(nP):
+        sel = td_sel_by_pro[p] if allow_window_reuse else np.where(nn_td == p)[0]
+        if sel.size == 0:
+            continue
+        # QUANTITY CAP: of this PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the
+        # rating (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use"
+        # slider: 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to
+        # the earlier tile (stable argsort) so the choice is deterministic.
+        if sel.size > td_n_epochs_cap:
+            dt = np.abs(td_t[sel] - pro[p])
+            keep = np.argsort(dt, kind="stable")[:td_n_epochs_cap]
+            sel = sel[np.sort(keep)]                  # keep original tile order for a stable median
+        med = np.nanmedian(td_mat[sel], axis=0)
+        rec = recs[p]
+        rec["tier"] = PRO_LSB_TIER_TD
+        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+        rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
+        rec["n_td_used"] = int(sel.size)
+        rec["used_s"] = float(sel.size * window_s)
+        rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
+                         "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
+                         % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
+                                       else int((nn_td == p).sum())),
+                            td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
+        td_tier_pro[p] = True
+        n_td_used += int(sel.size)
+
+    # ---- PSD assignment (only PROs with no TD become psd_bridge) ----------------------------------
+    psd = raw_cache.get("psd") or {}
+    psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
+    psd_mat = _to_mat(psd.get("lsb") or [])
+    n_psd_windows = int(psd_t.size)
+    psd_valid = np.isfinite(psd_t)
+    # PSD ELIGIBILITY also uses tol_s (the main slider) — the ONLY PSD control. No quantity cap: a
+    # PRO's PSD-bridge LSB is the nan-median over EVERY eligible PSD event within +/-tol_s.
+    if allow_window_reuse:
+        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, tol_s)
+        n_psd_assigned = int(sum(s.size for s in psd_sel_by_pro))
+    else:
+        nn_psd = np.full(psd_t.size, -1, dtype=int)
+        if psd_valid.any():
+            nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s)
+        n_psd_assigned = int((nn_psd >= 0).sum())
+
+    n_psd_used = 0
+    for p in range(nP):
+        if td_tier_pro[p]:
+            continue                                  # TD preferred — PSD here stays unused
+        sel = psd_sel_by_pro[p] if allow_window_reuse else np.where(nn_psd == p)[0]
+        if sel.size == 0:
+            continue
+        med = np.nanmedian(psd_mat[sel], axis=0)
+        rec = recs[p]
+        rec["tier"] = PRO_LSB_TIER_BRIDGE
+        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
+        rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
+        rec["n_psd_used"] = int(sel.size)
+        rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
+                         "calibrated only in [%.1f,%.1f] Hz"
+                         % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+        n_psd_used += int(sel.size)
+
+    n_pro_td = int(td_tier_pro.sum())
+    n_pro_psd = int(sum(1 for r in recs if r["tier"] == PRO_LSB_TIER_BRIDGE))
+    stats = {"n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
+             "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
+             "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
+             "n_td_assigned": n_td_assigned, "n_td_used": n_td_used,
+             "n_psd_assigned": n_psd_assigned, "n_psd_used": n_psd_used,
+             "tol_s": tol_s, "td_quantity_s": td_quantity_s, "td_n_epochs_cap": int(td_n_epochs_cap),
+             # legacy aliases kept so existing UI/echo readers don't KeyError:
+             "extent_s": td_quantity_s, "psd_tol_s": tol_s,
+             "allow_window_reuse": bool(allow_window_reuse)}
+    return recs, stats
+
+
+def per_pro_lsb_overlay(samples_uv, fs, center_offset_s, center_hz, *, band_half_hz=2.5,
+                        extent_s=None, missing=None, max_missing_frac=0.10,
+                        saturation_uv=PRO_LSB_SATURATION_UV):
+    """The 50%-overlap sliding-window LSB trace WITHIN one PRO's rating-centered TD extent (CS-4).
+
+    Where per_pro_lsb returns the single median LSB the device would act on, this returns the full
+    per-window series so the timeline can OVERLAY how the band power moved across the ~30 s around the
+    rating (and show the spread the median collapses). Same window geometry as the deployed sweep:
+    1 s rcs-Hann window, 50 % overlap (step = TRANSFORM_STEP_SECONDS), median is `np.nanmedian` of the
+    returned `lsb`. Per-window QC: a window touching the ADC rail is flagged saturated; the >max_missing
+    rejection is applied to the whole extent up front (same as per_pro_lsb's tier 2).
+
+    Returns dict:
+        {"t_offset_s": [win-start offsets within the extent],
+         "lsb": [per-window LSB], "median_lsb": float|None, "used_s": float,
+         "n_windows": int, "n_saturated": int, "saturated": bool, "ok": bool, "reason": str}
+    `ok=False` (with reason) when the extent is below one window or >max_missing Missing.
+
+    NOTE on `t_offset_s`: these are FINITE-SAMPLE-ELAPSED offsets (s/fs over the non-finite-filtered
+    vector), NOT wall-clock offsets from the extent start. t_offset_s, lsb, and the saturation flags
+    share this one window axis (the alignment guarantee), so the trace is internally consistent. But on
+    a gappy recording (NaN samples dropped before windowing) the axis COMPRESSES relative to wall clock:
+    a 2 s gap near the start shifts every later window's wall-clock time ahead of its t_offset_s. A
+    frontend overlaying this trace against a wall-clock PRO marker must map `starts` back through the
+    finite mask to true sample indices first; for showing the within-window spread the median collapses,
+    elapsed-finite time is fine as-is.
+    """
+    if extent_s is None:
+        extent_s = analytics.TRANSFORM_CENTERED_EXTENT_SECONDS
+    fs = float(fs)
+    half = float(band_half_hz)
+    slice_uv, used_s = analytics.transform_centered_window(
+        samples_uv, fs, center_offset_s, extent_s=extent_s, missing=missing,
+        max_missing_frac=max_missing_frac)
+    if slice_uv is None:
+        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": 0.0,
+                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
+                "reason": "extent below one window or >max_missing Missing"}
+    win = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+    step = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
+    # td_transform_band_power(agg='none') drops non-finite samples FIRST and strides over the
+    # COMPACTED array, so the window axis (and hence the trace x and the saturation flags) MUST be
+    # derived from that same finite-filtered vector — otherwise a gappy recording decouples t_offset_s,
+    # lsb, and sat. Finite-filter once here and build everything (band power, starts, saturation) from it.
+    sl = np.asarray(slice_uv, dtype=float)
+    vf = sl[np.isfinite(sl)]
+    if vf.size < win:
+        return {"t_offset_s": [], "lsb": [], "median_lsb": None, "used_s": float(used_s),
+                "n_windows": 0, "n_saturated": 0, "saturated": False, "ok": False,
+                "reason": "fewer than one finite window after dropping non-finite samples"}
+    pw = analytics.td_transform_band_power(vf, fs, float(center_hz), half_hz=half,
+                                           step_samples=step, agg="none")
+    pw = np.asarray(pw, dtype=float).ravel()
+    lsb = np.where(np.isfinite(pw) & (pw > 0), analytics.LSB_PER_UV2_TRANSFORM * pw, np.nan)
+    starts = np.arange(0, vf.size - win + 1, step)        # SAME axis the band power strided over
+    # per-window saturation, vectorized: one strided window matrix -> per-window max|.| -> rail test.
+    # No Python loop; shares the window axis with pw/lsb so the QC flags align to the trace.
+    M = vf[starts[:, None] + np.arange(win)[None, :]]      # (W, win)
+    sat = (np.nanmax(np.abs(M), axis=1) >= saturation_uv) if starts.size else np.zeros(0, dtype=bool)
+    med = float(np.nanmedian(lsb)) if np.isfinite(lsb).any() else None
+    return {"t_offset_s": [float(s / fs) for s in starts],
+            "lsb": [float(x) for x in lsb],
+            "median_lsb": med, "used_s": float(used_s),
+            "n_windows": int(starts.size), "n_saturated": int(sat.sum()),
+            "saturated": bool(sat.any()), "ok": True,
+            "reason": ("ok" if not sat.any() else "%d/%d windows saturated"
+                       % (int(sat.sum()), int(starts.size)))}
 
 
 def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
@@ -648,7 +1633,7 @@ def lsb_overview(lsb, *, session_gap_s=1800.0, chronic_max_points=1500):
                     sample count, and the session's sensing center frequency (for the categorical
                     color). ~one block per recording instead of hundreds of points.
 
-    A third, MODELED layer carries the psd_modeled tier (survey-TD -> Welch256 -> k=269) as discrete
+    A third, MODELED layer carries the psd_modeled tier (survey-TD -> transform DSP -> k=352.62) as discrete
     points the frontend draws with a DISTINCT HOLLOW marker — never as a native session block, so a
     calibrated estimate is never read as a sensed LSB. Modeled points are excluded from the streaming
     session blocks and from the chronic line.

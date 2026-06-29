@@ -93,7 +93,8 @@ function binWidthForMetric(metricKey, vmin, vmax) {
 function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percentileHigh,
                                metricLabel, metricKey, loading,
                                matchTolerance, setMatchTolerance, matchDirty,
-                               scanModel, matchedLoading }) {
+                               scanModel, matchedLoading,
+                               setPercentileLow, setPercentileHigh, setStrategy }) {
   const ref = useRef(null);
   const hasTolControl = typeof setMatchTolerance === "function";
 
@@ -205,6 +206,41 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       cnt[i] += 1;
     }
     const centers = cnt.map((_, i) => (edges[i] + edges[i + 1]) / 2);
+
+    // Per-bar provenance for the hover (matched mode only). Re-bin the matched samples into the SAME
+    // edges and, per bar, tally: distinct calendar days, the TIME-DOMAIN source split (BrainSense /
+    // Indefinite), and the PSD-origin split (Montage / Patient-trigger / other). The scan pools full-
+    // spectrum PSDs whose ORIGIN is either Welch'd-from-raw-TD (BrainSense/Indefinite streaming) or a
+    // native device PSD (Montage Welch, Patient-event onboard FFT) — so the two groups below are
+    // "derived from time-domain" vs "native PSD", which is the provenance the hover surfaces.
+    const binOf = (v) => { let i = 0; while (i < nBins - 1 && v >= edges[i + 1]) i += 1; return i; };
+    const srcGroup = (src) => {
+      const s = String(src || "").toLowerCase();
+      if (s.indexOf("brainsense") >= 0 || (s.indexOf("td") >= 0 && s.indexOf("stream") >= 0)) return ["td", "BrainSense"];
+      if (s.indexOf("indefinite") >= 0) return ["td", "Indefinite"];
+      if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return ["psd", "Montage"];
+      if (s.indexOf("patient") >= 0 || s.indexOf("event") >= 0) return ["psd", "Patient-trigger"];
+      return ["psd", "Other"];
+    };
+    const barProv = matchedMode
+      ? (() => {
+          const z = () => ({ days: new Set(),
+                             td: { BrainSense: 0, Indefinite: 0 },
+                             psd: { Montage: 0, "Patient-trigger": 0, Other: 0 } });
+          const acc = Array.from({ length: nBins }, z);
+          for (const s of (scanModel.samples || [])) {
+            if (s.v == null || !Number.isFinite(s.v) || s.bin === "unmatched") continue;
+            const bi = binOf(s.v);
+            if (bi < 0 || bi >= nBins) continue;
+            const day = Number.isFinite(s.t) ? new Date(s.t * 1000).toISOString().slice(0, 10) : null;
+            if (day) acc[bi].days.add(day);
+            const [grp, label] = srcGroup(s.source);
+            if (acc[bi][grp] && acc[bi][grp][label] != null) acc[bi][grp][label] += 1;
+          }
+          return acc;
+        })()
+      : null;
+
     let colors;
     if (cuts.kind === "two-cut") {
       colors = centers.map((c) => (c <= cuts.lowCut ? LO : (c >= cuts.highCut ? HI : MID)));
@@ -217,6 +253,9 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
     const widths = cnt.map((_, i) => (edges[i + 1] - edges[i]) * 0.96);
     const shapes = [];
     const annotations = [];
+    // Cut lines are DISPLAY-ONLY dashed notches at the current thresholds — the percentile cut points
+    // are set by the two-handle range slider above the histogram (see JSX), not by dragging in-plot.
+    // The notch + its percentile label simply mirror the slider's current low/high.
     const pushCutLine = (x, label, color, yLevel = 1.04, xanchor = "center") => {
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1,
                     line: { color, width: 2, dash: "dash" } });
@@ -311,11 +350,50 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
 
     const yTitle = matchedMode ? "Matched neural samples" : "Days";
     const hoverUnit = matchedMode ? "samples" : "days";
-    const traces = [{
-      x: centers, y: cnt, type: "bar",
-      marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
-      hovertemplate: `${metricLabel || "pain"}=%{x:.1f}<br>%{y:,} ${hoverUnit}<extra></extra>`,
-    }];
+    // Hover: in matched mode, lead with the calendar-day count for the bar (the unit the reviewer
+    // cares about — how many DAYS contribute), then the time-domain source split (BrainSense /
+    // Indefinite) and the PSD-origin split (Montage / Patient-trigger / other). customdata carries
+    // the pre-rendered breakdown lines so the hovertemplate stays declarative.
+    const className = (c) => (cuts.kind === "two-cut")
+      ? (c <= cuts.lowCut ? "Low pain" : (c >= cuts.highCut ? "High pain" : "Excluded (mid)"))
+      : (cuts.kind === "one-cut" ? (c <= cuts.cut ? "Low pain" : "High pain") : "");
+    let traces;
+    if (matchedMode && barProv) {
+      const fmtGrp = (obj) => {
+        const parts = Object.entries(obj).filter(([, n]) => n > 0)
+          .map(([k, n]) => `${k} ${n.toLocaleString()}`);
+        return parts.length ? parts.join(" · ") : "—";
+      };
+      const customdata = centers.map((c, i) => {
+        const p = barProv[i];
+        const nDays = p ? p.days.size : 0;
+        const tdN = p ? (p.td.BrainSense + p.td.Indefinite) : 0;
+        const psdN = p ? (p.psd.Montage + p.psd["Patient-trigger"] + p.psd.Other) : 0;
+        return [
+          nDays.toLocaleString(),                          // 0: distinct days (pinned on top)
+          className(c),                                    // 1: class label
+          tdN.toLocaleString(), p ? fmtGrp(p.td) : "—",    // 2,3: TD total + split
+          psdN.toLocaleString(), p ? fmtGrp(p.psd) : "—",  // 4,5: PSD total + split
+        ];
+      });
+      traces = [{
+        x: centers, y: cnt, type: "bar",
+        marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
+        customdata,
+        hovertemplate:
+          "<b>%{customdata[0]} days</b> · %{y:,} samples<br>"
+          + `${metricLabel || "pain"} ≈ %{x:.1f}  ·  %{customdata[1]}<br>`
+          + "<span style='color:#555'>Time-domain (%{customdata[2]}):</span> %{customdata[3]}<br>"
+          + "<span style='color:#555'>PSD (%{customdata[4]}):</span> %{customdata[5]}"
+          + "<extra></extra>",
+      }];
+    } else {
+      traces = [{
+        x: centers, y: cnt, type: "bar",
+        marker: { color: colors, line: { width: 0 } }, opacity: 0.88, width: widths,
+        hovertemplate: `${metricLabel || "pain"}=%{x:.1f}<br>%{y:,} ${hoverUnit}<extra></extra>`,
+      }];
+    }
     const layout = {
       // Preserve any zoom the user applied to the histogram across live recolors; reset only when
       // the metric changes (different value domain).
@@ -335,15 +413,27 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
                ...(matchedMode && cuts.kind === "two-cut" ? { range: [0, yMax * 1.6] } : {}) },
       shapes, annotations, showlegend: false,
     };
+    // The percentile cut points are set by the two-handle RANGE SLIDER rendered ABOVE the histogram
+    // (see the JSX below), NOT by dragging inside the plot. Plotly's `edits.shapePosition` is a single
+    // boolean with no per-axis constraint — a shape drag moves in x AND y and can resize the line — so
+    // in-plot editing is DISABLED here and the cut lines are display-only dashed notches at the current
+    // thresholds. This removes the broken vertical-drag/resize behavior and keeps the slider as the one
+    // source of truth for percentileLow/High.
     Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false, displayModeBar: false,
+      edits: { shapePosition: false },
     });
+    // Defensive: drop any stale relayout drag handler from an earlier render of this component.
+    const gd = ref.current;
+    if (gd && gd.removeAllListeners) gd.removeAllListeners("plotly_relayout");
     // NOTE: no per-run Plotly.purge cleanup here. Purging before each re-run destroys the graph div,
     // which defeats the `uirevision: hist-${metricKey}` set below — the user's histogram zoom would
     // reset on every match-window / strategy drag. Plotly.react diffs in place, so the live recolor
     // works without a purge; we purge only on unmount (separate effect below), mirroring
     // BiomarkerDataTimeline's deliberate same pattern.
-  }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey]);
+  // scanModel added: proIdxByBin reads scanModel.samples; omitting it caused stale per-bin
+  // rating counts after scanModel rebuilt (e.g. matchDirection change) without other deps changing.
+  }, [vals, cuts, dailyStats, counts, matchedMode, metricLabel, metricKey, scanModel]);
 
   // Purge ONCE on unmount only (not before every recompute) so zoom survives live recolors.
   useEffect(() => {
@@ -362,14 +452,20 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         : ((loading || matchedLoading) ? "loading…" : "no data yet"));
 
   // Footer caption.
+  // Full range of the per-rating match offsets (same |Δt| distribution as the median). Appended ONLY
+  // to the "X of Y pain reports … median match offset" line below, per PI — not the other offset texts.
+  const rangeTxt = (counts && counts.min_abs_offset_min != null && counts.max_abs_offset_min != null)
+    ? ` (range ${counts.min_abs_offset_min.toFixed(1)} to ${counts.max_abs_offset_min.toFixed(1)} min)`
+    : "";
+  const offsetSummary = (counts && counts.median_abs_offset_min != null)
+    ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".";
   const footerCaption = (() => {
     if (matchedMode) {
       if (cuts.kind === "two-cut") {
         // When the matched values are too few / too discrete (integer NRS) to form a middle tertile,
         // the excluded-middle bin is empty by construction — say so, so the missing grey isn't a mystery.
         const emptyMiddle = (counts.n_excluded_middle || 0) === 0;
-        const offsetTxt = counts.median_abs_offset_min != null
-          ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".";
+        const offsetTxt = offsetSummary;
         if (emptyMiddle) {
           return `Cut at ${cuts.lowCut?.toFixed(1)} / ${cuts.highCut?.toFixed(1)} — no excluded-middle bin: ` +
             `the matched values are too discrete (e.g. integer NRS) to form a middle tertile, so every matched sample is high or low` + offsetTxt;
@@ -379,7 +475,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       }
       if (cuts.kind === "one-cut") {
         return `Matched neural samples cut at ${cuts.cut?.toFixed(1)} — every matched sample is labeled (none excluded)` +
-          (counts.median_abs_offset_min != null ? ` · median match offset ${counts.median_abs_offset_min.toFixed(1)} min.` : ".");
+          offsetSummary;
       }
       return "No neural sample matched a pain report at this window — widen the match window.";
     }
@@ -445,7 +541,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
               <b>{`(${su.pct_pro_used}%)`}</b>
               {` paired with neural data within ±${matchTolerance} min`}
               {Number.isFinite(counts.median_abs_offset_min)
-                ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min` : ""}
+                ? `, median match offset ${counts.median_abs_offset_min.toFixed(1)} min${rangeTxt}` : ""}
               {`. Each paired rating carries ${su.psd_per_pro_mean} PSDs on average (median ${su.psd_per_pro_median}, max ${su.psd_per_pro_max}; cap ${(counts.max_per_rating || 3)}/channel).`}
             </>
           ) : (
@@ -501,6 +597,57 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
             : "No PSD scan index available — showing the daily PRO distribution."}
         </MDTypography>
       ) : null)}
+
+      {/* Percentile cut control — ONE slider bar with TWO handles (low + high endpoints), sitting
+          directly ABOVE the histogram so the dashed notch lines below track the handles. This is the
+          single source of truth for the cut points (the in-plot lines are display-only). Shown in
+          two-cut percentile/tertile mode when the parent supplies the setters. Dragging promotes a
+          tertile preset to "percentile" (same as the old slider onChange) so the custom cuts persist. */}
+      {(cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
+        <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
+          <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: LO }}>
+              {`low ≤ ${(strategy === "tertile" ? 33 : percentileLow)}th pct`}
+            </MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#8A929B", fontStyle: "italic" }}>
+              {"drag the two handles to set the cuts"}
+            </MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: 700, color: HI }}>
+              {`high ≥ ${(strategy === "tertile" ? 67 : percentileHigh)}th pct`}
+            </MDTypography>
+          </MDBox>
+          <Slider
+            value={[
+              strategy === "tertile" ? 33 : percentileLow,
+              strategy === "tertile" ? 67 : percentileHigh,
+            ]}
+            min={1} max={99} step={1} size="small" valueLabelDisplay="auto"
+            disableSwap
+            getAriaLabel={(i) => (i === 0 ? "low percentile cut" : "high percentile cut")}
+            valueLabelFormat={(v) => `${v}th`}
+            onChange={(e, v) => {
+              if (!Array.isArray(v)) return;
+              let [lo, hi] = v;
+              // Keep a ≥1-pct gap so the cuts never cross (disableSwap holds order; this holds the gap).
+              lo = Math.min(Math.max(Math.round(lo), 1), 98);
+              hi = Math.max(Math.min(Math.round(hi), 99), lo + 1);
+              if (strategy === "tertile" && setStrategy) setStrategy("percentile");
+              setPercentileLow(lo);
+              setPercentileHigh(hi);
+            }}
+            sx={{
+              mt: 0.25,
+              // Two-tone track: the selected (mid-band) range is neutral grey, rail faint.
+              color: MID,
+              "& .MuiSlider-thumb": { height: 16, width: 16 },
+              // MUI stamps each thumb with data-index (0 = low, 1 = high) — color them to match the
+              // low/high classes and the dashed notch lines below.
+              "& .MuiSlider-thumb[data-index='0']": { backgroundColor: LO },
+              "& .MuiSlider-thumb[data-index='1']": { backgroundColor: HI },
+            }}
+          />
+        </MDBox>
+      ) : null}
 
       <div ref={ref} style={{ flex: 1, width: "100%", minHeight: 340 }} />
       <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, textAlign: "center" }}>
