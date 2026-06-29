@@ -20,7 +20,13 @@
 > **Purpose.** Single authoritative reference for the BRAVO_pain closed-loop DBS platform.
 > Read this to be current. Where sources conflicted, the chronologically later one won and the
 > stale claim was dropped. **State as of this revision:** branch `PS_closedloop_deployment`,
-> **HEAD `b06b0e2`** (biomarker matching: TWO-WINDOW MODALITY SPLIT + cache-only path). The two match
+> **HEAD `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
+> hoisted `rangeTxt`/`offsetSummary` in BinarizationPreview.js read `counts.min_abs_offset_min` before
+> the preview model loaded, throwing `Cannot read properties of null` and blanking the Biomarkers module.
+> Added `counts &&` guards; rebuilt chunk `434.861dc283`, main `8fa51c07`). Below = the two-window change
+> it patches.
+>
+> **`b06b0e2`** (biomarker matching: TWO-WINDOW MODALITY SPLIT + cache-only path). The two match
 > windows now have distinct jobs: the **main MatchToleranceMin slider = eligibility radius for BOTH TD
 > and PSD** (PSD bridge no longer hard-locked to ±120 s); the **extent slider is repurposed into a
 > TD-signal QUANTITY knob** = how many of the nearest 3 s TD tiles to median per rating (nearest
@@ -76,6 +82,9 @@ the match-offset full range "(range lo to hi min)" appended to the "X of Y pain 
 offset" line only. Live verify on 2e3c75c0: main slider 2→120 min grows matched PROs 258→927; TD-quantity
 30→120 s scales `n_td_used` ×4 with PSD untouched. New tests `test_live_match_td_quantity_caps_nearest_n_tiles`
 + rewritten reuse test; **container suite 261/261**. Frontend chunk `434.9f4cba51`, main `87e35786`.
+*Hotfix `b239e57`:* the offset-range edit blanked the Biomarkers module — the hoisted `rangeTxt`/
+`offsetSummary` read `counts.min_abs_offset_min` while `scanModel.counts` is still null on first paint;
+added `counts &&` guards, rebuilt (chunk `434.861dc283`, main `8fa51c07`). PI confirmed it works.
 
 **Biomarker accuracy remediation — high-priority audit fixes (2026-06-28, `7ce588d`).** Four of the
 high-severity items from the stress-test audit (`remediation_action_plan.md`, artifact `488a4d02`).
