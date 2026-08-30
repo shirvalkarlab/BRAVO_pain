@@ -184,7 +184,16 @@ def run_for_participant(request_data: dict) -> dict:
         arms[label] = entry
 
     supported = bool(rep.recommendation_is_supported()) if hasattr(rep, "recommendation_is_supported") else False
-    blockers = _blockers(rep, arms)
+    # Amplitude actually DELIVERED per hemisphere, so a blocker can tell a prediction inside the
+    # model's support from one beyond it.
+    observed_amp_range = {}
+    for hemi in ("Left", "Right"):
+        col = f"amp_mA_{hemi}"
+        if col in es.columns:
+            s = pd.to_numeric(es[col], errors="coerce").dropna()
+            if len(s):
+                observed_amp_range[hemi] = (float(s.min()), float(s.max()))
+    blockers = _blockers(rep, arms, observed_amp_range)
     return {
         "available": True,
         "participant": uid,
@@ -198,8 +207,9 @@ def run_for_participant(request_data: dict) -> dict:
     }
 
 
-def _blockers(rep, arms) -> list:
+def _blockers(rep, arms, observed_amp_range=None) -> list:
     """Plain-language reasons a parameter recommendation is withheld."""
+    observed_amp_range = observed_amp_range or {}
     out = []
     if not any(a.get("optimum_resolved") for a in arms.values()):
         out.append("No arm can distinguish its own best setting from the setting currently in force: "
@@ -233,27 +243,43 @@ def _blockers(rep, arms) -> list:
                    "is a consequence of the two-anchor safety seed, which has no prospective "
                    "side-effect data to shape it, and must be resolved before any ramp is planned.")
 
-    # An optimum pinned to the edge of the search grid is not an interior optimum: it is the surface
-    # saying "keep going in this direction", which is what a monotone trend looks like when the trend
-    # is confounded with time. Flag it explicitly rather than letting a reader take the edge cell as
-    # a located optimum.
-    edge = []
+    # Two distinct things get conflated here, so both are checked separately.
+    #
+    # (a) Optimum at the EDGE of the search GRID. That is the surface saying "keep going", which is
+    #     what a monotone trend looks like at a boundary. Rare in practice — the grid runs past the
+    #     delivered range — so this usually emits nothing, which is the correct outcome, not a bug.
+    # (b) Optimum beyond the amplitude ever actually DELIVERED on that hemisphere. This is the one
+    #     that fires on real data and is the more meaningful warning: the surrogate is predicting
+    #     outside its own support, where the posterior mean is driven by the prior mean function and
+    #     the fitted trend rather than by any observation.
+    edge, extrap = [], []
+    try:
+        grid_hi, grid_lo = float(max(PLT.AMP_GRID)), float(min(PLT.AMP_GRID))
+    except Exception:
+        grid_hi = grid_lo = None
     for label, a in arms.items():
         amp = (a.get("optimum") or {}).get("amp_mA")
         if amp is None:
             continue
-        try:
-            hi = float(max(PLT.AMP_GRID)); lo = float(min(PLT.AMP_GRID))
-        except Exception:
-            continue
-        if amp >= hi - 1e-9 or amp <= lo + 1e-9:
+        amp = float(amp)
+        if grid_hi is not None and (amp >= grid_hi - 1e-9 or amp <= grid_lo + 1e-9):
             edge.append(f"{label} (at {amp:g} mA)")
+        rng = observed_amp_range.get(a.get("hemisphere"))
+        if rng and np.isfinite(rng[1]) and amp > float(rng[1]) + 1e-9:
+            extrap.append(f"{label} (optimum {amp:g} mA vs {float(rng[1]):g} mA ever delivered on "
+                          f"the {a.get('hemisphere')} side)")
     if edge:
         out.append("Optimum sits at the EDGE of the amplitude grid for: " + ", ".join(edge) +
-                   ". An edge optimum is the surface extrapolating monotonically to its boundary, "
-                   "not an interior optimum it has located — expected here because amplitude rose "
-                   "over the record and is confounded with time. Widening the grid would move the "
-                   "edge, not resolve the confound.")
+                   ". An edge optimum is the surface extrapolating to its boundary rather than "
+                   "locating an interior optimum; widening the grid would move the edge, not "
+                   "resolve the underlying confound.")
+    if extrap:
+        out.append("Optimum lies ABOVE the highest amplitude ever delivered for: "
+                   + ", ".join(extrap) +
+                   ". Outside its own support the posterior mean is carried by the prior mean "
+                   "function and the fitted amplitude trend, not by data, and that trend is "
+                   "confounded with time in this record. Treat such a cell as a hypothesis to test, "
+                   "never as a setting to program.")
 
     skipped = (rep.manifest or {}).get("skipped") or {}
     for label, why in skipped.items():
