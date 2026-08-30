@@ -4866,9 +4866,18 @@ def deployment_summary(request_data):
         _plo = power.get("power_current_lo")
         if _plo is not None:
             _need_hi = power.get("n_ratings_needed_hi")
-            _powered_detail = (f"power {round(_plo*100)}%–{_pc_txt} (conservative–point AUC); "
-                               f"need {_need_hi if _need_hi is not None else '∞'} ratings at the CI "
-                               f"lower bound (audit C4: gate reads the conservative end)")
+            # Same guard as the else-branch below: when the requirement is not achievable by
+            # collecting more data, do not print a number that reads as a collection target. This
+            # branch had been left unguarded, so a near-chance band WITH a CI lower bound still
+            # printed its six-figure requirement.
+            if power.get("status") in ("at_or_below_chance", "requirement_infeasible"):
+                _powered_detail = (f"power {round(_plo*100)}%–{_pc_txt} (conservative–point AUC); "
+                                   f"target power NOT achievable by collecting more data "
+                                   f"(AUC indistinguishable from chance)")
+            else:
+                _powered_detail = (f"power {round(_plo*100)}%–{_pc_txt} (conservative–point AUC); "
+                                   f"need {_need_hi if _need_hi is not None else '∞'} ratings at the CI "
+                                   f"lower bound (audit C4: gate reads the conservative end)")
         else:
             # Do not print a six-figure requirement as if it were a target: at a near-chance AUC the
             # required n is finite only arithmetically (1/(AUC-0.5)^2), so it reads as a plan when it
@@ -4966,9 +4975,16 @@ def deployment_summary(request_data):
             # The number is finite but only arithmetically. Required n scales as 1/(AUC-0.5)^2, so a
             # near-chance AUC yields a requirement no study can meet; quoting it as a shortfall
             # implies more data would rescue the biomarker.
+            # Quote the requirement the STATUS was decided on. Feasibility reads the conservative
+            # CI-lower-bound requirement when one exists (fail-closed, matching the gate), so
+            # quoting the point requirement here would cite a different, smaller number than the
+            # one that triggered the verdict.
+            _need_hi_c = power.get("n_ratings_needed_hi")
+            _deciding = _need_hi_c if (power.get("auc_lo") is not None and _need_hi_c is not None) else _need
+            _which = ("at the CI lower bound" if _deciding is not _need else "at the point AUC")
             caveats.append(
                 f"Underpowered and NOT rescuable by more data: 80% power would require "
-                f"{int(_need):,} independent ratings, beyond the "
+                f"{int(_deciding):,} independent ratings {_which}, beyond the "
                 f"{int(power.get('feasible_n_max') or 0):,} ceiling for a realistic "
                 f"single-participant study. Because required n scales as 1/(AUC-0.5)^2, this is a "
                 f"restatement of 'indistinguishable from chance', not a collection target." + _have_txt)

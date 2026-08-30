@@ -282,7 +282,12 @@ computable. The joint GP covariance between the two cells is NOT carried, so `va
 because nearby cells are positively correlated this OVERSTATES the variance and the gate is therefore
 strictly conservative — it can withhold a recommendation it might have supported but cannot
 manufacture one. Tightening it needs `return_cov=True` on a joint prediction and is a documented next
-step, not a silent approximation. Six tests pin this in `StimOptimizer/tests/test_pipeline.py`.
+step, not a silent approximation. **Five** tests pin this in `StimOptimizer/tests/test_pipeline.py`
+(`test_gate_propagates_the_incumbent_sd_not_just_the_candidate`,
+`test_gate_is_conservative_relative_to_ignoring_the_incumbent_sd`,
+`test_gate_returns_false_when_the_candidate_is_worse`,
+`test_gate_missing_incumbent_sd_degrades_to_the_candidate_only`,
+`test_gate_rejects_a_degenerate_zero_variance`) — an earlier version of this line said six.
 
 **Two blockers were dead code and now fire.** `safe_contiguous` was computed as
 `safe_contiguous_ceiling is not None`, but that field is always a float (NaN when there is no
@@ -294,6 +299,27 @@ inside the safe set but in a **disconnected island**. A monotone amplitude ramp 
 force toward that cell would cross amplitudes the safety model rejects. That is a consequence of the
 two-anchor safety seed having no prospective side-effect data to shape it, and it now emits its own
 blocker.
+
+**Four audit fixes on top of the above (2026-08-30), one of them the same class of bug as the
+original complaint:**
+
+1. **The adapter silently dropped pain reports after the last settings observation.** The final
+   epoch is open-ended — its `t_end` is only the last device export, not the moment the setting
+   stopped being in force — so `_t < t_end` discarded every report collected since that export.
+   Measured: 1 of 753 reports today (2026-08-29), but the mechanism means EVERY future report is
+   dropped until new settings arrive, which is exactly the silent truncation that made the timeline
+   look frozen. Open epochs now extend to +inf; `open_ended` still marks them so anything weighting
+   by exposure knows `dur_h` is a lower bound. Design matrix went 751 -> 752 reports.
+2. **The service understated its own data horizon.** It stamped figures with the last epoch's START
+   (2026-08-12) while settings ran to 08-28 and reports to 08-29. It now reports the span, epoch
+   count and report count.
+3. **The power gate's conservative branch had no status guard.** The fix for "do not print a
+   six-figure requirement as if it were a target" was applied to only one of the two branches, so a
+   near-chance band that also had a CI lower bound still printed its requirement.
+4. **The infeasible caveat quoted the point requirement while the status is decided on the
+   conservative one.** It now quotes the deciding requirement and says which it is ("at the point
+   AUC" / "at the CI lower bound"), so the number in the sentence is the number that produced the
+   verdict.
 
 `pipeline.run(outdir=None)` is new and means in-memory only — fit every arm, write nothing. The
 service uses it so no CSVs or PNGs accumulate in the container, and figures are returned as Plotly

@@ -129,9 +129,19 @@ def run_for_participant(request_data: dict) -> dict:
                 "reason": "no exposure epochs carry usable pain reports for this participant",
                 "washin_min": washin_min}
 
+    # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
+    # setting began, which understates the span by however long that setting has been in force —
+    # here it read 2026-08-12 while settings ran to 08-28 and reports to 08-29. Use the latest
+    # evidence actually incorporated: the end of the last epoch, and the last report attached.
     horizon = "settings and pain reports as ingested at request time"
     if "t0" in es.columns:
-        horizon = f"through {pd.to_datetime(es['t0']).max():%Y-%m-%d}"
+        ends = [pd.to_datetime(es["t0"]).max()]
+        if "t_end" in es.columns:
+            ends.append(pd.to_datetime(es["t_end"]).max())
+        last = max(e for e in ends if pd.notna(e))
+        horizon = (f"epochs {pd.to_datetime(es['t0']).min():%Y-%m-%d} to "
+                   f"{last:%Y-%m-%d} ({int(len(es))} epochs, "
+                   f"{int(pd.to_numeric(es.get('n'), errors='coerce').fillna(0).sum())} reports)")
 
     try:
         rep = pipeline.run(es, sites=sites, hemispheres=hemis,

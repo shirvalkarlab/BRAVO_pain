@@ -238,7 +238,18 @@ def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
     p["epoch"] = np.where(idx >= 0, ep["epoch"].to_numpy()[np.clip(idx, 0, None)], np.nan)
     p = p.merge(ep[["epoch", "t_start", "t_end"]], on="epoch", how="left")
     p["h_since_change"] = (p["_t"] - p["t_start"]).dt.total_seconds() / 3600.0
-    p["in_epoch"] = p["_t"] < p["t_end"]
+    # The FINAL epoch is open-ended: its `t_end` is merely the last settings observation, not the
+    # moment the setting stopped being in force. Testing `_t < t_end` therefore silently DROPS every
+    # pain report collected after the last device export — which is the same silent-truncation
+    # failure that made the Biomarkers timeline look frozen. A report after the last settings
+    # observation belongs to the setting still in force, so the open epoch extends to +inf.
+    # Its `dur_h` remains a lower bound; `open_ended` marks it for anything weighting by exposure.
+    if "open_ended" in ep.columns:
+        p = p.merge(ep[["epoch", "open_ended"]], on="epoch", how="left")
+        p["open_ended"] = p["open_ended"].fillna(False).astype(bool)
+    else:
+        p["open_ended"] = False
+    p["in_epoch"] = (p["_t"] < p["t_end"]) | p["open_ended"]
     p["usable"] = p["in_epoch"] & (p["h_since_change"] >= float(washin_min) / 60.0)
 
     have = [c for c in items if c in p.columns]
