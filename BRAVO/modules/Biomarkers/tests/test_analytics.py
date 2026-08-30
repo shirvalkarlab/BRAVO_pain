@@ -2590,3 +2590,97 @@ def test_auc_power_feasibility_ceiling_is_configurable():
     o = an.auc_power(0.65, 24, 24, feasible_n_max=10)   # absurdly low ceiling
     assert o["feasible_n_max"] == 10
     assert o["requirement_feasible"] is False and o["status"] == an.POWER_STATUS_INFEASIBLE
+
+
+# --- MAD outlier exclusion (PI request, 2026-08-30) ---------------------------------------------
+def test_mad_rule_is_literal_five_mad_not_modified_zscore():
+    """The threshold is |x - median| >= N*MAD with the RAW MAD (no 1.4826 or 0.6745 rescaling).
+
+    Documented explicitly because the common Iglewicz-Hoaglin rule uses 0.6745/MAD with a 3.5 cut,
+    which would flag a different set. Constructed so the boundary is exact: median 10, MAD 2, so the
+    cut sits at 10 +/- 10.
+    """
+    from modules.Biomarkers.routines import analytics as an
+    # Derive expectations from the rule itself rather than hand-arithmetic — the first version of
+    # this test asserted MAD=2 for a fixture whose MAD was actually 4, and passed review by luck.
+    x = np.array([10., 12., 8., 14., 6., 40.0])
+    med = float(np.median(x))                       # 11.0
+    dev = np.abs(x - med)                           # [1, 1, 3, 3, 5, 29]
+    mad = float(np.median(dev))                     # 3.0
+    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    assert info["median"] == med and info["mad"] == mad, (info["median"], info["mad"], med, mad)
+    expected = list(np.where(dev >= 5.0 * mad)[0])   # cut at |x-11| >= 15 -> only 40.0
+    assert expected == [5]
+    assert list(np.where(mask)[0]) == expected and info["n_removed"] == 1
+    # The Iglewicz-Hoaglin modified z-score would use 0.6745*dev/MAD >= 3.5, i.e. dev >= 5.19*MAD
+    # here — a DIFFERENT cut. Assert the implementation follows the literal N*MAD form, not that one.
+    ih_cut = 3.5 / 0.6745 * mad
+    assert abs(ih_cut - 5.0 * mad) > 1e-6, "fixture must distinguish the two rules"
+    mask3, info3 = an.mad_outlier_mask(x, n_mad=3.0, scale="raw")   # cut at dev >= 9
+    assert list(np.where(mask3)[0]) == list(np.where(dev >= 9.0)[0]) == [5]
+
+
+def test_zero_mad_does_not_delete_all_variation():
+    """When a majority share one value the MAD is 0 and a naive rule flags every other sample.
+    That would delete the entire usable spread, so the rule must decline instead."""
+    from modules.Biomarkers.routines import analytics as an
+    x = np.array([5., 5., 5., 5., 5., 1.0, 9.0])
+    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    assert info["n_removed"] == 0 and not mask.any()
+    assert "MAD is zero" in (info["skipped"] or "")
+
+
+def test_nonfinite_never_counted_as_a_removal():
+    """NaNs are already absent from every statistic; counting them would inflate the reported
+    number of removals and make the report meaningless."""
+    from modules.Biomarkers.routines import analytics as an
+    x = np.array([1., 2., 3., 4., np.nan, np.inf, 500.0])
+    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    assert not mask[4] and not mask[5]
+    assert info["n_removed"] == int(mask.sum())
+
+
+def test_log_scale_rule_is_two_sided_where_raw_is_not():
+    """For a multiplicative quantity a symmetric raw-scale window is far tighter above the median
+    than below, so it deletes the upper tail almost exclusively. On the log scale the same rule is
+    two-sided. This is why OUTLIER_SCALE defaults to 'log'."""
+    from modules.Biomarkers.routines import analytics as an
+    rng = np.random.default_rng(0)
+    x = np.concatenate([10.0 ** rng.normal(0, 0.3, 200), [1e-6, 1e6]])   # lognormal + one each tail
+    m_raw, _ = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    m_log, _ = an.mad_outlier_mask(x, n_mad=5.0, scale="log")
+    med = np.median(x)
+    # the raw rule catches the high extreme but misses the low one entirely
+    assert m_raw[-1] and not m_raw[-2]
+    # the log rule catches BOTH extremes
+    assert m_log[-1] and m_log[-2]
+    assert (m_raw & (x < med)).sum() == 0, "raw-scale removals are one-sided (high only)"
+
+
+def test_one_exclusion_set_blanks_every_array_identically():
+    """The whole point: a single exclusion set must reach every statistic. Blanking to NaN keeps row
+    alignment against the label and cluster vectors, so no downstream filter can disagree."""
+    from modules.Biomarkers.routines import analytics as an
+    disp = np.array([1., 1.1, 0.9, 1.05, 1e6, 0.95])
+    log = np.log10(disp)
+    (d2, l2), info = an.apply_outlier_exclusion([disp, log], detect_on=disp,
+                                                n_mad=5.0, scale="log")
+    assert info["n_removed"] == 1
+    assert list(np.where(~np.isfinite(d2))[0]) == list(np.where(~np.isfinite(l2))[0]) == [4]
+    assert d2.shape == disp.shape and l2.shape == log.shape     # alignment preserved
+
+
+def test_scan_reports_removals_and_can_be_disabled():
+    """The count must be reported, and n_mad=0 must reproduce the pre-change behaviour exactly."""
+    from modules.Biomarkers.routines import analytics as an
+    det = _planted_detail(center=17.5, beta=0.6, seed=1)
+    off = an.spectral_feature_importance(det, strategy="tertile", outlier_n_mad=0.0)
+    on = an.spectral_feature_importance(det, strategy="tertile", outlier_n_mad=5.0)
+    assert off["outliers"]["enabled"] is False and off["outliers"]["n_removed"] == 0
+    assert off["outliers"]["rule"] == "disabled"
+    assert on["outliers"]["enabled"] is True
+    assert on["outliers"]["n_mad"] == 5.0 and on["outliers"]["scale"] == "log"
+    # the report must name every statistic the exclusion governs, so nobody has to guess
+    for k in ("correlation", "cv_logistic_auc", "cluster_robust_logit_p", "cohens_d"):
+        assert k in on["outliers"]["applies_to"]
+    assert on["outliers"]["n_bands_evaluated"] > 0

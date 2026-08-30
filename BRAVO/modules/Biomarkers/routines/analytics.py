@@ -596,6 +596,89 @@ def power_pain_scatter(cv_df, label_metric, *, max_points=2000):
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# Outlier exclusion (PI request, 2026-08-30)
+# ---------------------------------------------------------------------------------------------
+# Default threshold: a sample is an outlier when |x - median| >= N_MAD * MAD, with
+# MAD = median(|x - median|) and NO consistency rescaling. This is the literal reading of "five
+# median absolute deviations or greater from the median". Note it is therefore NOT the
+# Iglewicz-Hoaglin modified z-score (which uses 0.6745/MAD and a 3.5 cut); on Gaussian data
+# 5 raw MAD is about 3.37 sigma, so this is a comparable but slightly stricter rule.
+OUTLIER_N_MAD = 5.0
+
+# SCALE ON WHICH THE RULE IS APPLIED. This is a real statistical decision, not a detail.
+# The LSB band-power feature is multiplicative and heavy-tailed (roughly 0.1 to 15000), so a
+# symmetric +/- MAD window on the RAW scale is far tighter above the median than below it in
+# proportional terms: it deletes the upper tail almost exclusively, which biases every downstream
+# statistic in a fixed direction. On the log scale the distribution is roughly symmetric, so the
+# rule removes genuine two-sided outliers. The exclusion is DETECTED on the log scale and then
+# applied to both the raw display feature and the log fit feature, so exactly one set of samples
+# is dropped everywhere. Set to "raw" only to reproduce a literal raw-scale reading.
+OUTLIER_SCALE = "log"
+
+
+def mad_outlier_mask(x, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
+    """Boolean mask of outliers in ``x`` under the MAD rule. True == outlier == to be excluded.
+
+    Returns ``(mask, info)`` where ``info`` records the median, the MAD, the scale used and why
+    the rule was skipped if it was. Non-finite entries are never flagged (they are already absent
+    from every statistic) so the count reports genuine removals only.
+
+    ZERO-MAD GUARD: when more than half the samples share one value the MAD is 0 and the rule
+    would flag every sample that merely differs from the median — deleting real variation and, in
+    the degenerate case, the entire usable spread. In that case no sample is flagged and
+    ``info["skipped"]`` says so.
+    """
+    x = np.asarray(x, dtype=float)
+    finite = np.isfinite(x)
+    info = {"n_finite": int(finite.sum()), "n_mad": float(n_mad), "scale": str(scale),
+            "median": None, "mad": None, "n_removed": 0, "skipped": None}
+    if finite.sum() < 4:
+        info["skipped"] = "fewer than 4 finite samples"
+        return np.zeros_like(x, dtype=bool), info
+    if scale == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            v = np.log10(np.where(x > 0, x, np.nan))
+        finite = np.isfinite(v)
+        if finite.sum() < 4:
+            info["skipped"] = "fewer than 4 strictly-positive samples for the log-scale rule"
+            return np.zeros_like(x, dtype=bool), info
+    else:
+        v = x
+    med = float(np.median(v[finite]))
+    mad = float(np.median(np.abs(v[finite] - med)))
+    info["median"], info["mad"] = med, mad
+    if not np.isfinite(mad) or mad <= 0:
+        info["skipped"] = "MAD is zero (majority of samples share one value); no removal applied"
+        return np.zeros_like(x, dtype=bool), info
+    mask = finite & (np.abs(v - med) >= float(n_mad) * mad)
+    info["n_removed"] = int(mask.sum())
+    return mask, info
+
+
+def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
+    """Blank one shared set of outliers out of EVERY array in ``arrays``.
+
+    The point of this helper is that a single exclusion set must reach every statistic. Excluded
+    samples are set to NaN rather than removed by index, so any downstream computation already
+    masking on ``isfinite`` — the correlation, the cross-validated AUC and its cluster-robust
+    logit p, the effect size — drops the same samples without each needing its own filter and
+    without disturbing row alignment against the label and cluster vectors.
+
+    ``detect_on`` is the array the rule is evaluated on (the fit-scale feature); ``arrays`` is the
+    list of arrays to blank, which should include ``detect_on`` itself.
+    Returns ``(blanked_arrays, info)``.
+    """
+    mask, info = mad_outlier_mask(detect_on, n_mad=n_mad, scale=scale)
+    out = []
+    for a in arrays:
+        b = np.asarray(a, dtype=float).copy()
+        if b.shape == mask.shape:
+            b[mask] = np.nan
+        out.append(b)
+    return out, info
+
+
 def cluster_scatter(cv_df, kmeans_features=("left_leg_vas", "mpq_sum")):
     """KMeans pain-level clusters over the ACTUAL clustering feature(s) (cell 10), colored by the
     derived pain_level. Generic in the number of features so it renders for ANY selected metric:
@@ -1149,7 +1232,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                                 step_hz=1.0, fmax=100.0, adaptive_band=(8.0, 30.0),
                                 region_map=None, n_peaks=6, max_scatter=400,
                                 rating_aware_auc=None, feature="lsb",
-                                pro_lsb_spectrum_by_channel=None):
+                                pro_lsb_spectrum_by_channel=None,
+                                outlier_n_mad=OUTLIER_N_MAD, outlier_scale=OUTLIER_SCALE):
     """Exploratory 5 Hz sliding-band feature-importance scan (DESIGN §8b).
 
     Slides a `band_width_hz`-wide window in `step_hz` increments. For each (channel, band):
@@ -1260,6 +1344,10 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     C = psd.shape[1]
     label_fin_all = np.isfinite(labels)            # epochs with a matched PRO label
     n_pooled = int(label_fin_all.sum())            # pooled matched PSDs across ALL channels
+    # Outlier bookkeeping for the whole scan. Reported, never silent: the requirement is that the
+    # number removed is visible alongside the statistics it changed.
+    _outlier_log = []
+    _n_outliers_removed = 0
     for ci in range(C):
         raw = chans[ci] if ci < len(chans) else f"ch{ci}"
         region = region_map.get(raw) if region_map else None
@@ -1411,6 +1499,22 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
                 bp_disp = np.power(10.0, bp_log)   # raw linear LSB; NaN stays NaN
             else:
                 bp_disp = bp_log
+            # ---- OUTLIER EXCLUSION (PI request 2026-08-30) --------------------------------------
+            # ONE exclusion set per (channel, band), blanked to NaN in BOTH the display feature and
+            # the fit feature. Every statistic below already masks on isfinite — the correlation, the
+            # cross-validated AUC, its cluster-robust logit p, and the effect size — so blanking here
+            # is the single point of control that keeps them all on the same samples. Doing it per
+            # (channel, band) is required rather than tidy: band-power distributions differ by orders
+            # of magnitude across channels and frequencies, so a pooled threshold would be dominated
+            # by whichever channel has the largest units.
+            if outlier_n_mad and outlier_n_mad > 0:
+                (bp_disp, bp_log), _oinfo = apply_outlier_exclusion(
+                    [bp_disp, bp_log], detect_on=bp_disp,
+                    n_mad=float(outlier_n_mad), scale=str(outlier_scale))
+                _oinfo["channel"] = fmt["label"]
+                _oinfo["center_hz"] = float(c)
+                _outlier_log.append(_oinfo)
+                _n_outliers_removed += int(_oinfo["n_removed"])
             band_power_by_center.append(bp_disp)
             # Spearman rank correlation vs CONTINUOUS label (ALL matched samples — no binarization).
             # SPEARMAN, not Pearson (2026-06-28, PI): the LSB feature is heavy-tailed (~0.1–15000), so
@@ -1742,10 +1846,36 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             }
     # --------------------------------------------------------------------------------------------
 
+    # Outlier report. Every statistic in this payload — r, AUC, the cluster-robust logit p and the
+    # effect size — was computed AFTER these samples were blanked, from one shared exclusion set per
+    # (channel, band). `n_bands_skipped_zero_mad` matters for interpretation: those bands had a MAD
+    # of zero (a majority of samples sharing one value) so no removal could be applied there.
+    _n_bands_with_removal = sum(1 for o in _outlier_log if o.get("n_removed"))
+    _n_bands_zero_mad = sum(1 for o in _outlier_log if o.get("skipped"))
+    _n_finite_total = sum(int(o.get("n_finite") or 0) for o in _outlier_log)
+    outlier_report = {
+        "rule": (f"|x - median| >= {float(outlier_n_mad):g} x MAD on the "
+                 f"{outlier_scale} scale, applied per (channel, band)"
+                 if outlier_n_mad and outlier_n_mad > 0 else "disabled"),
+        "n_mad": float(outlier_n_mad) if outlier_n_mad else 0.0,
+        "scale": str(outlier_scale),
+        "enabled": bool(outlier_n_mad and outlier_n_mad > 0),
+        "n_removed": int(_n_outliers_removed),
+        "n_samples_considered": int(_n_finite_total),
+        "pct_removed": (100.0 * _n_outliers_removed / _n_finite_total) if _n_finite_total else None,
+        "n_bands_evaluated": int(len(_outlier_log)),
+        "n_bands_with_removal": int(_n_bands_with_removal),
+        "n_bands_skipped_zero_mad": int(_n_bands_zero_mad),
+        "applies_to": ["correlation", "cv_logistic_auc", "cluster_robust_logit_p",
+                       "cohens_d", "median_delta"],
+        "detected_on": "band-power feature only; the pain label is left intact because it is a "
+                       "bounded ordinal scale on which extreme values are signal, not contamination",
+    }
     return {
         "centers": [float(c) for c in centers],
         "bands": band_meta,
         "channels": out_channels,
+        "outliers": outlier_report,
         "band_width_hz": w,
         "step_hz": float(step_hz),
         "fmax": fmax,

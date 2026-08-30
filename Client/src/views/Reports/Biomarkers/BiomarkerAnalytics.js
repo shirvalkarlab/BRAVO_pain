@@ -1896,6 +1896,41 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
     ? ` ${fdrSummary.n_rigorous_fdr} of ${fdrSummary.n_bands_total} bands survive BH-FDR under rating-clustered logistic (the inferential headline); ${fdrSummary.n_naive_fdr} survive the naive per-sample FDR, which treats each matched sample as independent and over-reports because one rating contributes up to MaxPerRating samples. Ringed dots above mark the rigorous-FDR survivors.`
     : "";
 
+  // Outlier exclusion (PI, 2026-08-30). Stated here rather than buried, because every statistic in
+  // this section — the correlation, the cross-validated AUC, the rating-clustered logistic p and the
+  // click-panel effect size — is computed AFTER these samples are dropped, from ONE shared exclusion
+  // set per (channel, band). The count is reported so the reader can judge whether the rule is
+  // trimming a few artefacts or reshaping the sample.
+  const outl = scan && scan.outliers;
+  const outlierAnnotation = (outl && outl.enabled)
+    ? ` Outlier exclusion: a sample is dropped when its band power lies ${outl.n_mad}` +
+      ` or more median absolute deviations (MAD) from that band's median, evaluated on the` +
+      ` ${outl.scale} scale and applied separately to each (channel, band).` +
+      ` ${(outl.n_removed || 0).toLocaleString()} of ${(outl.n_samples_considered || 0).toLocaleString()}` +
+      ` samples were removed` +
+      (outl.pct_removed != null ? ` (${outl.pct_removed.toFixed(2)}%)` : "") +
+      `, affecting ${outl.n_bands_with_removal} of ${outl.n_bands_evaluated} bands.` +
+      ` The same excluded samples are held out of every statistic here — correlation, AUC,` +
+      ` rating-clustered logistic p and the click-panel effect size — so no two numbers are computed` +
+      ` on different samples. The rule is applied to the band-power feature only; the pain score is` +
+      ` left intact, because it is a bounded ordinal scale on which extreme values are signal rather` +
+      ` than contamination. The MAD is used raw, without the 1.4826 consistency rescaling, so` +
+      ` ${outl.n_mad} MAD is about ${(outl.n_mad * 0.6745).toFixed(2)} standard deviations for` +
+      ` Gaussian data.` +
+      (outl.n_bands_skipped_zero_mad
+        ? ` ${outl.n_bands_skipped_zero_mad} band(s) were skipped because their MAD was zero (a` +
+          ` majority of samples sharing one value), where the rule would otherwise have deleted all` +
+          ` remaining variation.`
+        : "") +
+      (outl.pct_removed != null && outl.pct_removed > 2.0
+        ? ` Note that removing ${outl.pct_removed.toFixed(1)}% is far more than the ~0.1% a` +
+          ` well-behaved unimodal distribution would yield at this threshold, which indicates the` +
+          ` feature is a mixture across recording sessions rather than a clean distribution with a` +
+          ` few artefacts. Treat the excluded points as possibly-real physiological states, not` +
+          ` confirmed noise.`
+        : "")
+    : (outl ? " Outlier exclusion is DISABLED for this view, so all matched samples are included." : "");
+
   return (
     <>
       <Section title="Full-spectrum exploration (all PSDs pooled per channel)"
@@ -1903,7 +1938,7 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
                  ? (scan.feature === "lsb_cs14"
                    ? "One LSB per matched (channel, rating) pair: 30 s rating-centred window through the transform DSP (k\u202f=\u202f352.62) when a time-domain recording covers the rating, else the CS-3 PSD bridge (k\u202f\u2248\u202f73.63) for PSD-only patient events. Raw (linear) LSB on the device scale, full 0\u2013100\u202fHz in a 5\u202fHz sliding band; green shading marks the validated 7.8\u201330\u202fHz range. Per band: Spearman \u03c1 vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter."
                    : "Every neural recording matched to the nearest pain report, scanned in a 5\u202fHz sliding band. Feature: raw calibrated LSB (269\u202f\u00d7 TD Welch band integral). Per band: Spearman \u03c1 and logistic AUC; click a band for its scatter.")
-                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned in a 5\u202fHz sliding band. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter.") + rigorAnnotation}
+                 : "Every full-spectrum PSD (time-domain streaming + montage/survey sweeps) matched to the nearest pain report within the chosen window, then scanned in a 5\u202fHz sliding band. Per band: Pearson r vs the continuous score and cross-validated logistic AUC vs the binarized score; click a band for its scatter.") + rigorAnnotation + outlierAnnotation}
                panels={tdPanels} />
       {/* Power-domain analysis section (chronic 10-min trend + per-session band power) REMOVED
           (2026-06-28, PI): chronic LSB averaging is irrelevant to closed-loop deployment, so the

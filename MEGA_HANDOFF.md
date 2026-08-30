@@ -227,6 +227,77 @@ live participant the call returns `available: True` with exactly one `Underpower
 asserts no caveat or gate detail leaks a literal `None`/`None%` into user-facing text. Container
 suite now **262/262**.
 
+**Outlier exclusion added to the full-spectrum exploration scan (2026-08-30, PI request).**
+
+Rule: a sample is dropped when `|x - median| >= N_MAD * MAD` with `MAD = median(|x - median|)` and
+**no consistency rescaling**, i.e. the literal reading of "five MAD or greater from the median".
+Defaults live in `analytics.OUTLIER_N_MAD = 5.0` and `analytics.OUTLIER_SCALE = "log"`. Request
+overrides: `OutlierNMad` (0 disables, reproducing the pre-change numbers) and `OutlierScale`
+(`log`/`raw`). Note this is NOT the Iglewicz-Hoaglin modified z-score (0.6745/MAD, 3.5 cut); 5 raw
+MAD is about 3.37 sigma on Gaussian data.
+
+**Two decisions that are NOT cosmetic, both measured rather than assumed:**
+
+1. **Applied on the LOG scale, not raw.** The LSB band-power feature is multiplicative and spans
+   roughly 0.1 to 15000, so a symmetric raw-scale window is proportionally far tighter above the
+   median than below: it deletes the upper tail almost exclusively. Measured on the real RCS08 scan,
+   the raw-scale rule removed **17,930 samples (3.71%)** and the log-scale rule **29,938 (6.19%)** —
+   and the raw rule's removals were one-sided. Worse, the *selected biomarker changed*: strongest AUC
+   was 0.9040 at 64.5 Hz under the log rule but 0.9192 at 10.5 Hz under the raw rule. A test
+   (`test_log_scale_rule_is_two_sided_where_raw_is_not`) pins the one-sidedness.
+2. **Per (channel, band), not pooled.** Band-power distributions differ by orders of magnitude across
+   channels and frequencies, so a pooled threshold would be set by whichever channel has the largest
+   units. This was the open question from the PI's dictated request and is still worth confirming.
+
+**READ THIS BEFORE QUOTING THE REMOVAL COUNT: 6.19% is far more than the ~0.1% a well-behaved
+unimodal distribution yields at 5 MAD.** That is evidence the feature is a MIXTURE across recording
+sessions, not a clean distribution with a few artefacts, so some of what the rule removes is likely
+real physiology rather than noise. The panel text says so explicitly (it triggers above 2% removal).
+This is a caveat on the rule, not a reason to skip it.
+
+**One shared exclusion set reaches every statistic.** Implemented by blanking excluded samples to
+NaN in BOTH the display feature and the fit feature at the single point they are computed, so every
+downstream consumer that already masks on `isfinite` drops the same samples without needing its own
+filter and without disturbing row alignment against the label and cluster vectors. Verified by
+differencing the real scan with the rule off vs on: the correlation changed in **410 of 576 bands**
+and the cross-validated AUC in **290**, with `n` and `n_r` moving in step. Cohen's d, the median
+delta and the rating-clustered logistic p are code-path verified rather than differenced, because
+they are not emitted as per-band curves in this payload — the effect size reads
+`band_power_by_center` (the blanked array, via `bp_list` at the scatter block) and the clustered p is
+computed inside `_band_cv_stats(bp_log)` alongside the AUC from the same blanked fit array. The
+scatter's reported `n` already follows the exclusion because its mask is
+`np.isfinite(bp_log) & label_fin`.
+
+Guards, each with a test: fewer than 4 finite samples, fewer than 4 strictly-positive samples for
+the log rule, and a **zero-MAD guard** — when a majority of samples share one value the MAD is 0 and
+a naive rule would flag everything that merely differs from the median, deleting all remaining
+variation; the rule declines and says so in `skipped`. Non-finite entries are never counted as
+removals, so the reported number means genuine exclusions.
+
+Reported in `spectral_feature_importance()["outliers"]` (rule string, n_mad, scale, n_removed,
+n_samples_considered, pct_removed, n_bands_evaluated, n_bands_with_removal,
+n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response top level as
+`outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
+subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
+
+**STILL TO DO — the audit the PI asked for is NOT complete.** The exclusion currently reaches the
+exploration SCAN only. Not yet audited or wired: `corr_spectrum`, `psd_spectra`, the chronic cv_df
+statistics (`sliding_window_analytics`, `roc_analysis`, `lfp_distribution`, `power_pain_scatter`,
+`cluster_scatter`, `pain_binarization`), the threshold detector (`_otsu_threshold`,
+`threshold_drift_by_week`) and the deployment family (`deployment_roc`, `deployment_roc_by_era`,
+`deployment_forward_chaining`, `psd_lsb_conversion`, `deployment_summary`). The deployment/threshold
+group shares ONE feature source, `_band_feature_from_detail` (callers at lines 2194, 2501, 2680,
+2799), which is the single insertion point for all four.
+
+**Open judgement call for the PI, do not silently resolve:** blanket exclusion is defensible for
+ASSOCIATIONAL statistics (correlation, AUC, effect size) but questionable for anything that sets an
+OPERATING POINT the device will run against — the detector threshold and the LSB conversion
+constant. A threshold estimated on a trimmed distribution while the device encounters the full one
+means the reported sensitivity and specificity are not what the device will achieve. Recommended
+resolution: compute the operating point on the full distribution, report the outlier count beside
+it, and present the outlier-excluded AUC as a labelled sensitivity analysis rather than as the
+headline.
+
 **StimOptimizer is now reachable from the sidebar (2026-08-30).** Five registrations, mirroring the
 Biomarkers precedent:
 

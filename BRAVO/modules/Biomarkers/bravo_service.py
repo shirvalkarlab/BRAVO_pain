@@ -2118,7 +2118,8 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                        train_days=None, step_days=None, sliding=True, region_map=None,
                        match_tolerance_min=None, psd_matrix=None, pro_match=None,
                        aggregate="all", max_per_rating=3, refractory_min=2.0,
-                       match_direction="prior", pro_lsb_spectrum_by_channel=None):
+                       match_direction="prior", pro_lsb_spectrum_by_channel=None,
+                       outlier_n_mad=None, outlier_scale=None):
     """Build the notebook-style analytics (sliding-window AUC/R, ROC, LFP/Otsu histogram, KMeans
     cluster scatter, and the streaming correlation spectrum). The independent pieces run
     concurrently; each is guarded so an analytics failure never breaks the main timeline response.
@@ -2170,7 +2171,12 @@ def _compute_analytics(run, chronic, pro_df, label_metric="nrs",
                 "spectral_feature_importance": lambda: analytics.spectral_feature_importance(
                     scan_src, strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
                     region_map=region_map,
-                    pro_lsb_spectrum_by_channel=pro_lsb_spectrum_by_channel),
+                    pro_lsb_spectrum_by_channel=pro_lsb_spectrum_by_channel,
+                    # Outlier exclusion (PI, 2026-08-30). None => the module default in
+                    # analytics.OUTLIER_N_MAD / OUTLIER_SCALE, so the rule is on by default rather
+                    # than something a caller has to remember to switch on.
+                    **({} if outlier_n_mad is None else {"outlier_n_mad": float(outlier_n_mad)}),
+                    **({} if outlier_scale is None else {"outlier_scale": str(outlier_scale)})),
                 "matched_sample_counts": count_task,
                 "pool_meta": lambda: (pooled or {}).get("pool_meta"),
                 # PSD spectrogram removed from the UI (added little over the spectrum + mean-PSD
@@ -2881,6 +2887,14 @@ def run_for_participant(request_data):
     # Match direction defaults to "prior" (forecasting: the PSD must precede the rating).
     max_per_rating = _int_param(request_data, "MaxPerRating", default=3, lo=1, hi=50)
     refractory_min = _float_param(request_data, "RefractoryMin", default=2.0, lo=0.0, hi=720.0)
+    # Outlier exclusion (PI, 2026-08-30). Defaults come from the analytics module, so the rule is ON
+    # unless a caller deliberately disables it. `OutlierNMad = 0` disables removal entirely, which is
+    # the switch for reproducing a pre-2026-08-30 number rather than editing the module.
+    outlier_n_mad = _float_param(request_data, "OutlierNMad",
+                                 default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
+    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
+    if outlier_scale not in ("log", "raw"):
+        outlier_scale = analytics.OUTLIER_SCALE
     # Three-way match direction (PSD<->PRO):
     #   pro_first (default for discovery): walk PROs, claim up to max_per_rating PSDs/channel each
     #     within tolerance. Maximizes PRO coverage -- the right framing for discovery, where each
@@ -2997,8 +3011,16 @@ def run_for_participant(request_data):
                                                  aggregate=aggregate, max_per_rating=max_per_rating,
                                                  refractory_min=refractory_min,
                                                  match_direction=match_direction,
-                                                 pro_lsb_spectrum_by_channel=pro_lsb_spectrum),
+                                                 pro_lsb_spectrum_by_channel=pro_lsb_spectrum,
+                                                 outlier_n_mad=outlier_n_mad,
+                                                 outlier_scale=outlier_scale),
                          label_metric=label_metric)
+    # Echo the exclusion settings at the top level so the UI can state the rule without digging
+    # into the analytics subtree, and so a saved response records what was applied.
+    out["outlier_n_mad"] = (float(outlier_n_mad) if outlier_n_mad is not None
+                            else float(analytics.OUTLIER_N_MAD))
+    out["outlier_scale"] = str(outlier_scale if outlier_scale is not None
+                               else analytics.OUTLIER_SCALE)
     out["label_metric"] = label_metric
     out["aggregate"] = aggregate
     out["max_per_rating"] = max_per_rating
