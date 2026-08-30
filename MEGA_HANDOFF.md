@@ -227,6 +227,70 @@ live participant the call returns `available: True` with exactly one `Underpower
 asserts no caveat or gate detail leaks a literal `None`/`None%` into user-facing text. Container
 suite now **262/262**.
 
+**StimOptimizer is now reachable from the sidebar (2026-08-30).** Five registrations, mirroring the
+Biomarkers precedent:
+
+| layer | file |
+|---|---|
+| DB -> design matrix | `BRAVO/modules/StimOptimizer/adapter.py` (new) |
+| service | `BRAVO/modules/StimOptimizer/bravo_service.py` (new) |
+| API view | `BRAVO/Server/APIs/DataAnalysis.py` -> `QueryStimOptimizer` |
+| route | `BRAVO/Server/APIs/urls.py` -> `path('queryStimOptimizer', ...)` |
+| React view | `Client/src/views/Reports/StimOptimizer/index.js` (new) |
+| sidebar | `Client/src/routes.js` -> key `stimOptimizer`, `/reports/stim-optimizer/:participant_uid` |
+
+Sidebar label is **"Stim Parameter Optimizer"**, directly under Biomarker Exploration. Frontend
+rebuilt (`main.8caba91d.js`), and the dev override bind-mounts `./Client/build` to
+`/usr/share/nginx/html`, so the host build is served with no image rebuild — confirmed the served
+bundle contains the new view. `/api/queryStimOptimizer` resolves. Container suite 267/267 and the
+StimOptimizer module tests pass.
+
+**Why `adapter.py` reads stored JSON rather than the Therapy tables — do not "simplify" this.**
+BRAVO normalizes settings into `Therapy` -> `ElectricalTherapy` -> `ElectricalStimulation`, which are
+dated and carry amplitude, pulse width, frequency and a bare `contact` index list — **but not the
+hemisphere**. Recovering it means mapping contact indices through the device's lead
+`Target`/`CustomName` definitions, and at one timestamp several rows differ by GROUP rather than by
+side (verified: two rows at 2026-08-28 18:25, `GROUP_A` contacts [1..6] at 3.0 mA/150 us and
+`GROUP_B` contacts [4,5,6] at 3.5 mA/100 us). Getting that wrong silently SWAPS hemispheres, which is
+a wrong-science failure with no crash. The adapter instead loads each `SourceFile` through
+`DataCurator.loadCacheFile` and reuses the validated dual-schema parser, where the device states the
+hemisphere explicitly. **Validation:** on the 1,239 shared (timestamp, hemisphere) keys against the
+file-based census, amplitude, pulse width, rate, cathode label and schema tag are **identical at
+100%**. Session rows do not share keys because the census used the FILENAME stamp (local clock) while
+the adapter uses `SessionDate` (UTC); measured on twelve August files these differ by a median of
+**1.4 minutes** (max 65.1, on 2026-08-06). With a 1-minute wash-in that can move a report across the
+boundary, so it is a real if small difference.
+
+**The honesty gate was wrong and is fixed — this is the most consequential change here.**
+`ArmResult.surface_can_resolve_its_optimum` tested `mu_star + k*sd_star < incumbent_mu`, which
+rearranges to `gain > k*sd_star`: it cleared the CANDIDATE's SD but ignored the incumbent's own
+posterior SD. Worked example from this run, arm `left_leg__Right`: incumbent mu +0.4285, candidate mu
+-0.6881, so gain 1.117; candidate SD 0.989, incumbent SD 0.923. The old form passed
+(1.117 > 0.989) and that single arm is why the module reported "recommendation supported" at all.
+Propagating both SDs gives sd_diff = sqrt(0.989^2 + 0.923^2) = 1.353, and 1.117 < 1.353, so the
+difference is **not** resolved. All four arms are now unresolved and `recommendation_supported` is
+False, which is the truthful reading. `incumbent_sd` was added to the figure metadata to make this
+computable. The joint GP covariance between the two cells is NOT carried, so `var1 + var2` is used;
+because nearby cells are positively correlated this OVERSTATES the variance and the gate is therefore
+strictly conservative — it can withhold a recommendation it might have supported but cannot
+manufacture one. Tightening it needs `return_cov=True` on a joint prediction and is a documented next
+step, not a silent approximation. Six tests pin this in `StimOptimizer/tests/test_pipeline.py`.
+
+**Two blockers were dead code and now fire.** `safe_contiguous` was computed as
+`safe_contiguous_ceiling is not None`, but that field is always a float (NaN when there is no
+ceiling), so the expression was constant True and the non-contiguous-safe-set blocker could never
+appear. It now reads the canonical `safe_is_contiguous`, and all four arms correctly report a
+non-contiguous safe set. That exposed a further clinically relevant fact worth acting on: the
+contiguous safe ceiling is **1.9-2.2 mA** while every proposed optimum sits at **4.0-4.9 mA**, i.e.
+inside the safe set but in a **disconnected island**. A monotone amplitude ramp from the setting in
+force toward that cell would cross amplitudes the safety model rejects. That is a consequence of the
+two-anchor safety seed having no prospective side-effect data to shape it, and it now emits its own
+blocker.
+
+`pipeline.run(outdir=None)` is new and means in-memory only — fit every arm, write nothing. The
+service uses it so no CSVs or PNGs accumulate in the container, and figures are returned as Plotly
+JSON for the browser (never rendered server-side; no kaleido).
+
 **Housekeeping:** `BRAVO/_agent_bridge/incoming/` holds ~450 MB of session JSONs copied there to
 feed the ingest run (20 files; 5 were new, 15 were duplicates). They are staging copies, safe to
 delete once you are satisfied with the ingest. Left in place rather than removed, since deleting

@@ -80,6 +80,7 @@ const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActi
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
 const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
 const ClosedLoopSim = lazy(() => import('views/Reports/ClosedLoopSim'));
+const StimOptimizer = lazy(() => import('views/Reports/StimOptimizer'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
@@ -404,6 +405,13 @@ const routes = {
         icon: <TimelineIcon />,
         route: "/reports/biomarkers/:participant_uid",
         component: <Biomarkers />,
+      },
+      {
+        key: "stimOptimizer",
+        name: "Stim Parameter Optimizer",
+        icon: <TimelineIcon />,
+        route: "/reports/stim-optimizer/:participant_uid",
+        component: <StimOptimizer />,
       },
       {
         key: "closedLoopSim",

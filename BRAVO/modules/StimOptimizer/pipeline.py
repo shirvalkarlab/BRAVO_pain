@@ -60,14 +60,35 @@ class ArmResult:
         return f"{self.site}__{self.hemisphere}"
 
     def surface_can_resolve_its_optimum(self, k: float = 1.0) -> bool:
-        """True only if the optimum's k-sigma band excludes the incumbent.
+        """True only if the candidate BEATS the incumbent by more than the uncertainty of that
+        difference.
 
-        This is the honest gate on a recommendation. With a posterior SD comparable to the whole
-        span of the posterior mean — which is the RCS08 situation — it returns False, and the arm
-        should be read as "keep exploring", not "move to this setting".
+        This is the honest gate on a recommendation, and the comparison has to be on the DIFFERENCE.
+        An earlier version tested ``mu_star + k*sd_star < incumbent_mu``, which rearranges to
+        ``gain > k*sd_star``: it required the gain to clear the CANDIDATE's SD but ignored the
+        incumbent's own posterior SD, and so overstated how well the two cells are separated.
+        Worked example from the RCS08 run of 2026-08-30, arm ``left_leg__Right``: incumbent
+        mu = +0.4285, candidate mu = -0.6881, so the gain is 1.117; the candidate SD is 0.989 and the
+        incumbent SD is 0.923. The old gate passed (1.117 > 0.989) and reported the optimum as
+        resolved. Propagating both SDs gives sd_diff = sqrt(0.989^2 + 0.923^2) = 1.353, and
+        1.117 < 1.353, so the difference is NOT resolved. That arm was the only one the old gate
+        passed, and it is the reason this module reported "recommendation supported" at all.
+
+        The variance of the difference between two GP predictions is
+        ``var1 + var2 - 2*cov``. We do not currently carry the joint covariance between the two
+        cells, so we use ``var1 + var2``. Because nearby cells on a smooth kernel are POSITIVELY
+        correlated, dropping ``-2*cov`` OVERSTATES the variance, which makes this gate strictly
+        conservative: it can withhold a recommendation it might have supported, but it cannot
+        manufacture one. Tightening it requires predicting both cells jointly with the full
+        covariance (``return_cov=True``) and is a documented next step, not a silent approximation.
         """
         m = self.meta
-        return bool(m["mu_star"] + k * m["sd_star"] < m["incumbent_mu"])
+        gain = float(m["incumbent_mu"]) - float(m["mu_star"])          # >0 means candidate is better
+        sd_inc = float(m.get("incumbent_sd") or 0.0)
+        sd_diff = float(np.sqrt(float(m["sd_star"]) ** 2 + sd_inc ** 2))
+        if not np.isfinite(sd_diff) or sd_diff <= 0:
+            return False
+        return bool(gain > k * sd_diff)
 
 
 @dataclass
@@ -131,7 +152,13 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
         ``.arms`` maps arm label to :class:`ArmResult`; ``.summary`` is one row per arm;
         ``.manifest`` records the declared provenance, per-arm status and written files.
     """
-    os.makedirs(outdir, exist_ok=True)
+    # `outdir=None` means IN-MEMORY ONLY: fit every arm and return the report without touching the
+    # filesystem. The service layer (bravo_service.run_for_participant) needs exactly this — it
+    # serializes the report to JSON for the browser, so writing CSVs and PNGs into the container
+    # would be dead weight and would need cleaning up. Every write below is guarded on `outdir`.
+    write_files = outdir is not None
+    if write_files:
+        os.makedirs(outdir, exist_ok=True)
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     arms, rows, skipped, written = {}, [], {}, []
 
@@ -157,11 +184,12 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
                             stopping=stop, meta=m)
             arms[label] = arm
 
-            for nm, df in (("queue", queue), ("batch", batch)):
-                p = os.path.join(outdir, f"stimopt_{nm}_{label}.csv")
-                df.to_csv(p, index=False)
-                written.append(p)
-            if render_figures:
+            if write_files:
+                for nm, df in (("queue", queue), ("batch", batch)):
+                    p = os.path.join(outdir, f"stimopt_{nm}_{label}.csv")
+                    df.to_csv(p, index=False)
+                    written.append(p)
+            if render_figures and write_files:
                 written += _render(ctx, label, outdir, figure_backend, dpi)
 
             rows.append(dict(
@@ -180,7 +208,7 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
             ))
 
     summary = pd.DataFrame(rows)
-    if not summary.empty:
+    if not summary.empty and write_files:
         p = os.path.join(outdir, "stimopt_arm_summary.csv")
         summary.to_csv(p, index=False)
         written.append(p)
@@ -191,6 +219,8 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
                     any_optimum_resolved=bool(summary["optimum_resolved"].any())
                     if not summary.empty else False,
                     files=[os.path.basename(f) for f in written])
+    if not write_files:
+        return RunReport(arms=arms, summary=summary, manifest=manifest)
     p = os.path.join(outdir, "stimopt_manifest.json")
     with open(p, "w") as fh:
         json.dump(manifest, fh, indent=2)

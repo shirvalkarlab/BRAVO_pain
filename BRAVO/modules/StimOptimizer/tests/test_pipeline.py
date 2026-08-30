@@ -94,3 +94,61 @@ def test_pipeline_skips_an_arm_it_cannot_fit_rather_than_dying():
     assert "left_leg__Left" in rep.arms
     assert "back__Left" not in rep.arms          # no back_vas column in the fixture
     assert "back__Left" in rep.manifest["skipped"]
+
+
+# --- the resolution gate: the single most consequential boolean in the module -------------------
+def _arm(mu_star, sd_star, incumbent_mu, incumbent_sd):
+    """Minimal ArmResult carrying only what the gate reads."""
+    from StimOptimizer.pipeline import ArmResult
+    meta = dict(mu_star=mu_star, sd_star=sd_star,
+                incumbent_mu=incumbent_mu, incumbent_sd=incumbent_sd)
+    return ArmResult(site="left_leg", hemisphere="Right", ctx=None, batch=None,
+                     queue=None, stopping=None, meta=meta)
+
+
+def test_gate_propagates_the_incumbent_sd_not_just_the_candidate():
+    """Regression, 2026-08-30, with the numbers from the live RCS08 run (arm left_leg__Right).
+
+    The old gate tested `mu_star + k*sd_star < incumbent_mu`, i.e. `gain > k*sd_star`, which clears
+    the CANDIDATE's SD only. Gain 1.117 beats the candidate SD 0.989, so the old form reported the
+    optimum as resolved. Propagating the incumbent's SD as well gives
+    sd_diff = sqrt(0.989^2 + 0.923^2) = 1.353, which the gain does NOT clear.
+    """
+    import math
+    arm = _arm(mu_star=-0.6881, sd_star=0.9894, incumbent_mu=0.4285, incumbent_sd=0.9227)
+    gain = 0.4285 - (-0.6881)
+    assert gain == pytest.approx(1.1166, abs=1e-3)
+    assert gain > 0.9894                                   # old gate would have passed
+    sd_diff = math.sqrt(0.9894 ** 2 + 0.9227 ** 2)
+    assert sd_diff == pytest.approx(1.3527, abs=1e-3)
+    assert gain < sd_diff                                  # difference is not resolved
+    assert arm.surface_can_resolve_its_optimum() is False
+
+
+def test_gate_is_conservative_relative_to_ignoring_the_incumbent_sd():
+    """Adding a second variance can only widen the band, so the gate can withhold a recommendation
+    it might have supported but can never manufacture one."""
+    # gain 2.0 against sd_diff 0.707 — resolved under either form
+    strict = _arm(mu_star=-2.0, sd_star=0.5, incumbent_mu=0.0, incumbent_sd=0.5)
+    assert strict.surface_can_resolve_its_optimum() is True
+    # The discriminating case is a gain that clears the candidate SD alone but NOT the propagated
+    # difference SD: gain 0.60 > sd_star 0.50, yet sd_diff = sqrt(0.5^2+0.5^2) = 0.707 > 0.60.
+    only_under_old_form = _arm(mu_star=-0.60, sd_star=0.5, incumbent_mu=0.0, incumbent_sd=0.5)
+    assert 0.60 > 0.5                                             # old form would have passed
+    assert only_under_old_form.surface_can_resolve_its_optimum() is False
+
+
+def test_gate_returns_false_when_the_candidate_is_worse():
+    worse = _arm(mu_star=0.5, sd_star=0.3, incumbent_mu=0.0, incumbent_sd=0.3)
+    assert worse.surface_can_resolve_its_optimum() is False
+
+
+def test_gate_missing_incumbent_sd_degrades_to_the_candidate_only():
+    """A meta dict without incumbent_sd must not crash; it falls back to the candidate SD alone."""
+    arm = _arm(mu_star=-2.0, sd_star=0.5, incumbent_mu=0.0, incumbent_sd=None)
+    assert arm.surface_can_resolve_its_optimum() is True
+
+
+def test_gate_rejects_a_degenerate_zero_variance():
+    arm = _arm(mu_star=-1.0, sd_star=0.0, incumbent_mu=0.0, incumbent_sd=0.0)
+    assert arm.surface_can_resolve_its_optimum() is False

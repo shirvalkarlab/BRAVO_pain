@@ -234,7 +234,12 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     sub = smu + float(beta) * ssd
     safe = sgp.safe_mask(beta=beta)
 
-    incumbent_mu = float(gp.predict(np.atleast_2d(incumbent_xy), return_std=False)[0])
+    # Keep the incumbent's OWN posterior SD, not just its mean. Comparing a candidate's k-sigma band
+    # against a point estimate of the incumbent understates the uncertainty of the comparison and can
+    # declare an optimum "resolved" on a difference smaller than the noise in that difference.
+    _inc_mu, _inc_sd = gp.predict(np.atleast_2d(incumbent_xy), return_std=True)
+    incumbent_mu = float(_inc_mu[0])
+    incumbent_sd = float(_inc_sd[0])
     i_star = int(np.argmin(np.where(safe, mu, np.inf)))
 
     # preference model — ILLUSTRATIVE, see figure 4
@@ -260,7 +265,7 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
         n_epochs=int(len(D)), n_epochs_fitted=int(len(fit)),
         n_reports_total=float(fit["n"].sum()),
         incumbent_epoch=float(incumbent_epoch), incumbent_xy=list(map(float, incumbent_xy)),
-        incumbent_mu=incumbent_mu,
+        incumbent_mu=incumbent_mu, incumbent_sd=incumbent_sd,
         kernel=gp.hyperparameters["kernel"],
         log_marginal_likelihood=gp.hyperparameters["log_marginal_likelihood"],
         mu_min=float(mu.min()), mu_max=float(mu.max()),

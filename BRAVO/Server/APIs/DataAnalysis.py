@@ -1694,3 +1694,57 @@ class QueryMedicationCycleAnalysis(RestViews.APIView):
             return Response(status=200, data=result)
 
         return Response(status=400, data={"message": "Malformed Input"})
+class QueryStimOptimizer(RestViews.APIView):
+    """
+    API View for Bayesian optimization of DBS stimulation parameters (StimOptimizer module).
+
+    **URL:** ``/queryStimOptimizer``  **Methods:** POST
+
+    Fits an independent Gaussian-process surrogate per ARM, where an arm is one pain site crossed
+    with one hemisphere, over the (frequency, amplitude) grid, under a separately modelled safety
+    constraint. Returns the posterior surfaces, the exploration queue, the next proposed batch and
+    the Plotly figure JSON for the browser.
+
+    This endpoint is deliberately built to be able to say that the data do NOT support a parameter
+    recommendation. Read ``recommendation_supported`` and ``blockers`` before reading any optimum:
+    an arm whose ``optimum_resolved`` is false has a predicted gain smaller than the posterior
+    uncertainty at that cell, which means the surface indicates where to look next, not what to
+    program.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param Sites: list of pain-site metrics (default ["left_leg", "back"])
+    :param Hemispheres: list of "Left"/"Right" (default both)
+    :param WashinMin: wash-in exclusion window in MINUTES (default 1.0)
+    :param Backend: "plotly" to include figure JSON (default) or "none" for tables only
+    :param NBatches: forward-simulated batches for the trajectory panel (default 3)
+    :param Q: batch size per simulated batch (default 4)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                    study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.StimOptimizer import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface the error as a message the view can render.
+            return Response(status=200, data={
+                "available": False, "arms": {}, "summary": [], "blockers": [],
+                "reason": "StimOptimizer computation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
