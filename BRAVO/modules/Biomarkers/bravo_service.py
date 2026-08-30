@@ -4857,15 +4857,29 @@ def deployment_summary(request_data):
     # audit C4: the gate passes only when the CONSERVATIVE (CI-lower-bound) power clears target, so a
     # band that looks powered on its optimistic point AUC cannot pass. Detail shows the power band.
     if power.get("available"):
-        _pc = round(power.get("power_current", 0) * 100)
+        # Same present-but-null hazard as n_ratings_needed below: `.get(key, 0)` does not protect
+        # against a key that exists with value None, and line ~4865 already treats the sibling
+        # n_ratings_needed_hi as nullable. Coerce explicitly rather than relying on the default.
+        _pc_raw = power.get("power_current")
+        _pc = round(_pc_raw * 100) if _pc_raw is not None else None
+        _pc_txt = f"{_pc}%" if _pc is not None else "not estimable"
         _plo = power.get("power_current_lo")
         if _plo is not None:
             _need_hi = power.get("n_ratings_needed_hi")
-            _powered_detail = (f"power {round(_plo*100)}–{_pc}% (conservative–point AUC); "
+            _powered_detail = (f"power {round(_plo*100)}%–{_pc_txt} (conservative–point AUC); "
                                f"need {_need_hi if _need_hi is not None else '∞'} ratings at the CI "
                                f"lower bound (audit C4: gate reads the conservative end)")
         else:
-            _powered_detail = (f"power {_pc}%, need {power.get('n_ratings_needed')} ratings")
+            # Do not print a six-figure requirement as if it were a target: at a near-chance AUC the
+            # required n is finite only arithmetically (1/(AUC-0.5)^2), so it reads as a plan when it
+            # is really a restatement that the band does not discriminate.
+            _need_txt = power.get("n_ratings_needed")
+            if power.get("status") in ("at_or_below_chance", "requirement_infeasible"):
+                _powered_detail = (f"power {_pc_txt}; target power NOT achievable by collecting more "
+                                   f"data (AUC indistinguishable from chance)")
+            else:
+                _powered_detail = (f"power {_pc_txt}, need "
+                                   f"{_need_txt if _need_txt is not None else '∞'} ratings")
     else:
         _powered_detail = "n/a"
     gates.append(_gate("powered", "Adequately powered (≥80%)",
@@ -4932,8 +4946,35 @@ def deployment_summary(request_data):
                        f"{drift.get('n_weeks_qualifying')} weeks — a fixed device threshold will be "
                        "miscalibrated in later weeks; plan periodic recalibration.")
     if power.get("available") and power.get("more_data_needed"):
-        caveats.append(f"Underpowered: ~{(power.get('n_ratings_needed',0) - power.get('n_ratings_current',0))} "
-                       "more independent pain ratings needed for 80% power.")
+        # `n_ratings_needed` is legitimately None when the power calculation flags underpowering but
+        # cannot SOLVE for the required N — an observed effect at or near chance has no finite
+        # sample size that reaches 80%. `.get(key, 0)` does NOT protect against this: the default
+        # only fires when the key is ABSENT, and here it is present and null, so the subtraction
+        # raised TypeError and took down the whole deployment summary (both deployment_summary
+        # tests, 2026-08-30). Report the honest state instead of inventing a number.
+        _need = power.get("n_ratings_needed")
+        _have = power.get("n_ratings_current")
+        _status = power.get("status")
+        _have_txt = f" Currently {int(_have)} ratings." if _have is not None else ""
+        if _status == "at_or_below_chance" or _need is None or _have is None:
+            caveats.append(
+                "Underpowered, and the requirement is UNDEFINED rather than large: at the observed "
+                "discrimination (AUC at or below chance) no finite number of additional ratings "
+                "reaches 80% power. This band does not separate the pain classes; collecting more "
+                "data will not change that." + _have_txt)
+        elif _status == "requirement_infeasible":
+            # The number is finite but only arithmetically. Required n scales as 1/(AUC-0.5)^2, so a
+            # near-chance AUC yields a requirement no study can meet; quoting it as a shortfall
+            # implies more data would rescue the biomarker.
+            caveats.append(
+                f"Underpowered and NOT rescuable by more data: 80% power would require "
+                f"{int(_need):,} independent ratings, beyond the "
+                f"{int(power.get('feasible_n_max') or 0):,} ceiling for a realistic "
+                f"single-participant study. Because required n scales as 1/(AUC-0.5)^2, this is a "
+                f"restatement of 'indistinguishable from chance', not a collection target." + _have_txt)
+        else:
+            caveats.append(f"Underpowered: ~{int(_need) - int(_have)} "
+                           "more independent pain ratings needed for 80% power.")
     caveats.append("Selection bias: this band was chosen from a sweep on the same data; the OR/AUC are "
                    "optimistic. Out-of-sample / prospective confirmation is the honest test.")
     # Audit C2: surface the forward-chaining result as a caveat so the in-sample optimism is

@@ -3456,7 +3456,53 @@ def psd_lsb_conversion(psd_bandpower_uv2, device_lsb, *, n_boot=2000, seed=0):
     }
 
 
-def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, design_effect=1.0):
+# Ceiling above which "ratings needed for 80% power" stops being a data-collection plan and becomes
+# a statement that the effect is indistinguishable from chance. Rationale, in this study's own units:
+# RCS08 accumulated ~48 INDEPENDENT (cluster-effective) pain ratings over roughly a year of chronic
+# daily reporting, so ~50/year is the realistic accrual rate for one participant. 500 is therefore a
+# deliberately GENEROUS ~10-year horizon — anything beyond it cannot be collected by any plausible
+# study, so presenting it as a shortfall ("collect N more ratings") misleads the reader into thinking
+# more data would rescue the biomarker. Observed in the wild at 270,660 ratings (~5,400 years) for a
+# band whose AUC was 0.5036. Raise it if a multi-site pooled analysis ever makes larger N feasible;
+# the raw requirement is always reported alongside, so nothing is hidden by this threshold.
+FEASIBLE_N_RATINGS_MAX = 500
+
+# Power-status vocabulary, so callers branch on a value instead of re-deriving the logic from floats.
+POWER_STATUS_POWERED = "powered"                      # target power already met
+POWER_STATUS_FEASIBLE = "more_data_feasible"          # underpowered, but the shortfall is collectable
+POWER_STATUS_INFEASIBLE = "requirement_infeasible"    # finite requirement, but beyond any real study
+POWER_STATUS_AT_CHANCE = "at_or_below_chance"         # AUC <= 0.5: no finite N reaches target power
+
+
+def _power_result_blank(**over):
+    """One canonical key set for EVERY auc_power return path.
+
+    The unavailable/at-chance paths used to return a SHORTER dict than the main path, so a consumer
+    reading e.g. ``power["power_current_lo"]`` raised KeyError on exactly the degenerate inputs where
+    it most needed a value. Every path now fills this template, so the shape is invariant and only
+    the values differ.
+    """
+    out = {
+        "available": False, "reason": None, "note": None,
+        "auc": None, "auc_lo": None, "se_auc": None,
+        "n_pos": None, "n_neg": None,
+        "power_current": None, "power_current_lo": None,
+        "n_ratings_current": None, "n_ratings_needed": None, "n_ratings_needed_hi": None,
+        "more_data_needed": None,
+        "alpha": None, "target_power": None,
+        "design_effect": None, "n_ratings_effective": None,
+        "small_sample": None, "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
+        "curve": None, "curve_truncated": False,
+        # feasibility of the requirement itself (see FEASIBLE_N_RATINGS_MAX)
+        "status": None, "requirement_feasible": None,
+        "feasible_n_max": int(FEASIBLE_N_RATINGS_MAX),
+    }
+    out.update(over)
+    return out
+
+
+def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, design_effect=1.0,
+              feasible_n_max=FEASIBLE_N_RATINGS_MAX):
     """Power / sample-size readout for a deployment AUC, on the count of INDEPENDENT ratings (the
     clustered effective n, NOT raw samples). Uses the Hanley & McNeil AUC variance.
 
@@ -3479,11 +3525,14 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
     try:
         from scipy import stats as _st
     except Exception as e:
-        return {"available": False, "reason": f"scipy unavailable: {e}"}
+        return _power_result_blank(reason=f"scipy unavailable: {e}")
     auc = float(max(auc, 1.0 - auc))
     n_pos_raw = int(n_pos); n_neg_raw = int(n_neg)
     if n_pos_raw < 2 or n_neg_raw < 2:
-        return {"available": False, "reason": "too few independent ratings for a power estimate"}
+        return _power_result_blank(reason="too few independent ratings for a power estimate",
+                                   n_pos=n_pos_raw, n_neg=n_neg_raw,
+                                   n_ratings_current=n_pos_raw + n_neg_raw,
+                                   alpha=alpha, target_power=target_power)
     # Audit [19] — DESIGN-EFFECT DISCOUNT. Weekly pain ratings are serially autocorrelated, so the
     # independent-rating count overstates the information content. `design_effect` (DEFF >= 1, the
     # moving-block/i.i.d. bootstrap variance ratio from deployment_roc) discounts the EFFECTIVE n:
@@ -3495,12 +3544,23 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
     n_pos = max(2.0, n_pos_raw / deff)
     n_neg = max(2.0, n_neg_raw / deff)
     if auc <= 0.5:
-        return {"available": True, "auc": auc, "power_current": float(alpha), "se_auc": None,
-                "n_ratings_current": n_pos_raw + n_neg_raw, "n_ratings_needed": None,
-                "design_effect": deff,
-                "more_data_needed": True, "alpha": alpha, "target_power": target_power,
-                "curve": None,
-                "note": "AUC at or below chance — no power to detect a real effect."}
+        # At exactly-chance discrimination there is NO finite N that reaches target power, so
+        # n_ratings_needed is None by mathematics, not by a failure to compute. power_current is
+        # alpha because the probability of rejecting AUC=0.5 when AUC really is 0.5 is just the
+        # Type I error rate. Both are correct; what was missing is that callers could not tell this
+        # apart from "the computation broke", hence the explicit status.
+        return _power_result_blank(
+            available=True, auc=auc, power_current=float(alpha), se_auc=None,
+            n_pos=n_pos_raw, n_neg=n_neg_raw,
+            n_ratings_current=n_pos_raw + n_neg_raw, n_ratings_needed=None,
+            design_effect=deff, n_ratings_effective=float((n_pos_raw + n_neg_raw) / deff),
+            more_data_needed=True, alpha=alpha, target_power=target_power,
+            small_sample=bool((n_pos_raw + n_neg_raw) < SMALL_SAMPLE_CLUSTER_FLOOR),
+            status=POWER_STATUS_AT_CHANCE, requirement_feasible=False,
+            feasible_n_max=int(feasible_n_max),
+            note="AUC at or below chance — no finite number of additional ratings reaches target "
+                 "power, so the requirement is undefined rather than large. power_current is alpha "
+                 "by definition (rejecting AUC=0.5 when it is true happens at the Type I rate).")
     Q1 = auc / (2.0 - auc)
     Q2 = 2.0 * auc * auc / (1.0 + auc)
     var = (auc * (1 - auc) + (n_pos - 1) * (Q1 - auc * auc)
@@ -3564,7 +3624,13 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
     prev = float(n_pos) / float(N0) if N0 > 0 else 0.5
     # x-axis is REAL ratings the clinician collects; power is evaluated at the corresponding EFFECTIVE
     # count N/deff (autocorrelation discount, audit [19]). At deff==1 these coincide -> identical curve.
-    n_top = int(max(N0_raw, n_need) * 1.35) + 4
+    # Cap the x-axis at the feasibility ceiling. Without this, an at-chance band with n_need =
+    # 270,660 produced a 40-point grid running to ~365,000 ratings, on which the clinician's actual
+    # 48 ratings sit invisibly against the origin and the curve reads as a flat line at alpha — a
+    # plot that hides the only region anyone can act in. Truncation is FLAGGED, not silent.
+    n_top_uncapped = int(max(N0_raw, n_need) * 1.35) + 4
+    n_top = min(n_top_uncapped, int(max(N0_raw * 1.35, feasible_n_max)) + 4)
+    curve_truncated = bool(n_top < n_top_uncapped)
     n_grid = np.unique(np.clip(np.linspace(4, n_top, 40).astype(int), 4, None))
     curve_n, curve_p = [], []
     for N in n_grid:
@@ -3576,8 +3642,29 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
     curve = ({"n": curve_n, "power": curve_p, "prevalence": prev}
              if len(curve_n) >= 2 else None)
 
+    # ---- is the REQUIREMENT itself a plan, or a restatement of "indistinguishable from chance"? ----
+    # `n_need` is finite whenever auc > 0.5, but it grows as 1/(auc-0.5)^2, so an AUC of 0.5036
+    # yields 270,660 ratings — ~5,400 years at this participant's accrual rate. Reporting that as a
+    # shortfall invites the reader to think more data would fix the biomarker. Decide feasibility on
+    # the CONSERVATIVE requirement when a CI lower bound gave us one (fail-closed, consistent with
+    # the gate above), else on the point requirement.
+    _need_for_feasibility = n_need_hi if (auc_lo_used is not None and n_need_hi is not None) else n_need
+    requirement_feasible = bool(_need_for_feasibility <= int(feasible_n_max))
+    if not more_data:
+        status = POWER_STATUS_POWERED
+    elif requirement_feasible:
+        status = POWER_STATUS_FEASIBLE
+    else:
+        status = POWER_STATUS_INFEASIBLE
+
     note = ("Hanley–McNeil AUC variance on the count of independent ratings (clustered "
             "effective n). Power to reject AUC = 0.5.")
+    if status == POWER_STATUS_INFEASIBLE:
+        note += (f" REQUIREMENT NOT FEASIBLE: reaching {target_power:.0%} power would take "
+                 f"{_need_for_feasibility:,} independent ratings, beyond the {int(feasible_n_max):,} "
+                 "ceiling for a realistic single-participant study. Because the required n scales as "
+                 "1/(AUC-0.5)^2, this is a restatement of 'this band is indistinguishable from "
+                 "chance', NOT a data-collection target.")
     if deff > 1.0:
         note += (f" Effective n is DISCOUNTED by a design effect of {deff:.2f} (audit [16]/[19]): "
                  "weekly ratings are serially autocorrelated, so the moving-block bootstrap variance "
@@ -3603,6 +3690,11 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
         "small_sample": bool(N0_raw < SMALL_SAMPLE_CLUSTER_FLOOR),
         "small_sample_floor": int(SMALL_SAMPLE_CLUSTER_FLOOR),
         "curve": curve,
+        "curve_truncated": curve_truncated,
+        "status": status,
+        "requirement_feasible": requirement_feasible,
+        "feasible_n_max": int(feasible_n_max),
+        "reason": None,
         "note": note,
     }
 

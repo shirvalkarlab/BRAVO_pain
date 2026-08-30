@@ -68,6 +68,318 @@
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
 
+**RESOLVED (2026-08-30, later): the July/August exports were re-synced into `RCS008 jsons/Stage 1`
+and are now ingested. BRAVO holds data to 2026-08-28.** The earlier provenance conflict was a
+Dropbox sync state, not a mystery: the folder now carries **577 JSONs (was 520) and 571 PDFs (was
+512)**, including **57 JSONs stamped 2026-07-02 through 2026-08-28** that were absent when the folder
+was first searched. Those are exactly the files the earlier stim census had read, which is why it
+contained records to 2026-08-28 while the folder appeared to stop at 24 June. Lesson for next time:
+a Dropbox CloudStorage path can legitimately lack files that existed earlier and will exist again —
+re-check the folder before concluding data is lost, and check the embedded filename stamp rather than
+mtime (every one of the 57 new files has a June-or-later stamp but was written to disk later still).
+
+`ingest_percept_folder` handled all 57: content-hash dedup classified **57 of 57 as new** (contrast
+the first run, where 15 of 20 filename-novel files were byte-identical re-exports), and all 57
+ingested with **zero failures in 210 s**. The database went **502 → 559 SourceFiles** and
+**5366 → 6095 Recordings** (+729), with newest SourceFile and newest Recording both now
+**2026-08-28**. Orphan count did not move (still 9), i.e. every new file produced recordings. The
+Biomarkers timeline can now advance past June; the assembled-matrix cache keys on the recording set
+so the first view load after this ingest is the slow one that rebuilds it.
+
+**"Biomarker plot is not updating with the new data" — the cache is EXONERATED; the platform simply
+had no data past June (2026-08-30).** The plot is correct for the data BRAVO holds. Note the limit
+of this finding: it is established that BRAVO's newest data is 2026-06-24 and that no ingest has
+occurred since 2026-06-25. It is NOT established where the reportedly-new device files are — they
+were searched for and not found (see the outstanding item at the end of this entry). Do not read
+this entry as "the new files are sitting in a folder"; that was looked for and did not hold.
+
+Evidence, all from the live container:
+
+- `/usr/src/BRAVO/BRAVOStorage/` holds 508 entries, every one last written **2026-06-25**. Nothing
+  has been uploaded since June.
+- The database's newest `SourceFile` was **2026-06-24** and its newest `Recording` **2026-06-29**.
+- `BRAVOStorage/cache/biomarker_psd` was touched the morning of 2026-08-30 — the view was running
+  and re-rendering happily, off June data.
+
+**The trap is structural, not a bug: copying exports into a folder does not put them in BRAVO.**
+Until now the only ingest path was the browser upload view (`Server/APIs/DataHandler`
+`DataUploadHandler`); there was no management command and no folder watcher. A folder of new
+exports therefore produces exactly this signature — a "frozen" plot with no error anywhere,
+because every view is faithfully drawing the last ingested state.
+
+The caching was investigated first and **exonerated**. `_assembled_signature` in
+`modules/Biomarkers/bravo_service.py` folds in each recording's (source, uid, hash), the Welch
+window, the channel-canonicalisation version, the TD-missing version, the PRO-set signature, and
+the patient-event recordings separately. It invalidates correctly; the in-container ingest log
+shows the matrix reassembling on its own immediately after new rows landed. The container had also
+been restarted, which clears the two in-process memos regardless.
+
+**New: `Server/management/commands/ingest_percept_folder.py`.** Batch-ingests a folder of Percept
+session-report JSONs for one participant, reusing the upload view's exact chain in the same order
+(`DataCurator.saveCacheFile` → `DataCurator.MedtronicPerceptJSONDecoder`) so a batch-ingested file
+is indistinguishable from a browser-uploaded one. Dedup is the identical HMAC over raw bytes
+(`unique_hashed`) scoped to institute, so re-running over an already-loaded folder is a safe no-op.
+Supports `--dry-run` (genuinely read-only; classifies new vs held and exits), `--limit`, and
+`--continue-on-error`. The orbstack container cannot see host paths, but `BRAVO/_agent_bridge/` is
+shared, so the working route is to drop exports into `_agent_bridge/incoming/` and point the
+command at `/usr/src/BRAVO/_agent_bridge/incoming`.
+
+First real run: of 520 host JSONs, 20 had filenames absent from the database, and content-hash
+dedup showed only **5** were genuinely new — the other 15 were re-exports under different filename
+prefixes with byte-identical payloads. Ingesting the 5 took the database from 497 to **502**
+SourceFiles and 5322 to **5366** Recordings.
+
+**"Orphan" SourceFiles are benign — do not chase them.** 9 of 502 SourceFiles carry zero Recording
+rows, and this is correct behaviour in every case examined. Two classes: (a) near-empty session
+reports (`Impedance` length 0, `PatientEvents` length 2, no neural blocks); (b) **re-exports of a
+session already held**. Class (b) looked alarming — 2.6 MB files carrying `LFPMontage` ×6,
+`LfpMontageTimeDomain` ×6 and a survey, yielding no rows — but `DataCurator` line ~307 dedups at the
+RECORDING level on a content fingerprint scoped to the participant. All three such files carry
+`SessionDate=2025-07-29T22:21:20Z` and that session's montages and surveys are already in BRAVO from
+`Report_Json_Session_Report_20250730T140701.json` and two 20250730T1220xx files. Nothing is dropped.
+Note also that one of them is *named* `...20250814T145112.json` while its SessionDate is 2025-07-29 —
+export filename stamps and session dates disagree, which is the same naming quirk documented above.
+
+**STILL OUTSTANDING — the July/August 2026 device data is not on this machine.** The reconstructed
+stim timeline used in the StimOptimizer work runs to 2026-08-28 with epochs at 2026-07-07, 07-22,
+08-06 and 08-12, so those exports existed when that census was built. They are now absent from every
+granted host path (searched all roots for `*_202607*T*` / `*_202608*T*`, JSON and PDF: zero hits),
+from the `RCS008 jsons` folder (newest file 2026-06-24 by both name stamp and mtime), and from
+container storage. **They must be re-provided before the Biomarkers timeline can advance past June.**
+Once they are, the fix is one command — drop them in `_agent_bridge/incoming/` and run
+`ingest_percept_folder`, `--dry-run` first.
+
+**The ingest surfaced a real latent crash in `deployment_summary` — fixed (2026-08-30).** After the
+5 new files landed, the container suite went 261/261 → **259 pass / 2 fail**, both in
+`deployment_summary` with `TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'` at
+`bravo_service.py` line 4935.
+
+Cause: `power.get('n_ratings_needed', 0) - power.get('n_ratings_current', 0)`. **`dict.get(key,
+default)` does NOT return the default when the key is PRESENT with value `None`** — the default only
+fires on absence. The live payload was `{available: True, more_data_needed: True,
+n_ratings_needed: None, n_ratings_current: 43}`: the power calculation legitimately flags
+underpowering while being unable to SOLVE for the required N, because an effect at or near chance
+has no finite sample size that reaches 80%. So the subtraction hit `None - 43` and took down the
+whole deployment-summary export for that participant — not just the caveat.
+
+Fixed to report the honest state instead of inventing a shortfall. It now reads: "Underpowered:
+more independent pain ratings are needed for 80% power, and the required number could not be
+estimated — at the observed effect size there is no finite sample size that reaches 80%. Treat this
+as 'not estimable', not as a small shortfall. Currently 43 ratings." The sibling hazard one line up
+(`power.get("power_current", 0) * 100`, same present-but-null pattern; note line ~4865 already
+treated `n_ratings_needed_hi` as nullable with an `∞` fallback) was hardened the same way, and the
+two gate-detail f-strings now render `not estimable` / `∞` rather than `None%`.
+
+Worth reading for the science, not just the crash: the gate detail for RCS08 ZERO_TWO_LEFT at
+20 Hz now prints **"power 5%, need ∞ ratings"** on 43 ratings. That was previously invisible behind
+an exception.
+
+**Then the power analysis itself was fixed, not just the crash it caused (2026-08-30).** Probing the
+real inputs showed the first diagnosis was incomplete. There are TWO degenerate regimes, not one:
+
+- `auc = 0.5` exactly → the early-return branch, `n_ratings_needed = None`. Correct: no finite N
+  reaches target power. `power_current = alpha` is also correct — rejecting AUC=0.5 when it is true
+  happens at the Type I rate.
+- `auc` just ABOVE 0.5 → the main path, returning a **finite but absurd** requirement. The live call
+  (ZERO_TWO_LEFT, 20 Hz, 5 Hz wide, nrs/tertile) gives `auc = 0.5036`, `n_ratings_current = 48`,
+  `design_effect = 1.28`, and **`n_ratings_needed = 270,660`**. Required n scales as
+  1/(AUC−0.5)², so a near-chance AUC yields a number no study can meet — ~5,400 years at this
+  participant's ~50 independent ratings/year. The old caveat rendered that as "~270,612 more ratings
+  needed", which reads as a data-collection plan when it is really a restatement of "this band does
+  not discriminate".
+
+Three defects fixed in `routines/analytics.py auc_power`:
+
+1. **Return shape was not invariant.** The unavailable and at-chance paths returned a SHORTER dict
+   than the main path (missing `auc_lo`, `n_pos`, `n_neg`, `power_current_lo`, `n_ratings_needed_hi`,
+   `n_ratings_effective`, `small_sample`, `small_sample_floor`), so a consumer reading
+   `power["power_current_lo"]` raised KeyError on exactly the degenerate inputs where it most needed
+   a value. All paths now fill one canonical template via `_power_result_blank()`.
+2. **No way to tell "undefined" from "broken" from "huge".** Added `status` ∈
+   {`powered`, `more_data_feasible`, `requirement_infeasible`, `at_or_below_chance`} plus
+   `requirement_feasible` and `feasible_n_max`, so callers branch on a value instead of re-deriving
+   the logic from floats. Feasibility is decided on the CONSERVATIVE requirement when a CI lower
+   bound supplied one, consistent with the existing fail-closed gate.
+3. **The power-vs-N curve was unreadable.** `n_top` was `max(N0, n_need) * 1.35`, so the at-chance
+   case built a 40-point grid running to ~365,000 ratings on which the clinician's real 48 sit
+   invisibly at the origin and the curve reads as a flat line at alpha. Now capped at the feasibility
+   ceiling with `curve_truncated` flagged rather than silently clipped.
+
+`FEASIBLE_N_RATINGS_MAX = 500` is the ceiling, chosen in this study's own units and documented at the
+constant: ~50 independent ratings/year for one participant makes 500 a deliberately generous ~10-year
+horizon, and it is a keyword argument so a pooled multi-site analysis can raise it. The raw
+requirement is always reported alongside, so the threshold hides nothing.
+
+Consumer side, `deployment_summary` now branches on `status`. The live readout reads: *"Underpowered
+and NOT rescuable by more data: 80% power would require 270,660 independent ratings, beyond the 500
+ceiling for a realistic single-participant study. Because required n scales as 1/(AUC-0.5)^2, this is
+a restatement of 'indistinguishable from chance', not a collection target. Currently 48 ratings."*
+The gate detail changed from `power 3%, need 270660 ratings` to `power 3%; target power NOT achievable
+by collecting more data (AUC indistinguishable from chance)`.
+
+Five tests added covering shape invariance across all four paths, the status vocabulary in each
+regime, at-chance giving an undefined rather than large requirement, curve capping, and the ceiling
+being configurable. Container suite **267/267**.
+
+`test_deployment_summary_survives_unestimable_power_requirement` added to
+`modules/Biomarkers/tests/test_analytics.py`. It is deliberately non-vacuous — verified that on the
+live participant the call returns `available: True` with exactly one `Underpowered:` caveat — and it
+asserts no caveat or gate detail leaks a literal `None`/`None%` into user-facing text. Container
+suite now **262/262**.
+
+**Housekeeping:** `BRAVO/_agent_bridge/incoming/` holds ~450 MB of session JSONs copied there to
+feed the ingest run (20 files; 5 were new, 15 were duplicates). They are staging copies, safe to
+delete once you are satisfied with the ingest. Left in place rather than removed, since deleting
+inside the repo is the user's call. `_agent_bridge/_*.py` is already gitignored, so the probe
+scripts written during this investigation (`_ingest_census.py`, `_storage_probe.py`,
+`_orphan_probe.py`, `_orphan_dedup_check.py`, `_power_probe.py`, `_tb_probe.py`,
+`_caveat_probe*.py`, `_dump_sf_names.py`) are untracked and equally disposable.
+
+**Known gap, not fixed:** the Biomarkers API exposes no cache-bypass or force-refresh parameter, so
+if the assembled-matrix cache ever DID go stale there is no way to force a rebuild from the UI. The
+signature is sound so this is a robustness gap rather than an active fault; worth adding.
+
+**`StimOptimizer` gains a callable entry point and runs per hemisphere (2026-08-30, untracked).**
+Previously `routines/` was importable library code with no runner, so nothing in the module was
+reachable from BRAVO the application. `StimOptimizer/pipeline.py` now provides `run(design_matrix,
+sites=..., hemispheres=..., ...) -> RunReport`, mirroring `modules/Biomarkers/pipeline.py`; still
+library mode with no Django endpoint or React view.
+
+The unit of work is an **arm**: one pain site crossed with one hemisphere's amplitude. Arms are
+fitted independently and never blended. The two sides are usable on different epoch subsets and the
+LEFT is the sparser one — in the 86-epoch RCS08 warm start both amplitudes are recorded on every
+epoch, but the left is above 0 mA on 59 and the right on 71 (21 epochs run the left off with the
+right active, against 9 the other way), giving 54 fitted epochs on the left arm and 63 on the right.
+`routines/plots.py` `build_context` takes `hemisphere=` and `primary_item=`, derives the amplitude
+column from it, refuses a missing column rather than substituting, and stamps hemisphere and outcome
+onto every figure's provenance line. Four arms (left_leg / back × Left / Right) produce 20 figures.
+
+**Four stale or inconsistent constants in `plots.py` were poisoning every output, now removed.**
+`INCUMBENT_EPOCH` and `INCUMBENT_XY` were independent module constants that had drifted apart *and*
+gone stale: the epoch pointed at 50 (2025-11-01, 110 Hz / 1.2 mA) while the coordinates named
+55 Hz / 1.6 mA, belonging to neither that epoch nor the setting actually in force (epoch 102,
+2026-08-12, 55 Hz, 3.5/3.0 mA). Every J was therefore referenced to the wrong incumbent. Both are
+now `None` by default and **derived from the design matrix** (most recent `t0`), which makes the pair
+self-consistent and staleness impossible; they remain as explicit overrides only. Three figure
+annotations additionally hardcoded the `55 Hz / 1.6 mA` label text while their markers used the
+derived value — all three now read the derived coordinates.
+
+`AMP_GRID` ran 0.8–4.0 mA and so **could not represent the July–August 2026 escalation**, which
+delivered up to 4.8 mA: the highest settings actually delivered fell outside the search space, where
+the surrogate could neither score nor propose them. Now 0.0–5.0 mA (0.0 because a hemisphere
+genuinely runs at 0 mA in this record). `WASHIN_MIN` was 5.0 and is now 1.0 (the PI-declared 60 s
+window); `DATA_HORIZON` now defaults to a string containing `UNDECLARED` so a stale horizon can
+never be silently stamped onto a figure — the caller must pass the true one.
+
+Also fixed: panel c of fig3 used a fixed y-floor of −1.35, which clipped the running-best trace off
+the bottom of the axis on arms whose best J goes lower (54 of 132 points on left_leg__Left, whose J
+spans −1.96 to +3.84). Limits are now data-driven with headroom added above for the legend only.
+
+`StimOptimizer/tests/test_pipeline.py` is new (8 tests) covering incumbent derivation, per-hemisphere
+column selection, refusal of an unknown or missing hemisphere, grid coverage of the delivered range,
+labelled provenance defaults, and that an unfittable arm is recorded in `manifest["skipped"]` rather
+than silently dropped. 54 tests pass **on a local run** (`PYTHONPATH=. python -B -m pytest
+StimOptimizer/tests`), not through the bridge suite.
+
+**Standing caveat unchanged:** no arm's optimum is resolved at one posterior SD
+(`optimum_resolved` False for all four; signal-to-uncertainty 1.43–3.70) and the safe set is
+non-contiguous in amplitude on every arm. Every selected cell is exploration-led (fraction above
+0.5 throughout), but the magnitude is NOT uniform across arms and must not be quoted as a single
+number: left_leg__Left 0.959–0.994, back__Left 0.938–0.999, back__Right 0.939–0.979, but
+**left_leg__Right 0.565–0.833** — the right-hemisphere left-leg arm carries appreciably more
+exploitable signal than the other three. Read the per-arm `stimopt_batch_<arm>.csv`, not a summary
+figure. These figures are built to show that a recommendation is not supported, not to produce one.
+The randomised within-visit ordering change remains the prerequisite.
+
+On fig1's headline: a grid minimum below zero IS predicted better than the incumbent in the mean,
+so the old hardcoded title "Nothing on the grid is predicted better than the incumbent" was false
+on three of four arms. `_incumbent_verdict()` now derives the wording — it reports "predicted better
+but NOT resolved: gain X < posterior SD Y" when the gain is smaller than the optimum's own posterior
+SD (true for left_leg__Left 0.46 < 1.01, left_leg__Right 0.25 < 1.07, back__Left 0.37 < 0.64), and
+only claims nothing is better when the minimum is genuinely non-negative (back__Right, +0.749).
+`_amp_label()` likewise derives the y-axis label from `ctx.meta["hemisphere"]`; it had been
+hardcoded to "Left-hemisphere amplitude" in five places, so every right-arm figure contradicted its
+own provenance stamp and its own incumbent marker.
+
+**New module: `BRAVO/modules/StimOptimizer/` — Bayesian optimization of stimulation parameters
+(2026-08-29, untracked).** Library mode, no Django endpoint or React view, mirroring the staging the
+Biomarkers module used. Searches (frequency, left amplitude) on a discrete grid with a Matern-3/2 ARD
+GP over a composite pain objective, under a separately modelled safety GP, with a parallel
+pairwise-probit preference GP. `OBJECTIVE_SPEC.md` is a pre-registration and carries a dated amendment
+log — read it before changing any threshold. No torch: the grid is a few hundred cells so the
+acquisition is evaluated exhaustively and scikit-learn's `GaussianProcessRegressor` supplies the
+kernel with per-observation noise. 35 tests pass (verified against fresh bytecode with `-B`, after a
+docstring-splitting SyntaxError meant an earlier "passing" run had used a stale `.pyc`).
+
+**GOTCHA, high impact: the Percept JSON carries stimulation amplitude in TWO different places, and a
+parser that reads only one of them silently returns an incomplete record.** This is a schema issue, not
+a missing-data issue: the JSONs contain the full amplitude history and are the canonical source.
+
+- **Legacy schema.** `Groups.{Initial,Final}[].ProgramSettings.{LeftHemisphere,RightHemisphere}
+  .Programs[]`, with the delivered amplitude in `AmplitudeInMilliAmps`, pulse width in
+  `PulseWidthInMicroSecond`, and rate at the group level in `ProgramSettings.RateInHertz`.
+- **BrainSense schema.** When a group is configured for sensing, there are **no hemisphere keys at
+  all**. The per-hemisphere program moves to `ProgramSettings.SensingChannel[]`, one entry per
+  hemisphere identified by `HemisphereLocation`. The delivered amplitude is
+  **`SuspendAmplitudeInMilliAmps`**; `PulseWidthInMicroSecond` and `RateInHertz` sit on the channel
+  (not the group); per-contact amplitudes are in `ElectrodeState[].ElectrodeAmplitudeInMilliAmps`;
+  `UpperLimitInMilliAmps`/`LowerLimitInMilliAmps` are the programmed bounds; and
+  `Upper/LowerCaptureAmplitudeInMilliAmps` plus `AdaptiveTherapy` carry the closed-loop configuration.
+
+Both schemas appear throughout the record and the split is **not** a date cutoff — of 1088
+active-group hemisphere records from `Groups.Final`, 681 use the sensing schema and 407 the legacy one.
+It is also **not** a home-versus-clinic distinction: both schemas occur in both session types. What
+happened for RCS08 is simply that by July 2026 every active group was sensing-configured, which is
+expected once closed-loop deployment is under way. Read both schemas (see
+`StimOptimizer.routines`-adjacent `group_settings()` pattern) and prefer `GroupHistory` alongside
+`Groups.Final`, because the dated `GroupHistory` snapshots capture between-visit changes that the
+per-session records miss — including them raises the epoch count from 73 to 102.
+
+An earlier revision of this entry claimed the JSONs truncate amplitude and directed readers to the
+PDF session reports instead. **That was wrong and is retracted.** It came from a parser that read only
+the hemisphere keys, so sensing-configured groups looked empty. The PDFs are a valid cross-check: on
+439 sessions where both sources describe the same group and hemisphere, amplitude agrees in 98.4% of
+cases, pulse width and rate in 99.5%. The apparent "extra" 5.0 mA level in the PDFs was an artifact of
+comparing active-group-only JSON records against all-group PDF records — the 5.0 mA belonged to Group
+B on 24 sessions in July-August 2025, and Group B was not the active group in any of them.
+
+Two real traps if you do use the PDFs: the filename stamp is LOCAL clock while the JSON `SessionDate`
+field is UTC (a seven-hour offset that reduces a naive join to 9 of 1177 rows), and the PDF text must
+be parsed line-by-line — a `(?:.*?\n){0,4}?` construct under `re.S` backtracks catastrophically and
+hangs for over ten minutes.
+
+**Programmed limits ARE usable as safety anchors.** `UpperLimitInMilliAmps` exceeds the delivered
+amplitude in 96.5% of legacy-schema records (median headroom 0.60 mA) and 58.3% of sensing-schema
+records (median 0.30 mA), so it is a genuine clinician ceiling rather than a copy of the current
+amplitude. A single June record where the two were equal had earlier been over-generalised.
+
+**Pulse width is asymmetric between hemispheres** in about 90% of timestamps — left 60 µs with right
+160 µs is the most common pairing (619 timestamps). Any instruction to "pin pulse width" must name a
+value per hemisphere.
+
+**RCS08 warm start and the corrected scientific reading.** From the canonical dual-schema JSON parse
+including `GroupHistory`: **102 setting-change epochs, 86 with data, 56 with n >= 3, 746 usable
+reports** at the 5-minute wash-in. (A single-schema parse gave 60/45/33/678 and a PDF-based
+reconstruction gave 73/67/51/747; both are superseded.) Effective sample size for a
+settings-level model is the **epoch**, not the report: ICC 0.286, design effect 5.02. Wash-in
+exclusion is **5 minutes**, not 24 h — PI reports a demonstrated sub-5-minute response, which recovers
+81 reports and 10 epochs. The previously missing June-August window was an **amplitude escalation, not
+a plateau**: 55 Hz throughout with left/right 2.0/1.6 -> 3.5/3.5 -> 4.0/4.0 -> 4.5/4.5 -> 4.0/3.0 ->
+3.5/3.0, pulse width 60 -> 100 us, cathode ring 1 -> ring 2. The five best epochs with n >= 5 are all
+from that period. **Current incumbent is epoch 73: 55 Hz, 3.5 mA left / 3.0 mA right, 100 us, ring 2,
+n = 18, NRS 6.56** — not the 55 Hz / 1.6 mA setting the truncated record implied. The surrogate finds a
+real amplitude dose-response (length scale 3.81; posterior mean at 55 Hz falls from +0.803 at 0.8 mA
+to +0.034 at 4.5 mA, then flattens, matching the clinical back-off from 4.5), and the highest-EI cells
+are 55 Hz at 4.4-5.0 mA. An earlier "flat in amplitude, go to 40 Hz" reading was an artifact of the
+truncated data. Amplitude is confounded with time in the *opposite* direction to what the JSONs
+implied: days versus left amplitude +0.39 (p = 0.001), days versus NRS -0.61 (p < 0.0001).
+
+**PRO refresh path.** `scripts/dump_chronic_pros.py` is not mounted into the container; stage it into
+`BRAVO/_agent_bridge/` (which is live-mounted) and run via the bridge with `DUMP_OUT` set to a fresh
+directory so the prior dump is not clobbered. The refreshed dump ships a `_pro_time_utc` column —
+use it rather than re-deriving the California-to-UTC conversion (verified identical to a manual
+PDT/PST conversion across 694 overlapping rows).
+
 **Documentation: v3.1.0 README fully corrected (2026-06-29, `621bc35`).** Six critical fixes applied to
 `README_BIOMARKERS_AND_DEPLOYMENT.md` in response to user feedback: (1) Added `MedtronicIndefiniteStream`
 to data-sources table (line 57) — the indefinite-duration TD recording type was core but missing from docs.

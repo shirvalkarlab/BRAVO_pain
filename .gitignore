@@ -327,6 +327,10 @@ BRAVO/modules/AsyncJobScheduler/*.sh
 
 # Patient PRO / LFP dumps produced by scripts/dump_chronic_pros.py — NEVER commit.
 BRAVO/_pro_dump/
+# Same content, refreshed dump written 2026-08-29 (141 MB of per-report PRO rows). The original
+# rule was an exact-directory match and did not cover the suffixed variant, so this sat untracked
+# but committable. Glob the family rather than naming each refresh.
+BRAVO/_pro_dump*/
 
 # Local Claude/Operon agent state (project memory, settings).
 .claude/

@@ -2482,3 +2482,111 @@ if __name__ == "__main__":
                      "test_modeled_transform_point_stays_flagged_native_preferred",
                      "test_modeled_excluded_from_native_correlation_path"):
             _fn(); print("PASS", _name)
+
+
+def test_deployment_summary_survives_unestimable_power_requirement():
+    """Regression, 2026-08-30: `n_ratings_needed` is legitimately None when the power calculation
+    flags underpowering but cannot solve for the required N (an effect at chance has no finite N
+    reaching 80%). The old code did `power.get('n_ratings_needed', 0) - power.get('n_ratings_current', 0)`,
+    and `.get(key, default)` does NOT return the default for a key that is PRESENT with value None —
+    so this raised TypeError and took down the entire deployment_summary export for that
+    participant. Reached on live RCS08 data after an ingest, not by any synthetic fixture.
+
+    Asserts the summary still builds, and that the caveat says the requirement is not estimable
+    rather than inventing a shortfall number.
+    """
+    import sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+    from Server import models
+    uid = "2e3c75c00d7f4f37b53a048d195f11da"
+    if models.Participant.find(uid=uid) is None:
+        return  # participant not in this DB — skip
+
+    out = bs.deployment_summary({
+        "ParticipantId": uid, "Channel": "ZERO_TWO_LEFT", "CenterHz": 20.0, "BandWidthHz": 5.0,
+        "Metric": "nrs", "Strategy": "tertile", "MatchDirection": "prior"})
+    if not out.get("available"):
+        return
+    caveats = out.get("caveats") or []
+    assert isinstance(caveats, list) and caveats, "deployment_summary must still produce caveats"
+
+    # No caveat may render a None into user-facing text.
+    for c in caveats:
+        assert "None" not in c, f"caveat leaked a None into display text: {c!r}"
+
+    # If the underpowered caveat is present at all, it must be one of the two well-formed shapes:
+    # a concrete shortfall, or an explicit 'not estimable' — never a bare arithmetic artefact.
+    under = [c for c in caveats if c.startswith("Underpowered:")]
+    for c in under:
+        assert ("could not be estimated" in c) or ("more independent pain ratings needed" in c), \
+            f"malformed underpowered caveat: {c!r}"
+
+    # Gate details must not leak a None percentage either (the sibling `power_current` hazard).
+    for g in (out.get("gates") or []):
+        detail = (g or {}).get("detail") if isinstance(g, dict) else None
+        if isinstance(detail, str):
+            assert "None%" not in detail, f"gate detail leaked a None percentage: {detail!r}"
+
+
+# --- auc_power: status vocabulary, invariant shape, feasibility ceiling (2026-08-30) -------------
+def test_auc_power_return_shape_is_invariant_across_all_paths():
+    """The unavailable / at-chance paths used to return a SHORTER dict than the main path, so a
+    consumer reading power['power_current_lo'] raised KeyError on exactly the degenerate inputs
+    where it most needed a value. Every path must now fill one canonical key set."""
+    from modules.Biomarkers.routines import analytics as an
+    shapes = {
+        tuple(sorted(an.auc_power(0.80, 24, 24).keys())),
+        tuple(sorted(an.auc_power(0.50, 24, 24).keys())),                 # at chance
+        tuple(sorted(an.auc_power(0.5036, 24, 24, design_effect=1.283).keys())),  # near chance
+        tuple(sorted(an.auc_power(0.70, 1, 9).keys())),                   # too few ratings
+    }
+    assert len(shapes) == 1, f"return shape diverges across paths: {len(shapes)} distinct key sets"
+    keys = tuple(sorted(an.auc_power(0.50, 24, 24).keys()))
+    for k in ("status", "requirement_feasible", "feasible_n_max", "power_current_lo",
+              "n_ratings_needed_hi", "curve_truncated", "reason"):
+        assert k in keys, f"{k} missing from the canonical key set"
+
+
+def test_auc_power_status_discriminates_the_four_regimes():
+    """`status` must let a caller branch without re-deriving the logic from floats."""
+    from modules.Biomarkers.routines import analytics as an
+    assert an.auc_power(0.80, 24, 24)["status"] == an.POWER_STATUS_POWERED
+    assert an.auc_power(0.65, 24, 24)["status"] == an.POWER_STATUS_FEASIBLE
+    assert an.auc_power(0.50, 24, 24)["status"] == an.POWER_STATUS_AT_CHANCE
+    # near-chance: requirement is finite but astronomically large
+    near = an.auc_power(0.5036, 24, 24, design_effect=1.283)
+    assert near["status"] == an.POWER_STATUS_INFEASIBLE
+    assert near["n_ratings_needed"] is not None and near["n_ratings_needed"] > 100000
+    assert near["requirement_feasible"] is False
+
+
+def test_auc_power_at_chance_requirement_is_undefined_not_large():
+    """AUC <= 0.5 has NO finite N reaching target power, and power_current is alpha by definition."""
+    from modules.Biomarkers.routines import analytics as an
+    o = an.auc_power(0.50, 24, 24, alpha=0.05)
+    assert o["available"] is True
+    assert o["n_ratings_needed"] is None
+    assert o["power_current"] == 0.05
+    assert o["more_data_needed"] is True
+    assert o["requirement_feasible"] is False
+
+
+def test_auc_power_curve_is_capped_at_the_feasibility_ceiling():
+    """An at-chance band produced a 40-point curve running to ~365,000 ratings, on which the real
+    48 ratings sit invisibly at the origin. The curve must stay in the actionable range and say so."""
+    from modules.Biomarkers.routines import analytics as an
+    o = an.auc_power(0.5036, 24, 24, design_effect=1.283)
+    assert o["curve_truncated"] is True
+    if o.get("curve"):
+        assert max(o["curve"]["n"]) <= o["feasible_n_max"] * 1.5, \
+            "curve x-axis still runs past the feasibility ceiling"
+    # a genuinely feasible requirement must NOT be flagged as truncated
+    assert an.auc_power(0.65, 24, 24)["curve_truncated"] is False
+
+
+def test_auc_power_feasibility_ceiling_is_configurable():
+    from modules.Biomarkers.routines import analytics as an
+    o = an.auc_power(0.65, 24, 24, feasible_n_max=10)   # absurdly low ceiling
+    assert o["feasible_n_max"] == 10
+    assert o["requirement_feasible"] is False and o["status"] == an.POWER_STATUS_INFEASIBLE
