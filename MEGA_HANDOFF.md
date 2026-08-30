@@ -242,8 +242,16 @@ Biomarkers precedent:
 Sidebar label is **"Stim Parameter Optimizer"**, directly under Biomarker Exploration. Frontend
 rebuilt (`main.8caba91d.js`), and the dev override bind-mounts `./Client/build` to
 `/usr/share/nginx/html`, so the host build is served with no image rebuild — confirmed the served
-bundle contains the new view. `/api/queryStimOptimizer` resolves. Container suite 267/267 and the
-StimOptimizer module tests pass.
+bundle contains the new view. `/api/queryStimOptimizer` resolves (verified by
+`django.urls.resolve` -> `QueryStimOptimizer`, and by an unauthenticated POST returning 403 where an
+unregistered path returns 405).
+
+**Two SEPARATE test suites — do not quote one as covering the other.** The container suite
+(`_agent_bridge/run_tests.py`, **267/267**) covers Biomarkers and does NOT include StimOptimizer:
+the container has no `pytest` installed, so an attempt to run the module tests there fails with
+`No module named pytest`. The StimOptimizer suite (**59 passed**) runs on the HOST in conda env
+`bravo_app`, from `BRAVO/modules` with `PYTHONPATH=.`. Both numbers are current as of 2026-08-30;
+quote them separately.
 
 **Why `adapter.py` reads stored JSON rather than the Therapy tables — do not "simplify" this.**
 BRAVO normalizes settings into `Therapy` -> `ElectricalTherapy` -> `ElectricalStimulation`, which are
