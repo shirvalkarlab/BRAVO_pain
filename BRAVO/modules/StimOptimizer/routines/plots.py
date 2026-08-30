@@ -48,11 +48,12 @@ from .preference import PreferenceGP
 
 # --- canonical configuration -------------------------------------------------------------
 FREQ_GRID = [10, 20, 30, 40, 55, 70, 85, 110, 125, 130, 145, 165]          # Hz
-# 0.0-5.0 mA. The lower bound is 0.0 because a hemisphere genuinely runs at 0 mA in this record;
-# the upper bound is 5.0 because the July-August 2026 escalation delivered up to 4.8 mA, which the
-# previous 0.8-4.0 grid COULD NOT REPRESENT — the highest settings actually delivered fell outside
-# the search space, so the surrogate could neither score nor propose them.
-AMP_GRID = np.round(np.arange(0.0, 5.01, 0.1), 2)                          # mA, per hemisphere
+# Upper bound 4.9 mA: PI-declared ceiling (2026-08-30). Chosen as the highest amplitude the search
+# is permitted to propose, just above the 4.8 mA actually delivered during the July-August 2026
+# escalation, so the grid can represent every setting on record without proposing beyond the
+# clinician's stated limit. Lower bound stays 0.0 because a hemisphere genuinely runs at 0 mA in
+# this record. Do not raise this to represent a higher delivered amplitude without a new PI limit.
+AMP_GRID = np.round(np.arange(0.0, 4.91, 0.1), 2)                          # mA, per hemisphere
 FIXED_LENGTH_SCALE = (0.823, None)   # frequency pinned at one octave, amplitude FITTED
 # Retained only as an explicit override for a caller who wants a NON-current reference. The
 # default is None, which derives both the epoch and its coordinates from the design matrix; see
