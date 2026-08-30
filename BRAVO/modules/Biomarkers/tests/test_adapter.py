@@ -328,22 +328,27 @@ def test_td_sliding_corr_spectrum_matches_scipy():
 
 
 def test_pearson_corr_psd_label_rejects_mad_outliers():
-    """MAD>=3 outlier rejection: a single artifact session must be excluded from the PSD<->pain
+    """MAD outlier rejection: a single artifact session must be excluded from the PSD<->pain
     correlation so it cannot fabricate (or destroy) a correlation. The MAD-filtered R on data with
-    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R."""
+    one planted spike must match the R on the clean data, and differ from the naive (unfiltered) R.
+
+    Updated 2026-08-30 for the plate-wide consolidation: the threshold is now read from
+    stats_utils.MAD_N_DEFAULT instead of being hardcoded at 3, so this test follows the canonical
+    rule rather than pinning a value that has since changed. Note the API change it also covers:
+    `mad_k=None` now means USE THE CANONICAL THRESHOLD, and disabling is `mad_k=0`."""
     pearson_corr_psd_label = streaming_psd.pearson_corr_psd_label
     rng = np.random.default_rng(7)
     E = 60
     label = np.linspace(0, 10, E)
     feat_clean = (label + rng.normal(0, 1.0, E))           # genuinely correlated feature
     psd_clean = feat_clean.reshape(E, 1, 1)
-    r_clean, _ = pearson_corr_psd_label(psd_clean, label, mad_k=3.0)
+    r_clean, _ = pearson_corr_psd_label(psd_clean, label)      # canonical threshold
 
     # Plant one extreme artifact session (huge feature, mid-range label) that would distort a naive R.
     feat_spk = feat_clean.copy(); feat_spk[E // 2] += 500.0
     psd_spk = feat_spk.reshape(E, 1, 1)
-    r_filtered, _ = pearson_corr_psd_label(psd_spk, label, mad_k=3.0)     # MAD drops the spike
-    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=None)       # naive keeps it
+    r_filtered, _ = pearson_corr_psd_label(psd_spk, label)                # MAD drops the spike
+    r_naive, _ = pearson_corr_psd_label(psd_spk, label, mad_k=0)          # 0 == disabled
 
     rc, rf, rn = float(r_clean[0, 0]), float(r_filtered[0, 0]), float(r_naive[0, 0])
     # Filtered R recovers the clean correlation; naive R is corrupted by the spike.
@@ -378,20 +383,21 @@ def test_concat_chronic_mad_is_per_recording_not_global():
     dB = np.column_stack([np.full(60, 100.0), np.full(60, 2.0)])   # tight high-scale source
     rec_a = {"Time": tA, "Data": dA, "ChannelNames": ["L LFP", "L Amplitude"]}
     rec_b = {"Time": tB, "Data": dB, "ChannelNames": ["L LFP", "L Amplitude"]}
-    lfp = adapter._concat_chronic([rec_a, rec_b], mad_k=3.0)["Data"][:, 0]
+    lfp = adapter._concat_chronic([rec_a, rec_b])["Data"][:, 0]   # canonical threshold
     assert (lfp == 10.0).sum() == 8 and (lfp == 100.0).sum() == 60   # both sources fully survive
     # Control: a GLOBAL MAD would flag every low-scale sample as an outlier.
     allv = np.concatenate([dA[:, 0], dB[:, 0]])
     med = np.median(allv); mad = np.median(np.abs(allv - med))
-    assert (np.abs(allv[:8] - med) <= 3.0 * mad).sum() == 0
+    from modules.Biomarkers.routines.stats_utils import MAD_N_DEFAULT as _K
+    assert (np.abs(allv[:8] - med) <= _K * mad).sum() == 0
     # A within-source spike IS dropped (give the source spread so MAD is defined).
     rng = np.random.default_rng(3)
     dS = np.column_stack([rng.normal(10, 1, 40), np.full(40, 2.0)]); dS[5, 0] = 9000.0
     rec_s = {"Time": _MIDNIGHT_UTC + np.arange(40) * 3600.0, "Data": dS,
              "ChannelNames": ["L LFP", "L Amplitude"]}
-    assert 9000.0 not in set(adapter._concat_chronic(rec_s, mad_k=3.0)["Data"][:, 0])
-    # mad_k=None disables rejection -> the spike survives.
-    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=None)["Data"][:, 0])
+    assert 9000.0 not in set(adapter._concat_chronic(rec_s)["Data"][:, 0])
+    # mad_k=0 disables rejection -> the spike survives. (None now means CANONICAL, not off.)
+    assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=0)["Data"][:, 0])
 
 
 def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():

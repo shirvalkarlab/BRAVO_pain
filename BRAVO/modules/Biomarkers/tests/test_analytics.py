@@ -2709,4 +2709,4 @@ def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
     # same threshold, same data -> the two masks must be exact complements on finite entries
     assert list(drop) == list(~keep), (list(drop), list(keep))
     # and the defaults genuinely differ, which is why they cannot be swapped blindly
-    assert an.OUTLIER_N_MAD == 5.0
+    assert an.OUTLIER_N_MAD == 5.0        # single canonical threshold, from stats_utils

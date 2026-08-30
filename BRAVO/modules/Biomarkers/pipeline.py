@@ -459,7 +459,7 @@ def _autocorr_adjusted_pgrid(result):
     # from and the t->p mapping is anti-conservative (partly undoing the effective-N adjustment this
     # function exists to make). Mirror the MAD keep-mask on the label once; the feature side is per
     # (c,f) inside the loop.
-    label_keep = adapter.mad_outlier_mask(labels, k=3.0)
+    label_keep = adapter.mad_outlier_mask(labels)
     from scipy.stats import t as _t
     for c in range(C):
         for f in range(F):
@@ -467,7 +467,7 @@ def _autocorr_adjusted_pgrid(result):
             if not np.isfinite(r) or abs(r) >= 1:
                 continue
             x = feat[:, c, f]
-            v = adapter.mad_outlier_mask(x, k=3.0) & label_keep
+            v = adapter.mad_outlier_mask(x) & label_keep
             n_eff = stats_utils.effective_n(x[v], labels[v])
             df = n_eff - 2.0
             if not np.isfinite(n_eff) or df < 1:
@@ -712,7 +712,7 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     # Robust MAD outlier rejection (>=3 MADs from the median is dropped) on BOTH the band-power
     # feature and the label, consistent with the correlation spectrum and the chronic detector, so a
     # single artifact session cannot inflate the partial r / effective N / Fisher-z CI for the band.
-    valid = adapter.mad_outlier_mask(bandpow, k=3.0) & adapter.mad_outlier_mask(labels, k=3.0)
+    valid = adapter.mad_outlier_mask(bandpow) & adapter.mad_outlier_mask(labels)
     n = int(valid.sum())
 
     # Stim-adjusted partial correlation. Only meaningful when stim amplitude was actually recorded

@@ -255,24 +255,21 @@ def _session_stim_amplitude(recording):
 # ---------------------------------------------------------------------------
 # 4) Chronic (10-min trend) glue for the threshold biomarker
 # ---------------------------------------------------------------------------
-def mad_outlier_mask(x, k=3.0):
-    """Boolean KEEP-mask: True for samples within k median-absolute-deviations of the median.
-    Excludes artifact spikes where |x - median| > k*MAD (NaN/non-finite are excluded). Returns the
-    finite mask when MAD==0 (all equal) or fewer than 3 finite points (MAD undefined/unstable).
-    Robust (median/MAD), so a few extreme values don't move the threshold like mean/SD would.
+def mad_outlier_mask(x, k=None):
+    """Boolean KEEP-mask under the ONE canonical MAD rule (stats_utils.mad_keep_mask).
+
+    Delegates rather than reimplementing. Previously carried its own copy defaulting to k=3.0; the
+    PI consolidated the biomarker plate onto a single 5 MAD filter on 2026-08-30, so ``k=None`` now
+    means the canonical threshold. Name and keep-polarity are preserved for existing callers.
+
+    NOTE for the chronic path: this is applied to the LFP POWER column, which is a raw linear
+    multiplicative quantity, so callers there pass scale via `_concat_chronic` using the log-scale
+    rule. A raw-scale window on linear power deletes the upper tail almost exclusively.
     """
-    x = np.asarray(x, dtype=float)
-    finite = np.isfinite(x)
-    if finite.sum() < 3:
-        return finite
-    med = np.median(x[finite])
-    mad = np.median(np.abs(x[finite] - med))
-    if mad <= 0:
-        return finite
-    return finite & (np.abs(x - med) <= k * mad)
+    from .routines.stats_utils import mad_keep_mask
+    return mad_keep_mask(x, n_mad=k, scale="raw")
 
-
-def _concat_chronic(chronic, mad_k=3.0):
+def _concat_chronic(chronic, mad_k=None):
     """Accept one Chronic recording dict OR a list of them, returning a single dict with a
     time-sorted, concatenated Time/Data. The threshold detector needs many days of trend
     (train+gap+test, default ~10 days); a single Chronic recording spans only minutes, so
@@ -281,7 +278,8 @@ def _concat_chronic(chronic, mad_k=3.0):
     `mad_k`: per-recording MAD outlier rejection on the LFP-power column (Data[:,0]) BEFORE
     concatenation. Applied PER RECORDING (each recording is one homogeneous-scale source —
     Chronic ~10-min LFP vs per-session Power-Domain band power differ ~8x), so a global MAD
-    wouldn't wrongly flag an entire lower-scale source. Set mad_k=None to disable.
+    wouldn't wrongly flag an entire lower-scale source. mad_k=None means the CANONICAL
+    threshold (stats_utils.MAD_N_DEFAULT); pass mad_k=0 to disable rejection entirely.
     """
     if isinstance(chronic, dict):
         chronic = [chronic]
@@ -301,8 +299,16 @@ def _concat_chronic(chronic, mad_k=3.0):
         # (channel, frequency) combo without a separate timestamp-to-schedule join. Snapped to the
         # Percept FFT bin (~250/256 Hz); NaN when the recording carries no CenterFrequencyHz.
         fhz = _snap_freq_local(c.get("CenterFrequencyHz"))
-        if mad_k and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
-            keep = mad_outlier_mask(d[:, 0], k=mad_k)   # per-recording (homogeneous scale)
+        # `mad_k is None` now means "use the canonical threshold", NOT "disabled" — a plain
+        # `if mad_k` truthiness test would silently skip outlier rejection for the default call.
+        # Explicit disable is mad_k=0 or mad_k=False.
+        _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
+        if _mad_on and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
+            # LOG-scale rule: Data[:,0] is LINEAR LFP power, a multiplicative quantity, so a
+            # symmetric raw-scale MAD window would delete the upper tail almost exclusively. Same
+            # canonical threshold as everywhere else; only the space it is evaluated in differs.
+            from .routines.stats_utils import mad_keep_mask as _mk
+            keep = _mk(d[:, 0], n_mad=mad_k, scale="log")   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
         if t.size:
             times_list.append(t)

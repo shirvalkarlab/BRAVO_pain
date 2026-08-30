@@ -599,12 +599,27 @@ def power_pain_scatter(cv_df, label_metric, *, max_points=2000):
 # ---------------------------------------------------------------------------------------------
 # Outlier exclusion (PI request, 2026-08-30)
 # ---------------------------------------------------------------------------------------------
-# Default threshold: a sample is an outlier when |x - median| >= N_MAD * MAD, with
-# MAD = median(|x - median|) and NO consistency rescaling. This is the literal reading of "five
-# median absolute deviations or greater from the median". Note it is therefore NOT the
-# Iglewicz-Hoaglin modified z-score (which uses 0.6745/MAD and a 3.5 cut); on Gaussian data
-# 5 raw MAD is about 3.37 sigma, so this is a comparable but slightly stricter rule.
-OUTLIER_N_MAD = 5.0
+# ONE outlier rule for the whole biomarker plate, defined in stats_utils and imported here.
+#
+# PI decision, 2026-08-30: 5 MAD everywhere, applied uniformly to the FEATURE, the LABEL and the
+# chronic LFP-power column, with the three previously-separate filters consolidated into a single
+# implementation. Before this there were three copies with two thresholds (analytics 5 MAD dropping,
+# streaming_psd._mad_keep 3 MAD keeping, adapter.mad_outlier_mask 3 MAD keeping) and inverted
+# polarity between them. Change `stats_utils.MAD_N_DEFAULT` to move the whole plate at once — that
+# single point of control is the reason for the consolidation.
+#
+# Consequence to be aware of when comparing against older figures: 5 MAD is LOOSER than the 3 MAD
+# the correlation spectrum and chronic path used before, so those reject fewer samples than they did.
+from .stats_utils import MAD_N_DEFAULT as OUTLIER_N_MAD  # noqa: E402  (5.0)
+from .stats_utils import mad_outlier_flags  # noqa: E402  (True == outlier; see stats_utils)
+
+# Scale for the pain LABEL. Pain scores are bounded ordinal scales, not multiplicative quantities,
+# so the rule is applied to them directly rather than in log space.
+OUTLIER_LABEL_SCALE = "raw"
+
+# The exclusion also covers extreme pain RATINGS, not just extreme features (PI, 2026-08-30) —
+# uniform treatment of feature and label, matching what `streaming_psd._mad_keep` has always done.
+OUTLIER_INCLUDE_LABEL = True
 
 # SCALE ON WHICH THE RULE IS APPLIED. This is a real statistical decision, not a detail.
 # The LSB band-power feature is multiplicative and heavy-tailed (roughly 0.1 to 15000), so a
@@ -617,53 +632,8 @@ OUTLIER_N_MAD = 5.0
 OUTLIER_SCALE = "log"
 
 
-def mad_outlier_flags(x, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
-    """Boolean mask of outliers in ``x`` under the MAD rule. True == outlier == to be excluded.
-
-    NAMED ``..._flags`` DELIBERATELY. ``adapter.mad_outlier_mask`` and
-    ``streaming_psd._mad_keep`` already exist and return the OPPOSITE polarity (True == KEEP), with
-    a different parameter name (``k``) and a stricter default (3 MAD, not 5). Reusing the name
-    ``mad_outlier_mask`` here would mean two same-named functions whose masks are inverses of each
-    other, so copying a call site between modules would silently keep only the outliers. Do not
-    rename this back.
-
-    Returns ``(mask, info)`` where ``info`` records the median, the MAD, the scale used and why
-    the rule was skipped if it was. Non-finite entries are never flagged (they are already absent
-    from every statistic) so the count reports genuine removals only.
-
-    ZERO-MAD GUARD: when more than half the samples share one value the MAD is 0 and the rule
-    would flag every sample that merely differs from the median — deleting real variation and, in
-    the degenerate case, the entire usable spread. In that case no sample is flagged and
-    ``info["skipped"]`` says so.
-    """
-    x = np.asarray(x, dtype=float)
-    finite = np.isfinite(x)
-    info = {"n_finite": int(finite.sum()), "n_mad": float(n_mad), "scale": str(scale),
-            "median": None, "mad": None, "n_removed": 0, "skipped": None}
-    if finite.sum() < 4:
-        info["skipped"] = "fewer than 4 finite samples"
-        return np.zeros_like(x, dtype=bool), info
-    if scale == "log":
-        with np.errstate(divide="ignore", invalid="ignore"):
-            v = np.log10(np.where(x > 0, x, np.nan))
-        finite = np.isfinite(v)
-        if finite.sum() < 4:
-            info["skipped"] = "fewer than 4 strictly-positive samples for the log-scale rule"
-            return np.zeros_like(x, dtype=bool), info
-    else:
-        v = x
-    med = float(np.median(v[finite]))
-    mad = float(np.median(np.abs(v[finite] - med)))
-    info["median"], info["mad"] = med, mad
-    if not np.isfinite(mad) or mad <= 0:
-        info["skipped"] = "MAD is zero (majority of samples share one value); no removal applied"
-        return np.zeros_like(x, dtype=bool), info
-    mask = finite & (np.abs(v - med) >= float(n_mad) * mad)
-    info["n_removed"] = int(mask.sum())
-    return mask, info
-
-
-def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
+def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE,
+                            extra_mask=None):
     """Blank one shared set of outliers out of EVERY array in ``arrays``.
 
     The point of this helper is that a single exclusion set must reach every statistic. Excluded
@@ -674,9 +644,25 @@ def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIE
 
     ``detect_on`` is the array the rule is evaluated on (the fit-scale feature); ``arrays`` is the
     list of arrays to blank, which should include ``detect_on`` itself.
-    Returns ``(blanked_arrays, info)``.
+
+    ``extra_mask`` is OR-ed into the feature-derived mask. It carries the LABEL-side exclusion: the
+    shared label vector must not itself be mutated (that would corrupt the binarization, the rating
+    groups and every other channel's view of the same ratings), so label outliers are dropped by
+    blanking the FEATURE at those rows instead. The effect on every statistic is identical, and row
+    alignment is preserved.
+
+    Returns ``(blanked_arrays, info)``; ``info`` gains ``n_removed_feature`` / ``n_removed_label_only``
+    so the report can separate the two sources rather than presenting one opaque total.
     """
     mask, info = mad_outlier_flags(detect_on, n_mad=n_mad, scale=scale)
+    info["n_removed_feature"] = int(mask.sum())
+    info["n_removed_label_only"] = 0
+    if extra_mask is not None:
+        em = np.asarray(extra_mask, dtype=bool)
+        if em.shape == mask.shape:
+            info["n_removed_label_only"] = int((em & ~mask).sum())
+            mask = mask | em
+            info["n_removed"] = int(mask.sum())
     out = []
     for a in arrays:
         b = np.asarray(a, dtype=float).copy()
@@ -1355,6 +1341,19 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     # number removed is visible alongside the statistics it changed.
     _outlier_log = []
     _n_outliers_removed = 0
+    # LABEL-side exclusion, computed ONCE for the scan because the label vector is shared by every
+    # channel and band. Extreme pain ratings are excluded on the same footing as extreme features
+    # (PI, 2026-08-30), matching `streaming_psd._mad_keep`, which has always filtered both sides.
+    #
+    # Implementation note: the shared `labels` array is NOT modified — mutating it would corrupt
+    # y_bin, the rating groups and every other channel's view of the same ratings. Instead the
+    # label-outlier indices are OR-ed into each band's feature exclusion, which drops exactly those
+    # samples from that band's statistics while leaving row alignment and the label vector intact.
+    _label_outlier_mask = np.zeros(labels.shape, dtype=bool)
+    _label_outlier_info = {"n_removed": 0, "skipped": "label exclusion disabled"}
+    if outlier_n_mad and outlier_n_mad > 0 and OUTLIER_INCLUDE_LABEL:
+        _label_outlier_mask, _label_outlier_info = mad_outlier_flags(
+            labels, n_mad=float(outlier_n_mad), scale=OUTLIER_LABEL_SCALE)
     for ci in range(C):
         raw = chans[ci] if ci < len(chans) else f"ch{ci}"
         region = region_map.get(raw) if region_map else None
@@ -1517,7 +1516,8 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
             if outlier_n_mad and outlier_n_mad > 0:
                 (bp_disp, bp_log), _oinfo = apply_outlier_exclusion(
                     [bp_disp, bp_log], detect_on=bp_disp,
-                    n_mad=float(outlier_n_mad), scale=str(outlier_scale))
+                    n_mad=float(outlier_n_mad), scale=str(outlier_scale),
+                    extra_mask=_label_outlier_mask)
                 _oinfo["channel"] = fmt["label"]
                 _oinfo["center_hz"] = float(c)
                 _outlier_log.append(_oinfo)
@@ -1875,8 +1875,13 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
         "n_bands_skipped_zero_mad": int(_n_bands_zero_mad),
         "applies_to": ["correlation", "cv_logistic_auc", "cluster_robust_logit_p",
                        "cohens_d", "median_delta"],
-        "detected_on": "band-power feature only; the pain label is left intact because it is a "
-                       "bounded ordinal scale on which extreme values are signal, not contamination",
+        "includes_label": bool(OUTLIER_INCLUDE_LABEL),
+        "n_removed_label_outliers": int(_label_outlier_info.get("n_removed") or 0),
+        "label_scale": OUTLIER_LABEL_SCALE,
+        "detected_on": ("band-power feature AND the pain label, the same uniform rule applied to "
+                        "both (PI 2026-08-30). Label outliers are dropped by blanking the feature at "
+                        "those rows so the shared label vector, its binarization and the rating "
+                        "groups are never mutated."),
     }
     return {
         "centers": [float(c) for c in centers],

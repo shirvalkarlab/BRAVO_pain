@@ -280,6 +280,60 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**RESOLVED (2026-08-30, PI decision): ONE outlier filter for the whole biomarker plate, 5 MAD,
+applied uniformly to FEATURE, LABEL and the chronic LFP-power column.** The three separate
+implementations described below have been consolidated into a single canonical rule in
+`routines/stats_utils.py`:
+
+| symbol | meaning |
+|---|---|
+| `stats_utils.MAD_N_DEFAULT = 5.0` | the ONE threshold; change it here to move the whole plate |
+| `stats_utils.mad_outlier_flags(x, n_mad, scale)` | True == outlier (drop) |
+| `stats_utils.mad_keep_mask(x, n_mad, scale)` | True == keep; exact complement, for keep-polarity callers |
+
+`analytics` imports the threshold and the flag function (no local copy remains).
+`streaming_psd._mad_keep` and `adapter.mad_outlier_mask` now DELEGATE, keeping their names and
+keep-polarity for existing callers but losing their private 3 MAD defaults. Verified at runtime that
+all three agree on identical data: the two keep-masks are exact complements of the canonical drop
+mask, boundary included (the canonical rule uses strict `>` so it matches `_mad_keep`'s `<=` keep).
+
+**THE MEASUREMENT THAT SETTLES 3 vs 5 — 3 MAD would have discarded nearly a quarter of the data.**
+Run on the real RCS08 scan, same code path, threshold varied:
+
+| threshold | samples removed | of total | bands affected | label outliers |
+|---|---|---|---|---|
+| 3 MAD | 110,355 | **22.82%** | 576 of 576 | 99 |
+| 5 MAD | 29,938 | **6.19%** | 410 of 576 | **0** |
+
+At 3 MAD every single band loses samples and 22.8% of the matched data goes, which is not a
+defensible artefact filter on a feature that is a session mixture. 5 MAD is the standing decision.
+
+**Note the label column: at 5 MAD there are ZERO label outliers.** So including the pain label in the
+exclusion is currently a NO-OP on this dataset — it is the right uniform policy and it is wired, but
+it is not moving any number today. At 3 MAD it would have dropped 99 ratings.
+
+**Scale is per-quantity, and this is not a violation of "one rule" — it is what keeps the one rule
+two-sided.** The rule is evaluated in log space for MULTIPLICATIVE quantities (raw linear LSB in the
+exploration scan, the chronic LFP-power column) and on the raw scale for quantities that are already
+additive (dB/z features in `streaming_psd` and the deployment family, and the bounded ordinal pain
+label). A symmetric window on a linear power axis deletes the upper tail almost exclusively; measured
+earlier, the raw-scale rule removed 3.71% one-sidedly against 6.19% two-sidedly, and the SELECTED
+BAND changed as a result.
+
+**API CHANGE, worth knowing before reading old code: `mad_k=None` / `k=None` now means USE THE
+CANONICAL THRESHOLD, not "disabled".** Explicit disable is `0` (or `False`). This bit twice during
+implementation and both traps are now fixed with comments in place: `adapter._concat_chronic` and
+`streaming_psd.pearson_corr_psd_label` both guarded their filter with a plain truthiness test
+(`if mad_k`), so the new `None` default would have SILENTLY SWITCHED OUTLIER REJECTION OFF for every
+default call — in the correlation spectrum's case, for the whole panel. No production caller passed
+`None` expecting the old meaning (all use the default); two tests did and were updated to `0`.
+
+Two adapter tests failed on the threshold change and were corrected rather than relaxed: they now
+read `stats_utils.MAD_N_DEFAULT` instead of hardcoding a multiplier, so they track the canonical rule
+and cannot silently drift from it again. Container suite **274/274**.
+
+**Superseded, kept for orientation — the audit that led to the decision above:**
+
 **PIPELINE-WIDE OUTLIER AUDIT (2026-08-30) — the headline is that THREE MAD RULES ALREADY EXISTED
 and they disagree with each other and with the new one.** This is the finding that matters most.
 

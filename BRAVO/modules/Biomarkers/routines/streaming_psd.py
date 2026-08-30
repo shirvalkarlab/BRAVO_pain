@@ -86,28 +86,27 @@ def normalize_psd_across_epochs(psd, method="zscore", scale_gaussian=True):
 
 
 # ---------- Pearson correlation (NaN-safe) ----------
-def _mad_keep(x, k=3.0):
-    """Boolean KEEP-mask: True for finite samples within k median-absolute-deviations of the median.
-    Excludes artifact spikes where |x - median| > k*MAD. Returns the finite mask when MAD==0 (all
-    equal) or fewer than 3 finite points (MAD undefined). Robust (median/MAD), so a few extreme
-    sessions can't drag a Pearson correlation. Mirrors adapter.mad_outlier_mask; duplicated here to
-    keep streaming_psd dependency-free."""
-    x = np.asarray(x, dtype=float)
-    finite = np.isfinite(x)
-    if finite.sum() < 3:
-        return finite
-    med = np.median(x[finite])
-    mad = np.median(np.abs(x[finite] - med))
-    if mad <= 0:
-        return finite
-    return finite & (np.abs(x - med) <= k * mad)
+def _mad_keep(x, k=None):
+    """Boolean KEEP-mask under the ONE canonical MAD rule (stats_utils.mad_keep_mask).
 
+    Delegates rather than reimplementing. This function used to carry its own copy of the rule with
+    a default of k=3.0, which disagreed with the analytics module's 5 MAD and used the opposite
+    polarity convention; the PI consolidated the plate onto a single 5 MAD filter on 2026-08-30.
+    ``k=None`` means the canonical threshold (stats_utils.MAD_N_DEFAULT).
 
-def pearson_corr_psd_label(psd_feat, label, mad_k=3.0):
+    Scale: the features reaching this function are post-daywise-normalization log/z quantities and
+    the label is a bounded ordinal score, so both are additive and the rule is applied on the raw
+    scale. Do NOT pass a raw-linear power/LSB feature here — that needs scale="log" (see
+    stats_utils.mad_outlier_flags).
+    """
+    from .stats_utils import mad_keep_mask
+    return mad_keep_mask(x, n_mad=k, scale="raw")
+
+def pearson_corr_psd_label(psd_feat, label, mad_k=None):
     """
     psd_feat: (E, C, F) features AFTER daywise normalization
     label:    (E,)
-    mad_k:    MAD outlier rejection (>=k MADs from the median is dropped) applied per (channel,
+    mad_k:    MAD outlier rejection applied per (channel,
               frequency) on the feature AND on the label before each correlation, so a single
               artifact session can't drive the Pearson R. Set None to disable.
     Returns: corr (C,F), pval (C,F)
@@ -120,12 +119,16 @@ def pearson_corr_psd_label(psd_feat, label, mad_k=3.0):
 
     yv = np.isfinite(y)
     # Label-side MAD keep-mask (computed once; the feature side is per (c,f) below).
-    y_keep = _mad_keep(y, k=mad_k) if mad_k else yv
+    # `mad_k is None` means USE THE CANONICAL THRESHOLD, not "disabled" — a plain truthiness test
+    # here would silently switch the correlation spectrum's outlier rejection off for every default
+    # call. Explicit disable is mad_k=0 or mad_k=False.
+    _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
+    y_keep = _mad_keep(y, k=mad_k) if _mad_on else yv
 
     for c in range(C):
         for f in range(F):
             x = X[:, c, f]
-            x_keep = _mad_keep(x, k=mad_k) if mad_k else np.isfinite(x)
+            x_keep = _mad_keep(x, k=mad_k) if _mad_on else np.isfinite(x)
             v = x_keep & y_keep
             n = v.sum()
             if n < 3:

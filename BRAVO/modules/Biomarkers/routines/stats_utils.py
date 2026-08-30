@@ -328,3 +328,87 @@ def block_perm_pvalue(observed_stat, feature_matrix, labels, stat_fn, n_perm=100
     if used == 0:
         return (np.nan, 0)
     return ((ge + 1) / (used + 1), used)   # +1: never report p=0
+
+
+# =================================================================================================
+# THE outlier rule for the biomarker plate. ONE implementation, one threshold, used everywhere.
+# =================================================================================================
+# PI decision, 2026-08-30 (superseding an interim 3 MAD decision the same day): every reported
+# statistic on the biomarker plate — the correlation spectrum, the full-spectrum exploration scan,
+# the chronic LFP-power path, the AUC, the effect sizes — uses ONE filter at 5 MAD, applied
+# uniformly to the FEATURE, the LABEL and the chronic power column.
+#
+# Before this consolidation there were three separate implementations with two different thresholds
+# (analytics at 5 MAD dropping, streaming_psd._mad_keep at 3 MAD keeping, adapter.mad_outlier_mask
+# at 3 MAD keeping) and inverted polarity between them. They now all delegate here. Raising or
+# lowering MAD_N_DEFAULT changes the whole plate at once, which is the point.
+#
+# NOTE: moving from 3 to 5 MAD LOOSENS the correlation spectrum and the chronic path — they reject
+# fewer samples than before this change. That is the intended consequence of the PI's decision.
+MAD_N_DEFAULT = 5.0
+
+
+def mad_outlier_flags(x, n_mad=None, scale="raw"):
+    """Boolean mask of OUTLIERS (True == outlier == exclude) under the MAD rule.
+
+    Rule: ``|v - median(v)| > n_mad * MAD``, with ``MAD = median(|v - median(v)|)`` and NO
+    consistency rescaling (so ``n_mad`` is in raw MAD units, not sigma; 5 raw MAD is about
+    3.37 sigma on Gaussian data). The inequality is STRICT so this is the exact complement of
+    :func:`mad_keep_mask` at every threshold, boundary included.
+
+    ``scale`` selects the space the rule is evaluated in, and it matters:
+
+    * ``"raw"`` — use for quantities that are already additive: dB/log power, z-scored features,
+      and bounded ordinal pain scores.
+    * ``"log"`` — use for MULTIPLICATIVE quantities on a linear axis, i.e. raw linear band power
+      and raw LSB. A symmetric window on such a feature is proportionally far tighter above the
+      median than below, so a raw-scale rule deletes the upper tail almost exclusively. Measured on
+      RCS08: the raw rule removed 3.71% one-sidedly vs 6.19% two-sidedly on the log scale, and the
+      SELECTED BAND changed as a result.
+
+    Non-finite entries are never flagged (they are already absent from every statistic), so the
+    returned count means genuine exclusions.
+
+    ZERO-MAD GUARD: when a majority of samples share one value the MAD is 0 and a naive rule would
+    flag everything that merely differs from the median, deleting all remaining variation. In that
+    case nothing is flagged and ``info["skipped"]`` says why.
+
+    Returns ``(mask, info)`` with info = {n_finite, n_mad, scale, median, mad, n_removed, skipped}.
+    """
+    x = np.asarray(x, dtype=float)
+    n_mad = float(MAD_N_DEFAULT if n_mad is None else n_mad)
+    finite = np.isfinite(x)
+    info = {"n_finite": int(finite.sum()), "n_mad": n_mad, "scale": str(scale),
+            "median": None, "mad": None, "n_removed": 0, "skipped": None}
+    if finite.sum() < 4:
+        info["skipped"] = "fewer than 4 finite samples"
+        return np.zeros_like(x, dtype=bool), info
+    if scale == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            v = np.log10(np.where(x > 0, x, np.nan))
+        finite = np.isfinite(v)
+        if finite.sum() < 4:
+            info["skipped"] = "fewer than 4 strictly-positive samples for the log-scale rule"
+            return np.zeros_like(x, dtype=bool), info
+    else:
+        v = x
+    med = float(np.median(v[finite]))
+    mad = float(np.median(np.abs(v[finite] - med)))
+    info["median"], info["mad"] = med, mad
+    if not np.isfinite(mad) or mad <= 0:
+        info["skipped"] = "MAD is zero (majority of samples share one value); no removal applied"
+        return np.zeros_like(x, dtype=bool), info
+    mask = finite & (np.abs(v - med) > n_mad * mad)
+    info["n_removed"] = int(mask.sum())
+    return mask, info
+
+
+def mad_keep_mask(x, n_mad=None, scale="raw"):
+    """Boolean KEEP-mask (True == keep) — the exact complement of :func:`mad_outlier_flags`.
+
+    Provided because the historical call sites in ``streaming_psd`` and ``adapter`` are written in
+    keep-polarity. Non-finite entries are never kept.
+    """
+    x = np.asarray(x, dtype=float)
+    mask, _ = mad_outlier_flags(x, n_mad=n_mad, scale=scale)
+    return np.isfinite(x) & ~mask
