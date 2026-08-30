@@ -2597,8 +2597,10 @@ def test_mad_rule_is_literal_five_mad_not_modified_zscore():
     """The threshold is |x - median| >= N*MAD with the RAW MAD (no 1.4826 or 0.6745 rescaling).
 
     Documented explicitly because the common Iglewicz-Hoaglin rule uses 0.6745/MAD with a 3.5 cut,
-    which would flag a different set. Constructed so the boundary is exact: median 10, MAD 2, so the
-    cut sits at 10 +/- 10.
+    which would flag a different set. Fixture: median 11, MAD 3, so the 5-MAD cut sits at 11 +/- 15
+    and removes only the 40.0. (An earlier draft of this docstring said median 10 / MAD 2, which was
+    wrong for its own fixture — the numbers below are recomputed in the test body rather than
+    asserted from prose, so a stale comment can no longer make the test lie.)
     """
     from modules.Biomarkers.routines import analytics as an
     # Derive expectations from the rule itself rather than hand-arithmetic — the first version of
@@ -2607,7 +2609,7 @@ def test_mad_rule_is_literal_five_mad_not_modified_zscore():
     med = float(np.median(x))                       # 11.0
     dev = np.abs(x - med)                           # [1, 1, 3, 3, 5, 29]
     mad = float(np.median(dev))                     # 3.0
-    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    mask, info = an.mad_outlier_flags(x, n_mad=5.0, scale="raw")
     assert info["median"] == med and info["mad"] == mad, (info["median"], info["mad"], med, mad)
     expected = list(np.where(dev >= 5.0 * mad)[0])   # cut at |x-11| >= 15 -> only 40.0
     assert expected == [5]
@@ -2616,7 +2618,7 @@ def test_mad_rule_is_literal_five_mad_not_modified_zscore():
     # here — a DIFFERENT cut. Assert the implementation follows the literal N*MAD form, not that one.
     ih_cut = 3.5 / 0.6745 * mad
     assert abs(ih_cut - 5.0 * mad) > 1e-6, "fixture must distinguish the two rules"
-    mask3, info3 = an.mad_outlier_mask(x, n_mad=3.0, scale="raw")   # cut at dev >= 9
+    mask3, info3 = an.mad_outlier_flags(x, n_mad=3.0, scale="raw")   # cut at dev >= 9
     assert list(np.where(mask3)[0]) == list(np.where(dev >= 9.0)[0]) == [5]
 
 
@@ -2625,7 +2627,7 @@ def test_zero_mad_does_not_delete_all_variation():
     That would delete the entire usable spread, so the rule must decline instead."""
     from modules.Biomarkers.routines import analytics as an
     x = np.array([5., 5., 5., 5., 5., 1.0, 9.0])
-    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    mask, info = an.mad_outlier_flags(x, n_mad=5.0, scale="raw")
     assert info["n_removed"] == 0 and not mask.any()
     assert "MAD is zero" in (info["skipped"] or "")
 
@@ -2635,7 +2637,7 @@ def test_nonfinite_never_counted_as_a_removal():
     number of removals and make the report meaningless."""
     from modules.Biomarkers.routines import analytics as an
     x = np.array([1., 2., 3., 4., np.nan, np.inf, 500.0])
-    mask, info = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
+    mask, info = an.mad_outlier_flags(x, n_mad=5.0, scale="raw")
     assert not mask[4] and not mask[5]
     assert info["n_removed"] == int(mask.sum())
 
@@ -2647,8 +2649,8 @@ def test_log_scale_rule_is_two_sided_where_raw_is_not():
     from modules.Biomarkers.routines import analytics as an
     rng = np.random.default_rng(0)
     x = np.concatenate([10.0 ** rng.normal(0, 0.3, 200), [1e-6, 1e6]])   # lognormal + one each tail
-    m_raw, _ = an.mad_outlier_mask(x, n_mad=5.0, scale="raw")
-    m_log, _ = an.mad_outlier_mask(x, n_mad=5.0, scale="log")
+    m_raw, _ = an.mad_outlier_flags(x, n_mad=5.0, scale="raw")
+    m_log, _ = an.mad_outlier_flags(x, n_mad=5.0, scale="log")
     med = np.median(x)
     # the raw rule catches the high extreme but misses the low one entirely
     assert m_raw[-1] and not m_raw[-2]
@@ -2684,3 +2686,27 @@ def test_scan_reports_removals_and_can_be_disabled():
     for k in ("correlation", "cv_logistic_auc", "cluster_robust_logit_p", "cohens_d"):
         assert k in on["outliers"]["applies_to"]
     assert on["outliers"]["n_bands_evaluated"] > 0
+
+
+def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
+    """Guard against a latent trap: three MAD helpers now exist with DIFFERENT conventions.
+
+      analytics.mad_outlier_flags(x, n_mad=5.0)  -> True == OUTLIER (drop),  default 5 MAD
+      adapter.mad_outlier_mask(x, k=3.0)         -> True == KEEP,            default 3 MAD
+      streaming_psd._mad_keep(x, k=3.0)          -> True == KEEP,            default 3 MAD
+
+    If the analytics one were named `mad_outlier_mask`, copying a call site between modules would
+    silently invert the filter and keep ONLY the outliers. This test pins both the naming and the
+    polarity so a future rename cannot reintroduce the trap.
+    """
+    from modules.Biomarkers.routines import analytics as an
+    from modules.Biomarkers import adapter as ad
+    assert not hasattr(an, "mad_outlier_mask"), \
+        "analytics must not export mad_outlier_mask — that name is adapter's KEEP-mask"
+    x = np.array([10., 12., 8., 14., 6., 40.0])
+    drop, _ = an.mad_outlier_flags(x, n_mad=3.0, scale="raw")
+    keep = ad.mad_outlier_mask(x, k=3.0)
+    # same threshold, same data -> the two masks must be exact complements on finite entries
+    assert list(drop) == list(~keep), (list(drop), list(keep))
+    # and the defaults genuinely differ, which is why they cannot be swapped blindly
+    assert an.OUTLIER_N_MAD == 5.0

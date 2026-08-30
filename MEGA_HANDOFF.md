@@ -280,7 +280,65 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
-**STILL TO DO — the audit the PI asked for is NOT complete.** The exclusion currently reaches the
+**PIPELINE-WIDE OUTLIER AUDIT (2026-08-30) — the headline is that THREE MAD RULES ALREADY EXISTED
+and they disagree with each other and with the new one.** This is the finding that matters most.
+
+| helper | polarity | default | applied to | drives |
+|---|---|---|---|---|
+| `analytics.mad_outlier_flags(x, n_mad, scale)` (NEW) | True = **DROP** | **5 MAD**, log scale | feature only | exploration scan |
+| `adapter.mad_outlier_mask(x, k)` | True = **KEEP** | **3 MAD** | chronic LFP power col | `_concat_chronic`, `pipeline.py:462` (on LABELS) |
+| `streaming_psd._mad_keep(x, k)` | True = **KEEP** | **3 MAD** | feature **AND label** | `pearson_corr_psd_label` -> the whole correlation spectrum |
+
+Three consequences, the first already fixed:
+
+1. **FIXED — name/polarity trap.** The new helper was originally called `mad_outlier_mask`, the same
+   name as adapter's, but returns the **inverse** mask (adapter: True = keep; new: True = drop) with a
+   different parameter name (`k` vs `n_mad`) and a different default (3 vs 5). Two same-named
+   functions whose masks are complements means copying a call site between modules silently keeps
+   ONLY the outliers. Renamed to `mad_outlier_flags`, with a docstring saying not to rename it back
+   and a test (`test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused`) asserting
+   the two masks are exact complements at a matched threshold and that `analytics` does not export
+   the old name.
+2. **PI DECISION NEEDED — 3 MAD or 5?** The correlation spectrum has been rejecting at **3 MAD**
+   all along, which is STRICTER than the 5 MAD just requested. Unifying at 5 would LOOSEN an
+   existing filter and change correlation-spectrum numbers that may already have been reported.
+   Not changed unilaterally.
+3. **PI DECISION NEEDED — filter the pain label or not?** `_mad_keep` is applied to the LABEL as
+   well as the feature, so extreme pain ratings are currently dropped from the correlation spectrum.
+   The new rule deliberately leaves the label intact, on the reasoning that a bounded ordinal pain
+   scale has extreme values that are signal rather than contamination. These two positions are
+   contradictory and one of them should win.
+
+**Deployment and threshold-detector family: REPORTED, NOT REMOVED.** A deliberate policy split, not
+an oversight. These functions return two kinds of number: an AUC (associational, where trimming a
+tail is defensible) and a cut-point threshold with its sensitivity/specificity (an OPERATING POINT
+the device runs against, where the device meets the full distribution). A threshold fitted on a
+trimmed sample would not deliver the sensitivity printed beside it. So `outlier_report_for_feature()`
+evaluates and reports the rule without removing anything, and `deployment_roc` additionally returns a
+clearly-labelled `sensitivity_analysis` with the AUC recomputed excluding the flagged samples.
+Wired into `deployment_roc`, `deployment_roc_by_era`, `threshold_drift_by_week` and
+`deployment_forward_chaining`. Note the scale subtlety: those features are ALREADY log/dB, so the
+rule is applied with `scale="raw"` — passing `scale="log"` would take log10 of a dB value and
+silently skip the negative ones.
+
+**Measured on live RCS08, and it changes the picture: the deployment feature has essentially no
+outliers.** `band_deployment_roc` on ZERO_TWO_LEFT @ 20 Hz flags **0 of 82** samples (MAD 0.431);
+`band_deployment_roc_by_era` flags **6 of 409 (1.47%)**. So the 6.19% seen in the exploration scan is
+a property of the RAW LSB feature and its heavy multiplicative tail, NOT a pipeline-wide problem. The
+committed band's AUC is not being driven by tail samples.
+
+**Also worth knowing: the exploration scan's correlation is Spearman, which is rank-invariant and
+already robust to outliers** — so the removal moves it only modestly. The statistic that genuinely
+needed protection is the **Pearson** correlation spectrum, and that one already had a 3 MAD filter.
+
+**STILL TO DO after this audit.** Not wired and not audited in depth: `psd_spectra` (not referenced
+by the frontend), `cluster_scatter` (not referenced), and the chronic cv_df statistics
+(`sliding_window_analytics`, `roc_analysis`, `lfp_distribution`, `power_pain_scatter`,
+`pain_binarization`) which read `LFP_smoothed` from the chronic frame rather than the per-rating band
+feature — a different data path whose outlier handling comes from `adapter._concat_chronic` at
+3 MAD. `psd_lsb_conversion` and `deployment_summary` are also not yet covered.
+
+**Superseded note (kept for orientation) — the earlier to-do list below predates the audit above.** The exclusion currently reaches the
 exploration SCAN only. Not yet audited or wired: `corr_spectrum`, `psd_spectra`, the chronic cv_df
 statistics (`sliding_window_analytics`, `roc_analysis`, `lfp_distribution`, `power_pain_scatter`,
 `cluster_scatter`, `pain_binarization`), the threshold detector (`_otsu_threshold`,

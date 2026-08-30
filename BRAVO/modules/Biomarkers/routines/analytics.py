@@ -617,8 +617,15 @@ OUTLIER_N_MAD = 5.0
 OUTLIER_SCALE = "log"
 
 
-def mad_outlier_mask(x, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
+def mad_outlier_flags(x, n_mad=OUTLIER_N_MAD, scale=OUTLIER_SCALE):
     """Boolean mask of outliers in ``x`` under the MAD rule. True == outlier == to be excluded.
+
+    NAMED ``..._flags`` DELIBERATELY. ``adapter.mad_outlier_mask`` and
+    ``streaming_psd._mad_keep`` already exist and return the OPPOSITE polarity (True == KEEP), with
+    a different parameter name (``k``) and a stricter default (3 MAD, not 5). Reusing the name
+    ``mad_outlier_mask`` here would mean two same-named functions whose masks are inverses of each
+    other, so copying a call site between modules would silently keep only the outliers. Do not
+    rename this back.
 
     Returns ``(mask, info)`` where ``info`` records the median, the MAD, the scale used and why
     the rule was skipped if it was. Non-finite entries are never flagged (they are already absent
@@ -669,7 +676,7 @@ def apply_outlier_exclusion(arrays, detect_on, n_mad=OUTLIER_N_MAD, scale=OUTLIE
     list of arrays to blank, which should include ``detect_on`` itself.
     Returns ``(blanked_arrays, info)``.
     """
-    mask, info = mad_outlier_mask(detect_on, n_mad=n_mad, scale=scale)
+    mask, info = mad_outlier_flags(detect_on, n_mad=n_mad, scale=scale)
     out = []
     for a in arrays:
         b = np.asarray(a, dtype=float).copy()
@@ -1945,6 +1952,36 @@ def spectral_feature_importance(td_detail, *, strategy="tertile", low_pct=33.333
     }
 
 
+def outlier_report_for_feature(x, *, n_mad=None, context=""):
+    """Outlier REPORT (never a removal) for a device-facing log/dB band-power feature.
+
+    Used by the deployment and threshold-detector readouts. The policy differs from the exploration
+    scan on purpose: those readouts produce an OPERATING POINT the device will run against, and the
+    device meets the full distribution including the extremes. A cut fitted on a trimmed sample
+    would not deliver the sensitivity printed beside it. So here the rule is evaluated and reported,
+    and the caller decides whether any associational statistic is worth re-running without the
+    flagged samples as a labelled sensitivity analysis.
+
+    ``x`` must ALREADY be on the log/dB scale (which is what every caller passes), so the rule is
+    applied with ``scale="raw"`` — that IS the log scale for band power. Passing a raw linear feature
+    here would apply a one-sided rule; use ``apply_outlier_exclusion`` with ``scale="log"`` for that.
+    """
+    x = np.asarray(x, dtype=float)
+    n_mad = float(OUTLIER_N_MAD if n_mad is None else n_mad)
+    mask, info = mad_outlier_flags(x, n_mad=n_mad, scale="raw")
+    n_fin = int(np.isfinite(x).sum())
+    return mask, {
+        "policy": "REPORTED, NOT REMOVED (operating point must reflect the full distribution)",
+        "rule": f"|x - median| >= {n_mad:g} x MAD on the log/dB band-power feature",
+        "n_mad": n_mad,
+        "n_flagged": int(info["n_removed"]),
+        "n_samples": n_fin,
+        "pct_flagged": (100.0 * info["n_removed"] / n_fin) if n_fin else None,
+        "median": info["median"], "mad": info["mad"], "skipped": info["skipped"],
+        "context": context or None,
+    }
+
+
 def _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz=5.0):
     """Extract the per-sample log band-power feature + matched labels + rating clusters + times for
     ONE (channel, band) from a pooled td_detail — the SAME feature definition the glmer uses.
@@ -2370,9 +2407,64 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
             "feature_units": "oriented log10 band power (same scale as the cut-point threshold)",
         }
 
+    # ---- OUTLIER HANDLING FOR A DEVICE-FACING READOUT (2026-08-30) ----------------------------
+    # Deliberately NOT the same policy as the exploration scan, and the difference is the point.
+    #
+    # This function returns two KINDS of number. The AUC is associational: it answers "does this band
+    # carry signal", and trimming a heavy tail there is defensible. The cut-point threshold and its
+    # sensitivity/specificity are an OPERATING POINT the device will run against, and the device will
+    # encounter the full distribution including the extremes. A threshold fitted on a trimmed
+    # distribution therefore would NOT deliver the sensitivity reported next to it — the reported
+    # performance would be measured on a population the device never sees.
+    #
+    # So: the headline AUC, ROC curve, thresholds and operating points above are computed on the FULL
+    # matched sample, unchanged. The exclusion is reported, and the AUC is recomputed with outliers
+    # removed as a clearly-labelled SENSITIVITY ANALYSIS. If the two AUCs disagree materially, that
+    # is information about how much of the discrimination rests on tail samples — it is not a
+    # licence to substitute the trimmed number.
+    #
+    # NOTE ON SCALE: `x` here is ALREADY log/dB band power (10*log10), so the rule is applied with
+    # scale="raw" — that IS the log scale for this quantity. Passing scale="log" would take log10 of
+    # a dB value, which is negative for sub-unit powers and would silently drop those samples from
+    # the rule instead of testing them.
+    _o_mask, _o_info = mad_outlier_flags(x, n_mad=OUTLIER_N_MAD, scale="raw")
+    _sens = {"computed": False, "reason": None}
+    if _o_info["n_removed"] > 0:
+        keep = ~_o_mask
+        y_k, s_k = y[keep], use_score[keep]
+        if np.unique(y_k).size == 2 and keep.sum() >= 8:
+            _raw_k = float(metrics.roc_auc_score(y_k, s_k))
+            _sens = {"computed": True, "reason": None,
+                     "auc_excluding_outliers": float(max(_raw_k, 1.0 - _raw_k)),
+                     "auc_full_sample": auc,
+                     "delta_auc": float(max(_raw_k, 1.0 - _raw_k) - auc),
+                     "n_used": int(keep.sum()), "n_pos": int(np.sum(y_k == 1)),
+                     "n_neg": int(np.sum(y_k == 0))}
+        else:
+            _sens["reason"] = ("excluding outliers left one class empty or fewer than 8 samples; "
+                               "the sensitivity analysis is not estimable")
+    else:
+        _sens["reason"] = "no samples met the outlier rule, so the analysis is identical to the headline"
+    outlier_block = {
+        "policy": "REPORTED, NOT REMOVED for the operating point",
+        "rule": (f"|x - median| >= {OUTLIER_N_MAD:g} x MAD on the log/dB band-power feature"),
+        "n_mad": float(OUTLIER_N_MAD),
+        "n_flagged": int(_o_info["n_removed"]),
+        "n_samples": int(x.size),
+        "pct_flagged": (100.0 * _o_info["n_removed"] / x.size) if x.size else None,
+        "median": _o_info["median"], "mad": _o_info["mad"], "skipped": _o_info["skipped"],
+        "rationale": ("The threshold and its sensitivity/specificity are computed on the FULL "
+                      "sample because the device will encounter the full distribution; a cut fitted "
+                      "on a trimmed distribution would not deliver the reported sensitivity in "
+                      "deployment. The AUC excluding these samples is provided as a sensitivity "
+                      "analysis only."),
+        "sensitivity_analysis": _sens,
+    }
+
     return {
         "available": True,
         "auc": auc, "auc_lo": auc_lo, "auc_hi": auc_hi,
+        "outliers": outlier_block,
         "n_boot_ok": len(boot_aucs),
         "fpr": [float(v) for v in fpr_o], "tpr": [float(v) for v in tpr_o],
         "thr": [None if not np.isfinite(t) else float(t) for t in thr_o],
@@ -2629,8 +2721,10 @@ def deployment_roc_by_era(td_detail, channel_raw, center_hz, stim_series, *, ban
     portable_by_ci = ((len(ov_vals) >= 1 and all(ov_vals) and not any_reversed)
                       if len(est) >= 2 else None)
 
+    _, _outl_era = outlier_report_for_feature(bp_log, context="deployment_roc_by_era")
     return {
         "available": True,
+        "outliers": _outl_era,
         "eras": eras_out, "pooled": pooled,
         "cutpoint_spread": cutpoint_spread, "auc_spread": auc_spread,
         "any_reversed": any_reversed, "any_below_half": any_below_half,
@@ -2751,7 +2845,8 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
                    "weeks; consider periodic recalibration." if drift_flag else
                    "No significant calendar-time drift; the pooled cut-point is stationary over the "
                    "record.")
-    return {"available": True, "status": status,
+    _, _outl_drift = outlier_report_for_feature(bp_log, context="threshold_drift_by_week")
+    return {"available": True, "status": status, "outliers": _outl_drift,
             "n_weeks_qualifying": int(n_weeks),
             "pooled_threshold": pooled_thr,
             "slope_per_week": slope, "slope_p": slope_p, "total_drift": total_drift,
@@ -2945,8 +3040,9 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
     reliable = bool(n_folds >= 2 and len(np.unique(oof_cluster)) >= int(min_train_clusters))
     beats_chance_forward = bool(held_out_auc_lo is not None and held_out_auc_lo > 0.5)
 
+    _, _outl_fc = outlier_report_for_feature(bp_log, context="deployment_forward_chaining")
     return {
-        "available": True,
+        "available": True, "outliers": _outl_fc,
         "n_folds": n_folds,
         "reliable": reliable,
         "in_sample_auc": in_sample_auc,
