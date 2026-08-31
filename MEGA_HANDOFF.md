@@ -280,6 +280,71 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**CRITICAL FIX (2026-08-30): the conservative "powered" gate in `auc_power` was defeated by a fold,
+and could report a FALSE PASS on a device-facing readout.** Found by a delegated inference audit,
+confirmed independently against live RCS08 data before changing anything.
+
+`analytics.py` computed `a_lo = max(auc_lo, 1 - auc_lo)`, commented "fold defensively". That mirrors
+a sub-chance CI lower bound up above 0.5 — destroying exactly the information the caller's DE-FOLDED
+bootstrap CI exists to carry (that de-fold is deliberate and was separately audited as correct).
+Two distinct failures resulted:
+
+1. **Silently inert.** With the real RCS08 bound `auc_lo = 0.3484` and `auc = 0.5036`, the fold gave
+   0.6516, which fails `a_lo <= auc` AND fails `a_lo <= 0.5`. Neither branch ran, so `auc_lo`,
+   `power_current_lo` and `n_ratings_needed_hi` all returned `None`. The fail-closed branch — the
+   entire point of a conservative gate — was **unreachable for precisely the bands it was written
+   for.** Verified across eight different lower bounds: all `None`.
+2. **False pass.** At `auc = 0.85` with `auc_lo = 0.20`, the fold returned 0.80, which satisfies
+   `a_lo <= auc`. Power was then computed at a fabricated "conservative" bound of 0.80 and the status
+   came back **`powered`** — a band whose interval badly crosses chance reading as deployable. That is
+   the gate being *more* permissive than the point estimate.
+
+Fixed by keeping the SIGNED bound: clamp a bound above the point estimate down to it (that means the
+caller passed the wrong end), but never mirror across 0.5. New payload field `ci_crosses_chance`,
+present on every return path so the shape stays invariant. Measured after the fix:
+
+| case | before | after |
+|---|---|---|
+| auc 0.85, auc_lo 0.20 | `status=powered`, bound 0.80 | `auc_lo=0.20`, `power_lo=0.05`, `crosses=True`, not powered |
+| RCS08: auc 0.5036, auc_lo 0.3484 | all `None` | `auc_lo=0.3484`, `power_lo=0.05`, `status=requirement_infeasible`, `crosses=True` |
+| genuinely powered: auc 0.85, auc_lo 0.72 | `powered` | `powered`, `power_lo=0.994` — no false negative introduced |
+
+Three tests pin it, including shape invariance across all four return paths.
+
+**The rest of that audit is a 13-item specification, NOT yet implemented** — see the artifact
+`CI_SPEC_biomarker_plate.md` and its three supporting tables. The highest-severity outstanding items:
+the correlation-spectrum p is a naive t on EPOCHS (at the selected cell 9.24e-10 naive versus 1.56e-04
+cluster-robust on ratings, an SE inflation of 1.65x, taking BH survivors from 20 cells to 4); the
+selection-corrected `perm_p` permutes epoch labels rather than ratings (0.0729 versus 0.233 under a
+rating-level null); a time-ordered holdout shows the winning band's correlation **reverses sign**
+out of sample (r_train +0.552, r_holdout -0.413); the bootstrap block length of 12 gives simulated
+coverage 0.850 against 0.945 at length 1; and `rating_group` on the time-domain path is built by
+value-matching pain scores, collapsing 72 true matched ratings into 7 groups. The audit also found
+several things sound and says so explicitly — do not "fix" the cluster resampling, the BCa
+acceleration, the de-fold, or the deployment MAD policy.
+
+**"Original bug" closed out: the Biomarkers API now has a cache force-refresh (2026-08-30).** There
+was previously no bypass at all, so if the assembled-matrix cache ever DID go stale there was no way
+to rebuild from the UI — which is why the original "plot not updating" report had no diagnostic path,
+even though the actual cause turned out to be device files that had never been ingested. Two
+granularities, because they differ in cost by two orders of magnitude:
+
+- `ForceRefresh: "matrix"` (also `true`/`1`/`yes`) — ignore the assembled-matrix npz, reassemble from
+  the per-recording spectra. Seconds. Measured: 27.5 s, rebuilt from 809 cached spectra with **0**
+  recordings re-Welch'd.
+- `ForceRefresh: "all"` (also `full`/`hard`) — additionally ignore the per-recording spectra, forcing
+  a decode + Welch of every recording. Minutes.
+- Absent/`false`/`0`/unrecognised → normal cached read. An unrecognised value maps to "no refresh"
+  rather than raising, so a typo can never trigger the expensive path or 500 a working panel.
+
+A refresh still WRITES the rebuilt caches, so the next request is fast again. Verified that a refresh
+reproduces the SAME answer rather than a different one: strongest AUC 0.904032 at 64.5 Hz both ways.
+The response now carries a `cache` block (`force_refresh`, `meaning`, `how_to_refresh`) so a future
+"it is not updating" report is answerable from the payload alone — and that text points the reader at
+the newest SourceFile date FIRST, because that, not the cache, was the real cause last time.
+
+Container suite **277/277**.
+
 **RESOLVED (2026-08-30, PI decision): ONE outlier filter for the whole biomarker plate, 5 MAD,
 applied uniformly to FEATURE, LABEL and the chronic LFP-power column.** The three separate
 implementations described below have been consolidated into a single canonical rule in

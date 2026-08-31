@@ -2710,3 +2710,64 @@ def test_the_two_mad_helpers_have_opposite_polarity_and_must_not_be_confused():
     assert list(drop) == list(~keep), (list(drop), list(keep))
     # and the defaults genuinely differ, which is why they cannot be swapped blindly
     assert an.OUTLIER_N_MAD == 5.0        # single canonical threshold, from stats_utils
+
+
+# --- auc_power: the conservative gate must not be defeated by folding (2026-08-30) --------------
+def test_conservative_gate_does_not_mirror_a_sub_chance_lower_bound():
+    """REGRESSION, device-facing. auc_power used to compute a_lo = max(auc_lo, 1 - auc_lo), which
+    mirrored a sub-chance CI lower bound up above 0.5 and destroyed the information the caller's
+    DE-FOLDED bootstrap CI exists to carry.
+
+    Two failures, both reproduced on live RCS08 data before the fix:
+      1. Silently inert. With the real bound auc_lo=0.3484 and auc=0.5036 the fold gave 0.6516,
+         which fails `a_lo <= auc` AND fails `a_lo <= 0.5`, so neither branch ran and
+         auc_lo/power_current_lo/n_ratings_needed_hi all returned None — the conservative gate
+         reported nothing at all.
+      2. FALSE PASS. At auc=0.85 with auc_lo=0.20 the fold returned 0.80, which satisfies
+         `a_lo <= auc`, so power was computed at a fabricated 'conservative' bound of 0.80 and the
+         status came back 'powered' — a band whose interval badly crosses chance reading as
+         deployable.
+    """
+    from modules.Biomarkers.routines import analytics as an
+
+    # (2) the false pass: must now fail closed, not report 'powered'
+    r = an.auc_power(0.85, 25, 23, auc_lo=0.20)
+    assert r["ci_crosses_chance"] is True
+    assert abs(r["auc_lo"] - 0.20) < 1e-9, "the SIGNED bound must survive, not its mirror"
+    assert abs(r["power_current_lo"] - r["alpha"]) < 1e-9, \
+        "power at a sub-chance bound is the Type I rate, not a computed high power"
+    assert r["n_ratings_needed_hi"] is None
+    assert r["status"] != "powered", "a CI crossing chance must never read as powered"
+
+    # (1) the real RCS08 bound: the gate must now actually report instead of returning None
+    r = an.auc_power(0.5035714285714286, 25, 23, auc_lo=0.3483912803298396,
+                     design_effect=1.4787476214475113)
+    assert r["ci_crosses_chance"] is True
+    assert abs(r["auc_lo"] - 0.3483912803298396) < 1e-12
+    assert abs(r["power_current_lo"] - r["alpha"]) < 1e-9
+
+    # no false NEGATIVE introduced: a genuinely resolved band still passes
+    r = an.auc_power(0.85, 60, 60, auc_lo=0.72)
+    assert not r["ci_crosses_chance"]
+    assert abs(r["auc_lo"] - 0.72) < 1e-9 and r["power_current_lo"] > 0.9
+    assert r["status"] == "powered"
+
+
+def test_conservative_bound_above_the_point_estimate_is_clamped_not_mirrored():
+    """A lower bound above the point estimate means the caller passed the wrong end. Clamp to the
+    point estimate; never mirror across 0.5 (that was the defect)."""
+    from modules.Biomarkers.routines import analytics as an
+    r = an.auc_power(0.70, 40, 40, auc_lo=0.90)
+    assert abs(r["auc_lo"] - 0.70) < 1e-9, r["auc_lo"]
+    assert not r["ci_crosses_chance"]
+
+
+def test_ci_crosses_chance_present_on_every_return_path():
+    """Shape invariance: the degenerate paths must carry the key too, or a consumer reading it
+    raises on exactly the inputs where the answer matters most."""
+    from modules.Biomarkers.routines import analytics as an
+    shapes = {tuple(sorted(an.auc_power(*a, **k).keys())) for a, k in
+              [((0.85, 25, 23), {"auc_lo": 0.20}), ((0.5, 24, 24), {}),
+               ((0.9, 1, 1), {}), ((0.7, 30, 30), {"auc_lo": 0.6})]}
+    assert len(shapes) == 1, f"return shape diverges: {len(shapes)} distinct key sets"
+    assert "ci_crosses_chance" in shapes.pop()

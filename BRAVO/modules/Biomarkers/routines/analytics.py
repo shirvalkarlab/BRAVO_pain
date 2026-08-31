@@ -3718,6 +3718,7 @@ def _power_result_blank(**over):
         "auc": None, "auc_lo": None, "se_auc": None,
         "n_pos": None, "n_neg": None,
         "power_current": None, "power_current_lo": None,
+        "ci_crosses_chance": None,
         "n_ratings_current": None, "n_ratings_needed": None, "n_ratings_needed_hi": None,
         "more_data_needed": None,
         "alpha": None, "target_power": None,
@@ -3815,12 +3816,32 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
     # Re-run the SAME Hanley–McNeil math at auc_lo (the clustered-bootstrap CI lower bound). This is
     # the power we'd actually have if the true AUC sat at the pessimistic edge of the CI — the number
     # the "powered" deployment gate should fail-closed on, instead of the optimistic point estimate.
-    power_lo = None; n_need_hi = None; auc_lo_used = None
+    power_lo = None; n_need_hi = None; auc_lo_used = None; ci_crosses_chance = None
     if auc_lo is not None:
         try:
-            a_lo = float(max(float(auc_lo), 1.0 - float(auc_lo)))  # fold defensively (display is oriented >=0.5)
+            # DO NOT FOLD. This line used to read max(auc_lo, 1 - auc_lo), "fold defensively", and
+            # that mirrored a sub-chance lower bound up above 0.5 — destroying the one piece of
+            # information the caller's de-folded bootstrap CI exists to carry.
+            #
+            # Two consequences, both verified on live RCS08 data (2026-08-30):
+            #   1. The fail-closed branch below (`a_lo <= 0.5` -> no power, gate must not pass) became
+            #      UNREACHABLE for exactly the bands it was written for. With the real bound
+            #      auc_lo = 0.3484 the fold gave 0.6516, which fails `a_lo <= auc` (auc = 0.5036) AND
+            #      fails `a_lo <= 0.5`, so NEITHER branch ran and auc_lo_used / power_current_lo /
+            #      n_ratings_needed_hi all came back None. The conservative gate was silently inert.
+            #   2. Worse, it could report a FALSE PASS. At auc = 0.85 with auc_lo = 0.20 the fold
+            #      returns 0.80, which satisfies `a_lo <= auc`, so power is computed at a
+            #      "conservative" bound of 0.80 and the status comes back `powered` — a band whose
+            #      interval badly crosses chance reading as deployable.
+            #
+            # Correct handling: keep the SIGNED bound. Clamp it at the point estimate (a lower bound
+            # above the point estimate is nonsense and means the caller passed an upper bound), but
+            # never mirror it across 0.5.
+            a_lo = float(auc_lo)
         except (TypeError, ValueError):
             a_lo = None
+        if a_lo is not None and np.isfinite(a_lo) and a_lo > 0.5:
+            a_lo = min(a_lo, float(auc))          # clamp, never mirror
         if a_lo is not None and np.isfinite(a_lo) and a_lo > 0.5 and a_lo <= auc:
             auc_lo_used = a_lo
             Q1l = a_lo / (2.0 - a_lo)
@@ -3834,8 +3855,10 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
             n_need_hi = int(np.ceil(n_need_hi_eff * deff))   # -> real ratings (deff==1 -> identity)
         elif a_lo is not None and np.isfinite(a_lo) and a_lo <= 0.5:
             # CI lower bound touches/crosses chance: conservatively, no power and ratings-needed is
-            # undefined (the band could be null). Gate must not pass.
+            # undefined (the band could be null). Gate must not pass. THIS BRANCH WAS UNREACHABLE
+            # before the fold above was removed — it is the whole point of the conservative gate.
             auc_lo_used = a_lo; power_lo = float(alpha); n_need_hi = None
+            ci_crosses_chance = True
 
     # The gate reads the conservative bound when we have one: more data is needed unless we clear the
     # target at the CI lower bound. Comparisons are in REAL ratings (n_need_* already × deff, N0_raw
@@ -3911,6 +3934,10 @@ def auc_power(auc, n_pos, n_neg, *, alpha=0.05, target_power=0.80, auc_lo=None, 
         "n_pos": n_pos_raw, "n_neg": n_neg_raw,
         "se_auc": se,
         "power_current": power, "power_current_lo": power_lo,
+        # True when the CI lower bound touches or crosses 0.5, i.e. the band may be null. Before
+        # 2026-08-30 this state was UNREACHABLE because the bound was folded above 0.5, which left
+        # the conservative gate inert and could even report a false pass.
+        "ci_crosses_chance": ci_crosses_chance,
         "n_ratings_current": int(N0_raw), "n_ratings_needed": n_need, "n_ratings_needed_hi": n_need_hi,
         "more_data_needed": more_data, "alpha": alpha, "target_power": target_power,
         # Audit [19]: design-effect discount. design_effect==1.0 -> no discount (identical to prior).

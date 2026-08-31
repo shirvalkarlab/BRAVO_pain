@@ -1435,7 +1435,7 @@ def _recording_rows_for_psd(participant_uid):
     return out
 
 
-def _assemble_psd_rows_cached(participant_uid, pro_times=None):
+def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=False):
     """Assemble the full PSD-row list for a participant using the per-recording cache, decoding +
     Welch'ing ONLY the recordings whose spectra are not already on disk.
 
@@ -1470,7 +1470,10 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None):
     missing = []   # entries needing a decode+Welch
     for e in entries:
         path = _key_for(e)
-        cached = _load_recording_psd_rows(path) if os.path.exists(path) else None
+        # force_recompute ignores the on-disk spectra so every recording is decoded and Welch'd
+        # again. The rebuilt rows are still written back, so this is a one-off cost.
+        cached = (None if force_recompute
+                  else (_load_recording_psd_rows(path) if os.path.exists(path) else None))
         if cached is not None:
             rows.extend(cached)
             n_cached += 1
@@ -1589,7 +1592,33 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     return hashlib.sha1(("|".join(parts)).encode()).hexdigest()[:16], entries
 
 
-def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=None):
+def _normalize_force_refresh(value):
+    """Normalize a request's ForceRefresh into None | "matrix" | "all".
+
+    Accepts what a JSON client plausibly sends: absent/None/False/""/"0"/"false"/"none" -> None;
+    True/"1"/"true"/"yes"/"matrix" -> "matrix" (rebuild the assembled matrix, seconds);
+    "all"/"full"/"recompute"/"hard" -> "all" (also re-decode and re-Welch every recording, minutes).
+
+    Anything unrecognised maps to None rather than raising, and deliberately so: an unrecognised
+    value must never silently trigger the expensive path, and a typo in a query parameter should not
+    500 a panel that is otherwise fine.
+    """
+    if value is None or value is False:
+        return None
+    if value is True:
+        return "matrix"
+    v = str(value).strip().lower()
+    if v in ("", "0", "false", "no", "none", "off"):
+        return None
+    if v in ("all", "full", "recompute", "hard", "2"):
+        return "all"
+    if v in ("1", "true", "yes", "on", "matrix", "matrix_only"):
+        return "matrix"
+    return None
+
+
+def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=None,
+                       force_refresh=None):
     """Load the per-channel PSD matrix for this participant from disk, or build it and persist it.
 
     Two-level cache:
@@ -1607,11 +1636,24 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=N
 
     `td_list`/`psd_list` are accepted for call-site back-compat but no longer needed (the assembly
     is keyed off the DB). Returns the `psd_rows_to_matrix` dict (or None if no PSDs).
+
+    `force_refresh`: None/False = normal cached behaviour. "matrix" ignores the assembled-matrix npz
+    and reassembles from the per-recording spectra (seconds). "all" additionally ignores the
+    per-recording spectra, forcing a decode + Welch of every recording (minutes). A refresh still
+    WRITES the rebuilt caches, so the next request is fast again. See `_normalize_force_refresh`.
     """
     from .routines import streaming_psd as _sp
+    # FORCE REFRESH (2026-08-30). Until now there was no bypass at all: if this cache ever DID go
+    # stale there was no way to rebuild from the UI, which is why the original "plot not updating"
+    # complaint had no diagnostic path — even though the real cause turned out to be that the new
+    # device files had never been ingested. Closing the hole so the next such report is answerable.
+    _fr = _normalize_force_refresh(force_refresh)
+    if _fr:
+        _log.info("Biomarkers: force_refresh=%r — bypassing %s cache for %s", _fr,
+                  "matrix + per-recording" if _fr == "all" else "matrix", participant_uid)
     sig, _entries = _psd_matrix_signature_orm(participant_uid, pro_times=pro_times)
     path = os.path.join(_psd_cache_dir(), f"{participant_uid}_{sig}.npz")
-    if os.path.exists(path):
+    if os.path.exists(path) and not _fr:
         try:
             z = np.load(path, allow_pickle=True)
             out = {"logX": z["logX"], "t": z["t"],
@@ -1623,7 +1665,8 @@ def _cached_psd_matrix(participant_uid, td_list=None, psd_list=None, pro_times=N
         except Exception as e:
             _log.warning("Biomarkers: PSD matrix cache read failed (%s); recomputing", e)
 
-    rows, n_cached, n_computed = _assemble_psd_rows_cached(participant_uid, pro_times=pro_times)
+    rows, n_cached, n_computed = _assemble_psd_rows_cached(
+        participant_uid, pro_times=pro_times, force_recompute=(_fr == "all"))
     if n_computed or n_cached:
         _log.info("Biomarkers: PSD rows assembled for %s — %d from per-recording cache, %d Welch'd",
                   participant_uid, n_cached, n_computed)
@@ -2954,7 +2997,9 @@ def run_for_participant(request_data):
     # instead of re-decoding on the request thread. Per-metric PRO filtering stays downstream in the
     # match step (build_pooled_detail_from_matrix / pro_match).
     pro_match = _pro_match_arrays(pro_df, label_metric)
-    psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
+    _force_refresh = _normalize_force_refresh(request_data.get("ForceRefresh"))
+    psd_matrix = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
+               force_refresh=_force_refresh)
 
     # Per-pair LSB spectrum cache for the SPECTRAL SCAN. The per-band LSB the scan reads is indexed by
     # `rating_group`, which is the position of each matched PSD's PRO in `pro_match[0]` (the
@@ -3017,6 +3062,21 @@ def run_for_participant(request_data):
                          label_metric=label_metric)
     # Echo the exclusion settings at the top level so the UI can state the rule without digging
     # into the analytics subtree, and so a saved response records what was applied.
+    # Report the cache decision so a "the plot is not updating" report is answerable from the
+    # payload alone instead of needing a container probe: the reader can see whether this response
+    # came from cache and how to force a rebuild.
+    out["cache"] = {
+        "force_refresh": _force_refresh,
+        "meaning": ({"matrix": "assembled-matrix cache bypassed and rebuilt from per-recording spectra",
+                     "all": "assembled-matrix AND per-recording spectra bypassed; every recording "
+                            "re-decoded and re-Welch'd"}.get(_force_refresh)
+                    if _force_refresh else "normal cached read (no refresh requested)"),
+        "how_to_refresh": ("POST ForceRefresh='matrix' to rebuild the assembled matrix (seconds), or "
+                           "ForceRefresh='all' to also re-decode and re-Welch every recording "
+                           "(minutes). NOTE: a stale cache has never yet been the cause of a frozen "
+                           "plot here — on 2026-08-30 the cause was device files that had never been "
+                           "ingested. Check the newest SourceFile date before reaching for this."),
+    }
     out["outlier_n_mad"] = (float(outlier_n_mad) if outlier_n_mad is not None
                             else float(analytics.OUTLIER_N_MAD))
     out["outlier_scale"] = str(outlier_scale if outlier_scale is not None
@@ -3494,7 +3554,9 @@ def _validate_band_core(request_data):
     # the warm cache (band validation must see the SAME pooled features the scan does, or a validated
     # band wouldn't match its scan r; using pm[0] here would re-key the matrix per metric and miss the
     # warm entry). Per-metric filtering stays in the match step below (pm feeds the matcher).
-    mat = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df))
+    _force_refresh = _normalize_force_refresh(request_data.get("ForceRefresh"))
+    mat = _cached_psd_matrix(participant_uid, pro_times=_all_pro_times(pro_df),
+        force_refresh=_force_refresh)
     if mat is None or np.asarray(mat.get("t")).size == 0 \
             or np.asarray(mat.get("logX")).size == 0:
         return {"available": False, "reason": "no PSD samples for this participant"}
