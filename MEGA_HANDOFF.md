@@ -280,6 +280,42 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**FIX (2026-08-31): the correlation spectrum's p-value is now CLUSTER-ROBUST on rating clusters,
+and the naive family is published alongside it instead of being replaced.** Audit item C2, and it
+was only implementable after the `rating_group` fix below — a cluster-robust p computed on a
+grouping that clusters on the outcome would have been worse than the naive one.
+
+`pearson_corr_psd_label` computed `p` from a t on r with `df = n-2`, where *n* counts EPOCHS. Several
+epochs are matched to the same pain report, so that df counts each epoch as a fresh observation and
+overstates the information by roughly the average cluster size. It now takes an optional
+`rating_group` and, when given, reports a Liang-Zeger cluster-robust p with `df = G-1`. Because both
+variables are standardized, r IS the OLS slope, so the sandwich reduces to a closed form:
+
+    Var(r) = [G/(G-1)] * [(N-1)/(N-2)] * sum_g (sum_{i in g} x_i u_i)^2 / (sum_i x_i^2)^2,  u = y - r*x
+
+Closed form rather than statsmodels because this runs per (channel, frequency) — hundreds of cells on
+every request. **That makes the equivalence test mandatory, and it is in the suite**:
+`test_cluster_robust_p_matches_statsmodels_cluster_covariance` asserts the slope, the cluster SE and
+the p reproduce `statsmodels` `cov_type="cluster"` — verified identical to 10 decimal places
+(SE 0.0684763248 both ways, ratio 1.000000, p 1.42445e-12 both ways).
+
+Measured consequence on the displayed family (300 cells, live RCS08):
+
+| metric | BH q<0.05, naive t on epochs | BH q<0.05, cluster-robust on ratings |
+|---|---|---|
+| `nrs` | **20** | **3** |
+| `left_leg_vas` | 0 | 0 |
+
+So 17 of 20 apparent survivors under `nrs` were pseudoreplication. (The audit predicted 20 -> 4 on
+the old grouping; 3 is the same figure recomputed on the corrected 72-cluster grouping.)
+
+Design choices worth keeping: the naive family is **published, not discarded** — `p_naive`/`q_naive`
+per channel plus `n_sig_cluster`/`n_sig_naive`/`pval_method` in the summary, mirroring the scan's
+existing `p_pearson`/`q_pearson` contrast, so the gap is visible rather than a silent swap. Fewer
+than 3 clusters yields NaN rather than a number someone would read as inference. Epochs with
+`rating_group == -1` are excluded rather than each forming its own cluster. Omitting `rating_group`
+reproduces the old p bit-for-bit, so other callers are unaffected. Five tests, suite 284 -> **289**.
+
 **CRITICAL FIX (2026-08-31): `rating_group` on the time-domain path was built from the pain SCORE,
 not the identity of the matched report — so the plate's "rigorous" clustered statistics were
 clustered on the outcome itself.** This is audit item F9/C3, and it is the most consequential of the

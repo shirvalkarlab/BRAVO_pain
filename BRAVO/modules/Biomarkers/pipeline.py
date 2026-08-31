@@ -596,7 +596,13 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     label_col = f"{label_metric}_{label_reduce}"
     labels = session_df[label_col].to_numpy(dtype=float)
 
-    result = streaming_psd.compute_psd_pain_correlation(streams, labels, chan_order, transform=transform)
+    # Build the rating grouping BEFORE the correlation so the spectrum's p-value can be
+    # cluster-robust on ratings rather than a naive t on epochs. `labels` is session_df[label_col],
+    # so the identity carries across one-for-one.
+    _rating_group = rating_group_from_identity(session_df, labels)
+    result = streaming_psd.compute_psd_pain_correlation(streams, labels, chan_order,
+                                                        transform=transform,
+                                                        rating_group=_rating_group)
     band = select_biomarker_band(result)
 
     timeline = pd.DataFrame({
@@ -661,7 +667,9 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # aggregation, where the day's aggregate genuinely IS one shared rating). `labels` is
     # `session_df[label_col]`, so epoch i corresponds to session_df row i one-for-one and the
     # identity can be carried straight across. Distinct identity -> distinct group; unmatched -> -1.
-    result["rating_group"] = rating_group_from_identity(session_df, td_labels)
+    # Same array the correlation used above; recomputing it would risk the two drifting apart.
+    result["rating_group"] = (_rating_group if len(_rating_group) == len(td_labels)
+                              else rating_group_from_identity(session_df, td_labels))
     
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,
             "timeline": timeline, "detail": result, "summary": summary}

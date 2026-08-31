@@ -102,20 +102,39 @@ def _mad_keep(x, k=None):
     from .stats_utils import mad_keep_mask
     return mad_keep_mask(x, n_mad=k, scale="raw")
 
-def pearson_corr_psd_label(psd_feat, label, mad_k=None):
+def pearson_corr_psd_label(psd_feat, label, mad_k=None, rating_group=None, return_extra=False):
     """
     psd_feat: (E, C, F) features AFTER daywise normalization
     label:    (E,)
     mad_k:    MAD outlier rejection applied per (channel,
               frequency) on the feature AND on the label before each correlation, so a single
-              artifact session can't drive the Pearson R. Set None to disable.
-    Returns: corr (C,F), pval (C,F)
+              artifact session can't drive the Pearson R. None = canonical threshold; 0 disables.
+    rating_group: (E,) integer grouping factor, one code per matched pain report (-1 = ungrouped;
+              see pipeline.rating_group_from_identity). WHEN GIVEN, `pval` is CLUSTER-ROBUST on
+              rating clusters with df = G-1 instead of a naive t with df = n-2. This matters a lot:
+              several epochs share one pain report, so the naive df overstates the information by
+              roughly the average cluster size. Measured on RCS08 at the selected cell, the naive
+              p was 9.24e-10 against 1.56e-04 cluster-robust — an SE inflation of about 1.65x, and
+              the BH-significant count over the displayed family fell from 20 cells to 4.
+              When omitted, behaviour is unchanged (naive p), so existing callers are unaffected.
+    return_extra: also return a dict with `pval_naive`, `n_clusters`, `se_cluster` and `method`,
+              so the panel can show the corrected and naive families side by side rather than
+              silently swapping one for the other.
+    Returns: corr (C,F), pval (C,F)[, extra dict]
     """
     X = np.asarray(psd_feat, dtype=float)
     y = np.asarray(label, dtype=float)
     E, C, F = X.shape
     corr = np.full((C, F), np.nan)
     pval = np.full((C, F), np.nan)
+    pval_naive = np.full((C, F), np.nan)
+    n_clusters = np.full((C, F), np.nan)
+    se_cluster = np.full((C, F), np.nan)
+    g_all = None
+    if rating_group is not None:
+        g_all = np.asarray(rating_group, dtype=int)
+        if g_all.size != E:
+            raise ValueError(f"rating_group has {g_all.size} entries for {E} epochs")
 
     yv = np.isfinite(y)
     # Label-side MAD keep-mask (computed once; the feature side is per (c,f) below).
@@ -138,8 +157,62 @@ def pearson_corr_psd_label(psd_feat, label, mad_k=None):
             y_z = (y[v] - np.nanmean(y[v])) / (np.nanstd(y[v]) + 1e-12)
             r = np.mean(x_z * y_z)
             corr[c, f] = r
+            # NAIVE p: t on r with df = n-2, where n counts EPOCHS. Kept as an explicit contrast
+            # because it is what the panel used to present as its only p-value.
             tstat = r * np.sqrt((n - 2) / (1 - r**2 + 1e-12))
-            pval[c, f] = 2 * (1 - t.cdf(abs(tstat), df=n - 2))
+            pval_naive[c, f] = 2 * (1 - t.cdf(abs(tstat), df=n - 2))
+
+            if g_all is None:
+                pval[c, f] = pval_naive[c, f]
+                continue
+            # CLUSTER-ROBUST p on RATING clusters. Several epochs are matched to the same pain
+            # report, so the epochs are not independent and df = n-2 overstates the information by
+            # roughly the average cluster size. With both variables standardized, r IS the OLS slope
+            # of y_z on x_z, so the cluster-robust (Liang-Zeger) sandwich for a simple regression
+            # reduces to a few lines: with residuals u = y_z - r*x_z,
+            #     Var(r) = c * sum_g (sum_{i in g} x_i u_i)^2 / (sum_i x_i^2)^2
+            # and c the usual finite-cluster correction G/(G-1) * (N-1)/(N-2).
+            # Done in closed form rather than via statsmodels because this runs per (channel,
+            # frequency) — hundreds of cells on every request — and the closed form is validated
+            # against statsmodels' cov_type="cluster" in the test suite.
+            g = g_all[v]
+            ok = g >= 0
+            if ok.sum() < 3:
+                pval[c, f] = np.nan
+                continue
+            xz_o, yz_o, g_o = x_z[ok], y_z[ok], g[ok]
+            uniq = np.unique(g_o)
+            G = uniq.size
+            if G < 3:
+                # Too few clusters for a sandwich to mean anything. Report NOTHING rather than a
+                # number that would be read as inference.
+                pval[c, f] = np.nan
+                n_clusters[c, f] = G
+                continue
+            u = yz_o - r * xz_o
+            sxx = float(np.sum(xz_o * xz_o))
+            if sxx <= 0:
+                pval[c, f] = np.nan
+                continue
+            # per-cluster score sums, vectorized over clusters
+            score = xz_o * u
+            sums = np.zeros(G, dtype=float)
+            np.add.at(sums, np.searchsorted(uniq, g_o), score)
+            N = xz_o.size
+            corr_factor = (G / (G - 1.0)) * ((N - 1.0) / max(N - 2.0, 1.0))
+            var_r = corr_factor * float(np.sum(sums * sums)) / (sxx * sxx)
+            se_r = float(np.sqrt(max(var_r, 1e-300)))
+            t_cl = r / se_r if se_r > 0 else np.nan
+            # df = G - 1, the standard choice for cluster-robust inference (NOT n - 2)
+            pval[c, f] = float(2 * t.sf(abs(t_cl), df=G - 1)) if np.isfinite(t_cl) else np.nan
+            n_clusters[c, f] = G
+            se_cluster[c, f] = se_r
+
+    if return_extra:
+        return corr, pval, {"pval_naive": pval_naive, "n_clusters": n_clusters,
+                            "se_cluster": se_cluster,
+                            "method": ("cluster-robust sandwich on rating clusters, t with df=G-1"
+                                       if g_all is not None else "naive t on epochs, df=n-2")}
     return corr, pval
 
 
@@ -991,7 +1064,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
 
 def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
-                                 transform="log"):
+                                 transform="log", rating_group=None):
     """
     Orchestrates the streaming biomarker: build a per-epoch PSD stack, normalize, and
     correlate each (channel, frequency) feature against a pain label.
@@ -1063,13 +1136,20 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
             "'log'|'log_zscore'|'fooof'|'relative_power'|'relative_power_log'"
         )
 
-    corr, pval = pearson_corr_psd_label(feature, np.asarray(labels, dtype=float))
+    corr, pval, _pextra = pearson_corr_psd_label(
+        feature, np.asarray(labels, dtype=float), rating_group=rating_group, return_extra=True)
     return {
         "f_set": f_set,
         "psd": psd,
         "feature": feature,
         "corr": corr,
-        "pval": pval,
+        "pval": pval,                       # cluster-robust on ratings when rating_group is given
+        # The naive t-on-epochs family, kept alongside rather than discarded so the panel can show
+        # the contrast (this is the same pattern the scan already uses with p_pearson/q_pearson).
+        "pval_naive": _pextra["pval_naive"],
+        "n_clusters_per_cell": _pextra["n_clusters"],
+        "se_cluster": _pextra["se_cluster"],
+        "pval_method": _pextra["method"],
         "chan_order": list(chan_order),
         "transform": transform,
         "labels": np.asarray(labels, dtype=float),

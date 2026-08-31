@@ -903,6 +903,13 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     f = np.asarray(td_detail["f_set"], dtype=float)
     corr = np.asarray(td_detail["corr"], dtype=float)   # (C, F)
     pval = np.asarray(td_detail["pval"], dtype=float)
+    # `pval` is now CLUSTER-ROBUST on rating clusters when the caller supplied a grouping
+    # (streaming_psd.pearson_corr_psd_label). The naive t-on-epochs family is carried alongside so
+    # the panel can show the contrast instead of silently swapping one p-value for another — the
+    # same pattern the exploration scan uses with p_pearson/q_pearson.
+    _pv_naive = td_detail.get("pval_naive")
+    pval_naive = (np.asarray(_pv_naive, dtype=float) if _pv_naive is not None else None)
+    _pval_method = td_detail.get("pval_method") or "naive t on epochs, df=n-2"
     chans = td_detail.get("chan_order", [])
     ignore = np.zeros(len(f), bool) if not ignore_band else ((f > ignore_band[0]) & (f < ignore_band[1]))
     # Enforce the biomarker frequency cap: frequencies at/above max_freq_hz are excluded from peak
@@ -928,6 +935,13 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     pflat = pval.astype(float).copy()
     pflat[:, ignore] = np.nan                     # drop capped/notched cells from the FDR family
     qgrid = bh_fdr(pflat.ravel()).reshape(pval.shape)
+    # Second BH family on the NAIVE p over exactly the same displayed cells, so the panel can state
+    # how much of its apparent significance came from treating correlated epochs as independent.
+    _q_naive_grid = None
+    if pval_naive is not None and pval_naive.shape == pval.shape:
+        _pn = pval_naive.astype(float).copy()
+        _pn[:, ignore] = np.nan
+        _q_naive_grid = bh_fdr(_pn.ravel()).reshape(pval.shape)
 
     channels = []
     for ci in range(corr.shape[0]):
@@ -970,6 +984,9 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
             "r": [_f(x) for x in r_row],
             "p": [_f(x) for x in p_row],
             "q": [_f(x) for x in q_row],          # BH-FDR q over the displayed family
+            # The naive t-on-epochs family, for the contrast. NOT the headline.
+            "p_naive": ([_f(x) for x in pval_naive[ci]] if pval_naive is not None else None),
+            "q_naive": ([_f(x) for x in _q_naive_grid[ci]] if _q_naive_grid is not None else None),
             "significant": sig,
             "peaks": peaks,
             "peak_scatter": peak_scatter,
@@ -977,7 +994,16 @@ def corr_spectrum(td_detail, ignore_band=None, p_significant=0.001, region_map=N
     return {"freqs": [float(x) for x in f], "channels": channels,
             "transform": td_detail.get("transform", "log"),
             "p_significant": p_significant, "q_significant": q_significant,
-            "significance_method": "BH-FDR over displayed channel x freq family"}
+            "significance_method": "BH-FDR over displayed channel x freq family",
+            "pval_method": _pval_method,
+            # How many displayed cells survive BH under each p definition. The gap IS the
+            # pseudoreplication: epochs sharing one pain report are not independent, and the naive
+            # t with df = n-2 counts each epoch as a fresh observation.
+            "n_sig_cluster": int(np.sum(np.isfinite(qgrid) & (qgrid < q_significant)
+                                        & ~ignore[None, :])),
+            "n_sig_naive": (int(np.sum(np.isfinite(_q_naive_grid) & (_q_naive_grid < q_significant)
+                                       & ~ignore[None, :])) if _q_naive_grid is not None else None),
+            "n_cells_displayed": int(np.sum(~ignore) * corr.shape[0])}
 
 
 # --- Exploratory spectral feature-importance scan (DESIGN §8b) -------------------------------

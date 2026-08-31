@@ -857,3 +857,91 @@ def test_rating_group_end_to_end_from_align_pros():
                              match_tolerance_min=60.0)
     g = pipeline.rating_group_from_identity(sdf, sdf["nrs_min"].to_numpy(dtype=float))
     assert len(set(g.tolist())) == 3, (list(g), sdf["nrs_min"].tolist())
+
+
+# --- cluster-robust p for the correlation spectrum (audit C2, 2026-08-31) -----------------------
+def test_cluster_robust_p_matches_statsmodels_cluster_covariance():
+    """The sandwich is implemented in closed form (this runs per channel x frequency, hundreds of
+    cells per request, so a statsmodels fit per cell is not affordable). That makes an equivalence
+    test mandatory rather than optional: assert it reproduces statsmodels' cov_type='cluster'
+    exactly, so the closed form can never silently drift from the reference implementation.
+    """
+    from modules.Biomarkers.routines import streaming_psd as sp
+    import statsmodels.api as smapi
+    from scipy.stats import t as _t
+
+    rng = np.random.default_rng(11)
+    G, per = 40, 4
+    g = np.repeat(np.arange(G), per)
+    u_g = rng.normal(0, 1.0, G)                       # cluster effect -> real within-cluster dependence
+    x = rng.normal(0, 1, G * per) + np.repeat(u_g, per)
+    y = 0.5 * x + np.repeat(u_g, per) + rng.normal(0, 1, G * per)
+
+    corr, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                                  rating_group=g, return_extra=True)
+    xz = (x - x.mean()) / x.std()
+    yz = (y - y.mean()) / y.std()
+    m = smapi.OLS(yz, smapi.add_constant(xz)).fit(cov_type="cluster",
+                                                  cov_kwds={"groups": g}, use_t=True)
+    assert abs(float(corr[0, 0]) - float(m.params[1])) < 1e-9
+    assert abs(float(extra["se_cluster"][0, 0]) - float(m.bse[1])) < 1e-9, \
+        (float(extra["se_cluster"][0, 0]), float(m.bse[1]))
+    p_ref = float(2 * _t.sf(abs(float(m.params[1]) / float(m.bse[1])), df=G - 1))
+    assert abs(float(pval[0, 0]) - p_ref) < 1e-12
+    # and the whole point: clustering must WIDEN the interval relative to the naive fit
+    se_naive = float(smapi.OLS(yz, smapi.add_constant(xz)).fit().bse[1])
+    assert float(extra["se_cluster"][0, 0]) > se_naive
+
+
+def test_cluster_robust_p_is_not_more_significant_than_naive_under_dependence():
+    """With genuine within-cluster dependence the corrected p must be LARGER. If a refactor ever
+    inverts this, the panel would be reporting pseudoreplication as extra confidence."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(3)
+    g = np.repeat(np.arange(30), 5)
+    u = rng.normal(0, 1.2, 30)
+    x = rng.normal(0, 1, 150) + np.repeat(u, 5)
+    y = 0.4 * x + np.repeat(u, 5) + rng.normal(0, 1, 150)
+    _, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                               rating_group=g, return_extra=True)
+    assert float(pval[0, 0]) >= float(extra["pval_naive"][0, 0])
+    assert int(extra["n_clusters"][0, 0]) == 30
+
+
+def test_omitting_rating_group_leaves_the_naive_behaviour_untouched():
+    """Back-compat: existing callers that pass no grouping must get exactly the old p-value."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(7)
+    x = rng.normal(0, 1, 60)
+    y = 0.5 * x + rng.normal(0, 1, 60)
+    _, p_no_g = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0)
+    _, p2, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0, return_extra=True)
+    assert abs(float(p_no_g[0, 0]) - float(extra["pval_naive"][0, 0])) < 1e-15
+    assert abs(float(p_no_g[0, 0]) - float(p2[0, 0])) < 1e-15
+    assert "naive" in extra["method"]
+
+
+def test_too_few_clusters_reports_nothing_rather_than_a_number():
+    """Under 3 clusters a sandwich is meaningless; it must yield NaN, not a p-value someone reads."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(5)
+    g = np.repeat(np.arange(2), 20)                    # only 2 clusters
+    x = rng.normal(0, 1, 40)
+    y = 0.6 * x + rng.normal(0, 1, 40)
+    _, pval, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                               rating_group=g, return_extra=True)
+    assert not np.isfinite(float(pval[0, 0]))
+    assert int(extra["n_clusters"][0, 0]) == 2
+    assert np.isfinite(float(extra["pval_naive"][0, 0]))   # the naive contrast still computes
+
+
+def test_ungrouped_epochs_are_excluded_from_the_cluster_p():
+    """rating_group == -1 marks an epoch with no matched report; it must not form its own cluster."""
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(13)
+    g = np.concatenate([np.repeat(np.arange(10), 4), np.full(8, -1)])
+    x = rng.normal(0, 1, g.size)
+    y = 0.5 * x + rng.normal(0, 1, g.size)
+    _, _, extra = sp.pearson_corr_psd_label(x.reshape(-1, 1, 1), y, mad_k=0,
+                                            rating_group=g, return_extra=True)
+    assert int(extra["n_clusters"][0, 0]) == 10, extra["n_clusters"][0, 0]
