@@ -299,7 +299,7 @@ every request. **That makes the equivalence test mandatory, and it is in the sui
 the p reproduce `statsmodels` `cov_type="cluster"` — verified identical to 10 decimal places
 (SE 0.0684763248 both ways, ratio 1.000000, p 1.42445e-12 both ways).
 
-Measured consequence on the displayed family (300 cells, live RCS08):
+Measured consequence over `corr_spectrum`'s BH family (300 cells, live RCS08):
 
 | metric | BH q<0.05, naive t on epochs | BH q<0.05, cluster-robust on ratings |
 |---|---|---|
@@ -308,6 +308,18 @@ Measured consequence on the displayed family (300 cells, live RCS08):
 
 So 17 of 20 apparent survivors under `nrs` were pseudoreplication. (The audit predicted 20 -> 4 on
 the old grouping; 3 is the same figure recomputed on the corrected 72-cluster grouping.)
+
+**Scope caveat — `corr_spectrum` is an API product that the UI does NOT currently render.** Verified:
+no file under `Client/src` references `corr_spectrum` (only `sliding_corr_spectrum`, a different
+product, and `spectral_feature_importance`). The three former time-domain panels were replaced by the
+full-spectrum scan; see the comment at `BiomarkerAnalytics.js:1132`. So this fix corrects an endpoint
+consumers can call, not a number on screen today — call it correct-but-not-yet-visible, and do not
+quote the 20 -> 3 contrast as if it were the panel's headline.
+
+**The number that DID move on screen is the scan's**, because its rigorous p
+(`_cluster_robust_logit_p`) clusters on `rating_group`, which the fix below corrected from 7 clusters
+to 72. That is the `n_rigorous_fdr` figure the panel annotation already describes (156 of 576 for
+`nrs`, 0 of 576 for `left_leg_vas`).
 
 Design choices worth keeping: the naive family is **published, not discarded** — `p_naive`/`q_naive`
 per channel plus `n_sig_cluster`/`n_sig_naive`/`pval_method` in the summary, mirroring the scan's
