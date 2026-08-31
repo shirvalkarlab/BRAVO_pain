@@ -48,6 +48,47 @@ from . import adapter
 # silently — or, as a first draft of that code did, raising NameError on `_log`.
 _log = logging.getLogger(__name__)
 
+
+def rating_group_from_identity(session_df, labels):
+    """Grouping factor for rating-aware statistics: one group per MATCHED REPORT.
+
+    Extracted from ``run_timedomain_branch`` so it can be tested directly — the three tests added
+    with the original fix all exercised ``adapter.align_pros``, leaving this half of it backed only
+    by a live measurement.
+
+    Returns an int array, one entry per epoch: a distinct code per distinct matched report, and -1
+    for an epoch that has no matched report or no usable label.
+
+    WHY IDENTITY AND NOT VALUE. This used to reconstruct the grouping by searching ``pro_df`` for a
+    report whose VALUE equalled the session's label and taking the first hit. On an integer pain
+    scale that collapses every session sharing a score into ONE "rating": measured on RCS08, 72
+    genuinely distinct matched reports were represented as 7 groups under ``nrs``, because there were
+    only 7 distinct NRS values. That corrupted the cluster-robust logit p (7 clusters instead of 72,
+    far too few for sandwich variance) and — worse — made ``StratifiedGroupKFold``'s folds a function
+    of the outcome being predicted, holding whole pain levels out together.
+
+    There is deliberately NO value-matching fallback. If the session/epoch alignment this depends on
+    does not hold, the grouping is left unset and a warning is logged, because reverting to a
+    grouping that clusters on the outcome is worse than having no grouping at all.
+    """
+    labels = np.asarray(labels, dtype=float)
+    rating_group = np.full(len(labels), -1, dtype=int)
+    has_col = "matched_pro_time" in getattr(session_df, "columns", ())
+    if has_col and len(session_df) == len(labels):
+        ids = pd.to_datetime(session_df["matched_pro_time"], errors="coerce")
+        codes, _ = pd.factorize(ids, use_na_sentinel=True)   # NaT -> -1, which is what we want
+        rating_group = np.asarray(codes, dtype=int)
+        # An epoch whose label is unusable carries no information for a rating-aware statistic, so
+        # it must not occupy a group either.
+        rating_group[~np.isfinite(labels)] = -1
+    else:
+        _log.warning(
+            "Biomarkers: cannot build rating_group from matched-report identity (session_df rows=%d, "
+            "epochs=%d, has column=%s) — leaving it unset rather than falling back to value-matching, "
+            "which collapses every session sharing a pain score into one group.",
+            len(session_df) if session_df is not None else -1, len(labels), has_col)
+    return rating_group
+
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
 STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
@@ -620,21 +661,7 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # aggregation, where the day's aggregate genuinely IS one shared rating). `labels` is
     # `session_df[label_col]`, so epoch i corresponds to session_df row i one-for-one and the
     # identity can be carried straight across. Distinct identity -> distinct group; unmatched -> -1.
-    rating_group = np.full(len(td_labels), -1, dtype=int)
-    if "matched_pro_time" in session_df.columns and len(session_df) == len(td_labels):
-        ids = pd.to_datetime(session_df["matched_pro_time"], errors="coerce")
-        codes, _ = pd.factorize(ids, use_na_sentinel=True)   # NaT -> -1, which is what we want
-        rating_group = np.asarray(codes, dtype=int)
-        # A label with no matched report must not be assigned a group, and a matched report with no
-        # usable label carries no information — keep both out of the grouping.
-        rating_group[~np.isfinite(np.asarray(td_labels, dtype=float))] = -1
-    else:
-        _log.warning(
-            "Biomarkers: cannot build rating_group from matched-report identity (session_df rows=%d, "
-            "epochs=%d, has column=%s) — leaving it unset rather than falling back to value-matching, "
-            "which collapses every session sharing a pain score into one group.",
-            len(session_df), len(td_labels), "matched_pro_time" in session_df.columns)
-    result["rating_group"] = rating_group
+    result["rating_group"] = rating_group_from_identity(session_df, td_labels)
     
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,
             "timeline": timeline, "detail": result, "summary": summary}

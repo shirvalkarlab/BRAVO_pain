@@ -322,9 +322,15 @@ DIFFERENT reports that share a score land in different groups),
 whichever group sorts first) and `test_align_pros_same_day_branch_groups_by_date`. The commit message
 on `cf7c429` says "four tests" — that count is wrong; there are three, and they are named here.
 
-Not pinned by a test, and worth adding: the `pipeline` side of the fix. The three tests all exercise
-`align_pros`; the factorize-and-clamp step in `run_timedomain_branch` and its no-fallback warning
-path are currently covered only by the live measurement (nrs 7 -> 72 groups), not by an assertion.
+**Coverage gap now closed (same day).** The three tests above all exercised `align_pros`, leaving
+the `pipeline` half backed only by the live measurement. That step is now extracted as
+`pipeline.rating_group_from_identity(session_df, labels)` — a pure function, so it can be asserted
+directly — with **four** further tests: one group per matched report even when every score is
+identical, unmatched and non-finite-label epochs excluded, a shape mismatch or missing column
+leaving the grouping entirely unset rather than guessing, and an end-to-end
+`align_pros -> rating_group_from_identity` composition. Suite 280 -> **284**. The live measurement
+was re-run after the extraction and still gives 72 groups over 294 assigned epochs under `nrs`, so
+the refactor is behaviour-preserving. Total coverage for this fix: **7** tests.
 
 Note `pipeline.py` had no logging at all — a first draft of that warning would have raised
 `NameError` on `_log`. A module logger was added.

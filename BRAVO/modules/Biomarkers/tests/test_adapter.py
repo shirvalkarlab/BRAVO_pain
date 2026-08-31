@@ -800,3 +800,60 @@ def test_align_pros_same_day_branch_groups_by_date():
     codes, _ = pd.factorize(ids, use_na_sentinel=True)
     assert list(codes[:2]) == [0, 0], list(codes)     # same day -> one shared rating
     assert codes[2] == -1                              # no report that day -> ungrouped
+
+
+# --- the pipeline half of the rating_group fix (was untested; gap recorded 2026-08-31) ----------
+def test_rating_group_from_identity_gives_one_group_per_matched_report():
+    """Distinct matched report -> distinct group, even when the pain SCORES are identical.
+
+    This is the assertion the original fix was missing: its three tests all exercised align_pros,
+    leaving pipeline's factorize step backed only by a live measurement.
+    """
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(
+        ["2026-03-01 12:00", "2026-03-02 12:00", "2026-03-02 12:00", "2026-03-03 12:00"])})
+    labels = np.array([7.0, 7.0, 7.0, 7.0])          # every score identical on purpose
+    g = pipeline.rating_group_from_identity(sdf, labels)
+    assert len(set(g.tolist())) == 3, g              # three distinct reports
+    assert g[1] == g[2] and g[0] != g[1] and g[3] not in (g[0], g[1])
+    # the old value-matching would have produced ONE group here, since all four scores are equal
+    assert len(set(g.tolist())) > 1
+
+
+def test_rating_group_from_identity_excludes_unmatched_and_unusable():
+    """NaT identity -> -1, and a non-finite label -> -1 even when a report was matched."""
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(
+        ["2026-03-01 12:00", None, "2026-03-03 12:00", "2026-03-04 12:00"])})
+    labels = np.array([5.0, 5.0, np.nan, 6.0])
+    g = pipeline.rating_group_from_identity(sdf, labels)
+    assert g[1] == -1, "no matched report must not get a group"
+    assert g[2] == -1, "an unusable label must not occupy a group"
+    assert g[0] >= 0 and g[3] >= 0 and g[0] != g[3]
+
+
+def test_rating_group_from_identity_refuses_to_guess_on_a_shape_mismatch():
+    """If the session/epoch alignment does not hold, leave the grouping UNSET. Falling back to
+    value-matching would silently restore a grouping that clusters on the outcome."""
+    sdf = pd.DataFrame({"matched_pro_time": pd.to_datetime(["2026-03-01 12:00"])})
+    g = pipeline.rating_group_from_identity(sdf, np.array([5.0, 6.0, 7.0]))
+    assert list(g) == [-1, -1, -1], g
+    # and the same when the column is absent entirely
+    g2 = pipeline.rating_group_from_identity(pd.DataFrame({"other": [1, 2]}), np.array([5.0, 6.0]))
+    assert list(g2) == [-1, -1], g2
+
+
+def test_rating_group_end_to_end_from_align_pros():
+    """align_pros -> rating_group_from_identity: the two halves must compose, which is what the
+    live 7 -> 72 measurement was standing in for."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({
+        "date_time_s1_daily": [base, base + _dt.timedelta(days=1), base + _dt.timedelta(days=2)],
+        "nrs": [7.0, 7.0, 7.0],                       # all identical scores, three distinct reports
+    })
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=1, minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=2, minutes=1)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    g = pipeline.rating_group_from_identity(sdf, sdf["nrs_min"].to_numpy(dtype=float))
+    assert len(set(g.tolist())) == 3, (list(g), sdf["nrs_min"].tolist())
