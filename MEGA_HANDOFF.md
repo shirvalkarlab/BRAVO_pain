@@ -314,8 +314,17 @@ when unmatched). `pipeline` factorizes that identity — distinct report gives a
 unmatched gives -1. `labels` is `session_df[label_col]`, so epoch *i* is session row *i* one-for-one
 and the identity carries straight across. The value-matching fallback is **deleted, not kept**: if
 the alignment assumption ever fails the code logs and leaves the grouping unset rather than silently
-reverting to a grouping that clusters on the outcome. Four tests pin it, including that two sessions
-matched to different reports with the same score land in different groups.
+reverting to a grouping that clusters on the outcome. **Three** tests pin it, in
+`tests/test_adapter.py` (the container suite moved 277 -> 280, i.e. +3):
+`test_align_pros_records_the_matched_report_identity_not_just_its_value` (two sessions matched to
+DIFFERENT reports that share a score land in different groups),
+`test_align_pros_unmatched_session_has_no_identity` (NaT factorizes to -1 rather than joining
+whichever group sorts first) and `test_align_pros_same_day_branch_groups_by_date`. The commit message
+on `cf7c429` says "four tests" — that count is wrong; there are three, and they are named here.
+
+Not pinned by a test, and worth adding: the `pipeline` side of the fix. The three tests all exercise
+`align_pros`; the factorize-and-clamp step in `run_timedomain_branch` and its no-fallback warning
+path are currently covered only by the live measurement (nrs 7 -> 72 groups), not by an assertion.
 
 Note `pipeline.py` had no logging at all — a first draft of that warning would have raised
 `NameError` on `_log`. A module logger was added.
