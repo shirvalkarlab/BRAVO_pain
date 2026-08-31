@@ -734,3 +734,69 @@ if __name__ == "__main__":
     test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")
+
+
+def test_align_pros_records_the_matched_report_identity_not_just_its_value():
+    """`matched_pro_time` is the IDENTITY of the matched report, which is what callers need in order
+    to cluster correctly.
+
+    Regression for a defect fixed 2026-08-30: pipeline.run_timedomain_branch used to reconstruct the
+    grouping by searching pro_df for a report whose VALUE equalled the session's label and taking the
+    first hit. On an integer pain scale that collapses every session sharing a score into one
+    "rating". Measured on live RCS08 with Metric=nrs: 72 genuinely distinct matched reports were
+    represented as 7 groups, because there were only 7 distinct NRS values. Two sessions matched to
+    DIFFERENT reports that happen to share a score must land in different groups.
+    """
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    # three reports, two of which share the SAME pain value but are different reports
+    pro = pd.DataFrame({
+        "date_time_s1_daily": [base, base + _dt.timedelta(days=1), base + _dt.timedelta(days=2)],
+        "nrs": [7.0, 7.0, 4.0],
+    })
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=1, minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=2, minutes=1)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert "matched_pro_time" in sdf.columns
+    assert sdf["matched"].all(), sdf[["matched", "match_dt_min"]]
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    # the two 7.0 sessions matched DIFFERENT reports -> distinct identities
+    assert ids.nunique() == 3, list(ids)
+    assert sdf["nrs_min"].tolist() == [7.0, 7.0, 4.0]
+    # the old value-matching would have produced only 2 groups (one per distinct value)
+    assert sdf["nrs_min"].nunique() == 2
+
+
+def test_align_pros_unmatched_session_has_no_identity():
+    """An unmatched session must carry NaT, so factorize maps it to -1 (no group) rather than
+    silently joining whichever group sorts first."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [base], "nrs": [5.0]})
+    recs = [{"StartTime": base + _dt.timedelta(minutes=1)},
+            {"StartTime": base + _dt.timedelta(days=30)}]          # far outside tolerance
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0)
+    assert sdf["matched"].tolist() == [True, False]
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    assert pd.notna(ids.iloc[0]) and pd.isna(ids.iloc[1])
+    codes, _ = pd.factorize(ids, use_na_sentinel=True)
+    assert list(codes) == [0, -1], list(codes)
+
+
+def test_align_pros_same_day_branch_groups_by_date():
+    """On the legacy same-day path the 'rating' is the day's aggregate, so two sessions on one day
+    genuinely share a rating and must share a group."""
+    import datetime as _dt
+    d = _dt.datetime(2026, 3, 1, 8, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [d, d + _dt.timedelta(hours=6)], "nrs": [6.0, 8.0]})
+    recs = [{"StartTime": d + _dt.timedelta(hours=1)},
+            {"StartTime": d + _dt.timedelta(hours=9)},
+            {"StartTime": d + _dt.timedelta(days=5)}]
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",))
+    ids = pd.to_datetime(sdf["matched_pro_time"])
+    codes, _ = pd.factorize(ids, use_na_sentinel=True)
+    assert list(codes[:2]) == [0, 0], list(codes)     # same day -> one shared rating
+    assert codes[2] == -1                              # no report that day -> ungrouped

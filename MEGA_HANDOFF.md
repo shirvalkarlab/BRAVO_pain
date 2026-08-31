@@ -280,6 +280,65 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**CRITICAL FIX (2026-08-31): `rating_group` on the time-domain path was built from the pain SCORE,
+not the identity of the matched report — so the plate's "rigorous" clustered statistics were
+clustered on the outcome itself.** This is audit item F9/C3, and it is the most consequential of the
+inference defects because it corrupted the statistic the panel presents as the trustworthy one.
+
+`pipeline.run_timedomain_branch` reconstructed the grouping by searching `pro_df` for a report whose
+VALUE equalled the session's label and taking the first hit
+(`np.where(np.abs(pro_vals - lbl) < 1e-6)[0][0]`). On an integer scale that collapses every session
+sharing a score into ONE "rating", so the number of groups equalled the number of distinct pain
+VALUES. Measured on live RCS08:
+
+| metric | groups BEFORE (= distinct values) | groups AFTER (= matched reports) |
+|---|---|---|
+| `nrs` | **7** | **72** |
+| `left_leg_vas` | 37 | 46 |
+
+Severity is metric-dependent, which is why it survived: on a 0-100 VAS the collapse is a 24%
+undercount, but on integer NRS it is a **10x** undercount. Two consequences, both on the rigorous
+statistics:
+
+- `_cluster_robust_logit_p` clustered on 7 clusters instead of 72. Sandwich variance on that few
+  clusters is unreliable, and this is the p-value the plate presents as the pseudoreplication-corrected
+  headline (the ringed survivors).
+- `_cv_logistic_auc`'s `StratifiedGroupKFold` grouped on those same collapsed groups, i.e. **the CV
+  folds were defined by the outcome being predicted** — whole pain levels were held out together.
+  That is not a defensible fold structure under any reading.
+
+Fixed at the source rather than patched: `adapter.align_pros` now records `matched_pro_time`, the
+IDENTITY of the report each session matched (its timestamp under time-window matching; the calendar
+date under legacy same-day aggregation, where the day's aggregate genuinely IS one shared rating, NaT
+when unmatched). `pipeline` factorizes that identity — distinct report gives a distinct group,
+unmatched gives -1. `labels` is `session_df[label_col]`, so epoch *i* is session row *i* one-for-one
+and the identity carries straight across. The value-matching fallback is **deleted, not kept**: if
+the alignment assumption ever fails the code logs and leaves the grouping unset rather than silently
+reverting to a grouping that clusters on the outcome. Four tests pin it, including that two sessions
+matched to different reports with the same score land in different groups.
+
+Note `pipeline.py` had no logging at all — a first draft of that warning would have raised
+`NameError` on `_log`. A module logger was added.
+
+**THE RESULT THIS EXPOSED, and it matters scientifically: under correct rating-level clustering, NOT
+ONE of 576 candidate bands survives FDR for the left leg — the PI's designated primary site.**
+Verified as a real null rather than missing values (a clustered p is computed for all 576 cells):
+
+| metric | naive FDR survivors | rigorous FDR survivors | min clustered p | min q | strongest AUC |
+|---|---|---|---|---|---|
+| `nrs` | 454 of 576 | **156** | 3.98e-06 | 0.0012 | 0.859 |
+| `left_leg_vas` | 444 of 576 | **0** | 0.00149 | **0.128** | 0.904 |
+
+So for the primary site the naive analysis would pass 444 of 576 bands and the honest one passes
+none, while the strongest AUC on display is 0.904. That combination — a high AUC with no band
+surviving clustered multiplicity correction — is exactly what this plate exists to catch, and it
+should be read as "no validated biomarker for the left leg on this data", not as a 0.904 result.
+Do not quote the naive count. (The earlier audit recorded 471 naive / 74 rigorous under the OLD
+grouping, but its naive count differs from any configuration measured here, so treat that pair as a
+different configuration rather than a clean before/after.)
+
+Container suite **280/280**.
+
 **CRITICAL FIX (2026-08-30): the conservative "powered" gate in `auc_power` was defeated by a fold,
 and could report a FALSE PASS on a device-facing readout.** Found by a delegated inference audit,
 confirmed independently against live RCS08 data before changing anything.

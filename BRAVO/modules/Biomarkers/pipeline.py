@@ -29,6 +29,7 @@ DEFERRED HOOKS (intentionally not built here -- see plan):
 
 import os
 import json
+import logging
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,6 +42,11 @@ from .routines import redcap_client
 from .routines import stats_utils
 from .routines.analytics import format_channel
 from . import adapter
+
+# This module had no logging at all. The rating_group fallback below needs to be able to say
+# something when the session/epoch alignment it depends on does not hold, rather than failing
+# silently — or, as a first draft of that code did, raising NameError on `_log`.
+_log = logging.getLogger(__name__)
 
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
 STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
@@ -592,20 +598,42 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # Map each session's matched PRO back to the PRO index in pro_df. Each epoch (session) matches
     # to at most one PRO label; we find its index for the rating-grouped deduplication.
     td_labels = result.get("labels", labels)  # use result labels (should match session_df)
+    #
+    # GROUP ON THE MATCHED RATING'S IDENTITY, NOT ITS VALUE (fixed 2026-08-30).
+    #
+    # This block used to reconstruct the grouping by searching pro_df for a report whose VALUE
+    # equalled the session's label — `np.where(abs(pro_vals - lbl) < 1e-6)[0][0]` — and taking the
+    # first hit. On an integer pain scale that is catastrophic: every session that happens to share
+    # a score collapses into ONE "rating group", so the number of groups equals the number of
+    # distinct pain VALUES (single digits) rather than the number of matched reports (dozens).
+    #
+    # Two consequences, both on the panel's *rigorous* statistics:
+    #   * `_cluster_robust_logit_p` clustered on a handful of clusters instead of dozens. Sandwich
+    #     variance with that few clusters is unreliable, and it is the p-value the plate presents as
+    #     the pseudoreplication-corrected headline (the ringed survivors).
+    #   * `_cv_logistic_auc`'s StratifiedGroupKFold grouped on those same collapsed groups — i.e.
+    #     the CV folds were defined BY THE OUTCOME, so whole pain levels were held out together.
+    #     Grouping on the value of the thing you are predicting is not a defensible fold structure.
+    #
+    # `align_pros` now records `matched_pro_time`, the identity of the report each session was
+    # matched to (its timestamp under time-window matching; the calendar date under legacy same-day
+    # aggregation, where the day's aggregate genuinely IS one shared rating). `labels` is
+    # `session_df[label_col]`, so epoch i corresponds to session_df row i one-for-one and the
+    # identity can be carried straight across. Distinct identity -> distinct group; unmatched -> -1.
     rating_group = np.full(len(td_labels), -1, dtype=int)
-    # Map each session's label back to its PRO row in pro_df by value. session_df's `{m}_min`/`{m}_mean`
-    # columns are copies of the matched PRO's RAW metric value (adapter.align_pros), so the comparison
-    # set is the BARE metric column `pro_df[label_metric]` (e.g. "vas") — NOT `label_col` ("vas_min"),
-    # which exists only on session_df and would KeyError on the raw PRO frame. Hoisted out of the loop
-    # (invariant across epochs). If the metric column is absent, leave rating_group as -1 (no dedup).
-    pro_vals = (pd.to_numeric(pro_df[label_metric], errors="coerce").to_numpy(dtype=float)
-                if label_metric in pro_df.columns else None)
-    if pro_vals is not None:
-        for i, lbl in enumerate(td_labels):
-            if np.isfinite(lbl):
-                matched_idx = np.where(np.isfinite(pro_vals) & (np.abs(pro_vals - lbl) < 1e-6))[0]
-                if len(matched_idx) > 0:
-                    rating_group[i] = matched_idx[0]
+    if "matched_pro_time" in session_df.columns and len(session_df) == len(td_labels):
+        ids = pd.to_datetime(session_df["matched_pro_time"], errors="coerce")
+        codes, _ = pd.factorize(ids, use_na_sentinel=True)   # NaT -> -1, which is what we want
+        rating_group = np.asarray(codes, dtype=int)
+        # A label with no matched report must not be assigned a group, and a matched report with no
+        # usable label carries no information — keep both out of the grouping.
+        rating_group[~np.isfinite(np.asarray(td_labels, dtype=float))] = -1
+    else:
+        _log.warning(
+            "Biomarkers: cannot build rating_group from matched-report identity (session_df rows=%d, "
+            "epochs=%d, has column=%s) — leaving it unset rather than falling back to value-matching, "
+            "which collapses every session sharing a pain score into one group.",
+            len(session_df), len(td_labels), "matched_pro_time" in session_df.columns)
     result["rating_group"] = rating_group
     
     return {"source": "timedomain", "code_version": STREAMING_CODE_VERSION,

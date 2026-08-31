@@ -123,7 +123,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         far finer match than the legacy same-day mean. `*_mean` and `*_min` are both set to that one
         matched report's value (a single report has no spread); sessions with no PRO inside the window
         get NaN metrics and `matched=False`. When None, the legacy same-calendar-day mean/min is used.
-        Every session row carries `matched` (bool) and `match_dt_min` (signed minutes PRO-minus-session,
+        Every session row carries `matched` (bool), `matched_pro_time` (the IDENTITY of the matched
+        report — its timestamp under time-window matching, or the calendar date under legacy same-day
+        aggregation; NaT when unmatched) and `match_dt_min` (signed minutes PRO-minus-session,
         NaN when unmatched) so the caller can count matched neural samples and surface sparsity.
 
     Returns
@@ -158,7 +160,8 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
                 ts = _to_datetime(rec.get("StartTime"))
                 row = {"session_index": i, "session_start": ts,
                        "session_date": (ts.date() if not pd.isna(ts) else None),
-                       "matched": False, "match_dt_min": np.nan}
+                       "matched": False, "match_dt_min": np.nan,
+                       "matched_pro_time": pd.NaT}
                 j = -1
                 if not pd.isna(ts) and len(pro_times):
                     ts64 = np.datetime64(ts.to_datetime64())
@@ -176,6 +179,13 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
                     dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
                     row["matched"] = True
                     row["match_dt_min"] = float(dt_min)
+                    # IDENTITY of the matched report, not its value. Callers need to know WHICH
+                    # rating a session was matched to in order to cluster/group correctly. Without
+                    # it, pipeline.run_timedomain_branch reconstructed the grouping by searching for
+                    # a PRO whose VALUE equalled the label, which on an integer pain scale collapses
+                    # every session sharing a score into one "rating" — and worse, makes the grouping
+                    # a function of the outcome being predicted.
+                    row["matched_pro_time"] = pd.Timestamp(pro_times[j])
                     for m in metrics:
                         v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
                         row[f"{m}_mean"] = v
@@ -197,8 +207,14 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             ts = _to_datetime(rec.get("StartTime"))
             sess_date = ts.date() if not pd.isna(ts) else None
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
+            # On this path the "rating" is the DAY'S AGGREGATE (mean/min over that date's reports),
+            # so the identity of the matched rating is the date itself: two sessions on the same day
+            # genuinely share one rating and belong in one group.
             row = {"session_index": i, "session_start": ts, "session_date": sess_date,
-                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan}
+                   "matched": bool(len(same_day) > 0), "match_dt_min": np.nan,
+                   "matched_pro_time": (pd.Timestamp(sess_date) if (sess_date is not None
+                                                                    and len(same_day) > 0)
+                                        else pd.NaT)}
             for m in metrics:
                 if m in same_day.columns and len(same_day) > 0:
                     row[f"{m}_mean"] = same_day[m].mean()
