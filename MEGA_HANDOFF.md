@@ -703,9 +703,13 @@ scripts written during this investigation (`_ingest_census.py`, `_storage_probe.
 `_orphan_probe.py`, `_orphan_dedup_check.py`, `_power_probe.py`, `_tb_probe.py`,
 `_caveat_probe*.py`, `_dump_sf_names.py`) are untracked and equally disposable.
 
-**Known gap, not fixed:** the Biomarkers API exposes no cache-bypass or force-refresh parameter, so
-if the assembled-matrix cache ever DID go stale there is no way to force a rebuild from the UI. The
-signature is sound so this is a robustness gap rather than an active fault; worth adding.
+**~~Known gap, not fixed~~ — CLOSED 2026-08-30 (commit `4236001`).** This entry used to read: "the
+Biomarkers API exposes no cache-bypass or force-refresh parameter, so if the assembled-matrix cache
+ever DID go stale there is no way to force a rebuild from the UI." That gap is fixed — `ForceRefresh`
+accepts `"matrix"` (reassemble from per-recording spectra, seconds) or `"all"` (re-decode and
+re-Welch everything, minutes), with unrecognised values mapping to a normal cached read. See the
+force-refresh section higher up for the measured numbers. Kept as a struck-through entry rather than
+deleted, because a reader who remembers the gap should be able to find out where it went.
 
 **`StimOptimizer` gains a callable entry point and runs per hemisphere (2026-08-30, untracked).**
 Previously `routines/` was importable library code with no runner, so nothing in the module was
