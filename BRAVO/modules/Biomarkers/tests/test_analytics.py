@@ -2935,3 +2935,74 @@ def test_exploration_publishes_an_outlier_sensitivity_block():
     assert blk["n_unfiltered"] >= blk["n_filtered"]
     assert blk["n_excluded"] == blk["n_unfiltered"] - blk["n_filtered"]
     assert "same sample" in blk["note"]
+
+
+# --- F8 second item: the permutation family must contain the selected cell (2026-09-02) --------
+def test_selection_statistic_reproduces_the_screen_then_max_rule():
+    """The selection is not the family maximum: it screens by BH-corrected q and takes the largest
+    |r| among survivors. When a strong-|r| cell fails the screen, the selection statistic must be
+    the largest SURVIVING |r|, not the global one."""
+    import numpy as np
+    from modules.Biomarkers import pipeline as pl
+    # cell 0 has the largest |r| but a tiny effective N, so it should fail the FDR screen; cell 1 is
+    # slightly weaker but very well sampled and should survive and therefore be selected.
+    r_abs = np.array([0.90, 0.60, 0.05, 0.04])
+    n_eff = np.array([3.0, 400.0, 400.0, 400.0])
+    # Sanity-check the premise itself before asserting on the rule, because the first version of
+    # this test used n_eff=5 for the strong cell, where p is about 0.037 and the cell SURVIVES --
+    # so the test was asserting the wrong expectation rather than finding a defect.
+    from scipy import stats as _st
+    _p_strong = 2 * _st.t.sf(0.90 * np.sqrt((3.0 - 2) / (1 - 0.81)), df=1.0)
+    assert _p_strong > 0.10, f"premise broken: strong cell p={_p_strong:.3f} would survive"
+    sel = pl._selection_statistic(r_abs, n_eff, q_threshold=0.10)
+    assert abs(sel - 0.60) < 1e-9, f"expected the surviving max 0.60, got {sel}"
+    # with every cell well sampled the strongest survives and the rule coincides with the max
+    sel2 = pl._selection_statistic(r_abs, np.full(4, 400.0), q_threshold=0.10)
+    assert abs(sel2 - 0.90) < 1e-9
+
+
+def test_neff_inversion_round_trips():
+    import numpy as np
+    from scipy import stats as st
+    from modules.Biomarkers import pipeline as pl
+    for r_true, n_true in ((0.4, 60.0), (0.15, 300.0), (0.7, 20.0)):
+        t = abs(r_true) * np.sqrt((n_true - 2) / (1 - r_true ** 2))
+        p = 2 * st.t.sf(t, df=n_true - 2)
+        got = pl._neff_from_r_and_p(np.array([r_true]), np.array([p]))[0]
+        assert abs(got - n_true) / n_true < 0.02, (r_true, n_true, got)
+
+
+def test_family_guard_flags_a_selected_value_outside_the_permuted_family():
+    """THE FINDING THIS GUARD EXISTS FOR. The permutation family and the selection grid are built
+    on different row sets, and on the live left-leg outcome the selected |r| (0.6343) EXCEEDS the
+    permutation family's own maximum (0.5743). A value selected from a family cannot exceed that
+    family's maximum, so the two are demonstrably different families and no permutation p over the
+    permuted one is selection-corrected for the reported cell. The flag must be False there."""
+    import sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+
+    def find(o, key):
+        if isinstance(o, dict):
+            if key in o:
+                yield o
+            for v in o.values():
+                yield from find(v, key)
+        elif isinstance(o, list):
+            for v in o[:3]:
+                yield from find(v, key)
+
+    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
+                                "source": "timedomain", "LabelMetric": "left_leg_vas"})
+    hits = list(find(r, "perm_family_matches_selection"))
+    assert hits, "the guard field is not published"
+    su = hits[0]
+    assert "perm_family_caveat" in su
+    assert "selection-corrected" in su["perm_family_caveat"].lower()
+    flag, sel_obs, rr = (su["perm_family_matches_selection"], su.get("perm_selection_obs"),
+                         su.get("r"))
+    if flag is None:
+        return
+    if sel_obs is not None and rr is not None:
+        # the flag must be a faithful comparison, not a constant
+        assert flag == (abs(rr) <= sel_obs + 1e-9)

@@ -747,8 +747,75 @@ def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
                 "n_epochs_used": int(rows.sum()), "reason": None}
 
 
+def _neff_from_r_and_p(r, p):
+    """Recover each cell's effective N by inverting the two-sided t-test that produced ``p``.
+
+    The selection rule screens on an autocorrelation-adjusted p-grid, so replicating that rule inside
+    a permutation needs each cell's effective N. We recover it once from the observed pair rather
+    than recomputing the autocorrelation adjustment per permutation: the null should vary the labels
+    while holding the SCREENING GEOMETRY fixed, because a null in which the screen itself moves is a
+    null for a different procedure than the one that was run.
+
+    Inverting t = r * sqrt((n-2)/(1-r^2)) with p = 2*(1 - CDF_t(|t|, n-2)) has no closed form in n,
+    so each cell is solved numerically. Cells whose r or p is not finite return NaN and are excluded
+    from the screen, exactly as they are in the observed selection.
+    """
+    from scipy import optimize, stats as _st
+    r = np.asarray(r, float).ravel()
+    p = np.asarray(p, float).ravel()
+    out = np.full(r.size, np.nan)
+    for i in range(r.size):
+        ri, pi = r[i], p[i]
+        if not (np.isfinite(ri) and np.isfinite(pi)) or abs(ri) >= 1.0 or not (0.0 < pi <= 1.0):
+            continue
+
+        def f(n, ri=ri, pi=pi):
+            n = max(3.0 + 1e-9, float(n))
+            t = abs(ri) * np.sqrt((n - 2.0) / max(1e-12, 1.0 - ri * ri))
+            return 2.0 * _st.t.sf(t, df=n - 2.0) - pi
+
+        try:
+            lo, hi = 3.0 + 1e-6, 1e6
+            if f(lo) * f(hi) > 0:
+                continue
+            out[i] = float(optimize.brentq(f, lo, hi, xtol=1e-3, maxiter=200))
+        except Exception:
+            continue
+    return out
+
+
+def _selection_statistic(r_abs, n_eff, q_threshold):
+    """The statistic the SELECTION RULE actually maximises, for one vector of |correlations|.
+
+    ``select_biomarker_band`` does NOT take the family maximum of |r|. It converts the correlation
+    grid to an autocorrelation-adjusted p-grid, Benjamini-Hochberg corrects it, restricts to cells
+    whose q falls below the threshold, and takes the largest |r| WITHIN THAT SURVIVING POOL —
+    falling back to the whole family only when nothing survives. Family maximum and selected value
+    therefore differ whenever the surviving pool excludes the global argmax, which is precisely the
+    observed situation: the family max was 0.5692 while the selected cell's |r| was 0.5303.
+
+    A p-value is selection-corrected only if its null is the null of the statistic the selection
+    maximises. This function reproduces the rule so the permutation distribution is of the right
+    quantity rather than of a neighbouring one.
+    """
+    from scipy import stats as _st
+    r_abs = np.asarray(r_abs, float)
+    n_eff = np.asarray(n_eff, float)
+    ok = np.isfinite(r_abs) & np.isfinite(n_eff) & (n_eff > 2.0) & (r_abs < 1.0)
+    if not ok.any():
+        return np.nan
+    t = np.zeros_like(r_abs)
+    t[ok] = r_abs[ok] * np.sqrt((n_eff[ok] - 2.0) / np.maximum(1e-12, 1.0 - r_abs[ok] ** 2))
+    p = np.full(r_abs.shape, np.nan)
+    p[ok] = 2.0 * _st.t.sf(t[ok], df=n_eff[ok] - 2.0)
+    q = stats_utils.bh_fdr(np.where(ok, p, np.nan))
+    sig = ok & np.isfinite(q) & (q < q_threshold)
+    pool = sig if sig.any() else ok
+    return float(np.max(r_abs[pool]))
+
+
 def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, return_null=False,
-                               rating_group=None):
+                               rating_group=None, obs_p=None, q_threshold=0.10):
     """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
     pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
     x n_perm) with a handful of matrix ops.
@@ -814,6 +881,17 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
         rr = cov / np.sqrt(vx[None, :] * vy)          # (P, K)
     good = (nj >= min_n)[None, :] & np.isfinite(rr)
     rr = np.where(good, np.abs(rr), -np.inf)
+    # Observed per-cell |r|, using the SAME covariance math as the permutations above rather than a
+    # separate correlation call, so the observed vector and the null vectors cannot drift apart in
+    # their treatment of missing values or of the min_n floor. Needed for the selection-matched null
+    # below, which has to screen the observed grid exactly as select_biomarker_band does.
+    _Yo = y[None, :]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        _cov_o = (_Yo @ Xm) - (_Yo @ M) * sx[None, :] / nj[None, :]
+        _vy_o = ((_Yo * _Yo) @ M) - (_Yo @ M) ** 2 / nj[None, :]
+        _rr_o = _cov_o / np.sqrt(vx[None, :] * _vy_o)
+    rr_obs = np.where((nj >= min_n)[None, :] & np.isfinite(_rr_o), np.abs(_rr_o), np.nan).ravel()
+
     stat = rr.max(axis=1)                             # (P,) family max|R| per permutation
     finite = np.isfinite(stat) & (stat > -np.inf)
     used = int(finite.sum())
@@ -821,6 +899,31 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
         return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
     null_stats = stat[finite]
     ge = int(np.sum(null_stats >= obs))
+
+    # F8 (second item): A SECOND NULL, FOR THE STATISTIC THE SELECTION ACTUALLY MAXIMISES.
+    # `stat` above is the family maximum of |r|. The selection rule screens by BH-corrected q first
+    # and only then takes the largest |r| among survivors, so the two are different statistics and
+    # a family-max null is not a selection-corrected null for the reported cell. When the observed
+    # p-grid is supplied we recover each cell's effective N once, then replicate the full rule
+    # inside every permutation and report that p separately. Both are published; neither replaces
+    # the other, because they answer different questions ("could searching alone produce this
+    # strongest correlation" versus "could it produce this SELECTED correlation").
+    sel_p = sel_obs = None
+    sel_used = 0
+    if obs_p is not None:
+        _neff = _neff_from_r_and_p(np.abs(rr_obs), np.asarray(obs_p, float).ravel())
+        if np.isfinite(_neff).sum() >= 2:
+            sel_obs = _selection_statistic(np.abs(rr_obs), _neff, q_threshold)
+            _sel_null = np.array([_selection_statistic(np.abs(rr[j]), _neff, q_threshold)
+                                  for j in range(rr.shape[0])], float)
+            _sf = np.isfinite(_sel_null)
+            sel_used = int(_sf.sum())
+            if sel_used > 0 and np.isfinite(sel_obs):
+                sel_p = float((int(np.sum(_sel_null[_sf] >= sel_obs)) + 1) / (sel_used + 1))
+    perm_info.update({"selection_p": sel_p, "selection_obs": sel_obs,
+                      "selection_perm_used": sel_used,
+                      "selection_rule": ("BH q < %.2f, then max |r| among survivors (falls back to "
+                                         "the whole family when none survive)" % q_threshold)})
     p = (ge + 1) / (used + 1)                          # +1: never report p=0
     # WINNER'S CURSE MAGNITUDE (audit F14). The null distribution of the family max|R| IS the
     # magnitude of the selection effect, and it was already being computed here and shipped as a
@@ -967,6 +1070,16 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # run_timedomain_branch, so reading it here silently selected the epoch-level fallback (F3).
         _rg = rating_group if rating_group is not None else result.get("rating_group")
         _rg_perm = (np.asarray(_rg)[perm_valid] if _rg is not None else None)
+        # The observed autocorrelation-adjusted p-grid, flattened over exactly the cells the
+        # permutation family covers (same channel order, same frequency cap), so the selection screen
+        # inside the null lines up cell-for-cell with the observed one.
+        try:
+            _pg = _autocorr_adjusted_pgrid(result)
+            _obs_p_flat = np.asarray(_pg, float)[:, keep_f].reshape(-1)
+        except Exception as _exc:
+            _log.warning("Biomarkers: observed p-grid unavailable for the selection-matched null "
+                         "(%s: %s); reporting the family-max p only.", type(_exc).__name__, _exc)
+            _obs_p_flat = None
 
         # F8: APPLY THE SAME OUTLIER FILTER THE DISPLAYED r USES. Without this, perm_obs was the
         # family max over UNFILTERED cells while the reported r, the FDR and therefore the SELECTION
@@ -1009,7 +1122,8 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # The null permutes RATINGS, not epochs (F3), on the same filtered rows as the observed
         # statistic (F8).
         perm_p, perm_used, perm_obs, perm_null, perm_meta = _block_perm_maxcorr_pvalue(
-            X, yv, n_perm=n_perm, seed=0, return_null=True, rating_group=_rg_perm)
+            X, yv, n_perm=n_perm, seed=0, return_null=True, rating_group=_rg_perm,
+            obs_p=_obs_p_flat)
         perm_meta["outlier_filtered"] = bool(_perm_filtered)
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
@@ -1035,6 +1149,34 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # F10: the outlier rule's own influence on the headline correlation, so a reader can see
         # how much of the result rests on which points were excluded.
         "outlier_sensitivity": _sens_r,
+        # F8 (second item): p for the statistic the SELECTION maximises, beside the family-max p.
+        "perm_selection_p": perm_meta.get("selection_p"),
+        "perm_selection_obs": perm_meta.get("selection_obs"),
+        "perm_selection_rule": perm_meta.get("selection_rule"),
+        # AND THE GUARD THAT MATTERS MORE THAN EITHER p. Investigating the selection rule turned up
+        # something worse than a mismatched statistic: the permutation family and the selection grid
+        # are computed on DIFFERENT ROW SETS. The permutation restricts to rows carrying a rating id
+        # and applies the outlier filter; the reported correlation comes from the correlation
+        # spectrum with its own per-cell handling. The proof is arithmetic and needs no simulation —
+        # for the left-leg outcome the SELECTED cell's |r| is 0.6343 while the permutation family's
+        # own observed maximum is 0.5743, and a value selected from a family cannot exceed that
+        # family's maximum.
+        #
+        # While that holds, NO permutation p over this family is a selection-corrected p for the
+        # reported cell, whichever statistic the null uses. So the flag below is published and any
+        # consumer must check it before describing perm_p as selection-corrected. Reconciling the
+        # two families (recomputing the permutation correlations on exactly the selection grid's
+        # rows) is NOT done here and remains open.
+        "perm_family_matches_selection": (
+            None if (perm_meta.get("selection_obs") is None or r is None or not np.isfinite(r))
+            else bool(abs(r) <= float(perm_meta["selection_obs"]) + 1e-9)),
+        "perm_family_caveat": (
+            "The permutation family and the selection grid are computed on different row sets "
+            "(the permutation subsets to rated rows and applies the outlier filter). When "
+            "perm_family_matches_selection is False the selected |r| lies outside the permuted "
+            "family entirely, so perm_p and perm_selection_p are NOT selection-corrected p-values "
+            "for the reported cell and must not be presented as such. Reconciling the two families "
+            "is open work."),
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
