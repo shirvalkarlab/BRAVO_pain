@@ -280,6 +280,65 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**CLOSED LOOP: the device constraint that reframes the biomarker work (2026-09-02).**
+
+`modules/StimOptimizer/routines/percept_adaptive.py` encodes Percept RC/PC Adaptive Therapy
+constraints, every value quoted from `Medtronic_PerceptAdaptive_WhitePaper_032025.pdf`
+(UC202012929dEN, in project artifacts) with page references in the source. Nothing in it is
+inferred — a closed-loop stimulator's range and timing limits are safety-relevant.
+
+**Adaptive Therapy can only be driven by an LFP band inside 8-30 Hz.** The wider 1-96 Hz range is
+Sensing Only, meaning the signal can be recorded but a change in it will not change stimulation.
+Consequence for the plate, which is a device fact and independent of how well anything correlates
+with pain:
+
+| selected band | centre | adaptive-capable? |
+|---|---|---|
+| `nrs` | 3.92 Hz | **NO** — a 5 Hz-wide band there spans 1.4-6.4 Hz, entirely below 8 Hz |
+| `left_leg_vas` | 14.82 Hz | yes |
+
+So the `nrs` band cannot be deployed as a closed-loop control signal on this hardware. Note the
+band search's existing `MAX_BIOMARKER_FREQ_HZ` is an UPPER cap only and does not express this; a
+closed-loop candidate must satisfy both bounds, and the whole band must fit, not just its centre
+(`band_is_adaptive_capable` checks the edges).
+
+**Why closed loop is a second build, not a parameter change.** Open loop chooses a fixed
+(frequency, amplitude). Adaptive Therapy chooses a CONTROL POLICY and the device moves amplitude
+itself. The free parameters become: threshold mode; sensing channel and band; the LFP threshold(s);
+adaptive amplitude limits and paused amplitude; transition durations; onset duration, detection
+blanking, startup delay. The current optimizer searches none of these.
+
+Device defaults, from the white paper's parameter table (p. 14):
+
+| | Dual Threshold | Single Threshold | Single Inverse |
+|---|---|---|---|
+| can drive therapy | yes | yes | **no — Sensing Only** |
+| reaction | order of minutes | order of milliseconds | n/a |
+| transition up / down | 2.5 min / 5 min | 250 ms / 250 ms | n/a |
+| onset duration | 1200 ms | 200 ms | n/a |
+| detection blanking | 2000 ms | 550 ms | n/a |
+| FFT size / update | 256 pts / 5 Hz | 64 pts / 20 Hz | 256 pts / 2 Hz |
+| averaging duration | 1200 ms | 100 ms | 3000 ms |
+| threshold algorithm | manual upper + lower | device: 0.75*(U-L)+L | device: 0.75*(U-L)+L |
+| suggested capture state | off medication | off medication | on medication |
+
+Three further facts worth carrying: (a) the single threshold is **derived by the device** as
+0.75*(upper-lower)+lower, so a single-threshold plan must PREDICT it rather than choose it, and the
+device refuses inverted or too-close captures; (b) when a group is switched from Adaptive to Sensing
+Only, the adaptive amplitude limits **become the patient limits**; (c) **contralateral drive is
+supported** for dual-lead configurations — sensing from one hemisphere's lead can drive Adaptive
+Therapy on the other. (c) matters directly here, because the left-leg objective disagrees between
+hemispheres.
+
+`ADAPTIVE_JSON_FIELDS` records the `ProgramSettings` field names carrying adaptive configuration
+(AdaptiveTherapyMode, Thresholds, StimulationLimits, SuspendAmplitude, SensingHemisphere, onset and
+blanking durations, and the rest) so a closed-loop adapter does not rediscover them by trial and
+error. The existing adapter reads only the open-loop subset.
+
+**Not built yet:** the closed-loop objective and acquisition. What exists is the constraint layer
+plus `validate_policy()`, which checks a proposed policy against the labelling only — it is not a
+clinical safety review and says nothing about whether given amplitude limits are tolerable.
+
 **F3 + F14 FIXED (2026-09-02). The selection-corrected p now permutes RATINGS, and the winner's
 curse has a magnitude instead of a boolean. The result changes the reading of the plate.**
 
