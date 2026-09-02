@@ -136,6 +136,25 @@ And the rebuilt plan needs pulse width to VARY between settings (60/100/180 us) 
 within each ladder, which is what the contrast requires, but the anchor differs from the left ladder
 because it must remain the true incumbent.
 
+**THE PLATFORM STORES DECIBELS, AND GETTING THAT WRONG IS SILENT (2026-09-02).**
+`streaming_psd.psd_rows_to_matrix` stores `logX = 10 * log10(power)`. Linearising with `10 ** logX`
+instead of `10 ** (logX / 10)` is wrong by a factor of ten IN THE EXPONENT: for a spectrum near
+-1 dB it inflates band power by orders of magnitude while still returning finite, plausible numbers,
+so nothing raises. `lfp_evidence.band_power_linear` therefore takes an explicit
+`log_scale` ("db10" default, "log10" available) and REFUSES an unknown value. I shipped the wrong
+constant in the first draft of that function and caught it only by reading psd_rows_to_matrix; the
+lesson is that a stored log spectrum's convention is provenance, not a detail.
+
+**`adapter.evidence_inputs(participant)` / `adapter.evidence_for_participant(participant)` — Stage 2
+can now run on real recordings.** The first returns `(psd_frame, epochs)`, reusing the Biomarkers
+assembled PSD matrix rather than re-deriving spectra (so both modules share one definition of what
+the brain was doing) and this module's own `exposure_epochs` (so both share one definition of what
+stimulation was being delivered). The second returns `(evidence_dict, audit_frame)` keyed on
+(channel, hemisphere, rate). The Biomarkers import is function-local to avoid a module cycle.
+`lfp_evidence.frame_from_matrix` converts the assembled matrix, whose `f_set` is ONE shared
+frequency axis rather than per-row. A participant with settings but no sensing returns
+`(None, epochs)` rather than raising, because that is a normal state.
+
 **`routines/lfp_evidence.py` — the missing join, and the reason Stage 2 ran on fabricated spectra.**
 `stage_gate.LfpEvidence` was constructed ONLY in tests. This builds it from the Biomarkers assembled
 PSD matrix joined to StimOptimizer exposure epochs, keyed on (channel, hemisphere, rate) because

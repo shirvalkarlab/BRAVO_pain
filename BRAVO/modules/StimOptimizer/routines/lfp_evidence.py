@@ -78,22 +78,72 @@ def _to_utc(values, *, unit="s"):
     return t
 
 
-def band_power_linear(log_psd, freqs, center_hz, width_hz):
-    """Device-style band power from LOG power density: exponentiate, then integrate over the band.
+#: How a stored log spectrum maps back to linear power. The BRAVO platform's assembled matrix holds
+#: ``logX = 10 * log10(power)`` — DECIBELS — set in ``streaming_psd.psd_rows_to_matrix``. Undoing it
+#: with ``10 ** logX`` instead of ``10 ** (logX / 10)`` is wrong by a factor of ten IN THE EXPONENT,
+#: which for a spectrum around -1 dB inflates band power by orders of magnitude while still
+#: returning finite, plausible-looking numbers. The convention is therefore named explicitly at every
+#: call site rather than assumed.
+LOG_SCALES = {"db10": 10.0, "log10": 1.0}
+DEFAULT_LOG_SCALE = "db10"
 
-    The device thresholds a linear sum over the band, so the log has to be undone BEFORE summing —
-    summing logs is a product of powers and is not the quantity the device computes. Returns one
-    value per row, or ``None`` when the band lies outside the frequency axis (rather than silently
-    integrating over whatever bins happen to be nearest).
+
+def band_power_linear(log_psd, freqs, center_hz, width_hz, *, log_scale=DEFAULT_LOG_SCALE):
+    """Device-style band power from a LOG power spectrum: linearise, then integrate over the band.
+
+    The device thresholds a linear sum of squared magnitude over the band, and power is proportional
+    to squared magnitude, so integrating linear power density gives the device's quantity up to a
+    fixed scale factor. The log must be undone BEFORE summing — summing logs is a product of powers,
+    not a sum.
+
+    ``log_scale`` names the stored convention: ``"db10"`` for ``10*log10(power)`` (what the BRAVO
+    assembled matrix stores) or ``"log10"`` for a plain base-10 log. Getting this wrong does not
+    raise; it silently rescales every band power, so it is a required piece of provenance rather
+    than a detail.
+
+    Returns one value per row, or ``None`` when the band lies outside the frequency axis, rather
+    than integrating over whichever bins happen to be nearest.
     """
+    if log_scale not in LOG_SCALES:
+        raise ValueError(f"log_scale must be one of {sorted(LOG_SCALES)}, got {log_scale!r}")
     f = np.asarray(freqs, float)
     lo, hi = float(center_hz) - float(width_hz) / 2.0, float(center_hz) + float(width_hz) / 2.0
     sel = (f >= lo) & (f <= hi)
     if not sel.any():
         return None
-    lin = np.power(10.0, np.asarray(log_psd, float)[:, sel])
+    lin = np.power(10.0, np.asarray(log_psd, float)[:, sel] / LOG_SCALES[log_scale])
     df = float(np.median(np.diff(f))) if f.size > 1 else 1.0
     return np.nansum(lin, axis=1) * df
+
+
+def frame_from_matrix(mat, *, sources=None):
+    """The BRAVO assembled PSD matrix -> the row frame :func:`build_evidence` consumes.
+
+    ``mat`` is what ``Biomarkers.bravo_service._cached_psd_matrix`` returns:
+    ``{"logX": (N,F), "t": (N,), "channel": (N,), "source": (N,), "f_set": (F,)}``. Note ``f_set`` is
+    ONE shared frequency axis for every row, not a per-row array, so it is attached to each row here
+    rather than being re-derived.
+
+    ``sources`` optionally restricts which recording sources contribute (e.g. streaming time-domain
+    only, excluding montage sweeps). Left as ``None`` every source is kept, which is right for a
+    response test — the question is whether the band moves with amplitude, and a montage sweep
+    observes that as validly as a streaming segment.
+    """
+    need = {"logX", "t", "channel", "f_set"}
+    missing = need - set(mat or {})
+    if missing:
+        raise KeyError(f"assembled matrix missing {sorted(missing)}; has {sorted((mat or {}))}")
+    logX = np.asarray(mat["logX"], float)
+    f_set = np.asarray(mat["f_set"], float)
+    if logX.shape[1] != f_set.size:
+        raise ValueError(f"logX has {logX.shape[1]} frequency columns but f_set has {f_set.size}")
+    src = np.asarray(mat.get("source", np.full(logX.shape[0], "?")), dtype=object)
+    keep = np.ones(logX.shape[0], bool) if sources is None else np.isin(src, list(sources))
+    return pd.DataFrame({"t": np.asarray(mat["t"], float)[keep],
+                         "channel": np.asarray(mat["channel"], dtype=object)[keep],
+                         "source": src[keep],
+                         "log_psd": list(logX[keep]),
+                         "freqs": [f_set] * int(keep.sum())})
 
 
 @dataclass
@@ -139,7 +189,7 @@ def _epoch_for_times(times, epochs, *, t_start="t_start", t_end="t_end"):
 
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
                    require_stim_on=True, amp_col=None, era_col="visit",
-                   time_unit="s", mode_requires=None):
+                   time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
     Parameters
@@ -220,7 +270,7 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
 
     bp = {}
     for c, w in bands:
-        v = band_power_linear(logm, freqs, c, w)
+        v = band_power_linear(logm, freqs, c, w, log_scale=log_scale)
         if v is not None:
             bp[(round(float(c), 6), round(float(w), 6))] = v
     if not bp:

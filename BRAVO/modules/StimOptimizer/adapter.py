@@ -269,6 +269,48 @@ def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
     return out
 
 
+def evidence_inputs(participant, *, force_refresh=None, sources=None):
+    """Live platform data -> ``(psd_frame, epochs)`` ready for ``routines.lfp_evidence``.
+
+    This is the seam that made Stage 2 runnable on real recordings. It reuses the Biomarkers
+    assembled PSD matrix rather than re-deriving spectra, so the two modules share one definition of
+    what the brain was doing at a given moment, and it builds the exposure epochs from THIS module's
+    settings reconstruction, so they share one definition of what stimulation was being delivered.
+
+    The PSD matrix is expensive to build and is cached by the Biomarkers layer; ``force_refresh``
+    is passed through for the rare case where that cache must be rebuilt.
+
+    Returns ``(None, epochs)`` when the participant has no assembled spectra, rather than raising —
+    a participant with settings but no sensing is a normal state, not an error.
+    """
+    from modules.Biomarkers import bravo_service as _bs      # local: avoids a module-level cycle
+    from .routines import lfp_evidence as _ev
+
+    epochs = exposure_epochs(settings_stream(participant))
+    mat = _bs._cached_psd_matrix(getattr(participant, "uid", participant),
+                                 force_refresh=force_refresh)
+    if not mat:
+        return None, epochs
+    return _ev.frame_from_matrix(mat, sources=sources), epochs
+
+
+def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rates=None,
+                             channels=None, force_refresh=None, sources=None, **kw):
+    """Every usable ``LfpEvidence`` for a participant, plus the audit of what was unusable.
+
+    Returns ``(evidence_dict, audit_frame)`` keyed on ``(channel, hemisphere, rate_hz)``. The audit
+    frame is not optional output: a cell that yields no evidence because the data cannot support the
+    test must be distinguishable from one that yields a genuine negative, and only the audit says
+    which. Callers handing this to the stage gate should report both.
+    """
+    from .routines import lfp_evidence as _ev
+    psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources)
+    if psd is None:
+        return {}, pd.DataFrame([{"reason_unusable": "no assembled PSD spectra for this participant",
+                                  "usable": False}])
+    return _ev.build_all(psd, epochs, hemispheres=hemispheres, rates=rates, channels=channels, **kw)
+
+
 def build_design_matrix(participant, request_data=None, *, washin_min=1.0,
                         items=PRO_ITEMS) -> pd.DataFrame:
     """End-to-end: platform data -> the epoch matrix ``StimOptimizer.pipeline.run`` consumes.

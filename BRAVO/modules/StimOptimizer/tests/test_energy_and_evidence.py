@@ -173,10 +173,16 @@ def _epochs(t0=1_760_000_000):
 
 
 def test_band_power_exponentiates_before_summing():
-    """Summing logs is a PRODUCT of powers, not the linear sum the device thresholds."""
+    """Summing logs is a PRODUCT of powers, not the linear sum the device thresholds.
+
+    This fixture is built as a PLAIN base-10 log, so it must say so. It originally relied on the
+    default, and when the default became "db10" — the platform's real convention — the test failed
+    on its own stale premise rather than on a code defect. Naming the convention at the call site
+    is exactly the discipline the log_scale parameter exists to force.
+    """
     log = np.array([[np.log10(2.0), np.log10(8.0)]])
     f = np.array([10.0, 11.0])
-    got = EV.band_power_linear(log, f, 10.5, 2.0)
+    got = EV.band_power_linear(log, f, 10.5, 2.0, log_scale="log10")
     assert got[0] == pytest.approx((2.0 + 8.0) * 1.0)      # 10, not log10(2)+log10(8)=1.204
     assert got[0] != pytest.approx(np.log10(2.0) + np.log10(8.0))
 
@@ -296,3 +302,75 @@ def test_joint_check_is_opt_in_and_validates_its_own_input():
     with pytest.raises(KeyError, match="prior_triples missing"):
         SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
                             prior_triples=_prior().rename(columns={"pw": "pulse_width"}))
+
+
+# --- the dB convention, and the assembled-matrix adapter (2026-09-02) --------------------------
+def test_the_platform_stores_decibels_and_undoing_it_wrongly_is_silent():
+    """streaming_psd.psd_rows_to_matrix stores 10*log10(power). Using 10**logX is wrong by a
+    factor of ten IN THE EXPONENT and still returns finite, plausible numbers — no exception,
+    just band powers inflated by orders of magnitude. Hence the explicit log_scale.
+    """
+    power = np.array([[4.0, 16.0]])
+    db = 10.0 * np.log10(power)                      # what the platform actually stores
+    f = np.array([10.0, 11.0])
+    got = EV.band_power_linear(db, f, 10.5, 2.0, log_scale="db10")
+    assert got[0] == pytest.approx(4.0 + 16.0)
+    wrong = EV.band_power_linear(db, f, 10.5, 2.0, log_scale="log10")
+    assert wrong[0] > 100 * got[0], "the two conventions must differ enough to matter"
+    assert np.isfinite(wrong[0]), "and the wrong one is finite, which is why it is dangerous"
+
+
+def test_db10_is_the_default_because_that_is_what_the_platform_stores():
+    assert EV.DEFAULT_LOG_SCALE == "db10"
+    power = np.array([[4.0, 16.0]])
+    db = 10.0 * np.log10(power)
+    f = np.array([10.0, 11.0])
+    assert EV.band_power_linear(db, f, 10.5, 2.0)[0] == pytest.approx(20.0)
+
+
+def test_unknown_log_scale_raises_rather_than_guessing():
+    with pytest.raises(ValueError, match="log_scale"):
+        EV.band_power_linear(np.zeros((1, 2)), np.array([1.0, 2.0]), 1.5, 2.0, log_scale="ln")
+
+
+def _matrix(n=6):
+    f_set = np.arange(1.0, 41.0, 1.0)
+    return {"logX": np.full((n, f_set.size), -1.0), "t": np.arange(n) * 600.0 + 1_760_000_000,
+            "channel": np.array(["ZERO_TWO_LEFT"] * n, dtype=object),
+            "source": np.array(["td"] * (n - 2) + ["montage"] * 2, dtype=object),
+            "f_set": f_set}
+
+
+def test_frame_from_matrix_attaches_the_shared_frequency_axis_to_every_row():
+    """f_set is ONE axis for all rows, not per-row; the frame builder must not re-derive it."""
+    fr = EV.frame_from_matrix(_matrix())
+    assert list(fr.columns) == ["t", "channel", "source", "log_psd", "freqs"]
+    assert len(fr) == 6
+    assert all(len(x) == 40 for x in fr.freqs)
+    assert np.array_equal(fr.freqs.iloc[0], fr.freqs.iloc[-1])
+
+
+def test_frame_from_matrix_can_restrict_sources_but_keeps_all_by_default():
+    assert len(EV.frame_from_matrix(_matrix())) == 6
+    assert len(EV.frame_from_matrix(_matrix(), sources=["td"])) == 4
+
+
+def test_frame_from_matrix_refuses_a_shape_mismatch():
+    m = _matrix(); m["f_set"] = np.arange(1.0, 10.0)
+    with pytest.raises(ValueError, match="frequency columns"):
+        EV.frame_from_matrix(m)
+    with pytest.raises(KeyError, match="missing"):
+        EV.frame_from_matrix({"logX": np.zeros((2, 2))})
+
+
+def test_matrix_to_evidence_round_trip_uses_the_db_convention():
+    """End to end: assembled matrix -> frame -> evidence, with band power on the linear scale."""
+    m = _matrix(n=40)
+    m["t"] = np.arange(40) * 600.0 + 1_760_000_000
+    fr = EV.frame_from_matrix(m)
+    ev, aud = EV.build_evidence(fr, _epochs(), channel="ZERO_TWO_LEFT", hemisphere="Left",
+                                rate_hz=165.0, bands=[(20.0, 5.0)])
+    assert ev is not None and aud.n_final > 0
+    bp = ev.power_for(20.0, 5.0)
+    # logX is a flat -1 dB, so linear power density is 10**(-0.1) per bin over 5 bins at 1 Hz
+    assert bp[0] == pytest.approx(5 * 10 ** (-0.1), rel=1e-6)
