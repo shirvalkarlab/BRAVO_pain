@@ -90,19 +90,24 @@ responding with significant era-blocked slopes, amplitude range 1.4-4.5 mA again
 **Why the other nine responders fail is the substance, and two of the three reasons were not being
 checked before.**
 
-1. *The energy gate applies to the EVIDENCE, not just to proposed settings.* Four responding cells
-   were measured across amplitude arms above the deployable cap — `ONE_THREE_LEFT` Left @165 Hz
-   contrasts 1.6 -> 4.8 mA against a 3.35 mA cap, and three cells at 110 Hz run to 4.0 mA against
-   3.18 mA. This is the same argument that disqualified the 165 Hz lead: **if the high arm delivers
-   more energy than we will program, a response measured only across that arm was never deployable
-   evidence.** Without this condition a clean dose-response curve recorded outside the safe envelope
-   silently licenses a policy inside it.
+1. *The energy gate applies to the EVIDENCE, not just to proposed settings.* **FIVE** responding
+   cells were measured across amplitude arms above the deployable cap — one at 165 Hz
+   (`ONE_THREE_LEFT` Left, 1.6 -> 4.8 mA against a 3.35 mA cap) and **FOUR at 110 Hz** running to
+   4.0 mA against 3.18 mA (`ZERO_THREE_LEFT`/`ZERO_THREE_RIGHT`/`ZERO_TWO_LEFT`/`ZERO_TWO_RIGHT`,
+   all Left). For THREE of the five, energy is the SOLE blocker (`ONE_THREE_LEFT` Left @165 Hz at
+   15/18 bands, `ZERO_THREE_RIGHT` Left @110 Hz at 18/18, `ZERO_TWO_RIGHT` Left @110 Hz at 9/18);
+   the other two also fail band-majority. This is the same argument that disqualified the 165 Hz
+   lead: **if the high arm delivers more energy than we will program, a response measured only
+   across that arm was never deployable evidence.** Without this condition a clean dose-response
+   curve recorded outside the safe envelope silently licenses a policy inside it.
 2. *A majority of scanned bands must respond.* The 18 bands are 5 Hz wide on a 1 Hz grid, so they
    overlap heavily and move together; one or two responding bands is the maximum of a correlated
    family, not a finding. `MIN_RESPONDING_BAND_FRACTION = 0.5`.
-3. *The slope must survive era blocking.* Two cells (`ZERO_THREE_RIGHT`/`ZERO_THREE_LEFT` Right
-   @110 Hz) have all 18 bands responding and ZERO with a significant era-blocked slope — amplitude
-   rose over time, so unblocked those slopes are time, not dose.
+3. *The slope must survive era blocking.* **ONE** cell — `ZERO_THREE_RIGHT` Right @110 Hz — has
+   all 18 bands responding and ZERO with a significant era-blocked slope; amplitude rose over time,
+   so unblocked that slope is time, not dose. A second cell (`ZERO_THREE_LEFT` Right @110 Hz) also
+   has no era-significant band but responds on only 1 of 18, so it fails band-majority as well and
+   is not an example of an otherwise-strong cell defeated by the time confound.
 
 **TWO BUGS FOUND BY RUNNING IT, NOT BY TESTS.** Both are the same failure: fixtures written with
 invented names/conventions instead of production's.

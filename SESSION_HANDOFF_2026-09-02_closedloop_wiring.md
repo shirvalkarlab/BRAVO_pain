@@ -30,16 +30,20 @@ separation 1.17. The screened selection and an explicit request for that cell ag
 Nine responders failed, and the reason counts (from `rcs08_closedloop_screen.csv`) are 5 on energy,
 5 on band minority, 2 on era blocking (some fail more than one):
 
-1. **The energy gate applies to the EVIDENCE, not only to proposed settings.** `ONE_THREE_LEFT`
-   Left @165 Hz contrasts 1.6 -> 4.8 mA against a 3.35 mA cap; three cells at 110 Hz reach 4.0 mA
-   against 3.18 mA. Same argument that disqualified the 165 Hz lead — if the high arm delivers more
-   energy than we will program, a response measured only across it was never deployable evidence.
-   Without this condition a clean dose-response curve recorded outside the safe envelope silently
-   licenses a policy inside it.
+1. **The energy gate applies to the EVIDENCE, not only to proposed settings.** FIVE cells:
+   `ONE_THREE_LEFT` Left @165 Hz contrasts 1.6 -> 4.8 mA against a 3.35 mA cap, and FOUR cells at
+   110 Hz reach 4.0 mA against 3.18 mA (`ZERO_THREE_LEFT`, `ZERO_THREE_RIGHT`, `ZERO_TWO_LEFT`,
+   `ZERO_TWO_RIGHT`, all Left). Energy is the SOLE blocker for three of the five. Same argument that
+   disqualified the 165 Hz lead — if the high arm delivers more energy than we will program, a
+   response measured only across it was never deployable evidence. Without this condition a clean
+   dose-response curve recorded outside the safe envelope silently licenses a policy inside it.
 2. **A majority of scanned bands must respond.** The 18 bands are 5 Hz wide on a 1 Hz grid, so they
    overlap and move together; one or two responding bands is the maximum of a correlated family.
-3. **The slope must survive era blocking.** Two cells have 18 of 18 bands responding and ZERO with
-   a significant era-blocked slope. Amplitude rose over time, so unblocked those slopes are time.
+3. **The slope must survive era blocking.** ONE cell — `ZERO_THREE_RIGHT` Right @110 Hz — has 18 of
+   18 bands responding and ZERO with a significant era-blocked slope. Amplitude rose over time, so
+   unblocked that slope is time, not dose. A second cell with no era-significant band
+   (`ZERO_THREE_LEFT` Right @110 Hz) responds on only 1 of 18 and fails band-majority too, so it is
+   not an example of a strong cell defeated by the confound.
 
 ## Two bugs found by running it, not by tests
 
