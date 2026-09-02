@@ -374,3 +374,191 @@ def test_matrix_to_evidence_round_trip_uses_the_db_convention():
     bp = ev.power_for(20.0, 5.0)
     # logX is a flat -1 dB, so linear power density is 10**(-0.1) per bin over 5 bins at 1 Hz
     assert bp[0] == pytest.approx(5 * 10 ** (-0.1), rel=1e-6)
+
+
+# --- production column names (2026-09-02) ------------------------------------------------------
+def _epochs_production():
+    """EXACTLY the columns adapter.exposure_epochs emits, verified against a live run.
+
+    The first draft of lfp_evidence hardcoded 'rate' / 'amp_Left' / 'visit'. Every test passed
+    because the fixtures used those invented names; the first live call raised KeyError: 'rate'.
+    This fixture exists so the module is tested against what production actually hands it.
+    """
+    s = pd.to_datetime(1_760_000_000, unit="s", utc=True)
+    return pd.DataFrame([
+        dict(epoch=1, t_start=s, t_end=s + pd.Timedelta(hours=2), freq_hz=165.0,
+             amp_mA_Left=1.6, amp_mA_Right=2.0, pw_us_Left=100.0, pw_us_Right=150.0,
+             cathode_Left="2a-2b-2c", cathode_Right="1a", dur_h=2.0, open_ended=False),
+        dict(epoch=2, t_start=s + pd.Timedelta(days=40), t_end=s + pd.Timedelta(days=40, hours=2),
+             freq_hz=165.0, amp_mA_Left=2.4, amp_mA_Right=2.0, pw_us_Left=100.0, pw_us_Right=150.0,
+             cathode_Left="2a-2b-2c", cathode_Right="1a", dur_h=2.0, open_ended=False),
+    ])
+
+
+def _psd_production(epochs):
+    f = np.arange(1.0, 41.0, 1.0)
+    ts = []
+    for r in epochs.itertuples():
+        base = r.t_start.timestamp()
+        ts += [base + 600, base + 1200, base + 1800]
+    n = len(ts)
+    return pd.DataFrame({"t": np.array(ts, float), "channel": ["ZERO_TWO_LEFT"] * n,
+                         "source": ["TD streaming"] * n,
+                         "log_psd": list(np.full((n, f.size), -1.0)), "freqs": [f] * n})
+
+
+def test_build_evidence_accepts_the_adapters_real_column_names():
+    ep = _epochs_production()
+    ev, aud = EV.build_evidence(_psd_production(ep), ep, channel="ZERO_TWO_LEFT",
+                                hemisphere="Left", rate_hz=165.0, bands=[(20.0, 5.0)])
+    assert ev is not None, aud.reason_unusable
+    assert aud.rate_col == "freq_hz" and aud.amp_col == "amp_mA_Left"
+    assert aud.amplitudes == (1.6, 2.4)
+
+
+def test_right_hemisphere_resolves_to_its_own_amplitude_column():
+    ep = _epochs_production()
+    ep.loc[1, "amp_mA_Right"] = 3.0            # give the right side two levels
+    _, aud = EV.build_evidence(_psd_production(ep), ep, channel="ZERO_TWO_LEFT",
+                               hemisphere="Right", rate_hz=165.0, bands=[(20.0, 5.0)])
+    assert aud.amp_col == "amp_mA_Right"
+
+
+def test_missing_rate_column_names_what_it_tried():
+    ep = _epochs_production().drop(columns=["freq_hz"])
+    with pytest.raises(KeyError, match="stimulation rate"):
+        EV.build_evidence(_psd_production(_epochs_production()), ep, channel="ZERO_TWO_LEFT",
+                          hemisphere="Left", rate_hz=165.0, bands=[(20.0, 5.0)])
+
+
+def test_era_falls_back_to_calendar_month_not_one_era_per_epoch():
+    """Per-epoch eras would leave one observation per stratum: blocking with no blocking power,
+    and a large era count in the audit hiding it. Calendar months group real exposures."""
+    ep = _epochs_production()                   # two epochs 40 days apart, no visit column
+    ev, aud = EV.build_evidence(_psd_production(ep), ep, channel="ZERO_TWO_LEFT",
+                                hemisphere="Left", rate_hz=165.0, bands=[(20.0, 5.0)])
+    assert "calendar month" in aud.era_source
+    assert aud.n_eras == 2                      # two distinct months, not six windows
+    assert len(set(ev.era)) == 2
+
+
+def test_an_explicit_era_column_wins_and_is_recorded():
+    ep = _epochs_production().assign(visit=[7, 7])
+    ev, aud = EV.build_evidence(_psd_production(ep), ep, channel="ZERO_TWO_LEFT",
+                                hemisphere="Left", rate_hz=165.0, bands=[(20.0, 5.0)])
+    assert aud.era_source == "column 'visit'" and aud.n_eras == 1
+
+
+# --- deployability screening and cell selection (2026-09-02) -----------------------------------
+class _Res:
+    """Minimal stand-in for lfp_response.ResponseResult, so screening is tested in isolation."""
+    def __init__(self, responds, slope_p, sep_d):
+        self.responds, self.slope_p, self.separation_d = responds, slope_p, sep_d
+
+
+class _Ev:
+    def __init__(self, amps, n_bands=18):
+        self.amplitude_mA = np.array(amps, float)
+        self.era = np.array(["a", "b"] * (len(amps) // 2 + 1))[:len(amps)]
+        self.cluster = np.arange(len(amps))
+        self.band_power = {(float(c), 5.0): np.ones(len(amps)) for c in range(10, 10 + n_bands)}
+
+    def power_for(self, c, w):
+        return self.band_power[(float(c), float(w))]
+
+
+def _fn(responds, slope_p, sep_d=1.2):
+    return lambda power, amp, era=None, cluster=None: _Res(responds, slope_p, sep_d)
+
+
+BUD = {"Left": 4.5 ** 2 * 100.0 * 55.0}
+PWL = lambda h, r: [100.0]
+
+
+def test_a_response_measured_above_the_energy_cap_is_not_deployable_evidence():
+    """The 165 Hz lead's problem, generalised: the gate must apply to the EVIDENCE too.
+
+    A clean dose-response curve recorded outside the deployable envelope would otherwise license a
+    policy inside it.
+    """
+    ev = {("ch", "Left", 165.0): _Ev([2.4, 4.8])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001),
+                                   energy_budget=BUD, pw_lookup=PWL)
+    assert best is None
+    row = screen.iloc[0]
+    assert row.n_responding == 18 and not row.deployable
+    assert not row.within_energy_budget
+    assert "outside the deployable envelope" in row.blocking_reasons
+
+
+def test_an_in_budget_responding_cell_is_deployable_and_selected():
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001),
+                                   energy_budget=BUD, pw_lookup=PWL)
+    assert best == ("ch", "Left", 55.0)
+    assert screen.iloc[0].deployable and screen.iloc[0].within_energy_budget
+
+
+def test_a_cell_whose_slope_dies_under_era_blocking_is_refused():
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40),
+                                   energy_budget=BUD, pw_lookup=PWL)
+    assert best is None
+    assert "era-blocked slope" in screen.iloc[0].blocking_reasons
+
+
+def test_one_lucky_band_of_eighteen_is_not_a_finding():
+    """Overlapping bands move together, so the best of a correlated family is not evidence."""
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    calls = {"n": 0}
+
+    def one_only(power, amp, era=None, cluster=None):
+        calls["n"] += 1
+        return _Res(calls["n"] == 1, 0.001, 1.2)
+
+    screen, best = EV.screen_cells(ev, response_fn=one_only, energy_budget=BUD, pw_lookup=PWL)
+    assert best is None
+    assert screen.iloc[0].n_responding == 1
+    assert "correlated family" in screen.iloc[0].blocking_reasons
+
+
+def test_the_most_permissive_pulse_width_decides_the_energy_verdict():
+    """A cell fails on energy only if it breaches under EVERY pulse width it was delivered at."""
+    ev = {("ch", "Left", 110.0): _Ev([1.0, 3.5])}
+    tight, _ = EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget=BUD,
+                               pw_lookup=lambda h, r: [140.0])
+    loose, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget=BUD,
+                                  pw_lookup=lambda h, r: [140.0, 60.0])
+    assert not tight.iloc[0].within_energy_budget
+    assert loose.iloc[0].within_energy_budget and best is not None
+
+
+def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
+    ev = {("ch", "Left", 165.0): _Ev([2.4, 4.8]),          # huge separation, over budget
+          ("ch", "Left", 55.0): _Ev([1.6, 4.0])}           # modest, in budget
+    def by_rate(power, amp, era=None, cluster=None):
+        return _Res(True, 0.001, 9.9 if len(amp) and max(amp) > 4.5 else 0.6)
+    screen, best = EV.screen_cells(ev, response_fn=by_rate, energy_budget=BUD, pw_lookup=PWL)
+    assert best == ("ch", "Left", 55.0)
+
+
+def test_select_for_refuses_evidence_from_a_different_rate():
+    """Artifact scales with rate, so a response at one rate says nothing about another."""
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    got, why = EV.select_for(ev, rate_hz=165.0, hemisphere="Left")
+    assert got is None and "no evidence for Left at 165 Hz" in why
+    got2, why2 = EV.select_for(ev, rate_hz=55.0, hemisphere="Left")
+    assert got2 is not None and "@55 Hz" in why2
+
+
+def test_select_for_refuses_to_pick_a_channel_silently():
+    ev = {("a", "Left", 55.0): _Ev([1.6, 4.0]), ("b", "Left", 55.0): _Ev([1.6, 4.0])}
+    got, why = EV.select_for(ev, rate_hz=55.0, hemisphere="Left")
+    assert got is None and "ambiguous" in why
+    got2, _ = EV.select_for(ev, rate_hz=55.0, hemisphere="Left", channel="b")
+    assert got2 is not None
+
+
+def test_empty_evidence_screens_to_nothing_without_raising():
+    screen, best = EV.screen_cells({}, response_fn=_fn(True, 0.001))
+    assert screen.empty and best is None

@@ -153,6 +153,139 @@ export default function StimOptimizer() {
             </MDAlert>
           </Grid>
 
+          {/* ---------- closed-loop readiness ----------
+              A DIFFERENT question from everything above it, and the panel says so. The optimizer
+              asks which setting relieves pain best; this asks whether any sensed band moves with
+              stimulation amplitude, which is the only lever Adaptive Therapy has. A band can
+              predict pain beautifully and be useless as a control signal.
+
+              Do NOT collapse this to a single ready/not-ready chip. The per-cell blocking reasons
+              are the content: a refusal because the data cannot support the test and a refusal
+              because the response is genuinely absent are different clinical conclusions. */}
+          {data.closed_loop && (
+            <Grid item xs={12}>
+              <Card>
+                <MDBox p={2}>
+                  <MDBox display="flex" alignItems="center" justifyContent="space-between">
+                    <MDTypography variant="h6">Closed-loop readiness (Adaptive Therapy)</MDTypography>
+                    {data.closed_loop.available && (
+                      <MDBox
+                        px={1.5}
+                        py={0.4}
+                        borderRadius="lg"
+                        sx={{
+                          backgroundColor: data.closed_loop.ready ? "success.main" : "warning.main",
+                        }}
+                      >
+                        <MDTypography variant="caption" color="white" fontWeight="medium">
+                          {data.closed_loop.ready
+                            ? `${data.closed_loop.n_cells_deployable} of ${data.closed_loop.n_cells_screened} cells deployable`
+                            : "no deployable control signal"}
+                        </MDTypography>
+                      </MDBox>
+                    )}
+                  </MDBox>
+
+                  {!data.closed_loop.available ? (
+                    <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1 }}>
+                      {data.closed_loop.reason}
+                    </MDTypography>
+                  ) : (
+                    <>
+                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.5 }}>
+                        Adaptive Therapy can only be driven by a band inside{" "}
+                        {(data.closed_loop.adaptive_window_hz || []).join("\u2013")}&nbsp;Hz, and only
+                        at a rate of at least {data.closed_loop.min_adaptive_rate_hz}&nbsp;Hz. Its
+                        only lever is amplitude, so a candidate band must be shown to MOVE with
+                        amplitude &mdash; a separate question from whether it tracks pain.
+                      </MDTypography>
+                      <MDTypography variant="button" fontWeight="medium" component="div" sx={{ mt: 1 }}>
+                        {data.closed_loop.verdict}
+                      </MDTypography>
+
+                      {(data.closed_loop.responding_cells || []).length > 0 && (
+                        <MDBox sx={{ overflowX: "auto", mt: 1.5 }}>
+                          <Table size="small">
+                            <TableBody>
+                              <TableRow>
+                                {["Channel", "Side", "Rate (Hz)", "Bands responding",
+                                  "Era-significant", "Amp range (mA)", "Energy cap (mA)",
+                                  "Deployable", "Why not"].map((h) => (
+                                  <TableCell key={h}>
+                                    <MDTypography variant="caption" fontWeight="medium">
+                                      {h}
+                                    </MDTypography>
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                              {data.closed_loop.responding_cells.map((c, i) => (
+                                <TableRow key={i}>
+                                  <TableCell>
+                                    <MDTypography variant="caption">{c.channel}</MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">{c.hemisphere}</MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">{fmt(c.rate_hz, 0)}</MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">
+                                      {c.n_responding} / {c.n_bands}
+                                    </MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">
+                                      {c.n_era_significant} / {c.n_bands}
+                                    </MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">
+                                      {fmt(c.amp_low_mA, 1)}&ndash;{fmt(c.amp_high_mA, 1)}
+                                    </MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography variant="caption">
+                                      {c.energy_cap_mA == null ? "\u2014" : fmt(c.energy_cap_mA, 2)}
+                                    </MDTypography>
+                                  </TableCell>
+                                  <TableCell>
+                                    <MDTypography
+                                      variant="caption"
+                                      fontWeight="medium"
+                                      color={c.deployable ? "success" : "error"}
+                                    >
+                                      {c.deployable ? "yes" : "no"}
+                                    </MDTypography>
+                                  </TableCell>
+                                  <TableCell sx={{ maxWidth: 420 }}>
+                                    <MDTypography variant="caption" color="text">
+                                      {c.blocking_reasons || "\u2014"}
+                                    </MDTypography>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </MDBox>
+                      )}
+
+                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1.5 }}>
+                        A cell is deployable only if a majority of scanned bands respond, the slope
+                        survives era blocking, and the amplitude contrast sits inside the energy
+                        budget derived from this patient&apos;s own record (Left{" "}
+                        {fmt((data.closed_loop.energy_budget_teed || {}).Left, 0)}, Right{" "}
+                        {fmt((data.closed_loop.energy_budget_teed || {}).Right, 0)} raw units). The
+                        energy condition matters: a response measured only above the amplitude we are
+                        willing to program was never deployable evidence.
+                      </MDTypography>
+                    </>
+                  )}
+                </MDBox>
+              </Card>
+            </Grid>
+          )}
+
           {/* ---------- evidence base ---------- */}
           <Grid item xs={12}>
             <Card>

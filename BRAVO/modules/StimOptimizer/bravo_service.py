@@ -214,7 +214,74 @@ def run_for_participant(request_data: dict) -> dict:
         "recommendation_supported": supported,
         "blockers": blockers,
         "washin_min": washin_min,
+        "closed_loop": closed_loop_readiness(participant, es,
+                                             include=bool((request_data or {})
+                                                          .get("ClosedLoop", True))),
     }
+
+
+def closed_loop_readiness(participant, es, *, include=True) -> dict:
+    """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
+
+    This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
+    apart deliberately. The optimizer asks which stimulation setting relieves pain best; this asks
+    whether any sensed band moves with stimulation amplitude, which is the only lever Adaptive
+    Therapy has. A band can predict pain beautifully and still be useless as a control signal.
+
+    The screen is returned in full, not just the verdict. A refusal caused by absent data and one
+    caused by a real negative response are clinically different conclusions, and only the per-cell
+    blocking reasons distinguish them — so a UI can say WHICH it is rather than showing an
+    unexplained "not ready".
+
+    Never raises into the response: this is an adjunct panel, and a failure here must not take down
+    the open-loop optimizer, which is the primary content. Failure is reported as a reason string.
+    """
+    if not include:
+        return {"available": False, "reason": "not requested (ClosedLoop=false)"}
+    try:
+        import numpy as _np
+        from . import pipeline as _pl
+        from .routines import objective as _obj, percept_adaptive as _pa
+
+        stream = adapter.settings_stream(participant)
+        ref = _obj.energy_reference_from_record(stream)
+        budget = {h: v["teed"] for h, v in ref.items()}
+
+        def _pw(hemi, rate):
+            s = stream[(stream["hemi"] == hemi)
+                       & _np.isclose(pd.to_numeric(stream["rate"], errors="coerce"), float(rate))]
+            return sorted(pd.to_numeric(s["pw"], errors="coerce").dropna().unique().tolist())
+
+        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+        bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
+        le = _pl.live_evidence(participant, energy_budget=budget, pw_lookup=_pw,
+                               amp_ceiling=_obj.AMP_CEILING_MA
+                               if hasattr(_obj, "AMP_CEILING_MA") else 4.9,
+                               bands=bands)
+        screen = le.screen if le.screen is not None else pd.DataFrame()
+        n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
+        return {
+            "available": True,
+            "ready": bool(le.selected is not None),
+            "verdict": le.describe(),
+            "selected": ({"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
+                          "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
+            "n_cells_screened": int(len(screen)),
+            "n_cells_deployable": n_deployable,
+            "energy_budget_teed": {h: _jsonable(v) for h, v in budget.items()},
+            "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
+            "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
+            # Only the cells that responded at all: the full 50-row screen is mostly cells with no
+            # response, which is not what a reader needs to see first.
+            "responding_cells": _frame_records(
+                screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
+                if not screen.empty else screen, limit=20),
+            "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
+        }
+    except Exception as e:                                    # noqa: BLE001 — adjunct panel
+        _log.exception("StimOptimizer: closed-loop readiness failed")
+        return {"available": False,
+                "reason": f"closed-loop readiness could not be evaluated: {e}"}
 
 
 def _blockers(rep, arms, observed_amp_range=None) -> list:

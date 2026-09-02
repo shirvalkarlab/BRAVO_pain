@@ -161,6 +161,12 @@ class EvidenceAudit:
     n_final: int = 0
     amplitudes: tuple = ()
     n_eras: int = 0
+    # Which columns were actually read, and where the era labels came from. Recorded because this
+    # module accepts more than one epoch-frame naming convention and derives eras when none are
+    # supplied, so "which frame was this" is not answerable from the numbers alone.
+    amp_col: str | None = None
+    rate_col: str | None = None
+    era_source: str | None = None
     reason_unusable: str | None = None
 
     def describe(self) -> str:
@@ -187,8 +193,46 @@ def _epoch_for_times(times, epochs, *, t_start="t_start", t_end="t_end"):
     return np.where(within, idx, -1)
 
 
+#: Column-name candidates, most-canonical first. The production caller is
+#: ``adapter.exposure_epochs``, which emits ``freq_hz`` / ``amp_mA_Left`` / ``pw_us_Left``; earlier
+#: hand-built frames in this project used ``rate`` / ``amp_Left``. Both are accepted because the
+#: first draft of this module hardcoded the SECOND set — it was written against a synthetic fixture
+#: with invented names, so every test passed while the real adapter output raised KeyError on the
+#: first live run. Resolving against a candidate list, with the production names first, is the fix.
+RATE_COLS = ("freq_hz", "rate", "rate_hz")
+AMP_COL_TEMPLATES = ("amp_mA_{h}", "amp_{h}", "amp_mA{h}")
+
+
+def _resolve_col(frame, candidates, what):
+    for c in candidates:
+        if c in frame.columns:
+            return c
+    raise KeyError(f"epochs has no {what} column; tried {list(candidates)}, "
+                   f"frame has {sorted(frame.columns)}")
+
+
+def _derive_era(ep, era_col, aud):
+    """Era labels for temporal blocking, and an honest record of where they came from.
+
+    Amplitude is confounded with time in this record, so the response test blocks on era. If the
+    frame carries an era/visit column it is used. Otherwise eras are derived as CALENDAR MONTHS of
+    ``t_start`` — not per-epoch indices. That distinction is the whole point: giving every epoch its
+    own era leaves the blocked model with one observation per stratum, which removes all blocking
+    power while still reporting a large era count, so the degradation would be invisible. The
+    resolved source is written into the audit.
+    """
+    if era_col and era_col in ep.columns:
+        aud.era_source = f"column {era_col!r}"
+        return ep[era_col].to_numpy()
+    if "t_start" in ep.columns:
+        aud.era_source = "calendar month of t_start (no era column present)"
+        return pd.to_datetime(ep["t_start"], utc=True).dt.strftime("%Y-%m").to_numpy()
+    aud.era_source = "UNAVAILABLE — no era column and no t_start; blocking is impossible"
+    return np.zeros(len(ep), dtype=int)
+
+
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
-                   require_stim_on=True, amp_col=None, era_col="visit",
+                   require_stim_on=True, amp_col=None, era_col="visit", rate_col=None,
                    time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
@@ -212,9 +256,14 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     aud = EvidenceAudit(channel=str(channel), hemisphere=str(hemisphere), rate_hz=float(rate_hz))
     if hemisphere not in ("Left", "Right"):
         raise ValueError(f"hemisphere must be 'Left' or 'Right', got {hemisphere!r}")
-    amp_col = amp_col or f"amp_{hemisphere}"
-    if amp_col not in epochs.columns:
+    if amp_col is None:
+        amp_col = _resolve_col(epochs, [t.format(h=hemisphere) for t in AMP_COL_TEMPLATES],
+                               f"{hemisphere}-hemisphere amplitude")
+    elif amp_col not in epochs.columns:
         raise KeyError(f"epochs missing {amp_col!r}; has {sorted(epochs.columns)}")
+    rate_col = rate_col or _resolve_col(epochs, RATE_COLS, "stimulation rate")
+    aud.amp_col = amp_col
+    aud.rate_col = rate_col
 
     p = pd.DataFrame(psd)
     p = p[p["channel"].astype(str) == str(channel)].copy()
@@ -236,8 +285,8 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
 
     meta = ep.loc[p._ep.to_numpy()]
     p = p.assign(amp=pd.to_numeric(meta[amp_col], errors="coerce").to_numpy(),
-                 rate=pd.to_numeric(meta["rate"], errors="coerce").to_numpy(),
-                 era=(meta[era_col].to_numpy() if era_col in ep.columns else p._ep.to_numpy()))
+                 rate=pd.to_numeric(meta[rate_col], errors="coerce").to_numpy(),
+                 era=_derive_era(meta, era_col, aud))
 
     n_before = len(p)
     p = p[np.isclose(p["rate"], float(rate_hz))]
@@ -284,6 +333,116 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     return ev, aud
 
 
+#: A cell must respond on at least this fraction of scanned bands. One band of eighteen is what a
+#: null looks like when eighteen OVERLAPPING bands are tested; a majority is the weakest claim that
+#: is not simply the maximum of a correlated family.
+MIN_RESPONDING_BAND_FRACTION = 0.5
+
+
+def screen_cells(evidence, *, response_fn, energy_budget=None, pw_lookup=None,
+                 min_responding_fraction=MIN_RESPONDING_BAND_FRACTION,
+                 require_era_significance=True, amp_ceiling=None):
+    """Which cells carry evidence that could actually license a closed-loop deployment.
+
+    Responding is necessary and not sufficient. Three further conditions apply, and on RCS08's real
+    record they cut five responding cells down to one:
+
+    1. **The contrast must be inside the energy budget.** This is the argument that disqualified the
+       165 Hz lead: if the high arm delivers more energy than we are willing to program, a response
+       measured only across that arm was never deployable evidence. The gate applies to the
+       EVIDENCE, not merely to proposed settings — otherwise a clean dose-response curve recorded
+       outside the safe envelope silently licenses a policy inside it.
+    2. **The slope must survive era blocking.** Amplitude rose over time in this record, so an
+       unblocked slope can be time rather than dose.
+    3. **A majority of scanned bands must respond**, because the bands overlap and move together,
+       so the best band of eighteen is the maximum of a correlated family rather than a finding.
+
+    ``response_fn(power, amplitude, era=, cluster=)`` is injected rather than imported, so this
+    module does not depend on the response implementation and a caller can screen against an
+    alternative test. ``pw_lookup(hemisphere, rate_hz)`` returns the pulse widths delivered at that
+    setting; the MOST PERMISSIVE (smallest) is used, so a cell fails on energy only when it exceeds
+    the budget under every pulse width it was actually delivered at.
+
+    Returns ``(screen_frame, selected_key)``. Cells are ranked by responding fraction then median
+    separation, but ONLY among survivors — a cell that fails a condition is never selected on the
+    strength of a large separation.
+    """
+    rows = []
+    for (ch, hemi, rate), ev in (evidence or {}).items():
+        band_keys = list(ev.band_power.keys())
+        res = [response_fn(ev.power_for(c, w), ev.amplitude_mA, era=ev.era, cluster=ev.cluster)
+               for (c, w) in band_keys]
+        n = len(res) or 1
+        n_resp = sum(1 for r in res if r.responds is True)
+        n_sig = sum(1 for r in res if np.isfinite(r.slope_p) and r.slope_p < 0.05)
+        seps = [r.separation_d for r in res if np.isfinite(r.separation_d)]
+        amps = tuple(sorted(set(np.round(np.asarray(ev.amplitude_mA, float), 3))))
+        amp_hi = max(amps) if amps else float("nan")
+
+        cap = float("inf")
+        pws = list(pw_lookup(hemi, rate) or []) if pw_lookup else []
+        if energy_budget is not None and hemi in energy_budget and pws:
+            cap = float(np.sqrt(float(energy_budget[hemi]) / (min(pws) * float(rate))))
+            if amp_ceiling is not None:
+                cap = min(cap, float(amp_ceiling))
+        in_budget = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
+
+        fails = []
+        if n_resp / n < min_responding_fraction:
+            fails.append(f"only {n_resp} of {n} bands respond (need "
+                         f"{min_responding_fraction:.0%}; overlapping bands make the single best "
+                         f"band the maximum of a correlated family)")
+        if not in_budget:
+            fails.append(f"high arm {amp_hi:.1f} mA exceeds the energy-matched cap {cap:.2f} mA "
+                         f"under every delivered pulse width {pws} — the response was measured "
+                         f"outside the deployable envelope")
+        if require_era_significance and n_sig == 0:
+            fails.append("no band has a significant era-blocked slope, so the contrast is not "
+                         "separable from the amplitude-versus-time confound")
+
+        rows.append(dict(channel=ch, hemisphere=hemi, rate_hz=float(rate), n_bands=n,
+                         n_responding=n_resp, responding_fraction=round(n_resp / n, 3),
+                         n_era_significant=n_sig,
+                         median_separation_d=(round(float(np.median(seps)), 3) if seps
+                                              else float("nan")),
+                         amp_low_mA=(min(amps) if amps else float("nan")), amp_high_mA=amp_hi,
+                         energy_cap_mA=(round(cap, 2) if np.isfinite(cap) else None),
+                         within_energy_budget=in_budget,
+                         deployable=(not fails), blocking_reasons="; ".join(fails)))
+    screen = pd.DataFrame(rows)
+    if screen.empty:
+        return screen, None
+    ok = screen[screen.deployable]
+    if ok.empty:
+        return screen, None
+    best = ok.sort_values(["responding_fraction", "median_separation_d"], ascending=False).iloc[0]
+    return screen, (best.channel, best.hemisphere, float(best.rate_hz))
+
+
+def select_for(evidence, *, rate_hz, hemisphere, channel=None):
+    """The evidence cell matching a frozen configuration, or ``None`` with the reason.
+
+    Evidence must come from the SAME rate as the configuration being gated. Stimulation artifact
+    scales with rate, so a response established at one rate says nothing about another, and the gate
+    would otherwise be satisfied by evidence from a regime that is not the one being deployed.
+    Hemisphere must match for the same reason amplitude is per-hemisphere.
+
+    ``channel=None`` with several sensing channels available is AMBIGUOUS and returns ``None``: the
+    caller must name the channel, because picking one silently hides that a choice was made.
+    """
+    hits = {k: v for k, v in (evidence or {}).items()
+            if np.isclose(float(k[2]), float(rate_hz)) and k[1] == hemisphere
+            and (channel is None or k[0] == channel)}
+    if not hits:
+        return None, (f"no evidence for {hemisphere} at {float(rate_hz):g} Hz"
+                      + (f" on {channel}" if channel else ""))
+    if len(hits) > 1:
+        return None, ("ambiguous: evidence exists on " + ", ".join(sorted(k[0] for k in hits))
+                      + " — name the sensing channel rather than letting one be picked silently")
+    (k, v), = hits.items()
+    return v, f"{k[0]} {k[1]} @{k[2]:g} Hz"
+
+
 def build_all(psd, epochs, *, hemispheres=("Left", "Right"), rates=None, channels=None, **kw):
     """Evidence for every (channel, hemisphere, rate) cell. Returns ``(dict, audit_frame)``.
 
@@ -295,7 +454,8 @@ def build_all(psd, epochs, *, hemispheres=("Left", "Right"), rates=None, channel
     ep = pd.DataFrame(epochs)
     chans = list(channels) if channels is not None else sorted(p["channel"].astype(str).unique())
     rs = list(rates) if rates is not None else sorted(
-        pd.to_numeric(ep["rate"], errors="coerce").dropna().unique().tolist())
+        pd.to_numeric(ep[_resolve_col(ep, RATE_COLS, "stimulation rate")],
+                      errors="coerce").dropna().unique().tolist())
     out, rows = {}, []
     for ch in chans:
         for h in hemispheres:

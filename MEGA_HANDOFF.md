@@ -75,6 +75,65 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-02 (later still) — closed-loop wiring is COMPLETE, and the answer is one cell of fifty
+
+Stage 2 now runs against real recordings. The chain is
+`adapter.evidence_inputs` -> `lfp_evidence.build_all` -> `lfp_evidence.screen_cells` ->
+`pipeline.live_evidence` -> the gate, exposed as `bravo_service.closed_loop_readiness` and rendered
+as a panel in the StimOptimizer view. Verified end to end on RCS08 through the bridge.
+
+**THE RESULT. 84 (channel, hemisphere, rate) cells evaluated, 50 usable, 10 with any responding
+band, and exactly ONE deployable: `ZERO_TWO_LEFT` / Left / 55 Hz**, all 18 adaptive-window bands
+responding with significant era-blocked slopes, amplitude range 1.4-4.5 mA against an energy cap of
+4.90 mA. The screened selection and an explicit request for that cell agree.
+
+**Why the other nine responders fail is the substance, and two of the three reasons were not being
+checked before.**
+
+1. *The energy gate applies to the EVIDENCE, not just to proposed settings.* Four responding cells
+   were measured across amplitude arms above the deployable cap — `ONE_THREE_LEFT` Left @165 Hz
+   contrasts 1.6 -> 4.8 mA against a 3.35 mA cap, and three cells at 110 Hz run to 4.0 mA against
+   3.18 mA. This is the same argument that disqualified the 165 Hz lead: **if the high arm delivers
+   more energy than we will program, a response measured only across that arm was never deployable
+   evidence.** Without this condition a clean dose-response curve recorded outside the safe envelope
+   silently licenses a policy inside it.
+2. *A majority of scanned bands must respond.* The 18 bands are 5 Hz wide on a 1 Hz grid, so they
+   overlap heavily and move together; one or two responding bands is the maximum of a correlated
+   family, not a finding. `MIN_RESPONDING_BAND_FRACTION = 0.5`.
+3. *The slope must survive era blocking.* Two cells (`ZERO_THREE_RIGHT`/`ZERO_THREE_LEFT` Right
+   @110 Hz) have all 18 bands responding and ZERO with a significant era-blocked slope — amplitude
+   rose over time, so unblocked those slopes are time, not dose.
+
+**TWO BUGS FOUND BY RUNNING IT, NOT BY TESTS.** Both are the same failure: fixtures written with
+invented names/conventions instead of production's.
+
+- `lfp_evidence` hardcoded `rate` / `amp_Left` / `visit`. Production `adapter.exposure_epochs` emits
+  `freq_hz` / `amp_mA_Left` / no visit column, so the first live call raised `KeyError: 'rate'` while
+  every test passed. Now resolved against `RATE_COLS` / `AMP_COL_TEMPLATES` with the PRODUCTION
+  names first, and `EvidenceAudit` records which columns were read.
+- Era fell back to the per-epoch index when no era column existed. That is one observation per
+  stratum: blocking with no blocking power, and a LARGE era count in the audit hiding it. Eras are
+  now derived as CALENDAR MONTHS of `t_start`, with `aud.era_source` naming the source.
+
+`select_for(evidence, rate_hz=, hemisphere=, channel=)` refuses evidence from a different rate
+(artifact scales with rate, so a response at one rate says nothing about another) and refuses to
+pick among several sensing channels silently.
+
+The service block never raises into the response — a failure in this adjunct panel must not take
+down the open-loop optimizer, which is the primary content — and `ClosedLoop=false` skips it. The
+React panel shows the per-cell blocking reasons rather than a ready/not-ready chip, because a
+refusal from absent data and one from a genuine negative are different clinical conclusions.
+
+14 tests. StimOptimizer suite 345 -> **359 passed / 41 skipped**; container Biomarkers **320/320**
+unchanged. Bundle rebuilt (`main.92c5b6b4.js`).
+
+STILL NOT DONE: `run_two_stage` accepts `lfp=` but nothing calls it WITH `live_evidence(...)`
+selected output in a single call — the pieces are connected and verified individually, and joining
+them is a two-line change once the gate's other conditions are worth evaluating. On present data the
+gate refuses on resolution anyway.
+
+
+
 ### 2026-09-02 (later) — energy-matched safety gate, and LfpEvidence from real data
 
 **THE SAFETY GATE IS NOW ENERGY-MATCHED, NOT AMPLITUDE-MATCHED (PI direction).** The tolerated

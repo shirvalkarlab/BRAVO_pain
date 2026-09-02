@@ -274,6 +274,78 @@ class TwoStageReport:
                             self.stage2.describe()])
 
 
+@dataclass
+class LiveEvidence:
+    """LFP evidence sourced from the platform, with everything needed to defend the choice.
+
+    ``selected`` is the one cell handed to the gate. ``screen`` is every cell that was considered
+    with its blocking reasons, and ``audit`` is every cell that could not even be built. Both
+    non-selected frames are part of the result rather than debug output: a gate refusal caused by
+    absent data and one caused by a real negative response are clinically different conclusions,
+    and only these frames distinguish them.
+    """
+
+    selected: object = None
+    selected_key: tuple | None = None
+    selection_note: str = ""
+    screen: object = None
+    audit: object = None
+
+    def describe(self) -> str:
+        n_ok = 0 if self.screen is None or self.screen.empty else int(self.screen.deployable.sum())
+        n_cells = 0 if self.screen is None else len(self.screen)
+        if self.selected is None:
+            return (f"no deployable LFP evidence: {n_ok} of {n_cells} response-capable cells passed "
+                    f"screening. {self.selection_note}")
+        return f"using {self.selection_note} ({n_ok} of {n_cells} cells deployable)"
+
+
+def live_evidence(participant, *, energy_budget=None, pw_lookup=None, amp_ceiling=None,
+                  channel=None, hemisphere=None, rate_hz=None, bands=None,
+                  force_refresh=None, **build_kwargs) -> LiveEvidence:
+    """Build, screen and select LFP evidence for a participant from platform data.
+
+    This is the seam that lets the gate be evaluated against real recordings instead of against
+    ``None``. Selection is either EXPLICIT — pass ``hemisphere`` and ``rate_hz`` (and ``channel``
+    when several sensing channels exist) to demand the cell matching a specific configuration — or
+    SCREENED, which ranks the deployable cells and takes the best. Explicit selection still reports
+    the screen, so a caller pinning a cell can see whether it would have survived screening.
+
+    ``energy_budget`` and ``pw_lookup`` are what make screening meaningful rather than cosmetic; see
+    :func:`routines.lfp_evidence.screen_cells`. Without them the energy condition is skipped and the
+    screen says so by leaving ``energy_cap_mA`` empty.
+    """
+    from .routines import lfp_evidence as EV, lfp_response as LR
+    from . import adapter as AD
+
+    ev, audit = AD.evidence_for_participant(
+        participant, force_refresh=force_refresh,
+        rates=([rate_hz] if rate_hz is not None else None),
+        channels=([channel] if channel is not None else None),
+        hemispheres=((hemisphere,) if hemisphere is not None else ("Left", "Right")),
+        bands=bands, **build_kwargs)
+
+    screen, best = EV.screen_cells(ev, response_fn=LR.assess_response,
+                                   energy_budget=energy_budget, pw_lookup=pw_lookup,
+                                   amp_ceiling=amp_ceiling)
+    if hemisphere is not None and rate_hz is not None:
+        sel, note = EV.select_for(ev, rate_hz=rate_hz, hemisphere=hemisphere, channel=channel)
+        key = None if sel is None else next(
+            k for k in ev if k[1] == hemisphere and np.isclose(float(k[2]), float(rate_hz))
+            and (channel is None or k[0] == channel))
+        return LiveEvidence(selected=sel, selected_key=key,
+                            selection_note=f"explicitly requested: {note}",
+                            screen=screen, audit=audit)
+    if best is None:
+        why = ("no cell survived screening" if not screen.empty
+               else "no cell could even be built — see the audit")
+        return LiveEvidence(selected=None, selected_key=None, selection_note=why,
+                            screen=screen, audit=audit)
+    return LiveEvidence(selected=ev[best], selected_key=best,
+                        selection_note=f"screened best: {best[0]} {best[1]} @{best[2]:g} Hz",
+                        screen=screen, audit=audit)
+
+
 def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="left_leg",
                   outdir=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
                   lfp=None, amp_limits=None, selected_bands=None, response_summary=None,
