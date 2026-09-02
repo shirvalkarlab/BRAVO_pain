@@ -33,7 +33,13 @@
 > (unique-PRO tertiles), per-channel count semantics, deployment checklist, ClosedLoopSim UI/workflow,
 > configuration, testing, troubleshooting, and development guidelines.
 >
-> **Branch HEAD `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
+> **CURRENT STATE (verified 2026-09-02).** Branch `PS_closedloop_deployment`, HEAD `bca0a01`, in sync
+> with `origin`. Container Biomarkers suite **320/320**; host StimOptimizer suite **312 passed,
+> 39 skipped**. The suite figures above (261/261) and the `b239e57` HEAD below are historical and
+> describe the 2026-06-29 merge state, not the present one — the paragraph is kept because it
+> documents what that specific hotfix did.
+>
+> **Historical, 2026-06-29 — branch HEAD was then `b239e57`** (hotfix: guard the offset-range string against null `scanModel.counts` — the
 > hoisted `rangeTxt`/`offsetSummary` in BinarizationPreview.js read `counts.min_abs_offset_min` before
 > the preview model loaded, throwing `Cannot read properties of null` and blanking the Biomarkers module.
 > Added `counts &&` guards; rebuilt chunk `434.861dc283`, main `8fa51c07`). Below = the two-window change
@@ -64,6 +70,92 @@
 ---
 
 ## 0. Recent work (newest first)
+
+### 2026-09-02 (overnight) — two-stage architecture, F8 reconciled, the null is a rotation test
+
+Blow-by-blow in `SESSION_HANDOFF_2026-09-02_two_stage_and_ordinal_safety.md`. Four commits,
+`6001e00` / `ba089e2` / `bca0a01` and the ordinal-safety commit that follows them.
+
+**StimOptimizer is now two explicit stages with a gate that can refuse (`ba089e2`).** The device
+forces the shape: rate and pulse width cannot change once BrainSense sensing is configured, so
+open-loop search is a prerequisite that must finish and freeze, and closed loop can then only move
+amplitude. `stage1_openloop.py` searches rate × pulse width × amplitude and emits a frozen
+configuration; `stage2_closedloop.py` takes it as an input it cannot modify (frozen dataclasses, and
+`run_stage2` raises on a caller-supplied rate or pulse width, so the freeze is enforced by the type
+system rather than only documented); `routines/stage_gate.py` decides whether stage 1 licenses
+stage 2. `pipeline.run` is untouched and `run_two_stage` sits alongside it.
+
+**The gate refuses on current data, four of six conditions blocking, and that is the deliverable.**
+The band question is split into two separately reported conditions because the two candidates fail
+for unrelated reasons: the 3.9215 Hz `nrs` band is excluded by the DEVICE (a 5 Hz band there spans
+1.4–6.4 Hz, outside the 8–30 Hz adaptive window) irrespective of its statistics, while the
+14.817 Hz `left_leg_vas` band is inside the window but unsupported. A test builds the 3.92 Hz band
+with a hypothetical `perm_p` of 0.0001 and confirms the window condition still refuses, so the
+independence is encoded rather than asserted. Conditions are three-valued and `None` never passes.
+
+**A false positive found and fixed inside stage 1.** J is zero at the incumbent by construction, so
+a pulse-width stratum containing no epoch at the incumbent rate has no anchor. The 140 µs stratum
+has no 55 Hz epoch on either side, so its posterior at the incumbent reverted to the stratum mean
+(+1.6625 SD 1.6019 left, +1.6776 SD 1.6173 right) and an apparent ~2.3 NRS-point *resolved* rate
+improvement was being measured against a fictitious baseline. Stage 1 now requires a stratum to
+have delivered the incumbent rate before claiming a gain against it. Where a stratum can speak, the
+gain is essentially zero: 0.0000, 0.0015, 0.0020, 0.0018 against difference SDs of 1.66, 1.68, 1.31,
+0.64.
+
+**Rate and pulse width are ALIASED in this record**, which bounds what stage 1 can ever conclude
+here: 11 of 24 rate × pulse-width cells delivered on the left, 12 of 30 on the right, and zero rates
+on either side delivered at two pulse-width levels that both clear the 8-epoch floor. The two views
+also disagree on sign — the stratified surrogate prefers 140 µs on the right while a rate-blocked,
+era-blocked, precision-weighted least-squares fit on the same 61 rows puts 140 µs **+3.0909 NRS
+points worse** than 100 µs (95% CI +0.3096 to +5.8723, p = 0.030). Both are reported.
+
+**F8 part 2 closed (`6001e00`) — and it removes a nominal significance rather than creating one.**
+The permutation family was not the family the band was selected from; for `left_leg_vas` the
+selected |r| of 0.6343 exceeded the permutation family's own maximum of 0.5743, which is
+arithmetically impossible from one dataset. Root cause was NOT the rating-identity restriction (zero
+unrated rows) but the MAD rule's ESTIMATION BASE: `pearson_corr_psd_label` estimates centre and
+scale on the full 372-epoch stack and masks per cell, while the permutation subset to label-valid
+rows first and then estimated. Option 1 was chosen — rebuild the selection grid's own masks, floor
+and FDR screen inside the permutation — because the disagreement was never about which rows are
+outliers in principle, only about which sample the rule is estimated on, so the fix belongs on the
+null side; and it leaves the reported band and correlation untouched. Two further misalignments were
+found and fixed in passing, both introduced earlier the same session: the null replayed a q < 0.10
+screen where the selection screens at q < 0.05 (both now read one constant, `BIOMARKER_FDR_Q`), and
+`_neff_from_r_and_p` was pairing one family's |r| with the other's p, recovering wrong degrees of
+freedom. Verified per run: per-cell |r| agrees to 6.63e-13 (`nrs`) and 5.00e-13 (`left_leg_vas`)
+across all 300 cells, zero cells in one family only, and the observed family maximum now equals the
+selected |r| exactly. **Result: both bands null.** `nrs` perm_p 0.0500 → 0.0809; `left_leg_vas`
+0.6074 → 0.4166 with the guard going False → True.
+
+**The permutation null is a ROTATION test, not a shuffle, and its p has a floor (`bca0a01`).**
+Chasing the block length the reconciliation left unassessed: the `nrs` rating series is strongly
+dependent (ACF flat at +0.35–0.43 to lag 12; Ljung-Box p = 0.0020 at lag 1, p < 0.0001 at lags 3, 5,
+10) while `left_leg_vas` is not (minimum p = 0.10), yet both get block length 1. I first concluded
+that meant an independent shuffle and therefore an anti-conservative p, replaced the lag-1 AR(1)
+estimator with an integrated autocorrelation time — then checked what block length 1 actually does.
+`circular_block_perm_matrix` returns the n circular ROTATIONS at `block <= 1`, verified directly
+(exactly n distinct outcomes from 4000 draws, every row a rotation, the identity among them). A
+rotation preserves the whole autocorrelation function and is STRICTER than a shuffle, so the old
+estimator was reaching the right null and my replacement made it worse — a block length of 10
+preserves only within-block dependence. **Reverted; no published number moved.** What is fixed: the
+false "i.i.d. shuffle" docstring; and the undisclosed resolution limit, since with only n rotations
+the p floor is ~1/(n+1) and the step ~1/n however many permutations are drawn. Now published as
+`perm_n_distinct_nulls`, `perm_p_floor`, `perm_p_step` — `nrs` 0.0809 is "about 6 of 72 rotations"
+(floor 0.0137), `left_leg_vas` 0.4166 is "about 18 of 43" (floor 0.0227). **A p near 0.05 from this
+machinery must not be read to three decimals.** Recorded as an open design question for the PI:
+preservation is non-monotone in block length, so the rotation test should arguably be selected
+explicitly rather than reached by rounding an AR(1) formula down to 1.
+
+**Reference codebases — two earlier characterisations in this doc were wrong.**
+`facebookresearch/aepsych` is the only usable Python reference (186 files on gpytorch/botorch), and
+supplies the cutpoint ordinal likelihood that fits our four-level severity ladder.
+`ericrcole/SafeOpt` is **MATLAB** (74 author `.m` files plus a vendored GPML toolbox, zero `.py`) and
+is an algorithmic reference only; its distinctive idea is that the safe set is CUMULATIVE
+(`safe_set = any([safe_set  Q_low > threshold], 2)`, so a cell never leaves once admitted), and its
+safety and objective models are the SAME GP, which does not transfer because ours are different
+quantities. `markjconnolly/meta_bayesian_optimization` is **empty** (an 83-byte README).
+`jerdra/BOONStim` is a Nextflow TMS pipeline, not relevant. Gotcha: `git clone` fails in the agent
+sandbox (creating `.git` is blocked) — use the codeload tarball endpoint.
 
 What changed and why, most recent first. The durable decisions are tabulated in §3; this section
 keeps the operational specifics. Per-commit detail: the dated session handoffs.
