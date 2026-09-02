@@ -57,10 +57,17 @@ def _flat_lfp(n=120, seed=1):
 # Condition 1: the adaptive rate floor
 # ---------------------------------------------------------------------------------------------
 def test_the_gate_refuses_a_sub_55_hz_rate_and_names_the_rate_condition():
-    """A group configured for Adaptive Therapy has a higher minimum rate (A610 manual p. 35).
+    """A group configured for Adaptive Therapy has a higher minimum rate than one without.
 
-    55 Hz is the PI-supplied value in percept_adaptive.MIN_ADAPTIVE_RATE_HZ. Below it the policy is
-    not programmable at all, so this is the cheapest condition to check and to fail.
+    PROVENANCE, split deliberately because the two halves have different sources. The A610 manual
+    (p. 35) is the authority for the CONSTRAINT and its DIRECTION only — it states that the minimum
+    rate is higher with Adaptive Therapy configured, without printing the figure on the pages
+    reviewed. The VALUE of 55 Hz is PI-supplied and lives in
+    percept_adaptive.MIN_ADAPTIVE_RATE_HZ, whose comment carries the full note. Do not re-attribute
+    the number to the manual.
+
+    Below the floor the policy is not programmable at all, so this is the cheapest condition to
+    check and to fail.
     """
     g = GATE.evaluate_gate(_frozen(_setting(rate_hz=40.0)), lfp=_responding_lfp())
     assert g.passed is False

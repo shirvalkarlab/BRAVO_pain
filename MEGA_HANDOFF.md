@@ -33,9 +33,13 @@
 > (unique-PRO tertiles), per-channel count semantics, deployment checklist, ClosedLoopSim UI/workflow,
 > configuration, testing, troubleshooting, and development guidelines.
 >
-> **CURRENT STATE (verified 2026-09-02).** Branch `PS_closedloop_deployment`, HEAD `bca0a01`, in sync
-> with `origin`. Container Biomarkers suite **320/320**; host StimOptimizer suite **312 passed,
-> 39 skipped**. The suite figures above (261/261) and the `b239e57` HEAD below are historical and
+> **CURRENT STATE (verified 2026-09-02, overnight session).** Branch `PS_closedloop_deployment`,
+> in sync with `origin` — the newest §0 entry names the commits, which is more durable than pinning
+> a short SHA here that the next commit falsifies. Container Biomarkers suite **320/320** (verified
+> via the bridge). Host StimOptimizer suite **312 passed / 41 skipped** in the torch-free
+> environment `bravo_app`, and **352 passed / 1 skipped** in `stimopt_torch`; the same 353 tests
+> collect in both, so the torch backend is a verified optional import rather than a requirement.
+> The suite figures above (261/261) and the `b239e57` HEAD below are historical and
 > describe the 2026-06-29 merge state, not the present one — the paragraph is kept because it
 > documents what that specific hotfix did.
 >

@@ -204,9 +204,10 @@ def circular_block_indices(n, block, rng):
     * **The p-value is quantised and floored.** With ``n`` distinct nulls the smallest attainable
       p is about ``1/(n+1)`` and p moves in steps of about ``1/n``, no matter how many permutations
       are drawn. Drawing 1000 permutations from ``n`` distinct outcomes does NOT give 1000
-      independent null draws; the effective null sample size is ``n``. At n = 72 that is a floor
-      near 0.015 and a precision near 0.014, so a reported 0.08 means "about 6 of 72 rotations
-      matched or beat the observed value" and should not be read to three decimal places.
+      independent null draws; the effective null sample size is ``n``. At n = 72 the floor is
+      1/73 = 0.0137 and the step is 1/72 = 0.0139 — note the floor is marginally SMALLER than the
+      step, since one is over n+1 and the other over n. So a reported 0.08 means "about 6 of 72
+      rotations matched or beat the observed value" and should not be read to three decimal places.
     * **The identity is always among the draws**, so the observed statistic appears in its own null
       and the count of null values at least as extreme is never zero. The ``(ge + 1)/(used + 1)``
       correction elsewhere is therefore doubly conservative here, which is the safe direction."""
