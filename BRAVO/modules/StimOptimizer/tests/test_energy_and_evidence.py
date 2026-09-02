@@ -16,7 +16,14 @@ from StimOptimizer.routines import lfp_evidence as EV
 
 # --- the energy budget -------------------------------------------------------------------------
 def _census():
-    """Left reaches 4.5 mA and 180 us at 55 Hz but NEVER TOGETHER — the whole point."""
+    """SYNTHETIC. Left reaches 4.5 mA and 180 us at 55 Hz but NEVER TOGETHER — the whole point.
+
+    These numbers are invented to make the max-of-product rule bite cleanly; they are NOT RCS08's.
+    Do not quote the 180 us or the resulting 1.8x ratio as facts about the patient — that mistake
+    was made once, in a clinic planning document. On RCS08's chronic census the maximum amplitude
+    and maximum pulse width at 55 Hz occur in the SAME epoch, so the real ratio there is 1.00x; on
+    the acute step log pulse width reaches 290 us and the ratio is 2.90x.
+    """
     return pd.DataFrame([
         dict(hemi="Left",  amp=4.5, pw=100.0, rate=55.0),
         dict(hemi="Left",  amp=2.0, pw=180.0, rate=55.0),
