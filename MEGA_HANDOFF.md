@@ -280,6 +280,65 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**F3 + F14 FIXED (2026-09-02). The selection-corrected p now permutes RATINGS, and the winner's
+curse has a magnitude instead of a boolean. The result changes the reading of the plate.**
+
+**F3.** `_block_perm_maxcorr_pvalue` circular-block permuted the EPOCH label vector. Several epochs
+share one pain report, so that null hands different permuted labels to epochs of the same report and
+splits a report's epochs across blocks — it has more freedom than the data. New
+`_rating_level_perm_matrix` takes one value per rating in time order, circular-block permutes THAT
+vector (block length from the rating-level autocorrelation, preserving serial dependence between
+successive reports), and broadcasts each permuted value back to every epoch sharing that report.
+Both the observed statistic and the null are computed on the same grouped rows, so they cannot come
+from different data (the defect F8 flags elsewhere). `perm_unit`, `perm_n_ratings`, `perm_block` and
+`perm_n_epochs_used` are published, because an epoch-level fallback is anti-conservative and a
+consumer must be able to tell which null produced the p it is reading.
+
+**A call-order trap worth remembering:** the first wiring read `result["rating_group"]` inside
+`_band_inference`, which runs BEFORE that key is assigned further down `run_timedomain_branch`. It
+silently selected the epoch-level fallback and produced a valid-looking, anti-conservative null. The
+grouping is now an explicit argument.
+
+**F14.** The null distribution of the family max |r| was already being computed and shipped as a raw
+array while the plate said only `selection_biased: True`. It is now summarised:
+`perm_null_max_mean` (the |r| that searching this family produces on average with NO real effect),
+`perm_null_max_p95`, `perm_obs_minus_null_mean`, `perm_obs_exceeds_null_p95`, `perm_family_size`.
+
+**Measured on live RCS08, family of 300 cells, 1000 permutations:**
+
+| | `nrs` | `left_leg_vas` |
+|---|---|---|
+| selected band | 3.92 Hz, L 1⁻3⁺ | 14.82 Hz, L 0⁻2⁺ |
+| r | −0.530 | −0.634 |
+| BH q (per-cell) | **0.019** | 0.506 |
+| perm_p, epoch-level null (WRONG) | 0.0729 | 0.0629 |
+| perm_p, rating-level null | **0.229** | **0.021** |
+| ratings / epochs / block | 72 / 294 / 1 | 46 / 244 / 1 |
+| observed max abs r | 0.4848 | 0.6695 |
+| null E[max abs r] | 0.4317 | 0.5435 |
+| null p95 | 0.5452 | 0.6541 |
+| exceeds null p95? | **No** | **Yes** |
+
+**The correction does NOT move both metrics the same way, and that matters.** For `nrs` the p rose
+0.073 -> 0.229 (matching the audit's predicted 0.233): the epoch-level null was anti-conservative
+because spurious replication inflated the observed statistic. For `left_leg_vas` the p FELL
+0.063 -> 0.021, because the rating-level block length collapsed from 6 to 1 — the epoch-level series
+looked strongly autocorrelated only because epochs within a rating are near-identical, and the long
+blocks that induced were inflating the null's spread. So the epoch-level null was wrong in both
+directions depending on which effect dominated; it was not simply "too liberal".
+
+**How to read the plate now.** For `nrs`, BH q = 0.019 looks significant while the
+selection-corrected p is 0.229 and the winning |r| sits INSIDE the null p95 — that band is not
+distinguishable from the maximum of noise over 300 cells, and the q is winner's-curse inflated. For
+`left_leg_vas` the two disagree the other way: no cell survives BH (q = 0.506) yet the family max
+does exceed its null p95 with perm_p = 0.021. Those answer different questions — BH controls false
+discoveries among per-cell tests, `perm_p` asks whether the best cell beats searching — and the
+disagreement is consistent with a weak effect spread across neighbouring bands rather than one sharp
+band. Neither metric supports "we have found a biomarker"; `left_leg_vas` supports "something is
+there, but not localised to a band we can name yet".
+
+Eight tests, suite 289 -> **297**.
+
 **FIX (2026-08-31): the correlation spectrum's p-value is now CLUSTER-ROBUST on rating clusters,
 and the naive family is published alongside it instead of being replaced.** Audit item C2, and it
 was only implementable after the `rating_group` fix below — a cluster-robust p computed on a

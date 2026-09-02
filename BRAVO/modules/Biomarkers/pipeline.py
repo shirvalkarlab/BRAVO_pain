@@ -638,7 +638,8 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
         c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig = band
         ch = format_channel(result["chan_order"][c_idx])
         summary.update(_band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig,
-                                       session_df.get("stim_amplitude")))
+                                       session_df.get("stim_amplitude"),
+                                       rating_group=_rating_group))
         summary.update({"channel": ch["short"], "channel_raw": ch["raw"]})
     
     # Inject rating_group into the detail so deduplication works for TD-only channels.
@@ -700,7 +701,54 @@ def _maxabs_corr(X, y, min_n=4):
     return float(np.max(np.abs(rr))) if rr.size else np.nan
 
 
-def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, return_null=False):
+def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
+    """Circular-block permutation at the RATING level, broadcast back to epochs.
+
+    THE EXCHANGEABLE UNIT IS THE RATING, NOT THE EPOCH (audit F3). Several epochs are matched to one
+    pain report, so permuting the epoch-level label vector is not a valid null: it hands different
+    permuted labels to epochs that belong to the same report, and it splits one report's epochs
+    across permutation blocks. Both destroy the replication structure the real data has, which makes
+    the null too variable in the wrong direction and the resulting p too small. Measured on RCS08 at
+    the selected cell, the epoch-level null gave p = 0.0729 where the rating-level null gives 0.233.
+
+    Construction: take one value per rating in time order, circular-block permute THAT vector (block
+    length from the rating-level autocorrelation, so serial dependence between successive reports is
+    preserved), then broadcast each permuted rating value back to every epoch sharing that report.
+
+    Returns ``(Yp, info)`` with ``Yp`` of shape ``(n_perm, n_grouped_epochs)`` and ``info`` recording
+    the grouped-row mask, the number of ratings and the block length. Callers MUST compute the
+    observed statistic on the same ``info["rows"]`` subset, or the observed value and its null come
+    from different data (the same defect F8 flags elsewhere).
+    """
+    y = np.asarray(y, dtype=float)
+    g = np.asarray(rating_group, dtype=int)
+    rows = np.isfinite(y) & (g >= 0)
+    if rows.sum() < 4:
+        return None, {"rows": rows, "n_ratings": 0, "block": None,
+                      "reason": "fewer than 4 epochs carry both a finite label and a rating id"}
+    gg, yy = g[rows], y[rows]
+    # unique ratings in FIRST-APPEARANCE (time) order, since the rows arrive time-ordered
+    _, first_idx = np.unique(gg, return_index=True)
+    uniq = gg[np.sort(first_idx)]
+    pos = {int(v): k for k, v in enumerate(uniq)}
+    inv = np.array([pos[int(v)] for v in gg], dtype=int)      # epoch -> rating slot
+    G = uniq.size
+    if G < 4:
+        return None, {"rows": rows, "n_ratings": int(G), "block": None,
+                      "reason": f"only {G} distinct ratings; a permutation null needs at least 4"}
+    # one value per rating. Constant within a rating by construction; mean is a no-op that also
+    # tolerates a frame where it is not exactly constant.
+    y_rating = np.array([float(np.nanmean(yy[inv == k])) for k in range(G)])
+    if block is None:
+        block = stats_utils.block_length_for(y_rating, G)
+    perm_g = stats_utils.circular_block_perm_matrix(G, int(block), int(n_perm), rng)   # (P, G)
+    Yp = y_rating[perm_g][:, inv]                                                       # (P, n_rows)
+    return Yp, {"rows": rows, "n_ratings": int(G), "block": int(block),
+                "n_epochs_used": int(rows.sum()), "reason": None}
+
+
+def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, return_null=False,
+                               rating_group=None):
     """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
     pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
     x n_perm) with a handful of matrix ops.
@@ -717,14 +765,34 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
     the UI can plot the null distribution of the family max|R| against the observed value."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
+    rng = np.random.default_rng(seed)
+    perm_info = {"unit": "epoch", "n_ratings": None, "block": None, "n_epochs_used": int(X.shape[0])}
+
+    Yp = None
+    if rating_group is not None:
+        # RATING-LEVEL null (audit F3). Restrict BOTH the observed statistic and the null to the
+        # rows that carry a rating id, so the two come from the same data — computing the observed
+        # value on more rows than its null is the defect F8 flags elsewhere.
+        Yp, info = _rating_level_perm_matrix(y, rating_group, int(n_perm), rng, block=block)
+        if Yp is None:
+            _log.warning("Biomarkers: rating-level permutation null unavailable (%s); falling back "
+                         "to the epoch-level null, which is anti-conservative because epochs "
+                         "sharing one rating are not exchangeable.", info.get("reason"))
+        else:
+            rows = info["rows"]
+            X, y = X[rows], y[rows]
+            perm_info = {"unit": "rating", "n_ratings": info["n_ratings"], "block": info["block"],
+                         "n_epochs_used": info["n_epochs_used"]}
+
     N, K = X.shape
     obs = _maxabs_corr(X, y, min_n=min_n)
     if not np.isfinite(obs) or N < 4:
-        return (np.nan, 0, obs, None) if return_null else (np.nan, 0)
-    if block is None:
-        block = stats_utils.block_length_for(y, N)
-    rng = np.random.default_rng(seed)
-    perm = stats_utils.circular_block_perm_matrix(N, block, int(n_perm), rng)   # (P, N)
+        return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
+    if Yp is None:
+        if block is None:
+            block = stats_utils.block_length_for(y, N)
+        perm = stats_utils.circular_block_perm_matrix(N, block, int(n_perm), rng)   # (P, N)
+        perm_info["block"] = int(block)
 
     M = np.isfinite(X).astype(float)                  # (N, K) fixed column masks (y is finite)
     Xm = np.where(M > 0, X, 0.0)                      # (N, K)
@@ -734,7 +802,9 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
     with np.errstate(invalid="ignore", divide="ignore"):
         vx = sxx - sx * sx / nj                       # (K,)
 
-    Yp = y[perm]                                      # (P, N) permuted labels
+    if Yp is None:
+        Yp = y[perm]                                  # (P, N) epoch-level permuted labels
+
     Sxy = Yp @ Xm                                     # (P, K)
     Sy = Yp @ M                                       # (P, K)
     Syy = (Yp * Yp) @ M                               # (P, K)
@@ -748,14 +818,27 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
     finite = np.isfinite(stat) & (stat > -np.inf)
     used = int(finite.sum())
     if used == 0:
-        return (np.nan, 0, obs, None) if return_null else (np.nan, 0)
+        return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
     null_stats = stat[finite]
     ge = int(np.sum(null_stats >= obs))
     p = (ge + 1) / (used + 1)                          # +1: never report p=0
-    return (p, used, float(obs), null_stats) if return_null else (p, used)
+    # WINNER'S CURSE MAGNITUDE (audit F14). The null distribution of the family max|R| IS the
+    # magnitude of the selection effect, and it was already being computed here and shipped as a
+    # raw array while the plate said only `selection_biased: True`. Summarising it turns "these
+    # numbers are biased" into "this is how much of the winning |r| searching alone would produce".
+    perm_info.update({
+        "null_max_mean": float(np.mean(null_stats)),
+        "null_max_p95": float(np.quantile(null_stats, 0.95)),
+        "null_max_median": float(np.median(null_stats)),
+        "obs_minus_null_mean": float(obs - np.mean(null_stats)),
+        "obs_exceeds_null_p95": bool(obs > np.quantile(null_stats, 0.95)),
+        "family_size": int(K),
+    })
+    return (p, used, float(obs), null_stats, perm_info) if return_null else (p, used)
 
 
-def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000):
+def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000,
+                    rating_group=None):
     """Honest inference for the selected time-domain band.
 
     HEADLINE significance = the temporal-block PERMUTATION p (perm_p) for the family max|R|: it is
@@ -829,7 +912,7 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     # Restricts to label-valid rows; the block-permutation block length comes from the (now time-
     # ordered) label autocorrelation, so the null preserves serial dependence.
     perm_valid = np.isfinite(labels)
-    perm_p, perm_used, perm_obs, perm_null = (np.nan, 0, np.nan, None)
+    perm_p, perm_used, perm_obs, perm_null, perm_meta = (np.nan, 0, np.nan, None, {})
     if perm_valid.sum() >= 4:
         # Restrict the family to the SAME ≤ MAX_BIOMARKER_FREQ_HZ band the selector searches, so the
         # family-max null (perm_obs) is over exactly the cells a biomarker could be drawn from.
@@ -838,8 +921,14 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         feat_capped = feat[:, :, keep_f]
         X = feat_capped.reshape(feat_capped.shape[0], -1)[perm_valid]
         yv = labels[perm_valid]
-        perm_p, perm_used, perm_obs, perm_null = _block_perm_maxcorr_pvalue(
-            X, yv, n_perm=n_perm, seed=0, return_null=True)
+        # Pass the rating grouping so the null permutes RATINGS, not epochs (audit F3). The
+        # observed statistic is recomputed inside on the same grouped rows as the null.
+        # Explicit argument, NOT result["rating_group"] — that key is not populated until later in
+        # run_timedomain_branch, so reading it here silently selected the epoch-level fallback.
+        _rg = rating_group if rating_group is not None else result.get("rating_group")
+        perm_p, perm_used, perm_obs, perm_null, perm_meta = _block_perm_maxcorr_pvalue(
+            X, yv, n_perm=n_perm, seed=0, return_null=True,
+            rating_group=(np.asarray(_rg)[perm_valid] if _rg is not None else None))
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
         "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner
@@ -854,6 +943,20 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # the payload; this is the strongest |R| over all contacts x freqs per shuffle.
         "perm_obs": (None if not np.isfinite(perm_obs) else round(float(perm_obs), 4)),
         "perm_null": ([round(float(s), 4) for s in perm_null] if perm_null is not None else None),
+        # F3 provenance: WHICH unit was permuted. "rating" is the valid null; "epoch" is
+        # anti-conservative and only appears as a logged fallback.
+        "perm_unit": perm_meta.get("unit"),
+        "perm_n_ratings": perm_meta.get("n_ratings"),
+        "perm_block": perm_meta.get("block"),
+        "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
+        # F14: the winner's-curse magnitude, not just the flag. null_max_mean is the |r| that
+        # searching this family produces on average when there is NO real effect, so the honest
+        # read of the winning |r| is the excess over it.
+        "perm_null_max_mean": perm_meta.get("null_max_mean"),
+        "perm_null_max_p95": perm_meta.get("null_max_p95"),
+        "perm_obs_minus_null_mean": perm_meta.get("obs_minus_null_mean"),
+        "perm_obs_exceeds_null_p95": perm_meta.get("obs_exceeds_null_p95"),
+        "perm_family_size": perm_meta.get("family_size"),
         "narrow_peak_warning": narrow_peak,
     }
 
