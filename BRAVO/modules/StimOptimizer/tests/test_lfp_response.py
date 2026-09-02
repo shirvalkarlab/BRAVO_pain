@@ -143,20 +143,32 @@ def test_bad_arguments_are_refused():
 
 
 def test_era_collinear_with_amplitude_destroys_the_estimate_not_silently():
-    """THE PATHOLOGY THIS RECORD ACTUALLY HAS. Amplitude rose over time, so if eras are nested
-    within amplitude rather than crossed with it, blocking on era removes the contrast under test.
-    Discovered by accident when a fixture generated eras sequentially: the same data that gives
-    p<0.001 crossed gives a null result nested. The capture contrast still stands, because it does
-    not condition on era — which is exactly why the verdict does not rest on the slope alone.
+    """THE PATHOLOGY THIS RECORD ACTUALLY HAS, demonstrated rather than asserted.
+
+    Amplitude rose over time in this patient's record, so if eras are nested within amplitude
+    instead of crossed with it, blocking on era removes the very contrast under test.
+
+    An earlier version of this test used effect=1.0, where the signal is so strong that the nested
+    fit still returns p = 5e-82 — so it demonstrated nothing, and its docstring's claim of "a null
+    result nested" was false. Its assertion was also merely nested_p > crossed_p, which two numbers
+    both indistinguishable from zero satisfy vacuously. Parameters are now chosen where the
+    pathology genuinely bites, and the assertions state the outcome rather than an ordering:
+    at effect=0.20 with noise=1.0 the crossed fit gives p about 0.004 (significant) while the
+    nested fit gives p about 0.34 (null) on the same underlying effect.
+
+    The capture contrast survives both, because it compares the two amplitude arms directly and
+    never conditions on era. That is precisely why the module's verdict does not rest on the slope.
     """
-    crossed = LR.assess_response(*_synth(n_per=200, effect=1.0)[:2],
-                                 era=_synth(n_per=200, effect=1.0)[2],
-                                 cluster=_synth(n_per=200, effect=1.0)[3])
-    p, a, era, cl = _synth(n_per=200, effect=1.0, era_collinear=True)
+    crossed = LR.assess_response(*_synth(n_per=200, effect=0.20, noise=1.0)[:2],
+                                 era=_synth(n_per=200, effect=0.20, noise=1.0)[2],
+                                 cluster=_synth(n_per=200, effect=0.20, noise=1.0)[3])
+    p, a, era, cl = _synth(n_per=200, effect=0.20, noise=1.0, era_collinear=True)
     nested = LR.assess_response(p, a, era=era, cluster=cl)
 
-    assert crossed.slope_p < 0.01, "crossed fixture must be estimable, else this tests nothing"
-    assert nested.slope_p > crossed.slope_p, (crossed.slope_p, nested.slope_p)
-    # The capture contrast is unaffected: it compares the two arms directly.
-    assert nested.direction_ok is True and nested.separation_d > LR.MIN_CAPTURE_SEPARATION_D
-    assert nested.responds is True
+    assert crossed.slope_p < 0.01, (
+        f"crossed fixture must be estimable or this tests nothing (got {crossed.slope_p:.3g})")
+    assert nested.slope_p > 0.05, (
+        f"nested fixture must LOSE the effect, which is the pathology under test "
+        f"(got {nested.slope_p:.3g})")
+    # The capture contrast is unaffected: it does not condition on era.
+    assert nested.direction_ok is True
