@@ -144,7 +144,40 @@ def balanced_metrics(sens, spec, n_pos, n_neg):
 def block_length_for(labels, n=None):
     """Default circular-block length = the lag-1 autocorrelation (decorrelation) timescale of the
     labels, -1/ln(r1), clipped to [1, n//4]. 1 when there is no positive autocorrelation. Shared by
-    both the scalar and the vectorized permutation paths so they always agree."""
+    both the scalar and the vectorized permutation paths so they always agree.
+
+    **A returned 1 does NOT mean an independent shuffle.** An earlier version of this docstring said
+    it did, and that was wrong. ``circular_block_indices`` and ``circular_block_perm_matrix`` return
+    a pure CIRCULAR SHIFT when ``block <= 1``, so a block length of 1 selects the rotation test:
+    only ``n`` distinct nulls exist, the label series' entire autocorrelation function is preserved,
+    and only its alignment with the features is destroyed. That is a legitimate and conservative
+    null for a serially dependent label series — it is stricter than an independent shuffle, not
+    looser — but it has a hard resolution limit, documented on those two functions.
+
+    MEASURED ON THE REAL DATA (2026-09-02), because the lag-1 estimator's assumption is worth
+    checking rather than trusting. It models the autocorrelation as AR(1), where ACF(k) = r1**k, and
+    reads lag 1 only. For the `nrs` rating-level series (72 ratings) the observed function is
+        +0.357 +0.402 +0.426 +0.374 +0.354 +0.226   (lags 1-6; still +0.35 at lag 12)
+    where an AR(1) at r1 = 0.357 predicts +0.357 +0.128 +0.046 +0.016 +0.006 +0.002. The series does
+    not decay geometrically at all, and Ljung-Box rejects independence at p = 0.0020 (lag 1) and
+    p < 0.0001 (lags 3, 5, 10). So -1/ln(0.357) = 0.97 rounds to 1. For `left_leg_vas` (43 ratings)
+    the same rounding happens for the opposite reason: there is no detectable dependence to preserve
+    (Ljung-Box minimum p = 0.10).
+
+    Both therefore run the rotation test, which is the right answer for `nrs` (its dependence is
+    fully preserved) and harmless for `left_leg_vas` (there is none to preserve). The lag-1
+    estimator arrives there by a route that does not generalise, though: a series with a high
+    lag-1 value would get multi-sample blocks, and those preserve dependence only WITHIN a block.
+
+    **OPEN DESIGN QUESTION, deliberately not resolved here.** Dependence preservation is therefore
+    NON-MONOTONE in the block length: length 1 preserves everything (a shift), intermediate lengths
+    preserve only within-block structure, and length n is a shift again. For a null whose purpose is
+    to preserve the label series' temporal structure, the block machinery is arguably the wrong tool
+    and the rotation test should be selected explicitly rather than reached by rounding. Changing
+    that would move published p-values, so it is recorded rather than done. An integrated
+    autocorrelation time, tau = 1 + 2*sum ACF(k), was implemented and reverted on 2026-09-02 for
+    exactly this reason: it correctly gave 10 for `nrs`, but a block length of 10 preserves LESS of
+    the dependence than the shift the old estimator already selected, so it made the null worse."""
     labels = np.asarray(labels, dtype=float)
     n = int(labels.size if n is None else n)
     # Use the POSITIVE lag-1 autocorrelation only. Circular-block permutation exists to preserve
@@ -161,7 +194,22 @@ def block_length_for(labels, n=None):
 
 def circular_block_indices(n, block, rng):
     """One circular-block-permuted index vector of length n (block length `block`). Preserves
-    within-block temporal structure, breaking only the cross-block label-feature alignment."""
+    within-block temporal structure, breaking only the cross-block label-feature alignment.
+
+    **``block <= 1`` returns a pure CIRCULAR SHIFT, not an independent shuffle.** Only ``n`` distinct
+    outcomes exist (the n rotations), one of which is the identity. This is the rotation test: it
+    preserves the series' whole autocorrelation function and destroys only its alignment with the
+    features. Two consequences a caller must not overlook:
+
+    * **The p-value is quantised and floored.** With ``n`` distinct nulls the smallest attainable
+      p is about ``1/(n+1)`` and p moves in steps of about ``1/n``, no matter how many permutations
+      are drawn. Drawing 1000 permutations from ``n`` distinct outcomes does NOT give 1000
+      independent null draws; the effective null sample size is ``n``. At n = 72 that is a floor
+      near 0.015 and a precision near 0.014, so a reported 0.08 means "about 6 of 72 rotations
+      matched or beat the observed value" and should not be read to three decimal places.
+    * **The identity is always among the draws**, so the observed statistic appears in its own null
+      and the count of null values at least as extreme is never zero. The ``(ge + 1)/(used + 1)``
+      correction elsewhere is therefore doubly conservative here, which is the safe direction."""
     block = max(1, int(block))
     shift = int(rng.integers(0, n))
     base = (np.arange(n) + shift) % n
@@ -172,6 +220,24 @@ def circular_block_indices(n, block, rng):
     blocks = [base[i * block:(i + 1) * block] for i in range(nb)]
     rng.shuffle(blocks)
     return np.concatenate(blocks)[:n]
+
+
+def permutation_null_resolution(n, block):
+    """How well a permutation null of this shape can resolve a p-value.
+
+    Returns ``(n_distinct, p_floor, p_step)``. At ``block <= 1`` the builders below return the ``n``
+    circular rotations, so only ``n`` distinct nulls exist however many permutations are drawn: the
+    smallest attainable p is ``1/(n+1)`` and p moves in steps of about ``1/n``. Published beside any
+    p-value from this machinery so a reader cannot over-read a quantised number, which is a real
+    hazard when the floor (about 0.015 at n = 72) sits close to a 0.05 threshold.
+
+    At ``block > 1`` the block ORDER is shuffled, so the count of distinct outcomes is the number of
+    block orderings times the ``n`` shifts and is large enough not to bind; it is reported as None
+    rather than computed, because the exact count depends on the ragged final block."""
+    n = int(n); block = max(1, int(block))
+    if block <= 1:
+        return n, 1.0 / (n + 1), 1.0 / n
+    return None, None, None
 
 
 def circular_block_perm_matrix(n, block, n_perm, rng):

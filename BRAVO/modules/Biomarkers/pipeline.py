@@ -1304,6 +1304,21 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
+        # HOW FINELY THIS NULL CAN RESOLVE A p AT ALL (2026-09-02). At block length 1 —
+        # which is what block_length_for returns for both outcome metrics on this record — the
+        # builder returns the n circular ROTATIONS, so only n distinct nulls exist however many
+        # permutations are drawn. p is therefore quantised in steps of about 1/n with a floor near
+        # 1/(n+1), and the effective null sample size is n, not n_perm. Published because that floor
+        # sits close to 0.05 at these rating counts (about 0.0137 at 72 ratings), so a reported p
+        # near 0.05 must not be read to three decimal places or treated as finely separated from
+        # the threshold.
+        **dict(zip(("perm_n_distinct_nulls", "perm_p_floor", "perm_p_step"),
+                   (lambda t: (t[0],
+                               None if t[1] is None else round(float(t[1]), 5),
+                               None if t[2] is None else round(float(t[2]), 5)))(
+                       stats_utils.permutation_null_resolution(
+                           perm_meta.get("n_ratings") or perm_meta.get("n_epochs_used") or 0,
+                           perm_meta.get("block") or 1)))),
         # F14: the winner's-curse magnitude, not just the flag. null_max_mean is the |r| that
         # searching this family produces on average when there is NO real effect, so the honest
         # read of the winning |r| is the excess over it.
