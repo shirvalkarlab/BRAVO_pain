@@ -69,8 +69,13 @@ def test_the_selected_biomarker_bands_against_the_device_constraint():
 
 
 def test_policy_validation_flags_limits_and_paused_amplitude():
+    # Base updated 2026-09-02: rate_hz, n_neurostimulators and lfp_responds_to_stimulation became
+    # required when the manual's rate floor, single-neurostimulator contraindication and
+    # LFP-must-respond requirement were encoded. A policy without them is now legitimately
+    # incomplete, so the old base was a stale premise rather than this test finding a bug.
     base = dict(mode=PA.SINGLE, center_hz=20.0, band_width_hz=5.0,
-                amp_min_mA=1.0, amp_max_mA=3.0, paused_amp_mA=2.0)
+                amp_min_mA=1.0, amp_max_mA=3.0, paused_amp_mA=2.0,
+                rate_hz=130.0, n_neurostimulators=1, lfp_responds_to_stimulation=True)
     assert PA.validate_policy(base) == []
     assert any("max > min" in p for p in
                PA.validate_policy({**base, "amp_min_mA": 3.0, "amp_max_mA": 1.0}))
@@ -92,3 +97,83 @@ def test_adaptive_json_field_names_are_recorded():
     for f in ("AdaptiveTherapyMode", "Thresholds", "StimulationLimits", "SuspendAmplitude",
               "SensingHemisphere", "DetectionBlankingDuration"):
         assert f in PA.ADAPTIVE_JSON_FIELDS
+
+
+# --- rate floor and eligibility (2026-09-02, from the A610 manual + PI) ------------------------
+def _ok_policy(**kw):
+    base = dict(mode=PA.SINGLE, center_hz=20.0, band_width_hz=5.0, amp_min_mA=1.0,
+                amp_max_mA=3.0, paused_amp_mA=2.0, rate_hz=130.0,
+                n_neurostimulators=1, lfp_responds_to_stimulation=True)
+    base.update(kw)
+    return base
+
+
+def test_a_fully_specified_policy_passes():
+    assert PA.validate_policy(_ok_policy()) == []
+
+
+def test_rate_below_the_adaptive_floor_is_refused():
+    """The manual states a group with Adaptive Therapy has a HIGHER minimum rate than an open-loop
+    group; the value is PI-supplied at 55 Hz."""
+    assert PA.MIN_ADAPTIVE_RATE_HZ == 55.0
+    probs = PA.validate_policy(_ok_policy(rate_hz=40.0))
+    assert any("below the adaptive minimum" in p for p in probs)
+    assert PA.validate_policy(_ok_policy(rate_hz=55.0)) == []
+    assert PA.validate_policy(_ok_policy(rate_hz=54.9)) != []
+
+
+def test_missing_rate_is_refused_rather_than_defaulted():
+    """Silently assuming a rate would let a sub-floor policy through."""
+    assert any("rate_hz is required" in p for p in PA.validate_policy(_ok_policy(rate_hz=None)))
+
+
+def test_open_loop_rates_that_fail_closed_loop_are_named_as_such():
+    """40 Hz appeared on the open-loop clinic list and is legitimate there. The message must not
+    imply the rate is unusable in general."""
+    p = [x for x in PA.validate_policy(_ok_policy(rate_hz=40.0)) if "adaptive minimum" in x][0]
+    assert "OPEN loop" in p
+
+
+def test_two_neurostimulators_is_a_contraindication():
+    probs = PA.validate_policy(_ok_policy(n_neurostimulators=2))
+    assert any("must NOT be configured" in p for p in probs)
+    assert PA.ADAPTIVE_REQUIRES_SINGLE_NEUROSTIMULATOR is True
+
+
+def test_lfp_must_be_shown_to_respond_to_stimulation():
+    """A band that tracks pain but does not move with amplitude is not a control signal. Absence of
+    evidence must fail, so the default (unset) is a problem, not a pass."""
+    assert any("RESPONDS TO STIMULATION" in p
+               for p in PA.validate_policy(_ok_policy(lfp_responds_to_stimulation=None)))
+    assert any("RESPONDS TO STIMULATION" in p
+               for p in PA.validate_policy(_ok_policy(lfp_responds_to_stimulation=False)))
+    pol = _ok_policy(); pol.pop("lfp_responds_to_stimulation")
+    assert any("RESPONDS TO STIMULATION" in p for p in PA.validate_policy(pol))
+
+
+def test_indication_and_config_locks_are_recorded():
+    """These are the facts that decide whether a deployment is even attemptable."""
+    assert PA.ADAPTIVE_LABELLED_INDICATION == "Parkinson's disease"
+    assert PA.RATE_AND_PW_FROZEN_ONCE_BRAINSENSE_CONFIGURED is True
+    assert any("interleaving" in e for e in PA.ADAPTIVE_EXCLUSIONS)
+    assert any("cycling" in e for e in PA.ADAPTIVE_EXCLUSIONS)
+    assert set(PA.BRAINSENSE_AUTO_DISABLED_DURING) >= {"MRI mode", "recharging"}
+
+
+def test_device_band_power_definition_is_recorded_as_linear_sum_of_squares():
+    """The device thresholds a linear sum of squared magnitude; the pipeline's feature is log band
+    power. A threshold learned in log space is not the number the device wants."""
+    d = PA.DEVICE_BAND_POWER.lower()
+    assert "sum of squared" in d and "not log" in d
+
+
+def test_the_55_hz_floor_interacts_with_the_selected_biomarker_bands():
+    """Both gates must pass together: the BAND must be inside 8-30 Hz and the stimulation RATE must
+    be at or above 55 Hz. They are independent constraints on different quantities and it is easy
+    to conflate them, since both are frequencies in Hz."""
+    pol = _ok_policy(center_hz=14.817, band_width_hz=5.0, rate_hz=130.0)
+    assert PA.validate_policy(pol) == []
+    # right band, unprogrammable rate
+    assert PA.validate_policy(_ok_policy(center_hz=14.817, rate_hz=40.0)) != []
+    # programmable rate, undeployable band (the nrs winner at 3.92 Hz)
+    assert PA.validate_policy(_ok_policy(center_hz=3.9215, rate_hz=130.0)) != []

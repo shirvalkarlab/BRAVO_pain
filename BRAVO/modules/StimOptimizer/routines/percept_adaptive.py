@@ -56,6 +56,89 @@ ADAPTIVE_LFP_BAND_HZ = (8.0, 30.0)
 #: The wider range available when only recording.
 SENSING_ONLY_LFP_BAND_HZ = (1.0, 96.0)
 
+# ---------------------------------------------------------------------------------------------
+# STIMULATION RATE FLOOR FOR CLOSED LOOP
+# ---------------------------------------------------------------------------------------------
+#: Minimum stimulation rate for a group configured with Adaptive Therapy.
+#:
+#: PROVENANCE, stated precisely because it differs from everything else in this file. The A610
+#: Clinician Programming Guide (M066414C001 Rev B) states the CONSTRAINT and its DIRECTION but does
+#: not print the number on the pages reviewed:
+#:   "For a group configured with Adaptive Therapy, maximum pulse width and maximum rate are lower
+#:    than a group without Adaptive Therapy configured. Minimum rate is HIGHER than a group without
+#:    Adaptive Therapy." (p. 35; the same statement appears for BrainSense on p. 34)
+#: The VALUE of 55 Hz is PI-stated ("when we deploy closed-loop it needs to meet the minimum
+#: frequency of 55 Hz; the machine doesn't work below that"), and is consistent with the labelling's
+#: stated direction. It is recorded as a PI-supplied number rather than a quoted one; if the exact
+#: figure is later found in the labelling, replace this note with the quote.
+MIN_ADAPTIVE_RATE_HZ = 55.0
+
+#: Open-loop interleaving caps, recorded for completeness (manual p. 29): interleaving "cannot
+#: exceed 125 hertz per program, or 250 hertz per hemisphere". Interleaving is NOT available in a
+#: group with BrainSense or Adaptive Therapy and must be removed before configuring them.
+INTERLEAVE_MAX_RATE_PER_PROGRAM_HZ = 125.0
+INTERLEAVE_MAX_RATE_PER_HEMISPHERE_HZ = 250.0
+
+# ---------------------------------------------------------------------------------------------
+# CONFIGURATION LOCKS AND EXCLUSIONS (manual pp. 34-35)
+# ---------------------------------------------------------------------------------------------
+#: "Pulse width and rate cannot be adjusted once BrainSense has been set up for either hemisphere."
+#: To change them, BrainSense must be REMOVED from the group. This is the single most important
+#: sequencing fact for this project: the open-loop search over (rate, pulse width, amplitude) must
+#: be FINISHED before closed loop is configured, because closed loop then adapts amplitude only and
+#: freezes the other two.
+RATE_AND_PW_FROZEN_ONCE_BRAINSENSE_CONFIGURED = True
+
+#: Features that cannot coexist with BrainSense / Adaptive Therapy in one group (manual pp. 34-35).
+ADAPTIVE_EXCLUSIONS = (
+    "interleaving (must be removed before configuring BrainSense)",
+    "multiple rates within the group",
+    "cycling (not available with Adaptive Therapy)",
+    "a hemisphere with a pocket adaptor",
+    "patient-adjustable amplitude limits (Adaptive uses its own limits from BrainSense Setup and "
+    "they are not patient-adjustable)",
+)
+
+#: Conditions under which the device disables BrainSense automatically (manual p. 34): MRI mode,
+#: recharging, and during an impedance test. A closed-loop plan must assume these interruptions.
+BRAINSENSE_AUTO_DISABLED_DURING = ("MRI mode", "recharging", "impedance test")
+
+# ---------------------------------------------------------------------------------------------
+# INDICATION AND HARDWARE ELIGIBILITY (manual p. 35) -- READ BEFORE PLANNING A DEPLOYMENT
+# ---------------------------------------------------------------------------------------------
+#: "Adaptive Therapy is a therapy option for the Parkinson's disease indication in patients who have
+#: a single Percept neurostimulator." Chronic pain is therefore an OFF-LABEL indication for Adaptive
+#: Therapy, which is a regulatory and IRB matter, not something this module can resolve.
+ADAPTIVE_LABELLED_INDICATION = "Parkinson's disease"
+
+#: "Adaptive Therapy has only been studied in patients with a single Percept neurostimulator.
+#: Adaptive Therapy should NOT be configured in patients who have two neurostimulators."
+#: A bilateral implant using ONE neurostimulator with two leads ("Dual Lead configuration") is
+#: supported; TWO neurostimulators is an explicit contraindication.
+ADAPTIVE_REQUIRES_SINGLE_NEUROSTIMULATOR = True
+
+#: The control logic assumes the LFP RESPONDS TO STIMULATION AMPLITUDE. Manual p. 35: "Adaptive
+#: Therapy relies on LFP signals that respond to stimulation amplitude changes. If a patient's LFP
+#: signal does not respond in this way, Adaptive Therapy may not be optimal." In Parkinson's this is
+#: the well-characterised alpha-beta suppression with increasing amplitude. For a pain biomarker it
+#: is NOT established, and it is a DIFFERENT question from "does this band correlate with pain":
+#: a band can track pain perfectly and still be useless as a control signal if stimulation does not
+#: move it. The biomarker module currently tests only the pain correlation.
+REQUIRES_LFP_RESPONSE_TO_STIMULATION = True
+
+# ---------------------------------------------------------------------------------------------
+# THE DEVICE'S BAND-POWER DEFINITION (manual p. 39)
+# ---------------------------------------------------------------------------------------------
+#: "Captured LFP power ... calculated as the sum of the squared LFP magnitude at each frequency
+#: within the selected band, similar to the Area Under the Curve."
+#:
+#: This matters for threshold transfer. The device thresholds a LINEAR sum of squared magnitude over
+#: the band. The biomarker pipeline's feature is log band power (`bp_log`). A threshold learned in
+#: log space is not the number the device wants, and a band-power definition that averages rather
+#: than sums differs by the bin count. Any threshold handed to the device must be expressed in the
+#: device's own units, which means matching this definition exactly, not approximately.
+DEVICE_BAND_POWER = "sum of squared LFP magnitude over the band (linear, AUC-like), not log, not mean"
+
 
 @dataclass(frozen=True)
 class ModeSpec:
@@ -207,6 +290,45 @@ def validate_policy(policy):
         problems.append(
             f"mode {mode!r} is Sensing Only and cannot drive Adaptive Therapy: a change in LFP "
             "will not change stimulation.")
+
+    # Stimulation rate floor. A group configured for Adaptive Therapy has a HIGHER minimum rate
+    # than an open-loop group (manual p. 35); the value is PI-supplied. This is a hard gate: a
+    # policy below it is not programmable, so an optimizer proposing it is wasting a session.
+    rate = policy.get("rate_hz")
+    if rate is None:
+        problems.append(
+            f"rate_hz is required for a closed-loop policy: the adaptive minimum rate "
+            f"({MIN_ADAPTIVE_RATE_HZ:g} Hz) is higher than the open-loop minimum, so a rate that "
+            "is fine open-loop may not be programmable with Adaptive Therapy.")
+    elif float(rate) < MIN_ADAPTIVE_RATE_HZ:
+        problems.append(
+            f"rate {float(rate):g} Hz is below the adaptive minimum of {MIN_ADAPTIVE_RATE_HZ:g} Hz "
+            "and cannot be programmed with Adaptive Therapy. Note this rate may be perfectly "
+            "usable OPEN loop — the floor applies to the adaptive configuration.")
+
+    # Hardware eligibility. Two neurostimulators is an explicit contraindication, not a caution.
+    n_ins = policy.get("n_neurostimulators")
+    if n_ins is not None and int(n_ins) > 1 and ADAPTIVE_REQUIRES_SINGLE_NEUROSTIMULATOR:
+        problems.append(
+            "Adaptive Therapy must NOT be configured in a patient with two neurostimulators "
+            "(manual p. 35: it has only been studied with a single Percept neurostimulator). A "
+            "bilateral implant on ONE neurostimulator with two leads is supported; two separate "
+            "neurostimulators is not.")
+
+    # The control signal must actually respond to stimulation. This is a DIFFERENT requirement from
+    # correlating with the symptom, and it is the one a pain biomarker is least likely to meet.
+    if policy.get("lfp_responds_to_stimulation") is not True:
+        problems.append(
+            "not established that the proposed LFP band RESPONDS TO STIMULATION AMPLITUDE. Adaptive "
+            "Therapy relies on that response (manual p. 35); a band that tracks pain but does not "
+            "move with amplitude is not a usable control signal. Pass "
+            "lfp_responds_to_stimulation=True only when it has been measured, not assumed.")
+
+    if mode == DUAL and policy.get("sensing_hemisphere") not in (None, policy.get("hemisphere")):
+        problems.append(
+            "in Dual Threshold Mode stimulation is driven by sensing from the SAME hemisphere "
+            "unless a contralateral sensing configuration is explicitly set up (manual p. 38). "
+            "Set contralateral=True if that configuration is intended.")
 
     ok, why = band_is_adaptive_capable(policy.get("center_hz", float("nan")),
                                        policy.get("band_width_hz", 0.0))
