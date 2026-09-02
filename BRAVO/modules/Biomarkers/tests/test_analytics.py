@@ -2864,3 +2864,74 @@ def test_all_deployment_binarizations_pass_rating_group():
     assert src.count("pain_cutoff=pain_cutoff, rating_group=rating_group") == 3
     # and nothing in the deployment family still binarizes without it
     assert "pain_cutoff=pain_cutoff)\n    m = np.isfinite(bp_log)" not in src
+
+
+# --- F13: the AUC estimand must be on the same unit as its interval (2026-09-02) ---------------
+def test_rating_equal_weighting_makes_every_rating_count_once():
+    """An unweighted AUC averages over positive-negative PAIRS, so a rating contributing k samples
+    on one side and k' on the other supplies k*k' of the pairs — its influence grows with the
+    PRODUCT of counts. Coverage is an artefact of recording, not of informativeness. Weighting each
+    sample by 1/(its rating's count) makes each rating carry total weight 1."""
+    import numpy as np
+    from sklearn import metrics
+    # rating 0 is matched to 8 samples, ratings 1..3 to one each. All of rating 0 is class 1.
+    g = np.array([0]*8 + [1, 2, 3])
+    y = np.array([1]*8 + [0, 0, 0])
+    x = np.array([5.0]*8 + [1.0, 2.0, 3.0])
+    cl, inv = np.unique(g, return_inverse=True)
+    w = 1.0 / np.bincount(inv).astype(float)[inv]
+    assert np.allclose([w[g == c].sum() for c in cl], 1.0), "each rating must carry total weight 1"
+    # here the dominant rating is perfectly separable, so both are 1.0; the invariant under test is
+    # the weight construction, which is what stops coverage from setting the estimate.
+    assert abs(metrics.roc_auc_score(y, x, sample_weight=w) - 1.0) < 1e-9
+
+
+def test_deployment_reports_both_weightings_and_their_difference():
+    import sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+    out = bs.band_deployment_roc({
+        "ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da", "Channel": "ZERO_TWO_LEFT",
+        "CenterHz": 20.0, "BandWidthHz": 5.0, "Metric": "nrs", "Strategy": "tertile",
+        "MatchDirection": "prior"})
+    d = out.get("deployment") or out.get("roc") or out
+    if not (isinstance(d, dict) and d.get("available")):
+        return
+    for k in ("auc", "auc_sample_weighted", "auc_weighting_delta", "auc_weighting"):
+        assert k in d, f"{k} missing — the weighting change must be visible, not silent"
+    assert abs(d["auc_weighting_delta"] - (d["auc"] - d["auc_sample_weighted"])) < 1e-3
+    assert "rating-equal" in d["auc_weighting"]
+
+
+# --- F10: the outlier rule's influence must be visible on the exploration path -----------------
+def test_exploration_publishes_an_outlier_sensitivity_block():
+    """The rule's median and MAD come from the same sample the exclusion then alters, and neither
+    the Fisher-z interval nor the permutation p accounts for that. The headline stays filtered
+    (an exploration correlation is associational) but the unfiltered counterpart must be reported."""
+    import sys
+    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
+    from modules.Biomarkers import bravo_service as bs
+
+    def find(o, key, path=""):
+        if isinstance(o, dict):
+            if key in o:
+                yield o
+            for k, v in o.items():
+                yield from find(v, key, path + "." + k)
+        elif isinstance(o, list):
+            for v in o[:3]:
+                yield from find(v, key, path)
+
+    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
+                                "source": "timedomain", "LabelMetric": "nrs"})
+    hits = list(find(r, "outlier_sensitivity"))
+    assert hits, "no outlier_sensitivity block published"
+    blk = hits[0]["outlier_sensitivity"]
+    if blk is None:
+        return
+    for k in ("r_filtered", "r_unfiltered", "n_filtered", "n_unfiltered", "n_excluded",
+              "delta_r", "note"):
+        assert k in blk, f"{k} missing from the sensitivity block"
+    assert blk["n_unfiltered"] >= blk["n_filtered"]
+    assert blk["n_excluded"] == blk["n_unfiltered"] - blk["n_filtered"]
+    assert "same sample" in blk["note"]

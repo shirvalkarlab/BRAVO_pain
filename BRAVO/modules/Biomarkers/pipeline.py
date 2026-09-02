@@ -861,6 +861,46 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     valid = adapter.mad_outlier_mask(bandpow) & adapter.mad_outlier_mask(labels)
     n = int(valid.sum())
 
+    # F10: LABELLED SENSITIVITY ANALYSIS FOR THE OUTLIER RULE ON THE EXPLORATION PATH.
+    #
+    # The rule's centre and scale (the median and the MAD) are estimated from the very same sample
+    # whose correlation and interval the exclusion then changes. Nothing downstream accounts for
+    # that: the Fisher-z interval and the permutation p are computed as though the retained sample
+    # had been fixed in advance, when in fact which points were retained was chosen from the data.
+    # There is no clean analytic correction for this, so the honest treatment is to make the
+    # exclusion's influence visible instead of invisible.
+    #
+    # `deployment_roc` already does this on the deployment path, where it computes the headline on
+    # the FULL sample and reports the trimmed value as a labelled sensitivity analysis. The
+    # exploration path had no counterpart: the filter was applied, the filtered r was the headline,
+    # and a reader had no way to see how much of the result rested on the exclusion. This computes
+    # the same correlation on the unfiltered sample and publishes both, plus the difference.
+    #
+    # The headline stays the FILTERED value here, unlike the deployment path, and the asymmetry is
+    # deliberate. An exploration correlation is associational, so trimming a heavy tail is
+    # defensible; a deployment threshold is an operating point the device runs against the full
+    # distribution, so trimming there would report performance on a population the device never
+    # sees. What both paths now share is that neither hides the exclusion.
+    _finite = np.isfinite(bandpow) & np.isfinite(labels)
+    _sens_r = None
+    if int(_finite.sum()) >= 4:
+        _ru = float(np.corrcoef(bandpow[_finite], labels[_finite])[0, 1])
+        _sens_r = {
+            "r_filtered": (None if r is None or not np.isfinite(r) else float(r)),
+            "r_unfiltered": (None if not np.isfinite(_ru) else _ru),
+            "n_filtered": n,
+            "n_unfiltered": int(_finite.sum()),
+            "n_excluded": int(_finite.sum()) - n,
+            "delta_r": (None if (r is None or not np.isfinite(r) or not np.isfinite(_ru))
+                        else float(r - _ru)),
+            "note": ("The outlier rule's median and MAD are estimated on the same sample the "
+                     "exclusion then alters, and neither the Fisher-z interval nor the permutation "
+                     "p accounts for that data-dependent selection. The filtered value is the "
+                     "headline because an exploration correlation is associational; the unfiltered "
+                     "value is given so the exclusion's influence is visible. A large delta_r means "
+                     "the result rests substantially on which points were dropped."),
+        }
+
     # Stim-adjusted partial correlation. Only meaningful when stim amplitude was actually recorded
     # AND varies (you cannot regress out a confound that is missing or constant). Distinguish those
     # cases from a genuine "adjustment shrank it to ~0" so the card never misreads a null.
@@ -992,6 +1032,9 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # displayed r. False means perm_p refers to an unfiltered statistic and is not a
         # selection-corrected p for the reported r.
         "perm_outlier_filtered": perm_meta.get("outlier_filtered"),
+        # F10: the outlier rule's own influence on the headline correlation, so a reader can see
+        # how much of the result rests on which points were excluded.
+        "outlier_sensitivity": _sens_r,
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),

@@ -2301,10 +2301,35 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     y = y_all[m].astype(int)
     g = rating_group[m]
 
-    raw_auc = float(metrics.roc_auc_score(y, x))
+    # F13: THE POINT ESTIMATE AND ITS CONFIDENCE INTERVAL MUST BE ON THE SAME UNIT.
+    #
+    # An unweighted AUC is the probability that a randomly chosen HIGH-pain sample scores above a
+    # randomly chosen LOW-pain sample. Because the AUC is an average over positive-negative PAIRS, a
+    # rating contributing k samples to one class enters k times on that side, and against a rating
+    # contributing k' on the other side it supplies k*k' of the pairs. So a rating's influence on the
+    # estimate grows with the PRODUCT of sample counts, which means a rating that happened to be
+    # matched to many PSD rows can dominate a rating matched to one. The number of rows a rating
+    # attracted is an artefact of recording coverage, not of how informative that rating is.
+    #
+    # This also made the estimate and its interval describe different quantities. The bootstrap below
+    # resamples WHOLE RATING CLUSTERS, so the confidence interval is already an interval for a
+    # rating-level estimand — while the point estimate it brackets was sample-level.
+    #
+    # The clinically meaningful question is whether the band discriminates for a randomly chosen
+    # RATING, since a rating is the unit of pain measurement and of any future deployment decision.
+    # So each sample is weighted by the reciprocal of its rating's sample count, making every rating
+    # contribute equally regardless of coverage, and that becomes the headline. The old sample-level
+    # value is retained beside it as `auc_sample_weighted` so the change is visible and auditable
+    # rather than a silent redefinition.
+    _cl, _inv = np.unique(g, return_inverse=True)
+    _cl_n = np.bincount(_inv).astype(float)
+    w_rating = 1.0 / _cl_n[_inv]                     # each rating carries total weight 1
+    raw_auc = float(metrics.roc_auc_score(y, x, sample_weight=w_rating))
+    raw_auc_sample = float(metrics.roc_auc_score(y, x))
     flip = raw_auc < 0.5                       # orient so higher score = higher pain
     use_score = -x if flip else x
     auc = float(max(raw_auc, 1.0 - raw_auc))
+    auc_sample_weighted = float(max(raw_auc_sample, 1.0 - raw_auc_sample))
     # F5: THIS STATISTIC DOES NOT AVERAGE 0.5 UNDER THE NULL. Orientation is chosen from the same
     # data (`flip`), so the reported value is max(A, 1-A) = 0.5 + |A - 0.5| and its null expectation
     # is 0.5 + E|A - 0.5| > 0.5. For A approximately normal about 0.5 with SD s,
@@ -2574,6 +2599,15 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         "deff_raw": (None if deff_raw is None else round(float(deff_raw), 4)),
         "deff_was_clamped": bool(deff_raw is not None and not (1.0 <= deff_raw <= 5.0)),
         # F5: read the point AUC against THIS, never against 0.5.
+        # F13: both estimands, so the reader can see how much the coverage weighting mattered.
+        # `auc` is rating-equal (each rating contributes once) and is the unit the bootstrap CI is
+        # on; `auc_sample_weighted` is the old per-PSD-row value.
+        "auc_sample_weighted": round(auc_sample_weighted, 4),
+        "auc_weighting": ("rating-equal: each sample weighted 1/(its rating's sample count), so a "
+                          "rating matched to many PSD rows does not outweigh one matched to few. "
+                          "The bootstrap CI resamples whole rating clusters, so this is the "
+                          "estimand the interval brackets."),
+        "auc_weighting_delta": round(auc - auc_sample_weighted, 4),
         "null_reference_auc": (None if _null_ref_auc is None else round(float(_null_ref_auc), 4)),
         "auc_excess_over_null": (None if _auc_excess is None else round(float(_auc_excess), 4)),
         "auc_folding_note": ("The point AUC is max(A, 1-A) with orientation chosen from the same "
