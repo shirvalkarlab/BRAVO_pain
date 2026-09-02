@@ -287,16 +287,31 @@ only lever IS amplitude. `StimOptimizer/routines/lfp_response.py` implements tha
 against the full assembled PSD matrix (6072 rows, 6 channels, 3 sources, 2025-06-18 to 2026-08-28)
 joined to the 120 settings epochs from `StimOptimizer.adapter.exposure_epochs`. Result:
 
-- 255 within-rate contrasts with stimulation ON, ipsilateral amplitude, adaptive-capable bands
-  (8-30 Hz), rates >= 55 Hz. Direction correct (power falling as amplitude rises) in **119 (47%)**;
-  one-sided binomial against a coin flip **p = 0.87**. There is NO consistent suppression.
-- Only 58 (23%) passed both direction and separation.
-- 38 contrasts (15%) had separation d > 2, implausibly large for neural modulation, and only 12 of
-  those 38 had a significant slope once era was blocked -- between-recording variance, not
-  dose-response.
-- By rate, direction correct: 55 Hz 40%, 110 Hz 34%, 125 Hz 41%, 145 Hz 71%, 165 Hz 91%. The two
-  rates with the most data are BELOW chance. 165 Hz is the only coherent signal and rests on a
-  single amplitude ladder in one channel, confounded with era -- not a result.
+**THE UNIT OF ANALYSIS IS THE CHANNEL x RATE CELL, NOT THE BAND.** Within one channel at one rate
+all 17 band-power values move together, so they are ONE observation, not seventeen: cells come out
+either 0/17 or 17/17 on direction and almost never in between (the dir_frac distribution is bimodal
+-- four cells at 0.00, three at 1.00). A first version of this summary ran a binomial over 255
+band-level contrasts and reported "47%, p=0.87"; that was PSEUDOREPLICATED and is superseded. Both
+versions say the gate fails, but only the cell-level figure is on the right unit.
+
+- **3 of 15 channel x rate cells (20%)** show suppression, defined as direction correct across >=80%
+  of bands AND median separation d >= 0.5 so a threshold is placeable. One-sided binomial against a
+  coin flip **p = 0.996**. No general suppression relationship.
+- The three passing cells are ONE_THREE_LEFT@165, ZERO_THREE_RIGHT@110 and ZERO_TWO_LEFT@55 -- three
+  different rates in three different channels, so no single configuration is consistently supported.
+- **165 Hz REPLICATES BILATERALLY and is the one prospective lead.** BOTH 165 Hz cells have correct
+  direction: 17/17 on ONE_THREE_LEFT (Left, median d=1.28, all 17 slopes p<0.05, 2.4->4.8 mA) and
+  14/17 on ZERO_THREE_RIGHT (Right, median d=0.11, 0/17 slopes significant, 1.1->2.0 mA). That is a
+  replication across two channels in OPPOSITE hemispheres, not a single-channel artifact -- an
+  earlier version of this entry said "a single amplitude ladder in one channel", which the saved
+  by-cell CSV contradicts, and the correction matters because a bilateral replication is materially
+  more credible. It is still not sufficient: only the Left cell has a usable magnitude, the Right
+  cell has direction without effect, and both rest on 2 eras so era-confounding is not excluded.
+- Retained for reference: at band level, 38 contrasts (15%) had d > 2, implausibly large for neural
+  modulation, and only 12 of those had a significant era-blocked slope -- between-recording variance.
+
+Per-cell detail is saved as `rcs08_lfp_response_by_cell.csv`; read THAT, not the band-level CSV,
+for any claim about how many independent configurations respond.
 
 **TWO CONFOUNDS HAD TO BE ELIMINATED FIRST, AND THE FIRST PASS WAS DISCARDED BECAUSE OF THEM.**
 
@@ -323,9 +338,15 @@ closed-loop (the 40 Hz setting from v1 was fine open-loop and is gone); contacts
 any point, because changing electrode configuration clears the threshold captures; BrainSense LFP is
 recorded at every step; and the rate/pulse width this session settles on are the ones closed loop
 inherits, since both freeze once BrainSense is configured -- which is why a 165 Hz slot is worth
-spending. Two capture pairs fall out of the design at 55 Hz with contacts fixed: Left 2.0 vs 4.5 mA
-(Right held 3.0) and Right 1.9 vs 3.0 mA (Left held 3.5). Both low arms are therapeutic, not 0 mA.
-18 steps, 6 settings x 3 blocks, ~63 min, balanced (mean step index 8.3-10.7 against midpoint 9.5).
+spending. FOUR contrasts fall out of the design, each at one rate with contacts fixed and one amplitude
+moving: Left @55 Hz (C 2.0 -> B 4.5, Right held 3.0), Right @55 Hz (D 1.9 -> A 3.0, Left held 3.5),
+**Left @165 Hz (F 2.4 -> G 4.5, Right held 3.0)** which tests the bilateral 165 Hz finding
+prospectively, and a rate contrast at matched amplitude (B 4.5@55 vs G 4.5@165). Every low arm is
+therapeutic, not 0 mA. The 165 Hz low arm is 2.4 mA to match where the retrospective signal was
+actually observed. 21 steps, 7 settings x 3 blocks, ~74 min; two full blocks is 14 steps / ~49 min
+and is analysable. Drop E first if a setting must go -- it serves neither a capture pair nor the rate
+contrast. G has never been delivered and F only once, so the 165 Hz ladder is the least precedented
+and most informative part of the session.
 
 Unchanged and worth restating: every predicted between-setting difference is smaller than its own
 posterior SD, so this is a testing list, not a recommendation.
