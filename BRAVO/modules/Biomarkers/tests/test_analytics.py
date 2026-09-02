@@ -2771,3 +2771,96 @@ def test_ci_crosses_chance_present_on_every_return_path():
                ((0.9, 1, 1), {}), ((0.7, 30, 30), {"auc_lo": 0.6})]}
     assert len(shapes) == 1, f"return shape diverges: {len(shapes)} distinct key sets"
     assert "ci_crosses_chance" in shapes.pop()
+
+
+# --- F4: the block bootstrap must have enough blocks to be calibrated (2026-09-02) -------------
+def _ar1(K, rho=0.85, seed=0):
+    rng = np.random.default_rng(seed)
+    x = np.zeros(K)
+    for i in range(1, K):
+        x[i] = rho * x[i - 1] + rng.normal()
+    return x
+
+
+def test_block_length_never_leaves_fewer_than_min_blocks():
+    """The old K//3 cap allowed 4 blocks per replicate at K=48, and simulated coverage of the 95%
+    interval was 0.850 against 0.945 at L=1. A replicate built from a handful of blocks cannot
+    represent the resampling distribution."""
+    from modules.Biomarkers.routines import analytics as an
+    for K in (60, 90, 120, 200, 300):
+        L = an._auto_block_len(_ar1(K))
+        assert L >= 1
+        if L > 1:
+            assert K // L >= an.MIN_BOOT_BLOCKS, (K, L, K // L)
+
+
+def test_small_cluster_counts_fall_back_to_iid():
+    """Below SMALL_K_BLOCK_BOOT the variance mis-calibration costs more than the under-represented
+    serial dependence, so L=1 (the i.i.d. cluster bootstrap) is the calibrated choice. K=48 is the
+    audited case that used to return 12."""
+    from modules.Biomarkers.routines import analytics as an
+    assert an.SMALL_K_BLOCK_BOOT == 60 and an.MIN_BOOT_BLOCKS == 10
+    for K in (20, 30, 48, 54, 59):
+        assert an._auto_block_len(_ar1(K)) == 1, K
+
+
+def test_uncorrelated_ratings_still_give_block_length_one():
+    """Pre-existing behaviour that must survive: no positive autocorrelation reproduces the i.i.d.
+    cluster bootstrap exactly."""
+    from modules.Biomarkers.routines import analytics as an
+    rng = np.random.default_rng(3)
+    assert an._auto_block_len(rng.normal(0, 1, 200)) == 1
+
+
+# --- F5: the folded point AUC has a null expectation above 0.5 ---------------------------------
+def test_folded_auc_null_reference_formula_matches_direct_simulation():
+    """null_reference_auc = 0.5 + s*sqrt(2/pi) is E[max(A,1-A)] for A ~ N(0.5, s). It is computed
+    rather than hardcoded, so check it against a direct simulation of the same quantity."""
+    rng = np.random.default_rng(11)
+    for s in (0.05, 0.088, 0.15):
+        A = rng.normal(0.5, s, 400_000)
+        sim = float(np.mean(np.maximum(A, 1.0 - A)))
+        closed = 0.5 + s * np.sqrt(2.0 / np.pi)
+        assert abs(sim - closed) < 2e-3, (s, sim, closed)
+
+
+def test_folding_reference_is_above_half_and_grows_with_noise():
+    """The whole point: comparing a folded AUC to 0.5 overstates discrimination, and the overstatement
+    is larger the noisier the estimate."""
+    lo = 0.5 + 0.05 * np.sqrt(2.0 / np.pi)
+    hi = 0.5 + 0.15 * np.sqrt(2.0 / np.pi)
+    assert 0.5 < lo < hi
+
+
+# --- F6/F7: the clamp is visible, and a suppressed CI stays suppressed everywhere --------------
+def test_design_effect_clamp_is_reported():
+    """deff stays clamped (a deff < 1 would inflate the effective n and make power optimistic) but
+    deff_raw is published so the clamp is auditable. The raw ratio is below 1 in 57.7% of null
+    simulations on this structure, so this is not a hypothetical."""
+    from modules.Biomarkers.routines import analytics as an
+    src = open(an.__file__).read()
+    assert '"deff_raw"' in src and '"deff_was_clamped"' in src
+    assert "deff_raw = float(var_block / var_iid)" in src
+
+
+def test_iid_ci_is_suppressed_under_the_same_floor_as_the_headline_ci():
+    """These used to be emitted at 20 replicates while the headline CI was withheld at 100, so a
+    consumer could read an uncalibrated interval as the interval."""
+    from modules.Biomarkers.routines import analytics as an
+    src = open(an.__file__).read()
+    i = src.index('"auc_lo_iid"')
+    window = src[i:i + 400]
+    assert "BOOT_CI_VALID_FLOOR" in window, window[:200]
+    assert ">= 20" not in window
+
+
+# --- F12: the tertile cut references unique ratings, in EVERY deployment function --------------
+def test_all_deployment_binarizations_pass_rating_group():
+    """The audit named deployment_roc; the same omission was in deployment_roc_by_era and
+    threshold_drift_by_week. A pseudoreplicated cut point defines the classes partly by how often a
+    rating happened to be sampled."""
+    from modules.Biomarkers.routines import analytics as an
+    src = open(an.__file__).read()
+    assert src.count("pain_cutoff=pain_cutoff, rating_group=rating_group") == 3
+    # and nothing in the deployment family still binarizes without it
+    assert "pain_cutoff=pain_cutoff)\n    m = np.isfinite(bp_log)" not in src

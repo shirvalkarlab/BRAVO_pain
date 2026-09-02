@@ -31,6 +31,16 @@ SMALL_SAMPLE_CLUSTER_FLOOR = 10
 # built on <100 replicates as "unstable"; this makes the suppression threshold match that warning.
 BOOT_CI_VALID_FLOOR = 100
 
+# F4 (2026-09-02): moving-block bootstrap calibration guards. A block bootstrap is only calibrated
+# when a replicate contains enough blocks to represent the resampling distribution; the old K//3 cap
+# allowed as few as 4. Simulated coverage of the 95% AUC interval on this study's real structure was
+# 0.850 at the auto-chosen L=12 (K=48) versus 0.945 at L=1, i.e. the interval was materially too
+# narrow. MIN_BOOT_BLOCKS is the floor on blocks per replicate; below SMALL_K_BLOCK_BOOT clusters we
+# use L=1 outright, because at those counts the variance mis-calibration costs more than the
+# under-represented serial dependence.
+MIN_BOOT_BLOCKS = 10
+SMALL_K_BLOCK_BOOT = 60
+
 
 # --- Channel-name formatting -----------------------------------------------------------------
 _WORD2DIGIT = {"ZERO": "0", "ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4",
@@ -2075,7 +2085,21 @@ def _auto_block_len(cluster_series):
     below = np.where(acf < 0.1)[0]
     decay = int(below[0] + 1) if below.size else maxlag   # first lag with ACF < 0.1 (1-indexed)
     n13 = max(2, int(round(K ** (1.0 / 3.0))))
-    return int(min(max(decay, n13), max(2, K // 3)))
+    L = int(min(max(decay, n13), max(2, K // 3)))
+
+    # F4: A MOVING-BLOCK BOOTSTRAP NEEDS ENOUGH BLOCKS TO BE CALIBRATED, and the K//3 cap does not
+    # deliver that. At K = 48 the old rule returned L = 12, i.e. only 4 blocks per replicate, and
+    # simulated coverage of the resulting 95% interval was 0.850 against 0.945 for L = 1 — the
+    # interval was too narrow because a replicate built from 4 blocks cannot represent the
+    # resampling distribution. Two guards:
+    #   * require at least MIN_BOOT_BLOCKS blocks, so L <= K / MIN_BOOT_BLOCKS;
+    #   * below SMALL_K_BLOCK_BOOT clusters, fall back to L = 1 (the i.i.d. cluster bootstrap),
+    #     which is the calibrated choice at these counts even when some autocorrelation is present.
+    # This trades a little bias (serial dependence under-represented) for a lot of variance
+    # calibration, which is the right trade when the interval is the deliverable.
+    if K < SMALL_K_BLOCK_BOOT:
+        return 1
+    return int(max(1, min(L, K // MIN_BOOT_BLOCKS)))
 
 
 def _block_bootstrap_aucs(use_score, y, cluster_of_row, K, n_boot, block_len, rng):
@@ -2263,8 +2287,13 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
     bp_log, labels, rating_group, _times = feat
+    # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
+    # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
+    # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
+    # defined partly by how often a rating happened to be sampled. The audit named deployment_roc;
+    # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                             pain_cutoff=pain_cutoff)
+                             pain_cutoff=pain_cutoff, rating_group=rating_group)
     m = np.isfinite(bp_log) & np.isfinite(y_all)
     if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched high/low samples for an ROC"}
@@ -2276,6 +2305,16 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     flip = raw_auc < 0.5                       # orient so higher score = higher pain
     use_score = -x if flip else x
     auc = float(max(raw_auc, 1.0 - raw_auc))
+    # F5: THIS STATISTIC DOES NOT AVERAGE 0.5 UNDER THE NULL. Orientation is chosen from the same
+    # data (`flip`), so the reported value is max(A, 1-A) = 0.5 + |A - 0.5| and its null expectation
+    # is 0.5 + E|A - 0.5| > 0.5. For A approximately normal about 0.5 with SD s,
+    # E|A - 0.5| = s*sqrt(2/pi), so the reference the point AUC should be read against is
+    #     null_reference_auc = 0.5 + s*sqrt(2/pi),   s = bootstrap SD of the AUC.
+    # Computed rather than hardcoded, and it reproduces the 0.570 obtained independently by direct
+    # null simulation on this band's real structure. Comparing `auc` to 0.5 overstates
+    # discrimination by exactly this offset. Filled in after the bootstrap below.
+    _null_ref_auc = None
+    _auc_excess = None
     fpr, tpr, thr = metrics.roc_curve(y, use_score)
     # Map decision thresholds back to the ORIGINAL oriented log-power scale (rule: power >= thr).
     thr_device = (-thr if flip else thr).astype(float)
@@ -2365,10 +2404,24 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     # clamped to [1, 5] defensively and set to 1.0 when either resample is degenerate or block_len==1.
     var_iid = float(np.var(boot_iid)) if len(boot_iid) >= 20 else 0.0
     var_block = float(np.var(boot_block)) if len(boot_block) >= 20 else 0.0
+    deff_raw = None
     if block_len > 1 and var_iid > 0 and var_block > 0:
-        deff = float(min(5.0, max(1.0, var_block / var_iid)))
+        deff_raw = float(var_block / var_iid)
+        deff = float(min(5.0, max(1.0, deff_raw)))
     else:
         deff = 1.0
+    # F6: the CLAMP is load-bearing and must be visible. The raw ratio falls below 1 in 57.7% of
+    # null simulations on this structure — block resampling does not always widen the variance at
+    # these cluster counts — so clamping at 1 silently turns a measured deflation into "no
+    # inflation". `deff` stays clamped, because a deff < 1 would inflate the effective n and make
+    # the power readout optimistic; `deff_raw` is published so the clamp is auditable, not tacit.
+
+    # F5 continued: null reference for the FOLDED point AUC, from the bootstrap SD.
+    _boot_sd = (float(np.std(boot_block)) if len(boot_block) >= 20
+                else (float(np.std(boot_iid)) if len(boot_iid) >= 20 else None))
+    if _boot_sd is not None and np.isfinite(_boot_sd) and _boot_sd > 0:
+        _null_ref_auc = float(0.5 + _boot_sd * np.sqrt(2.0 / np.pi))
+        _auc_excess = float(auc - _null_ref_auc)
 
     # ---- default operating point: Youden's J ----
     op = None
@@ -2510,8 +2563,22 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
         # design effect (var_block / var_iid, >=1) used downstream to discount the effective n in the
         # power readout. `auc_lo_iid`/`auc_hi_iid` retain the i.i.d. CI for transparency/regression.
         "block_len": int(block_len), "deff": float(deff),
-        "auc_lo_iid": (float(np.percentile(boot_iid, 2.5)) if len(boot_iid) >= 20 else None),
-        "auc_hi_iid": (float(np.percentile(boot_iid, 97.5)) if len(boot_iid) >= 20 else None),
+        # F7: suppressed under the SAME floor as auc_lo/auc_hi. These were emitted whenever 20
+        # replicates survived, so when the headline CI was withheld as uncalibrated a consumer could
+        # still read an i.i.d. interval built from too few replicates and treat it as the interval.
+        # A suppressed CI has to be suppressed on every channel it is exposed through.
+        "auc_lo_iid": (float(np.percentile(boot_iid, 2.5))
+                       if len(boot_iid) >= BOOT_CI_VALID_FLOOR else None),
+        "auc_hi_iid": (float(np.percentile(boot_iid, 97.5))
+                       if len(boot_iid) >= BOOT_CI_VALID_FLOOR else None),
+        "deff_raw": (None if deff_raw is None else round(float(deff_raw), 4)),
+        "deff_was_clamped": bool(deff_raw is not None and not (1.0 <= deff_raw <= 5.0)),
+        # F5: read the point AUC against THIS, never against 0.5.
+        "null_reference_auc": (None if _null_ref_auc is None else round(float(_null_ref_auc), 4)),
+        "auc_excess_over_null": (None if _auc_excess is None else round(float(_auc_excess), 4)),
+        "auc_folding_note": ("The point AUC is max(A, 1-A) with orientation chosen from the same "
+                             "data, so its null expectation is null_reference_auc (> 0.5), not 0.5. "
+                             "auc_excess_over_null is discrimination above that reference."),
         # Audit [3]: BCa interval. ci_method names the resampling scheme; the interval itself is
         # bias-corrected & accelerated (bca_z0 = bias correction, bca_a = acceleration from the
         # delete-one-cluster jackknife). CI suppressed (auc_lo/hi None) below BOOT_CI_VALID_FLOOR.
@@ -2805,9 +2872,15 @@ def threshold_drift_by_week(td_detail, channel_raw, center_hz, *, band_width_hz=
     feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found", "status": "not_assessed"}
-    bp_log, labels, _rating_group, times = feat
+    # No longer unused: the tertile cut below needs the rating identity (F12).
+    bp_log, labels, rating_group, times = feat
+    # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
+    # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
+    # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
+    # defined partly by how often a rating happened to be sampled. The audit named deployment_roc;
+    # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                             pain_cutoff=pain_cutoff)
+                             pain_cutoff=pain_cutoff, rating_group=rating_group)
     weeks_all = _elapsed_week_cluster(times, len(bp_log))
     m = np.isfinite(bp_log) & np.isfinite(y_all) & (weeks_all >= 0)
     if m.sum() < DRIFT_MIN_SAMPLES_PER_WEEK * 2 or len(np.unique(y_all[m])) < 2:
@@ -2926,8 +2999,13 @@ def deployment_forward_chaining(td_detail, channel_raw, center_hz, *, band_width
     if feat is None:
         return {"available": False, "reason": f"channel {channel_raw} / band not found in detail"}
     bp_log, labels, rating_group, times = feat
+    # F12: the tertile cut must reference the UNIQUE-RATING distribution, not the per-sample
+    # vector. Without rating_group the cut point is itself pseudoreplicated — a rating with many
+    # matched PSD rows drags the percentile toward its own value, so "high pain" and "low pain" get
+    # defined partly by how often a rating happened to be sampled. The audit named deployment_roc;
+    # the same omission was present in deployment_roc_by_era and threshold_drift_by_week.
     y_all = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                             pain_cutoff=pain_cutoff)
+                             pain_cutoff=pain_cutoff, rating_group=rating_group)
     m = np.isfinite(bp_log) & np.isfinite(y_all)
     if m.sum() < 12 or len(np.unique(y_all[m])) < 2:
         return {"available": False, "reason": "too few matched high/low samples for forward-chaining"}
