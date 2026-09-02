@@ -75,6 +75,80 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-02 (later) — energy-matched safety gate, and LfpEvidence from real data
+
+**THE SAFETY GATE IS NOW ENERGY-MATCHED, NOT AMPLITUDE-MATCHED (PI direction).** The tolerated
+amplitude ceilings for RCS08 were established AT 55 Hz. Amplitude is the wrong quantity to hold
+constant across rates, because energy per unit time rises with rate: TEED goes as amplitude squared
+times pulse width times rate, so the same amplitude at 165 Hz delivers 3x the energy.
+
+- `objective.energy_reference_from_record(census, rate_hz=55)` derives each hemisphere's budget as
+  the MAX OF THE PRODUCT over real epochs, never max(amp)**2 * max(pw). That distinction is
+  load-bearing: the left hemisphere reached both 4.5 mA and 180 us at 55 Hz but NEVER TOGETHER, so
+  separate maxima would licence 1.8x the largest energy actually received. Budgets on this record:
+  Left 111375 (4.5 mA / 100 us / 55 Hz), Right 178200 (4.5 mA / 160 us / 55 Hz).
+- `objective.energy_matched_ceiling(rate, pw, budget, amp_ceiling=)` = sqrt(budget / (pw * f)),
+  i.e. sqrt(55/f) with pw unchanged: 0.707 at 110 Hz, 0.577 at 165 Hz. PASS amp_ceiling — the gate
+  is ADDITIONAL, never a replacement. At 10 Hz the energy-matched value computes to 10.55 mA, so an
+  energy-only gate is dangerously permissive at low rates. Impedance cancels ONLY while contacts are
+  fixed; re-derive the budget after any contact change.
+- `schedule.safety_filter` takes `energy_budget=` (None = old two-constraint behaviour, kept so
+  single-rate callers do not change silently) and now reports `teed_pct_L/R` and `energy_cap_L/R`.
+  It RAISES if rate or pulse width is absent rather than checking amplitude alone.
+
+**THE CASE THIS CATCHES THAT INSPECTION DOES NOT:** a hemisphere held at CONSTANT AMPLITUDE across a
+rate change is not held at constant energy. The right side fixed at 3.0 mA goes from 44% to 133% of
+its own budget as the rate moves 55 -> 165 Hz. The side nobody varied is the side that breaches.
+
+**Consequence for the clinic plan: both 165 Hz settings failed** (the high arm at 4.5 mA was 300% of
+budget) and the session was rebuilt. **And the 165 Hz lead itself was delivered 3.4x over this
+budget** — the historical 2.4 -> 4.8 mA contrast puts 4.8 mA at 341%. That reframes rather than
+destroys the evidence: if we cannot deploy above 2.60 mA at 165 Hz, a response measured only above
+it was never deployable evidence. But the in-budget 165 Hz span collapses to 0.8 mA (delivered
+1.6-2.4), giving an estimated separation of 0.43 against the 0.50 floor, so no threshold can be
+placed there. **110 Hz is the only rate above 55 Hz that still clears the floor** (1.0-2.8 mA, span
+1.8, estimated 0.96), so the high-rate ladder moved from 165 to 110 Hz — accepting that 110 Hz was
+one of the WEAKER rates retrospectively (34% direction-correct). Separations are scaled from ONE
+historical measurement, not measured. Right pulse width is now 150 us per PI (111 records at 55 Hz;
+novel at 110/165 Hz but interpolating between delivered 100 and 180).
+
+**`routines/lfp_evidence.py` — the missing join, and the reason Stage 2 ran on fabricated spectra.**
+`stage_gate.LfpEvidence` was constructed ONLY in tests. This builds it from the Biomarkers assembled
+PSD matrix joined to StimOptimizer exposure epochs, keyed on (channel, hemisphere, rate) because
+pooling channels mixes sensing configurations and pooling rates lets a rate effect masquerade as an
+amplitude effect. It lives in StimOptimizer, not Biomarkers, so the epoch reconstruction, wash-in
+convention and era blocking have exactly one definition. Five traps encoded as tests: timestamps are
+epoch SECONDS (read as ns everything lands in 1970 and the join empties with no error, so it now
+RAISES); stored values are LOG POWER DENSITY so the module exponentiates before integrating and
+populates `band_power`, never `magnitude` (summing logs is a product of powers); zero-amplitude rows
+dropped (stim off has no artifact, so 0-vs-4.8 is artifact-vs-none); rates never pooled; era
+populated from the visit index because amplitude is confounded with time. Unusable cells return
+`None` WITH a reason — a gate reporting "no response" for absent data is indistinguishable from one
+reporting a real negative.
+
+23 tests. StimOptimizer suite 312 -> **335 passed / 41 skipped**, no regressions.
+
+STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on live data, and the two closed-loop paths
+remain unconnected — see the module-interaction note below.
+
+### 2026-09-02 — the two closed-loop paths do not interfere, and do not interact
+
+Checked against the code rather than reasoned about. NO interference: separate routes
+(`queryStimOptimizer` vs `queryDeploymentROC`/`RocByEra`/`Summary`); StimOptimizer writes NO shared
+state (every write goes to a caller-supplied outdir; no DB, no cache, nothing in BRAVOStorage); no
+shared mutable "committed candidate" record exists; and stage2 imports nothing from Biomarkers. The
+flip side is they are DISCONNECTED, which is why they can drift. Three overlap risks: (1) the 8-30 Hz
+adaptive window is hardcoded `(8.0, 30.0)` in Biomarkers AND defined as
+`percept_adaptive.ADAPTIVE_LFP_BAND_HZ` in StimOptimizer, with no import between them; (2) the 55 Hz
+closed-loop rate floor is UNKNOWN to the existing deployment path, and the rate is exactly what
+Stage 1 produces; (3) they rank by DIFFERENT objectives — discrimination (AUC, cut-point) versus
+deployability (capture separation) — with no arbitration rule, so two panels can name two bands.
+NOT established: whether the two express band power compatibly (the existing path works on log band
+power, the device wants a linear sum, but there IS an LSB conversion path) — a check worth running,
+not a defect found.
+
+
+
 ### 2026-09-02 (overnight) — two-stage architecture, F8 reconciled, the null is a rotation test
 
 Blow-by-blow in `SESSION_HANDOFF_2026-09-02_two_stage_and_ordinal_safety.md`. Four commits,

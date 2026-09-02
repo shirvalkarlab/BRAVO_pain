@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from . import objective as OBJ
+
 
 @dataclass
 class ScheduleSpec:
@@ -123,25 +125,82 @@ def randomized_block_schedule(candidates, *, seed, n_blocks=3, washin_s=60.0, mi
     return sched, spec
 
 
-def safety_filter(candidates, *, delivered_envelope, amp_ceiling,
-                  left_col="ampL", right_col="ampR"):
-    """Keep only candidates inside BOTH the declared ceiling and what has actually been delivered.
+def safety_filter(candidates, *, delivered_envelope, amp_ceiling, energy_budget=None,
+                  left_col="ampL", right_col="ampR", rate_col="rate",
+                  pw_left_col="pwL", pw_right_col="pwR"):
+    """Keep only candidates inside EVERY safety constraint. Three now bind, not two.
 
     ``delivered_envelope`` is ``{"Left": (lo, hi), "Right": (lo, hi)}`` taken from the patient's own
-    record. This is deliberately the binding constraint rather than the module's safety GP: that GP
-    runs on a two-anchor seed because no structured side-effect severity item has ever been
-    collected, so it is over-conservative and would refuse amplitudes the patient has already
-    tolerated. Returns ``(kept, rejected)`` so a dropped candidate is visible, never silent.
+    record, and ``amp_ceiling`` is the clinician-declared absolute maximum.
+
+    ``energy_budget`` is ``{"Left": teed, "Right": teed}``, normally from
+    :func:`objective.energy_reference_from_record`. WHY IT EXISTS: the tolerated amplitude ceilings
+    were established at one rate (55 Hz here), and the energy the tissue receives per unit time
+    rises with rate, so an amplitude that is safe at 55 Hz can deliver several times that energy at
+    a higher rate. Total electrical energy delivered goes as amplitude squared times pulse width
+    times rate, so at 165 Hz the same amplitude delivers 3x the energy. Passing ``None`` skips the
+    energy gate and restores the old two-constraint behaviour, which is wrong for any candidate set
+    spanning more than one rate — it is the default only so existing single-rate callers do not
+    change behaviour silently.
+
+    A CASE THIS CATCHES AND EYEBALLING DOES NOT: a hemisphere held at a CONSTANT amplitude across a
+    rate change is not held at constant energy. On this record the right side held at 3.0 mA while
+    the rate moved 55 -> 165 Hz goes from 44% to 133% of its own budget, so the side nobody was
+    varying is the side that breaches.
+
+    Returns ``(kept, rejected)``; rejected rows carry ``reject_reason`` so a dropped candidate is
+    always visible rather than silently absent.
+
+    Note on the safety GP: this filter binds on the delivered record rather than on the module's
+    safety surrogate. The surrogate is fitted from coded severity (see ``routines.safety_ordinal``),
+    but on this record 402 of 774 rows were never examined by a coder and default to "none" at
+    systematically lower amplitudes, so its absolute probabilities are provisional and it reports
+    the top of the amplitude range as unevidenced rather than safe. What the patient has actually
+    received is the firmer constraint.
     """
     cand = pd.DataFrame(candidates).copy()
     lo_l, hi_l = delivered_envelope["Left"]
     lo_r, hi_r = delivered_envelope["Right"]
-    ok = (cand[left_col].between(lo_l, hi_l) & cand[right_col].between(lo_r, hi_r)
-          & (cand[left_col] <= amp_ceiling) & (cand[right_col] <= amp_ceiling))
-    cand["reject_reason"] = np.where(
-        ok, "",
-        np.where((cand[left_col] > amp_ceiling) | (cand[right_col] > amp_ceiling),
-                 f"above the {amp_ceiling} mA ceiling",
-                 "outside the amplitude range ever delivered to this patient"))
+    in_env = cand[left_col].between(lo_l, hi_l) & cand[right_col].between(lo_r, hi_r)
+    under_ceil = (cand[left_col] <= amp_ceiling) & (cand[right_col] <= amp_ceiling)
+
+    if energy_budget is None:
+        in_energy = pd.Series(True, index=cand.index)
+        over_l = over_r = pd.Series(False, index=cand.index)
+    else:
+        missing = [c for c in (rate_col, pw_left_col, pw_right_col) if c not in cand.columns]
+        if missing:
+            raise KeyError(
+                f"the energy gate needs {missing} on every candidate. Amplitude alone cannot be "
+                "checked against an energy budget: the same amplitude is a different energy at a "
+                "different rate or pulse width. Supply them, or pass energy_budget=None to skip "
+                "the gate deliberately.")
+        capL = OBJ.energy_matched_ceiling(cand[rate_col], cand[pw_left_col],
+                                          energy_budget["Left"], amp_ceiling=amp_ceiling)
+        capR = OBJ.energy_matched_ceiling(cand[rate_col], cand[pw_right_col],
+                                          energy_budget["Right"], amp_ceiling=amp_ceiling)
+        cand["energy_cap_L_mA"] = np.round(capL, 3)
+        cand["energy_cap_R_mA"] = np.round(capR, 3)
+        cand["teed_pct_L"] = np.round(
+            100 * cand[left_col] ** 2 * cand[pw_left_col] * cand[rate_col]
+            / energy_budget["Left"]).astype(int)
+        cand["teed_pct_R"] = np.round(
+            100 * cand[right_col] ** 2 * cand[pw_right_col] * cand[rate_col]
+            / energy_budget["Right"]).astype(int)
+        over_l = cand[left_col] > capL + 1e-9
+        over_r = cand[right_col] > capR + 1e-9
+        in_energy = ~(over_l | over_r)
+
+    ok = in_env & under_ceil & in_energy
+    reason = np.where(
+        ~under_ceil, f"above the {amp_ceiling} mA declared ceiling",
+        np.where(~in_env, "outside the amplitude range ever delivered to this patient",
+                 np.where(over_l & over_r, "energy budget exceeded on BOTH hemispheres",
+                          np.where(over_l, "LEFT exceeds its energy-matched ceiling at this rate",
+                                   np.where(over_r,
+                                            "RIGHT exceeds its energy-matched ceiling at this rate "
+                                            "(a constant amplitude is not a constant energy)",
+                                            "")))))
+    cand["reject_reason"] = np.where(ok, "", reason)
     return cand[ok].drop(columns=["reject_reason"]).reset_index(drop=True), \
         cand[~ok].reset_index(drop=True)

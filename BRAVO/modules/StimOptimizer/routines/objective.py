@@ -239,6 +239,73 @@ def energy_penalty(freq_hz, amp_ma, pulse_width_us, *, ref=None) -> np.ndarray:
     return raw / energy_reference(ref)
 
 
+def energy_reference_from_record(census, *, rate_hz=55.0, hemispheres=("Left", "Right"),
+                                 hemi_col="hemi", amp_col="amp", pw_col="pw", rate_col="rate"):
+    """Each hemisphere's highest-energy exposure AT ``rate_hz`` that is actually on record.
+
+    This is the anchor for :func:`energy_matched_ceiling`, and it is deliberately derived from the
+    record rather than declared. The tolerated amplitude ceilings for this patient were established
+    at 55 Hz, so 55 Hz is the reference rate.
+
+    IMPORTANT, and the reason this is a function rather than two lookups: the budget is the maximum
+    of the PRODUCT over real epochs, never ``max(amp) ** 2 * max(pw) * rate``. Taking separate
+    maxima would invent an exposure that never happened — on this record the left hemisphere reached
+    4.5 mA and 180 us at 55 Hz but not simultaneously, so the separate-maxima budget would be 1.8x
+    the largest energy the patient has actually received.
+
+    Returns ``{hemi: {"amp_mA", "pw_us", "rate_hz", "teed"}}``, omitting a hemisphere with no
+    records at ``rate_hz`` rather than substituting another rate.
+    """
+    df = pd.DataFrame(census)
+    for c in (hemi_col, amp_col, pw_col, rate_col):
+        if c not in df.columns:
+            raise KeyError(f"census missing column {c!r}; has {sorted(df.columns)}")
+    num = {c: pd.to_numeric(df[c], errors="coerce") for c in (amp_col, pw_col, rate_col)}
+    at = df.assign(**num)
+    at = at[(at[amp_col] > 0) & np.isclose(at[rate_col], float(rate_hz))].dropna(
+        subset=[amp_col, pw_col, rate_col])
+    out = {}
+    for h in hemispheres:
+        s = at[at[hemi_col] == h]
+        if s.empty:
+            continue
+        teed = s[amp_col] ** 2 * s[pw_col] * s[rate_col]
+        row = s.loc[teed.idxmax()]
+        out[h] = {"amp_mA": float(row[amp_col]), "pw_us": float(row[pw_col]),
+                  "rate_hz": float(rate_hz), "teed": float(teed.max())}
+    return out
+
+
+def energy_matched_ceiling(rate_hz, pulse_width_us, budget_teed, *, amp_ceiling=None):
+    """Amplitude that delivers ``budget_teed`` at ``rate_hz`` and ``pulse_width_us``.
+
+    Holding AMPLITUDE constant across rates is the wrong safety rule, because the energy the tissue
+    receives per unit time rises with rate. Holding total electrical energy constant instead gives
+
+        cap(f, pw) = sqrt( budget / (pw * f) )
+
+    which for unchanged pulse width is the 55 Hz amplitude scaled by ``sqrt(55 / f)`` — 0.707 at
+    110 Hz, 0.577 at 165 Hz. Impedance cancels because it appears in both the budget and the
+    candidate, which holds only while CONTACTS ARE FIXED; a contact change alters impedance and
+    invalidates the budget, so re-derive it rather than carrying it across a reconfiguration.
+
+    ``amp_ceiling`` clamps the result. Pass it: this gate is an ADDITIONAL constraint, not a
+    replacement for the declared ceiling. At low rates the energy-matched value exceeds anything
+    programmable (at 10 Hz it computes to 10.55 mA on this record), so without the clamp an
+    energy-only gate would licence amplitudes far outside the tolerated range.
+    """
+    f = np.asarray(rate_hz, float)
+    pw = np.asarray(pulse_width_us, float)
+    if np.any(f <= 0) or np.any(pw <= 0):
+        raise ValueError("rate_hz and pulse_width_us must be positive")
+    if float(budget_teed) <= 0:
+        raise ValueError("budget_teed must be positive")
+    cap = np.sqrt(float(budget_teed) / (pw * f))
+    if amp_ceiling is not None:
+        cap = np.minimum(cap, float(amp_ceiling))
+    return cap
+
+
 def composite_z(pro: pd.DataFrame, items: dict | None = None, *, metric=None) -> pd.Series:
     """Per-report pain score for a chosen metric (section 2.2).
 
