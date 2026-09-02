@@ -245,3 +245,47 @@ def test_hemisphere_must_be_named_explicitly():
     with pytest.raises(ValueError, match="hemisphere"):
         EV.build_evidence(_psd(), _epochs(), channel="ZERO_TWO_LEFT", hemisphere="both",
                           rate_hz=165.0)
+
+
+# --- joint prior exposure: the failure that produced a wrong clinic document -------------------
+def _prior():
+    """1.4 mA seen only at 60 us; 100 us seen only at 3.5 mA. Neither pairing is 1.4 @ 100."""
+    return pd.DataFrame([
+        dict(hemi="Left",  amp=1.4, pw=60.0,  rate=55.0),
+        dict(hemi="Left",  amp=3.5, pw=100.0, rate=55.0),
+        dict(hemi="Right", amp=3.0, pw=150.0, rate=55.0),
+    ])
+
+
+def test_marginal_familiarity_does_not_imply_the_pair_was_ever_delivered():
+    """The exact bug: a plan built from individually-familiar numbers, novel as a combination.
+
+    1.4 mA appears at 55 Hz. 100 us appears at 55 Hz. The PAIR 1.4 mA @ 100 us never happened,
+    and an amplitude-only check cannot see that.
+    """
+    c = pd.DataFrame([dict(id="novel_pair", rate=55.0, ampL=1.4, ampR=3.0,
+                           pwL=100.0, pwR=150.0)])
+    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
+                                    energy_budget=BUDGET, prior_triples=_prior())
+    assert kept.empty, "a novel combination must not pass"
+    assert "NEVER been delivered" in rej.iloc[0]["reject_reason"]
+    assert rej.iloc[0]["prior_joint_L"] == 0
+    # and it would have PASSED without the joint check, which is why the check exists
+    kept2, _ = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
+                                   energy_budget=BUDGET, prior_triples=None)
+    assert len(kept2) == 1
+
+
+def test_a_genuinely_delivered_triple_passes_and_reports_its_record_count():
+    c = pd.DataFrame([dict(id="real", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
+    kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
+                                    energy_budget=BUDGET, prior_triples=_prior())
+    assert len(kept) == 1 and rej.empty
+    assert kept.iloc[0]["prior_joint_L"] == 1 and kept.iloc[0]["prior_joint_R"] == 1
+
+
+def test_joint_check_is_opt_in_and_validates_its_own_input():
+    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
+    with pytest.raises(KeyError, match="prior_triples missing"):
+        SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
+                            prior_triples=_prior().rename(columns={"pw": "pulse_width"}))

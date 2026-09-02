@@ -126,6 +126,9 @@ def randomized_block_schedule(candidates, *, seed, n_blocks=3, washin_s=60.0, mi
 
 
 def safety_filter(candidates, *, delivered_envelope, amp_ceiling, energy_budget=None,
+                  prior_triples=None, amp_tol=0.06, pw_tol=1.0,
+                  triple_hemi_col="hemi", triple_amp_col="amp", triple_pw_col="pw",
+                  triple_rate_col="rate",
                   left_col="ampL", right_col="ampR", rate_col="rate",
                   pw_left_col="pwL", pw_right_col="pwR"):
     """Keep only candidates inside EVERY safety constraint. Three now bind, not two.
@@ -191,7 +194,39 @@ def safety_filter(candidates, *, delivered_envelope, amp_ceiling, energy_budget=
         over_r = cand[right_col] > capR + 1e-9
         in_energy = ~(over_l | over_r)
 
-    ok = in_env & under_ceil & in_energy
+    if prior_triples is None:
+        novel_l = novel_r = pd.Series(False, index=cand.index)
+    else:
+        # JOINT prior exposure, not marginal. An amplitude seen at this rate and a pulse width seen
+        # at this rate do NOT imply the PAIR was ever delivered: a plan can be assembled entirely
+        # from individually-familiar numbers and still program a combination the patient has never
+        # received. That happened in this project — a clinic plan claimed every setting had been
+        # delivered before while 7 of 14 hemisphere-settings were novel as triples, because the
+        # check was on amplitude alone and pulse width was assigned from an unrelated epoch.
+        pt = pd.DataFrame(prior_triples)
+        for c in (triple_hemi_col, triple_amp_col, triple_pw_col, triple_rate_col):
+            if c not in pt.columns:
+                raise KeyError(f"prior_triples missing {c!r}; has {sorted(pt.columns)}")
+        pt = pt.assign(**{c: pd.to_numeric(pt[c], errors="coerce")
+                          for c in (triple_amp_col, triple_pw_col, triple_rate_col)})
+
+        def _n_prior(hemi, rate, amp, pw):
+            s = pt[(pt[triple_hemi_col] == hemi)
+                   & np.isclose(pt[triple_rate_col], float(rate))
+                   & (np.abs(pt[triple_amp_col] - float(amp)) <= amp_tol)
+                   & (np.abs(pt[triple_pw_col] - float(pw)) <= pw_tol)]
+            return int(len(s))
+
+        nl = [_n_prior("Left", r[rate_col], r[left_col], r[pw_left_col])
+              for _, r in cand.iterrows()]
+        nr = [_n_prior("Right", r[rate_col], r[right_col], r[pw_right_col])
+              for _, r in cand.iterrows()]
+        cand["prior_joint_L"] = nl
+        cand["prior_joint_R"] = nr
+        novel_l = pd.Series(nl, index=cand.index) == 0
+        novel_r = pd.Series(nr, index=cand.index) == 0
+
+    ok = in_env & under_ceil & in_energy & ~(novel_l | novel_r)
     reason = np.where(
         ~under_ceil, f"above the {amp_ceiling} mA declared ceiling",
         np.where(~in_env, "outside the amplitude range ever delivered to this patient",
@@ -200,7 +235,13 @@ def safety_filter(candidates, *, delivered_envelope, amp_ceiling, energy_budget=
                                    np.where(over_r,
                                             "RIGHT exceeds its energy-matched ceiling at this rate "
                                             "(a constant amplitude is not a constant energy)",
-                                            "")))))
+                                            np.where(
+                                                novel_l | novel_r,
+                                                "this exact (rate, amplitude, pulse width) "
+                                                "combination has NEVER been delivered to this "
+                                                "patient, even though the amplitude and the pulse "
+                                                "width each appear individually",
+                                                ""))))))
     cand["reject_reason"] = np.where(ok, "", reason)
     return cand[ok].drop(columns=["reject_reason"]).reset_index(drop=True), \
         cand[~ok].reset_index(drop=True)

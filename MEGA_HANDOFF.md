@@ -112,6 +112,30 @@ one of the WEAKER rates retrospectively (34% direction-correct). Separations are
 historical measurement, not measured. Right pulse width is now 150 us per PI (111 records at 55 Hz;
 novel at 110/165 Hz but interpolating between delivered 100 and 180).
 
+**JOINT PRIOR EXPOSURE, not marginal — a wrong claim in a safety document, and the gate that now
+prevents it.** A clinic plan asserted that every setting used an amplitude, pulse width and rate
+combination the patient had received before, "checked by assertion in the generating code". The
+assertion checked hemisphere, rate and AMPLITUDE only; pulse width was assigned per hemisphere per
+rate from one reference epoch and applied to every setting regardless of the amplitude it had
+historically been paired with. Re-querying the exact triple showed **7 of 14 hemisphere-settings
+were novel as combinations** — e.g. 1.4 mA at 100 us on the left, where only 60 us had ever been
+paired with that amplitude, and 2.8 mA at 100 us at 110 Hz where only 140 us had. The individual
+amplitude and the individual pulse width each appeared in the record; the pairing did not.
+
+The lesson generalises: **a plan can be assembled entirely from individually-familiar numbers and
+still program a combination the patient has never received.** `schedule.safety_filter` now takes
+`prior_triples=` (the settings census) and checks joint (hemi, rate, amp within `amp_tol`, pw within
+`pw_tol`) occurrence, reporting `prior_joint_L/R` and refusing a novel triple with that reason. A
+test asserts the same candidate PASSES without the joint check and FAILS with it, which is the whole
+point of having it.
+
+Two facts that fell out and matter clinically. **PW 150 us on the right cannot support a capture
+ladder**: at 55 Hz the only in-budget amplitude ever delivered at 150 us is 3.0 mA, so there is no
+second point to contrast, and the right ladder has to use 180 us (1.9 and 3.0 mA both delivered).
+And the rebuilt plan needs pulse width to VARY between settings (60/100/180 us) — held constant
+within each ladder, which is what the contrast requires, but the anchor differs from the left ladder
+because it must remain the true incumbent.
+
 **`routines/lfp_evidence.py` — the missing join, and the reason Stage 2 ran on fabricated spectra.**
 `stage_gate.LfpEvidence` was constructed ONLY in tests. This builds it from the Biomarkers assembled
 PSD matrix joined to StimOptimizer exposure epochs, keyed on (channel, hemisphere, rate) because
