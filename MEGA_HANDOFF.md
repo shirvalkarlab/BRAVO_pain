@@ -287,12 +287,26 @@ only lever IS amplitude. `StimOptimizer/routines/lfp_response.py` implements tha
 against the full assembled PSD matrix (6072 rows, 6 channels, 3 sources, 2025-06-18 to 2026-08-28)
 joined to the 120 settings epochs from `StimOptimizer.adapter.exposure_epochs`. Result:
 
-**THE UNIT OF ANALYSIS IS THE CHANNEL x RATE CELL, NOT THE BAND.** Within one channel at one rate
-all 17 band-power values move together, so they are ONE observation, not seventeen: cells come out
-either 0/17 or 17/17 on direction and almost never in between (the dir_frac distribution is bimodal
--- four cells at 0.00, three at 1.00). A first version of this summary ran a binomial over 255
-band-level contrasts and reported "47%, p=0.87"; that was PSEUDOREPLICATED and is superseded. Both
-versions say the gate fails, but only the cell-level figure is on the right unit.
+**THE UNIT OF ANALYSIS IS THE CHANNEL x RATE CELL, NOT THE BAND -- FOR STRUCTURAL REASONS.** The 17
+bands scanned inside 8-30 Hz are 5 Hz wide on a 0.9905 Hz grid, so each band is 5 BINS and adjacent
+centres are ONE bin apart: neighbouring bands share 4 of their 5 bins, and all 17 bands together
+draw on only 21 DISTINCT frequency bins. Seventeen "tests" built from twenty-one numbers are not
+seventeen independent tests. Measured: mean pairwise r of log band power within a cell = 0.789
+(median 0.865), mean ADJACENT-band r = 0.955, and by the eigenvalue heuristic the 17 bands carry
+~6.3 independent dimensions (range 1.5-12.5 across cells). A first version of this summary ran a
+binomial over 255 band-level contrasts and reported "47%, p=0.87"; that was PSEUDOREPLICATED by
+roughly 2.7x and is superseded.
+
+**WITHDRAWN CLAIM.** That same first version justified the correction by asserting the per-cell
+direction fractions were bimodal -- "either 0/17 or 17/17, almost never in between", citing four
+cells at 0.00 and three at 1.00. THAT IS FALSE. The 15 observed fractions are 0.00, 0.00, 0.00,
+0.00, 0.06, 0.41, 0.41, 0.47, 0.53, 0.59, 0.71, 0.82, 1.00, 1.00, 1.00 -- seven at a pole and SEVEN
+in the 0.41-0.82 middle. The distribution is spread, and it is not evidence for anything; the bin
+overlap and the correlation figures above are. Do not reintroduce the bimodality argument.
+
+Counting per cell is independently the decision-relevant choice, because a deployment IS one channel
+at one rate with one band. Treating a cell as one observation is CONSERVATIVE given 6.3 effective
+dimensions, which is the right direction to err here.
 
 - **3 of 15 channel x rate cells (20%)** show suppression, defined as direction correct across >=80%
   of bands AND median separation d >= 0.5 so a threshold is placeable. One-sided binomial against a
