@@ -838,7 +838,7 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
 
 
 def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000,
-                    rating_group=None):
+                    rating_group=None, perm_mad_k=None):
     """Honest inference for the selected time-domain band.
 
     HEADLINE significance = the temporal-block PERMUTATION p (perm_p) for the family max|R|: it is
@@ -921,14 +921,56 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         feat_capped = feat[:, :, keep_f]
         X = feat_capped.reshape(feat_capped.shape[0], -1)[perm_valid]
         yv = labels[perm_valid]
-        # Pass the rating grouping so the null permutes RATINGS, not epochs (audit F3). The
-        # observed statistic is recomputed inside on the same grouped rows as the null.
+
+        # Rating grouping, resolved BEFORE the outlier filter because the filter subsets it.
         # Explicit argument, NOT result["rating_group"] — that key is not populated until later in
-        # run_timedomain_branch, so reading it here silently selected the epoch-level fallback.
+        # run_timedomain_branch, so reading it here silently selected the epoch-level fallback (F3).
         _rg = rating_group if rating_group is not None else result.get("rating_group")
+        _rg_perm = (np.asarray(_rg)[perm_valid] if _rg is not None else None)
+
+        # F8: APPLY THE SAME OUTLIER FILTER THE DISPLAYED r USES. Without this, perm_obs was the
+        # family max over UNFILTERED cells while the reported r, the FDR and therefore the SELECTION
+        # itself were computed on filtered ones — so perm_p was a selection-corrected p for a
+        # statistic nobody reported. The null was internally consistent with its own observed value,
+        # which is why this did not show up as an obvious error; it was answering a different
+        # question from the one the plate asks.
+        #
+        # We call streaming_psd._mad_keep rather than re-deriving the rule, so the filter cannot
+        # drift from the correlation path's. It is keep-polarity (True == keep) at raw scale with
+        # the canonical threshold, exactly as pearson_corr_psd_label applies it: once to the label,
+        # and once per (channel, frequency) column.
+        _ykeep = streaming_psd._mad_keep(yv, k=perm_mad_k)
+        if _ykeep.sum() >= 4:
+            # Label outliers are dropped as ROWS, before permutation. They are excluded from the
+            # reported analysis anyway, and removing them up front keeps the row set FIXED across
+            # permutations — necessary because the vectorised null permutes only y and relies on the
+            # per-column NaN masks being invariant.
+            X = X[_ykeep]
+            yv = yv[_ykeep]
+            _rg_perm = (_rg_perm[_ykeep] if _rg_perm is not None else None)
+            # Feature outliers are blanked to NaN per column rather than dropped, because a cell's
+            # outliers are its own: dropping rows globally would discard a row that is extreme in
+            # one channel/frequency but perfectly usable in every other. _maxabs_corr already does
+            # pairwise NaN deletion per column, which is how the displayed r treats them too.
+            for _j in range(X.shape[1]):
+                _col = X[:, _j]
+                _ck = streaming_psd._mad_keep(_col, k=perm_mad_k)
+                if not _ck.all():
+                    X[~_ck, _j] = np.nan
+            _perm_filtered = True
+        else:
+            _log.warning("Biomarkers: MAD filter would leave %d of %d rows for the permutation "
+                         "null; running it UNFILTERED, which makes perm_obs inconsistent with the "
+                         "displayed r.", int(_ykeep.sum()), int(_ykeep.size))
+            _perm_filtered = False
+        # _rg_perm is resolved ABOVE, before the outlier filter, and subsetted by it. It must NOT be
+        # re-derived from `perm_valid` here: that would restore the unfiltered rows and hand the
+        # null a grouping vector longer than its labels (observed 232 rows vs grouping 244).
+        # The null permutes RATINGS, not epochs (F3), on the same filtered rows as the observed
+        # statistic (F8).
         perm_p, perm_used, perm_obs, perm_null, perm_meta = _block_perm_maxcorr_pvalue(
-            X, yv, n_perm=n_perm, seed=0, return_null=True,
-            rating_group=(np.asarray(_rg)[perm_valid] if _rg is not None else None))
+            X, yv, n_perm=n_perm, seed=0, return_null=True, rating_group=_rg_perm)
+        perm_meta["outlier_filtered"] = bool(_perm_filtered)
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
         "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner
@@ -946,6 +988,10 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         # F3 provenance: WHICH unit was permuted. "rating" is the valid null; "epoch" is
         # anti-conservative and only appears as a logged fallback.
         "perm_unit": perm_meta.get("unit"),
+        # F8: whether the null and its observed value used the SAME outlier filter as the
+        # displayed r. False means perm_p refers to an unfiltered statistic and is not a
+        # selection-corrected p for the reported r.
+        "perm_outlier_filtered": perm_meta.get("outlier_filtered"),
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
