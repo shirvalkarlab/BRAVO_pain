@@ -16,7 +16,12 @@ refresh is::
 
     from StimOptimizer.routines import plots
     plots.render_all("rcs08_bo_design_matrix.csv", outdir="figs",
-                     data_horizon="settings to 2026-08-31, PROs to 2026-08-28",
+                     # Pass the TRUE horizon of the matrix you are handing in. This example is
+                     # illustrative only — do not copy the date. The module default is the string
+                     # "UNDECLARED", deliberately conspicuous, so a stale horizon can never be
+                     # silently stamped onto a figure; an earlier version of this example carried a
+                     # date two months past the data it was documented against.
+                     data_horizon="<the true horizon of your design matrix>",
                      washin_min=5.0)
 
 ``data_horizon`` and ``washin_min`` are stamped onto every figure. They are not cosmetic: the
@@ -381,8 +386,15 @@ def _trajectory(fit, batches, grid, sgp, *, beta, amp_col="amp_mA_Left"):
     t["safety_mu"] = smu
     t["safety_ub"] = smu + float(beta) * ssd
     obs = t["phase"].eq("observed")
-    t["best_so_far"] = np.where(obs, t["J"].where(obs).cummin(), np.nan)
-    t["best_so_far"] = t["J"].cummin()
+    # BEST-SO-FAR IS OBSERVED-ONLY. The second assignment here used to be `t["J"].cummin()`, which
+    # overwrote this line and let the running minimum absorb the SIMULATED rows — whose J is the
+    # kriging-believer posterior MEAN, not a measurement (the same function sets J=m.mu for those,
+    # and fig3's own legend calls them "predicted J (simulated, kriging-believer)"). The curve
+    # plotted as "best J so far" could therefore step down on a prediction, which is exactly the
+    # claim the panel exists to refute. Candidate posterior means run as low as -0.071 against an
+    # incumbent of -0.0996, so this was reachable, not theoretical. The overwritten first
+    # assignment was the intent; it is now the only one.
+    t["best_so_far"] = t["J"].where(obs).cummin().ffill()
     return t
 
 
