@@ -465,6 +465,23 @@ def _build_freq_epochs(ch_list):
 # ~30–50 Hz); the at-home chronic biomarker is a 5 Hz band picked from those. Bands at/above this
 # cut are excluded from selection so a high-frequency artifact can never win the max|R| search.
 MAX_BIOMARKER_FREQ_HZ = 50.0
+
+# The FDR threshold the biomarker SELECTION actually screens at. This is a shared constant rather
+# than a default repeated in two signatures because the permutation null has to replay the very
+# same screen: `select_biomarker_band` was screening at q < 0.05 while `_selection_statistic` was
+# being called with q_threshold=0.10, so the "selection-corrected" null was replaying a screen that
+# admitted a different set of survivors than the screen that chose the reported band. A family
+# whose membership rule differs from the selection's membership rule is a different family, which
+# is exactly the defect F8 part 2 is about.
+BIOMARKER_FDR_Q = 0.05
+
+# Minimum number of valid (feature, label) pairs a cell needs to be a member of the family.
+# `streaming_psd.pearson_corr_psd_label` skips a cell when fewer than 3 pairs survive its outlier
+# filter, so 3 is the selection grid's own membership floor. The permutation family previously used
+# a floor of 4, which silently excluded any 3-pair cell that the selection could nevertheless have
+# chosen — a second way for the selected cell to fall outside the permuted family.
+SELECTION_MIN_PAIRS = 3
+
 # Back-compat alias (old name referenced the streaming version).
 CODE_VERSION = STREAMING_CODE_VERSION
 
@@ -524,14 +541,16 @@ def _autocorr_adjusted_pgrid(result):
     return pgrid
 
 
-def select_biomarker_band(result, q_threshold=0.05, ignore_band=None):
+def select_biomarker_band(result, q_threshold=BIOMARKER_FDR_Q, ignore_band=None):
     """Pick the (channel, frequency) with the strongest |corr| vs pain that survives FDR.
 
     Returns (chan_index, freq_index, r, p, freq_hz, fdr_q, fdr_significant) or None.
     NOTE: the returned `r`/`p`/`fdr_q` are CONDITIONAL on this band being the max|R| winner over the
     whole (channel x freq) grid — i.e. selection-biased (winner's curse). The only selection-corrected
     significance statement is the block-permutation perm_p computed in _band_inference. Callers should
-    present r/p/fdr_q as descriptive and lead with perm_p.
+    present r/p/fdr_q as descriptive and lead with perm_p — but only after checking
+    `perm_family_matches_selection`, because perm_p is a selection-corrected p for THIS band only
+    when the permuted family is the family this function searched (see the F8 part 2 block there).
 
     Rigor fix: the per-test p over ~101 freqs x channels is BOTH multiple-comparison inflated AND
     anti-conservative under serial correlation. We therefore (1) recompute each cell's p on the
@@ -710,6 +729,10 @@ def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
     across permutation blocks. Both destroy the replication structure the real data has, which makes
     the null too variable in the wrong direction and the resulting p too small. Measured on RCS08 at
     the selected cell, the epoch-level null gave p = 0.0729 where the rating-level null gives 0.233.
+    Those two figures were measured BEFORE the permutation family was reconciled with the selection
+    grid (F8 part 2), so they describe a family that is no longer the one this function feeds. The
+    epoch-level comparison has NOT been re-measured on the reconciled family; the argument for
+    permuting ratings rather than epochs does not depend on the size of that particular gap.
 
     Construction: take one value per rating in time order, circular-block permute THAT vector (block
     length from the rating-level autocorrelation, so serial dependence between successive reports is
@@ -791,12 +814,22 @@ def _selection_statistic(r_abs, n_eff, q_threshold):
     grid to an autocorrelation-adjusted p-grid, Benjamini-Hochberg corrects it, restricts to cells
     whose q falls below the threshold, and takes the largest |r| WITHIN THAT SURVIVING POOL —
     falling back to the whole family only when nothing survives. Family maximum and selected value
-    therefore differ whenever the surviving pool excludes the global argmax, which is precisely the
-    observed situation: the family max was 0.5692 while the selected cell's |r| was 0.5303.
+    therefore differ whenever the surviving pool excludes the global argmax.
 
     A p-value is selection-corrected only if its null is the null of the statistic the selection
     maximises. This function reproduces the rule so the permutation distribution is of the right
     quantity rather than of a neighbouring one.
+
+    ``q_threshold`` must be the threshold ``select_biomarker_band`` actually screened at, which is
+    why both take their default from ``BIOMARKER_FDR_Q``. Replaying the screen at a different
+    threshold admits a different set of survivors and so replays a different selection rule.
+
+    EVIDENCE THAT THE REPLAY IS FAITHFUL. Once the permutation family is built from the selection
+    grid (see the F8 part 2 block in ``_band_inference``), this function applied to the observed
+    family must return exactly the |r| that ``select_biomarker_band`` chose. Measured on RCS08 with
+    the live pipeline it does, to about 4e-13 for both outcome metrics: 0.5302802685841238 against
+    a selected r of -0.5302802685837144 for ``nrs``, and 0.6342879386047172 against -0.6342879386043144
+    for ``left_leg_vas``. That agreement is the check; before the family was reconciled it did not hold.
     """
     from scipy import stats as _st
     r_abs = np.asarray(r_abs, float)
@@ -814,8 +847,9 @@ def _selection_statistic(r_abs, n_eff, q_threshold):
     return float(np.max(r_abs[pool]))
 
 
-def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, return_null=False,
-                               rating_group=None, obs_p=None, q_threshold=0.10):
+def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=SELECTION_MIN_PAIRS,
+                               return_null=False, rating_group=None, obs_p=None,
+                               q_threshold=BIOMARKER_FDR_Q):
     """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
     pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
     x n_perm) with a handful of matrix ops.
@@ -849,7 +883,15 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
             rows = info["rows"]
             X, y = X[rows], y[rows]
             perm_info = {"unit": "rating", "n_ratings": info["n_ratings"], "block": info["block"],
-                         "n_epochs_used": info["n_epochs_used"]}
+                         "n_epochs_used": info["n_epochs_used"],
+                         # How many rows the rating-id requirement removed. This is the one row-set
+                         # difference the reconciliation in _band_inference cannot remove, because
+                         # a row with no pain-report identity has no exchangeable unit and so
+                         # cannot take part in a rating-level null at all. When it is 0 the
+                         # permutation family and the selection grid are the SAME rows; when it is
+                         # positive the permutation family is a strict subset and the family guard
+                         # below is what tells a reader so.
+                         "n_rows_dropped_unrated": int((~rows).sum())}
 
     N, K = X.shape
     obs = _maxabs_corr(X, y, min_n=min_n)
@@ -891,6 +933,12 @@ def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=4, r
         _vy_o = ((_Yo * _Yo) @ M) - (_Yo @ M) ** 2 / nj[None, :]
         _rr_o = _cov_o / np.sqrt(vx[None, :] * _vy_o)
     rr_obs = np.where((nj >= min_n)[None, :] & np.isfinite(_rr_o), np.abs(_rr_o), np.nan).ravel()
+    # Publish the observed per-cell |r| vector so the caller can CHECK, cell for cell, that this
+    # family really is the selection grid rather than take it on trust. Reconciliation is only
+    # demonstrated by a measured agreement between this vector and the selection grid's own
+    # correlations; a comment asserting the two match is what F8 part 2 found to be wrong before.
+    perm_info["obs_abs_r_flat"] = rr_obs
+    perm_info["min_pairs"] = int(min_n)
 
     stat = rr.max(axis=1)                             # (P,) family max|R| per permutation
     finite = np.isfinite(stat) & (stat > -np.inf)
@@ -1056,20 +1104,90 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
     # ordered) label autocorrelation, so the null preserves serial dependence.
     perm_valid = np.isfinite(labels)
     perm_p, perm_used, perm_obs, perm_null, perm_meta = (np.nan, 0, np.nan, None, {})
+    _recon = {}
     if perm_valid.sum() >= 4:
         # Restrict the family to the SAME ≤ MAX_BIOMARKER_FREQ_HZ band the selector searches, so the
         # family-max null (perm_obs) is over exactly the cells a biomarker could be drawn from.
         f_set_all = np.asarray(result["f_set"], dtype=float)
         keep_f = f_set_all < MAX_BIOMARKER_FREQ_HZ
-        feat_capped = feat[:, :, keep_f]
-        X = feat_capped.reshape(feat_capped.shape[0], -1)[perm_valid]
-        yv = labels[perm_valid]
 
-        # Rating grouping, resolved BEFORE the outlier filter because the filter subsets it.
-        # Explicit argument, NOT result["rating_group"] — that key is not populated until later in
-        # run_timedomain_branch, so reading it here silently selected the epoch-level fallback (F3).
+        # ------------------------------------------------------------------------------------
+        # F8 PART 2: BUILD THE PERMUTATION FAMILY OUT OF THE SELECTION GRID, NOT BESIDE IT.
+        #
+        # THE DEFECT. The previous version of this block subset the epochs to the label-valid rows
+        # FIRST and only then estimated the MAD outlier rule, once on the label and once per
+        # (channel, frequency) column. `pearson_corr_psd_label`, which produced the correlation
+        # grid the band is actually selected from, does the opposite: it estimates the same rule on
+        # the FULL epoch stack — every epoch, including those whose pain label is missing — and
+        # then applies label keep and column keep together as a per-cell mask. A robust centre and
+        # scale estimated from 294 rows is not the centre and scale estimated from 372 rows, so the
+        # two paths flagged different rows as outliers and therefore correlated different samples.
+        # The consequence is arithmetic, not statistical: measured on RCS08 for the left-leg
+        # outcome, the selected cell's |r| was 0.6343 on the selection grid while the permutation
+        # family's own observed maximum was 0.5743, and a value drawn from a family cannot exceed
+        # that family's maximum. While that held, no permutation p over the permuted family was a
+        # selection-corrected p for the reported cell, whichever statistic the null used.
+        #
+        # THE FIX, AND WHY THIS OPTION. Two repairs were available. One recomputes the permutation
+        # correlations on exactly the rows the selection grid used, leaving the reported band and
+        # its correlation untouched and changing only the null. The other recomputes the selection
+        # on the permutation's row set, which would change which band is reported to the clinician.
+        # This code takes the first. It is the cheaper of the two here because the divergence was
+        # never a disagreement about which rows are outliers in principle — both paths run the
+        # identical rule from `stats_utils.mad_keep_mask` — only about which sample the rule's
+        # centre and scale are estimated from, and the selection grid's choice (the full epoch
+        # stack) is the one the reported correlation, the FDR family and the displayed spectrum all
+        # already use. Recomputing the selection on the permutation's rows would have changed a
+        # published band and correlation in order to fix a defect in a p-value, which is the wrong
+        # direction of repair when the p-value is the thing that was computed on the wrong sample.
+        #
+        # HOW. Estimate both masks on the full epoch stack exactly as `pearson_corr_psd_label`
+        # does, blank feature outliers to NaN per column, and only THEN drop rows. Dropping rows
+        # afterwards is safe for the per-cell correlations because every row dropped here — label
+        # missing, or label MAD-flagged — is a row `pearson_corr_psd_label` excludes from every
+        # cell anyway, since its per-cell mask requires the label keep. The row drop is necessary
+        # because the vectorised null permutes only y and needs the column NaN masks to be
+        # invariant across permutations.
+        #
+        # WHAT THIS DOES NOT FIX. `_block_perm_maxcorr_pvalue` further restricts to rows carrying a
+        # pain-report identity, because the exchangeable unit of the null is the rating (F3) and a
+        # row with no report has no unit to permute. That restriction cannot be lifted without
+        # reverting to the epoch-level null, which was measured to be anti-conservative. On this
+        # cohort it removes nothing (every label-valid row carries a report identity), so the two
+        # families coincide; the count is published as `perm_rows_dropped_unrated` and the family
+        # guard below is a measurement, not an assumption, so a cohort where it removes rows will
+        # still be caught.
+        # ------------------------------------------------------------------------------------
+        _E = int(feat.shape[0])
+        _Xall = feat[:, :, keep_f].reshape(_E, -1).copy()
+        # Label keep-mask on the FULL label vector (`_mad_keep` already excludes non-finite), which
+        # is the vector pearson_corr_psd_label estimates it on.
+        _ykeep_all = streaming_psd._mad_keep(labels, k=perm_mad_k)
+        # Feature keep-mask per column, estimated on the FULL epoch stack, blanked to NaN rather
+        # than dropped: a cell's outliers are its own, and dropping rows globally would discard a
+        # row that is extreme in one channel/frequency but usable in every other. The vectorised
+        # null does pairwise NaN deletion per column, which is how the displayed r treats them too.
+        for _j in range(_Xall.shape[1]):
+            _ck = streaming_psd._mad_keep(_Xall[:, _j], k=perm_mad_k)
+            if not _ck.all():
+                _Xall[~_ck, _j] = np.nan
+        _perm_filtered = bool(int(_ykeep_all.sum()) >= 4)
+        if _perm_filtered:
+            _rows = _ykeep_all
+        else:
+            _log.warning("Biomarkers: the label MAD filter would leave %d of %d rows for the "
+                         "permutation null; running it on all label-valid rows instead, which "
+                         "makes perm_obs inconsistent with the displayed r.",
+                         int(_ykeep_all.sum()), int(_ykeep_all.size))
+            _rows = perm_valid
+        X = _Xall[_rows]
+        yv = labels[_rows]
+
+        # Rating grouping, subsetted by the SAME row mask as X and yv. Explicit argument, NOT
+        # result["rating_group"] — that key is not populated until later in run_timedomain_branch,
+        # so reading it here silently selected the epoch-level fallback (F3).
         _rg = rating_group if rating_group is not None else result.get("rating_group")
-        _rg_perm = (np.asarray(_rg)[perm_valid] if _rg is not None else None)
+        _rg_perm = (np.asarray(_rg)[_rows] if _rg is not None else None)
         # The observed autocorrelation-adjusted p-grid, flattened over exactly the cells the
         # permutation family covers (same channel order, same frequency cap), so the selection screen
         # inside the null lines up cell-for-cell with the observed one.
@@ -1080,51 +1198,39 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
             _log.warning("Biomarkers: observed p-grid unavailable for the selection-matched null "
                          "(%s: %s); reporting the family-max p only.", type(_exc).__name__, _exc)
             _obs_p_flat = None
+        # The selection grid's own |r|, flattened over the same cells in the same order, kept so
+        # the reconciliation can be MEASURED against it below rather than asserted in a comment.
+        _corr_flat = np.abs(np.asarray(result["corr"], float)[:, keep_f].reshape(-1))
 
-        # F8: APPLY THE SAME OUTLIER FILTER THE DISPLAYED r USES. Without this, perm_obs was the
-        # family max over UNFILTERED cells while the reported r, the FDR and therefore the SELECTION
-        # itself were computed on filtered ones — so perm_p was a selection-corrected p for a
-        # statistic nobody reported. The null was internally consistent with its own observed value,
-        # which is why this did not show up as an obvious error; it was answering a different
-        # question from the one the plate asks.
-        #
-        # We call streaming_psd._mad_keep rather than re-deriving the rule, so the filter cannot
-        # drift from the correlation path's. It is keep-polarity (True == keep) at raw scale with
-        # the canonical threshold, exactly as pearson_corr_psd_label applies it: once to the label,
-        # and once per (channel, frequency) column.
-        _ykeep = streaming_psd._mad_keep(yv, k=perm_mad_k)
-        if _ykeep.sum() >= 4:
-            # Label outliers are dropped as ROWS, before permutation. They are excluded from the
-            # reported analysis anyway, and removing them up front keeps the row set FIXED across
-            # permutations — necessary because the vectorised null permutes only y and relies on the
-            # per-column NaN masks being invariant.
-            X = X[_ykeep]
-            yv = yv[_ykeep]
-            _rg_perm = (_rg_perm[_ykeep] if _rg_perm is not None else None)
-            # Feature outliers are blanked to NaN per column rather than dropped, because a cell's
-            # outliers are its own: dropping rows globally would discard a row that is extreme in
-            # one channel/frequency but perfectly usable in every other. _maxabs_corr already does
-            # pairwise NaN deletion per column, which is how the displayed r treats them too.
-            for _j in range(X.shape[1]):
-                _col = X[:, _j]
-                _ck = streaming_psd._mad_keep(_col, k=perm_mad_k)
-                if not _ck.all():
-                    X[~_ck, _j] = np.nan
-            _perm_filtered = True
-        else:
-            _log.warning("Biomarkers: MAD filter would leave %d of %d rows for the permutation "
-                         "null; running it UNFILTERED, which makes perm_obs inconsistent with the "
-                         "displayed r.", int(_ykeep.sum()), int(_ykeep.size))
-            _perm_filtered = False
-        # _rg_perm is resolved ABOVE, before the outlier filter, and subsetted by it. It must NOT be
-        # re-derived from `perm_valid` here: that would restore the unfiltered rows and hand the
-        # null a grouping vector longer than its labels (observed 232 rows vs grouping 244).
-        # The null permutes RATINGS, not epochs (F3), on the same filtered rows as the observed
-        # statistic (F8).
+        # The null permutes RATINGS, not epochs (F3), on the same rows and the same per-cell masks
+        # as the selection grid (F8). `min_n` and `q_threshold` are the selection's own values, so
+        # the family's membership rule and its FDR screen are the ones that chose the reported band.
         perm_p, perm_used, perm_obs, perm_null, perm_meta = _block_perm_maxcorr_pvalue(
             X, yv, n_perm=n_perm, seed=0, return_null=True, rating_group=_rg_perm,
-            obs_p=_obs_p_flat)
+            obs_p=_obs_p_flat, min_n=SELECTION_MIN_PAIRS, q_threshold=BIOMARKER_FDR_Q)
         perm_meta["outlier_filtered"] = bool(_perm_filtered)
+
+        # MEASURED RECONCILIATION. Compare the permutation family's observed per-cell |r| against
+        # the selection grid's, cell for cell. `max_abs_dev` at machine precision is the evidence
+        # that the two families are the same family; `cells_in_selection_only_max_abs_r` is the
+        # largest correlation the selection could have chosen that the permuted family does not
+        # contain, and it is the quantity that can break the guard.
+        _obs_abs = perm_meta.pop("obs_abs_r_flat", None)
+        if _obs_abs is not None and np.asarray(_obs_abs).size == _corr_flat.size:
+            _obs_abs = np.asarray(_obs_abs, float)
+            _both = np.isfinite(_obs_abs) & np.isfinite(_corr_flat)
+            _only_sel = np.isfinite(_corr_flat) & ~np.isfinite(_obs_abs)
+            _recon = {
+                "cells": int(_corr_flat.size),
+                "cells_compared": int(_both.sum()),
+                "max_abs_dev": (float(np.max(np.abs(_obs_abs[_both] - _corr_flat[_both])))
+                                if _both.any() else None),
+                "cells_in_selection_only": int(_only_sel.sum()),
+                "cells_in_selection_only_max_abs_r": (float(np.max(_corr_flat[_only_sel]))
+                                                      if _only_sel.any() else None),
+                "cells_in_permutation_only": int(
+                    (np.isfinite(_obs_abs) & ~np.isfinite(_corr_flat)).sum()),
+            }
     return {
         "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
         "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner
@@ -1153,30 +1259,48 @@ def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_pe
         "perm_selection_p": perm_meta.get("selection_p"),
         "perm_selection_obs": perm_meta.get("selection_obs"),
         "perm_selection_rule": perm_meta.get("selection_rule"),
-        # AND THE GUARD THAT MATTERS MORE THAN EITHER p. Investigating the selection rule turned up
-        # something worse than a mismatched statistic: the permutation family and the selection grid
-        # are computed on DIFFERENT ROW SETS. The permutation restricts to rows carrying a rating id
-        # and applies the outlier filter; the reported correlation comes from the correlation
-        # spectrum with its own per-cell handling. The proof is arithmetic and needs no simulation —
-        # for the left-leg outcome the SELECTED cell's |r| is 0.6343 while the permutation family's
-        # own observed maximum is 0.5743, and a value selected from a family cannot exceed that
-        # family's maximum.
-        #
-        # While that holds, NO permutation p over this family is a selection-corrected p for the
-        # reported cell, whichever statistic the null uses. So the flag below is published and any
-        # consumer must check it before describing perm_p as selection-corrected. Reconciling the
-        # two families (recomputing the permutation correlations on exactly the selection grid's
-        # rows) is NOT done here and remains open.
+        # THE GUARD, WHICH IS NOW A CHECK ON A RECONCILED FAMILY RATHER THAN A WARNING ABOUT AN
+        # UNRECONCILED ONE. The permutation family is built from the selection grid's own per-cell
+        # masks, membership floor and FDR screen (see the long comment in the permutation block
+        # above), so the selected |r| should be a member of the permuted family by construction.
+        # The flag is kept, and kept as a measurement, because construction arguments have already
+        # been wrong here twice: it compares the reported |r| against the permuted family's own
+        # observed selection statistic and must be True. A False here means the reconciliation did
+        # not hold on this dataset — most likely because rows were dropped for lacking a
+        # pain-report identity (see perm_rows_dropped_unrated) — and in that case perm_p and
+        # perm_selection_p are NOT selection-corrected p-values for the reported cell.
         "perm_family_matches_selection": (
             None if (perm_meta.get("selection_obs") is None or r is None or not np.isfinite(r))
             else bool(abs(r) <= float(perm_meta["selection_obs"]) + 1e-9)),
         "perm_family_caveat": (
-            "The permutation family and the selection grid are computed on different row sets "
-            "(the permutation subsets to rated rows and applies the outlier filter). When "
-            "perm_family_matches_selection is False the selected |r| lies outside the permuted "
-            "family entirely, so perm_p and perm_selection_p are NOT selection-corrected p-values "
-            "for the reported cell and must not be presented as such. Reconciling the two families "
-            "is open work."),
+            "The permutation family is built from the selection grid: the same MAD masks estimated "
+            "on the same full epoch stack, the same minimum-pairs floor and the same FDR screen "
+            "threshold that chose the reported band. perm_family_max_abs_dev_from_corr reports the "
+            "largest cell-for-cell disagreement between the permuted family's observed |r| and the "
+            "selection grid's, and perm_rows_dropped_unrated reports the only row-set difference "
+            "that cannot be removed (rows with no pain-report identity have no exchangeable unit "
+            "for a rating-level null). If perm_family_matches_selection is False the selected |r| "
+            "lies outside the permuted family, so perm_p and perm_selection_p are NOT "
+            "selection-corrected p-values for the reported cell and must not be presented as such."),
+        # F8 part 2 evidence. These are the numbers a reader checks instead of trusting the prose:
+        # max_abs_dev at machine precision means the permuted family IS the selection grid;
+        # cells_in_selection_only_max_abs_r is the largest correlation the selection could have
+        # chosen that the permuted family does not contain.
+        "perm_family_reconciled": (
+            None if not _recon else bool(
+                _recon.get("max_abs_dev") is not None and _recon["max_abs_dev"] <= 1e-9
+                and (_recon.get("cells_in_selection_only_max_abs_r") is None
+                     or (r is not None and np.isfinite(r)
+                         and _recon["cells_in_selection_only_max_abs_r"] <= abs(r) + 1e-9)))),
+        "perm_family_max_abs_dev_from_corr": _recon.get("max_abs_dev"),
+        "perm_family_cells_compared": _recon.get("cells_compared"),
+        "perm_family_cells_in_selection_only": _recon.get("cells_in_selection_only"),
+        "perm_family_cells_in_selection_only_max_abs_r": _recon.get(
+            "cells_in_selection_only_max_abs_r"),
+        "perm_family_cells_in_permutation_only": _recon.get("cells_in_permutation_only"),
+        "perm_rows_dropped_unrated": perm_meta.get("n_rows_dropped_unrated"),
+        "perm_min_pairs": perm_meta.get("min_pairs"),
+        "perm_selection_q_threshold": BIOMARKER_FDR_Q,
         "perm_n_ratings": perm_meta.get("n_ratings"),
         "perm_block": perm_meta.get("block"),
         "perm_n_epochs_used": perm_meta.get("n_epochs_used"),

@@ -1056,3 +1056,62 @@ def test_null_max_mean_grows_with_family_size():
     big = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 120)), y, n_perm=300,
                                         return_null=True)[4]["null_max_mean"]
     assert big > small, (small, big)
+
+
+# --- F8 part 2: the outlier rule is ONE rule, but its verdict depends on the estimation base -----
+def test_mad_rule_is_shared_by_adapter_and_streaming_psd():
+    """There must be exactly one MAD rule on this plate. `adapter.mad_outlier_mask` and
+    `streaming_psd._mad_keep` both delegate to `stats_utils.mad_keep_mask`, and the F8 part 2
+    reconciliation relies on that: the permutation family rebuilds the selection grid's masks by
+    calling the streaming_psd helper, so if the two helpers ever diverged the rebuilt family would
+    silently stop being the selection grid."""
+    rng = np.random.default_rng(11)
+    x = rng.normal(0, 1, 200)
+    x[3] = 60.0
+    x[7] = -55.0
+    x[11] = np.nan
+    a = adapter.mad_outlier_mask(x)
+    b = streaming_psd._mad_keep(x)
+    assert a.dtype == bool and b.dtype == bool
+    assert np.array_equal(a, b)
+    # and it is a KEEP mask that never keeps a non-finite entry
+    assert not a[11] and not a[3] and not a[7]
+
+
+def test_mad_verdict_depends_on_the_estimation_base():
+    """THE MECHANISM OF THE F8 PART 2 DEFECT, in one assertion.
+
+    The rule is `|v - median| > 5 * MAD`, so both the centre and the scale are estimated from
+    whatever sample is handed in. Estimating on a subset of rows can therefore flag a value that
+    estimating on the full set keeps, and vice versa. That is why building the permutation family
+    on the label-valid rows produced different correlations from the selection grid, which
+    estimates the same rule on the full epoch stack: nobody had changed the rule, only the sample
+    it was estimated from.
+
+    Concretely, the value 30 below is flagged when the base is the six-element subset (median 3,
+    MAD 1.5, so the window is +/- 7.5) and kept when five more large values join the base (median
+    20, MAD 10, window +/- 50).
+    """
+    subset = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 30.0])
+    full = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 30.0, 20.0, 22.0, 24.0, 26.0, 28.0])
+    keep_subset = streaming_psd._mad_keep(subset)
+    keep_full = streaming_psd._mad_keep(full)
+    assert bool(keep_subset[5]) is False, "premise broken: 30 is not an outlier in the subset"
+    assert bool(keep_full[5]) is True, "premise broken: 30 is still an outlier in the full base"
+    # the first five entries are kept under both bases, so the disagreement is about that one row
+    assert keep_subset[:5].all() and keep_full[:5].all()
+
+
+def test_min_pairs_floor_is_the_correlation_routines_own_floor():
+    """`pipeline.SELECTION_MIN_PAIRS` must be the number of surviving pairs at which
+    `pearson_corr_psd_label` starts producing a correlation, because that routine's floor is what
+    decides which cells are members of the selection family. The permutation family previously used
+    a floor of 4, which excluded any 3-pair cell the selection could nevertheless have chosen."""
+    assert pipeline.SELECTION_MIN_PAIRS == 3
+    for n_finite, want_finite in ((3, True), (2, False)):
+        feat = np.full((6, 1, 1), np.nan)
+        feat[:n_finite, 0, 0] = np.arange(n_finite, dtype=float) + 1.0
+        lab = np.arange(6, dtype=float) * 1.5 + 0.5
+        corr, _pval = streaming_psd.pearson_corr_psd_label(feat, lab)
+        got = np.isfinite(corr[0, 0])
+        assert bool(got) is want_finite, (n_finite, corr[0, 0])

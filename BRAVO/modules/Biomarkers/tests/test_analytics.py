@@ -2972,12 +2972,24 @@ def test_neff_inversion_round_trips():
         assert abs(got - n_true) / n_true < 0.02, (r_true, n_true, got)
 
 
-def test_family_guard_flags_a_selected_value_outside_the_permuted_family():
-    """THE FINDING THIS GUARD EXISTS FOR. The permutation family and the selection grid are built
-    on different row sets, and on the live left-leg outcome the selected |r| (0.6343) EXCEEDS the
-    permutation family's own maximum (0.5743). A value selected from a family cannot exceed that
-    family's maximum, so the two are demonstrably different families and no permutation p over the
-    permuted one is selection-corrected for the reported cell. The flag must be False there."""
+def test_family_guard_passes_on_the_reconciled_left_leg_outcome():
+    """THE DEFECT THIS GUARD WAS BUILT FOR, AND ITS REPAIR.
+
+    History. The permutation family and the selection grid used to be built on different row sets,
+    and on the live left-leg outcome the selected |r| (0.6343) EXCEEDED the permutation family's own
+    observed maximum (0.5743). A value drawn from a family cannot exceed that family's maximum, so
+    the two were demonstrably different families and no permutation p over the permuted one was
+    selection-corrected for the reported cell. The guard was False there.
+
+    F8 part 2 reconciled the two by estimating the outlier masks on the same full epoch stack the
+    correlation spectrum uses, and by giving the null the selection's own minimum-pairs floor and
+    FDR screen threshold. The guard must now PASS, and the reconciliation diagnostics must show the
+    two families agreeing cell for cell rather than merely being claimed to agree.
+
+    Only the left-leg outcome is exercised live, because it is the metric the defect was found on
+    and because each live run costs about two minutes. The synthetic tests below cover the same
+    invariants without the live data.
+    """
     import sys
     sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
     from modules.Biomarkers import bravo_service as bs
@@ -3006,3 +3018,138 @@ def test_family_guard_flags_a_selected_value_outside_the_permuted_family():
     if sel_obs is not None and rr is not None:
         # the flag must be a faithful comparison, not a constant
         assert flag == (abs(rr) <= sel_obs + 1e-9)
+        # and it must now be the passing case: the reported band is a member of the permuted family
+        assert flag is True, (
+            "the selected |r| %.4f still exceeds the permuted family's selection statistic %.4f — "
+            "the two families are not reconciled" % (abs(rr), sel_obs))
+        # the replayed selection rule must reproduce the band the selector actually chose
+        assert abs(abs(rr) - sel_obs) < 1e-6, (rr, sel_obs)
+    # measured, not asserted: the permuted family's observed |r| must equal the selection grid's
+    dev = su.get("perm_family_max_abs_dev_from_corr")
+    assert dev is not None and dev < 1e-9, dev
+    assert su.get("perm_family_cells_in_selection_only") == 0, (
+        "cells the selection could choose are absent from the permuted family; the largest is "
+        "|r| = %s" % su.get("perm_family_cells_in_selection_only_max_abs_r"))
+    assert su.get("perm_family_reconciled") is True
+    assert su.get("perm_rows_dropped_unrated") == 0
+    assert su.get("perm_selection_q_threshold") == 0.05
+
+
+# --- F8 part 2: the reconciliation, on synthetic data so it runs without the live cohort --------
+def _selection_grid_fixture(seed=3, E=90, C=2, F=12):
+    """A `result` dict built by the REAL correlation routine, with the two conditions that made the
+    permutation family diverge from the selection grid.
+
+    First, a third of the pain labels are MISSING. That is what separates the two estimation bases:
+    `pearson_corr_psd_label` estimates the MAD outlier rule on the full epoch stack, including
+    epochs whose label is missing, while the permutation used to subset to the label-valid rows and
+    estimate the rule there. Second, a few genuinely extreme feature values are injected, so the
+    rule has something to flag and the two bases can disagree about what.
+    """
+    import numpy as np
+    from modules.Biomarkers.routines import streaming_psd as sp
+    rng = np.random.default_rng(seed)
+    feature = rng.normal(0, 1, (E, C, F))
+    labels = rng.normal(0, 1, E)
+    feature[:, 1, 5] = 0.7 * labels + 0.7 * rng.normal(0, 1, E)   # one cell carries real signal
+    labels[rng.choice(E, size=E // 3, replace=False)] = np.nan
+    feature[0, 0, 0] = 40.0
+    feature[1, 1, 2] = -35.0
+    feature[2, 1, 5] = 25.0
+    f_set = np.linspace(2.0, 40.0, F)
+    corr, pval = sp.pearson_corr_psd_label(feature, labels)
+    return {"feature": feature, "psd": np.exp(feature), "labels": labels, "corr": corr,
+            "pval": pval, "f_set": f_set, "chan_order": ["C0", "C1"], "transform": "log"}
+
+
+def test_the_two_estimation_bases_really_do_disagree():
+    """PREMISE CHECK for the reconciliation test below, because a test that passes on a fixture
+    which never exercises the defect proves nothing. Builds the same design matrix twice — masks
+    estimated on the full epoch stack, and masks estimated after subsetting to the label-valid rows
+    — and requires at least one cell's correlation to differ between them."""
+    import numpy as np
+    from modules.Biomarkers import pipeline as pl
+    from modules.Biomarkers.routines import streaming_psd as sp
+    res = _selection_grid_fixture()
+    feature, labels = res["feature"], res["labels"]
+    keep_f = np.asarray(res["f_set"], float) < pl.MAX_BIOMARKER_FREQ_HZ
+    E = feature.shape[0]
+
+    def blank(X):
+        X = X.copy()
+        for j in range(X.shape[1]):
+            ck = sp._mad_keep(X[:, j])
+            X[~ck, j] = np.nan
+        return X
+
+    X_new = blank(feature[:, :, keep_f].reshape(E, -1))            # full-stack base (selection's)
+    y_new = np.where(sp._mad_keep(labels), labels, np.nan)
+    lv = np.isfinite(labels)
+    X_pre = feature[:, :, keep_f].reshape(E, -1)[lv]
+    y_pre = labels[lv]
+    yk = sp._mad_keep(y_pre)
+    X_pre, y_pre = blank(X_pre[yk]), y_pre[yk]                     # label-valid base (the old way)
+
+    def cell_r(X, y, j):
+        m = np.isfinite(X[:, j]) & np.isfinite(y)
+        if m.sum() < 3 or np.std(X[m, j]) == 0 or np.std(y[m]) == 0:
+            return np.nan
+        return float(np.corrcoef(X[m, j], y[m])[0, 1])
+
+    devs = [abs(cell_r(X_new, y_new, j) - cell_r(X_pre, y_pre, j)) for j in range(X_new.shape[1])]
+    devs = [d for d in devs if np.isfinite(d)]
+    assert devs and max(devs) > 1e-6, (
+        "fixture does not exercise the estimation-base defect; max cell deviation %s" % (
+            max(devs) if devs else None))
+
+
+def test_permutation_family_is_built_from_the_selection_grid():
+    """THE RECONCILIATION. Run the real selection rule on the fixture, hand the chosen cell to
+    `_band_inference`, and require the permuted family's observed per-cell |r| to equal the
+    selection grid's cell for cell, with no cell that the selection could have chosen missing from
+    the permuted family. That equality is what makes the permutation p a selection-corrected p for
+    the reported cell; before the fix it did not hold."""
+    import numpy as np
+    from modules.Biomarkers import pipeline as pl
+    res = _selection_grid_fixture()
+    band = pl.select_biomarker_band(res)
+    assert band is not None, "fixture selected no band"
+    c, f, r, p, f_hz, q, sig = band
+    labels = res["labels"]
+    # one rating per epoch, so the rating-level null's row requirement removes nothing and the only
+    # remaining row-set difference is the one this fix addresses
+    rg = np.arange(len(labels))
+    rg[~np.isfinite(labels)] = -1
+    out = pl._band_inference(res, c, f, r, p, f_hz, q, sig, None, n_perm=200, rating_group=rg)
+
+    dev = out["perm_family_max_abs_dev_from_corr"]
+    assert dev is not None and dev < 1e-9, dev
+    assert out["perm_family_cells_compared"] == out["perm_family_size"]
+    assert out["perm_family_cells_in_selection_only"] == 0
+    assert out["perm_family_cells_in_permutation_only"] == 0
+    assert out["perm_rows_dropped_unrated"] == 0
+    assert out["perm_family_reconciled"] is True
+    # the selected |r| is a MEMBER of the permuted family, which is the arithmetic fact that failed
+    assert out["perm_obs"] >= abs(r) - 1e-4, (out["perm_obs"], r)
+    assert out["perm_family_matches_selection"] is True
+    # and the replayed selection rule reproduces the band the selector chose
+    assert abs(out["perm_selection_obs"] - abs(r)) < 1e-8, (out["perm_selection_obs"], r)
+    # both p-values must still be honest probabilities on the (+1)/(n+1) grid
+    for key in ("perm_p", "perm_selection_p"):
+        assert out[key] is None or 0.0 < out[key] <= 1.0, (key, out[key])
+
+
+def test_selection_and_permutation_share_one_screen():
+    """The family's membership rule and its FDR screen must come from ONE place. The screen used to
+    differ silently: `select_biomarker_band` screened at q < 0.05 while the null replayed the screen
+    at q < 0.10, and the null's membership floor was 4 surviving pairs where the correlation routine
+    admits a cell at 3. Both differences change which cells are in the family."""
+    import inspect
+    from modules.Biomarkers import pipeline as pl
+    assert pl.BIOMARKER_FDR_Q == 0.05
+    assert pl.SELECTION_MIN_PAIRS == 3
+    sel = inspect.signature(pl.select_biomarker_band).parameters
+    perm = inspect.signature(pl._block_perm_maxcorr_pvalue).parameters
+    assert sel["q_threshold"].default == pl.BIOMARKER_FDR_Q
+    assert perm["q_threshold"].default == pl.BIOMARKER_FDR_Q
+    assert perm["min_n"].default == pl.SELECTION_MIN_PAIRS
