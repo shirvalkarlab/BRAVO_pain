@@ -280,6 +280,56 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**THE CLOSED-LOOP RESPONSE GATE WAS RUN ON THE REAL RECORD AND IT DOES NOT PASS (2026-09-02).**
+
+The manual requires the sensed band to respond to stimulation amplitude, because Adaptive Therapy's
+only lever IS amplitude. `StimOptimizer/routines/lfp_response.py` implements that test; it was run
+against the full assembled PSD matrix (6072 rows, 6 channels, 3 sources, 2025-06-18 to 2026-08-28)
+joined to the 120 settings epochs from `StimOptimizer.adapter.exposure_epochs`. Result:
+
+- 255 within-rate contrasts with stimulation ON, ipsilateral amplitude, adaptive-capable bands
+  (8-30 Hz), rates >= 55 Hz. Direction correct (power falling as amplitude rises) in **119 (47%)**;
+  one-sided binomial against a coin flip **p = 0.87**. There is NO consistent suppression.
+- Only 58 (23%) passed both direction and separation.
+- 38 contrasts (15%) had separation d > 2, implausibly large for neural modulation, and only 12 of
+  those 38 had a significant slope once era was blocked -- between-recording variance, not
+  dose-response.
+- By rate, direction correct: 55 Hz 40%, 110 Hz 34%, 125 Hz 41%, 145 Hz 71%, 165 Hz 91%. The two
+  rates with the most data are BELOW chance. 165 Hz is the only coherent signal and rests on a
+  single amplitude ladder in one channel, confounded with era -- not a result.
+
+**TWO CONFOUNDS HAD TO BE ELIMINATED FIRST, AND THE FIRST PASS WAS DISCARDED BECAUSE OF THEM.**
+
+1. ZERO-AMPLITUDE LOW ARM. The lowest amplitude level in this record is 0.0 mA -- stimulation OFF.
+   `assess_response` picks the extreme levels with enough rows, so the first pass compared 0 mA
+   against ~4.8 mA. With stimulation off there is NO stimulation artifact, so that contrast is
+   artifact-versus-no-artifact and says nothing about dose-response inside the therapeutic range.
+   The signature was unmistakable: power ROSE with amplitude in 74% of those 108 contrasts. The
+   device's own captures are both at therapeutic amplitudes, so the test must be too. Pass rejected
+   in full; `lfp_response_RCS08.csv` is retained only as the record of the rejected analysis.
+2. RATE POOLED ACROSS ARMS. Artifact magnitude depends on rate, and rate varied alongside amplitude
+   over this record, so a pooled comparison lets a rate difference masquerade as an amplitude
+   effect. Every reported contrast is now WITHIN a single rate.
+
+**WHY THIS CANNOT BE SETTLED RETROSPECTIVELY.** In the archive, amplitude is confounded with time,
+rate, contact configuration and recording session. The device's capture procedure is a WITHIN-SESSION
+manipulation: hold rate, pulse width and contacts fixed, step amplitude between two therapeutic
+levels, record LFP at each. No amount of modelling recovers that from observational history. The
+2026-09-03 clinic sheet was rebuilt to produce exactly that data.
+
+**Clinic sheet v2 (`CLINIC_SHEET_RCS08_v2.md`, seed 20260903)** therefore differs from v1 in four
+ways, each traceable to a device constraint: every rate is >= 55 Hz so a winner is programmable
+closed-loop (the 40 Hz setting from v1 was fine open-loop and is gone); contacts must not change at
+any point, because changing electrode configuration clears the threshold captures; BrainSense LFP is
+recorded at every step; and the rate/pulse width this session settles on are the ones closed loop
+inherits, since both freeze once BrainSense is configured -- which is why a 165 Hz slot is worth
+spending. Two capture pairs fall out of the design at 55 Hz with contacts fixed: Left 2.0 vs 4.5 mA
+(Right held 3.0) and Right 1.9 vs 3.0 mA (Left held 3.5). Both low arms are therapeutic, not 0 mA.
+18 steps, 6 settings x 3 blocks, ~63 min, balanced (mean step index 8.3-10.7 against midpoint 9.5).
+
+Unchanged and worth restating: every predicted between-setting difference is smaller than its own
+posterior SD, so this is a testing list, not a recommendation.
+
 **CLOSED LOOP: the device constraint that reframes the biomarker work (2026-09-02).**
 
 `modules/StimOptimizer/routines/percept_adaptive.py` encodes Percept RC/PC Adaptive Therapy
