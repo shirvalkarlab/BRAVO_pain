@@ -280,6 +280,85 @@ n_bands_skipped_zero_mad, applies_to, detected_on) and echoed at the response to
 `outlier_n_mad` / `outlier_scale`. The UI states the rule, the count and the mixture caveat in the
 subtitle beneath **Full-spectrum exploration**. Container suite **273/273**.
 
+**RETRACTION, HIGH IMPACT: SIDE-EFFECT SEVERITY DATA EXISTS, AND AMPLITUDE DOES NOT PREDICT IT
+(2026-09-02).**
+
+Throughout this project the handoff, the module README and the clinic sheets stated that the safety
+model runs on a two-anchor seed "because the PRO battery contains no structured side-effect severity
+item". THAT IS WRONG and has been since the codebook was built. `rcs08_acute_steps_coded.csv` holds
+774 coded acute steps: 696 none, 28 mild, 23 moderate, 1 severe, 26 unknown, each with amplitude,
+rate and pulse width. The module simply never consumed it.
+
+**And the data does not support the safe set's central assumption.** Non-procedural steps with
+stimulation on (n=417): Spearman correlation between left amplitude and severity is **-0.013,
+p = 0.79**. Moderate-or-worse occurs in 4.3% of steps below 2 mA and 4.8% at or above. Five
+moderate events occur at 0.0 mA, i.e. with stimulation OFF, which means some coded events are not
+stimulation-caused even after procedural ones are excluded — a data-quality caveat on the codebook.
+Full breakdown in `rcs08_severity_vs_amplitude.csv`.
+
+Consequences, both directions:
+- A fitted monotone amplitude-severity ceiling is NOT supported by this patient's data. That is
+  better founded than the two-anchor seed, which imposed a ceiling by assumption and produced the
+  non-contiguous safe islands. The defensible amplitude constraint is the DELIVERED ENVELOPE plus
+  the clinician-declared 4.9 mA ceiling, not a fitted gradient.
+- BUT the top of the range is barely sampled: 50 steps above 3 mA and only **5 above 4 mA**. So "no
+  ceiling up to 4 mA" is supported and "no ceiling up to 4.9 mA" is NOT — and 4.5-4.9 mA is exactly
+  where the optimizer wants to propose. Treat above 4 mA as UNKNOWN, not safe.
+
+**F10 AND F13 CLOSED (2026-09-02) — all thirteen actionable audit items are now done.**
+
+F13: deployment_roc's bootstrap resamples whole rating clusters, so its interval was for a
+rating-level estimand while the point estimate was sample-level. An unweighted AUC averages over
+pairs, so a rating contributing k samples on one side and k' on the other supplies k*k' of them --
+influence grows with the PRODUCT of counts, and coverage is a recording artefact. Now weighted
+1/(rating's sample count) so every rating carries weight 1; `auc_sample_weighted` and
+`auc_weighting_delta` publish the change. Live band: 0.5186 rating-equal vs 0.5071 sample-weighted.
+Conclusion unchanged -- against a folding null reference of 0.5556 the band still sits 0.037 BELOW
+chance.
+
+F10: the exploration path applied the outlier rule with no counterpart without it, while
+deployment_roc already reported one (which is why F11 was sound). `outlier_sensitivity` now
+publishes the filtered and unfiltered correlation, both n, the exclusion count and the delta. The
+headline stays FILTERED on the exploration path and that asymmetry is deliberate: an exploration
+correlation is associational, whereas a deployment threshold is an operating point the device runs
+against the full distribution. Measured, and it cuts both ways: the filter STRENGTHENS nrs
+(-0.5303 vs -0.4848, 15 of 131 excluded) and WEAKENS left_leg_vas (-0.6343 vs -0.6695, 7 of 31
+excluded). left_leg_vas deserves separate attention: the rule removes 23% of that sample, leaving
+n=24.
+
+**F8's SECOND ITEM IS NOT CLOSED, AND THE REASON IS WORSE THAN THE ITEM (2026-09-02).**
+
+The item: the selection is BH-screen-then-max-|r|, not family-max-|r|, so perm_p tested a statistic
+nobody reported. `_neff_from_r_and_p` and `_selection_statistic` now replay the real rule inside
+each permutation and `perm_selection_p` is published beside `perm_p`.
+
+The worse finding: **the permutation family and the selection grid are computed on different row
+sets** -- the permutation subsets to rated rows and applies the outlier filter, while the reported r
+comes from the correlation spectrum. Proof is arithmetic: for left_leg_vas the SELECTED |r| is
+0.6343 while the permutation family's own maximum is 0.5743, and a selected value cannot exceed the
+maximum of the family it came from. While that holds, no permutation p over this family is
+selection-corrected for the reported cell, whichever statistic the null uses -- so the fix above
+does not close it either. What IS committed is the guard: `perm_family_matches_selection` (True for
+nrs, **False for left_leg_vas**) and `perm_family_caveat`. **Any consumer must check that flag
+before describing perm_p as selection-corrected.** Reconciling the families is open work.
+
+**THE POST-SESSION ANALYSIS HARNESS IS BUILT (2026-09-02).**
+
+`StimOptimizer/routines/session_analysis.py` turns a filled clinic sheet into results: re-derives
+ACTUAL wash-in per step from recorded clock times rather than assuming the planned 60 s, fits
+setting effects with block as a factor and cluster-robust standard errors while reporting the
+unadjusted model beside it, estimates the within-session noise floor from the repeated anchor, and
+gates any "better than incumbent" verdict on the uncertainty OF THE DIFFERENCE. Time parsing refuses
+ambiguous input rather than guessing and carries through what resolution a time was written to,
+because a wash-in from two minute-resolution times is uncertain by about the size of the 60 s
+threshold. A rating time before its programming time is a data-entry error, not a short wash-in.
+StimOptimizer suite 105 -> 203 passed, 15 skipped.
+
+**BoTorch refactor: IN PROGRESS, parked on a user approval** for the torch install.
+`routines/surrogate_torch.py` and its 24 tests exist but are NOT committed and the tests skip
+without the torch stack; `BOTORCH_REFACTOR.md` (which must carry the recommendation on whether torch
+belongs in the Django container) is not yet written.
+
 **THE CLOSED-LOOP RESPONSE GATE WAS RUN ON THE REAL RECORD AND IT DOES NOT PASS (2026-09-02).**
 
 The manual requires the sensed band to respond to stimulation amplitude, because Adaptive Therapy's
