@@ -291,7 +291,21 @@ rate and pulse width. The module simply never consumed it.
 
 **And the data does not support the safe set's central assumption.** Non-procedural steps with
 stimulation on (n=417): Spearman correlation between left amplitude and severity is **-0.013,
-p = 0.79**. Moderate-or-worse occurs in 4.3% of steps below 2 mA and 4.8% at or above. Five
+p = 0.79**.
+
+**QUOTE THE CONTINUOUS TEST, NOT A DICHOTOMISED RATE.** An earlier version of this entry gave
+"4.3% below 2 mA versus 4.8% at or above", which did not match the cited artifact and is corrected
+here. Those figures were computed with the boundary EXCLUSIVE (amplitude < 2 versus >= 2) while
+`rcs08_severity_vs_amplitude.csv` bins right-closed, putting 2.0 mA in the lower group and giving
+5.67% versus 2.94%. Both are arithmetically correct for their own cut; the entry published one while
+citing the other, and the two disagree on DIRECTION.
+
+The reason is that **38 of the 417 steps sit at exactly 2.0 mA and 5 of those are
+moderate-or-worse**, so one boundary choice moves 9% of the sample and a fifth of the events.
+Sweeping cut points and conventions (`rcs08_severity_dichotomy_sensitivity.csv`) gives eight
+combinations, of which **four say the rate falls with amplitude and four say it rises** — a perfect
+split. A dichotomised comparison that reverses direction on a boundary convention carries no
+directional information, so do not quote one; quote rho = -0.013, p = 0.79. Five
 moderate events occur at 0.0 mA, i.e. with stimulation OFF, which means some coded events are not
 stimulation-caused even after procedural ones are excluded — a data-quality caveat on the codebook.
 Full breakdown in `rcs08_severity_vs_amplitude.csv`.
