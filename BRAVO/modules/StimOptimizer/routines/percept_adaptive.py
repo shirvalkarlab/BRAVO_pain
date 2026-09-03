@@ -50,28 +50,42 @@ SINGLE = "single"
 SINGLE_INVERSE = "single_inverse"
 
 # ---------------------------------------------------------------------------------------------
-# ELIGIBILITY: THE DEVICE WILL NOT LET A NON-PARKINSON'S PATIENT ENABLE ADAPTIVE THERAPY
+# ELIGIBILITY: RCS08 IS PROGRAMMED IN PARKINSON'S MODE, SO THE FULL WORKFLOW IS AVAILABLE
 # ---------------------------------------------------------------------------------------------
-#: This is a PROGRAMMER WORKFLOW RESTRICTION, not merely an indication caveat, and it is quoted
-#: rather than paraphrased because the distinction decides what this module can honestly promise.
-#: Percept Adaptive white paper (UC202012929dEN) p. 13, verbatim:
+#: PI decision, 2026-09-03: this participant is programmed in Parkinson's mode, so the workflow
+#: restriction below does not bind and Adaptive Therapy can be enabled. The closed-loop deliverable
+#: is a PROGRAMMABLE configuration, not a prepared non-executable one.
+#:
+#: The restriction is retained here, quoted rather than paraphrased, because it still governs what a
+#: participant programmed in a non-Parkinson's mode could do, and because a future reader needs to
+#: know which of the two situations they are in. White paper (UC202012929dEN) p. 13:
 #:
 #:   "Non-Parkinson's patients are defaulted to the Dual Threshold mode for chronic sensing
 #:    capabilities and are not allowed to continue the workflow past the thresholds capture step."
 #:
-#: The same page opens "For patients with Parkinson's Disease only", and p. 9 adds that all
-#: non-Parkinson's patients use Dual Threshold and "do not have the ability to choose the Threshold
-#: mode".
+#: p. 9 adds that such patients "do not have the ability to choose the Threshold mode".
 #:
-#: CONSEQUENCE FOR THIS PROJECT. Every preparatory step is reachable — sensing configuration, band
-#: and centre-frequency selection, chronic LFP recording, and thresholds capture itself. What is NOT
-#: reachable on this software version is the final step of enabling Adaptive. So the deliverable of
-#: the closed-loop work is a PREPARED, NON-EXECUTABLE configuration plus the measurements that would
-#: license it, and any interface that implies a chronic pain participant can be switched to Adaptive
-#: today is wrong. Whether a route exists (a software version, an investigational agreement, a
-#: different pathway) is a regulatory and institutional question, not one this module can answer.
-ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION = True
-NON_PD_WORKFLOW_CEILING = "thresholds capture"
+#: Selecting Parkinson's mode is the PI's clinical and regulatory determination under their own
+#: protocol. It is recorded here as a configuration fact, not as anything this module validated, and
+#: nothing downstream should present it as an engineering conclusion.
+ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION = False   # RCS08 is programmed in Parkinson's mode
+NON_PD_WORKFLOW_CEILING = "thresholds capture"   # applies only to a non-Parkinson's-mode participant
+
+#: WHAT PARKINSON'S MODE DOES *NOT* CHANGE, checked because it looked like it might.
+#: Parkinson's mode also unlocks the CHOICE of threshold mode rather than forcing Dual Threshold,
+#: which raised a real question: the deployability screen refuses a band whose power RISES with
+#: amplitude, and an "inverse" control law would be exactly what such a band needs. If a selectable
+#: inverse mode could drive therapy, the cells refused on sign would come back.
+#:
+#: It cannot. Of the three modes, the two that can drive therapy (Dual and Single) BOTH declare the
+#: same expected direction — the LFP must be suppressed when stimulation is High — and Single
+#: Threshold Inverse, the one whose law runs the other way, is "only available in a Sensing Only
+#: configuration, meaning a change in LFP will not [change stimulation]". See MODES below, where
+#: SINGLE_INVERSE carries can_drive_therapy=False for that reason.
+#:
+#: So the negative-slope requirement in lfp_evidence.screen_cells is unaffected by the mode change,
+#: and the cells refused for a positive confound-adjusted slope stay refused.
+SIGN_REQUIREMENT_HOLDS_IN_EVERY_THERAPY_DRIVING_MODE = True
 
 # ---------------------------------------------------------------------------------------------
 # WHAT THE DUAL THRESHOLD CONTROL LAW ASSUMES ABOUT THE SIGN

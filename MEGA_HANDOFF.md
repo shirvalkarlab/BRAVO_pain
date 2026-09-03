@@ -75,6 +75,38 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-03 — RCS08 is programmed in PARKINSON'S MODE, so the indication ceiling does not bind
+
+PI decision. Earlier entries in this document concluded that the closed-loop deliverable for RCS08
+could only ever be a prepared, non-executable configuration, because the white paper states that
+non-Parkinson's patients "are not allowed to continue the workflow past the thresholds capture
+step". That conclusion does not apply: this participant is programmed in Parkinson's mode, the full
+Adaptive workflow is reachable, and the closed-loop output is a PROGRAMMABLE configuration.
+`percept_adaptive.ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION` is now False. The quoted restriction is
+kept in the module because it still governs a participant programmed the other way, and a reader
+needs to be able to tell which situation they are in. Selecting the mode is the PI's clinical and
+regulatory determination under their protocol, not an engineering finding of this project.
+
+**A consequence that looked like it might reverse yesterday's sign fix, checked, and does not.**
+Parkinson's mode also unlocks the CHOICE of threshold mode rather than forcing Dual Threshold. That
+mattered because the deployability screen refuses a band whose power RISES with amplitude, and an
+inverse control law is precisely what such a band would need — so if a selectable inverse mode could
+drive therapy, the cells refused on sign would come back, including `ZERO_TWO_LEFT`/Left/55 Hz,
+which discriminates strongly and was refused for 18 of 18 significantly POSITIVE adjusted slopes.
+
+It does not come back. Of the three modes, the two that can drive therapy (Dual and Single) declare
+the SAME expected direction — the LFP must be suppressed when stimulation is High — and Single
+Threshold Inverse, whose law runs the other way, is "only available in a Sensing Only configuration,
+meaning a change in LFP will not [change stimulation]". `MODES[SINGLE_INVERSE].can_drive_therapy` is
+False for exactly that reason. So the negative-slope requirement holds in every mode that can
+actually drive therapy, the screen is unchanged, and the verdict stands at 2 of 50 deployable with
+`ONE_THREE_LEFT`/Left/165 Hz selected. Recorded as
+`SIGN_REQUIREMENT_HOLDS_IN_EVERY_THERAPY_DRIVING_MODE`.
+
+Suite 356 passed / 41 skipped, unchanged.
+
+
+
 ### 2026-09-02 (evening) — the first RANDOMISED clinic session was run, and the design earned itself
 
 New Drive file, found by rescanning the `Stage 2 / Clinic Testing` folder (which went 28 -> 32
