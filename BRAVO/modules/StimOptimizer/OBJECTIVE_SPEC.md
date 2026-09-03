@@ -390,10 +390,23 @@ were the SAME setting on two separate blocks (110 Hz, 2.5 mA left with 2.0 mA ri
 mild effect at one setting is a more useful observation than scattered events, and is worth
 confirming prospectively rather than treated as established from two occurrences.
 
-One protocol deviation is recorded in the sheet itself: at step 2 the left pulse width was set to
-110 us instead of the planned 100 us, so that anchor step is not a clean anchor. It is retained with
-the deviation noted rather than dropped, because dropping it would remove one of only three anchor
-observations.
+One protocol deviation is recorded in the sheet itself. The `PW (us)` cell for step 2 reads
+literally `L 100 (did 110 accidentally) / R 150`, so the left pulse width DELIVERED was 110 us
+against a planned 100 us, and that anchor step is not a clean anchor. It is retained with the
+deviation carried explicitly rather than dropped, because dropping it would leave only two clean
+anchor observations. Excluding it moves the fitted drift from -0.0511 to -0.0550 points per minute
+and the joint setting test from p = 0.804 to p = 0.677, so neither the sign nor the conclusion
+depends on it.
+
+**A defect in the first version of the parsed artifact, corrected.** The parser took the FIRST number
+on each side of the pulse-width cell, which is the PLANNED value, and discarded the parenthetical
+correction entirely. `rcs08_sep2_steps.csv` v1 therefore recorded `pw_L = 100` for step 2 with no
+trace of the deviation, so the artifact contradicted this paragraph and an auditor reading only the
+artifact would reasonably have concluded the deviation was invented. v2 carries `pw_raw` (the
+verbatim cell), `pw_L_planned`, `pw_L_delivered`, `pw_R_planned`, `pw_R_delivered` and a
+`pw_deviation` note. The general lesson, which applies to every sheet in this folder: these cells are
+FREE TEXT that usually happens to parse as a number, so a regex that takes the first match will
+silently normalise away exactly the annotations a clinician added because they mattered.
 
 ### 2026-08-30 — the objective changes site: LEFT LEG replaces the global rating
 

@@ -112,9 +112,20 @@ for next session: score the per-site items, above all the left leg, at EVERY ste
 same setting (110 Hz, L 2.5 / R 2.0) on two separate blocks. Reproducible-at-one-setting is a more
 useful signal than scattered, and worth confirming prospectively rather than banked from two events.
 
-**Recorded deviation** (in the sheet, not inferred): step 2 ran the left pulse width at 110 us
-instead of the planned 100 us, so that anchor step is not clean. Retained with the deviation noted,
-because dropping it would remove one of only three anchor observations.
+**Recorded deviation** (verbatim in the sheet, not inferred): the step-2 `PW (us)` cell reads
+`L 100 (did 110 accidentally) / R 150`, so the left pulse width DELIVERED was 110 us against a
+planned 100. That anchor step is not clean; it is retained with the deviation carried explicitly,
+since dropping it leaves only two clean anchors. Excluding it moves the drift from -0.0511 to
+-0.0550 points per minute and the joint setting test from p = 0.804 to p = 0.677 — neither the sign
+nor the conclusion turns on it.
+
+**PARSER DEFECT, corrected, and it generalises.** v1 of `rcs08_sep2_steps.csv` stored `pw_L = 100`
+for step 2 because the parser took the FIRST number on each side and dropped the parenthetical, so
+the artifact contradicted the prose and an auditor reading only the artifact would reasonably have
+called the deviation invented. v2 adds `pw_raw`, `pw_L_planned`, `pw_L_delivered`, `pw_R_planned`,
+`pw_R_delivered`, `pw_deviation`. These sheet cells are FREE TEXT that usually parses as a number —
+a first-match regex silently normalises away precisely the annotations a clinician bothered to add.
+Applies to every workbook in this folder, not just this one.
 
 Artifacts: `rcs08_sep2_steps.csv` (22 mapped steps), `rcs08_sep2_setting_effects.csv` (the
 drift-adjusted model), `rcs08_sep2_drift_counterfactual.csv` (raw versus adjusted per setting).
