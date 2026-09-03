@@ -49,6 +49,45 @@ DUAL = "dual"
 SINGLE = "single"
 SINGLE_INVERSE = "single_inverse"
 
+# ---------------------------------------------------------------------------------------------
+# ELIGIBILITY: THE DEVICE WILL NOT LET A NON-PARKINSON'S PATIENT ENABLE ADAPTIVE THERAPY
+# ---------------------------------------------------------------------------------------------
+#: This is a PROGRAMMER WORKFLOW RESTRICTION, not merely an indication caveat, and it is quoted
+#: rather than paraphrased because the distinction decides what this module can honestly promise.
+#: Percept Adaptive white paper (UC202012929dEN) p. 13, verbatim:
+#:
+#:   "Non-Parkinson's patients are defaulted to the Dual Threshold mode for chronic sensing
+#:    capabilities and are not allowed to continue the workflow past the thresholds capture step."
+#:
+#: The same page opens "For patients with Parkinson's Disease only", and p. 9 adds that all
+#: non-Parkinson's patients use Dual Threshold and "do not have the ability to choose the Threshold
+#: mode".
+#:
+#: CONSEQUENCE FOR THIS PROJECT. Every preparatory step is reachable — sensing configuration, band
+#: and centre-frequency selection, chronic LFP recording, and thresholds capture itself. What is NOT
+#: reachable on this software version is the final step of enabling Adaptive. So the deliverable of
+#: the closed-loop work is a PREPARED, NON-EXECUTABLE configuration plus the measurements that would
+#: license it, and any interface that implies a chronic pain participant can be switched to Adaptive
+#: today is wrong. Whether a route exists (a software version, an investigational agreement, a
+#: different pathway) is a regulatory and institutional question, not one this module can answer.
+ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION = True
+NON_PD_WORKFLOW_CEILING = "thresholds capture"
+
+# ---------------------------------------------------------------------------------------------
+# WHAT THE DUAL THRESHOLD CONTROL LAW ASSUMES ABOUT THE SIGN
+# ---------------------------------------------------------------------------------------------
+#: White paper p. 13: "High LFP is associated with lower stimulation and lower LFP is associated
+#: with higher stimulation... When the LFP passes above the upper threshold, the stimulation
+#: amplitude slowly ramps up. When the LFP passes below the lower threshold, the stimulation
+#: amplitude slowly ramps down."
+#:
+#: So the control law HARD-CODES the assumption that band power falls as amplitude rises. It is not
+#: a modelling preference. If a band's power RISES with amplitude, the device's response to high LFP
+#: (ramp amplitude up) drives the band further up, which calls for more amplitude again — positive
+#: feedback bounded only by the clinician's amplitude limits. That is why the deployability screen
+#: requires the sign of the CONFOUND-ADJUSTED slope to be negative and not merely significant.
+DUAL_THRESHOLD_ASSUMES_POWER_FALLS_WITH_AMPLITUDE = True
+
 #: Adaptive Therapy can be driven by a band in this range only. Outside it, sensing is possible but
 #: therapy cannot respond. White paper p. 14 parameter table, "LFP Frequency Range":
 #: "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)".

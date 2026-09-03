@@ -390,9 +390,16 @@ def test_an_explicit_era_column_wins_and_is_recorded():
 
 # --- deployability screening and cell selection (2026-09-02) -----------------------------------
 class _Res:
-    """Minimal stand-in for lfp_response.ResponseResult, so screening is tested in isolation."""
-    def __init__(self, responds, slope_p, sep_d):
+    """Minimal stand-in for lfp_response.ResponseResult, so screening is tested in isolation.
+
+    `slope` defaults NEGATIVE because that is the direction Adaptive Therapy needs (band power
+    falling as amplitude rises). The stub originally carried no slope at all, which is why the
+    screen could require era significance without ever checking the sign — the fixture could not
+    have caught it.
+    """
+    def __init__(self, responds, slope_p, sep_d, slope=-0.2):
         self.responds, self.slope_p, self.separation_d = responds, slope_p, sep_d
+        self.slope_log_per_mA = slope
 
 
 class _Ev:
@@ -406,8 +413,10 @@ class _Ev:
         return self.band_power[(float(c), float(w))]
 
 
-def _fn(responds, slope_p, sep_d=1.2):
-    return lambda power, amp, era=None, cluster=None: _Res(responds, slope_p, sep_d)
+def _fn(responds, slope_p, sep_d=1.2, slope=-0.2):
+    """`slope` defaults negative, the direction Adaptive Therapy needs. Pass a positive value to
+    exercise the case where the confound-adjusted relationship runs the wrong way."""
+    return lambda power, amp, era=None, cluster=None: _Res(responds, slope_p, sep_d, slope)
 
 
 LIMIT = 5.0
@@ -500,3 +509,38 @@ def test_select_for_refuses_to_pick_a_channel_silently():
 def test_empty_evidence_screens_to_nothing_without_raising():
     screen, best = EV.screen_cells({}, response_fn=_fn(True, 0.001))
     assert screen.empty and best is None
+
+
+# --- the era-blocked slope must point the RIGHT WAY, not merely be significant (2026-09-02) ------
+def test_a_significant_but_POSITIVE_adjusted_slope_is_refused():
+    """REGRESSION, and it changed a live verdict. screen_cells counted bands whose era-blocked
+    slope was significant and never checked its sign, which inverted the purpose of the condition:
+    a cell passed when its raw arm means fell while the confound-ADJUSTED relationship rose, i.e.
+    exactly when the apparent response was a time artifact. On RCS08 the cell the screen SELECTED
+    as best (ZERO_TWO_LEFT/Left/55 Hz) had all 18 bands significantly POSITIVE, median +0.4387.
+    """
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    screen, best = EV.screen_cells(
+        ev, response_fn=_fn(True, 0.001, slope=+0.44), amp_ceiling=LIMIT)
+    row = screen.iloc[0]
+    assert row.n_responding == 18 and row.n_era_significant == 18
+    assert row.n_era_negative_significant == 0
+    assert not row.deployable and best is None
+    assert "NEGATIVE era-blocked slope" in row.blocking_reasons
+    assert "time artifact" in row.blocking_reasons
+
+
+def test_a_negative_adjusted_slope_in_a_majority_is_required_not_one_lucky_band():
+    """The correlated-family argument applies to the SIGN as well as to the responding fraction.
+    Applying it to one and not the other let a cell through on 3 of 18 negative bands with a
+    positive median slope."""
+    def mostly_positive(power, amp, era=None, cluster=None):
+        mostly_positive.i += 1
+        neg = mostly_positive.i <= 3            # only 3 of 18 bands negative
+        return _Res(True, 0.001, 0.9, slope=(-0.2 if neg else +0.2))
+    mostly_positive.i = 0
+    ev = {("ch", "Left", 110.0): _Ev([2.5, 4.0])}
+    screen, best = EV.screen_cells(ev, response_fn=mostly_positive, amp_ceiling=LIMIT)
+    row = screen.iloc[0]
+    assert row.n_era_negative_significant == 3 and row.n_bands == 18
+    assert not row.deployable and best is None

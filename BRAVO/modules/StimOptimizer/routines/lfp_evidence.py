@@ -411,7 +411,21 @@ def screen_cells(evidence, *, response_fn,
                for (c, w) in band_keys]
         n = len(res) or 1
         n_resp = sum(1 for r in res if r.responds is True)
+        # SIGNIFICANT *AND* POINTING THE RIGHT WAY. This counted significance alone until
+        # 2026-09-02, which inverted the purpose of the era-blocking condition instead of serving
+        # it. `direction_ok` compares the raw arm means and is therefore confoundable with time;
+        # the era-blocked slope is the confound-ADJUSTED quantity. Requiring only that the adjusted
+        # slope be significant admitted cells whose arm means fall while the adjusted relationship
+        # RISES — i.e. exactly the cells where the apparent response is a time artifact. On RCS08
+        # the cell the screen SELECTED as best (ZERO_TWO_LEFT/Left/55 Hz) had all 18 bands with a
+        # significantly POSITIVE era-blocked slope, median +0.4387 log units per mA.
+        #
+        # Adaptive Therapy needs band power to FALL as amplitude rises, so the adjusted slope must
+        # be negative. Both counts are reported: n_era_significant for continuity, and
+        # n_era_negative_significant, which is the one the gate uses.
         n_sig = sum(1 for r in res if np.isfinite(r.slope_p) and r.slope_p < 0.05)
+        n_sig_neg = sum(1 for r in res if np.isfinite(r.slope_p) and r.slope_p < 0.05
+                        and np.isfinite(r.slope_log_per_mA) and r.slope_log_per_mA < 0)
         seps = [r.separation_d for r in res if np.isfinite(r.separation_d)]
         amps = tuple(sorted(set(np.round(np.asarray(ev.amplitude_mA, float), 3))))
         amp_hi = max(amps) if amps else float("nan")
@@ -427,13 +441,30 @@ def screen_cells(evidence, *, response_fn,
         if not within_limit:
             fails.append(f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, so the "
                          f"response was measured outside the programmable envelope")
-        if require_era_significance and n_sig == 0:
-            fails.append("no band has a significant era-blocked slope, so the contrast is not "
-                         "separable from the amplitude-versus-time confound")
+        # A MAJORITY of bands must carry the negative adjusted slope, not merely one. This is the
+        # same argument already applied to the responding fraction: the 18 bands are 5 Hz wide on a
+        # 1 Hz grid, so they overlap heavily and move together, and a single qualifying band is the
+        # maximum of a correlated family rather than a finding. Applying the rule to the responding
+        # fraction but not to the adjusted sign was an inconsistency: on RCS08 it let
+        # ZERO_TWO_RIGHT/Left/110 Hz through on 3 of 18 negative bands with a POSITIVE median slope
+        # of +0.0409.
+        if require_era_significance and n_sig_neg / n < min_responding_fraction:
+            if n_sig == 0:
+                fails.append("no band has a significant era-blocked slope, so the contrast is not "
+                             "separable from the amplitude-versus-time confound")
+            else:
+                fails.append(
+                    f"only {n_sig_neg} of {n} bands have a significant NEGATIVE era-blocked slope "
+                    f"(need {min_responding_fraction:.0%}; {n_sig} are significant in either "
+                    "direction). Once the amplitude-versus-time confound is removed the response "
+                    "does not fall with amplitude in a majority of bands, which is what Adaptive "
+                    "Therapy needs; falling arm means without a falling adjusted slope are a time "
+                    "artifact")
 
         rows.append(dict(channel=ch, hemisphere=hemi, rate_hz=float(rate), n_bands=n,
                          n_responding=n_resp, responding_fraction=round(n_resp / n, 3),
                          n_era_significant=n_sig,
+                         n_era_negative_significant=n_sig_neg,
                          median_separation_d=(round(float(np.median(seps)), 3) if seps
                                               else float("nan")),
                          amp_low_mA=(min(amps) if amps else float("nan")), amp_high_mA=amp_hi,
