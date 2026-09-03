@@ -345,6 +345,56 @@ highest-expected-improvement cells are consequently all at 40 Hz, the untested f
 the best-performing 55 Hz. This inverts the reading of the 24 h matrix and should be treated as the
 leading structural hypothesis, to be confirmed once the missing ten weeks of data arrive.
 
+### 2026-09-02 — the randomisation prerequisite is DISCHARGED, and it mattered
+
+This module has said since its first draft that randomising the order of settings within a visit is
+the prerequisite for interpreting any in-clinic contrast, because a monotone ramp makes "later
+setting" and "better setting" the same variable. On 2026-09-02 that randomised design was run for
+the first time. The result settles the question in favour of the concern.
+
+The schedule was executed exactly as issued: seven settings in three randomised complete blocks,
+twenty-one steps, with the setting in force repeated once per block as an anchor and the optional
+165 Hz probe run last. Mapping every step back to the plan gives twenty-two steps and zero
+unmatched.
+
+**The within-visit drift is large, monotone and highly significant.** On the Overall rating,
+Spearman correlation with elapsed time is -0.873 (p = 2.4e-07). Fitted as a linear term alongside
+setting, the slope is -0.051 rating points per minute (p < 0.0001), which is **-3.79 points across
+the 74-minute session** on a 0-10 scale. The anchor setting traces it on its own: identical
+parameters scored 5, then 4, then 3 across the three blocks.
+
+**Once that drift is removed, no setting differs from the anchor.** The joint F-test across all
+seven setting contrasts gives F = 0.520, p = 0.804, and every individual confidence interval spans
+zero. The raw between-setting spread is 2.00 points; the drift-adjusted spread is 0.73.
+
+**What the design bought, as a counterfactual.** Under the monotone ordering used in previous
+sessions, the setting that happened to run last would have appeared roughly 3.8 points better than
+the one that ran first for no reason other than when it was run. That is five times the entire
+drift-adjusted spread between settings. Any apparent winner from a monotonically ordered session
+should be treated as uninterpretable rather than merely noisy.
+
+**THE SESSION'S LIMITATION, AND IT IS SEVERE.** The primary outcome was almost never recorded. Left
+leg has two values across twenty-two steps, both 2.0, so no setting contrast is estimable on it at
+all; left foot has two, back three, right leg two, right foot two, head none. Only the Overall
+rating was scored, on twenty-one of twenty-two steps. The 2026-08-30 amendment above established
+that the Overall rating does NOT detect the stimulation on-versus-off effect that site-specific
+scores do (+0.27, p = 0.25 for Overall against +1.31, p = 0.016 for the left leg). **So the null
+result above is a null on the wrong outcome and is not evidence that the settings do not differ.**
+The single highest-value change for the next session is recording the per-site scores, above all
+the left leg, at every step rather than occasionally.
+
+**A structured side-effect severity field now exists in the sheet**, which the module has wanted
+since Phase 1, carrying an in-sheet instruction to stop and contact the PI at a score of 2 or
+higher. It was completed on eight of twenty-two steps, never exceeded 1, and both severity-1 events
+were the SAME setting on two separate blocks (110 Hz, 2.5 mA left with 2.0 mA right). A reproducible
+mild effect at one setting is a more useful observation than scattered events, and is worth
+confirming prospectively rather than treated as established from two occurrences.
+
+One protocol deviation is recorded in the sheet itself: at step 2 the left pulse width was set to
+110 us instead of the planned 100 us, so that anchor step is not a clean anchor. It is retained with
+the deviation noted rather than dropped, because dropping it would remove one of only three anchor
+observations.
+
 ### 2026-08-30 — the objective changes site: LEFT LEG replaces the global rating
 
 PI direction: the left leg is the critical site, the head is not a target, and the back warrants a

@@ -75,6 +75,52 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-02 (evening) — the first RANDOMISED clinic session was run, and the design earned itself
+
+New Drive file, found by rescanning the `Stage 2 / Clinic Testing` folder (which went 28 -> 32
+files): **`2026_Sep2_RCS08 Stage 2 - September 2026 In-Clinic Testing 09_02_2026`**, id
+`1JdPCWeTfWcjUegBvkf0ug6KqxXWVdN7RaWNn2c1WqNk`. The connector still rejects `name` as a query
+field, so navigate by `parentId` — folder id `10uYVdcj_NGtepeiDF2qHn2bb-fwHqQcv`, server
+`directory-21656df1-5b20-4f16-9973-7a60b15e206c`. Pull as xlsx via `download_file_content` with
+`exportMimeType` set to the spreadsheet type and parse with openpyxl; `read_file_content` flattens
+the workbook and loses the tabs. Header row is 11, as in every prior file.
+
+**The sheet has two NEW columns** beyond the lab's usual nineteen: a leading `Stim Set` column (left
+empty this session) and a numeric `SIDE EFFECT` column carrying an in-sheet stop rule at 2 or
+higher. The latter is the structured severity field this module has wanted since Phase 1.
+
+**The schedule was executed exactly**: 7 settings x 3 randomised blocks = 21 steps, anchor repeated
+each block, the optional 165 Hz probe P1 last, 22 steps total, zero unmatched against the plan.
+
+**Headline: drift is enormous and, once removed, nothing separates the settings.** Spearman
+elapsed-time versus Overall is -0.873 (p = 2.4e-07); the fitted drift is -0.051 points per minute
+(p < 0.0001), i.e. **-3.79 points over 74 minutes**. The anchor alone went 5 -> 4 -> 3. Drift-adjusted,
+the joint F-test across settings is F = 0.520, p = 0.804 with every interval spanning zero. Raw
+spread 2.00 points, adjusted spread 0.73. **Counterfactual: under the old monotone ordering the last
+setting would have looked ~3.8 points better purely from its position — five times the real spread.
+Treat any winner from a monotonically ordered session as uninterpretable.** Full detail is a dated
+amendment in `OBJECTIVE_SPEC.md`.
+
+**The severe limitation: the primary outcome was barely recorded.** Left leg has 2 values of 22
+steps (both 2.0) so nothing is estimable on it; left foot 2, back 3, right leg 2, right foot 2, head
+0. Only Overall was scored (21 of 22). The 2026-08-30 spec amendment established that Overall does
+NOT detect the effect the site scores do (+0.27, p = 0.25 versus left leg +1.31, p = 0.016), so this
+null is **a null on the wrong outcome**, not evidence that settings do not differ. Highest-value fix
+for next session: score the per-site items, above all the left leg, at EVERY step.
+
+**Side effects:** completed on 8 of 22 steps, never above 1, and both severity-1 events were the
+same setting (110 Hz, L 2.5 / R 2.0) on two separate blocks. Reproducible-at-one-setting is a more
+useful signal than scattered, and worth confirming prospectively rather than banked from two events.
+
+**Recorded deviation** (in the sheet, not inferred): step 2 ran the left pulse width at 110 us
+instead of the planned 100 us, so that anchor step is not clean. Retained with the deviation noted,
+because dropping it would remove one of only three anchor observations.
+
+Artifacts: `rcs08_sep2_steps.csv` (22 mapped steps), `rcs08_sep2_setting_effects.csv` (the
+drift-adjusted model), `rcs08_sep2_drift_counterfactual.csv` (raw versus adjusted per setting).
+
+
+
 ### 2026-09-02 (later) — THE ENERGY-MATCHED CAP IS RETRACTED; flat 5 mA limit; open-loop rename
 
 **PI direction, and it reverses several earlier conclusions.** The energy-matched amplitude ceiling
