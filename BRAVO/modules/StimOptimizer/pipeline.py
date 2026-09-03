@@ -63,6 +63,7 @@ import numpy as np
 import pandas as pd
 
 from .routines import acquisition as ACQ
+from .routines import objective as OBJ
 from .routines import plots as PLT
 
 DEFAULT_SITES = ("left_leg", "back")
@@ -126,10 +127,30 @@ class RunReport:
         return any(a.surface_can_resolve_its_optimum() for a in self.arms.values())
 
 
-def _queue_frame(ctx, top=25) -> pd.DataFrame:
+def _queue_frame(ctx, top=25, *, delivered=None, hemisphere=None,
+                 amp_ceiling=OBJ.AMP_HARD_LIMIT_MA) -> pd.DataFrame:
+    """The exploration queue, annotated with whether each cell is actually ELIGIBLE to test.
+
+    WHY THE ANNOTATION EXISTS. The queue and the in-clinic testing schedule are selected by
+    OPPOSITE criteria, and presenting the queue alone invited a direct contradiction between two
+    outputs of the same module. ``acquisition.exploration_queue`` returns cells that have NEVER been
+    tested — that is what makes them informative, because a cell with no reports is where the
+    surrogate is most uncertain. The safety filter that builds the clinic schedule requires the
+    opposite: a (rate, amplitude, pulse width) combination this patient has ALREADY received, so
+    that tolerability is established before the setting is programmed for a 60-second step.
+
+    A queue cell is therefore normally NOT schedulable as it stands. That is not a defect in either
+    component; it is the honest statement that the most informative setting and the most clearly
+    tolerated setting are different settings, and moving to a novel combination is a clinical
+    decision rather than something the optimizer may take on its own. The columns below let the
+    panel say which is which instead of implying every queue row can be run tomorrow.
+
+    ``delivered`` is the per-hemisphere settings census (``routines.adapter.settings_stream``
+    output). Without it the eligibility columns are omitted rather than guessed.
+    """
     gx = ctx.gx
     q = ctx.queue[:top]
-    return pd.DataFrame(dict(
+    out = pd.DataFrame(dict(
         rank=np.arange(1, len(q) + 1),
         freq_hz=gx[q, 0], amp_mA=gx[q, 1],
         posterior_mean=ctx.mu[q], posterior_sd=ctx.sd[q],
@@ -138,6 +159,30 @@ def _queue_frame(ctx, top=25) -> pd.DataFrame:
         n_reports=ctx.n_reports[q],
         safe=ctx.safe[q],
     ))
+    out["within_hard_limit"] = out["amp_mA"] <= float(amp_ceiling) + 1e-9
+    if delivered is None or hemisphere is None:
+        return out
+
+    d = pd.DataFrame(delivered)
+    d = d[d["hemi"].astype(str) == str(hemisphere)]
+    amp = pd.to_numeric(d.get("amp"), errors="coerce")
+    rate = pd.to_numeric(d.get("rate"), errors="coerce")
+    ok = amp.notna() & (amp > 0)
+    lo, hi = (float(amp[ok].min()), float(amp[ok].max())) if ok.any() else (np.nan, np.nan)
+    out["inside_delivered_envelope"] = out["amp_mA"].between(lo, hi)
+    # Has this (rate, amplitude) pair ever been delivered on this side? Pulse width is not a queue
+    # dimension, so this is a NECESSARY condition for schedulability and not a sufficient one — the
+    # full joint (rate, amplitude, pulse width) check happens in schedule.safety_filter once a pulse
+    # width is chosen. Reported as such rather than as a green light.
+    pair = []
+    for _, r in out.iterrows():
+        m = ok & np.isclose(rate, float(r["freq_hz"])) & (np.abs(amp - float(r["amp_mA"])) <= 0.06)
+        pair.append(int(m.sum()))
+    out["prior_records_at_this_rate_and_amp"] = pair
+    out["schedulable_without_new_clinical_signoff"] = (
+        out["within_hard_limit"] & out["inside_delivered_envelope"]
+        & (out["prior_records_at_this_rate_and_amp"] > 0))
+    return out
 
 
 def _batch_frame(ctx) -> pd.DataFrame:
@@ -153,6 +198,7 @@ def _batch_frame(ctx) -> pd.DataFrame:
 
 
 def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
+        delivered_census=None,
         outdir=".", data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
         render_figures=True, figure_backend="mpl", dpi=200, top_queue=25,
         strict=False, **ctx_kwargs) -> RunReport:
@@ -201,7 +247,8 @@ def run(design_csv, *, sites=DEFAULT_SITES, hemispheres=DEFAULT_HEMISPHERES,
                 continue
 
             m = ctx.meta
-            queue = _queue_frame(ctx, top=top_queue)
+            queue = _queue_frame(ctx, top=top_queue, delivered=delivered_census,
+                                 hemisphere=hemi)
             batch = _batch_frame(ctx)
             stop = ACQ.check_stopping([m["mu_star"]], ctx.mu, ctx.sd, ctx.n_reports,
                                       incumbent_mu=m["incumbent_mu"])
@@ -300,7 +347,7 @@ class LiveEvidence:
         return f"using {self.selection_note} ({n_ok} of {n_cells} cells deployable)"
 
 
-def live_evidence(participant, *, energy_budget=None, pw_lookup=None, amp_ceiling=None,
+def live_evidence(participant, *, amp_ceiling=None,
                   channel=None, hemisphere=None, rate_hz=None, bands=None,
                   force_refresh=None, **build_kwargs) -> LiveEvidence:
     """Build, screen and select LFP evidence for a participant from platform data.
@@ -311,9 +358,12 @@ def live_evidence(participant, *, energy_budget=None, pw_lookup=None, amp_ceilin
     SCREENED, which ranks the deployable cells and takes the best. Explicit selection still reports
     the screen, so a caller pinning a cell can see whether it would have survived screening.
 
-    ``energy_budget`` and ``pw_lookup`` are what make screening meaningful rather than cosmetic; see
-    :func:`routines.lfp_evidence.screen_cells`. Without them the energy condition is skipped and the
-    screen says so by leaving ``energy_cap_mA`` empty.
+    ``amp_ceiling`` optionally refuses a cell whose amplitude contrast reaches above the declared
+    hard limit; see :func:`routines.lfp_evidence.screen_cells`.
+
+    RETRACTION, 2026-09-02: this took ``energy_budget`` and ``pw_lookup`` to apply an energy-matched
+    amplitude ceiling. That model is withdrawn — the limit is a flat 5 mA, not a per-rate energy
+    budget — and both parameters are gone, so passing either raises TypeError.
     """
     from .routines import lfp_evidence as EV, lfp_response as LR
     from . import adapter as AD
@@ -325,9 +375,7 @@ def live_evidence(participant, *, energy_budget=None, pw_lookup=None, amp_ceilin
         hemispheres=((hemisphere,) if hemisphere is not None else ("Left", "Right")),
         bands=bands, **build_kwargs)
 
-    screen, best = EV.screen_cells(ev, response_fn=LR.assess_response,
-                                   energy_budget=energy_budget, pw_lookup=pw_lookup,
-                                   amp_ceiling=amp_ceiling)
+    screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling)
     if hemisphere is not None and rate_hz is not None:
         sel, note = EV.select_for(ev, rate_hz=rate_hz, hemisphere=hemisphere, channel=channel)
         key = None if sel is None else next(

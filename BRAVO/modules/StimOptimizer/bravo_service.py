@@ -144,7 +144,17 @@ def run_for_participant(request_data: dict) -> dict:
                    f"{int(pd.to_numeric(es.get('n'), errors='coerce').fillna(0).sum())} reports)")
 
     try:
-        rep = pipeline.run(es, sites=sites, hemispheres=hemis,
+        # The settings census is what lets the exploration queue report ELIGIBILITY rather than
+        # just promise. Without it the queue panel cannot distinguish a cell the patient has already
+        # received from one that has never been delivered, which is precisely the contradiction
+        # between this queue and the in-clinic schedule that the panel now explains. Failure to
+        # build it must not take down the optimizer, so it degrades to no annotation.
+        try:
+            _census = adapter.settings_stream(participant)
+        except Exception:                                     # noqa: BLE001 — annotation only
+            _log.exception("StimOptimizer: settings census unavailable; queue eligibility omitted")
+            _census = None
+        rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
                            outdir=None, render_figures=False,
                            data_horizon=horizon, washin_min=washin_min,
                            n_batches=int((request_data or {}).get("NBatches", 3)),
@@ -243,21 +253,9 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
         from . import pipeline as _pl
         from .routines import objective as _obj, percept_adaptive as _pa
 
-        stream = adapter.settings_stream(participant)
-        ref = _obj.energy_reference_from_record(stream)
-        budget = {h: v["teed"] for h, v in ref.items()}
-
-        def _pw(hemi, rate):
-            s = stream[(stream["hemi"] == hemi)
-                       & _np.isclose(pd.to_numeric(stream["rate"], errors="coerce"), float(rate))]
-            return sorted(pd.to_numeric(s["pw"], errors="coerce").dropna().unique().tolist())
-
         lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
         bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
-        le = _pl.live_evidence(participant, energy_budget=budget, pw_lookup=_pw,
-                               amp_ceiling=_obj.AMP_CEILING_MA
-                               if hasattr(_obj, "AMP_CEILING_MA") else 4.9,
-                               bands=bands)
+        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands)
         screen = le.screen if le.screen is not None else pd.DataFrame()
         n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
         return {
@@ -268,7 +266,7 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
                           "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
             "n_cells_screened": int(len(screen)),
             "n_cells_deployable": n_deployable,
-            "energy_budget_teed": {h: _jsonable(v) for h, v in budget.items()},
+            "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
             "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
             "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
             # Only the cells that responded at all: the full 50-row screen is mostly cells with no

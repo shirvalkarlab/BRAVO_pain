@@ -1,6 +1,6 @@
 /**
 =========================================================
-* UF BRAVO Platform -- Stimulation Parameter Optimizer (Shirvalkar Lab)
+* UF BRAVO Platform -- OPEN-LOOP Stimulation Parameter Optimizer (Shirvalkar Lab)
 =========================================================
 * Renders the per-arm Bayesian-optimization surfaces returned by /api/queryStimOptimizer.
 *
@@ -209,7 +209,7 @@ export default function StimOptimizer() {
                             <TableBody>
                               <TableRow>
                                 {["Channel", "Side", "Rate (Hz)", "Bands responding",
-                                  "Era-significant", "Amp range (mA)", "Energy cap (mA)",
+                                  "Era-significant", "Amp range (mA)", "Amp limit (mA)",
                                   "Deployable", "Why not"].map((h) => (
                                   <TableCell key={h}>
                                     <MDTypography variant="caption" fontWeight="medium">
@@ -246,7 +246,7 @@ export default function StimOptimizer() {
                                   </TableCell>
                                   <TableCell>
                                     <MDTypography variant="caption">
-                                      {c.energy_cap_mA == null ? "\u2014" : fmt(c.energy_cap_mA, 2)}
+                                      {c.amp_limit_mA == null ? "\u2014" : fmt(c.amp_limit_mA, 1)}
                                     </MDTypography>
                                   </TableCell>
                                   <TableCell>
@@ -272,12 +272,15 @@ export default function StimOptimizer() {
 
                       <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1.5 }}>
                         A cell is deployable only if a majority of scanned bands respond, the slope
-                        survives era blocking, and the amplitude contrast sits inside the energy
-                        budget derived from this patient&apos;s own record (Left{" "}
-                        {fmt((data.closed_loop.energy_budget_teed || {}).Left, 0)}, Right{" "}
-                        {fmt((data.closed_loop.energy_budget_teed || {}).Right, 0)} raw units). The
-                        energy condition matters: a response measured only above the amplitude we are
-                        willing to program was never deployable evidence.
+                        survives era blocking, and the amplitude contrast sits at or below the flat{" "}
+                        {fmt(data.closed_loop.amp_hard_limit_mA, 1)}&nbsp;mA hard limit. That limit is
+                        PI-declared and was established by testing at 165&nbsp;Hz; it does not vary
+                        with rate or pulse width. An earlier version of this panel applied an
+                        energy-matched ceiling that scaled as the square root of 55/f &mdash; that
+                        model has been withdrawn, because tolerable amplitude at a given frequency is
+                        not governed by total delivered energy. The amplitude condition still matters
+                        for the same reason it always did: a response measured only above the
+                        amplitude we are willing to program was never deployable evidence.
                       </MDTypography>
                     </>
                   )}
@@ -420,18 +423,43 @@ export default function StimOptimizer() {
 
                   {(current.queue || []).length > 0 && (
                     <MDBox mt={2}>
-                      <MDTypography variant="h6">What to test next</MDTypography>
-                      <MDTypography variant="caption" color="text" component="div">
-                        Never-tested cells ordered by expected improvement. While no optimum is
-                        resolved, this queue is the actionable output of the module.
+                      <MDTypography variant="h6">
+                        Where the model is most uncertain (not the clinic schedule)
                       </MDTypography>
+                      <MDTypography variant="caption" color="text" component="div">
+                        These are cells that have <strong>never been tested</strong>, ordered by
+                        expected improvement. That is exactly what makes them informative &mdash; a
+                        setting with no reports is where the model knows least &mdash; and it is also
+                        why most of them are <strong>not</strong> on the in-clinic testing schedule.
+                        The schedule is built by the opposite rule: it uses only combinations of rate,
+                        amplitude and pulse width this patient has <strong>already received</strong>,
+                        so that tolerability is established before a setting is programmed for a
+                        60-second step.
+                      </MDTypography>
+                      <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.75 }}>
+                        So read this table as the research question, and the clinic schedule as what
+                        can be run tomorrow. The two disagree by design. The{" "}
+                        <strong>eligible</strong> column marks the rows that satisfy the schedule&apos;s
+                        safety rule as they stand; a row marked no is not forbidden, but moving to a
+                        combination never delivered before is a clinical decision and needs explicit
+                        sign-off rather than being run because the model ranked it highly. Amplitudes
+                        are additionally capped at the flat{" "}
+                        {fmt((data.closed_loop || {}).amp_hard_limit_mA ?? 5, 1)}&nbsp;mA hard limit.
+                      </MDTypography>
+                      {/* Explicit column list rather than the first six keys of the payload: the
+                          eligibility flag is the whole point of this panel and a positional slice
+                          would silently drop it as soon as the backend adds a column. */}
                       <Table size="small" sx={{ mt: 1 }}>
                         <TableHead>
                           <TableRow>
-                            {Object.keys(current.queue[0]).slice(0, 6).map((h) => (
-                              <TableCell key={h}>
+                            {[["rank", "rank"], ["freq_hz", "freq (Hz)"], ["amp_mA", "amp (mA)"],
+                              ["posterior_mean", "posterior mean"], ["posterior_sd", "posterior SD"],
+                              ["expected_improvement", "exp. improvement"],
+                              ["prior_records_at_this_rate_and_amp", "prior records"],
+                              ["schedulable_without_new_clinical_signoff", "eligible"]].map(([k, label]) => (
+                              <TableCell key={k}>
                                 <MDTypography variant="caption" fontWeight="medium">
-                                  {h.replace(/_/g, " ")}
+                                  {label}
                                 </MDTypography>
                               </TableCell>
                             ))}
@@ -440,11 +468,23 @@ export default function StimOptimizer() {
                         <TableBody>
                           {current.queue.slice(0, 10).map((r, i) => (
                             <TableRow key={i}>
-                              {Object.keys(current.queue[0]).slice(0, 6).map((h) => (
+                              {["rank", "freq_hz", "amp_mA", "posterior_mean", "posterior_sd",
+                                "expected_improvement", "prior_records_at_this_rate_and_amp",
+                                "schedulable_without_new_clinical_signoff"].map((h) => (
                                 <TableCell key={h}>
-                                  <MDTypography variant="caption">
-                                    {typeof r[h] === "number" ? fmt(r[h], 3) : String(r[h] ?? "\u2014")}
-                                  </MDTypography>
+                                  {h === "schedulable_without_new_clinical_signoff" ? (
+                                    <MDTypography
+                                      variant="caption"
+                                      fontWeight="medium"
+                                      color={r[h] ? "success" : "text"}
+                                    >
+                                      {r[h] == null ? "\u2014" : r[h] ? "yes" : "no"}
+                                    </MDTypography>
+                                  ) : (
+                                    <MDTypography variant="caption">
+                                      {typeof r[h] === "number" ? fmt(r[h], 3) : String(r[h] ?? "\u2014")}
+                                    </MDTypography>
+                                  )}
                                 </TableCell>
                               ))}
                             </TableRow>

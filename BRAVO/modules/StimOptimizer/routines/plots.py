@@ -58,7 +58,11 @@ FREQ_GRID = [10, 20, 30, 40, 55, 70, 85, 110, 125, 130, 145, 165]          # Hz
 # escalation, so the grid can represent every setting on record without proposing beyond the
 # clinician's stated limit. Lower bound stays 0.0 because a hemisphere genuinely runs at 0 mA in
 # this record. Do not raise this to represent a higher delivered amplitude without a new PI limit.
-AMP_GRID = np.round(np.arange(0.0, 4.91, 0.1), 2)                          # mA, per hemisphere
+# Upper bound tracks objective.AMP_HARD_LIMIT_MA (5.0 mA as of 2026-09-02). This MUST follow the
+# declared limit: a grid that stops below it leaves the highest permitted amplitudes outside the
+# search space, so the surrogate can neither score nor propose them. That exact defect occurred once
+# already here, when the grid stopped at 4.0 while 4.8 mA had been delivered.
+AMP_GRID = np.round(np.arange(0.0, OBJ.AMP_HARD_LIMIT_MA + 0.01, 0.1), 2)  # mA, per hemisphere
 FIXED_LENGTH_SCALE = (0.823, None)   # frequency pinned at one octave, amplitude FITTED
 # Retained only as an explicit override for a caller who wants a NON-current reference. The
 # default is None, which derives both the epoch and its coordinates from the design matrix; see

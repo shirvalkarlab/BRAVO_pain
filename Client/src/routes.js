@@ -408,7 +408,7 @@ const routes = {
       },
       {
         key: "stimOptimizer",
-        name: "Stim Parameter Optimizer",
+        name: "Open-Loop Stim Optimizer",
         icon: <TimelineIcon />,
         route: "/reports/stim-optimizer/:participant_uid",
         component: <StimOptimizer />,

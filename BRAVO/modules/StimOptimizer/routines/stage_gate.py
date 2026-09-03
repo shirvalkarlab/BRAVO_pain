@@ -84,10 +84,15 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import lfp_response as LFP
+from . import objective as OBJ
 from . import percept_adaptive as PA
 
 #: Amplitude ceiling the plan may propose, in mA. PI-declared (2026-08-30).
-AMP_CEILING_MA = 4.9
+#: Kept as an alias so existing callers keep working, but there is now ONE source of truth:
+#: objective.AMP_HARD_LIMIT_MA. Raised 4.9 -> 5.0 on 2026-09-02 when the PI declared a flat 5 mA
+#: hard limit per hemisphere, established by testing at 165 Hz, replacing the retracted
+#: energy-matched ceiling. Do not re-declare a literal here.
+AMP_CEILING_MA = OBJ.AMP_HARD_LIMIT_MA
 
 #: Default sensed-band width, in Hz. This is OUR default and not a device figure: the labelling
 #: specifies the permitted band RANGE (8-30 Hz) but the width is a configuration choice. 5 Hz is

@@ -339,29 +339,66 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
 MIN_RESPONDING_BAND_FRACTION = 0.5
 
 
-def screen_cells(evidence, *, response_fn, energy_budget=None, pw_lookup=None,
+def _sensing_side(channel) -> str:
+    """Which hemisphere a sensing channel sits on, read from its name.
+
+    Percept channel labels end in _LEFT or _RIGHT (e.g. ZERO_TWO_LEFT). This matters because a
+    cell pairs a SENSING channel with a STIMULATING hemisphere and the two need not match: the
+    A610 manual states that in Dual Threshold Mode stimulation is driven by sensing from the SAME
+    hemisphere unless a contralateral sensing configuration has been explicitly set up. A
+    contralateral cell is therefore not unusable, but it requires a configuration step that an
+    ipsilateral cell does not, so it must never be selected silently.
+    """
+    c = str(channel).upper()
+    if c.endswith("_LEFT"):
+        return "Left"
+    if c.endswith("_RIGHT"):
+        return "Right"
+    return "unknown"
+
+
+def _laterality(channel, hemisphere) -> str:
+    """``ipsilateral`` / ``contralateral`` / ``unknown``.
+
+    An unparseable channel name returns "unknown" rather than defaulting to either value. Calling
+    it contralateral would assert a fact about the electrode geometry that the name does not
+    support, and calling it ipsilateral would let an unverified pairing be selected as though the
+    configuration question had been settled.
+    """
+    side = _sensing_side(channel)
+    if side == "unknown":
+        return "unknown"
+    return "ipsilateral" if side == str(hemisphere) else "contralateral"
+
+
+def screen_cells(evidence, *, response_fn,
                  min_responding_fraction=MIN_RESPONDING_BAND_FRACTION,
                  require_era_significance=True, amp_ceiling=None):
     """Which cells carry evidence that could actually license a closed-loop deployment.
 
-    Responding is necessary and not sufficient. Three further conditions apply, and on RCS08's real
-    record they cut five responding cells down to one:
+    Responding is necessary and not sufficient. Two further conditions apply:
 
-    1. **The contrast must be inside the energy budget.** This is the argument that disqualified the
-       165 Hz lead: if the high arm delivers more energy than we are willing to program, a response
-       measured only across that arm was never deployable evidence. The gate applies to the
-       EVIDENCE, not merely to proposed settings — otherwise a clean dose-response curve recorded
-       outside the safe envelope silently licenses a policy inside it.
+    1. **A majority of scanned bands must respond**, because the bands overlap and move together,
+       so the best band of eighteen is the maximum of a correlated family rather than a finding.
     2. **The slope must survive era blocking.** Amplitude rose over time in this record, so an
        unblocked slope can be time rather than dose.
-    3. **A majority of scanned bands must respond**, because the bands overlap and move together,
-       so the best band of eighteen is the maximum of a correlated family rather than a finding.
+
+    ``amp_ceiling`` optionally refuses a cell whose contrast reaches above the declared hard limit
+    (:data:`objective.AMP_HARD_LIMIT_MA`). Left as ``None`` no amplitude condition is applied.
+
+    RETRACTION, 2026-09-02: a third condition used to refuse any cell whose high amplitude arm
+    exceeded an ENERGY-MATCHED ceiling scaling as sqrt(55/f). The PI has rejected the premise that
+    tolerable amplitude at a frequency is governed by delivered energy, so ``energy_budget`` and
+    ``pw_lookup`` are gone and passing them raises TypeError. This materially loosens the screen:
+    five of the ten responding cells on RCS08 were refused on energy alone or in part, and under a
+    flat 5 mA limit none of them breaches, so cells previously excluded now qualify. The argument
+    that a response measured outside the programmable envelope is not deployable evidence still
+    holds in principle — it is simply that the envelope is a flat amplitude limit, not an energy
+    budget, so almost nothing on this record falls outside it.
 
     ``response_fn(power, amplitude, era=, cluster=)`` is injected rather than imported, so this
     module does not depend on the response implementation and a caller can screen against an
-    alternative test. ``pw_lookup(hemisphere, rate_hz)`` returns the pulse widths delivered at that
-    setting; the MOST PERMISSIVE (smallest) is used, so a cell fails on energy only when it exceeds
-    the budget under every pulse width it was actually delivered at.
+    alternative test.
 
     Returns ``(screen_frame, selected_key)``. Cells are ranked by responding fraction then median
     separation, but ONLY among survivors — a cell that fails a condition is never selected on the
@@ -379,23 +416,17 @@ def screen_cells(evidence, *, response_fn, energy_budget=None, pw_lookup=None,
         amps = tuple(sorted(set(np.round(np.asarray(ev.amplitude_mA, float), 3))))
         amp_hi = max(amps) if amps else float("nan")
 
-        cap = float("inf")
-        pws = list(pw_lookup(hemi, rate) or []) if pw_lookup else []
-        if energy_budget is not None and hemi in energy_budget and pws:
-            cap = float(np.sqrt(float(energy_budget[hemi]) / (min(pws) * float(rate))))
-            if amp_ceiling is not None:
-                cap = min(cap, float(amp_ceiling))
-        in_budget = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
+        cap = float(amp_ceiling) if amp_ceiling is not None else float("inf")
+        within_limit = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
 
         fails = []
         if n_resp / n < min_responding_fraction:
             fails.append(f"only {n_resp} of {n} bands respond (need "
                          f"{min_responding_fraction:.0%}; overlapping bands make the single best "
                          f"band the maximum of a correlated family)")
-        if not in_budget:
-            fails.append(f"high arm {amp_hi:.1f} mA exceeds the energy-matched cap {cap:.2f} mA "
-                         f"under every delivered pulse width {pws} — the response was measured "
-                         f"outside the deployable envelope")
+        if not within_limit:
+            fails.append(f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, so the "
+                         f"response was measured outside the programmable envelope")
         if require_era_significance and n_sig == 0:
             fails.append("no band has a significant era-blocked slope, so the contrast is not "
                          "separable from the amplitude-versus-time confound")
@@ -406,8 +437,10 @@ def screen_cells(evidence, *, response_fn, energy_budget=None, pw_lookup=None,
                          median_separation_d=(round(float(np.median(seps)), 3) if seps
                                               else float("nan")),
                          amp_low_mA=(min(amps) if amps else float("nan")), amp_high_mA=amp_hi,
-                         energy_cap_mA=(round(cap, 2) if np.isfinite(cap) else None),
-                         within_energy_budget=in_budget,
+                         sensing_side=_sensing_side(ch),
+                         laterality=_laterality(ch, hemi),
+                         amp_limit_mA=(round(cap, 2) if np.isfinite(cap) else None),
+                         within_amp_limit=within_limit,
                          deployable=(not fails), blocking_reasons="; ".join(fails)))
     screen = pd.DataFrame(rows)
     if screen.empty:
@@ -415,7 +448,15 @@ def screen_cells(evidence, *, response_fn, energy_budget=None, pw_lookup=None,
     ok = screen[screen.deployable]
     if ok.empty:
         return screen, None
-    best = ok.sort_values(["responding_fraction", "median_separation_d"], ascending=False).iloc[0]
+    # Rank IPSILATERAL cells ahead of contralateral ones before considering strength of evidence.
+    # A contralateral pairing (sensing on one side driving stimulation on the other) is supported by
+    # the device but only once a contralateral sensing configuration has been set up, so preferring
+    # it on the strength of a slightly better separation would hand back a configuration that needs
+    # an extra clinical step without saying so. Contralateral cells remain in the screen and remain
+    # selectable by naming them explicitly through select_for.
+    ok = ok.assign(_ipsi=(ok["laterality"] == "ipsilateral").astype(int))
+    best = ok.sort_values(["_ipsi", "responding_fraction", "median_separation_d"],
+                          ascending=False).iloc[0]
     return screen, (best.channel, best.hemisphere, float(best.rate_hz))
 
 

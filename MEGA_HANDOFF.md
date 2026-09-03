@@ -75,6 +75,78 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-02 (later) — THE ENERGY-MATCHED CAP IS RETRACTED; flat 5 mA limit; open-loop rename
+
+**PI direction, and it reverses several earlier conclusions.** The energy-matched amplitude ceiling
+is withdrawn. The PI's reasoning is that the tolerable amplitude cap at a given frequency is not
+related to total electrical energy delivered, and that the real limit is a flat 5 mA observed during
+testing at 165 Hz. Every TEED calculation and the concept itself have been removed.
+
+**One source of truth.** `objective.AMP_HARD_LIMIT_MA = 5.0`, aliased by
+`stage_gate.AMP_CEILING_MA`, `stage1_openloop.AMP_CEILING_MA` and
+`surrogate_torch.CLINICIAN_AMP_CEILING`. `plots.AMP_GRID` now DERIVES its upper bound from it
+(0-5.0 mA, 51 cells). That last one matters: the grid previously stopped at 4.9, and a grid that
+stops below the declared limit leaves the highest permitted amplitudes outside the search space
+where the surrogate can neither score nor propose them. That exact defect occurred once before here
+when the grid stopped at 4.0 while 4.8 mA had been delivered.
+
+**Deleted, not defaulted off:** `ENERGY_REF`, `energy_reference`, `energy_penalty`,
+`energy_reference_from_record`, `energy_matched_ceiling`, `w_energy`, `J_energy`. A dormant energy
+cap is what a later reader reinstates by accident. `schedule.safety_filter` and
+`lfp_evidence.screen_cells` now RAISE TypeError if passed `energy_budget`, so a caller working from
+the retracted model sees it rather than silently getting different behaviour.
+
+**The composite objective is unaffected in value.** `J` was `J_pain + J_SE + w_energy * J_energy`
+with `w_energy = 0.0`, so the energy term was already inert on every run and dropping it changes no
+published number. A test now pins that `J` equals the sum of the two surviving terms, so an
+energy-like term cannot be reintroduced silently.
+
+**RE-RUNNING THE CLOSED-LOOP SCREEN CHANGED THE ANSWER: 1 of 50 deployable -> 4 of 50.** Zero of the
+ten responding cells breach 5 mA, so the amplitude condition is now non-binding on this record
+entirely. Newly deployable: `ONE_THREE_LEFT`/Left/165 Hz, `ZERO_THREE_RIGHT`/Left/110 Hz,
+`ZERO_TWO_RIGHT`/Left/110 Hz. Nothing was lost. **The 165 Hz lead is therefore reinstated** — the
+earlier statement that it was disqualified was a consequence of the energy cap. Current figures are
+in `rcs08_closedloop_screen_flatlimit.csv`; do not requote the energy-era screen.
+
+**A NEW FINDING that surfaced from the re-run: laterality was never being reported.** Of the four
+deployable cells, TWO are CONTRALATERAL — the sensing channel is on one side while the stimulating
+hemisphere is the other (`ZERO_THREE_RIGHT`/Left and `ZERO_TWO_RIGHT`/Left). The A610 manual states
+that in Dual Threshold Mode stimulation is driven by sensing from the SAME hemisphere unless a
+contralateral sensing configuration has been explicitly set up. The strongest cell by evidence
+(`ZERO_THREE_RIGHT`/Left/110 Hz, 18/18 bands, separation 2.11) is contralateral, so ranking on
+evidence alone silently returned a configuration needing an extra clinical step.
+`lfp_evidence.screen_cells` now reports `sensing_side` and `laterality` on every row and ranks
+IPSILATERAL cells ahead of contralateral ones before considering strength of evidence. With that
+change the selection moves from the contralateral 110 Hz cell to the ipsilateral
+`ZERO_TWO_LEFT`/Left/55 Hz. Contralateral cells stay in the screen and remain selectable by naming
+them through `select_for`. An unparseable channel name yields `laterality = "unknown"` rather than
+defaulting either way, since calling it contralateral would assert electrode geometry the name does
+not support.
+
+**"What to test next" contradicted the clinic sheet, and now explains itself.** The panel ranked
+NEVER-TESTED cells by expected improvement while the clinic schedule is built by the opposite rule —
+only (rate, amplitude, pulse width) combinations the patient has ALREADY received. So the module was
+recommending settings its own schedule forbids. `_queue_frame` now annotates each row with
+`within_hard_limit`, `inside_delivered_envelope`, `prior_records_at_this_rate_and_amp` and
+`schedulable_without_new_clinical_signoff`, fed by `adapter.settings_stream` through the service.
+**On current data 0 of 25 queue rows are schedulable without new clinical sign-off**, which is the
+honest quantification of the contradiction rather than a bug. The panel is retitled "Where the model
+is most uncertain (not the clinic schedule)" and states that the two disagree by design: the queue
+is the research question, the schedule is what can be run tomorrow, and moving to a novel
+combination is a clinical decision. The table now lists columns EXPLICITLY rather than slicing the
+first six payload keys, which would have dropped the eligibility flag as soon as a column was added.
+
+**Rename: the sidebar now reads "Open-Loop Stim Optimizer"** (was "Stim Parameter Optimizer"), with
+a header comment in the view explaining that this module searches FIXED settings while closed-loop
+Adaptive Therapy modulates amplitude continuously from a sensed band. The PYTHON PACKAGE is still
+`StimOptimizer` and the route is still `/api/queryStimOptimizer`. That was deliberate: renaming the
+package touches the API contract and every import, and a design agent is currently writing an
+implementation plan against the present function paths. Worth doing as its own deliberate pass.
+
+Host StimOptimizer suite **354 passed / 41 skipped**. Container synced and workers reloaded.
+
+
+
 ### 2026-09-02 (later still) — closed-loop wiring is COMPLETE, and the answer is one cell of fifty
 
 Stage 2 now runs against real recordings. The chain is

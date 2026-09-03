@@ -64,6 +64,7 @@ from __future__ import annotations
 import math
 import warnings
 
+from . import objective as _OBJ
 import numpy as np
 
 from .objective import SE_THRESHOLD
@@ -813,7 +814,8 @@ class TorchPreferenceGP:
 #: Highest amplitude any setting may take, in milliamps. This is a clinician-declared ceiling
 #: for this participant and not an estimate from data, so it is a hard bound and no model
 #: output can raise it.
-CLINICIAN_AMP_CEILING = 4.9
+# Alias only; single source of truth is objective.AMP_HARD_LIMIT_MA (5.0 mA as of 2026-09-02).
+CLINICIAN_AMP_CEILING = _OBJ.AMP_HARD_LIMIT_MA
 #: Highest amplitude at which the coded acute record contains enough steps to support any
 #: statement about tolerability. Above this the record holds 5 steps in total, which is too few
 #: to distinguish tolerated from not tolerated, so the region is reported as unknown.

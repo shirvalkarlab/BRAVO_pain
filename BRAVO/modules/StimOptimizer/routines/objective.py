@@ -192,7 +192,6 @@ DEFAULTS = dict(
     c_dur=0.25,        # variance inflation scale for short exposures
     c_age=0.25,        # variance inflation scale for observation age
     dur_ref_h=168.0,   # one week: exposures shorter than this have not reached steady state
-    w_energy=0.0,      # energy penalty OFF by default (section 2.4)
     min_var=1e-3,      # numerical floor on observation variance
 )
 
@@ -209,101 +208,23 @@ def side_effect_penalty(severity) -> float:
     return SE_LADDER[key]
 
 
-#: Reference point for the energy normaliser: the most expensive cell of the declared SEARCH
-#: GRID (OBJECTIVE_SPEC section 1), not the most expensive observed epoch. Fixing it here is
-#: what makes w_energy mean the same thing across runs — normalising by the max of whatever
-#: epoch table happens to be passed in would rescale the weight every time the data changed.
-#: Pulse width is 60 us because OBJECTIVE_SPEC section 1 PINS it at 60 us for the prospective
-#: phase. Using an historical maximum (140-180 us) here would inflate the divisor and leave
-#: w_energy uninterpretable at the grid maximum. TEED at this cell is 247500.
-ENERGY_REF = {"freq_hz": 165.0, "amp_mA": 5.0, "pw_us": 60.0}
-
-
-def energy_reference(ref: dict | None = None) -> float:
-    """TEED at the grid's most expensive cell, in raw (unnormalised) units."""
-    r = ref or ENERGY_REF
-    return float(r["amp_mA"]) ** 2 * float(r["pw_us"]) * float(r["freq_hz"])
-
-
-def energy_penalty(freq_hz, amp_ma, pulse_width_us, *, ref=None) -> np.ndarray:
-    """Total electrical energy delivered, up to the impedance constant, normalised to [0, 1].
-
-    TEED ~ amplitude^2 * pulse_width * frequency, divided by its value at the most expensive
-    cell of the declared search grid (:data:`ENERGY_REF`). The divisor is a fixed constant, so
-    ``w_energy`` is interpretable in NRS points at that reference cell and does not move when
-    the epoch table changes. Values above 1.0 are possible and left unclipped: they mean the
-    setting is outside the declared grid, which is worth seeing rather than hiding.
-    """
-    raw = (np.asarray(amp_ma, float) ** 2 * np.asarray(pulse_width_us, float)
-           * np.asarray(freq_hz, float))
-    return raw / energy_reference(ref)
-
-
-def energy_reference_from_record(census, *, rate_hz=55.0, hemispheres=("Left", "Right"),
-                                 hemi_col="hemi", amp_col="amp", pw_col="pw", rate_col="rate"):
-    """Each hemisphere's highest-energy exposure AT ``rate_hz`` that is actually on record.
-
-    This is the anchor for :func:`energy_matched_ceiling`, and it is deliberately derived from the
-    record rather than declared. The tolerated amplitude ceilings for this patient were established
-    at 55 Hz, so 55 Hz is the reference rate.
-
-    IMPORTANT, and the reason this is a function rather than two lookups: the budget is the maximum
-    of the PRODUCT over real epochs, never ``max(amp) ** 2 * max(pw) * rate``. Taking separate
-    maxima would invent an exposure that never happened — on this record the left hemisphere reached
-    4.5 mA and 180 us at 55 Hz but not simultaneously, so the separate-maxima budget would be 1.8x
-    the largest energy the patient has actually received.
-
-    Returns ``{hemi: {"amp_mA", "pw_us", "rate_hz", "teed"}}``, omitting a hemisphere with no
-    records at ``rate_hz`` rather than substituting another rate.
-    """
-    df = pd.DataFrame(census)
-    for c in (hemi_col, amp_col, pw_col, rate_col):
-        if c not in df.columns:
-            raise KeyError(f"census missing column {c!r}; has {sorted(df.columns)}")
-    num = {c: pd.to_numeric(df[c], errors="coerce") for c in (amp_col, pw_col, rate_col)}
-    at = df.assign(**num)
-    at = at[(at[amp_col] > 0) & np.isclose(at[rate_col], float(rate_hz))].dropna(
-        subset=[amp_col, pw_col, rate_col])
-    out = {}
-    for h in hemispheres:
-        s = at[at[hemi_col] == h]
-        if s.empty:
-            continue
-        teed = s[amp_col] ** 2 * s[pw_col] * s[rate_col]
-        row = s.loc[teed.idxmax()]
-        out[h] = {"amp_mA": float(row[amp_col]), "pw_us": float(row[pw_col]),
-                  "rate_hz": float(rate_hz), "teed": float(teed.max())}
-    return out
-
-
-def energy_matched_ceiling(rate_hz, pulse_width_us, budget_teed, *, amp_ceiling=None):
-    """Amplitude that delivers ``budget_teed`` at ``rate_hz`` and ``pulse_width_us``.
-
-    Holding AMPLITUDE constant across rates is the wrong safety rule, because the energy the tissue
-    receives per unit time rises with rate. Holding total electrical energy constant instead gives
-
-        cap(f, pw) = sqrt( budget / (pw * f) )
-
-    which for unchanged pulse width is the 55 Hz amplitude scaled by ``sqrt(55 / f)`` — 0.707 at
-    110 Hz, 0.577 at 165 Hz. Impedance cancels because it appears in both the budget and the
-    candidate, which holds only while CONTACTS ARE FIXED; a contact change alters impedance and
-    invalidates the budget, so re-derive it rather than carrying it across a reconfiguration.
-
-    ``amp_ceiling`` clamps the result. Pass it: this gate is an ADDITIONAL constraint, not a
-    replacement for the declared ceiling. At low rates the energy-matched value exceeds anything
-    programmable (at 10 Hz it computes to 10.55 mA on this record), so without the clamp an
-    energy-only gate would licence amplitudes far outside the tolerated range.
-    """
-    f = np.asarray(rate_hz, float)
-    pw = np.asarray(pulse_width_us, float)
-    if np.any(f <= 0) or np.any(pw <= 0):
-        raise ValueError("rate_hz and pulse_width_us must be positive")
-    if float(budget_teed) <= 0:
-        raise ValueError("budget_teed must be positive")
-    cap = np.sqrt(float(budget_teed) / (pw * f))
-    if amp_ceiling is not None:
-        cap = np.minimum(cap, float(amp_ceiling))
-    return cap
+# ---------------------------------------------------------------------------------------------
+# AMPLITUDE HARD LIMIT
+# ---------------------------------------------------------------------------------------------
+#: The single safety ceiling on stimulation amplitude, per hemisphere, in milliamps.
+#:
+#: PROVENANCE: PI-declared, established by testing at 165 Hz. It is a FLAT limit — it does not
+#: vary with rate or pulse width.
+#:
+#: RETRACTION, 2026-09-02. This replaces an energy-matched ceiling that scaled the cap as
+#: sqrt(55/f), on the reasoning that total electrical energy delivered (TEED, proportional to
+#: amplitude^2 * pulse width * rate) should be held constant across rates. The PI has rejected that
+#: premise: the tolerable amplitude at a given frequency is not governed by TEED, and the observed
+#: limit was a flat 5 mA found by testing at 165 Hz rather than a frequency-dependent budget. All
+#: TEED machinery has been removed rather than left switched off, because a dormant energy cap is
+#: exactly the kind of thing a later reader reinstates by accident. Do not reintroduce it without
+#: new evidence that a frequency-dependent amplitude limit exists for this patient.
+AMP_HARD_LIMIT_MA = 5.0
 
 
 def composite_z(pro: pd.DataFrame, items: dict | None = None, *, metric=None) -> pd.Series:
@@ -393,7 +314,7 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
 
     Returns
     -------
-    DataFrame with ``J``, ``J_pain``, ``J_SE``, ``J_energy``, ``obs_var``, ``se_observed``.
+    DataFrame with ``J``, ``J_pain``, ``J_SE``, ``obs_var``, ``se_observed``.
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     item = resolve_primary(epoch_stats, cfg["primary_item"])
@@ -431,8 +352,10 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         d["se_observed"] = False
         d["J_SE"] = 0.0
 
-    d["J_energy"] = energy_penalty(d["freq_hz"], d["amp_mA_Left"], d["pw_us_Left"])
-    d["J"] = d["J_pain"] + d["J_SE"] + cfg["w_energy"] * d["J_energy"]
+    # J has no energy term. The composite was J_pain + J_SE + w_energy * J_energy with
+    # w_energy = 0.0, i.e. the energy penalty was already inert on every run, so dropping it
+    # changes no published value. See AMP_HARD_LIMIT_MA for why the concept was removed entirely.
+    d["J"] = d["J_pain"] + d["J_SE"]
     # Hard infeasibility, not a large finite penalty — see SE_LADDER. A cell flagged
     # infeasible may never be selected, however large its apparent pain benefit.
     d["feasible"] = np.isfinite(d["J"])

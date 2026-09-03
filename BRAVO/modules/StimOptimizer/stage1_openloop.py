@@ -104,7 +104,9 @@ RESOLUTION_K = 1.0
 #: Amplitude ceiling the search may propose, in mA. PI-declared (2026-08-30) and identical to the
 #: top of ``routines/plots.AMP_GRID``; restated here as a named constant because Stage 2 and the
 #: gate both need it and neither should reach into a plotting module for a safety limit.
-AMP_CEILING_MA = 4.9
+#: Alias only. Single source of truth is routines.objective.AMP_HARD_LIMIT_MA, raised 4.9 -> 5.0
+#: on 2026-09-02 with the flat PI-declared hard limit.
+AMP_CEILING_MA = OBJ.AMP_HARD_LIMIT_MA
 
 #: Exposure duration, in hours, above which a delivered setting is treated as tolerated for the
 #: purposes of seeding the safety model. Same default ``build_context`` uses.

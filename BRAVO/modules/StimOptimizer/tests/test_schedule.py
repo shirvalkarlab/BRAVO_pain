@@ -92,7 +92,10 @@ def test_safety_filter_rejects_above_ceiling_with_a_reason():
     c = CAND.copy()
     c.loc[c.id == "B", "ampL"] = 5.2
     kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9)
-    assert list(rej.id) == ["B"] and "ceiling" in rej.iloc[0].reject_reason
+    # The message wording changed with the 2026-09-02 retraction ("declared ceiling" ->
+    # "declared hard limit"). Assert the LIMIT VALUE appears rather than a particular noun: the
+    # number is what a clinician needs from a refusal, and it survives further rewording.
+    assert list(rej.id) == ["B"] and "4.9" in rej.iloc[0].reject_reason
     assert "B" not in list(kept.id)
 
 

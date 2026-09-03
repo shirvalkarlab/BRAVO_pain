@@ -14,137 +14,76 @@ from StimOptimizer.routines import schedule as SCHED
 from StimOptimizer.routines import lfp_evidence as EV
 
 
-# --- the energy budget -------------------------------------------------------------------------
-def _census():
-    """SYNTHETIC. Left reaches 4.5 mA and 180 us at 55 Hz but NEVER TOGETHER — the whole point.
+# --- the flat amplitude hard limit (replaces the retracted energy-matched cap) ----------------
+#: Delivered amplitude envelope for the filter fixtures. Defined here rather than inside the
+#: excised energy block it used to share, which is why five tests briefly referenced an undefined
+#: name after the retraction.
+ENV = {"Left": (0.0, 5.0), "Right": (0.0, 5.0)}
 
-    These numbers are invented to make the max-of-product rule bite cleanly; they are NOT RCS08's.
-    Do not quote the 180 us or the resulting 1.8x ratio as facts about the patient — that mistake
-    was made once, in a clinic planning document. On RCS08's chronic census the maximum amplitude
-    and maximum pulse width at 55 Hz occur in the SAME epoch, so the real ratio there is 1.00x; on
-    the acute step log pulse width reaches 290 us and the ratio is 2.90x.
+def test_the_amplitude_limit_is_flat_and_lives_in_one_place():
+    """PI-declared 5.0 mA per hemisphere, established by testing at 165 Hz.
+
+    RETRACTION 2026-09-02: this file previously tested an energy-matched ceiling that scaled the
+    cap as sqrt(55/f) from a TEED budget. The PI rejected the premise that tolerable amplitude at a
+    frequency is governed by delivered energy. The machinery was removed rather than switched off,
+    and these tests assert it is GONE, because a dormant energy cap is what a later reader
+    reinstates by accident.
     """
-    return pd.DataFrame([
-        dict(hemi="Left",  amp=4.5, pw=100.0, rate=55.0),
-        dict(hemi="Left",  amp=2.0, pw=180.0, rate=55.0),
-        dict(hemi="Left",  amp=4.8, pw=100.0, rate=165.0),   # different rate, must not be used
-        dict(hemi="Right", amp=4.5, pw=160.0, rate=55.0),
-        dict(hemi="Right", amp=0.0, pw=160.0, rate=55.0),    # off; must be excluded
-    ])
+    from StimOptimizer.routines import stage_gate as GATE
+    from StimOptimizer import stage1_openloop as S1
+    from StimOptimizer.routines import plots as PLT
+    assert OBJ.AMP_HARD_LIMIT_MA == 5.0
+    # one source of truth, not four literals that can drift apart
+    assert GATE.AMP_CEILING_MA == OBJ.AMP_HARD_LIMIT_MA
+    assert S1.AMP_CEILING_MA == OBJ.AMP_HARD_LIMIT_MA
+    # and the SEARCH GRID must reach the limit, or the highest permitted amplitudes sit outside
+    # the search space where the surrogate can neither score nor propose them
+    assert PLT.AMP_GRID.max() == OBJ.AMP_HARD_LIMIT_MA
 
 
-def test_budget_is_max_of_the_product_not_the_product_of_maxima():
-    """max(amp)**2 * max(pw) would invent an exposure the patient never received."""
-    ref = OBJ.energy_reference_from_record(_census())
-    assert ref["Left"]["amp_mA"] == 4.5 and ref["Left"]["pw_us"] == 100.0
-    assert ref["Left"]["teed"] == pytest.approx(4.5 ** 2 * 100.0 * 55.0)
-    naive = 4.5 ** 2 * 180.0 * 55.0          # what separate maxima would give
-    assert ref["Left"]["teed"] < naive
-    assert naive / ref["Left"]["teed"] == pytest.approx(1.8)
+def test_every_teed_symbol_is_gone_from_the_objective():
+    for name in ("ENERGY_REF", "energy_reference", "energy_penalty",
+                 "energy_reference_from_record", "energy_matched_ceiling"):
+        assert not hasattr(OBJ, name), f"{name} survived the retraction"
+    assert "w_energy" not in OBJ.DEFAULTS
 
 
-def test_budget_uses_only_the_reference_rate_and_ignores_stim_off():
-    ref = OBJ.energy_reference_from_record(_census(), rate_hz=55.0)
-    assert ref["Left"]["rate_hz"] == 55.0
-    # the 4.8 mA / 165 Hz row is more energetic but is at the wrong rate
-    assert ref["Left"]["amp_mA"] != 4.8
-    assert ref["Right"]["amp_mA"] == 4.5           # not the 0.0 mA row
+def test_the_composite_objective_no_longer_carries_an_energy_term():
+    """It was J_pain + J_SE + w_energy*J_energy with w_energy = 0.0, so removing it changes
+    no published value. This test pins that the column is gone AND that J still equals the sum
+    of the two surviving terms, so a future energy-like term cannot be added silently."""
+    ep = pd.DataFrame({
+        "epoch": [1, 2], "freq_hz": [55.0, 55.0], "amp_mA_Left": [1.6, 3.5],
+        "pw_us_Left": [60.0, 60.0], "n": [6, 6], "t0": pd.to_datetime(["2026-01-01", "2026-02-01"], utc=True),
+        "dur_h": [200.0, 200.0], "left_leg_vas": [70.0, 40.0], "left_leg_vas_sd": [8.0, 8.0]})
+    d = OBJ.build_objective(ep, incumbent_epoch=1)
+    assert "J_energy" not in d.columns
+    assert np.allclose(d["J"], d["J_pain"] + d["J_SE"])
 
 
-def test_hemisphere_absent_at_the_reference_rate_is_omitted_not_substituted():
-    c = pd.DataFrame([dict(hemi="Left", amp=1.0, pw=60.0, rate=110.0)])
-    assert OBJ.energy_reference_from_record(c) == {}
+def test_safety_filter_refuses_an_energy_budget_argument():
+    """A caller still passing one is working from the retracted model and must see that."""
+    c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
+    with pytest.raises(TypeError):
+        SCHED.safety_filter(c, delivered_envelope=ENV, energy_budget={"Left": 1.0})
 
 
-# --- the ceiling -------------------------------------------------------------------------------
-def test_ceiling_scales_as_the_square_root_of_the_rate_ratio():
-    budget = 4.5 ** 2 * 100.0 * 55.0
-    at55 = OBJ.energy_matched_ceiling(55.0, 100.0, budget)
-    assert at55 == pytest.approx(4.5)
-    assert OBJ.energy_matched_ceiling(110.0, 100.0, budget) == pytest.approx(4.5 * np.sqrt(0.5))
-    assert OBJ.energy_matched_ceiling(165.0, 100.0, budget) == pytest.approx(4.5 / np.sqrt(3.0))
-    # and the delivered energy at the cap equals the budget, which is the definition
-    cap = OBJ.energy_matched_ceiling(165.0, 100.0, budget)
-    assert cap ** 2 * 100.0 * 165.0 == pytest.approx(budget)
+def test_the_flat_limit_binds_identically_at_every_rate():
+    """The point of the retraction: 4.5 mA is now equally acceptable at 55 and at 165 Hz, where
+    the energy model would have refused it at the higher rate."""
+    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=4.5, ampR=4.5, pwL=100.0, pwR=150.0)
+            for f in (55.0, 110.0, 165.0)]
+    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope=ENV)
+    assert len(kept) == 3 and rej.empty
 
 
-def test_shorter_pulse_width_buys_amplitude_at_the_same_energy():
-    budget = 4.5 ** 2 * 100.0 * 55.0
-    assert (OBJ.energy_matched_ceiling(165.0, 60.0, budget)
-            > OBJ.energy_matched_ceiling(165.0, 100.0, budget))
-
-
-def test_ceiling_must_be_clamped_because_low_rates_are_permissive():
-    """At 10 Hz the energy-matched value is ~10.5 mA. Unclamped, an energy-only gate is unsafe."""
-    budget = 4.5 ** 2 * 100.0 * 55.0
-    assert OBJ.energy_matched_ceiling(10.0, 100.0, budget) > 10.0
-    assert OBJ.energy_matched_ceiling(10.0, 100.0, budget, amp_ceiling=4.9) == pytest.approx(4.9)
-
-
-def test_ceiling_refuses_nonsense_inputs():
-    for bad in ((0.0, 100.0, 1.0), (55.0, 0.0, 1.0)):
-        with pytest.raises(ValueError):
-            OBJ.energy_matched_ceiling(*bad)
-    with pytest.raises(ValueError):
-        OBJ.energy_matched_ceiling(55.0, 100.0, 0.0)
-
-
-# --- the filter --------------------------------------------------------------------------------
-ENV = {"Left": (0.0, 4.9), "Right": (0.0, 4.9)}
-BUDGET = {"Left": 4.5 ** 2 * 100.0 * 55.0, "Right": 4.5 ** 2 * 160.0 * 55.0}
-
-
-def _cands():
-    return pd.DataFrame([
-        dict(id="ok55",   rate=55.0,  ampL=4.5, ampR=3.0, pwL=100.0, pwR=160.0),
-        dict(id="hot165", rate=165.0, ampL=4.5, ampR=3.0, pwL=100.0, pwR=160.0),
-        dict(id="heldR",  rate=165.0, ampL=2.4, ampR=3.0, pwL=100.0, pwR=160.0),
-        dict(id="fine165", rate=165.0, ampL=2.4, ampR=2.0, pwL=100.0, pwR=160.0),
-    ])
-
-
-def test_the_gate_catches_a_constant_amplitude_that_is_not_a_constant_energy():
-    """`heldR` varies only the LEFT amplitude; the right sits untouched at 3.0 mA and breaches."""
-    kept, rej = SCHED.safety_filter(_cands(), delivered_envelope=ENV, amp_ceiling=4.9,
-                                    energy_budget=BUDGET)
-    assert set(kept.id) == {"ok55", "fine165"}
-    r = rej.set_index("id")
-    assert "RIGHT exceeds" in r.loc["heldR", "reject_reason"]
-    assert "constant amplitude is not a constant energy" in r.loc["heldR", "reject_reason"]
-    # the right side is over budget even though nobody varied it
-    assert r.loc["heldR", "teed_pct_R"] > 100
-    assert r.loc["heldR", "teed_pct_L"] <= 100
-
-
-def test_the_gate_reports_the_energy_fraction_so_a_reader_can_audit_it():
-    kept, rej = SCHED.safety_filter(_cands(), delivered_envelope=ENV, amp_ceiling=4.9,
-                                    energy_budget=BUDGET)
-    assert kept.set_index("id").loc["ok55", "teed_pct_L"] == 100      # the reference cell itself
-    hot = rej.set_index("id").loc["hot165"]
-    assert hot["teed_pct_L"] == pytest.approx(300, abs=1)             # 3x at 3x the rate
-    assert "energy" in hot["reject_reason"].lower()
-
-
-def test_amplitude_alone_cannot_be_energy_checked_so_the_gate_refuses_to_guess():
-    bare = _cands().drop(columns=["pwL"])
-    with pytest.raises(KeyError, match="energy gate needs"):
-        SCHED.safety_filter(bare, delivered_envelope=ENV, amp_ceiling=4.9, energy_budget=BUDGET)
-
-
-def test_energy_gate_is_opt_in_so_existing_single_rate_callers_are_unchanged():
-    kept, rej = SCHED.safety_filter(_cands(), delivered_envelope=ENV, amp_ceiling=4.9,
-                                    energy_budget=None)
-    assert len(kept) == 4 and rej.empty
-    assert "teed_pct_L" not in kept.columns
-
-
-def test_declared_ceiling_still_binds_independently_of_energy():
-    """A low rate makes the energy cap permissive; the declared ceiling must still refuse."""
-    c = pd.DataFrame([dict(id="low", rate=10.0, ampL=6.0, ampR=1.0, pwL=100.0, pwR=160.0)])
-    kept, rej = SCHED.safety_filter(c, delivered_envelope={"Left": (0, 9), "Right": (0, 9)},
-                                    amp_ceiling=4.9, energy_budget=BUDGET)
-    assert kept.empty
-    assert "ceiling" in rej.iloc[0]["reject_reason"]
+def test_above_the_flat_limit_is_refused_at_every_rate():
+    rows = [dict(id=f"r{f:.0f}", rate=f, ampL=5.1, ampR=1.0, pwL=100.0, pwR=150.0)
+            for f in (55.0, 165.0)]
+    kept, rej = SCHED.safety_filter(pd.DataFrame(rows), delivered_envelope={"Left": (0.0, 9.0),
+                                                                            "Right": (0.0, 9.0)})
+    assert kept.empty and len(rej) == 2
+    assert rej.reject_reason.str.contains("hard limit").all()
 
 
 # --- LfpEvidence from real-shaped data ---------------------------------------------------------
@@ -279,20 +218,20 @@ def test_marginal_familiarity_does_not_imply_the_pair_was_ever_delivered():
     c = pd.DataFrame([dict(id="novel_pair", rate=55.0, ampL=1.4, ampR=3.0,
                            pwL=100.0, pwR=150.0)])
     kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    energy_budget=BUDGET, prior_triples=_prior())
+                                    prior_triples=_prior())
     assert kept.empty, "a novel combination must not pass"
     assert "NEVER been delivered" in rej.iloc[0]["reject_reason"]
     assert rej.iloc[0]["prior_joint_L"] == 0
     # and it would have PASSED without the joint check, which is why the check exists
     kept2, _ = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                   energy_budget=BUDGET, prior_triples=None)
+                                   prior_triples=None)
     assert len(kept2) == 1
 
 
 def test_a_genuinely_delivered_triple_passes_and_reports_its_record_count():
     c = pd.DataFrame([dict(id="real", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
     kept, rej = SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
-                                    energy_budget=BUDGET, prior_triples=_prior())
+                                    prior_triples=_prior())
     assert len(kept) == 1 and rej.empty
     assert kept.iloc[0]["prior_joint_L"] == 1 and kept.iloc[0]["prior_joint_R"] == 1
 
@@ -300,7 +239,7 @@ def test_a_genuinely_delivered_triple_passes_and_reports_its_record_count():
 def test_joint_check_is_opt_in_and_validates_its_own_input():
     c = pd.DataFrame([dict(id="x", rate=55.0, ampL=1.4, ampR=3.0, pwL=60.0, pwR=150.0)])
     with pytest.raises(KeyError, match="prior_triples missing"):
-        SCHED.safety_filter(c, delivered_envelope=ENV, amp_ceiling=4.9,
+        SCHED.safety_filter(c, delivered_envelope=ENV,
                             prior_triples=_prior().rename(columns={"pw": "pulse_width"}))
 
 
@@ -471,38 +410,48 @@ def _fn(responds, slope_p, sep_d=1.2):
     return lambda power, amp, era=None, cluster=None: _Res(responds, slope_p, sep_d)
 
 
-BUD = {"Left": 4.5 ** 2 * 100.0 * 55.0}
-PWL = lambda h, r: [100.0]
+LIMIT = 5.0
 
 
-def test_a_response_measured_above_the_energy_cap_is_not_deployable_evidence():
-    """The 165 Hz lead's problem, generalised: the gate must apply to the EVIDENCE too.
-
-    A clean dose-response curve recorded outside the deployable envelope would otherwise license a
-    policy inside it.
+def test_a_response_measured_above_the_hard_limit_is_not_deployable_evidence():
+    """The principle survives the retraction; only the envelope changed. A response measured
+    entirely above the programmable amplitude is not evidence for a policy below it. Under the
+    flat 5 mA limit this now takes a 5.4 mA arm, where the energy model refused 4.8 mA at 165 Hz.
     """
-    ev = {("ch", "Left", 165.0): _Ev([2.4, 4.8])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001),
-                                   energy_budget=BUD, pw_lookup=PWL)
+    ev = {("ch", "Left", 165.0): _Ev([2.4, 5.4])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
     assert best is None
     row = screen.iloc[0]
     assert row.n_responding == 18 and not row.deployable
-    assert not row.within_energy_budget
-    assert "outside the deployable envelope" in row.blocking_reasons
+    assert not row.within_amp_limit
+    assert "hard limit" in row.blocking_reasons
+
+
+def test_the_previously_energy_refused_cells_now_qualify():
+    """The concrete consequence on RCS08: 4.8 mA at 165 Hz and 4.0 mA at 110 Hz were refused by
+    the energy cap (3.35 and 3.18 mA). Under a flat 5 mA limit neither breaches."""
+    ev = {("a", "Left", 165.0): _Ev([1.6, 4.8]), ("b", "Left", 110.0): _Ev([1.0, 4.0])}
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
+    assert screen.within_amp_limit.all() and screen.deployable.all()
+    assert best is not None
+
+
+def test_screen_cells_refuses_the_retracted_parameters():
+    ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
+    with pytest.raises(TypeError):
+        EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget={"Left": 1.0})
 
 
 def test_an_in_budget_responding_cell_is_deployable_and_selected():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001),
-                                   energy_budget=BUD, pw_lookup=PWL)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), amp_ceiling=LIMIT)
     assert best == ("ch", "Left", 55.0)
-    assert screen.iloc[0].deployable and screen.iloc[0].within_energy_budget
+    assert screen.iloc[0].deployable and screen.iloc[0].within_amp_limit
 
 
 def test_a_cell_whose_slope_dies_under_era_blocking_is_refused():
     ev = {("ch", "Left", 55.0): _Ev([1.6, 4.0])}
-    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40),
-                                   energy_budget=BUD, pw_lookup=PWL)
+    screen, best = EV.screen_cells(ev, response_fn=_fn(True, 0.40), amp_ceiling=LIMIT)
     assert best is None
     assert "era-blocked slope" in screen.iloc[0].blocking_reasons
 
@@ -516,29 +465,18 @@ def test_one_lucky_band_of_eighteen_is_not_a_finding():
         calls["n"] += 1
         return _Res(calls["n"] == 1, 0.001, 1.2)
 
-    screen, best = EV.screen_cells(ev, response_fn=one_only, energy_budget=BUD, pw_lookup=PWL)
+    screen, best = EV.screen_cells(ev, response_fn=one_only, amp_ceiling=LIMIT)
     assert best is None
     assert screen.iloc[0].n_responding == 1
     assert "correlated family" in screen.iloc[0].blocking_reasons
 
 
-def test_the_most_permissive_pulse_width_decides_the_energy_verdict():
-    """A cell fails on energy only if it breaches under EVERY pulse width it was delivered at."""
-    ev = {("ch", "Left", 110.0): _Ev([1.0, 3.5])}
-    tight, _ = EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget=BUD,
-                               pw_lookup=lambda h, r: [140.0])
-    loose, best = EV.screen_cells(ev, response_fn=_fn(True, 0.001), energy_budget=BUD,
-                                  pw_lookup=lambda h, r: [140.0, 60.0])
-    assert not tight.iloc[0].within_energy_budget
-    assert loose.iloc[0].within_energy_budget and best is not None
-
-
 def test_a_failing_cell_is_never_selected_on_the_strength_of_its_separation():
-    ev = {("ch", "Left", 165.0): _Ev([2.4, 4.8]),          # huge separation, over budget
-          ("ch", "Left", 55.0): _Ev([1.6, 4.0])}           # modest, in budget
+    ev = {("ch", "Left", 165.0): _Ev([2.4, 5.4]),          # huge separation, over the limit
+          ("ch", "Left", 55.0): _Ev([1.6, 4.0])}           # modest, within the limit
     def by_rate(power, amp, era=None, cluster=None):
-        return _Res(True, 0.001, 9.9 if len(amp) and max(amp) > 4.5 else 0.6)
-    screen, best = EV.screen_cells(ev, response_fn=by_rate, energy_budget=BUD, pw_lookup=PWL)
+        return _Res(True, 0.001, 9.9 if len(amp) and max(amp) > 5.0 else 0.6)
+    screen, best = EV.screen_cells(ev, response_fn=by_rate, amp_ceiling=LIMIT)
     assert best == ("ch", "Left", 55.0)
 
 
