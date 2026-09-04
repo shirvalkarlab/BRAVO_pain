@@ -611,3 +611,64 @@ def test_latency_estimator_recovers_a_known_time_constant_and_refuses_an_inert_b
     assert lat == pytest.approx(4.0, abs=0.5)
     assert PA.estimate_response_latency(t, np.ones_like(t), amp) is None
     assert PA.estimate_response_latency(t, power, np.ones_like(t)) is None
+
+
+# --- threshold-mode selection, live now that Parkinson's mode makes it a real choice ------------
+def test_single_threshold_on_both_hemispheres_is_refused_when_one_is_unvalidated():
+    """D40 is a SAFETY rule, not a detail, and it was dormant until 2026-09-03. With Adaptive
+    configured on both hemispheres in Single Threshold mode, sensing from EITHER hemisphere drives
+    therapy — so a hemisphere whose band never passed the screen could drive amplitude on both
+    sides. The function refuses rather than warns."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    r = PA.select_threshold_mode(PA.SINGLE, validated_hemispheres=("Left",),
+                                 configuring_both_hemispheres=True)
+    assert r["allowed"] is False
+    assert any("D40" in p and "Right" in p for p in r["problems"])
+    # one hemisphere only is fine
+    assert PA.select_threshold_mode(PA.SINGLE, validated_hemispheres=("Left",),
+                                    configuring_both_hemispheres=False)["allowed"] is True
+    # both validated is allowed, but the interchangeability claim is surfaced
+    both = PA.select_threshold_mode(PA.SINGLE, validated_hemispheres=("Left", "Right"),
+                                    configuring_both_hemispheres=True)
+    assert both["allowed"] is True and any("interchangeable" in w for w in both["warnings"])
+    # Dual does not couple the hemispheres, so the same configuration is unproblematic
+    assert PA.select_threshold_mode(PA.DUAL, validated_hemispheres=("Left",),
+                                    configuring_both_hemispheres=True)["allowed"] is True
+
+
+def test_single_inverse_is_refused_as_a_control_mode():
+    from StimOptimizer.routines import percept_adaptive as PA
+    r = PA.select_threshold_mode(PA.SINGLE_INVERSE)
+    assert r["allowed"] is False and "cannot drive therapy" in r["problems"][0]
+    assert r["consequences"]["can_drive_therapy"] is False
+
+
+def test_recommendation_is_dual_for_a_slow_signal_and_derived_not_hardcoded():
+    """Dual is recommended because chronic pain is slow, and the recommendation must FOLLOW from
+    the timescale rather than being fixed — a demonstrated fast biomarker should change it."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    slow = PA.recommend_threshold_mode(validated_hemispheres=("Left",))
+    assert slow["mode"] == PA.DUAL and slow["allowed"] is True
+    assert slow["timescale_measured"] is False
+    assert "No biomarker timescale has been measured" in slow["recommended_because"]
+    fast = PA.recommend_threshold_mode(biomarker_timescale_s=2.0, validated_hemispheres=("Left",))
+    assert fast["mode"] == PA.SINGLE and fast["timescale_measured"] is True
+
+
+def test_mode_selection_reports_the_coupling_and_timing_consequences():
+    from StimOptimizer.routines import percept_adaptive as PA
+    c = PA.select_threshold_mode(PA.DUAL)["consequences"]
+    assert c["couples_hemispheres"] is False
+    assert c["transition_up_ms"] == 2.5 * 60_000.0 and c["transition_down_ms"] == 5.0 * 60_000.0
+    assert PA.select_threshold_mode(PA.SINGLE)["consequences"]["couples_hemispheres"] is True
+    assert PA.select_threshold_mode("nonsense")["allowed"] is False
+
+
+def test_timing_plan_follows_the_selected_mode():
+    """The mode choice must actually change the timing, or the selector is decorative."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    dual = PA.timing_plan(mode=PA.DUAL)
+    single = PA.timing_plan(mode=PA.SINGLE)
+    assert dual["device_default_averaging_ms"] == 1200.0
+    assert single["device_default_averaging_ms"] == 100.0
+    assert dual["transition_up_ms"] != single["transition_up_ms"]

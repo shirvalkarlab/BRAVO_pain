@@ -143,6 +143,119 @@ UNPUBLISHED_RANGES = ("averaging duration", "detection blanking duration",
                       "transition up duration", "transition down duration")
 
 
+#: Hemisphere coupling in Single Threshold mode (`D40`, A610 p. 39): "If both hemispheres have an
+#: Adaptive Therapy program configured in Single Threshold Mode, Sensing LFP data from either
+#: hemisphere will drive Adaptive Therapy." This rule was dormant while Single Threshold was
+#: unavailable to a non-Parkinson's participant. In Parkinson's mode it is live, and it is a safety
+#: rule rather than a detail: configuring both hemispheres in Single lets a hemisphere whose band was
+#: never validated drive amplitude on both sides.
+SINGLE_COUPLES_HEMISPHERES = True
+
+
+def select_threshold_mode(mode, *, validated_hemispheres=(), configuring_both_hemispheres=False,
+                          biomarker_timescale_s=None):
+    """Choose a threshold mode and return its consequences, or refuse with reasons.
+
+    Selecting the mode is now a real choice. While the participant was programmed outside
+    Parkinson's mode the device forced Dual Threshold, so the module only had to describe it; the
+    mode is selectable now and the module has to help pick.
+
+    `validated_hemispheres` names the hemispheres for which a control band has actually passed the
+    deployability screen. `configuring_both_hemispheres` says whether an Adaptive program will exist
+    on both sides. Together these drive the `D40` check, which is the reason this function refuses
+    rather than merely advises.
+
+    `biomarker_timescale_s` is the timescale the control signal actually varies on, when known. It
+    decides whether Single Threshold's fast dynamics are appropriate: its 250 ms transitions and
+    100 ms averaging are matched to sub-second beta bursts, whereas chronic pain varies over hours,
+    so Dual Threshold's minute-scale transitions are the physiologically apt choice here. Single is
+    not forbidden — it is declined for a stated reason that can be revisited if a fast pain
+    biomarker is ever demonstrated.
+    """
+    spec = MODES.get(mode)
+    if spec is None:
+        return {"mode": mode, "allowed": False,
+                "problems": [f"unknown threshold mode {mode!r}; expected one of {sorted(MODES)}"],
+                "warnings": [], "consequences": {}}
+
+    problems, warnings = [], []
+    if not spec.can_drive_therapy:
+        problems.append(
+            f"{mode!r} cannot drive therapy: it is available only in a Sensing Only configuration, "
+            "so a change in LFP will not change stimulation. Choose it deliberately for monitoring, "
+            "never as a control mode.")
+
+    val = tuple(validated_hemispheres or ())
+    if mode == SINGLE and configuring_both_hemispheres:
+        unvalidated = [h for h in ("Left", "Right") if h not in val]
+        msg = ("D40: with an Adaptive program on BOTH hemispheres in Single Threshold mode, sensing "
+               "from EITHER hemisphere drives therapy.")
+        if unvalidated:
+            problems.append(
+                msg + " " + ", ".join(unvalidated) + " has no band that passed the deployability "
+                "screen, so an unvalidated signal would be able to drive amplitude on both sides. "
+                "Either validate it, or configure Adaptive on one hemisphere only, or use Dual "
+                "Threshold, which does not couple the hemispheres.")
+        else:
+            warnings.append(msg + " Both hemispheres are validated, so this is permissible, but the "
+                            "two bands must be interchangeable as controllers, which is a stronger "
+                            "claim than each being individually valid.")
+
+    if mode == SINGLE and biomarker_timescale_s is not None and biomarker_timescale_s > 60.0:
+        warnings.append(
+            f"the control signal varies on a timescale of about {biomarker_timescale_s:.0f} s, while "
+            "Single Threshold transitions in 250 ms and averages over 100 ms. Those dynamics are "
+            "matched to sub-second beta bursts, not to a slowly varying signal; Dual Threshold's "
+            "2.5-minute and 5-minute transitions are the apt choice unless fast dynamics are shown.")
+
+    return {
+        "mode": spec.mode,
+        "allowed": not problems,
+        "problems": problems,
+        "warnings": warnings,
+        "consequences": {
+            "can_drive_therapy": spec.can_drive_therapy,
+            "expected_direction": spec.expected_direction,
+            "threshold_algorithm": spec.threshold_algorithm,
+            "lfp_band_hz": list(spec.lfp_band_hz),
+            "averaging_duration_ms": spec.averaging_duration_ms,
+            "onset_duration_ms": spec.onset_duration_ms,
+            "detection_blanking_ms": spec.detection_blanking_ms,
+            "transition_up_ms": spec.transition_up_ms,
+            "transition_down_ms": spec.transition_down_ms,
+            "couples_hemispheres": bool(spec.mode == SINGLE and SINGLE_COUPLES_HEMISPHERES),
+            "suggested_capture_med_state": spec.suggested_capture_med_state,
+        },
+    }
+
+
+def recommend_threshold_mode(*, biomarker_timescale_s=None, validated_hemispheres=(),
+                             configuring_both_hemispheres=False):
+    """The mode this module recommends, with the reason, given what is known.
+
+    Returns Dual Threshold for a slowly varying signal, which is the situation here. The recommendation
+    is derived rather than hardcoded so that a demonstrated fast biomarker would change it.
+    """
+    fast = (biomarker_timescale_s is not None and biomarker_timescale_s <= 5.0)
+    mode = SINGLE if fast else DUAL
+    why = ("the control signal varies on a sub-5-second timescale, which is what Single Threshold's "
+           "250 ms transitions are designed for"
+           if fast else
+           "chronic pain varies over hours to days, and Dual Threshold's 2.5-minute and 5-minute "
+           "transitions are matched to that; Single Threshold's sub-second dynamics are not. Dual "
+           "Threshold is also control-to-range rather than control-to-target, which suits an "
+           "uncertain physiological target with an asymmetric cost of overshooting")
+    if biomarker_timescale_s is None:
+        why += ". No biomarker timescale has been measured, so this rests on the nature of the "\
+               "outcome rather than on data from this participant"
+    sel = select_threshold_mode(mode, validated_hemispheres=validated_hemispheres,
+                                configuring_both_hemispheres=configuring_both_hemispheres,
+                                biomarker_timescale_s=biomarker_timescale_s)
+    sel["recommended_because"] = why
+    sel["timescale_measured"] = biomarker_timescale_s is not None
+    return sel
+
+
 def timing_plan(*, mode=None, biomarker_integration_s=BIOMARKER_INTEGRATION_S,
                 ramp_s=None, settle_windows=SETTLE_WINDOWS, measured_latency_s=None):
     """Closed-loop timing parameters derived from the biomarker's own integration window.

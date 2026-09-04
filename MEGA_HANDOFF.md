@@ -75,6 +75,57 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-03 (later) — device knob inventory, and the threshold mode is now a real choice
+
+**Plan review (step 1).** One stale passage found and fixed: Phase 6 still said clinical benefit
+"requires `D02` and `D03` to be resolved through a regulatory or protocol route". Both are resolved
+for this participant, so the obstacle moved from "cannot be switched on" to "switching it on does
+not by itself demonstrate it helps" — which is a trial-design problem, not a device one.
+
+**Knob inventory (steps 2 and 3), saved as `closedloop_knob_inventory.csv`.** 25 modifiable device
+parameters catalogued against their rule, default and published range. Wiring status was determined
+by searching for a routine that actually RECOMMENDS a value, not by grepping for a mention — the
+first attempt did the latter and was useless, matching nine modules on the word "channel".
+
+Result: **7 of 25 are fully recommended today.** The rest: 7 absent, 4 are constraints rather than
+choices, 3 reported without being chosen, 2 have only a cap, 1 partial, 1 constrained-only. Each
+unwired knob carries a UX proposal in the artifact. The substantive gaps are threshold PLACEMENT
+(K06/K07 — `derive_single_threshold` covers Single only; nothing places a Dual pair), capture
+amplitudes (K08/K09 — the screen reports amplitudes observed in history but recommends none, and per
+`D28` choosing them is simultaneously a therapeutic decision), paused amplitude (K12, never modelled
+though the patient receives it whenever the loop suspends), and the titration protocol (K24/K25).
+
+**Threshold mode selection (step 4).** `select_threshold_mode` and `recommend_threshold_mode` in
+`percept_adaptive.py`. This was previously describable but not selectable, because the device forced
+Dual Threshold outside Parkinson's mode.
+
+**`D40` is now a live safety rule and the selector enforces it.** "If both hemispheres have an
+Adaptive Therapy program configured in Single Threshold Mode, Sensing LFP data from either
+hemisphere will drive Adaptive Therapy." The constraints document itself flagged this as mattering
+only "if the indication question is ever resolved" — it now is. Configuring Single on both
+hemispheres when only one has a band that passed the screen is REFUSED, not warned about, because it
+would let an unvalidated signal drive amplitude bilaterally. With both validated it is allowed with
+a warning that the two bands must be interchangeable as controllers, a stronger claim than each
+being individually valid. Dual does not couple the hemispheres and is unaffected.
+
+`recommend_threshold_mode` returns Dual for a slow signal, but DERIVES it from the timescale rather
+than hardcoding: a demonstrated sub-5-second biomarker flips the recommendation to Single. With no
+measured timescale it says so in its own reason string. Single Inverse is refused as a control mode
+(sensing only). `timing_plan` already takes the mode and the defaults differ by it — asserted in a
+test, so the selector cannot become decorative.
+
+StimOptimizer suite **367 passed / 41 skipped** (was 362). Plan v4 and the knob inventory saved as
+artifacts.
+
+**§9 status.** The plan's implementation section calls for a new nine-file `ClosedLoopDeployment`
+module across eight phases. Phases 4-6 are prospective data collection and cannot be built. What
+this pass contributes to the buildable phases: the constraint knowledge Phase 1 needs is now
+inventoried, and several Phase 1/2 primitives exist in `percept_adaptive` and `lfp_evidence`
+(timing, mode selection, laterality, the signed screen). The module scaffolding itself is NOT yet
+created; that is the next chunk.
+
+
+
 ### 2026-09-03 — rate as a biomarker covariate, an equivalence verdict, and closed-loop timing
 
 Three builds, in the order agreed, plus two documents revised for the Parkinson's-mode change.
