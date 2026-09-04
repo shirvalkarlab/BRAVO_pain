@@ -55,6 +55,20 @@ def impedance_facts(recordings):
            "lead_model": (newest.get("Left") or {}).get("LeadModel"),
            "lead_type": _lead_type((newest.get("Left") or {}).get("LeadModel"))}
 
+    # The historical worst is a DIFFERENT question from the current reading and both matter: a lead
+    # whose newest measurement is inside the limits but which has exceeded them before is not the
+    # same object as one that never has. Reporting only the newest hid this until the 2026-09-04
+    # ingest brought in a newer, better measurement and D16 silently flipped from fail to pass.
+    for hemi in ("Left", "Right"):
+        hist = [float(x) for r in rows
+                for row in (((r.metadata or {}).get(hemi) or {}).get("Bipolar") or [])
+                for x in row if x]
+        out.setdefault("history", {})[hemi] = {
+            "bipolar_max_ohm_ever": max(hist) if hist else None,
+            "n_readings": len(hist),
+            "n_above_open_limit": sum(1 for x in hist if x > 10000.0),
+        }
+
     for hemi in ("Left", "Right"):
         h = newest.get(hemi) or {}
         bip = [float(x) for row in (h.get("Bipolar") or []) for x in row if x]
@@ -121,7 +135,8 @@ PI_STATED_FACTS = {
 }
 
 
-def facts_for_participant(participant_uid, impedance_recordings=None, *, hemisphere=None):
+def facts_for_participant(participant_uid, impedance_recordings=None, *,
+                          hemisphere=None, channel=None):
     """Assemble every device fact this module can establish for one participant.
 
     Measured values take precedence over stated ones wherever both exist, and the returned dict
@@ -143,9 +158,19 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *, hemisph
         ohm = candidate_impedance_ohm(imp, hemisphere) if hemisphere else None
         if ohm is not None:
             out["impedance_ohms"] = ohm
+            # Be exact about what this number IS. It is the worst bipolar pair WITHIN the newest
+            # recording, not the worst across the record — and the difference is not academic: on
+            # 2026-09-04 an ingest brought in a newer, better measurement and D16 flipped from fail
+            # to pass with no code change, while 1265 of 15540 historical left-lead readings remain
+            # above the open-circuit limit. The old wording said "across N recordings", which would
+            # have let a reader take a currently-sound lead for a never-faulty one.
+            _hist = ((imp.get("history") or {}).get(hemisphere) or {})
             prov["impedance_ohms"] = (
-                f"measured: worst bipolar reading on the {hemisphere} lead across "
-                f"{imp['n_records']} impedance recordings, newest record")
+                f"measured: worst bipolar pair in the NEWEST of {imp['n_records']} impedance "
+                f"recordings on the {hemisphere} lead (status {imp.get('status_newest')}); "
+                f"worst EVER {_hist.get('bipolar_max_ohm_ever')} ohm with "
+                f"{_hist.get('n_above_open_limit')} of {_hist.get('n_readings')} readings above "
+                f"the 10000 ohm open limit")
         out["impedance_tested"] = True
         prov["impedance_tested"] = f"measured: {imp['n_records']} impedance recordings on record"
         if imp.get("lead_type"):
@@ -153,5 +178,111 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *, hemisph
             prov["lead_type"] = f"measured: LeadModel {imp.get('lead_model')}"
         out["_impedance_status"] = imp.get("status_newest")
         out["_impedance_status_counts"] = imp.get("status_counts")
+    # Facts from the raw session reports: capture amplitudes, adaptive limits, the device's own
+    # artefact verdict, cycling, and the per-bin LFP spectrum D09 consumes.
+    srf, srf_prov = session_report_facts_for(participant_uid, channel=channel,
+                                             hemisphere=hemisphere)
+    for k, v in srf.items():
+        if v is not None and out.get(k) is None:
+            out[k] = v
+            prov[k] = srf_prov.get(k, "measured: session reports")
+
     out["_provenance"] = prov
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# FACTS FROM THE SESSION REPORTS
+# ---------------------------------------------------------------------------------------------
+#: Per-participant summary produced by ``session_report_facts.scan_folder``. Committed next to the
+#: module because the scan takes ~4 minutes over 8.5 GB of reports and its result is a 34 KB
+#: summary; re-scanning per request is not an option and re-scanning per session is wasteful. The
+#: file records ``n_files`` so a reader can tell which pass produced it.
+_SUMMARY_FILES = {"2e3c75c00d7f4f37b53a048d195f11da": "_facts_RCS08.json"}
+
+
+def _load_summary(participant_uid):
+    import json as _json
+    import os as _os
+    name = _SUMMARY_FILES.get(str(participant_uid))
+    if not name:
+        return {}
+    path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), name)
+    try:
+        with open(path) as fh:
+            return _json.load(fh)
+    except Exception:
+        return {}
+
+
+def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
+    """Facts for the six rules the platform decoder does not keep in queryable form.
+
+    Every value here comes from the raw session reports rather than a person's recollection, and the
+    DISTRIBUTION is carried alongside the newest value because for several of these rules the
+    distribution is the finding — D27 is violated by 90% of the right-hemisphere capture records
+    while the most recent capture is compliant, and reporting only one of those would mislead.
+    """
+    from . import session_report_facts as _srf
+    S = _load_summary(participant_uid)
+    if not S:
+        return {}, {}
+    out, prov = {}, {}
+    n = S.get("n_files")
+    tag = f"measured: session reports, {n} files"
+
+    # D28 — adaptive limits and whether adaptive has ever run
+    cap = (S.get("capture_newest") or {}).get(hemisphere or "") or {}
+    if cap.get("lower_mA") is not None:
+        out["capture_amp_low_mA"] = float(cap["lower_mA"])
+        prov["capture_amp_low_mA"] = tag + " (newest capture)"
+    if cap.get("upper_mA") is not None:
+        out["capture_amp_high_mA"] = float(cap["upper_mA"])
+        prov["capture_amp_high_mA"] = tag + " (newest capture)"
+        # D28: the adaptive amplitude limits INHERIT the capture amplitudes (A610 p. 41).
+        out["adaptive_min_mA"] = float(cap["lower_mA"]) if cap.get("lower_mA") is not None else None
+        out["adaptive_max_mA"] = float(cap["upper_mA"])
+        prov["adaptive_max_mA"] = tag + " (inherited from capture per D28)"
+    if cap.get("pw_us") is not None:
+        out["capture_pulse_width_us"] = float(cap["pw_us"])
+        prov["capture_pulse_width_us"] = tag + " (newest capture)"
+
+    # D17 — the device's own artefact verdict for this channel
+    art = S.get("artifact_status") or {}
+    key = _match_survey_channel(art, channel, hemisphere)
+    if key:
+        counts = {k: v for k, v in (art.get(key) or {}).items() if k}
+        out["artifact_flags"] = sorted(k for k in counts if k != "ARTIFACT_NOT_PRESENT")
+        prov["artifact_flags"] = tag + f" (channel {key}: {counts})"
+
+    # D32 — cycling is the only one of the five feature exclusions the reports carry
+    cyc = S.get("cycling_enabled_counts") or {}
+    if cyc:
+        out["cycling_in_group"] = cyc.get("True", 0) > 0
+        prov["cycling_in_group"] = tag + f" (Cycling.Enabled {cyc})"
+
+    # D09 — the per-bin spectrum, which is the form the rule now consumes
+    bins = _srf.candidate_lfp_bins(S, channel, hemisphere) if channel else []
+    if bins:
+        out["lfp_bins_uvp"] = bins
+        prov["lfp_bins_uvp"] = tag + f" ({len(bins)} survey bins, median per bin)"
+    return out, prov
+
+
+def _match_survey_channel(mapping, channel, hemisphere):
+    """Reconcile a candidate's channel name with the survey's electrode-pair spelling.
+
+    A candidate says ``ONE_THREE_LEFT``; the survey says ``ONE_AND_THREE_Left``. Returning None
+    when no match is found is deliberate — a rule that receives no flags reports "not determinable"
+    rather than "no artefact", and inventing the latter is how a contaminated channel would pass.
+    """
+    if not channel:
+        return None
+    want = str(channel).upper().replace("_LEFT", "").replace("_RIGHT", "").replace("_", "")
+    for key in mapping:
+        pair, _, hemi = str(key).rpartition("_")
+        if hemisphere and hemi.lower() != str(hemisphere).lower():
+            continue
+        if pair.upper().replace("_AND_", "").replace("_", "") == want:
+            return key
+    return None

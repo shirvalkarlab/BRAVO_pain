@@ -567,3 +567,72 @@ def test_recording_set_signature_folds_in_each_recordings_own_hash():
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+
+# --- session-report facts, and the impedance current-vs-historical distinction (2026-09-04) -----
+def test_impedance_reports_the_newest_reading_AND_the_historical_worst():
+    """Regression for a verdict that flipped with no code change.
+
+    D16 read 10885 ohm and FAILED; an ingest brought in a newer, better measurement and it read
+    6869 ohm and PASSED. Both numbers were correct — the fact is the worst pair within the NEWEST
+    recording — but the provenance string said "across N recordings", which invites a reader to
+    take a currently-sound lead for a never-faulty one. On the real record the left lead is
+    intermittent: 1265 of 15540 readings exceed the open-circuit limit while the newest is inside
+    it. Both answers must therefore be carried, because "is it sound now" and "has it ever failed"
+    are different clinical questions.
+    """
+    from ClosedLoopDeployment import device_facts as DF
+
+    def rec(worst, date, status="GOOD"):
+        return _Rec({"Status": status,
+                     "Left": {"LeadModel": "LEAD_B33015",
+                              "Monopolar": [1000.0] * 8,
+                              "Bipolar": [[1000.0, worst]]},
+                     "Right": {"LeadModel": "LEAD_B33015",
+                               "Monopolar": [1000.0] * 8,
+                               "Bipolar": [[900.0, 950.0]]}}, date)
+
+    f = DF.impedance_facts([rec(13262.0, 1, "INVESTIGATE"), rec(6869.0, 2, "GOOD")])
+    assert f["Left"]["bipolar_max_ohm"] == 6869.0, "the fact is the NEWEST record's worst pair"
+    assert f["status_newest"] == "GOOD"
+    hist = f["history"]["Left"]
+    assert hist["bipolar_max_ohm_ever"] == 13262.0, "the historical worst must survive"
+    assert hist["n_above_open_limit"] == 1
+    assert f["status_counts"] == {"GOOD": 1, "INVESTIGATE": 1}
+
+    # the provenance handed to the interface must carry BOTH numbers
+    facts = DF.facts_for_participant("uid-x", [rec(13262.0, 1, "INVESTIGATE"), rec(6869.0, 2)],
+                                     hemisphere="Left")
+    p = (facts.get("_provenance") or {}).get("impedance_ohms", "")
+    assert "NEWEST" in p and "worst EVER" in p and "13262" in p, p
+
+
+def test_survey_channel_names_are_reconciled_and_never_guessed():
+    """A candidate says ONE_THREE_LEFT; the survey says ONE_AND_THREE_Left. A failed match must
+    return None so the rule reports "not determinable" — inventing "no artefact present" is how a
+    contaminated channel would pass the check it exists to fail."""
+    from ClosedLoopDeployment import device_facts as DF
+    m = {"ONE_AND_THREE_Left": {"ARTIFACT_NOT_PRESENT": 5},
+         "ONE_AND_THREE_Right": {"SQC_ARTIFACT_PRESENT": 3}}
+    assert DF._match_survey_channel(m, "ONE_THREE_LEFT", "Left") == "ONE_AND_THREE_Left"
+    assert DF._match_survey_channel(m, "ONE_THREE_LEFT", "Right") == "ONE_AND_THREE_Right"
+    assert DF._match_survey_channel(m, "ZERO_TWO_LEFT", "Left") is None
+    assert DF._match_survey_channel(m, None, "Left") is None
+
+
+def test_scan_folder_skips_an_unreadable_report_without_abandoning_the_batch(tmp_path):
+    """One truncated export must not cost the other eleven hundred."""
+    import json as _json
+    from ClosedLoopDeployment import session_report_facts as SRF
+    good = {"Groups": {"Final": [{"ProgramSettings": {"RateInHertz": 110.0, "SensingChannel": [
+        {"HemisphereLocation": "HemisphereLocationDef.Left",
+         "LowerCaptureAmplitudeInMilliAmps": 3.0,
+         "UpperCaptureAmplitudeInMilliAmps": 5.0,
+         "PulseWidthInMicroSecond": 100}]}}]}}
+    (tmp_path / "ok.json").write_text(_json.dumps(good))
+    (tmp_path / "broken.json").write_text("{not json")
+    S = SRF.scan_folder(str(tmp_path))
+    assert S["n_files"] == 2 and S["n_unreadable"] == 1
+    assert S["capture_newest"]["Left"]["upper_mA"] == 5.0
+    # 100 us is inside the 120 us ceiling, so this record is not a D27 violation
+    assert S["capture_ceiling_violations"]["Left"] == {"violating": 0, "total": 1}

@@ -532,7 +532,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _imp = list(_m.Recording.find_all(source__in=_sfs, type="MedtronicDeviceImpedance"))
         _hemi = (cands[0] or {}).get("actuated_hemisphere") or (cands[0] or {}).get(
             "sensing_hemisphere") or hemisphere
-        dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp, hemisphere=_hemi)
+        dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp,
+                                        hemisphere=_hemi,
+                                        channel=(cands[0] or {}).get("channel"))
     except Exception as exc:                      # never let a fact lookup take down the report
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
 

@@ -75,6 +75,86 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (rules) — all 1154 reports were ALREADY ingested; unknowns 8 -> 3, and D16 flipped
+
+**THE JSONS WERE NEVER UN-INGESTED. `--dry-run` over all 1154 files: "already in BRAVO 1154, NEW to
+ingest 0".** My closing claim the previous turn that they were on disk but not ingested was wrong.
+1154 files against 559 SourceFiles is content dedup collapsing duplicates, not missing data. Also
+note the folder holds 1154 JSONs recursively, not the 580 at top level; a first staging pass
+flattened by basename and silently kept 583 of them, since 571 share a basename with another file.
+
+**The blocker was DECODING, not ingest.** `ArtifactStatus` and `LFPFrequencyinHertz` have ZERO
+references anywhere in the codebase, and the capture/adaptive fields the decoder does mention do not
+survive into queryable form — `Server.models.Therapy` has 18616 rows for RCS08 and its
+`electricaltherapy` column is null on the rows checked. Six rules were blocking for want of data
+that had been in the database all along.
+
+**New `session_report_facts.py`: one pass over the raw reports, writing a 34 KB summary.** 1154
+files in 243 s, 0 unreadable. Committed as `_facts_RCS08.json` because the module LOADS it at
+runtime and an 8.5 GB per-request scan is not an option. The proper long-term fix is to decode
+these fields at ingest for every participant; this is the interim, and it says so. The summary
+carries the DISTRIBUTION as well as the newest value, because for several rules the distribution is
+the finding.
+
+**Live verdict for ONE_THREE_LEFT @ 24.5 Hz: still `blocked`, but the composition changed
+completely — failures 2 -> 3, unknowns 8 -> 3, advisories 27, checked 51.**
+
+FAILURES:
+- **D17 FAILS.** The device's own artefact verdict for `ONE_AND_THREE_Left` is
+  `{ARTIFACT_NOT_PRESENT: 188, SQC_ARTIFACT_PRESENT: 40, IMPEDANCE_FAILURE: 4}`. It flagged an
+  IMPEDANCE_FAILURE on the candidate channel itself.
+- **D19 FAILS** (unchanged): power-vs-amplitude slope +1 where the law needs negative, power-vs-pain
+  -1 where it needs positive. The positive-feedback condition.
+- **D32 FAILS**: `Cycling.Enabled` is true in 15187 records against 13294 false, and cycling is one
+  of the five features excluded from a BrainSense/Adaptive group. The other four exclusions
+  (pocket adaptor, multiple rates, interleaving, patient limits) remain unsupplied.
+
+**D16 FLIPPED FROM FAIL TO PASS WITH NO CODE CHANGE, and this is the most important thing in this
+entry.** It read 10885 ohm and failed; the newer measurements now on record read 6869 ohm and it
+passes. Both numbers were correct — the fact is the worst bipolar pair WITHIN THE NEWEST recording —
+but the provenance string said "across N recordings", which invites a reader to take a
+currently-sound lead for a never-faulty one. The left lead is INTERMITTENT:
+
+    Left  newest 2026-09-03: worst pair 6869 ohm, Status GOOD
+          whole record     : worst ever 13262 ohm, 1265 of 15540 readings above the 10000 ohm limit
+          2026-09-02       : two measurements, 10978 ohm INVESTIGATE then 7286 ohm GOOD
+    Right newest           : 4936 ohm GOOD; worst ever 11139 ohm, 127 of 15540 above the limit
+    Status counts over 556 records: GOOD 202, INVESTIGATE 354
+
+`impedance_facts` now returns a `history` block per hemisphere alongside the newest reading, and the
+provenance carries both, because "is the lead sound now" and "has it ever failed" are different
+clinical questions. D17's IMPEDANCE_FAILURE flag corroborates the intermittency independently, from
+the device's own judgement rather than our threshold arithmetic.
+
+**D09, per bin over the full record, for the candidate channel: 0 of the 22 bins inside 8-30 Hz
+clear the 1.2 uVp gate.** The bins that DO clear on `ONE_AND_THREE_Left` are 3 of 36, at
+4.9-6.8 Hz — entirely BELOW the adaptive band's 8 Hz floor, so they are unusable for Adaptive even
+though their amplitude is adequate. Best channel anywhere is `ZERO_AND_THREE_Left` with 8 of 36
+clearing over 4.9-11.7 Hz. Advisory, per PI decision, and the rendered text names the shortfall.
+
+**D28: Adaptive has run but is NOT currently configured.** Over all 1154 files: NOT_CONFIGURED
+16418, RUNNING 7277, DISABLED 1138, SUSPENDED 712, and the NEWEST value is NOT_CONFIGURED. Adaptive
+amplitude limits inherit the capture amplitudes per D28, so 3.0-5.0 mA on the left.
+
+**D24/D27 on the newest capture, which is better than the historical picture.** Newest: Left
+3.0/5.0 mA at 100 us, Right 3.0/4.0 mA at 100 us, both at 110 Hz — both lower arms therapeutic
+rather than the 0.0 mA arms seen earlier, and 100 us is INSIDE the 120 us artefact ceiling, so the
+newest capture does not violate D27. Historically it does badly: Left 14 of 1395 records violate
+(1%), Right 3139 of 3471 (90%).
+
+**Two of my earlier claims corrected.** (1) "None of the SuspendAmplitude values is 2.5 or 2.0" was
+based on 3 files and is wrong: over the full record 2.5 mA appears 498 times and 2.0 mA 154 times,
+so the PI's stated values are in the record. (2) The D27 right-hemisphere violation count was
+1571 of 1736 from a partial scan; over the full record it is 3139 of 3471, same conclusion.
+
+**STILL UNKNOWN, only 3, and none is a plumbing problem:** D29 (aligned segments matched — needs the
+implant record), D30 (whether the open-loop frequency search is closed — a PI decision, close to
+irreversible), D31 (the BrainSense parameter envelope — unpublished in any supplied document).
+
+Suite 136 -> 139.
+
+
+
 ### 2026-09-04 (caching) — 70.55 s to 0.45 s, and my diagnosis of the bottleneck was wrong
 
 **Measured stage profile of one deployment report, which is where this should have started:**
