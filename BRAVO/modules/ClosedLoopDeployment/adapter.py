@@ -519,9 +519,44 @@ def report_to_dict(rep):
             "params": {k: v for k, v in (rep.replay.params or {}).items()},
             "note": rep.replay.note,
         },
+        # EVERY MODE, plus which one this module recommends and why. The interface renders a
+        # toggle from this, so the clinician can look at what Single Threshold would require
+        # instead of taking the module's word that Dual is better. `selected` is what the candidate
+        # asked for and `recommended` is what this module would choose; they are deliberately
+        # separate keys so a page showing the non-recommended mode still displays the advice.
+        "prescriptions": None if getattr(rep, "prescriptions", None) is None else {
+            "recommended": rep.prescriptions.get("recommended"),
+            "selected": getattr(getattr(rep, "prescription", None), "mode", None),
+            "recommendation": {k: v for k, v in (rep.prescriptions.get("recommendation") or {}).items()
+                               if not k.startswith("_")},
+            "modes": {m: {
+                "mode": pr.mode,
+                "fields": pr.as_rows(),
+                "not_applicable": [{"parameter": f.name, "units": f.units, "why": f.why,
+                                    "status": f.status, "origin": f.origin, "confirm": f.confirm}
+                                   for f in (pr.not_applicable or [])],
+                "couplings": list(pr.couplings or []),
+                "unknowns": list(pr.unknowns or []),
+                "note": pr.note,
+                "duty": None if pr.duty is None else {
+                    k: getattr(pr.duty, k) for k in (
+                        "lfp_frac_above", "lfp_frac_between", "lfp_frac_below",
+                        "stim_frac_at_upper", "stim_frac_at_lower", "stim_frac_mid",
+                        "mean_amplitude_mA", "amplitude_duty", "transitions_per_hour",
+                        "qualified_transitions", "unqualified_excursions", "hours_observed",
+                        "hours_of_signal", "coverage_frac", "fractions_are_of_observed_samples",
+                        "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
+                        "predicted_failure_mode")} | {
+                    "caveats": list(pr.duty.caveats or [])},
+            } for m, pr in (rep.prescriptions.get("modes") or {}).items()},
+        },
         "prescription": None if getattr(rep, "prescription", None) is None else {
             "mode": rep.prescription.mode,
             "fields": rep.prescription.as_rows(),
+            "not_applicable": [{"parameter": f.name, "units": f.units, "why": f.why,
+                                "status": f.status, "origin": f.origin, "confirm": f.confirm}
+                               for f in (rep.prescription.not_applicable or [])],
+            "couplings": list(rep.prescription.couplings or []),
             "unknowns": list(rep.prescription.unknowns or []),
             "note": rep.prescription.note,
             "duty": None if rep.prescription.duty is None else {

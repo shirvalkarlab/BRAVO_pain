@@ -257,11 +257,23 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             from StimOptimizer.routines import percept_adaptive as _PA
             _mode = (first or {}).get("threshold_mode") or _PA.DUAL
             _t = d["t"].to_numpy() if "t" in d.columns else None
-            rep.prescription = presc.prescribe(
-                mode=_mode, threshold_plan=rep.threshold, candidate=first,
-                timing=_PA.timing_plan(mode=_mode),
+            # ALL modes, not just the recommended one. The clinician chooses the mode, so the
+            # interface needs a toggle, and a toggle needs every option's field set. Building them
+            # here rather than on demand also means the comparison is against one snapshot of the
+            # data instead of two fetches that could straddle a change.
+            _all = presc.prescribe_all_modes(
+                threshold_plan=rep.threshold, candidate=first,
                 power_series=d[power_scale].to_numpy() if len(d) else None,
-                t_s=_t, replay_result=rep.replay)
+                t_s=_t, replay_result=rep.replay,
+                validated_hemispheres=(hemisphere,) if rep.threshold is not None else (),
+                configuring_both_hemispheres=False)
+            rep.prescriptions = _all
+            # `rep.prescription` stays as the mode the CANDIDATE asked for, so callers that predate
+            # the toggle keep the behaviour they had. The recommendation is separate from the
+            # selection on purpose: a clinician exploring Single Threshold must not have the page
+            # silently switch back to what the module prefers.
+            rep.prescription = (_all["modes"].get(_mode)
+                                or _all["modes"].get(_all["recommended"]))
         except Exception as ex:
             rep.blockers.append(f"prescription generation failed: {ex}")
 

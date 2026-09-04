@@ -161,6 +161,49 @@ class Field_:
     range_source: str | None = None
     why: str = ""
 
+    #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
+    #:
+    #: `status` conflates two independent questions that a clinician standing at the programmer
+    #: needs answered separately: where did this number come from, and can I actually enter it?
+    #: The averaging duration is the case that proves they are independent — it is `derived`,
+    #: because this module computed 4096 ms from the biomarker's own integration window, AND its
+    #: adjustable range is unpublished, so nobody can promise the A610 will accept that value. One
+    #: enum cannot say both, and rendering it as merely "derived" would tell a reader the number is
+    #: trustworthy while withholding that it may be silently clamped.
+    #:
+    #: So the axes are separated. `origin` says where the value came from and takes
+    #: `participant` / `manufacturer` / `clinician` / `none`. `confirm` says what must happen
+    #: before it is trusted and takes `enterable` (a published range contains it) /
+    #: `check_on_device` (no published range, so read the field's own limits first) /
+    #: `must_choose` (no value is offered because the choice is clinical) / `not_applicable`.
+    #:
+    #: Derived from the existing fields rather than stored, so every existing call site keeps
+    #: working and the two axes cannot drift out of step with `status`.
+
+    @property
+    def origin(self):
+        if self.status == "not_applicable":
+            return "none"
+        if self.status == "device_default":
+            return "manufacturer"
+        if self.status == "read_off_programmer":
+            return "clinician"
+        return "participant"
+
+    @property
+    def confirm(self):
+        if self.status == "not_applicable":
+            return "not_applicable"
+        if self.status == "read_off_programmer" and self.value is None:
+            return "must_choose"
+        # An unpublished range is the deciding fact regardless of where the value came from: it is
+        # exactly the case the single `status` enum could not express.
+        if self.range_source and "NOT published" in self.range_source:
+            return "check_on_device"
+        if self.status == "read_off_programmer":
+            return "check_on_device"
+        return "enterable"
+
 
 @dataclass
 class DutyCycle:
@@ -219,12 +262,55 @@ class Prescription:
     fields: list = field(default_factory=list)
     duty: DutyCycle | None = None
     unknowns: list = field(default_factory=list)
+    #: Conflicts between PAIRS of fields, which a table of independent rows cannot express.
+    #:
+    #: A sixteen-row table renders each field as though its value could be judged on its own, and
+    #: the most consequential finding about this configuration is not a property of any single row:
+    #: at the derived averaging duration the onset duration is inoperative, and that is a fact
+    #: about the two fields together. Putting the warning in the onset row's ``why`` text was tried
+    #: and is not enough, because a reader scanning a column of values does not read sixteen
+    #: paragraphs of justification, and the conflict belongs to neither row alone.
+    #:
+    #: Each entry carries the two field names, their values, the plain-English consequence and a
+    #: severity, so an interface can render the pair rather than assert a conclusion.
+    couplings: list = field(default_factory=list)
+    #: Fields that do NOT exist in the selected mode, kept rather than omitted so a reader can see
+    #: that the other mode has them. Omitting them makes two modes look like the same table with
+    #: different numbers, which is exactly the misreading the mode toggle has to prevent.
+    not_applicable: list = field(default_factory=list)
     note: str = ""
 
     def as_rows(self):
         return [{"parameter": f.name, "value": f.value, "units": f.units, "status": f.status,
                  "device_default": f.default, "range": f.range_, "range_source": f.range_source,
-                 "why": f.why} for f in self.fields]
+                 "why": f.why,
+                 # The two provenance axes, so the interface never has to re-derive them from the
+                 # status string and cannot disagree with this module about what a status means.
+                 "origin": f.origin, "confirm": f.confirm,
+                 # The minutes-and-seconds gloss, computed HERE rather than in JavaScript. The two
+                 # transition durations come out of this module as 150000 and 300000 ms while the
+                 # A610 displays and accepts minutes and seconds, which is the largest transcription
+                 # hazard in the table: entering 150000 where the device wants 2 min 30 s is not a
+                 # near miss. Anything at or above ten seconds gets the gloss.
+                 "enter_as": _enter_as(f.value, f.units)} for f in self.fields]
+
+
+def _enter_as(value, units):
+    """How the A610 displays a millisecond value, for values long enough that it matters.
+
+    Returns None when no gloss is needed. The threshold is ten seconds: below that the programmer
+    shows milliseconds and the raw number is what gets typed, at or above it the programmer shows
+    minutes and seconds. The two transition durations are 150000 and 300000 ms, and typing those
+    digits into a field expecting 2 min 30 s is a two-order-of-magnitude error rather than a
+    near miss, so the gloss is part of the data rather than a presentation flourish.
+    """
+    if units != "ms" or not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    total = float(value) / 1000.0
+    if total < 10.0:
+        return None
+    m, sec = int(total // 60), total - 60 * int(total // 60)
+    return f"{m} min {sec:04.1f} s".replace(".0 s", " s")
 
 
 def _clamp(x, lo, hi):
@@ -293,6 +379,42 @@ def _failure_mode(lfp_above, lfp_below, at_upper, at_lower):
                 "the amplitude will chase it. D51 remedy: widen the threshold separation, or "
                 "lengthen Transition Down and shorten Transition Up.")
     return None
+
+
+def prescribe_all_modes(**kw):
+    """Every threshold mode's prescription in one call, plus the mode this module recommends.
+
+    WHY ALL THREE RATHER THAN THE RECOMMENDED ONE. The clinician is the person choosing the mode,
+    and a module that returns only its own preference makes that choice unauditable: to see what
+    Single Threshold would require, the clinician would have to take the module's word that it is
+    worse. Returning all three lets the interface offer a toggle and lets the reader compare the
+    field sets side by side, which is the honest shape for a recommendation — it says what this
+    module would do and shows the alternative it declined.
+
+    The recommendation itself is not made here. It comes from
+    ``percept_adaptive.recommend_threshold_mode``, which derives it from the biomarker's timescale
+    rather than hardcoding it, so a demonstrated fast biomarker would change the answer.
+
+    Returns ``{"recommended": <mode>, "recommendation": {...}, "modes": {<mode>: Prescription}}``.
+    A mode that cannot drive therapy still appears, carrying an empty field list and the reason,
+    because "this mode exists and is useless for closed loop" is information a clinician exploring
+    the toggle needs.
+    """
+    if PA is None:                                       # pragma: no cover
+        raise RuntimeError("percept_adaptive is required for the device parameter table")
+    kw.pop("mode", None)
+    rec = PA.recommend_threshold_mode(
+        biomarker_timescale_s=kw.pop("biomarker_timescale_s", None),
+        validated_hemispheres=kw.pop("validated_hemispheres", ()),
+        configuring_both_hemispheres=kw.pop("configuring_both_hemispheres", False))
+    out = {}
+    for m in PA.MODES:
+        try:
+            out[m] = prescribe(mode=m, timing=PA.timing_plan(mode=m), **kw)
+        except Exception as ex:                          # one mode failing must not lose the rest
+            out[m] = Prescription(mode=m, fields=[],
+                                  note=f"this mode's prescription could not be built: {ex}")
+    return {"recommended": rec.get("mode"), "recommendation": rec, "modes": out}
 
 
 def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_series=None,
@@ -469,8 +591,77 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                           lower_onset_ms=float(onset_ms), is_dual=is_dual,
                           replay_result=replay_result)
 
+    # --- field-pair couplings ------------------------------------------------------------------
+    couplings = []
+    _avg = next((f for f in F if f.name == "Averaging duration"), None)
+    _ons = [f for f in F if "nset duration" in f.name]
+    if _avg is not None and _ons:
+        _ow = onset_windows(_ons[0].value, _avg.value)
+        if _ow["inoperative"]:
+            couplings.append({
+                "fields": [_ons[0].name, _avg.name],
+                "values": [_ons[0].value, _avg.value],
+                "units": ["ms", "ms"],
+                "severity": "consequential",
+                "consequence": (
+                    f"The onset duration does nothing at this averaging duration. Averaging is "
+                    f"non-overlapping (D14), so the controller sees one averaged value per "
+                    f"averaging duration and an onset of {float(_ons[0].value):.0f} ms against "
+                    f"{float(_avg.value):.0f} ms is ceil({float(_ons[0].value):.0f}/"
+                    f"{float(_avg.value):.0f}) = 1 controller step. At one step the first averaged "
+                    f"sample past a threshold already satisfies the onset, so there is no "
+                    f"persistence requirement at all and the configuration's only protection "
+                    f"against acting on one noisy window is the separation between the two "
+                    f"thresholds."),
+                "resolution": (
+                    "The published onset range tops out at 2000 ms, so no value a clinician can "
+                    "enter makes the onset operative at an averaging duration of 2 s or more. "
+                    "Shortening the averaging duration would restore it, but the averaging "
+                    "duration is the feature definition: 4096 ms is the window every validated "
+                    "band was computed on, and changing it deploys a different feature from the "
+                    "validated one. This is a clinical trade rather than a setting to fix."),
+                "not_established": (
+                    "No supplied Medtronic document states whether the device counts the onset "
+                    "duration in averaging windows or in FFT updates, which arrive far more often "
+                    "(5 Hz in Dual Threshold). If it counts FFT updates then a 2000 ms onset spans "
+                    "ten of them and does filter. The reading used here is the one the defaults "
+                    "support, since the default onset and the default averaging duration are both "
+                    "1200 ms, which would otherwise be a strange coincidence. It is a reading, not "
+                    "a citation."),
+            })
+
+    # --- fields the OTHER mode has and this one does not ---------------------------------------
+    _names = {f.name for f in F}
+    na = []
+    if is_dual:
+        na = [Field_(name="Single LFP threshold", value=None, units="LSB", status="not_applicable",
+                     why=("Dual Threshold has two thresholds, both set by hand. The single "
+                          "threshold does not exist here, and in Single Threshold it is not typed "
+                          "in at all — the device computes it as 0.75 x (Upper - Lower) + Lower "
+                          "from the captured pair (D20).")),
+              Field_(name="Onset duration (single)", value=None, units="ms",
+                     status="not_applicable",
+                     why=("Dual Threshold has TWO onset durations, an upper and a lower, listed "
+                          "above and independently adjustable. That asymmetry is the first lever "
+                          "the manufacturer's troubleshooting table reaches for (D51), so "
+                          "collapsing them into one would remove a control rather than simplify "
+                          "the table."))]
+    elif mode == PA.SINGLE:
+        na = [Field_(name="Upper LFP threshold", value=None, units="LSB", status="not_applicable",
+                     why=("Single Threshold has one threshold and the device computes it from the "
+                          "captured amplitudes (D20); there is no upper threshold to enter.")),
+              Field_(name="Lower LFP threshold", value=None, units="LSB", status="not_applicable",
+                     why="Same as the upper threshold: not a field in this mode."),
+              Field_(name="Upper onset duration", value=None, units="ms", status="not_applicable",
+                     why=("Single Threshold has ONE onset duration, listed above. The upper and "
+                          "lower onsets are a Dual Threshold feature.")),
+              Field_(name="Lower onset duration", value=None, units="ms", status="not_applicable",
+                     why="Same as the upper onset: not a field in this mode.")]
+    na = [f for f in na if f.name not in _names]
+
     return Prescription(
         mode=mode, fields=F, duty=duty, unknowns=unknowns,
+        couplings=couplings, not_applicable=na,
         note=("Every field carries its status: derived from this participant's data, left at the "
               "manufacturer's default, or flagged as needing to be read off the programmer because "
               "its adjustable range is unpublished. No field is silently defaulted. There is no "

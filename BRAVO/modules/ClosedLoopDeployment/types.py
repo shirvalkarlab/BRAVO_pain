@@ -178,6 +178,11 @@ class DeploymentReport:
     #: unaffected. This is the module's ANSWER rather than its evidence: everything above decides
     #: whether a configuration may be used, and this says what to type into the programmer.
     prescription: Any = None
+    #: Every threshold mode's prescription plus the recommended mode, from
+    #: ``prescription.prescribe_all_modes``. Separate from ``prescription`` because the mode a
+    #: clinician is EXPLORING and the mode this module RECOMMENDS are different things, and
+    #: collapsing them would make the toggle silently snap back to the recommendation.
+    prescriptions: Any = None
     candidates: Any = None
     blockers: list = field(default_factory=list)
     manifest: dict = field(default_factory=dict)
