@@ -790,8 +790,21 @@ def _p_d28(candidate, participant):
 
     The limits default to the amplitudes used when capturing the thresholds, which makes the choice
     of capture amplitudes simultaneously a measurement decision and a therapeutic-range decision:
-    the module cannot recommend one without the other. The lower limit must be above zero for the
-    reason D07 gives, and both limits must sit inside the general device envelope.
+    the module cannot recommend one without the other. This rule owns the ORDER of the two limits
+    and their fit inside the general device envelope.
+
+    THE ZERO LOWER LIMIT IS DELIBERATELY NOT TESTED HERE, changed 2026-09-04. This predicate used to
+    read ``0.0 < lo < hi <= amp_hi and lo >= amp_lo``, which folded D07's condition into D28's
+    compound test, so a declared lower limit of zero failed BOTH rules and one consideration was
+    charged twice. D07 exists for no other purpose than to make the rebound argument about a zero
+    lower limit, so it owns that condition.
+
+    The duplicate is removed HERE, at the condition, rather than by setting D28 aside as a whole
+    rule through ``RULE_DEFERS_TO``. That distinction is the important one and it was got wrong
+    first: rule-level deferral is only sound when the whole rule duplicates another, and D28 tests
+    three separate things. Setting it aside because the zero condition fired would also have
+    discarded the ordering and envelope checks, hiding failures D07 knows nothing about — for
+    instance limits declared in the wrong order, which this rule still catches.
     """
     if not _is_adaptive(candidate):
         return True
@@ -800,7 +813,7 @@ def _p_d28(candidate, participant):
     if lo is None or hi is None:
         return None
     amp_lo, amp_hi = GENERAL_ENVELOPE["amp_mA"]
-    return 0.0 < lo < hi <= amp_hi and lo >= amp_lo
+    return lo < hi <= amp_hi and lo >= amp_lo
 
 
 def _p_d29(candidate, participant):
@@ -2162,6 +2175,131 @@ def _entry(rule, kind, why, observed):
     }
 
 
+# ---------------------------------------------------------------------------------------------
+# RULE DEFERRAL: ONE FACT MUST NOT BE CHARGED TWICE
+# ---------------------------------------------------------------------------------------------
+#: Some rules are narrower consequences of another rule reading the SAME input. When both fire, one
+#: consideration appears in the report twice, which inflates the apparent number of obstacles and
+#: makes the blocking set look less tractable than it is. The first instance found in practice was
+#: not in this table at all — an IMPEDANCE_FAILURE survey status was being charged to D16, which
+#: governs impedance against published limits, AND to D17, which asks about signal artefact.
+#:
+#: WHY THIS IS DECLARED EXPLICITLY AND NEVER INFERRED FROM SHARED INPUTS. A runtime probe of all 38
+#: predicates found ten candidate keys read by more than one rule, and on inspection only two of
+#: those pairs were genuine duplicates: four of six were rules asking DIFFERENT questions about the
+#: same number. ``intent`` alone is read by eleven rules and ``threshold_mode`` by seven, because
+#: each rule checks whether it applies at all — collapsing on key overlap would merge eleven
+#: unrelated rules and destroy the table. Sharing an input is evidence to investigate, never
+#: grounds to merge.
+#:
+#: Each entry is ``deferring_rule -> (owning_rule, why)``.
+RULE_DEFERS_TO = {
+    "D01": ("D02",
+            "Both read `indication`. D01 asks whether the device is approved for this indication at "
+            "all; D02 asks the narrower question of whether Adaptive Therapy specifically is "
+            "labelled for it. On an off-label indication both fail from the one fact, and D02's "
+            "condition is strictly the narrower of the two, so D02 owns the finding whenever the "
+            "intent is adaptive and D01 defers to it. When the intent is NOT adaptive, D02 passes "
+            "by construction and D01 stands on its own, which is why deferral is evaluated against "
+            "the owner's actual verdict rather than applied unconditionally."),
+    # D28 was briefly listed here as deferring to D07 and that was WRONG, corrected the same day.
+    # Its overlap with D07 is at the level of ONE CONDITION inside a compound predicate that tests
+    # three things, not at the level of the whole rule, so setting the rule aside would also have
+    # discarded its ordering and envelope checks. The duplicate was removed from D28's predicate
+    # instead. The general principle, worth stating because the distinction is easy to miss:
+    # rule-level deferral is sound only when the ENTIRE rule restates another rule's finding; when
+    # only one condition overlaps, delete the condition from the non-owning rule.
+}
+
+
+#: The exact ``kind`` strings the evaluator emits, grouped by what they mean for deferral. These
+#: are constants rather than literals inside ``apply_deferrals`` because the first version of that
+#: function tested for "fail" while the evaluator emits "failed", so every deferral involving a
+#: BLOCKING rule silently never fired and the mechanism looked as though it worked because the one
+#: advisory pair happened to match. A test asserts that every kind the evaluator can emit appears
+#: in exactly one of these sets, so a future rename cannot quietly disable deferral again.
+KIND_ADVERSE = frozenset({"failed", "advisory_failed"})
+KIND_UNEVALUABLE = frozenset({"input_not_supplied", "value_not_read_off_programmer",
+                              "advisory_not_determinable", "predicate_error",
+                              "advisory_no_predicate"})
+KIND_BENIGN = frozenset({"recorded_value", "deferred_duplicate"})
+ALL_KINDS = KIND_ADVERSE | KIND_UNEVALUABLE | KIND_BENIGN
+
+
+def _validate_deferral_graph():
+    """Refuse a malformed deferral graph at import rather than at report time.
+
+    A cycle would make the report's contents depend on dictionary order, and a pointer to a rule
+    that does not exist would silently disable the deferral it was meant to express.
+    """
+    ids = {r.rule_id for r in RULES}
+    for deferring, (owner, _why) in RULE_DEFERS_TO.items():
+        if deferring not in ids:
+            raise ValueError(f"deferral declared for unknown rule {deferring}")
+        if owner not in ids:
+            raise ValueError(f"rule {deferring} defers to unknown rule {owner}")
+        if owner == deferring:
+            raise ValueError(f"rule {deferring} cannot defer to itself")
+    # walk each chain; any revisit is a cycle
+    for start in RULE_DEFERS_TO:
+        seen, cur = {start}, start
+        while cur in RULE_DEFERS_TO:
+            cur = RULE_DEFERS_TO[cur][0]
+            if cur in seen:
+                raise ValueError(f"deferral cycle through {cur}")
+            seen.add(cur)
+
+
+_validate_deferral_graph()
+
+
+def apply_deferrals(rows_by_rule):
+    """Mark duplicate charges as deferred, and surface disagreements instead of hiding them.
+
+    ``rows_by_rule`` maps rule_id -> the row that rule produced, each carrying a ``kind``.
+
+    THE SAFETY PROPERTY, which the tests assert: deferral can never turn a blocked configuration
+    into a supported one. A deferring rule is only ever set aside when its OWNER reached the same
+    adverse verdict, so the owner is still failing and the verdict is unchanged; all that changes is
+    that the consideration is counted once instead of twice. Three cases are handled explicitly
+    because each of them is a way the naive version would be wrong:
+
+    * The owner was not evaluable. Then there is no second charge to collapse into, and the
+      deferring rule stands on its own — suppressing it would silently drop a real finding.
+    * The owner PASSED while the deferring rule failed. That is a contradiction between two rules
+      reading one input, and it is more interesting than either verdict alone, so the row is kept
+      and marked. It is never suppressed.
+    * The deferring rule passed. Nothing to collapse; it is left alone.
+    """
+    out = {}
+    for rid, row in rows_by_rule.items():
+        r = dict(row)
+        target = RULE_DEFERS_TO.get(rid)
+        if target:
+            owner, why = target
+            own = rows_by_rule.get(owner)
+            own_kind = (own or {}).get("kind")
+            if r.get("kind") in KIND_ADVERSE:
+                if own_kind in KIND_ADVERSE:
+                    r["deferred_to"] = owner
+                    r["deferral_reason"] = why
+                    r["counts_toward_verdict"] = False
+                    r["kind"] = "deferred_duplicate"
+                elif own_kind is None or own_kind in KIND_UNEVALUABLE:
+                    r["deferral_note"] = (
+                        f"would defer to {owner}, but {owner} could not be evaluated, so this "
+                        f"finding stands on its own rather than being collapsed into it")
+                    r["counts_toward_verdict"] = True
+                else:
+                    r["deferral_note"] = (
+                        f"DISAGREEMENT: {owner} owns this input and did NOT find a problem, while "
+                        f"this rule did. Two rules reading one input reached different verdicts; "
+                        f"that is worth more attention than either verdict alone.")
+                    r["counts_toward_verdict"] = True
+        out[rid] = r
+    return out
+
+
 def check_eligibility(candidate, participant, rules=None) -> types.EligibilityReport:
     """Evaluate every device rule against one candidate configuration.
 
@@ -2277,6 +2415,32 @@ def check_eligibility(candidate, participant, rules=None) -> types.EligibilityRe
                 rule, "recorded_value",
                 f"{rule.title}: satisfied, and the value is recorded here because the meaning of "
                 f"the rest of this report depends on it.", observed))
+
+    # Second pass: collapse a consideration that two rules charged separately. This has to come
+    # after the loop because a rule cannot know whether its owner found a problem until the owner
+    # has been evaluated, and the table is not in dependency order. Rows are matched by rule id
+    # across the three buckets, and a deferred row is MOVED to `deferred` rather than deleted, so
+    # the observation stays in the report and only the duplicate charge goes.
+    _rows = {}
+    for bucket in (report.failures, report.advisories, report.unknowns):
+        for row in bucket:
+            _rows.setdefault(row["rule_id"], row)
+    _resolved = apply_deferrals(_rows)
+    _set_aside = {rid for rid, r in _resolved.items() if r.get("kind") == "deferred_duplicate"}
+    if _set_aside:
+        for name in ("failures", "advisories", "unknowns"):
+            bucket = getattr(report, name)
+            kept = [r for r in bucket if r["rule_id"] not in _set_aside]
+            moved = [_resolved[r["rule_id"]] for r in bucket if r["rule_id"] in _set_aside]
+            setattr(report, name, kept)
+            report.deferred.extend(moved)
+    # Rows that were NOT set aside may still carry a deferral note (owner unevaluable, or the two
+    # rules disagreed); copy those annotations back so the reader sees them.
+    for name in ("failures", "advisories", "unknowns"):
+        for row in getattr(report, name):
+            note = (_resolved.get(row["rule_id"]) or {}).get("deferral_note")
+            if note:
+                row["deferral_note"] = note
 
     report.eligible = not report.failures and not report.unknowns
     return report

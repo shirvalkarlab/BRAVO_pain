@@ -42,13 +42,24 @@ class EligibilityReport:
     failures: list = field(default_factory=list)      # [{rule_id, severity, why, page}]
     advisories: list = field(default_factory=list)
     unknowns: list = field(default_factory=list)
+    #: Rows set aside because another rule already charged the SAME consideration from the SAME
+    #: input — see ``constraints.RULE_DEFERS_TO``. Added 2026-09-04 as a fourth bucket rather than
+    #: by deleting the duplicate row, because the observation is still worth reading; only the
+    #: second charge against the verdict goes. A row lands here ONLY when its owning rule reached
+    #: the same adverse verdict, so the owner is still failing and moving the row can never turn a
+    #: blocked configuration into an eligible one. New field with a default, so any caller that
+    #: does not know about it is unaffected.
+    deferred: list = field(default_factory=list)
     checked: int = 0
 
     def summary(self) -> str:
         if self.eligible:
             return f"eligible ({self.checked} rules checked, {len(self.advisories)} advisory)"
+        # `checked` still counts every rule in the table, and deferred rows are named separately, so
+        # a reader can always reconcile the buckets against the size of the table.
+        tail = f", {len(self.deferred)} deferred as duplicate" if self.deferred else ""
         return (f"NOT eligible: {len(self.failures)} blocking, {len(self.unknowns)} unknown "
-                f"of {self.checked} rules checked")
+                f"of {self.checked} rules checked{tail}")
 
 
 # --------------------------------------------------------------------------------------------

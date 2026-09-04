@@ -636,3 +636,56 @@ def test_scan_folder_skips_an_unreadable_report_without_abandoning_the_batch(tmp
     assert S["capture_newest"]["Left"]["upper_mA"] == 5.0
     # 100 us is inside the 120 us ceiling, so this record is not a D27 violation
     assert S["capture_ceiling_violations"]["Left"] == {"violating": 0, "total": 1}
+
+
+# --- D32 scope: the group we would program, not the device's history (2026-09-04) ---------------
+def test_cycling_is_read_from_the_newest_active_sensing_group_not_device_wide(tmp_path):
+    """Two bugs in one, both of which inflated a D32 failure.
+
+    First, `Cycling.Enabled` was matched by path SUBSTRING, which also caught
+    `DiagnosticData.LfpFrequencySnapshotEvents[].Cycling` — so an earlier pass reported cycling
+    enabled in 15187 records when the group setting lives at `GroupSettings.Cycling.Enabled`.
+
+    Second, and more important, D32 asks whether cycling is enabled in the BrainSense group being
+    configured. Counting every group ever recorded answers "has this device ever cycled", a
+    different question: across the real record cycling is enabled in 868 of 1867 active sensing
+    groups, so a device-wide read fails the rule while the newest active sensing group has it off.
+    """
+    import json as _json
+    from ClosedLoopDeployment import session_report_facts as SRF
+
+    def report(stamp, cycling, has_sensing=True, active=True):
+        ch = [{"HemisphereLocation": "HemisphereLocationDef.Left",
+               "PulseWidthInMicroSecond": 100,
+               "LowerCaptureAmplitudeInMilliAmps": 3.0,
+               "UpperCaptureAmplitudeInMilliAmps": 5.0}] if has_sensing else []
+        return {"Groups": {"Final": [{
+            "ActiveGroup": active,
+            "GroupSettings": {"Cycling": {"Enabled": cycling}},
+            "ProgramSettings": {"RateInHertz": 110.0, "SensingChannel": ch}}]},
+            # a snapshot event that also contains the word Cycling, which the substring match
+            # used to fold into the group count
+            "DiagnosticData": {"LfpFrequencySnapshotEvents": [{"Cycling": True}]}}
+
+    (tmp_path / "a_20250101.json").write_text(_json.dumps(report("a", True)))
+    (tmp_path / "b_20260101.json").write_text(_json.dumps(report("b", False)))
+    S = SRF.scan_folder(str(tmp_path))
+
+    # the device HAS cycled in a sensing group historically
+    assert S["cycling_in_sensing_group"] is True
+    # but the newest active sensing group has it off, and that is what D32 reads
+    assert S["d32_newest_active_sensing_group"]["cycling_in_group"] is False
+    # the snapshot event must not have been counted as a group setting
+    assert not any("Cycling" in k and "snapshot" in k.lower()
+                   for k in S["cycling_by_group_kind"])
+    assert sum(S["cycling_by_group_kind"].values()) == 2, "one group setting per file, no extras"
+
+
+def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent():
+    """The session report does not carry it, so D32 must keep it unknown. Assuming absence would
+    let a rule pass on a fact nobody checked, which is the failure mode this module exists to
+    avoid."""
+    from ClosedLoopDeployment import device_facts as DF
+    f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
+                                        channel="ONE_THREE_LEFT", hemisphere="Left")
+    assert "has_pocket_adaptor" not in f or f["has_pocket_adaptor"] is None

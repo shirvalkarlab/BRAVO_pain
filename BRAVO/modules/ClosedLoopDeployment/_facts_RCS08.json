@@ -104,9 +104,31 @@
   "4.5": 364,
   "2.6": 4
  },
- "cycling_enabled_counts": {
-  "False": 13294,
-  "True": 15187
+ "cycling_by_group_kind": {
+  "sensing/inactive/False": 2142,
+  "sensing/active/False": 999,
+  "no_sensing/inactive/False": 444,
+  "sensing/active/True": 868,
+  "sensing/inactive/True": 1681,
+  "no_sensing/active/False": 166,
+  "no_sensing/inactive/True": 1576,
+  "no_sensing/active/True": 204
+ },
+ "cycling_in_sensing_group": true,
+ "cycling_in_active_sensing_group": true,
+ "d32_newest_active_sensing_group": {
+  "cycling_in_group": false,
+  "multiple_rates_in_group": false,
+  "interleaving_in_group": false,
+  "patient_limits_configured": false,
+  "has_pocket_adaptor": null,
+  "n_programs": 1,
+  "rates_seen": [
+   110.0
+  ],
+  "pulse_widths_seen": [
+   100.0
+  ]
  },
  "sensing_channels": {
   "ZERO_AND_THREE": 24135,

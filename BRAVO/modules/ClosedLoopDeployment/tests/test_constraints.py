@@ -190,9 +190,21 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
 
 
 def test_off_label_indication_is_surfaced_without_disqualifying():
-    """D01 and D02 are labelling statements about the participant, not configuration defects."""
+    """D01 and D02 are labelling statements about the participant, not configuration defects.
+
+    UPDATED 2026-09-04. Both rules read `indication` and both fail on an off-label one, so one fact
+    was producing two advisory entries. D02 asks the narrower question (is Adaptive specifically
+    labelled for this indication) and now OWNS the finding; D01 defers to it and moves to the
+    `deferred` bucket. The observation is still in the report — the assertion below checks that it
+    is present and names its owner — and eligibility is unchanged, which is the property that makes
+    the collapse safe.
+    """
     report = check(passing_candidate(), resolved_participant())
-    assert {"D01", "D02"}.issubset(ids(report.advisories))
+    assert "D02" in ids(report.advisories), "the narrower rule keeps the finding"
+    assert "D01" not in ids(report.advisories), "the broader rule must not charge it a second time"
+    d01 = next(row for row in report.deferred if row["rule_id"] == "D01")
+    assert d01["deferred_to"] == "D02"
+    assert "indication" in d01["deferral_reason"]
     assert report.eligible is True
 
 
@@ -580,12 +592,31 @@ def test_d24_enforces_the_crossed_capture_order():
     assert "D24" in ids(swapped.failures)
 
 
-def test_d28_requires_two_ordered_therapeutic_limits_above_zero():
-    """The limits inherit the capture amplitudes, so they are a therapeutic decision as well."""
-    assert "D28" in ids(check(passing_candidate(adaptive_min_mA=0.0),
-                              resolved_participant()).failures)
-    assert "D28" in ids(check(passing_candidate(adaptive_min_mA=4.0, adaptive_max_mA=3.5),
-                              resolved_participant()).failures)
+def test_d28_owns_the_ordering_and_envelope_but_not_the_zero_lower_limit():
+    """UPDATED 2026-09-04, and the update is the point.
+
+    D28's predicate used to read `0.0 < lo < hi <= amp_hi and lo >= amp_lo`, folding D07's
+    zero-lower-limit condition into its own compound test, so a declared zero failed both rules and
+    one consideration was charged twice. D07 owns that condition now.
+
+    Crucially D28 must still catch everything else it tests. The duplicate was removed from the
+    CONDITION rather than by deferring the whole rule, because D28 tests three separate things and
+    setting it aside would have discarded the ordering and envelope checks too.
+    """
+    # the zero lower limit is now D07's finding alone
+    zero = check(passing_candidate(adaptive_min_mA=0.0), resolved_participant())
+    assert "D07" in ids(zero.advisories), "D07 still reports the rebound risk"
+    assert "D28" not in ids(zero.failures), "and D28 no longer charges it a second time"
+
+    # but D28's OWN checks are untouched: wrong order still fails
+    swapped = check(passing_candidate(adaptive_min_mA=4.0, adaptive_max_mA=3.5),
+                    resolved_participant())
+    assert "D28" in ids(swapped.failures), "the ordering check must survive the deduplication"
+
+    # and so does the envelope check
+    over = check(passing_candidate(adaptive_min_mA=1.0, adaptive_max_mA=99.0),
+                 resolved_participant())
+    assert "D28" in ids(over.failures), "the envelope check must survive too"
 
 
 # ------------------------------------------------------------------------------------------------
@@ -636,3 +667,90 @@ def test_severity_must_be_one_of_the_three_declared_values():
 def check(candidate, participant, rules=None):
     """Thin wrapper so that every test reads the same way."""
     return constraints.check_eligibility(candidate, participant, rules=rules)
+
+
+
+# --- rule deferral: one fact must not be charged twice (2026-09-04) ----------------------------
+def test_every_kind_the_evaluator_emits_is_classified_for_deferral():
+    """The bug this pins cost a silent mechanism failure.
+
+    `apply_deferrals` first tested for the kind "fail" while the evaluator emits "failed", so every
+    deferral involving a BLOCKING rule never fired, and the mechanism appeared to work only because
+    the one advisory pair happened to match. Any kind string the evaluator can produce must fall in
+    exactly one of the three sets, so a rename cannot quietly disable deferral again.
+    """
+    import re
+    from ClosedLoopDeployment import constraints as CN
+    src = open(CN.__file__).read()
+    emitted = set(re.findall(r'_entry\(\s*rule,\s*"([a-z_]+)"', src))
+    assert emitted, "could not find the kinds the evaluator emits"
+    unclassified = emitted - CN.ALL_KINDS
+    assert not unclassified, f"kinds emitted but not classified: {sorted(unclassified)}"
+    assert not (CN.KIND_ADVERSE & CN.KIND_UNEVALUABLE)
+    assert not (CN.KIND_ADVERSE & CN.KIND_BENIGN)
+
+
+def test_a_blocking_rule_deferral_would_fire_if_one_were_declared():
+    """Pins the "fail" versus "failed" bug independently of which pairs are declared today.
+
+    `apply_deferrals` first tested for the kind "fail" while the evaluator emits "failed", so any
+    deferral involving a BLOCKING rule silently never fired. The one pair declared at the time was
+    advisory and happened to match, so the mechanism looked as though it worked. The declared pairs
+    change; this behaviour must not.
+    """
+    from ClosedLoopDeployment import constraints as CN
+    rid, owner = "D01", CN.RULE_DEFERS_TO["D01"][0]
+    out = CN.apply_deferrals({rid: {"rule_id": rid, "kind": "failed"},
+                              owner: {"rule_id": owner, "kind": "failed"}})
+    assert out[rid]["kind"] == "deferred_duplicate", "a BLOCKING kind must be recognised"
+    assert out[rid]["counts_toward_verdict"] is False
+
+
+def test_deferral_can_never_make_a_blocked_candidate_eligible():
+    """The safety property. A row is set aside only when its OWNER reached the same adverse
+    verdict, so the owner is still failing and the verdict cannot move. Asserted directly rather
+    than argued, because this is the property that makes collapsing duplicates safe on a module
+    whose output authorises programming a neurostimulator."""
+    from ClosedLoopDeployment import constraints as CN
+    for rid, (owner, _why) in CN.RULE_DEFERS_TO.items():
+        rows = {rid: {"rule_id": rid, "kind": "failed"},
+                owner: {"rule_id": owner, "kind": "failed"}}
+        out = CN.apply_deferrals(rows)
+        assert out[rid]["kind"] == "deferred_duplicate"
+        # the OWNER is untouched and still adverse, so whatever bucket logic runs, it still blocks
+        assert out[owner]["kind"] == "failed"
+        assert out[owner].get("counts_toward_verdict") is not False
+
+
+def test_deferral_surfaces_a_disagreement_instead_of_hiding_it():
+    """If the owner passed while the deferring rule failed, two rules reading one input disagree.
+    That is more interesting than either verdict alone, so the row is kept and annotated."""
+    from ClosedLoopDeployment import constraints as CN
+    rid, (owner, _) = "D01", CN.RULE_DEFERS_TO["D01"]
+    out = CN.apply_deferrals({rid: {"rule_id": rid, "kind": "advisory_failed"},
+                              owner: {"rule_id": owner, "kind": "recorded_value"}})
+    assert out[rid]["kind"] == "advisory_failed", "never suppressed"
+    assert "DISAGREEMENT" in out[rid]["deferral_note"]
+    assert out[rid]["counts_toward_verdict"] is True
+
+
+def test_deferral_stands_alone_when_the_owner_could_not_be_evaluated():
+    """No second charge to collapse into, so suppressing the row would drop a real finding."""
+    from ClosedLoopDeployment import constraints as CN
+    rid, (owner, _) = "D01", CN.RULE_DEFERS_TO["D01"]
+    out = CN.apply_deferrals({rid: {"rule_id": rid, "kind": "advisory_failed"},
+                              owner: {"rule_id": owner, "kind": "input_not_supplied"}})
+    assert out[rid]["kind"] == "advisory_failed"
+    assert "could not be evaluated" in out[rid]["deferral_note"]
+    assert out[rid]["counts_toward_verdict"] is True
+
+
+def test_the_deferral_graph_is_acyclic_and_points_at_real_rules():
+    """Validated at import; re-asserted here so the guard itself is covered."""
+    from ClosedLoopDeployment import constraints as CN
+    ids_present = {r.rule_id for r in CN.RULES}
+    for deferring, (owner, why) in CN.RULE_DEFERS_TO.items():
+        assert deferring in ids_present and owner in ids_present
+        assert deferring != owner
+        assert len(why) > 80, "a deferral must carry its reasoning, not just a pointer"
+    CN._validate_deferral_graph()

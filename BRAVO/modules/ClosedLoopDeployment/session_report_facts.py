@@ -70,7 +70,7 @@ def scan_folder(folder, *, limit=None):
     sensing_channels = Counter()
     electrodes = Counter()
     unreadable = 0
-    newest = {"stamp": "", "adaptive": None, "capture": {}}
+    newest = {"stamp": "", "adaptive": None, "capture": {}, "d32": {}}
 
     for f in files:
         try:
@@ -88,8 +88,11 @@ def scan_folder(folder, *, limit=None):
                     newest["stamp"], newest["adaptive"] = stamp, _tail(v)
             elif "SuspendAmplitude" in p and isinstance(v, (int, float)):
                 suspend[float(v)] += 1
-            elif "Cycling.Enabled" in p:
-                cycling[bool(v)] += 1
+            # NOT counted here any more: the substring match caught
+            # `.DiagnosticData.LfpFrequencySnapshotEvents[].Cycling` as well as the group setting,
+            # which is why an earlier pass reported cycling enabled in 15187 records. Cycling is
+            # now read per GROUP below, scoped to groups that actually have sensing configured,
+            # because D32 asks about the BrainSense group and not about the device's history.
             elif p.endswith(".Channel") and "SensingChannel" in p:
                 sensing_channels[_tail(v)] += 1
             elif "ElectrodeState" in p and "Electrode" in p and isinstance(v, str):
@@ -100,6 +103,63 @@ def scan_folder(folder, *, limit=None):
             for g in ((d.get("Groups") or {}).get(grp) or []):
                 ps = g.get("ProgramSettings") or {}
                 rate = ps.get("RateInHertz")
+                # D32 SCOPE, corrected 2026-09-04. The rule asks whether cycling is enabled in a
+                # BrainSense or Adaptive group, so the only groups that can answer it are the ones
+                # with a SensingChannel configured. Reading Cycling across every group and every
+                # historical snapshot answered a different question and reported the majority state
+                # of the device rather than the state of the group we intend to use. The real path
+                # is GroupSettings.Cycling.Enabled, one level deeper than first assumed.
+                has_sensing = bool(ps.get("SensingChannel"))
+                gs = g.get("GroupSettings") or {}
+                cyc = (gs.get("Cycling") or {}).get("Enabled")
+                if cyc is not None:
+                    key = ("sensing" if has_sensing else "no_sensing",
+                           "active" if g.get("ActiveGroup") else "inactive")
+                    cycling[(key[0], key[1], bool(cyc))] += 1
+
+                # THE NEWEST ACTIVE SENSING GROUP is the configuration a clinician would actually
+                # program, so its state is what D32 should read. A 46% historical rate across every
+                # group ever recorded answers "has this device ever cycled", which is a different
+                # question and not the one the rule asks. This mirrors the pattern settled on for
+                # impedance: report the current state for the decision and keep the history
+                # alongside it, because "is it set that way now" and "has it ever been" are
+                # different questions and both are worth having.
+                if has_sensing and g.get("ActiveGroup") and stamp >= newest["stamp"]:
+                    progs = []
+                    for _ch in (ps.get("SensingChannel") or []):
+                        progs.append(_ch)
+                    rates = {ps.get("RateInHertz")} | {
+                        _ch.get("RateInHertz") for _ch in progs if _ch.get("RateInHertz")}
+                    rates = {r for r in rates if r is not None}
+                    pws = {_ch.get("PulseWidthInMicroSecond") for _ch in progs
+                           if _ch.get("PulseWidthInMicroSecond") is not None}
+                    limits = [(_ch.get("UpperLimitInMilliAmps"), _ch.get("LowerLimitInMilliAmps"))
+                              for _ch in progs]
+                    newest["d32"] = {
+                        # Each of these is a FEATURE EXCLUSION in D32: if present in the group,
+                        # BrainSense or Adaptive cannot be configured there.
+                        "cycling_in_group": bool(cyc) if cyc is not None else None,
+                        # More than one distinct rate inside the group is what "multiple rates"
+                        # means; a single rate at the group level with agreeing channels is one.
+                        "multiple_rates_in_group": (len(rates) > 1) if rates else None,
+                        # Interleaving shows up as programs on one hemisphere at different pulse
+                        # widths or rates. With one program per hemisphere there is nothing to
+                        # interleave, which is the common case here.
+                        "interleaving_in_group": (len(pws) > 1) if pws else None,
+                        # Patient amplitude limits are configured when an upper or lower limit is
+                        # present on the program rather than absent.
+                        "patient_limits_configured": (
+                            any(u is not None or l is not None for u, l in limits)
+                            if limits else None),
+                        # The pocket adaptor is a hardware accessory and is NOT reported anywhere in
+                        # the session report, so it stays None and D32 stays honest about it rather
+                        # than assuming its absence.
+                        "has_pocket_adaptor": None,
+                        "n_programs": len(progs),
+                        "rates_seen": sorted(float(r) for r in rates),
+                        "pulse_widths_seen": sorted(float(x) for x in pws),
+                    }
+
                 for ch in (ps.get("SensingChannel") or []):
                     lo = ch.get("LowerCaptureAmplitudeInMilliAmps")
                     up = ch.get("UpperCaptureAmplitudeInMilliAmps")
@@ -144,7 +204,15 @@ def scan_folder(folder, *, limit=None):
         "capture_ceiling_violations": {h: {"violating": v[0], "total": v[1]}
                                        for h, v in cap_violations.items()},
         "suspend_amplitudes": {str(k): v for k, v in suspend.items()},
-        "cycling_enabled_counts": {str(k): v for k, v in cycling.items()},
+        # Keyed by (group has sensing, group is active, cycling enabled) so a reader can see WHICH
+        # groups the cycling belongs to. D32 should consult the sensing groups only.
+        "cycling_by_group_kind": {"%s/%s/%s" % k: v for k, v in cycling.items()},
+        "cycling_in_sensing_group": bool(sum(
+            v for k, v in cycling.items() if k[0] == "sensing" and k[2])),
+        "cycling_in_active_sensing_group": bool(sum(
+            v for k, v in cycling.items() if k[0] == "sensing" and k[1] == "active" and k[2])),
+        # The five D32 feature exclusions as they stand in the NEWEST active sensing group.
+        "d32_newest_active_sensing_group": newest["d32"],
         "sensing_channels": dict(sensing_channels),
         "electrode_labels": dict(electrodes),
         "artifact_status": {ch: dict(c) for ch, c in artifact.items()},

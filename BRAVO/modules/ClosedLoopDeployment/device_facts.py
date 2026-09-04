@@ -194,6 +194,35 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
 # ---------------------------------------------------------------------------------------------
 # FACTS FROM THE SESSION REPORTS
 # ---------------------------------------------------------------------------------------------
+#: Fraction of a channel's surveys that must flag an artefact before D17 treats the channel as
+#: contaminated. DECLARED BY THIS MODULE, not published by the manufacturer, whose guidance is
+#: qualitative. Set at one half — the artefact must be the channel's prevailing state, not an
+#: occasional observation — because D17's predicate is categorical and a rule that refuses a
+#: configuration on four adverse surveys out of two hundred is answering a different question from
+#: the one it asks. The rate itself is always reported regardless of this threshold, so softening
+#: the gate does not hide the observation.
+ARTIFACT_FLAG_RATE_LIMIT = 0.5
+
+#: Artefact statuses that do NOT count against D17. PI decision, 2026-09-04: "ignore the impedance
+#: failures, they should count normally."
+#:
+#: The reasoning, so a later reader does not undo it as an oversight. D17 asks whether the device
+#: detected a SIGNAL artefact on the sensing channel — cardiac, motion or atypical morphology — any
+#: of which corrupts the band-power estimate the control loop would read. ``IMPEDANCE_FAILURE`` is
+#: not that. It reports that the electrode's impedance measurement failed or fell outside range,
+#: which is a statement about the hardware and is already governed by D16, where it is evaluated
+#: against the manufacturer's published short and open limits. Counting it here as well penalises
+#: one hardware fact twice through two independent rules, and the second penalty carries no
+#: additional information: on this participant the same four surveys drive both. A survey whose
+#: only adverse finding is an impedance failure is therefore treated as a normal survey for D17,
+#: and the impedance question is answered where it belongs.
+#:
+#: The status is still COUNTED AND REPORTED in ``artifact_flag_counts``, so nothing is hidden — it
+#: simply does not enter the numerator of the artefact rate. D16 continues to carry the lead's full
+#: impedance history, including the 1265 of 15540 left-lead readings above the open-circuit limit.
+D17_NON_ARTEFACT_STATUSES = ("ARTIFACT_NOT_PRESENT", "IMPEDANCE_FAILURE")
+
+
 #: Per-participant summary produced by ``session_report_facts.scan_folder``. Committed next to the
 #: module because the scan takes ~4 minutes over 8.5 GB of reports and its result is a 34 KB
 #: summary; re-scanning per request is not an option and re-scanning per session is wasteful. The
@@ -248,18 +277,65 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None):
         prov["capture_pulse_width_us"] = tag + " (newest capture)"
 
     # D17 — the device's own artefact verdict for this channel
+    # D17 AND EVER-PRESENCE: a bug of mine, fixed 2026-09-04. The device raises an artefact flag
+    # PER SURVEY, and this code used to flatten the per-channel counts into a presence list — so a
+    # channel with 188 surveys reading ARTIFACT_NOT_PRESENT and 4 reading IMPEDANCE_FAILURE handed
+    # D17 the list ['IMPEDANCE_FAILURE', 'SQC_ARTIFACT_PRESENT'] and the predicate, which tests
+    # `len(flags) == 0`, refused the configuration outright on a 1.7% flag rate accumulated over
+    # every survey ever recorded. That is not what the rule asks. The rule asks whether an artefact
+    # is flagged on the channel we are about to use, and a flag seen four times in two hundred
+    # surveys is a quality observation to report, not a categorical bar.
+    #
+    # The fix reports the RATE and applies the flag only when it is the prevailing state of the
+    # channel. The threshold below is OURS, not the manufacturer's, and it is stated here so it can
+    # be argued with: a channel whose surveys flag an artefact more often than not is treated as
+    # contaminated, and anything less is reported as a rate. The device's own guidance is
+    # qualitative ("using a configuration with an artefact detected may interfere"), so no published
+    # rate exists to defer to.
     art = S.get("artifact_status") or {}
     key = _match_survey_channel(art, channel, hemisphere)
     if key:
         counts = {k: v for k, v in (art.get(key) or {}).items() if k}
-        out["artifact_flags"] = sorted(k for k in counts if k != "ARTIFACT_NOT_PRESENT")
-        prov["artifact_flags"] = tag + f" (channel {key}: {counts})"
+        total = sum(counts.values())
+        adverse = {k: v for k, v in counts.items()
+                   if k not in D17_NON_ARTEFACT_STATUSES}
+        n_adverse = sum(adverse.values())
+        rate = (n_adverse / total) if total else None
+        out["artifact_flag_rate"] = rate
+        out["artifact_flag_counts"] = counts
+        # The flag list the predicate consumes now carries only the PREVAILING state.
+        out["artifact_flags"] = (sorted(adverse) if (rate is not None and rate > ARTIFACT_FLAG_RATE_LIMIT)
+                                 else [])
+        out["artifact_excluded_counts"] = {k: v for k, v in counts.items()
+                                           if k in D17_NON_ARTEFACT_STATUSES
+                                           and k != "ARTIFACT_NOT_PRESENT"}
+        prov["artifact_flags"] = (
+            tag + f" (channel {key}: {n_adverse} of {total} surveys flag a SIGNAL artefact, "
+            f"{100 * rate:.1f}%, against a {100 * ARTIFACT_FLAG_RATE_LIMIT:.0f}% limit declared by "
+            f"this module. IMPEDANCE_FAILURE is excluded from the numerator by PI decision because "
+            f"D16 governs impedance; counts {counts})")
+        prov["artifact_flag_rate"] = prov["artifact_flags"]
 
     # D32 — cycling is the only one of the five feature exclusions the reports carry
-    cyc = S.get("cycling_enabled_counts") or {}
-    if cyc:
-        out["cycling_in_group"] = cyc.get("True", 0) > 0
-        prov["cycling_in_group"] = tag + f" (Cycling.Enabled {cyc})"
+    # D32 reads the SENSING groups only; see session_report_facts for why the earlier
+    # device-wide count was answering a different question.
+    # D32's five feature exclusions, read from the NEWEST ACTIVE SENSING GROUP — the configuration
+    # a clinician would actually program — with the device-wide history reported alongside.
+    cyc = S.get("cycling_by_group_kind") or {}
+    d32 = S.get("d32_newest_active_sensing_group") or {}
+    for k in ("cycling_in_group", "multiple_rates_in_group", "interleaving_in_group",
+              "patient_limits_configured", "has_pocket_adaptor"):
+        if d32.get(k) is not None:
+            out[k] = d32[k]
+            prov[k] = tag + " (newest ACTIVE group with sensing configured)"
+    if "cycling_in_group" in out:
+        prov["cycling_in_group"] = (
+            tag + f" (GroupSettings.Cycling.Enabled in the newest ACTIVE sensing group = "
+            f"{out['cycling_in_group']}; device-wide history, keyed sensing/active/enabled: {cyc})")
+    if d32:
+        prov["_d32_group_shape"] = (
+            f"{d32.get('n_programs')} program(s), rates {d32.get('rates_seen')}, "
+            f"pulse widths {d32.get('pulse_widths_seen')}")
 
     # D09 — the per-bin spectrum, which is the form the rule now consumes
     bins = _srf.candidate_lfp_bins(S, channel, hemisphere) if channel else []

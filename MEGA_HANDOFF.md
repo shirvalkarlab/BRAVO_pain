@@ -75,6 +75,101 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (gates) — blocking failures 3 -> 1, and two of the three were MY bugs
+
+Brief was to make the gates more open systematically, address everything rather than only the
+blockers, identify the tunable knobs, and implement autonomously. Result: **the only remaining
+blocking failure is D19**, which fails on evidence and was deliberately not touched.
+
+**FIRST, THE KNOB AUDIT, because it bounds what "tuning" can even mean.** Of 31 numeric thresholds
+in the closed-loop stack, **28 are device-published** (A610 or the white paper) and are not ours to
+move; only **5 are declared by this module**, and one of those is new. The tunable set is therefore
+tiny, and the large gains came from correcting scope errors rather than from moving numbers. Full
+table in `RCS08_gate_knobs.csv`.
+
+**D17 FAIL -> PASS. Two defects, both mine.** (1) PI decision: `IMPEDANCE_FAILURE` is not a signal
+artefact and now counts as a normal survey. It reports that an impedance measurement failed, which
+is a hardware statement already governed by D16 against published limits — charging it to D17 as
+well penalised one hardware fact twice through two independent rules, and on this participant the
+same four surveys drove both. It is still COUNTED and REPORTED in `artifact_flag_counts`; it just
+does not enter the numerator. (2) The bigger bug: this code flattened per-channel survey counts into
+a presence LIST, and D17's predicate tests `len(flags) == 0`. So a channel with 188 surveys reading
+ARTIFACT_NOT_PRESENT and 40 reading SQC_ARTIFACT_PRESENT handed the rule a non-empty list and was
+refused outright on an ever-presence aggregate. Now reports a RATE: 40 of 232 surveys, **17.2%**,
+against a `ARTIFACT_FLAG_RATE_LIMIT = 0.5` declared by this module and stated at its declaration.
+
+**D32 FAIL -> UNKNOWN (pocket adaptor only). Two defects, both mine.** (1) `Cycling.Enabled` was
+matched by path SUBSTRING, which also caught `DiagnosticData.LfpFrequencySnapshotEvents[].Cycling`
+— that is where the bogus "15187 records" came from. The group setting lives at
+`GroupSettings.Cycling.Enabled`, one level deeper. (2) Scope: D32 asks about the BrainSense group
+being configured, and the code read every group in every historical snapshot. Across the real record
+cycling is enabled in **868 of 1867 active sensing groups**, so a device-wide read fails the rule;
+in the **newest ACTIVE sensing group** it reads `cycling False, interleaving False, multiple rates
+False, patient limits False` on one program at 110 Hz / 100 us. Four of five exclusions cleared by
+evidence. `has_pocket_adaptor` stays None because the session report does not carry it, and a test
+pins that it is never assumed absent.
+
+**RULE DEFERRAL: a general mechanism so one fact is not charged twice.** `RULE_DEFERS_TO` plus
+`apply_deferrals`, a second pass after the table is evaluated (a rule cannot know whether its owner
+found a problem until the owner has run, and the table is not in dependency order). D01 now defers
+to D02: both read `indication`, D02 asks the narrower question of whether Adaptive specifically is
+labelled for it, so D02 owns the finding. The row MOVES to a new `deferred` bucket rather than being
+deleted, so the observation stays.
+
+**Safety property, asserted in a test rather than argued:** deferral can never turn a blocked
+configuration into an eligible one, because a row is set aside only when its OWNER reached the same
+adverse verdict — the owner is still failing. Three edge cases are handled explicitly: owner
+unevaluable (the row stands alone), owner PASSED while the deferring rule failed (kept and marked
+`DISAGREEMENT`, because two rules reading one input disagreeing is more interesting than either
+verdict), and cycles or unknown pointers (refused at import by `_validate_deferral_graph`).
+
+**THE MAP THAT MADE THIS SAFE, and why the first attempt was worthless.** Regex-parsing the
+predicate bodies found 4 input keys across 38 predicates — wrong by an order of magnitude, since
+D32 alone reads five. Replaced by RUNTIME INTROSPECTION: hand each predicate a dict subclass that
+records every key looked up, probed twice (all-absent and all-present) to catch reads on branches a
+static scan cannot see. Exact result: **51 rules, 38 predicates, 48 keys, 0 predicate errors**, and
+ten keys read by more than one rule. Map at `_agent_bridge/_fact_rule_map.json`.
+
+**Of those ten candidates only TWO were genuine duplicates.** `intent` is read by ELEVEN rules and
+`threshold_mode` by seven, because each rule checks whether it applies at all — collapsing on key
+overlap would have merged eleven unrelated rules and destroyed the table. Adjudicated by reading the
+predicates: D18/D40 read identical keys but ask different questions and cannot both fire on one
+mode; D38/D39 are well-formedness versus fallback-flagging; D24/D27 test order versus artefact
+ceiling on the same number; D27/D31 are two different ceilings on pulse width. Sharing an input is
+evidence to investigate, never grounds to merge, and that is recorded at `RULE_DEFERS_TO`.
+
+**THE MOST IMPORTANT DESIGN CORRECTION: deferral granularity.** D28 was briefly declared as
+deferring to D07 and that was WRONG. Their overlap is ONE CONDITION inside a compound predicate
+that tests three things — `0.0 < lo < hi <= amp_hi and lo >= amp_lo` — so setting the whole rule
+aside when the zero condition fired would also have discarded its ordering and envelope checks,
+hiding failures D07 knows nothing about. Fixed by removing the duplicated CONDITION from D28's
+predicate instead. General principle now recorded: rule-level deferral is sound only when the
+ENTIRE rule restates another rule's finding; when one condition overlaps, delete the condition from
+the non-owning rule. Tests assert D28 still catches wrong order and envelope breaches.
+
+**A silent mechanism failure caught by exercising it rather than reading it.** `apply_deferrals`
+first tested for kind `"fail"` while the evaluator emits `"failed"`, so every deferral involving a
+BLOCKING rule never fired — and it looked as though it worked because the one declared pair happened
+to be advisory. Kinds are now module constants (`KIND_ADVERSE`, `KIND_UNEVALUABLE`, `KIND_BENIGN`)
+and a test asserts every kind the evaluator emits is classified in exactly one set, so a rename
+cannot quietly disable deferral again.
+
+**Live verdict for ONE_THREE_LEFT @ 24.5 Hz, before -> after:** failures **3 -> 1**, unknowns
+**8 -> 4**, advisory shortfalls **3 -> 2**. Remaining failure: **D19 only**. Remaining unknowns:
+D29 (needs the implant record), D30 (a PI decision), D31 (unpublished by Medtronic), D32 (pocket
+adaptor). Suite **139 -> 165**.
+
+**NOT DONE, DELIBERATELY: D19 was not loosened.** It refuses a band whose power RISES with
+amplitude, because the Dual Threshold law then reads high power as insufficient stimulation, ramps
+amplitude up, drives power higher and ramps again — bounded only by the clinician's amplitude
+ceiling rather than by physiology. On this candidate both slope signs are wrong (power-vs-amplitude
++1 where it must be negative, power-vs-pain -1 where it must be positive). Making this gate more
+permissive is the one change that would make the module unsafe rather than merely permissive, and it
+was not inferred from a general instruction to open the gates. Reconsidering it needs an explicit,
+separate decision.
+
+
+
 ### 2026-09-04 (rules) — all 1154 reports were ALREADY ingested; unknowns 8 -> 3, and D16 flipped
 
 **THE JSONS WERE NEVER UN-INGESTED. `--dry-run` over all 1154 files: "already in BRAVO 1154, NEW to
