@@ -75,6 +75,61 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-03 (later still) — the ClosedLoopDeployment module exists, and Phase 2 says none survive
+
+Ten files in `BRAVO/modules/ClosedLoopDeployment/`, **121 tests**, built without any new data.
+Phases 4-6 of the plan are prospective sessions and cannot be run, but their CODE (`replay.py`,
+`protocol.py`) is written and tested so those visits can be planned and replayed the moment data
+exists. Full write-up in `CLD_phase0_phase2_results.md`.
+
+**Phase 0 joined table: 109,296 rows, ZERO falling outside a known setting epoch.** Two silent
+failures were found and fixed while building it, both of which produced a wrong answer with no
+exception raised. First, under **pandas 3** `.astype("int64")` on a datetime column returns the
+integer in the column's own resolution, now MICROSECONDS not nanoseconds; dividing by 1e9 gave epoch
+seconds a thousand times too small, so every sample fell outside every epoch and the table came back
+empty. Second, the exposure frame spells its columns `amp_mA_Left` while the raw pivot spells them
+`amp_Left`; accepting one spelling produced a table with no amplitude at all, and every edge
+reported "no estimable band" as though it were a data problem. Both are pinned by regression tests
+across four datetime resolutions and both spellings. **If you write a new join in this repo, use
+`.to_numpy().astype("datetime64[ns]").astype("int64")`, never a bare `.astype("int64")`.**
+
+**H4 answered: the power scale does not change the winner here.** The device uses a linear sum
+(`D11`); the biomarker path used mean-of-log, which is a geometric mean. On a constructed peaked
+band they differ by 5.87 dB, but on the real record they disagree about the peak band in only
+**0.51%** of samples. Both scales are carried anyway, since that answer is dataset-specific.
+
+**Phase 2, the three edges (linear power, audit clustering):** E1 amplitude-to-power -0.169
+[-0.343, +0.006] p=0.058 over 87 setting epochs, NOT resolved. E2 power-to-pain -0.876
+[-1.767, +0.015] p=0.054 over 67 ratings, NOT resolved. E3 amplitude-to-pain -0.128
+[-0.237, -0.020] p=0.020 over 88 epochs, RESOLVED and negative. **Only the edge that does not
+involve the brain signal resolves.** Note the direction: E2 is NEGATIVE where deployability needs
+POSITIVE, so the point estimates would be incoherent if they resolved. Reported as "not established"
+rather than "contradictory", correctly, but it is not an encouraging pattern.
+
+**THE HEADLINE. Neither previously-nominated configuration survives honest inference.** Across all
+504 band-cells, 219 (43.5%) have intervals excluding zero — and **every one is below the cluster
+floor**: the robust variance estimator needs ~40 clusters and the maximum any cell reaches is 35
+setting epochs (median 7). No cell in the record clears it. The whole-epoch permutation shows why:
+at 165 Hz the largest t is **489.73** with a family-wise p of **0.243**, because with eight setting
+epochs, permuting amplitude between them produces equally extreme t values routinely. At 110 Hz —
+the rate of one of the two screen-deployable cells — max t is 2.05, p = 0.64. Only 55 Hz (35
+epochs) reaches family-wise significance. The plan predicted "far fewer than four and possibly
+none"; the answer is none of the nominated ones, with one rate worth titrating.
+
+**A brief I wrote was wrong and the sub-agent caught it.** I told the replay track that Dual
+Threshold ramps amplitude DOWN above the upper threshold. The white paper (p. 13, already quoted in
+`percept_adaptive.py`) says UP: the control law assumes power FALLS as amplitude rises, so it reads
+high power as insufficient stimulation. The required sign pattern is unchanged because it never
+depended on that sentence, but the sentence was rendering into the report a clinician reads. Fixed
+in both the docstring and the returned string, with a regression test on the rendered text.
+
+Suites: ClosedLoopDeployment **121 passed**, StimOptimizer **367 passed / 41 skipped**. The
+container Biomarkers suite currently shows 4 failures, ALL `NameResolutionError` reaching
+`redcap.ucsf.edu` — the container has lost DNS to REDCap and those tests fetch live outcomes. Not a
+code regression; nothing in this work touches REDCap. Re-run when the container has network.
+
+
+
 ### 2026-09-03 (later) — device knob inventory, and the threshold mode is now a real choice
 
 **Plan review (step 1).** One stale passage found and fixed: Phase 6 still said clinical benefit
