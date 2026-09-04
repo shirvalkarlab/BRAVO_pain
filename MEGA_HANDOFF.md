@@ -75,6 +75,76 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (caching) — 70.55 s to 0.45 s, and my diagnosis of the bottleneck was wrong
+
+**Measured stage profile of one deployment report, which is where this should have started:**
+
+    StimOptimizer.evidence_inputs          32.96 s
+    StimOptimizer.build_design_matrix      33.99 s
+    joined_table (cold)                     2.62 s
+    edges.actuation_edge                    0.09 s
+    pipeline.run                            0.05 s
+
+I had told the PI the 70 s was the 109k-row Phase 0 joined table and cached that FIRST. The table is
+**4% of the request**. 67 of the 70 seconds are the two input fetches, which re-read and re-decode
+the same recordings from the database on every request. Profile before optimising.
+
+**Result: first request 70.55 s, repeat 0.45 s (158x), a DIFFERENT centre frequency on the same
+inputs 0.46 s (152x)** — the last figure is the one that matters, because changing candidate is what
+a clinician actually does on that page. `force_refresh=True` still rebuilds in 68.04 s. Verdicts and
+failure sets are identical across cached and uncold reads.
+
+**Two memos, both keyed on content, never on a timer.**
+- `evidence_inputs_cached` keyed on `recording_set_signature`, which folds in EACH recording's own
+  uid, content hash and type. Not a count and not a newest-date: a re-decode that replaces a
+  recording in place changes neither, and a count alone also misses a deletion balanced by an
+  insertion. A new ingest invalidates immediately and nothing else does. This project already lost a
+  session to a plot that looked frozen because files had never been ingested, so an expiry window
+  was not an option.
+- `joined_table_cached` keyed on a content fingerprint of the join inputs.
+
+`build_design_matrix` ACCEPTS `request_data` and never references it anywhere in its body, so it is
+a pure function of the participant and safe to key on the recording set. It is called with default
+`washin_min` and `items`; a caller varying those would need them in the key.
+
+**A CACHE BUG FOUND AND FIXED BEFORE IT SHIPPED, and it is the dangerous kind.** The first
+fingerprint named columns that do not exist on the real psd frame (`frequency`, `log_power`,
+`center_hz`). Absent columns are skipped by design, so it hashed only `t` and `channel`, **reported
+its mode as "hashed", and did not change when the spectra changed.** A re-decoded recording with
+unchanged timestamps would have been served the previous joined table by a cache whose key claimed
+to be a content hash. Separately, `pandas.util.hash_pandas_object` cannot hash a column of numpy
+arrays, so naming the array columns without special handling degraded the mode to "shape_only"
+instead. The psd frame is one row per (sample, channel) with the whole spectrum in `log_psd` and its
+axis in `freqs`; those are now hashed over their BYTES, a column that cannot be hashed marks the
+whole fingerprint "shape_only" so the degradation is visible IN the key, and a frame carrying none
+of the named columns returns "no_columns" rather than a healthy-looking hash. The column COUNT is
+deliberately not in the key, so a downstream annotation column does not invalidate a valid table.
+
+**Contract:** both memos return the SAME object to every caller, so callers must treat results as
+read-only or copy before mutating. Same contract the Biomarkers assembled-matrix cache imposes.
+Bounded at 2 entries each; entries are 112k-row frames.
+
+### The new JSONs: 580 files, and three rules are answerable that were not
+
+**D28 — Adaptive Therapy has ACTUALLY RUN.** `AdaptiveTherapyStatus` across the 580 files:
+NOT_CONFIGURED 8340, **RUNNING 3645**, DISABLED 569, SUSPENDED 356. First RUNNING 2025-10-21.
+
+**D24 — capture pairs exist and every distinct combination is correctly ordered** (upper > lower).
+2434 pair records. Left 698 records / 7 distinct pairs, most common 0.0/1.2 mA. Right 1736 / 13
+distinct, most common 0.0/1.2 mA. CAVEAT: many pairs have a lower arm of **0.0 mA**, which is not a
+therapeutic amplitude — those are the artifact-versus-no-artifact contrast rather than the two
+therapeutic amplitudes D24 asks for, the same confound flagged for the LFP response analysis.
+
+**D27 — FAILS on the right hemisphere, 1571 of 1736 records**, because the right pulse width is
+160 us against the 120 us artefact ceiling. Left is mostly 60 us and violates in only 7 of 698.
+
+Also corrected: my "threshold capture has never been performed" claim was based on 3 local JSON
+files and was wrong. 401 of 580 files carry a nonzero capture amplitude.
+
+Suite 128 -> 136.
+
+
+
 ### 2026-09-04 (later) — device facts wired, and RCS08 now fails D16 and D19 on real evidence
 
 The verdict moved from "blocked because 14 rules cannot be evaluated" to **blocked because two rules

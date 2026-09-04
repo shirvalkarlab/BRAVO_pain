@@ -107,7 +107,7 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
-    T = adapter.joined_table(psd_frame, epochs, pro_frame=pro_frame)
+    T = adapter.joined_table_cached(psd_frame, epochs, pro_frame=pro_frame)
     rep.manifest = {
         "n_psd_rows": 0 if psd_frame is None else int(len(psd_frame)),
         "n_epochs": 0 if epochs is None else int(len(epochs)),

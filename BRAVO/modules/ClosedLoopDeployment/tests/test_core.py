@@ -374,3 +374,196 @@ def test_participant_scoped_device_facts_reach_the_participant_dict():
 
     # scope is read from the constraint module, so an unknown module strands nothing silently
     assert PL._participant_facts("uid-x", dev, None)["uid"] == "uid-x"
+
+
+# --- the Phase 0 cache (2026-09-04) -------------------------------------------------------------
+def _tiny_inputs():
+    """A psd frame and epoch frame in the REAL shapes, which are not the obvious ones.
+
+    The psd frame is one row per (sample, channel) as `lfp_evidence.frame_from_matrix` emits it:
+    `t` is EPOCH SECONDS as a float, and the whole spectrum lives in `log_psd` as a numpy array with
+    its axis in `freqs`. It is not long-per-frequency. The epoch frame keeps tz-aware Timestamps,
+    because that is what `exposure_epochs` produces. Both mistakes were made while writing these
+    tests and both failed loudly here but would have failed SILENTLY in the cache fingerprint.
+    """
+    t0 = pd.Timestamp("2026-01-01T00:00:00Z")
+    f_set = np.arange(8.0, 31.0, 1.0)
+    rows = []
+    for k in range(6):
+        rows.append({"t": float((t0 + pd.Timedelta(minutes=5 * k)).timestamp()),
+                     "channel": "CH", "source": "td",
+                     "log_psd": np.sin(f_set) + float(k), "freqs": f_set})
+    psd = pd.DataFrame(rows)
+    eps = pd.DataFrame({"t_start": [t0], "t_end": [t0 + pd.Timedelta(hours=1)],
+                        "amp_mA_Left": [2.0], "amp_mA_Right": [2.0], "freq_hz": [165.0],
+                        "pw_us_Left": [60.0]})
+    return psd, eps
+
+
+def _bump_spectrum(psd, row=0, by=10.0):
+    """Change the CONTENT of one spectrum, leaving every shape and timestamp identical."""
+    out = psd.copy()
+    out.at[row, "log_psd"] = np.asarray(out.at[row, "log_psd"], float) + by
+    return out
+
+
+def test_fingerprint_tracks_array_valued_spectra_and_not_merely_the_timestamps():
+    """Regression, 2026-09-04, for a cache bug that would have served stale tables while looking
+    verified.
+
+    The first fingerprint listed column names that do not exist on the real psd frame
+    ("frequency", "log_power", "center_hz"). Absent columns are skipped by design, so it hashed
+    only `t` and `channel`, reported its mode as "hashed", and DID NOT CHANGE when the spectra
+    changed. A re-decoded recording with unchanged timestamps would have been served the previous
+    joined table by a cache whose key claimed to be a content hash.
+
+    Separately, hash_pandas_object cannot hash a column of numpy arrays, so naming the array
+    columns without special handling degraded the mode to "shape_only" instead.
+    """
+    from ClosedLoopDeployment import adapter as AD
+    psd, _ = _tiny_inputs()
+    fp = AD._frame_fingerprint(psd, ("t", "channel", "source", "log_psd", "freqs"))
+    assert fp[0] == "hashed", "array columns must be hashed, not degrade to shape_only"
+    bumped = AD._frame_fingerprint(_bump_spectrum(psd), ("t", "channel", "source", "log_psd", "freqs"))
+    assert bumped != fp, "a spectral change MUST move the fingerprint"
+
+    # the signature used by the cache must inherit that sensitivity
+    a = AD._joined_signature(psd, None, (20.5,), 5.0)
+    b = AD._joined_signature(_bump_spectrum(psd), None, (20.5,), 5.0)
+    assert a != b
+
+    # a frame carrying none of the named columns is reported as such, never as a healthy hash
+    assert AD._frame_fingerprint(pd.DataFrame({"zz": [1]}), ("t",))[0] == "no_columns"
+    assert AD._frame_fingerprint(None, ("t",)) == ("none",)
+
+
+def test_joined_cache_returns_the_same_object_on_a_repeat_call():
+    from ClosedLoopDeployment import adapter as AD
+    AD.clear_joined_cache()
+    psd, eps = _tiny_inputs()
+    a = AD.joined_table_cached(psd, eps)
+    b = AD.joined_table_cached(psd, eps)
+    assert a is b, "a repeat call must not rebuild"
+    assert AD.joined_cache_stats()["entries"] == 1
+
+
+def test_joined_cache_invalidates_on_a_CONTENT_change_that_leaves_the_shape_identical():
+    """The property that justifies a content hash over a row count.
+
+    A corrected amplitude, a re-decoded spectrum or a moved epoch boundary can change the data
+    without changing its size. A shape-keyed cache would serve the stale table, and on a module
+    whose output authorises programming a neurostimulator that is far worse than rebuilding.
+    """
+    from ClosedLoopDeployment import adapter as AD
+    AD.clear_joined_cache()
+    psd, eps = _tiny_inputs()
+    first = AD.joined_table_cached(psd, eps)
+
+    moved = eps.copy()
+    moved.loc[0, "amp_mA_Left"] = 3.5          # same shape, different value
+    second = AD.joined_table_cached(psd, moved)
+    assert second is not first, "an amplitude change must invalidate"
+    assert AD.joined_cache_stats()["entries"] == 2
+
+    AD.clear_joined_cache()
+    p1 = AD.joined_table_cached(psd, eps)
+    p2 = AD.joined_table_cached(_bump_spectrum(psd), eps)
+    assert p2 is not p1, "a spectral change must invalidate"
+
+
+def test_joined_cache_is_bounded_and_evicts():
+    """Entries are 100k-row frames, so the memo must not grow without bound."""
+    from ClosedLoopDeployment import adapter as AD
+    AD.clear_joined_cache()
+    psd, eps = _tiny_inputs()
+    for amp in (1.0, 2.0, 3.0, 4.0):
+        e = eps.copy(); e.loc[0, "amp_mA_Left"] = amp
+        AD.joined_table_cached(psd, e)
+    st = AD.joined_cache_stats()
+    assert st["entries"] == st["max"] == AD._JOINED_MEMO_MAX
+
+
+def test_force_refresh_rebuilds_and_replaces_the_entry():
+    from ClosedLoopDeployment import adapter as AD
+    AD.clear_joined_cache()
+    psd, eps = _tiny_inputs()
+    a = AD.joined_table_cached(psd, eps)
+    b = AD.joined_table_cached(psd, eps, force_refresh=True)
+    assert b is not a, "force_refresh must rebuild"
+    assert AD.joined_table_cached(psd, eps) is b, "and the fresh table must replace the entry"
+
+
+def test_fingerprint_says_when_it_could_not_hash_rather_than_degrading_silently():
+    """A fingerprint that quietly fell back to the shape would reintroduce the stale-table risk the
+    content hash exists to remove, so the mode is the first element of the returned tuple.
+
+    Updated 2026-09-04: a frame carrying NONE of the named columns now returns "no_columns" rather
+    than "hashed". The old assertion accepted "hashed" for that case, which was the behaviour that
+    let a fingerprint over a nonexistent column list look healthy while tracking nothing.
+    """
+    from ClosedLoopDeployment import adapter as AD
+    psd, _ = _tiny_inputs()
+    assert AD._frame_fingerprint(psd, ("t", "channel", "log_psd"))[0] == "hashed"
+    assert AD._frame_fingerprint(None, ("x",)) == ("none",)
+    assert AD._frame_fingerprint(psd, ("nonexistent",))[0] == "no_columns"
+    # a partial overlap still hashes, over the columns that ARE present, and names them
+    fp = AD._frame_fingerprint(psd, ("t", "nonexistent"))
+    assert fp[0] == "hashed" and [c for c, _ in fp[2]] == ["t"]
+
+
+def test_annotating_a_column_the_join_ignores_does_not_invalidate():
+    """Downstream code adds columns. Invalidating on those would defeat the cache for no gain."""
+    from ClosedLoopDeployment import adapter as AD
+    AD.clear_joined_cache()
+    psd, eps = _tiny_inputs()
+    a = AD.joined_table_cached(psd, eps)
+    annotated = psd.copy(); annotated["reviewer_note"] = "looks fine"
+    assert AD.joined_table_cached(annotated, eps) is a, \
+        "a column the join never reads must not invalidate"
+
+
+def test_recording_set_signature_folds_in_each_recordings_own_hash():
+    """Keyed on recording IDENTITY, not a count or a max date.
+
+    A re-decode that replaces a recording in place changes neither the count nor the newest date,
+    and a count alone also misses a deletion balanced by an insertion. This project has already
+    lost a session to a plot that looked frozen because files were never ingested, so the cache must
+    invalidate exactly when the recording set changes and never on a timer.
+    """
+    from ClosedLoopDeployment import adapter as AD
+
+    class _R:
+        def __init__(self, uid, hashed, type_="X"):
+            self.uid, self.hashed, self.type = uid, hashed, type_
+
+    class _P:
+        uid = "p1"
+
+    import sys, types
+    fake = types.ModuleType("Server"); fake_models = types.ModuleType("Server.models")
+    state = {"recs": [_R("a", "h1"), _R("b", "h2")], "sfs": ["s1"]}
+    fake_models.SourceFile = type("SF", (), {"find_all": staticmethod(lambda **k: state["sfs"])})
+    fake_models.Recording = type("R", (), {"find_all": staticmethod(lambda **k: state["recs"])})
+    fake.models = fake_models
+    saved = (sys.modules.get("Server"), sys.modules.get("Server.models"))
+    sys.modules["Server"], sys.modules["Server.models"] = fake, fake_models
+    try:
+        base = AD.recording_set_signature(_P())
+        assert AD.recording_set_signature(_P()) == base, "must be stable for identical input"
+
+        state["recs"] = [_R("a", "h1_REDECODED"), _R("b", "h2")]
+        assert AD.recording_set_signature(_P()) != base, \
+            "a re-decode changes no count and no date, so the hash must carry it"
+
+        state["recs"] = [_R("a", "h1"), _R("c", "h2")]     # one deleted, one inserted
+        assert AD.recording_set_signature(_P()) != base, \
+            "a swap keeps the count identical and must still invalidate"
+
+        state["recs"] = [_R("b", "h2"), _R("a", "h1")]     # order must not matter
+        assert AD.recording_set_signature(_P()) == base
+    finally:
+        for k, v in zip(("Server", "Server.models"), saved):
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v

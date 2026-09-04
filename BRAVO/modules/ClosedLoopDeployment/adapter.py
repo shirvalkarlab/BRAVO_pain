@@ -21,6 +21,9 @@ the winner can actually be answered rather than assumed.
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
+import threading as _threading
+
 import numpy as np
 import pandas as pd
 
@@ -120,6 +123,201 @@ def _assign_epoch(t_epoch_s, epochs):
         m = (t >= a) & (t < b) if np.isfinite(b) else (t >= a)
         out[m] = i
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# PHASE 0 CACHE
+# ---------------------------------------------------------------------------------------------
+#: The joined table costs ~70 s to build for RCS08 (109,296 rows from 6,072 spectra against 120
+#: exposure epochs), and the deployment endpoint rebuilt it on EVERY request — so the live page sat
+#: on a spinner for over a minute each time a clinician changed a candidate. Every consumer wants
+#: the same table for the same inputs, so it is memoised.
+#:
+#: WHY THE SIGNATURE IS A CONTENT HASH AND NOT A SHAPE. A cache keyed on row counts would serve a
+#: stale table whenever the data changed without changing its size — a corrected amplitude, a
+#: re-decoded spectrum, an epoch boundary moving. On a module whose output authorises programming a
+#: neurostimulator, serving a stale table is far worse than rebuilding one, so the key folds in the
+#: actual VALUES of the columns the join depends on. Hashing 109k rows costs well under a second
+#: against the 70 s it saves, which is why the safe choice is also the affordable one.
+_JOINED_MEMO = {}
+_JOINED_MEMO_LOCK = _threading.Lock()
+
+#: Entries are large (a 109k-row frame), so the memo holds few. Two is enough for the access
+#: pattern that matters: a clinician toggling between two candidate configurations on one page.
+_JOINED_MEMO_MAX = 2
+
+
+def _frame_fingerprint(df, columns):
+    """A content hash of the columns a join depends on, plus the frame's shape.
+
+    THE ARRAY-VALUED COLUMN IS THE WHOLE DIFFICULTY, and getting it wrong is silent. The PSD frame
+    is one row per (sample, channel) with the entire spectrum held as a numpy array in ``log_psd``
+    and the frequency axis in ``freqs``. ``pandas.util.hash_pandas_object`` cannot hash a column of
+    arrays, and a first version of this function listed column names that did not exist on the real
+    frame — so it hashed only ``t`` and ``channel``, reported its mode as "hashed", and did not
+    change when the spectra changed. A re-decoded recording with unchanged timestamps would have
+    been served a stale table by a cache that looked verified. Array columns are therefore hashed
+    over their BYTES, and a column that cannot be hashed at all marks the whole fingerprint
+    "shape_only" so the degradation is visible in the key rather than hidden inside it.
+
+    Columns absent from the frame are skipped, which is intended: an annotation added downstream
+    must not invalidate a table whose join inputs are unchanged. But because absence is silent, the
+    names of the columns actually used are part of the returned tuple.
+    """
+    if df is None:
+        return ("none",)
+    present = [c for c in columns if c in getattr(df, "columns", [])]
+    if not present:
+        return ("no_columns", int(getattr(df, "shape", (0, 0))[0]))
+    parts, degraded = [], False
+    for c in present:
+        col = df[c]
+        first = next((v for v in col.to_numpy()[:1]), None)
+        if isinstance(first, (np.ndarray, list, tuple)):
+            try:
+                buf = bytearray()
+                for v in col.to_numpy():
+                    buf += np.ascontiguousarray(np.asarray(v, dtype=float)).tobytes()
+                parts.append((c, _hashlib.blake2b(bytes(buf), digest_size=16).hexdigest()))
+            except Exception:
+                degraded = True
+        else:
+            try:
+                parts.append((c, int(pd.util.hash_pandas_object(col, index=True).sum())))
+            except Exception:
+                degraded = True
+    # Row count is kept as a cheap guard, but the column COUNT deliberately is NOT: naming an
+    # explicit subset is what lets a downstream annotation column leave the table valid, and
+    # folding df.shape[1] in would silently undo that.
+    if degraded or not parts:
+        return ("shape_only", int(df.shape[0]), tuple(present))
+    return ("hashed", int(df.shape[0]), tuple(parts))
+
+
+def _joined_signature(psd_frame, epochs, centers, width):
+    # These are the columns lfp_evidence.frame_from_matrix actually emits. Naming a column that
+    # does not exist is not a harmless typo here: the fingerprint silently narrows to whatever DOES
+    # exist and stops tracking the data that matters.
+    return (_frame_fingerprint(psd_frame, ("t", "channel", "source", "log_psd", "freqs")),
+            _frame_fingerprint(epochs, ("t_start", "t_end", "amp_mA_Left", "amp_mA_Right",
+                                        "amp_Left", "amp_Right", "freq_hz", "pw_us_Left")),
+            tuple(float(c) for c in (centers or ())), float(width))
+
+
+#: THE ACTUAL BOTTLENECK, measured 2026-09-04 rather than assumed. A stage profile of one
+#: deployment report on RCS08 came out as:
+#:
+#:     StimOptimizer.evidence_inputs          32.96 s
+#:     StimOptimizer.build_design_matrix      33.99 s
+#:     joined_table (cold)                     2.62 s
+#:     edges.actuation_edge                    0.09 s
+#:     pipeline.run                            0.05 s
+#:
+#: so 67 of the 70 seconds are the two input fetches, and the joined table — which I had assumed
+#: was the problem and cached first — is 4% of the request. Both fetches re-read and re-decode the
+#: same recordings from the database on every request, and both are pure functions of the recording
+#: set, so both are memoised here.
+#:
+#: THE KEY IS THE RECORDING SET, NOT A TIMER. An expiry-based cache would serve a stale plot for
+#: however long the window lasts, and this project has already lost a session to exactly that class
+#: of confusion — a frozen Biomarkers plot whose cause was un-ingested files rather than a bad
+#: cache. Keying on the identity of every recording means a new ingest invalidates immediately and
+#: nothing else does.
+_INPUTS_MEMO = {}
+_INPUTS_MEMO_LOCK = _threading.Lock()
+_INPUTS_MEMO_MAX = 2
+
+
+def recording_set_signature(participant):
+    """Identity of every recording that feeds the inputs, so a new ingest invalidates the cache.
+
+    Folds in each recording's own uid and content hash rather than a count or a max date: a
+    re-decode that replaces a recording in place changes neither of those, and a count alone would
+    also miss a deletion balanced by an insertion.
+    """
+    from Server import models as _m
+    sfs = list(_m.SourceFile.find_all(owner=participant))
+    recs = list(_m.Recording.find_all(source__in=sfs))
+    ident = sorted((str(getattr(r, "uid", "")), str(getattr(r, "hashed", "")),
+                    str(getattr(r, "type", ""))) for r in recs)
+    blob = "|".join("~".join(t) for t in ident).encode("utf8")
+    return (str(getattr(participant, "uid", participant)), len(sfs), len(recs),
+            _hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+
+def evidence_inputs_cached(participant, *, force_refresh=False):
+    """``StimOptimizer.evidence_inputs`` and ``build_design_matrix``, memoised together.
+
+    Returns ``(psd_frame, epochs, design_matrix)``. The two calls are cached as one entry because
+    every consumer needs all three and they share the same invalidation condition, so splitting
+    them would double the signature cost for no benefit.
+
+    Callers must treat the returned frames as READ-ONLY, or copy before mutating: they are the same
+    objects handed to every other caller. That is the same contract the Biomarkers assembled-matrix
+    cache imposes.
+    """
+    from StimOptimizer import adapter as _sa
+    sig = recording_set_signature(participant)
+    if not force_refresh:
+        with _INPUTS_MEMO_LOCK:
+            hit = _INPUTS_MEMO.get(sig)
+        if hit is not None:
+            return hit
+    psd, eps = _sa.evidence_inputs(participant)
+    dm = _sa.build_design_matrix(participant)
+    out = (psd, eps, dm)
+    with _INPUTS_MEMO_LOCK:
+        if sig not in _INPUTS_MEMO and len(_INPUTS_MEMO) >= _INPUTS_MEMO_MAX:
+            _INPUTS_MEMO.pop(next(iter(_INPUTS_MEMO)), None)
+        _INPUTS_MEMO[sig] = out
+    return out
+
+
+def inputs_cache_stats():
+    with _INPUTS_MEMO_LOCK:
+        return {"entries": len(_INPUTS_MEMO), "max": _INPUTS_MEMO_MAX,
+                "psd_rows": [0 if v[0] is None else int(v[0].shape[0])
+                             for v in _INPUTS_MEMO.values()]}
+
+
+def clear_inputs_cache():
+    with _INPUTS_MEMO_LOCK:
+        _INPUTS_MEMO.clear()
+
+
+def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_WIDTH_HZ,
+                        force_refresh=False, **kwargs):
+    """``joined_table`` with a content-keyed memo. Returns the SAME object to every caller.
+
+    Callers must therefore treat the result as read-only, or copy it before mutating. That is the
+    price of not rebuilding a 70-second table per request, and it is the same contract the
+    Biomarkers assembled-matrix cache already imposes.
+    """
+    cen = tuple(DEFAULT_BAND_CENTERS_HZ if centers is None else centers)
+    sig = _joined_signature(psd_frame, epochs, cen, width)
+    if not force_refresh:
+        with _JOINED_MEMO_LOCK:
+            hit = _JOINED_MEMO.get(sig)
+        if hit is not None:
+            return hit
+    out = joined_table(psd_frame, epochs, centers=cen, width=width, **kwargs)
+    with _JOINED_MEMO_LOCK:
+        if sig not in _JOINED_MEMO and len(_JOINED_MEMO) >= _JOINED_MEMO_MAX:
+            _JOINED_MEMO.pop(next(iter(_JOINED_MEMO)), None)
+        _JOINED_MEMO[sig] = out
+    return out
+
+
+def joined_cache_stats():
+    """Entries and their row counts, for the interface and for tests."""
+    with _JOINED_MEMO_LOCK:
+        return {"entries": len(_JOINED_MEMO), "max": _JOINED_MEMO_MAX,
+                "rows": [int(getattr(v, "shape", (0,))[0]) for v in _JOINED_MEMO.values()]}
+
+
+def clear_joined_cache():
+    with _JOINED_MEMO_LOCK:
+        _JOINED_MEMO.clear()
 
 
 def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
@@ -306,15 +504,16 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     from . import pipeline as _pl
 
     rd = request_data or {}
-    psd, eps = _sa.evidence_inputs(participant, force_refresh=force_refresh)
+    # Both fetches go through the memo: measured at 32.96 s and 33.99 s respectively on RCS08, i.e.
+    # 67 of the 70 s this endpoint used to take. build_design_matrix ACCEPTS request_data and never
+    # references it, so it is a pure function of the participant and safe to key on the recording
+    # set; it is called with default washin_min and items, and a caller varying those would need
+    # them in the key.
+    psd, eps, dm = evidence_inputs_cached(participant, force_refresh=bool(force_refresh))
     if psd is None:
         return {"available": False,
                 "reason": "this participant has no assembled spectra, so no control signal can be "
                           "evaluated. Sensing recordings must be ingested first."}
-    try:
-        dm = _sa.build_design_matrix(participant, rd)
-    except Exception:
-        dm = None
 
     cands = candidates or rd.get("Candidates") or []
     if not cands:
