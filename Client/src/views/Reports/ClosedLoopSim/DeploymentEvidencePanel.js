@@ -21,6 +21,19 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 
+// An advisory is worth showing only when it reports a SHORTFALL. The rule table carries 29
+// advisories, most of which are context the reader does not need on every page load; surfacing all
+// of them would bury the two or three that describe a measurement falling short of a device
+// recommendation.
+//
+// The discriminator is `kind`, which the evaluator already sets per outcome: "advisory_failed" is
+// the predicate returning false, as against "advisory_no_predicate" (recorded for the reader, never
+// checked), "advisory_not_determinable" (inputs absent) and "predicate_error". An earlier version
+// of this filter tested a `passed` field that the payload does not carry, so it matched nothing and
+// rendered an empty section — the failure mode worth guarding here is a silently empty panel, not a
+// noisy one.
+const shortfall = (a) => a && a.kind === "advisory_failed";
+
 const fmt = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
 
 // Below this many clusters the cluster-robust variance estimator is anti-conservative: its
@@ -147,6 +160,30 @@ export default function DeploymentEvidencePanel({ report }) {
               <MDTypography variant="caption" sx={{ color: PAL.pass }}>
                 All evaluable rules pass.
               </MDTypography>
+            )}
+
+            {/* Advisories that carry a real shortfall. D09 is the reason this block exists: it was
+                softened from blocking to advisory on 2026-09-04 because the guide RECOMMENDS the
+                1.2 uVp capture amplitude and states it two ways without explaining the difference.
+                Softening a rule must not make it invisible — a signal below the capture floor is
+                the difference between a threshold that holds and one that drifts, so it is shown
+                in the warning ink with the specific bins named. */}
+            {el && (el.advisories || []).filter(shortfall).length > 0 && (
+              <MDBox mt={1}>
+                <MDTypography variant="caption" fontWeight="bold" sx={{ color: PAL.warn }}>
+                  Advisory — reported, not blocking
+                </MDTypography>
+                {(el.advisories || []).filter(shortfall).map((a) => (
+                  <MDBox key={`a-${a.rule_id}`} py={0.35}>
+                    <Tooltip title={a.why || ""}>
+                      <MDTypography variant="caption" sx={{ color: PAL.warn, display: "block" }}>
+                        <b>{a.rule_id}</b> {a.title} <i>({a.page})</i>
+                        {a.observed ? <><br />{a.observed}</> : null}
+                      </MDTypography>
+                    </Tooltip>
+                  </MDBox>
+                ))}
+              </MDBox>
             )}
           </Grid>
 

@@ -139,9 +139,16 @@ def test_every_rule_carries_its_citation_and_a_plain_english_reason():
 
 
 def test_severity_counts_are_the_documented_split():
-    """21 blocking, 28 advisory, 2 unknown. The two unknowns are the point of the split."""
+    """20 blocking, 29 advisory, 2 unknown. The two unknowns are the point of the split.
+
+    Was 21/28/2 until 2026-09-04, when D09 was moved from blocking to advisory on PI decision. The
+    guide RECOMMENDS the 1.2 uVp amplitude and states it two ways (1.2 against 1.1) without
+    explaining the difference, so refusing a configuration outright on it was stronger than the
+    evidence supports. D09 is the only rule that has been softened; if this count moves again,
+    check that the change was deliberate and recorded.
+    """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 21, "advisory": 28, "unknown": 2}
+    assert counts == {"blocking": 20, "advisory": 29, "unknown": 2}
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -244,10 +251,19 @@ def test_d08_window_widens_for_a_sensing_only_candidate():
 # ------------------------------------------------------------------------------------------------
 # D09 and its documented discrepancy.
 # ------------------------------------------------------------------------------------------------
-def test_d09_gates_at_1_2_uvp():
+def test_d09_reports_a_shortfall_without_blocking():
+    """D09 is ADVISORY as of 2026-09-04. A signal below the capture gate is surfaced for review,
+    and it does NOT make the configuration ineligible.
+
+    The distinction is the point: on RCS08 no bin in the 22-27 Hz candidate band reaches 1.2 uVp on
+    any of the twelve channels, while bins at 8.8-11.7 Hz do. That is a strong argument for moving
+    the centre frequency, and a weak argument for refusing to let anyone proceed — which is why it
+    now informs rather than stops.
+    """
     below = check(passing_candidate(lfp_amplitude_uvp=0.9), resolved_participant())
-    assert "D09" in ids(below.failures)
-    assert below.eligible is False
+    assert "D09" not in ids(below.failures), "D09 must no longer block"
+    assert "D09" in ids(below.advisories), "but the shortfall must still be reported"
+    assert below.eligible is True, "a sub-gate amplitude alone must not make it ineligible"
 
     at_gate = check(passing_candidate(lfp_amplitude_uvp=1.2), resolved_participant())
     assert "D09" not in ids(at_gate.failures)
@@ -264,9 +280,13 @@ def test_d09_uses_the_conservative_of_the_two_documented_floors():
     assert "1.2" in constraints.LFP_FLOOR_DISCREPANCY
     assert "1.1" in constraints.LFP_FLOOR_DISCREPANCY
 
+    # D09 became ADVISORY on 2026-09-04, so the row moved out of failures. Both documented floors
+    # must still appear in what the reader sees, which was always the point of this test: the
+    # module reports a disagreement the manufacturer's own documents do not resolve.
     report = check(passing_candidate(lfp_amplitude_uvp=1.15), resolved_participant())
-    d09 = next(row for row in report.failures if row["rule_id"] == "D09")
+    d09 = next(row for row in report.advisories if row["rule_id"] == "D09")
     assert "1.2" in d09["observed"] and "1.1" in d09["observed"]
+    assert "D09" not in ids(report.failures)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -335,8 +355,8 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 23          # 21 blocking + 2 unknown
-    assert len(report.advisories) == 28
+    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09 now advisory)
+    assert len(report.advisories) == 29        # 28 + D09, softened 2026-09-04
     assert report.checked == 51
     assert report.eligible is False
 
@@ -385,13 +405,15 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
     )
     report = check(broken, resolved_participant())
 
-    expected = {"D08", "D09", "D11", "D12", "D13", "D15", "D16", "D17",
+    # D09 is deliberately absent: it was softened to advisory on 2026-09-04, so a sub-gate
+    # amplitude is reported rather than counted as a failure.
+    expected = {"D08", "D11", "D12", "D13", "D15", "D16", "D17",
                 "D19", "D27", "D30", "D32", "D34"}
     assert expected.issubset(ids(report.failures))
     assert len(report.failures) >= len(expected)
     assert report.checked == 51                # nothing was skipped on the way past the failures
     assert report.eligible is False
-    assert "13 blocking" in report.summary() or "NOT eligible" in report.summary()
+    assert "NOT eligible" in report.summary()
 
 
 def test_every_failure_row_carries_the_page_that_forbids_it():

@@ -245,3 +245,37 @@ def test_the_payload_keeps_coherence_as_three_states():
     d = report_to_dict(rep)
     assert d["coherence"]["coherent"] is None
     assert d["verdict_detail"]["coherent"] is None, "None must not be collapsed to False"
+
+
+# --- D09 as a per-bin advisory (PI decision 2026-09-04) -----------------------------------------
+def test_d09_is_advisory_and_reports_which_bins_clear_the_capture_gate():
+    """Softened from blocking on PI decision: the guide RECOMMENDS this amplitude and states it two
+    ways (1.2 vs 1.1 uVp) without explaining the difference, so refusing outright would be stronger
+    than the evidence. It now reports which bins clear and flags the shortfall.
+
+    The per-bin form matters: threshold capture reads ONE frequency, so averaging a peak with its
+    neighbours can hide a capturable peak or manufacture one that is not there.
+    """
+    from ClosedLoopDeployment import constraints as CN
+    rule = CN.RULES_BY_ID["D09"]
+    assert rule.severity == "advisory"
+
+    band = {"center_hz": 24.5, "band_width_hz": 5.0}
+    # RCS08's real shape: nothing in the beta band reaches the gate.
+    below = dict(band, lfp_bins_uvp=[(22.5, 0.61), (23.5, 0.64), (24.5, 0.71), (25.5, 0.58)])
+    assert rule.predicate(below, {}) is False
+    obs = CN._OBSERVED["D09"](below, {})
+    assert "NO bin" in obs and "0.71" in obs
+
+    # A single clearing bin is enough, because capture reads one frequency.
+    one = dict(band, lfp_bins_uvp=[(22.5, 0.61), (24.5, 1.35), (25.5, 0.58)])
+    assert rule.predicate(one, {}) is True
+    assert "1 of 3 bins" in CN._OBSERVED["D09"](one, {})
+
+    # Bins outside the selected band must not rescue it: the alpha peak on this device sits at
+    # ~9 Hz, and it says nothing about capturability at 24.5 Hz.
+    outside = dict(band, lfp_bins_uvp=[(9.0, 4.0), (24.5, 0.4)])
+    assert rule.predicate(outside, {}) is False
+
+    # No bins in band at all is not determinable, not a pass.
+    assert rule.predicate(dict(band, lfp_bins_uvp=[(9.0, 4.0)]), {}) is None

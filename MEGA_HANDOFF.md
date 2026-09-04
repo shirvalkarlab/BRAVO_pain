@@ -75,6 +75,62 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 — D09 softened to a per-bin advisory, and four of my own claims corrected
+
+**D09 is now ADVISORY, not blocking (PI decision).** The guide RECOMMENDS an alpha-beta LFP
+amplitude above 1.2 uVp and states the floor two ways (1.2 uVp at A610 p. 37/72 against 1.1 uVp at
+WP p. 8) without explaining the difference, so refusing a configuration outright on it was stronger
+than the evidence supports. It now reports WHICH frequency bins clear the gate and flags the
+shortfall in the warning ink. **D09 is the only rule in the table that has been deliberately
+softened** — the reason is recorded at the rule so it is not silently hardened again. Severity split
+moved 21/28/2 to **20/29/2**.
+
+The predicate takes an optional `lfp_bins_uvp` list of (Hz, uVp) and passes when ANY bin inside the
+selected band clears the gate, because threshold capture reads ONE frequency. Averaging a peak with
+its neighbours can hide a capturable peak or manufacture one that is not there. Bins outside the
+band never rescue it.
+
+**THE MEASUREMENT THAT MOTIVATED THIS, and it is a finding about the biomarker, not the code.**
+Across the twelve sensing channels, in the 8-30 Hz adaptive window (22 bins each), only seven bins
+anywhere on this device reach 1.2 uVp, and **every one of them sits between 8.8 and 11.7 Hz**. The
+current candidate band at 22-27 Hz is below the capture floor on ALL TWELVE channels, medians
+0.36-0.71 uVp. Best channel is ZERO_AND_THREE_Left with 4 of 22 bins clearing, all alpha. This is a
+strong argument for moving the centre frequency into alpha before attempting threshold capture, and
+it is invisible in the beta-band analysis the project has been running.
+
+**Four claims of mine that were wrong, corrected here so they are not inherited:**
+
+1. "Threshold capture has never been performed" — OVERREACH. Based on 54 zero-valued fields across
+   only THREE local JSON files, which is not the record. The PI reports capture has been performed
+   in many sessions; new exports are being provided.
+2. "Artefact flags are not in the JSON" — WRONG. They are `ArtifactStatus` on each
+   `BrainSenseSurveys.ElectrodeSurvey` block. Left hemisphere reads ARTIFACT_NOT_PRESENT
+   throughout; five RIGHT channels each carry one `SQC_ARTIFACT_PRESENT`.
+3. "Impedance is not available" — WRONG. The platform holds **548 `MedtronicDeviceImpedance`
+   recordings**. I searched the raw session-report JSON for the wrong key.
+4. "ONE_THREE_LEFT may not be a BrainSense channel" — WRONG, and I retracted it within the same
+   turn. It appears seven times as a configured sensing channel; my single-file check was the
+   problem.
+
+**BLOCKER worth someone's attention: the impedance recordings do not load.**
+`Database.loadSourceFile` refuses all of them with "Malicious Attempt at Accessing Other Data in the
+Computer", which is the platform's own pointer/hash integrity guard. This is NOT to be routed
+around — it means the stored pointer and hash disagree for that recording type. Until it is
+resolved, D16 cannot be evaluated from the database even though the data is nominally present.
+
+Survey payload shape, for whoever wires D09 to live data: `MedtronicBrainSenseSurvey` (250 on
+record) loads to a dict with `Data` (4776 x 6 time domain), `SamplingRate` 250.0, `ChannelNames`
+like `ZERO_AND_THREE_LEFT_RING`, and a `Descriptor.MedtronicPSD` block. The per-bin magnitudes used
+above came from the raw session reports (`LFPFrequencyinHertz` and `LFPMagnitudeinMicroVoltPeak`,
+100 bins at ~0.98 Hz), not yet from the platform copy.
+
+Frontend: the panel now renders `kind == "advisory_failed"` rows in the warning ink with the bins
+named. An earlier version filtered on a `passed` field the payload does not carry, so it matched
+nothing and rendered an empty section; the discriminator is `kind`. ClosedLoopDeployment
+**124 passed**, StimOptimizer 367/41 unchanged.
+
+
+
 ### 2026-09-03 (Phase 7) — the deployment report is wired to the interface
 
 **New endpoint `/api/queryClosedLoopDeployment`** (`QueryClosedLoopDeployment` in

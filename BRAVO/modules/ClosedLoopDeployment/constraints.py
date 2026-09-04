@@ -506,6 +506,18 @@ def _p_d09(candidate, participant):
     1.1 uVp auto-detection floor from WP p. 8 is a different number in a different document and is
     reported, not used as the gate; see LFP_FLOOR_DISCREPANCY.
     """
+    bins = candidate.get("lfp_bins_uvp")
+    if bins:
+        # Per-bin form. The rule passes when ANY bin inside the selected band clears the gate,
+        # because threshold capture reads one frequency, not the band average — averaging a peak
+        # together with its neighbours can hide a perfectly capturable peak, and can equally
+        # manufacture one. `lfp_bin_clearance` carries the detail for the interface.
+        lo, hi = band_edges(candidate) or (None, None)
+        inband = [(f, a) for f, a in bins
+                  if lo is None or (lo <= float(f) < hi)]
+        if not inband:
+            return None
+        return any(float(a) >= LFP_THRESHOLD_CAPTURE_FLOOR_UVP for _, a in inband)
     amp = _num(candidate, "lfp_amplitude_uvp")
     if amp is None:
         return None
@@ -1072,6 +1084,24 @@ def _o_d08(c, p):
 
 
 def _o_d09(c, p):
+    bins = c.get("lfp_bins_uvp")
+    if bins:
+        edges = band_edges(c)
+        inband = [(float(f), float(a)) for f, a in bins
+                  if edges is None or (edges[0] <= float(f) < edges[1])]
+        clear = [f for f, a in inband if a >= LFP_THRESHOLD_CAPTURE_FLOOR_UVP]
+        peak = max((a for _, a in inband), default=None)
+        band_txt = "the selected band" if edges is None else f"{edges[0]:.1f}-{edges[1]:.1f} Hz"
+        if not inband:
+            return f"no LFP survey bins fall inside {band_txt}"
+        if clear:
+            return (f"{len(clear)} of {len(inband)} bins in {band_txt} reach the "
+                    f"{LFP_THRESHOLD_CAPTURE_FLOOR_UVP} uVp capture gate "
+                    f"({', '.join(f'{x:.1f} Hz' for x in clear[:6])}); peak {peak:.2f} uVp")
+        return (f"NO bin in {band_txt} reaches the {LFP_THRESHOLD_CAPTURE_FLOOR_UVP} uVp capture "
+                f"gate; the largest is {peak:.2f} uVp across {len(inband)} bins. Threshold capture "
+                f"is likely to be unreliable at this centre frequency even though the workflow is "
+                f"not blocked")
     return (f"LFP amplitude {c.get('lfp_amplitude_uvp')!r} uVp against the "
             f"{LFP_THRESHOLD_CAPTURE_FLOOR_UVP} uVp gate; the auto-detection floor in the other "
             f"document is {LFP_AUTODETECT_FLOOR_UVP} uVp")
@@ -1340,7 +1370,14 @@ RULES = (
         title="Minimum signal amplitude for threshold capture is 1.2 uVp",
         source="A610 (gate) and WP (auto-detection floor)",
         page="A610 p. 37, A610 p. 72; discrepant value at WP p. 8",
-        severity="blocking",
+        #: PI decision 2026-09-04: ADVISORY, not blocking. The guide recommends rather than
+        #: requires this amplitude, and the discrepancy between the two documents (1.2 vs 1.1 uVp)
+        #: is unexplained, so refusing a configuration outright on a recommendation the
+        #: manufacturer states two ways would be stronger than the evidence supports. The rule now
+        #: reports WHICH frequency bins clear the gate and flags the shortfall for review rather
+        #: than stopping the workflow. It is the one rule in this table that was deliberately
+        #: softened, and the reason is recorded here so it is not silently hardened again.
+        severity="advisory",
         human_text=(
             "To capture LFP thresholds and set up Adaptive Therapy the programming guide recommends "
             "an electrode configuration whose alpha-beta band LFP amplitude is greater than "
