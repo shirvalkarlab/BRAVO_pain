@@ -279,3 +279,62 @@ def test_d09_is_advisory_and_reports_which_bins_clear_the_capture_gate():
 
     # No bins in band at all is not determinable, not a pass.
     assert rule.predicate(dict(band, lfp_bins_uvp=[(9.0, 4.0)]), {}) is None
+
+
+# --- impedance facts, and why they are NOT read through the file loader (2026-09-04) ------------
+class _Rec:
+    """Minimal stand-in for a Recording row: the impedance payload lives on `metadata`."""
+    def __init__(self, metadata, date=0):
+        self.metadata, self.date, self.pointer, self.hashed = metadata, date, "", ""
+
+
+def _imp(worst_left, status="GOOD", date=1, model="LEAD_B33015"):
+    return _Rec({"Status": status,
+                 "Left": {"LeadModel": model, "Monopolar": [2605.0] * 8,
+                          "Bipolar": [[0.0, 5752.0, worst_left], [0.0, 0.0, 6641.0], [0.0, 0.0, 0.0]]},
+                 "Right": {"LeadModel": model, "Monopolar": [4044.0] * 8,
+                           "Bipolar": [[0.0, 4044.0, 4059.0], [0.0, 0.0, 3664.0], [0.0, 0.0, 0.0]]}},
+                date=date)
+
+
+def test_impedance_is_read_from_metadata_because_these_rows_have_no_file():
+    """`MedtronicDeviceImpedance` rows carry an EMPTY pointer — the payload is inline. Calling
+    Database.loadSourceFile on them trips its path-PREFIX guard and raises "Malicious Attempt at
+    Accessing Other Data in the Computer", which reads like a security incident and is not one; the
+    HMAC integrity guard is a different exception ("DANGER: Unauthorized Modification of Data") and
+    never fired. This test exists so nobody re-diagnoses that as data corruption.
+    """
+    from ClosedLoopDeployment import device_facts as DF
+    f = DF.impedance_facts([_imp(6322.0, date=1), _imp(10125.0, status="INVESTIGATE", date=2)])
+    assert f["available"] is True and f["n_records"] == 2
+    assert f["status_newest"] == "INVESTIGATE", "the NEWEST record must win, not the first"
+    assert f["status_counts"] == {"GOOD": 1, "INVESTIGATE": 1}
+    assert f["lead_type"] == "sensight" and f["lead_model"] == "LEAD_B33015"
+    assert DF.impedance_facts([])["available"] is False
+
+
+def test_impedance_reports_the_worst_pair_not_the_average():
+    """D16 is a FAULT check. One open contact matters even when the other seven are healthy, so
+    averaging is precisely the operation that would hide it."""
+    from ClosedLoopDeployment import device_facts as DF
+    f = DF.impedance_facts([_imp(10125.0)])
+    assert f["Left"]["bipolar_max_ohm"] == 10125.0
+    assert f["Left"]["bipolar_median_ohm"] < f["Left"]["bipolar_max_ohm"]
+    assert DF.candidate_impedance_ohm(f, "Left") == 10125.0
+    assert DF.candidate_impedance_ohm(f, "Right") == 4059.0
+    assert DF.candidate_impedance_ohm({"available": False}, "Left") is None
+
+
+def test_an_open_circuit_bipolar_pair_fails_d16():
+    """The real RCS08 reading. 10125 ohm on the left lead is above the 10000 ohm open limit, so the
+    sensing hemisphere for a left-sided candidate fails rather than merely warning."""
+    from ClosedLoopDeployment import constraints as CN
+    bad = CN.check_eligibility({"impedance_ohms": 10125.0, "impedance_tested": True},
+                               {"lead_type": "sensight"})
+    assert "D16" in {x["rule_id"] for x in bad.failures}
+    ok = CN.check_eligibility({"impedance_ohms": 6322.0, "impedance_tested": True},
+                              {"lead_type": "sensight"})
+    assert "D16" not in {x["rule_id"] for x in ok.failures}
+    shorted = CN.check_eligibility({"impedance_ohms": 200.0, "impedance_tested": True},
+                                   {"lead_type": "sensight"})
+    assert "D16" in {x["rule_id"] for x in shorted.failures}
