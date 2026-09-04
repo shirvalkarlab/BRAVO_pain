@@ -82,11 +82,26 @@ components printed a threshold to program without ever consulting the device rul
 them printed it into a sheet meant to be signed.
 
 `DeploymentVerdictStrip.js` rendered `power >= N LSB` at nineteen-point type gated only on
-`thresholdShown`, which derives entirely from `/queryDeploymentSummary` — the STATISTICAL gates. The
-component contained no reference to `deploymentReport` or to the device verdict at all; the only
-matches for those words were in its own header comment. `DeploySignoffCard.js` printed the same
-number at twenty-four-point type gated on `th.available`, inside the PRINTABLE record.
-`LsbPowerPanel.js` printed it at twenty-six.
+`thresholdShown`, which derives entirely from `/queryDeploymentSummary` — the STATISTICAL gates.
+`DeploySignoffCard.js` printed the same number at twenty-four-point type gated on `th.available`,
+inside the PRINTABLE record. `LsbPowerPanel.js` printed it at twenty-six.
+
+*Claim corrected after review.* This paragraph first said the strip "contained no reference to
+`deploymentReport` or to the device verdict at all; the only matches for those words were in its own
+header comment." The second half is false, and my own check manufactured it: I ran
+`grep -n "deploymentReport\|verdict\b" ... | head -5`, and the truncation hid every code match. The
+five printed lines are 2, 6, 61, 62 and 67 — comments and class names — while the file holds eight
+matches, three of them live code at lines 74, 75 and 86, with line 86 rendering
+`` ` . ${data.verdict}` `` into the strip's left cell.
+
+The precise position is narrower and survives. `deploymentReport` has ZERO references in the pre-fix
+file, so that half holds. What the strip referenced is `data.verdict`, where `data` is the
+`/queryDeploymentSummary` response — the STATISTICAL verdict from the gates, a different quantity
+from the device-rule verdict. The strip was displaying a verdict, and displaying the wrong one for
+the purpose of gating a value to program. That is why threading `deploymentReport` in was the fix
+rather than reusing what was already there. Keep the narrow lesson: `head` on a verification grep can
+manufacture the very absence being tested for, so a check establishing a negative must not be
+truncated.
 
 The two endpoints answer different questions and both must clear. The summary asks where the
 threshold goes and whether the statistical gates pass; the deployment report asks whether the device
