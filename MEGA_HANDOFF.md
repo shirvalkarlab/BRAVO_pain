@@ -75,6 +75,69 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (inference) — the bootstrap made the gate STRICTER, and my premise was stale
+
+I briefed this track on the belief that `MIN_RELIABLE_CLUSTERS = 40` was a dead-end gate no data
+could satisfy, quoting 504 band-cells with a maximum of 35 setting epochs. **That was stale and the
+track caught it.** After the 1154-file ingest the live table is 108 band-cells (6 channels x 18
+centres, 112050 rows) and EVERY cell has 57-89 setting epochs, so on the pooled table nothing falls
+below the threshold and the new switch never fires. The few-cluster regime only appears after
+stratifying by left-hemisphere amplitude era, which yields 324 cells with 2-48 clusters (median 26),
+306 of them below 40. Both stratifications were run and both are reported.
+
+**`MIN_RELIABLE_CLUSTERS` is now a SWITCH, not a disqualifier.** At or above 40 clusters CR0 supplies
+the p-value and interval; below it, the restricted wild cluster bootstrap-t does (Cameron, Gelbach &
+Miller 2008). Rademacher signs are drawn once per CLUSTER — structural, one weight column per
+cluster. At G <= 12 the entire 2^G weight space is ENUMERATED rather than sampled, and `enumerable`,
+`n_sign_vectors` and `p_resolution` report the coarseness. The interval comes from full inversion of
+the bootstrap-t test and the CR0 interval is never substituted; that is affordable because the
+restricted residuals are affine in the candidate value, so one set of replications serves the grid.
+
+**Rejection rate under a known null, nominal 5%. This is the evidence the change raises rigour:**
+
+    clusters      CR0    bootstrap    boot p-floor
+       5       0.2915     0.0000        0.0625
+       8       0.2035     0.0570        0.0078
+      15       0.1285     0.0575        0.0010
+      35       0.0705     0.0400        0.0010
+      40       0.0700     0.0360        0.0010
+      60       0.0760     0.0580        0.0010
+      90       0.0600     0.0470        0.0010
+
+CR0 rejects a true null 29% of the time at five clusters against a nominal 5%. At five clusters the
+Rademacher weight space cannot produce a p below 0.0625, so **no 5% test exists there at all** and
+the interval was unbounded in all 2000 replications — reported as such rather than papered over.
+
+**Power, same design with a real effect:** at 8 clusters 0.2245 (beta 0.5) and 0.5070 (beta 1.0); at
+15, 0.5160 and 0.9210; at 35, 0.9295 and 1.0000; at 5, zero for both, which follows from the
+p-floor. So the method still detects real effects and has not simply made everything null.
+
+**THE HEADLINE, AND IT IS THE OPPOSITE OF "OPENING THE GATE".** Of the 306 era-stratified E1
+band-cells below the threshold, CR0 called **71 resolved and the bootstrap called 9**. For E2 it is
+**62 under CR0 and 0 under the bootstrap**. 198 E1 intervals are unbounded — 90 because the cell has
+5 or fewer epochs, 108 because in the OFF era amplitude barely varies. **Nothing was resolved by the
+bootstrap that CR0 had not already resolved.** Valid small-sample inference did not license more
+configurations; it withdrew most of what CR0 had licensed. That is the right scientific outcome and
+it should be read as one: the apparent resolutions were an artefact of the estimator.
+
+**One real effect survives, and it is E3.** Above the threshold at 89 clusters both estimators agree:
+amplitude on pain, slope **-0.1489 pain points per mA**, CR0 p = 0.0114 with interval
+(-0.2644, -0.0335), bootstrap p = 0.0100 with (-0.2670, -0.0306). More stimulation, less pain, and
+it survives valid inference.
+
+**An unexplained disagreement, left unexplained rather than rationalised.** CR0 and the bootstrap
+also diverge strongly ABOVE the threshold, where CR0 should be fine: pooled E2 at 54-83 clusters
+resolves 34 cells under CR0 and 6 under the bootstrap, while pooled E1 runs the other way, 23 versus
+32. Simulated CR0 size at 40-90 clusters is only 0.060-0.076, far too mild to account for that, so
+the real residuals likely violate the simple random-effects design the simulation assumes. Recorded
+as an open question.
+
+**E2 could not be run as briefed:** the joined table carries no pain rating and no `report_id`, so
+the epoch-level pain composite was merged from the design matrix and clustered on `epoch`. Stated in
+the track's report rather than silently substituted.
+
+
+
 ### 2026-09-04 (gates) — blocking failures 3 -> 1, and two of the three were MY bugs
 
 Brief was to make the gates more open systematically, address everything rather than only the
