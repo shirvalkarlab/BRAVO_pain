@@ -144,9 +144,18 @@ Brief was to make the gates more open systematically, address everything rather 
 blockers, identify the tunable knobs, and implement autonomously. Result: **the only remaining
 blocking failure is D19**, which fails on evidence and was deliberately not touched.
 
-**FIRST, THE KNOB AUDIT, because it bounds what "tuning" can even mean.** Of 31 numeric thresholds
-in the closed-loop stack, **28 are device-published** (A610 or the white paper) and are not ours to
-move; only **5 are declared by this module**, and one of those is new. The tunable set is therefore
+**FIRST, THE KNOB AUDIT, because it bounds what "tuning" can even mean.** An automated scan of the
+closed-loop stack found **31 numeric thresholds: 28 device-published** (A610 or the white paper) and
+**3 declared by this module**.
+
+*Arithmetic corrected after review.* This paragraph first said "28 published, only 5 declared by
+this module" against a total of 31, which does not add up, and the console line beside it printed
+"5 of 31" with the 31 hardcoded rather than recomputed. Two denominators were being mixed. The
+stack scan covers 31 thresholds, 3 of them ours. The knob TABLE carries 5 rows under "ours" because
+it deliberately adds two the scan did not cover: `ARTIFACT_FLAG_RATE_LIMIT`, created that night, and
+`STABILITY_EQUIVALENCE_MARGIN_LOG_OR`, which lives in `Biomarkers/routines/analytics.py` and not in
+this stack. The table therefore totals **28 + 5 = 33** rows. The audit's point is untouched by the
+correction: on either denominator the great majority are the manufacturer's and cannot be tuned. The tunable set is therefore
 tiny, and the large gains came from correcting scope errors rather than from moving numbers. Full
 table in `RCS08_gate_knobs.csv`.
 
@@ -216,6 +225,15 @@ BLOCKING rule never fired — and it looked as though it worked because the one 
 to be advisory. Kinds are now module constants (`KIND_ADVERSE`, `KIND_UNEVALUABLE`, `KIND_BENIGN`)
 and a test asserts every kind the evaluator emits is classified in exactly one set, so a rename
 cannot quietly disable deferral again.
+
+**Provenance of the 868 / 1867 cycling counts, since a reviewer queried them.** They are the
+`sensing/active/True` and `sensing/active/False` entries of `cycling_by_group_kind` in
+`ClosedLoopDeployment/_facts_RCS08.json`, from `session_report_facts.scan_folder` over all 1154
+reports: 868 and 999, summing to 1867, a rate of 46.5%. TWO EARLIER PROBES IN THE SAME SESSION
+REPORT MUCH SMALLER NUMBERS AND MUST NOT BE USED — the first read `Cycling` at the wrong nesting
+level and returned empty counters, and the second sampled only the first 60 files while discovering
+the correct path (`GroupSettings.Cycling.Enabled`). Anyone reconciling these figures should use the
+committed summary, not those probes.
 
 **Live verdict for ONE_THREE_LEFT @ 24.5 Hz, before -> after:** failures **3 -> 1**, unknowns
 **8 -> 4**, advisory shortfalls **3 -> 2**. Remaining failure: **D19 only**. Remaining unknowns:
