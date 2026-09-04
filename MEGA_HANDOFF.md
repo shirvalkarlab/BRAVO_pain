@@ -75,6 +75,107 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (prescription) — the module now says WHAT TO PROGRAM, and four silent-skip bugs
+
+The PI corrected a conflation of mine that had shaped a whole night's work. I had audited the GATE
+THRESHOLDS — the numbers deciding whether a configuration is allowed — when what he meant by "knobs"
+were the closed-loop parameters a clinician types into the A610: upper and lower onset duration, the
+two LFP thresholds, averaging time, transition ramp times, adaptive startup delay. Those are the
+module's OUTPUT, not its input, and a deployment module that says "supported" without saying what to
+program is half a module.
+
+**New file `prescription.py`, organised BY MODE rather than by parameter.** The PI's second point was
+the decisive design constraint: the parameter set varies with the number of thresholds. Dual Threshold
+has two manually-set LFP thresholds and TWO onset durations; Single Threshold has ONE threshold the
+device computes itself as 0.75 x (Upper - Lower) + Lower (D20) and ONE onset; Single Threshold Inverse
+cannot drive therapy and has no prescription at all. Field counts on RCS08: dual 16, single 14,
+inverse 0. Presenting the single threshold as editable would invite a clinician to enter a value the
+device overwrites, so it is rendered as computed.
+
+Every field carries provenance — `derived` / `device_default` / `read_off_programmer` /
+`not_applicable` — because a clinician transcribing these is entitled to know which is which, and
+rendering a manufacturer default identically to a value measured from this participant invites the
+default to be entered as though it were a measurement. On RCS08: 13 derived, 3 device defaults, 2
+fields flagged as needing the programmer because their adjustable ranges are unpublished (the two
+transition durations and the startup delay).
+
+**A misreading of mine, corrected before it shaped anything.** I was about to treat the second numeric
+column of the D20 parameter table as a resolution or step grid, which would have meant quantising
+every recommendation. The header reads `| Parameter | Dual Threshold | Single Threshold | Single
+Threshold Inverse |` — four columns of VALUES. No step grid exists in any supplied document. The
+encoded ModeSpec values were correct all along; it was my in-conversation reading that drifted.
+
+**THE PARAMETER INTERACTION WORTH KNOWING, and it silently removes a safety feature.** Averaging is
+non-overlapping (D14), so the onset duration expresses itself as ceil(onset / averaging) controller
+steps. At one step the onset does NOTHING: the first averaged sample past a threshold already
+satisfies it. The published dual-mode onset range tops out at 2 s, so at ANY averaging duration of
+2 s or more the onset is inoperative at every value the clinician can choose — including the 4096 ms
+this module recommends to match the validated biomarker window. Only an onset at the top of its range
+against the 1200 ms default averaging gives two windows. The manufacturer's own defaults pair 1200 ms
+onset with 1200 ms averaging, which is exactly one window. So matching the validated feature window
+costs the onset filter entirely, and the protection has to come from threshold separation instead.
+Reported as `onset_inoperative` with the arithmetic, not buried. NOT ESTABLISHED: no supplied document
+states whether the device counts onset in averaging windows or in FFT updates (5 Hz in dual mode); the
+reading used is the one the defaults support, and it is a reading rather than a citation.
+
+**THE RAMP IS NOT RESOLVABLE ON THE CHRONIC RECORD, which is a data finding rather than a bug.** The
+controller replay refuses a non-uniform sample interval, correctly — it advances the ramp by a rate
+times an interval, so a series whose interval jumps would attribute a recording gap to the ramp. On
+RCS08 the largest departure from the median is over a million percent. I first fixed this by splitting
+the record at its gaps and replaying each contiguous stretch (`replay.dual_threshold_segments`, 283
+segments), which is the right structure and is kept. But the deciding fact is coarser: the chronic
+snapshots arrive every 230 s while the transition-up duration is 150 s, so ONE replay step would carry
+the amplitude across the whole range and the simulated controller degenerates to bang-bang. Every
+time-at-limit fraction from that would describe a trajectory the device never produces. The replay now
+refuses on that ground and names both durations. Answering the amplitude-side duty question needs data
+sampled at the device's own averaging rate during a streaming session, not chronic snapshots.
+
+**COVERAGE 0.0124%, and the "% time on" metric must not be quoted without it.** The band-power state
+fractions (above 49.6%, between 31.9%, below 18.5%) are fractions of the SAMPLES ON RECORD, not of the
+day: the cell holds 1.2 hours of signal spread across 9936 hours of elapsed time. The two differ by a
+factor of about 8000, and the bursts are not missing at random either, since streaming starts when the
+participant or the clinic starts it. Carried as `coverage_frac` and
+`fractions_are_of_observed_samples` so an interface can REFUSE to print a percentage of the day rather
+than relying on a caveat being read.
+
+**FOUR SILENT-SKIP BUGS, all of the same shape: a computation that produced nothing and raised
+nothing.**
+
+1. `pipeline` selected the two capture amplitudes as the plain min and max of observed amplitude. The
+   RCS08 minimum is 0.0 mA — stimulation OFF. That reintroduced the artefact-versus-no-artefact
+   confound the amplitude screen exists to remove, AND produced a prescription the device rejects,
+   since the adaptive limits inherit the capture amplitudes (D28) and the lower must be above zero
+   (D07). Now restricted to therapeutic amplitudes: 1.40-4.80 mA, 186 stimulation-off samples
+   excluded, lower threshold moved 0.2015 -> 0.182.
+2. `pipeline` built the amplitude column name as `f"amp_{hemisphere}"` while the joined table spells
+   it `amp_mA_Left`. The membership test failed on EVERY real report, the whole threshold block was
+   skipped, `rep.threshold` came back None and the prescription was therefore absent — with no error,
+   and a payload indistinguishable from a participant with no amplitude on record. Now uses
+   `adapter.canonical_amp_col`, with a blocker when the column is genuinely missing.
+3. `report_to_dict` had NO KEY for `replay` or `protocol`. Both were computed and dropped on the
+   floor, so the panel could not show sections it had no way to know existed.
+4. The three coverage fields were added to DutyCycle but not to the serialiser's key tuple, so the
+   caveat text carried the numbers while the fields serialised as null — an interface reading the
+   fields alone could have printed "49.6% of the day" for a record with 0.012% coverage.
+
+Guarded by two mechanical tests that compare the dataclasses against the serialiser, since this class
+of omission is invisible to every unit test that exercises the dataclass directly. One of them cried
+wolf on its first run because its own regex rejected the capital letters in `mean_amplitude_mA`; a
+test that cries wolf gets disabled, so the pattern was widened.
+
+Also fixed: the titration protocol needed a test amplitude the screen's candidates never carried (the
+session varies AMPLITUDE), and each arm needs its own label because the protocol groups differences by
+label and would otherwise pool the two amplitudes into one comparison — which is the very contrast the
+session exists to measure. It now generates: 2 configurations, 11 blocks, 44 streaming measurements
+plus 11 baselines, 50.8 minutes.
+
+Unchanged: D19 still fails on evidence and was not touched. D26 reports the same inverted capture from
+the threshold-placement side, which is consistent rather than a second problem.
+
+Suite 172 -> 176.
+
+
+
 ### 2026-09-04 (inference) — the bootstrap made the gate STRICTER, and my premise was stale
 
 I briefed this track on the belief that `MIN_RELIABLE_CLUSTERS = 40` was a dead-end gate no data

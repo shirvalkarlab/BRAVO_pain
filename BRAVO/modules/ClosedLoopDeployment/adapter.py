@@ -475,6 +475,65 @@ def report_to_dict(rep):
             "observed_pattern": rep.coherence.observed_pattern,
             "n_boot": rep.coherence.n_boot, "note": rep.coherence.note,
         },
+        # The programmable prescription. Every field carries its provenance because the interface
+        # must be able to distinguish a value derived from this participant's data from a
+        # manufacturer default and from a field whose adjustable range is unpublished — a clinician
+        # transcribing these into a programmer is entitled to know which is which, and rendering
+        # them identically would invite a default to be entered as though it were a measurement.
+        # The controller replay. Not serialised at all until 2026-09-04, so the panel could not
+        # show the counterfactual trajectory even when the pipeline had computed it. The amplitude
+        # TRAJECTORY itself is deliberately omitted: it is one value per controller step over
+        # months of recording, far too large for a payload, and the fractions plus the transition
+        # count are what a reader acts on. Its caveat is carried through verbatim because the
+        # trajectory is what the control law would have done to a power series recorded under the
+        # participant's actual programming, which is not a forecast of what the device would
+        # deliver once the loop is closed.
+        # The titration protocol. Also unserialised until 2026-09-04, so a session plan the
+        # pipeline had generated could not be shown. The power figures are carried because a plan
+        # whose detectable effect size is implausibly large is a plan not worth running, and the
+        # clinician is the person who can judge that; the seed is carried so a plan can be
+        # regenerated identically, which is what makes the randomised order auditable rather than
+        # merely random.
+        "protocol": None if rep.protocol is None else {
+            "steps": list(rep.protocol.steps or []),
+            "n_steps": len(rep.protocol.steps or []),
+            "n_pairs": rep.protocol.n_pairs,
+            "alpha": rep.protocol.alpha,
+            "power": rep.protocol.power,
+            "detectable_d": rep.protocol.detectable_d,
+            "duration_min": rep.protocol.duration_min,
+            "seed": rep.protocol.seed,
+            "note": rep.protocol.note,
+        },
+        "replay": None if rep.replay is None else {
+            "frac_time_at_upper": rep.replay.frac_time_at_upper,
+            "frac_time_at_lower": rep.replay.frac_time_at_lower,
+            "n_transitions": rep.replay.n_transitions,
+            "saturated": rep.replay.saturated,
+            "params": {k: v for k, v in (rep.replay.params or {}).items()},
+            "note": rep.replay.note,
+        },
+        "prescription": None if getattr(rep, "prescription", None) is None else {
+            "mode": rep.prescription.mode,
+            "fields": rep.prescription.as_rows(),
+            "unknowns": list(rep.prescription.unknowns or []),
+            "note": rep.prescription.note,
+            "duty": None if rep.prescription.duty is None else {
+                k: getattr(rep.prescription.duty, k) for k in (
+                    "lfp_frac_above", "lfp_frac_between", "lfp_frac_below",
+                    "stim_frac_at_upper", "stim_frac_at_lower", "stim_frac_mid",
+                    "mean_amplitude_mA", "amplitude_duty", "transitions_per_hour",
+                    "qualified_transitions", "unqualified_excursions", "hours_observed",
+                    # Coverage travels with the fractions or they will be misread. Omitting these
+                    # three from this tuple already happened once: the caveat text carried the
+                    # numbers while the fields serialised as null, so an interface reading the
+                    # fields alone could have printed "49.6% of the day" for a record with 0.012%
+                    # coverage. Any field added to DutyCycle must be added here too.
+                    "hours_of_signal", "coverage_frac", "fractions_are_of_observed_samples",
+                    "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
+                    "predicted_failure_mode")} | {
+                "caveats": list(rep.prescription.duty.caveats or [])},
+        },
         "threshold": None if rep.threshold is None else {
             "upper": _num(rep.threshold.upper), "lower": _num(rep.threshold.lower),
             "control_authority": _num(rep.threshold.control_authority),

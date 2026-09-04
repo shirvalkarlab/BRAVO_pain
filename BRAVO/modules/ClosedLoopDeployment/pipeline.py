@@ -159,22 +159,134 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])
-    amp_col = f"amp_{hemisphere}"
+    # THE COLUMN NAME COMES FROM THE ADAPTER, NOT FROM AN f-STRING HERE. Fixed 2026-09-04.
+    #
+    # This read `f"amp_{hemisphere}"` while the joined table spells the column `amp_mA_Left`, with
+    # the unit in the name. The membership test therefore failed on every real report, the whole
+    # threshold-placement block was skipped, and `rep.threshold` came back None — with no error and
+    # no blocker, because a skipped block raises nothing. Downstream that made the prescription
+    # absent too, and the payload looked exactly as it would if the participant genuinely had no
+    # amplitude on record. `adapter.canonical_amp_col` is the single definition of this name and is
+    # used here so the two cannot drift apart again.
+    amp_col = adapter.canonical_amp_col(hemisphere)
+    if amp_col not in d.columns:
+        # Fall back to the tolerant resolver before giving up, since older frames in the artifact
+        # store predate the canonical spelling, then say plainly which name was missing.
+        try:
+            amp_col = adapter.resolve_setting_column(d.columns, "amp", hemisphere) or amp_col
+        except Exception:
+            pass
+    if amp_col not in d.columns and len(d):
+        rep.blockers.append(
+            f"no {hemisphere} amplitude column in the joined table (looked for "
+            f"{adapter.canonical_amp_col(hemisphere)!r}; the table has "
+            f"{sorted(c for c in d.columns if 'amp' in c.lower())!r}), so no thresholds were "
+            f"placed and no prescription was generated")
     if amp_col in d.columns and len(d):
         amps = d[amp_col].astype(float)
-        lo_a, hi_a = amps.min(), amps.max()
+        # THE CAPTURE AMPLITUDES MUST BOTH BE THERAPEUTIC, so zero is excluded. Fixed 2026-09-04.
+        #
+        # This previously used the plain minimum of the observed amplitudes, and on RCS08 that
+        # minimum is 0.0 mA, so the "lower capture amplitude" was stimulation switched OFF. Two
+        # separate things go wrong with that and both are serious.
+        #
+        # First, it reintroduces the exact confound the amplitude-response screen was built to
+        # eliminate. Comparing band power at 0 mA against band power at 4.8 mA is comparing a
+        # recording with no stimulation artefact against one with a large artefact, so any
+        # difference in band power is uninterpretable as a physiological response — it is at least
+        # partly the artefact appearing and disappearing.
+        #
+        # Second, it produces a prescription the device will not accept. The adaptive amplitude
+        # limits inherit the capture amplitudes (D28) and the lower limit must be strictly above
+        # zero (D07), because an adaptive lower limit of zero means therapy switches off entirely
+        # whenever the band is quiet, which is a rebound risk rather than a therapeutic floor. A
+        # capture at 0 mA therefore yields a lower amplitude limit that fails D07 and D28.
+        #
+        # The lowest THERAPEUTIC amplitude on record is used instead. When the record contains no
+        # nonzero amplitude for this hemisphere there is nothing to capture from and the threshold
+        # placement is skipped, which is reported rather than silently substituted.
+        therapeutic = amps[amps > 0]
+        if not len(therapeutic):
+            rep.blockers.append(
+                f"no nonzero {hemisphere} amplitude on record for this cell, so the two capture "
+                f"amplitudes cannot both be therapeutic (D07, D28) and no thresholds were placed")
+            lo_a = hi_a = float("nan")
+        else:
+            lo_a, hi_a = therapeutic.min(), therapeutic.max()
         if np.isfinite(lo_a) and np.isfinite(hi_a) and hi_a > lo_a:
             rep.threshold = A.threshold_placement(
-                d.loc[amps <= lo_a, power_scale].to_numpy(),
-                d.loc[amps >= hi_a, power_scale].to_numpy(),
+                d.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
+                d.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
                 amp_low=float(lo_a), amp_high=float(hi_a),
                 expected_sign=-1, observed_series=d[power_scale].to_numpy())
+
+    # --- controller replay -----------------------------------------------------------------------
+    # Run BEFORE the prescription because the prescription's amplitude-side duty figures come from
+    # it. Without this the module reported time spent past a threshold but nothing about time spent
+    # at an amplitude limit, and those are different quantities: the amplitude ramps slowly, so a
+    # brief excursion past a threshold moves it only part of the way. The replay needs a strictly
+    # increasing time base and the joined table has duplicate timestamps, so the series is collapsed
+    # to one power value per timestamp first rather than letting the replay refuse it.
+    rpl = _optional("replay")
+    if rpl is not None and rep.threshold is not None and len(d) and "t" in d.columns:
+        try:
+            g = (d[["t", power_scale]].dropna().groupby("t", as_index=False)[power_scale].mean()
+                 .sort_values("t"))
+            if len(g) >= 3:
+                t0 = float(g["t"].iloc[0])
+                # Segment-wise, because a chronic record is streaming bursts separated by days and
+                # the single-shot replay correctly refuses a non-uniform interval rather than
+                # attributing a month-long gap to the controller's ramp.
+                rep.replay = rpl.dual_threshold_segments(
+                    (g["t"].astype(float) - t0).to_numpy(),
+                    g[power_scale].astype(float).to_numpy(), rep.threshold)
+        except Exception as ex:
+            rep.blockers.append(f"controller replay failed: {ex}")
+
+    # --- the programmable prescription ----------------------------------------------------------
+    # Built LAST among the analytic steps because it consumes their outputs: the thresholds place
+    # the LFP fields, the timing plan sets the averaging and ramp, and the replay supplies the
+    # amplitude-side duty cycle. It is deliberately built even when the verdict is blocked, because
+    # a clinician reviewing a blocked configuration still needs to see what would be programmed —
+    # that is often how the blocker becomes intelligible. Whether it may be ENTERED is the
+    # verdict's business, not this file's, and the interface must not present a prescription from a
+    # blocked report as though it were authorised.
+    presc = _optional("prescription")
+    if presc is not None and rep.threshold is not None:
+        try:
+            from StimOptimizer.routines import percept_adaptive as _PA
+            _mode = (first or {}).get("threshold_mode") or _PA.DUAL
+            _t = d["t"].to_numpy() if "t" in d.columns else None
+            rep.prescription = presc.prescribe(
+                mode=_mode, threshold_plan=rep.threshold, candidate=first,
+                timing=_PA.timing_plan(mode=_mode),
+                power_series=d[power_scale].to_numpy() if len(d) else None,
+                t_s=_t, replay_result=rep.replay)
+        except Exception as ex:
+            rep.blockers.append(f"prescription generation failed: {ex}")
 
     # --- optional pieces ------------------------------------------------------------------------
     prot = _optional("protocol")
     if prot is not None and hasattr(prot, "titration_plan"):
         try:
-            rep.protocol = prot.titration_plan(cand, seed=seed)
+            # The titration session varies AMPLITUDE, so each candidate must carry the amplitude to
+            # be tested; the screen's candidates describe a sensing configuration and do not. The
+            # two capture amplitudes are the right ladder ends: they are the amplitudes the
+            # thresholds were captured at (D24) and the ones the adaptive limits inherit (D28), so
+            # testing between them is testing the range the loop will actually operate over.
+            _cand = list(cand or [])
+            if rep.threshold is not None:
+                _lo = getattr(rep.threshold, "capture_amp_low", None)
+                _hi = getattr(rep.threshold, "capture_amp_high", None)
+                if _lo is not None and _hi is not None:
+                    # Each arm needs its OWN label. The protocol groups differences by label and
+                    # refuses duplicates, correctly: two arms sharing a label would be pooled into
+                    # one comparison, which is exactly the amplitude contrast the session exists
+                    # to measure. So the label carries the amplitude that distinguishes them.
+                    _cand = [dict(c, test_amp_mA=a,
+                                  label=f"{c.get('channel', 'candidate')} @ {a:g} mA")
+                             for c in _cand for a in (float(_lo), float(_hi))]
+            rep.protocol = prot.titration_plan(_cand, seed=seed)
         except Exception as ex:
             rep.blockers.append(f"protocol generation failed: {ex}")
 

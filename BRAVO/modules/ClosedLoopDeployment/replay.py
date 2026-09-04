@@ -684,3 +684,186 @@ def _build_note(*, action, saturated, at_low, at_high, sat_frac, n_transitions, 
         "grid, so this is the commanded amplitude rather than a quantised delivered one.")
 
     return " ".join(parts)
+
+
+# --------------------------------------------------------------------------------------------
+# SEGMENT-WISE REPLAY OVER A GAPPY CHRONIC RECORD
+# --------------------------------------------------------------------------------------------
+#: Minimum controller steps a contiguous segment must contain to be replayed. A segment shorter
+#: than this cannot exercise the control law meaningfully — with the device's transition durations
+#: measured in minutes, a handful of steps cannot move the amplitude far enough for the resulting
+#: time-at-limit fractions to mean anything, and including such segments would let a few noisy
+#: fragments dominate an average. Declared by this module, not by Medtronic.
+MIN_SEGMENT_STEPS = 3
+
+#: A gap larger than this multiple of the median sample interval starts a new segment.
+SEGMENT_GAP_FACTOR = 3.0
+
+
+def dual_threshold_segments(t_s, power, plan, params=None, *,
+                            min_segment_steps=MIN_SEGMENT_STEPS,
+                            gap_factor=SEGMENT_GAP_FACTOR):
+    """Replay the controller over each CONTIGUOUS stretch of a gappy record, then aggregate.
+
+    WHY THIS EXISTS RATHER THAN A LOOSER TOLERANCE IN ``dual_threshold``. That function refuses a
+    non-uniform sample interval, and it is right to: the controller advances its ramp by a rate
+    times an interval, so feeding it a series whose interval jumps would silently attribute a
+    month-long recording gap to the ramp and march the amplitude to a limit that nothing in the
+    data supports. On the real RCS08 record the largest departure from the median interval is over
+    a million percent, because a chronic Percept record is a series of short streaming bursts
+    separated by days.
+
+    Loosening the tolerance would convert a correct refusal into a wrong number. Splitting the
+    record at its gaps keeps the refusal intact and asks a question that is actually answerable:
+    what would the control law have done during each stretch when the signal was genuinely being
+    observed? The amplitude is treated as re-initialised at the start of each segment, which is
+    also what the device does in practice — the adaptive startup delay exists precisely because
+    the controller resumes from a known amplitude rather than from wherever it left off days
+    earlier.
+
+    WHAT THE AGGREGATE MEANS, AND WHAT IT DOES NOT. The returned fractions are weighted by the
+    number of controller steps in each segment, so they describe the time the controller spent at
+    each limit DURING OBSERVED STRETCHES. They are not fractions of the patient's day: the
+    unobserved gaps are not represented at all, and they are not missing at random, because
+    streaming happens when the participant or the clinic starts it. ``coverage_frac`` on the
+    result records how little of the elapsed span contributed, so the number cannot be quoted
+    without it.
+
+    Returns a ``types.ReplayResult`` whose ``params`` carries the segmentation record.
+    """
+    t = np.asarray(t_s, float).ravel()
+    p = np.asarray(power, float).ravel()
+    if t.size != p.size:
+        raise ValueError(f"time and power differ in length: {t.size} vs {p.size}")
+    ok = np.isfinite(t) & np.isfinite(p)
+    t, p = t[ok], p[ok]
+    order = np.argsort(t, kind="stable")
+    t, p = t[order], p[order]
+
+    # Collapse duplicated timestamps rather than letting them appear as zero-length intervals.
+    if t.size and np.any(np.diff(t) == 0):
+        uniq, idx = np.unique(t, return_inverse=True)
+        summed = np.zeros(uniq.size); counts = np.zeros(uniq.size)
+        np.add.at(summed, idx, p); np.add.at(counts, idx, 1.0)
+        t, p = uniq, summed / np.maximum(counts, 1.0)
+
+    if t.size < min_segment_steps:
+        return types.ReplayResult(
+            t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
+            n_transitions=None, saturated=None,
+            params={"n_segments": 0, "reason": "too few samples"},
+            note=(f"only {t.size} distinct samples, fewer than the {min_segment_steps} steps a "
+                  f"segment must contain to exercise the control law, so no replay was run."))
+
+    gaps = np.diff(t)
+    med = float(np.median(gaps[gaps > 0])) if np.any(gaps > 0) else None
+    if med is None or not (med > 0):
+        return types.ReplayResult(
+            t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
+            n_transitions=None, saturated=None, params={"n_segments": 0},
+            note="the time base has no positive interval, so no replay was run.")
+    # CAN THIS RECORD REPRESENT THE DEVICE'S RAMP AT ALL? This is checked before any segmentation,
+    # because it is a property of the sampling cadence rather than of any individual segment, and
+    # because failing it makes every downstream number meaningless in a way that is easy to miss.
+    #
+    # The device moves the amplitude gradually: the transition-up duration is 2.5 minutes and the
+    # transition-down duration 5 minutes by default. A replay advances the ramp by a rate times the
+    # sample interval, so if the samples arrive FARTHER APART than the transition duration, one
+    # step of the replay traverses the entire amplitude range. The simulated controller then jumps
+    # between the two limits instantaneously, which is not the control law the device implements —
+    # it is a bang-bang controller with the same thresholds. Every time-at-limit fraction computed
+    # that way describes an amplitude trajectory the device would never produce.
+    #
+    # On the real RCS08 record the chronic snapshots arrive every 230 s while the transition-up
+    # duration is 150 s, so this is not a hypothetical: the whole record fails this check, and the
+    # honest report is that the ramp is unresolvable at this cadence rather than a set of fractions
+    # from a controller that does not exist. Denser data is what fixes it — a streaming session
+    # sampled at the device's own averaging rate rather than chronic snapshots minutes apart.
+    p_in = dict(DEFAULT_PARAMS)
+    if params:
+        p_in.update({k: v for k, v in params.items() if k in DEFAULT_PARAMS})
+    ramp_up_s = float(p_in["transition_up_ms"]) / 1000.0
+    if med >= ramp_up_s:
+        return types.ReplayResult(
+            t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
+            n_transitions=None, saturated=None,
+            params={"n_segments": None, "n_segments_used": 0, "median_interval_s": med,
+                    "transition_up_s": ramp_up_s, "ramp_resolvable": False},
+            note=(f"THE RAMP IS NOT RESOLVABLE AT THIS SAMPLING CADENCE, so no replay was run and "
+                  f"no time-at-limit fraction is reported. The samples arrive every {med:.0f} s "
+                  f"while the transition-up duration is {ramp_up_s:.0f} s, so a single replay step "
+                  f"would carry the amplitude across the whole range and the simulated controller "
+                  f"would jump between the two limits instantaneously. That is a bang-bang "
+                  f"controller, not the gradual ramp the device implements, and its time-at-limit "
+                  f"fractions would describe a trajectory the device would never produce. "
+                  f"Answering this question needs data sampled at the device's own averaging rate "
+                  f"during a streaming session, not chronic snapshots minutes apart."))
+
+    cut = np.flatnonzero(gaps > gap_factor * med) + 1
+    bounds = np.concatenate([[0], cut, [t.size]])
+
+    used_steps = 0
+    tot_up = tot_lo = 0.0
+    n_trans = 0
+    n_sat = 0
+    n_used = 0
+    skipped = 0
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        if b - a < min_segment_steps:
+            skipped += 1
+            continue
+        seg_t, seg_p = t[a:b] - t[a], p[a:b]
+        try:
+            r = dual_threshold({"t_s": seg_t, "power": seg_p}, plan, params)
+        except Exception:
+            # A segment the controller still refuses is skipped and counted rather than allowed to
+            # abort the aggregate; the count is reported so the reader knows it happened.
+            skipped += 1
+            continue
+        w = float(b - a)
+        if r.frac_time_at_upper is not None:
+            tot_up += w * float(r.frac_time_at_upper)
+        if r.frac_time_at_lower is not None:
+            tot_lo += w * float(r.frac_time_at_lower)
+        n_trans += int(r.n_transitions or 0)
+        n_sat += 1 if r.saturated else 0
+        used_steps += w
+        n_used += 1
+
+    if not used_steps:
+        return types.ReplayResult(
+            t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
+            n_transitions=None, saturated=None,
+            params={"n_segments": int(bounds.size - 1), "n_segments_used": 0,
+                    "n_segments_skipped": int(skipped), "median_interval_s": med},
+            note=(f"the record splits into {bounds.size - 1} contiguous segments at gaps larger "
+                  f"than {gap_factor:g} times the median interval of {med:.1f} s, and none of them "
+                  f"contains the {min_segment_steps} steps a replay needs. Nothing was replayed, "
+                  f"which is reported rather than substituted with a whole-record replay that "
+                  f"would have attributed the gaps to the controller's ramp."))
+
+    span = float(t[-1] - t[0])
+    observed = float(used_steps) * med
+    return types.ReplayResult(
+        t_s=None, state=None,
+        frac_time_at_upper=tot_up / used_steps,
+        frac_time_at_lower=tot_lo / used_steps,
+        n_transitions=int(n_trans),
+        saturated=bool(n_sat),
+        params={"n_segments": int(bounds.size - 1), "n_segments_used": int(n_used),
+                "n_segments_skipped": int(skipped), "steps_used": int(used_steps),
+                "median_interval_s": med, "span_s": span,
+                "coverage_frac": (observed / span) if span > 0 else None,
+                "ramp_resolvable": True, "transition_up_s": ramp_up_s,
+                "amp_low_mA": getattr(plan, "capture_amp_low", None),
+                "amp_high_mA": getattr(plan, "capture_amp_high", None)},
+        note=(f"Aggregated over {n_used} contiguous segments ({skipped} skipped for holding fewer "
+              f"than {min_segment_steps} steps), weighted by the number of controller steps in "
+              f"each. The record was split at gaps larger than {gap_factor:g} times the median "
+              f"interval of {med:.1f} s, because the whole-record replay is correctly REFUSED on "
+              f"a series whose interval jumps by six orders of magnitude — feeding it through "
+              f"would attribute recording gaps to the controller's ramp. These fractions therefore "
+              f"describe observed stretches and are NOT fractions of the patient's day: the gaps "
+              f"are unrepresented and are not missing at random, since streaming starts when the "
+              f"participant or the clinic starts it. The underlying power was also recorded under "
+              f"the participant's actual programming rather than under closed-loop control."))

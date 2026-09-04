@@ -689,3 +689,344 @@ def test_pocket_adaptor_stays_unknown_rather_than_assumed_absent():
     f, _p = DF.session_report_facts_for("2e3c75c00d7f4f37b53a048d195f11da",
                                         channel="ONE_THREE_LEFT", hemisphere="Left")
     assert "has_pocket_adaptor" not in f or f["has_pocket_adaptor"] is None
+
+
+def test_capture_amplitudes_exclude_zero_because_both_must_be_therapeutic():
+    """Regression, 2026-09-04, found by running the prescription on the real RCS08 record.
+
+    The pipeline selected the two capture amplitudes as the plain min and max of the observed
+    amplitudes. On RCS08 the minimum is 0.0 mA, so the lower capture amplitude was stimulation
+    switched OFF, which breaks two different things.
+
+    It reintroduces the artefact confound the amplitude-response screen exists to remove: band
+    power at 0 mA has no stimulation artefact in it and band power at 4.8 mA has a large one, so
+    the difference is not interpretable as a physiological response to amplitude.
+
+    And it produces a prescription the device rejects, because the adaptive amplitude limits
+    inherit the capture amplitudes (D28) and the lower limit must be strictly above zero (D07).
+    """
+    import numpy as np
+    import pandas as pd
+    from ClosedLoopDeployment import pipeline as PL
+
+    src = open(PL.__file__).read()
+    assert "amps[amps > 0]" in src, "the therapeutic restriction is missing from the pipeline"
+    assert "amps.min(), amps.max()" not in src, \
+        "the unrestricted min/max selection is back; zero amplitude would be captured again"
+
+    # the arms handed to threshold_placement must also carry the restriction, or the amplitudes
+    # would be therapeutic while the power arms still contained stimulation-off samples
+    assert "(amps > 0) & (amps <= lo_a)" in src
+    assert "(amps > 0) & (amps >= hi_a)" in src
+
+
+# --- the prescription: mode-dependent field sets and a validated time base (2026-09-04) --------
+def test_the_programmable_field_set_depends_on_the_number_of_thresholds():
+    """Dual Threshold has two thresholds and TWO onset durations; Single has one computed
+    threshold and ONE onset duration; Single Inverse cannot drive therapy and has none.
+
+    This is not a cosmetic difference. The manufacturer's troubleshooting table adjusts "Upper
+    Onset" and "Lower Onset" in OPPOSITE directions to fix stimulation that is transiently too low
+    (D51), which is only possible if they are two independently settable fields. And the single
+    threshold is not typed in at all: the device computes it as 0.75 x (Upper - Lower) + Lower
+    (D20), so presenting it as an editable field would invite a clinician to enter a value the
+    device will overwrite.
+    """
+    from StimOptimizer.routines import percept_adaptive as PA
+    from ClosedLoopDeployment import prescription as PR, types as TY
+
+    tp = TY.ThresholdPlan(upper=10.0, lower=6.0, capture_amp_low=3.0, capture_amp_high=5.0)
+
+    dual = PR.prescribe(mode=PA.DUAL, threshold_plan=tp, timing=PA.timing_plan(mode=PA.DUAL))
+    names = [f.name for f in dual.fields]
+    assert "Upper onset duration" in names and "Lower onset duration" in names
+    assert "Upper LFP threshold" in names and "Lower LFP threshold" in names
+    assert "Onset duration" not in names, "dual mode must not present a single merged onset"
+
+    single = PR.prescribe(mode=PA.SINGLE, threshold_plan=tp, timing=PA.timing_plan(mode=PA.SINGLE))
+    snames = [f.name for f in single.fields]
+    assert "Onset duration" in snames
+    assert "Upper onset duration" not in snames and "Lower onset duration" not in snames
+    assert "Single LFP threshold" in snames
+    # and it carries the device's own formula, not either captured threshold
+    sf = next(f for f in single.fields if f.name == "Single LFP threshold")
+    assert abs(float(sf.value) - (0.75 * (10.0 - 6.0) + 6.0)) < 1e-9
+
+    inv = PR.prescribe(mode=PA.SINGLE_INVERSE, threshold_plan=tp)
+    assert inv.fields == [], "a sensing-only mode has no closed-loop prescription"
+    assert "cannot drive therapy" in inv.note
+
+
+def test_the_onset_duration_is_reported_as_inoperative_when_it_spans_one_window():
+    """The interaction most likely to be missed, and it silently removes a safety feature.
+
+    Averaging is non-overlapping (D14), so the onset expresses itself as ceil(onset / averaging)
+    controller steps. At one step the onset does nothing: the first averaged sample past a
+    threshold already satisfies it. Because the published dual-mode onset range tops out at 2 s,
+    ANY averaging duration of 2 s or more makes the onset inoperative at every value the clinician
+    can choose — including the 4096 ms this module recommends to match the validated biomarker.
+    """
+    from ClosedLoopDeployment import prescription as PR
+
+    # the manufacturer's own defaults are exactly one window, so the onset does nothing there either
+    assert PR.onset_windows(1200.0, 1200.0)["windows"] == 1
+    assert PR.onset_windows(1200.0, 1200.0)["inoperative"] is True
+
+    # only the top of the range against the default averaging gives a real filter
+    assert PR.onset_windows(2000.0, 1200.0)["windows"] == 2
+    assert PR.onset_windows(2000.0, 1200.0)["inoperative"] is False
+
+    # at the biomarker-matched averaging duration, nothing in the published range is operative
+    for onset in (1200.0, 1600.0, 2000.0):
+        r = PR.onset_windows(onset, 4096.0)
+        assert r["windows"] == 1 and r["inoperative"] is True, onset
+        assert "does NOTHING" in r["why"]
+
+    with pytest.raises(ValueError):
+        PR.onset_windows(1200.0, 0.0)
+
+
+def test_a_degenerate_time_base_suppresses_the_per_hour_figures():
+    """Regression, 2026-09-04. A caller converted epoch SECONDS as though they were nanoseconds,
+    compressing fourteen months into one second of 1970. The interval collapsed toward zero and
+    transitions-per-hour came out as 3.4 billion against an observed span of zero hours. A rate
+    against a near-zero denominator is broken rather than large, so it is now refused."""
+    import numpy as np
+    from ClosedLoopDeployment import prescription as PR
+
+    rng = np.random.default_rng(0)
+    power = rng.normal(1.0, 0.3, 400)
+
+    bad = PR.duty_cycle(power, upper=1.2, lower=0.8, dt_s=1e-9, averaging_ms=1200.0)
+    assert bad.transitions_per_hour is None
+    assert bad.hours_observed is None
+    assert any("outside the plausible range" in c for c in bad.caveats)
+
+    # a sane time base still produces the figures
+    t = np.arange(400) * 60.0
+    ok = PR.duty_cycle(power, upper=1.2, lower=0.8, t_s=t, averaging_ms=1200.0)
+    assert ok.hours_observed is not None and ok.hours_observed > 0
+    assert abs(ok.hours_observed - (399 * 60.0) / 3600.0) < 1e-6
+
+    # elapsed time is the SPAN, not the sample count times the interval: with a gap in the middle
+    # the two differ, and using the count would inflate every per-hour figure
+    t_gap = np.concatenate([np.arange(200) * 60.0, np.arange(200) * 60.0 + 100 * 3600.0])
+    gapped = PR.duty_cycle(power, upper=1.2, lower=0.8, t_s=t_gap, averaging_ms=1200.0)
+    assert gapped.hours_observed > 100, "the span must include the gap"
+
+
+def test_duplicate_timestamps_do_not_collapse_the_sample_interval():
+    """The real joined table has 1079 rows on 1023 distinct timestamps for one band-cell. Taking
+    the median of ALL differences would include zeros and drive the interval to zero, which is the
+    same failure as the unit error above by a different route."""
+    import numpy as np
+    from ClosedLoopDeployment import prescription as PR
+
+    t = np.repeat(np.arange(300) * 120.0, 2)          # every timestamp duplicated
+    power = np.tile(np.linspace(0.5, 1.5, 300), 2)
+    r = PR.duty_cycle(power, upper=1.2, lower=0.8, t_s=t, averaging_ms=1200.0)
+    assert r.hours_observed is not None
+    assert any("share a timestamp" in c for c in r.caveats)
+
+
+def test_the_pipeline_resolves_the_amplitude_column_instead_of_guessing_its_name():
+    """Regression, 2026-09-04, and it is the second instance of this failure class in this module.
+
+    The pipeline built the column name as an f-string, `f"amp_{hemisphere}"`, while the joined
+    table spells it `amp_mA_Left` with the unit in the name. The membership test failed on every
+    real report, so the threshold-placement block was SKIPPED — silently, because skipping a block
+    raises nothing. `rep.threshold` came back None, the prescription was therefore absent, and the
+    payload was indistinguishable from a participant who genuinely had no amplitude on record.
+
+    The test asserts the name comes from `adapter.canonical_amp_col`, which is the single
+    definition, and that a genuinely missing column now produces a BLOCKER rather than silence.
+    """
+    from ClosedLoopDeployment import adapter as AD, pipeline as PL
+
+    assert AD.canonical_amp_col("Left") == "amp_mA_Left"
+    src = open(PL.__file__).read()
+    assert 'adapter.canonical_amp_col(hemisphere)' in src
+    assert 'amp_col = f"amp_{hemisphere}"' not in src, "the hardcoded name is back"
+    # a missing column must announce itself
+    assert "no {hemisphere} amplitude column in the joined table" in src or \
+           "amplitude column in the joined table" in src
+
+
+def test_sparse_coverage_forbids_reporting_the_fractions_as_percentages_of_the_day():
+    """The single most misreadable number the module produces, so it carries a structural flag.
+
+    A chronic Percept record is sampled in short bursts minutes apart. On RCS08 one band-cell holds
+    1079 samples of a 4.096 s window — about 1.2 hours of signal — spread across roughly 9,900
+    hours of elapsed time, a coverage of about one part in eight thousand. So "half the samples sat
+    above the upper threshold" is emphatically not "half the day sat above the upper threshold",
+    and an interface that prints the latter overstates the result by orders of magnitude. The flag
+    exists so the interface can refuse rather than relying on a caveat being read.
+    """
+    import numpy as np
+    from ClosedLoopDeployment import prescription as PR
+
+    rng = np.random.default_rng(1)
+    power = rng.normal(1.0, 0.4, 500)
+
+    # bursty: one sample every 230 s, each standing for a 4.096 s window
+    sparse = PR.duty_cycle(power, upper=1.2, lower=0.8,
+                           t_s=np.arange(500) * 230.0, averaging_ms=4096.0)
+    assert sparse.fractions_are_of_observed_samples is True
+    assert sparse.coverage_frac is not None and sparse.coverage_frac < 0.05
+    assert any("must not be reported as" in c for c in sparse.caveats)
+    # the fractions are still computed, because they remain useful for COMPARING configurations
+    assert sparse.lfp_frac_above is not None
+
+    # continuous: samples one averaging window apart, so the fractions are fractions of time
+    dense = PR.duty_cycle(power, upper=1.2, lower=0.8,
+                          t_s=np.arange(500) * 4.096, averaging_ms=4096.0)
+    assert dense.fractions_are_of_observed_samples is False
+    assert dense.coverage_frac > 0.9
+    assert not any("must not be reported as" in c for c in dense.caveats)
+
+
+def test_every_duty_cycle_field_reaches_the_payload():
+    """Guards a bug that already happened: `coverage_frac`,
+    `fractions_are_of_observed_samples` and `hours_of_signal` were added to the DutyCycle
+    dataclass but not to the serialiser's key tuple, so the caveat text carried the coverage
+    figures while the fields themselves serialised as null. An interface reading the fields alone
+    could then have printed "49.6% of the day" for a record whose coverage is 0.012%.
+
+    Comparing the dataclass against the serialiser mechanically means the next field cannot be
+    forgotten, which is the point: this class of omission is invisible in every unit test that
+    exercises the dataclass directly.
+    """
+    import dataclasses
+    import re
+    from ClosedLoopDeployment import adapter as AD, prescription as PR
+
+    declared = {f.name for f in dataclasses.fields(PR.DutyCycle)}
+    src = open(AD.__file__).read()
+    i = src.index('"duty": None if rep.prescription.duty is None else {')
+    block = src[i:i + 1800]
+    # The character class must admit capitals: `mean_amplitude_mA` carries the unit in the name and
+    # a lowercase-only pattern silently excluded it, which made this guard report a phantom
+    # omission on its first run. A test that cries wolf gets disabled, so the pattern matches the
+    # identifiers the codebase actually uses.
+    emitted = set(re.findall(r'"([A-Za-z_]+)"', block))
+    missing = declared - emitted
+    assert not missing, f"DutyCycle fields never serialised to the payload: {sorted(missing)}"
+
+
+def test_segment_replay_splits_at_gaps_instead_of_loosening_the_uniformity_guard():
+    """A chronic Percept record is streaming bursts separated by days, and `dual_threshold`
+    correctly REFUSES it: the controller advances its ramp by a rate times an interval, so a
+    series whose interval jumps by six orders of magnitude would attribute a month-long recording
+    gap to the ramp and march the amplitude to a limit nothing in the data supports. On the real
+    RCS08 cell the largest departure from the median interval is over a million percent.
+
+    Loosening the tolerance would turn a correct refusal into a wrong number, so the record is
+    split at its gaps instead and each contiguous stretch replayed separately.
+    """
+    import numpy as np
+    import pytest as _pytest
+    from ClosedLoopDeployment import replay as RP, types as TY
+
+    plan = TY.ThresholdPlan(upper=1.2, lower=0.8, capture_amp_low=1.4, capture_amp_high=4.8)
+    rng = np.random.default_rng(3)
+
+    # Three bursts of 40 uniform samples, separated by two multi-day gaps. The WITHIN-burst
+    # cadence is the device's own averaging window rather than the chronic-snapshot cadence,
+    # because a 230 s cadence now trips the ramp-resolution refusal before segmentation is even
+    # reached — see the test below. That refusal is correct and this test is about the gap
+    # splitting, so the bursts are sampled densely enough for the ramp to be representable.
+    bursts = [np.arange(40) * 4.096 + off for off in (0.0, 5e5, 1.2e6)]
+    t = np.concatenate(bursts)
+    power = rng.normal(1.0, 0.35, t.size)
+
+    # the single-shot replay must still refuse this, which is the premise of the whole function
+    with _pytest.raises(Exception):
+        RP.dual_threshold({"t_s": t, "power": power}, plan)
+
+    r = RP.dual_threshold_segments(t, power, plan)
+    assert r.params["n_segments"] == 3
+    assert r.params["n_segments_used"] == 3
+    assert r.frac_time_at_upper is not None and r.frac_time_at_lower is not None
+    # coverage must be reported, because these fractions are of OBSERVED stretches only
+    assert r.params["coverage_frac"] is not None and r.params["coverage_frac"] < 0.05
+    assert "NOT fractions of the patient's day" in r.note
+
+    # segments too short to exercise the control law are skipped and counted, not averaged in
+    short = np.concatenate([np.arange(40) * 4.096, np.array([9e5, 9e5 + 4.096])])
+    r2 = RP.dual_threshold_segments(short, rng.normal(1.0, 0.35, short.size), plan)
+    assert r2.params["n_segments"] == 2 and r2.params["n_segments_used"] == 1
+    assert r2.params["n_segments_skipped"] == 1, (
+        "a 2-sample trailing segment is below the 3-step floor and must be skipped, not averaged in")
+
+    # duplicated timestamps are collapsed rather than read as zero-length intervals
+    dup = np.repeat(np.arange(40) * 4.096, 2)
+    r3 = RP.dual_threshold_segments(dup, rng.normal(1.0, 0.35, dup.size), plan)
+    assert r3.params.get("n_segments_used", 0) >= 1
+
+
+def test_replay_refuses_a_cadence_that_cannot_represent_the_ramp():
+    """The finding that matters more than the segmentation, and it is easy to miss.
+
+    The device moves amplitude gradually: 2.5 minutes up, 5 minutes down by default. A replay
+    advances the ramp by a rate times the sample interval, so samples arriving FARTHER APART than
+    the transition duration make one step traverse the entire amplitude range. The simulated
+    controller then jumps between the limits instantaneously, which is a bang-bang controller with
+    the same thresholds and not the law the device implements, so its time-at-limit fractions
+    describe a trajectory the device would never produce.
+
+    On the real RCS08 record the chronic snapshots arrive every 230 s against a 150 s transition
+    up, so the whole record fails this — which is why the honest output is a refusal naming the
+    cadence rather than a set of plausible-looking fractions.
+    """
+    import numpy as np
+    from ClosedLoopDeployment import replay as RP, types as TY
+
+    plan = TY.ThresholdPlan(upper=1.2, lower=0.8, capture_amp_low=1.4, capture_amp_high=4.8)
+    rng = np.random.default_rng(7)
+
+    coarse = np.arange(60) * 230.0                      # the real RCS08 cadence
+    r = RP.dual_threshold_segments(coarse, rng.normal(1.0, 0.35, 60), plan)
+    assert r.params["ramp_resolvable"] is False
+    assert r.frac_time_at_upper is None and r.n_transitions is None
+    assert "NOT RESOLVABLE" in r.note
+    assert "230" in r.note and "150" in r.note, "the note must name both durations"
+
+    # sampled at the device's averaging rate, the ramp is resolvable and fractions are produced
+    fine = np.arange(400) * 4.096
+    r2 = RP.dual_threshold_segments(fine, rng.normal(1.0, 0.35, 400), plan)
+    assert r2.params["ramp_resolvable"] is True
+    assert r2.frac_time_at_upper is not None
+
+
+def test_every_report_section_reaches_the_payload():
+    """Generalises a bug that happened twice in one session.
+
+    `replay` and `protocol` were both computed by the pipeline and then dropped on the floor,
+    because `report_to_dict` simply had no key for them. Nothing failed: the panel rendered
+    without a section it had no way to know existed, and the payload was indistinguishable from a
+    run where those steps had not been reached. The duty-cycle fields went the same way an hour
+    later.
+
+    Comparing the DeploymentReport dataclass against the serialiser mechanically means the third
+    instance cannot happen silently. Fields deliberately withheld are named here with the reason,
+    so withholding stays a decision rather than an oversight.
+    """
+    import dataclasses
+    import re
+    from ClosedLoopDeployment import adapter as AD
+    from ClosedLoopDeployment.types import DeploymentReport
+
+    # `candidates` and `manifest` are diagnostics rather than sections; `participant` is echoed at
+    # the top level rather than nested. Everything else must appear as a payload key.
+    WITHHELD = {"candidates", "manifest", "participant", "blockers"}
+
+    declared = {f.name for f in dataclasses.fields(DeploymentReport)} - WITHHELD
+    src = open(AD.__file__).read()
+    i = src.index("def report_to_dict(rep)")
+    j = src.index("\ndef ", i + 10)
+    body = src[i:j]
+    emitted = set(re.findall(r'^\s{8}"([A-Za-z_]+)":', body, flags=re.M))
+    missing = declared - emitted
+    assert not missing, (
+        f"DeploymentReport sections computed but never serialised: {sorted(missing)}. "
+        f"Add a key to report_to_dict, or add the name to WITHHELD with a reason.")

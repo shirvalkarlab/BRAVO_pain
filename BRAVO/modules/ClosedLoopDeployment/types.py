@@ -173,6 +173,11 @@ class DeploymentReport:
     threshold: ThresholdPlan | None = None
     replay: ReplayResult | None = None
     protocol: Protocol | None = None
+    #: The programmable device parameters and the predicted duty cycle, from prescription.py.
+    #: Added 2026-09-04 as a new field with a default, so any caller that predates it is
+    #: unaffected. This is the module's ANSWER rather than its evidence: everything above decides
+    #: whether a configuration may be used, and this says what to type into the programmer.
+    prescription: Any = None
     candidates: Any = None
     blockers: list = field(default_factory=list)
     manifest: dict = field(default_factory=dict)
