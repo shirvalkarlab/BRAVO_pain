@@ -319,7 +319,8 @@ function ClosedLoopSim() {
               {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
                   Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
               <Grid item xs={12}>
-                <DeploymentVerdictStrip bandCandidate={bc} summary={summary} />
+                <DeploymentVerdictStrip bandCandidate={bc} summary={summary}
+                  deploymentReport={deploymentReport} />
               </Grid>
 
               {/* Phase 7: device eligibility, the three edges with their clustering provenance, and
@@ -344,7 +345,7 @@ function ClosedLoopSim() {
               <Grid item xs={12} md={6} id="cl-lsb">
                 <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
                   requestParams={requestParams} cutpoint={cutpoint}
-                  onLsbThreshold={setLsbThreshold} />
+                  onLsbThreshold={setLsbThreshold} deploymentReport={deploymentReport} />
               </Grid>
               <Grid item xs={12} md={6} id="cl-era">
                 <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
@@ -359,7 +360,8 @@ function ClosedLoopSim() {
               </Grid>
               <Grid item xs={12} id="cl-signoff">
                 <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} cutpoint={cutpoint} summary={summary} />
+                  requestParams={requestParams} cutpoint={cutpoint} summary={summary}
+                  deploymentReport={deploymentReport} />
               </Grid>
 
               <Grid item xs={12}>

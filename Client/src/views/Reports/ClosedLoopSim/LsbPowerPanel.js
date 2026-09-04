@@ -34,7 +34,23 @@ const TIER_LABEL = {
   channel_pooled: "from frozen PSD→LSB model (channel-pooled)",
 };
 
-function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold }) {
+function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint, onLsbThreshold,
+                         deploymentReport }) {
+  // THE DEVICE VERDICT GATES THE HEADLINE NUMBER, added 2026-09-04, the third of three places that
+  // printed a value to program without consulting the device rules. This panel is the most
+  // defensible of the three, because its job is genuinely analytic — it shows where a percentile of
+  // the device's own Timeline band power falls — but it labels that number "THRESHOLD TO PROGRAM"
+  // at twenty-six-point type, which is an instruction rather than an analysis. So the label and the
+  // framing change when the device forbids the configuration, while the measurement itself stays
+  // on the page: an analyst still needs to see where the percentile sits, and hiding a measurement
+  // would remove information rather than remove a hazard.
+  //
+  // That is the distinction against the verdict strip and the sign-off card, where the number was
+  // SUPPRESSED. Those two exist to tell a clinician what to do next, so a number in them gets
+  // typed. This one exists to show where a distribution sits, so it is relabelled instead.
+  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const _vd = (_rep && _rep.verdict_detail) || {};
+  const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
   const pwRef = useRef(null);
   const thrRef = useRef(null);
   const [data, setData] = useState(null);
@@ -362,12 +378,25 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {tl && tl.available && !tl.estimated ? (
               <MDBox p={1.2} mb={1.2} sx={{ backgroundColor: PAL.accentFill, borderRadius: "6px",
                 border: `1px solid ${PAL.accentBorder}` }}>
-                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold", color: PAL.accent }}>
-                  THRESHOLD TO PROGRAM (device LSB)
+                <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
+                  color: deviceBlocks ? PAL.warnText : PAL.accent }}>
+                  {deviceBlocks
+                    ? "WHERE THE PERCENTILE FALLS (device LSB) — NOT A VALUE TO PROGRAM"
+                    : "THRESHOLD TO PROGRAM (device LSB)"}
                 </MDTypography>
-                <MDTypography variant="h4" sx={{ fontSize: 26, color: PAL.accent, lineHeight: 1.1 }}>
-                  {`power ≥ ${fmt(tl.upper_lsb, 1)} LSB`}
+                <MDTypography variant="h4" sx={{ fontSize: 26,
+                  color: deviceBlocks ? PAL.neutral : PAL.accent, lineHeight: 1.1 }}>
+                  {`power ${deviceBlocks ? "=" : "≥"} ${fmt(tl.upper_lsb, 1)} LSB`}
                 </MDTypography>
+                {deviceBlocks ? (
+                  <MDTypography variant="caption" display="block"
+                    sx={{ fontSize: 9.5, color: PAL.warnText, mt: 0.3 }}>
+                    The device does not currently permit this configuration, so this is a
+                    measurement of where the percentile sits and not a setting to enter. The
+                    comparison operator is shown as an equals sign for the same reason: a
+                    greater-than-or-equal sign reads as a rule to apply.
+                  </MDTypography>
+                ) : null}
                 <MDTypography variant="caption" display="block" color="text" sx={{ fontSize: 10, mt: 0.3 }}>
                   {`p${fmt(tl.percentile, 0)} of the device's own Timeline band power · `
                     + `${tl.n_timeline_samples} in-band samples · device LSB p10/median/p90 `

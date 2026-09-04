@@ -75,6 +75,66 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (safety gate) — the page printed a value to program for a configuration the device forbids
+
+Found by a design-critique lane and verified against the source before acting on it. **Three
+components printed a threshold to program without ever consulting the device rules**, and one of
+them printed it into a sheet meant to be signed.
+
+`DeploymentVerdictStrip.js` rendered `power >= N LSB` at nineteen-point type gated only on
+`thresholdShown`, which derives entirely from `/queryDeploymentSummary` — the STATISTICAL gates. The
+component contained no reference to `deploymentReport` or to the device verdict at all; the only
+matches for those words were in its own header comment. `DeploySignoffCard.js` printed the same
+number at twenty-four-point type gated on `th.available`, inside the PRINTABLE record.
+`LsbPowerPanel.js` printed it at twenty-six.
+
+The two endpoints answer different questions and both must clear. The summary asks where the
+threshold goes and whether the statistical gates pass; the deployment report asks whether the device
+would permit the configuration at all. A band can pass every gate in the first and be undeployable
+in the second — which is RCS08's live state: D19 fails because the band's power RISES with amplitude,
+closing a positive-feedback loop, and four further rules cannot be evaluated.
+
+**Fixed by suppression, not greying, in the two components whose job is to tell a clinician what to
+do.** A greyed number is still a number, still legible, and still the largest thing on the strip, and
+the failure mode is a number being on screen during a programming visit — a number in that position
+gets typed. In its place the strip and the card now print the reason and the counts. Live text:
+"the device does not permit this configuration - 1 rule violated, 4 cannot be evaluated."
+
+**Fixed by relabelling in `LsbPowerPanel`, deliberately not by suppression.** That panel's job is
+genuinely analytic — it shows where a percentile of the device's own Timeline band power falls — so
+hiding the measurement would remove information rather than remove a hazard. The label becomes
+"WHERE THE PERCENTILE FALLS - NOT A VALUE TO PROGRAM" and the operator changes from `>=` to `=`,
+because a greater-than-or-equal sign reads as a rule to apply.
+
+All three fail CLOSED: a report that has not loaded, or that carries no device answer, withholds. An
+absent verdict is not permission.
+
+**Also fixed, and my own guard had missed it.** The `deferred` bucket was never serialised, so the
+four bucket lengths did not account for the rules checked — the arithmetic a reader uses to satisfy
+themselves nothing was quietly discarded. My completeness test walked only the fields of
+`DeploymentReport` and did not recurse into the nested dataclasses, so a missing key on
+`EligibilityReport` passed it. A completeness check that only checks the outer layer gives false
+assurance, which is worse than no check because it stops anyone looking. The guard now recurses, and
+on its first run it immediately found a third omission: `ReplayResult.amplitude_mA`, a per-step
+trajectory that IS deliberately withheld and is now declared as such with its reason.
+
+RCS08 live: verdict blocked, device_eligible False, 1 failure, 4 unknowns, 1 deferred row (D01
+deferring to D02). Frontend build compiled; all new copy verified present in the served bundle.
+Suite 176 passed.
+
+**Verified claims, for the record, since three of the four were worse than the critique described.**
+Threshold-to-program appears in three components, not one. `_RECORD_VALUE_ON_PASS = ("D03", "D04",
+"D31")` emits `recorded_value` on pass and `DeploymentEvidencePanel.js` line 35 filters with
+`kind === "advisory_failed"`, so all three pinned values are discarded — including D03, the row
+recording that the programming mode is Parkinson's, which is the fact making the whole workflow
+reachable. `MIN_RELIABLE_CLUSTERS = 40` is duplicated in JavaScript at line 42 with a comment asking
+a reader to keep it in step, and is now doubly wrong because the inference work replaced that floor
+with a switch between estimators. `not_applicable` appears once in `prescription.py`, in a docstring,
+and is never assigned. Those three are NOT yet fixed and are Phase B and C of
+`CLD_WIRING_PLAN.md`.
+
+
+
 ### 2026-09-04 (prescription) — the module now says WHAT TO PROGRAM, and four silent-skip bugs
 
 The PI corrected a conflation of mine that had shaped a whole night's work. I had audited the GATE

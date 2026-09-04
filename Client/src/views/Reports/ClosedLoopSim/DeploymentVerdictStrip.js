@@ -31,7 +31,7 @@ function jumpTo(id) {
   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
+export default function DeploymentVerdictStrip({ bandCandidate, summary, deploymentReport }) {
   const bc = bandCandidate || {};
   // Consume the SHARED summary fetch lifted to the parent (no own /queryDeploymentSummary call).
   const { data, loading, err } = summary || { data: null, loading: false, err: null };
@@ -47,7 +47,35 @@ export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
   // surfaced as `available`/measured). Read the estimate from there so this strip matches what the
   // LSB panel shows for an unsensed-but-modelable band, instead of rendering "not deployable".
   const est = th && th.estimated && th.estimate ? th.estimate : null;
-  const thresholdShown = !!(th && (th.available || est)); // measured OR modeled value to display
+
+  // THE DEVICE VERDICT GATES THE NUMBER, added 2026-09-04. Until now this cell printed
+  // `power ≥ N LSB` at nineteen-point type gated only on `thresholdShown`, which derives entirely
+  // from /queryDeploymentSummary — the STATISTICAL gates. This component had no reference to the
+  // device rules at all, so the Percept could forbid the configuration outright and the largest
+  // number on the page would still be a value to program. For RCS08 that is the live state: rule
+  // D19 fails because the band's power RISES with amplitude, which would close a positive-feedback
+  // loop, and four further rules cannot be evaluated.
+  //
+  // The two endpoints answer different questions and both must clear. The summary asks where the
+  // threshold goes and whether the statistical gates pass; the deployment report asks whether the
+  // device would permit the configuration at all. A band can pass every gate in the first and be
+  // undeployable in the second.
+  //
+  // SUPPRESSED RATHER THAN GREYED, deliberately. A greyed number is still a number, still legible,
+  // and still the largest thing on the strip, and the failure mode being guarded against is a
+  // number being on screen during a programming visit — a number in that position gets typed. The
+  // reason and the count of what is withheld are printed in its place, so a reader knows something
+  // exists and has been held back rather than being simply absent.
+  const rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const vd = (rep && rep.verdict_detail) || {};
+  // Fail closed: a report that has not loaded, or that carries no device answer, withholds. An
+  // absent verdict is not permission.
+  const deviceOk = !!(rep && rep.available && vd.device_eligible === true);
+  const deviceBlocks = !deviceOk;
+  const nFail = ((rep && rep.eligibility && rep.eligibility.failures) || []).length;
+  const nUnknown = ((rep && rep.eligibility && rep.eligibility.unknowns) || []).length;
+
+  const thresholdShown = !!(th && (th.available || est)) && !deviceBlocks;
   const estimated = !!est;                                 // modeled → ≈ + tier; measured → ≥
   const upperLsb = th && th.available ? th.upper_lsb : (est && est.estimated_upper_lsb);
   const estTier = est && est.tier;
@@ -95,19 +123,32 @@ export default function DeploymentVerdictStrip({ bandCandidate, summary }) {
           sx={{ borderLeft: "1px solid #ddd", borderRight: "1px solid #ddd" }}>
           <MDTypography variant="caption" sx={{ fontSize: 9, fontWeight: "bold", color: "#999",
             letterSpacing: 0.4 }}>
-            THRESHOLD TO PROGRAM
+            {deviceBlocks ? "THRESHOLD TO PROGRAM — WITHHELD" : "THRESHOLD TO PROGRAM"}
           </MDTypography>
           <MDTypography variant="h5" sx={{ fontSize: 19, lineHeight: 1.1,
-            color: thresholdShown ? (estimated ? PAL.warnText : PAL.accent) : PAL.neutral }}>
+            color: thresholdShown ? (estimated ? PAL.warnText : PAL.accent)
+              : deviceBlocks ? PAL.warnText : PAL.neutral }}>
             {thresholdShown
               ? `power ${estimated ? "≈" : "≥"} ${fmt(upperLsb, 1)} LSB`
-              : "— not deployable"}
+              : deviceBlocks ? "no value shown" : "— not deployable"}
           </MDTypography>
           {thresholdShown ? (
             <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#888" }}>
               {estimated
                 ? `estimated (${estTier || "modeled"})${estExtrap ? " · extrapolated" : ""}`
                 : `p${fmt(th.percentile, 0)} of device Timeline`}
+            </MDTypography>
+          ) : deviceBlocks ? (
+            // Say WHY, and say that something is being held back rather than missing. A reader who
+            // sees an empty cell looks for a bug; a reader who sees the reason goes to the rule
+            // ledger, which is where the answer is.
+            <MDTypography variant="caption" display="block"
+              sx={{ fontSize: 9, color: PAL.warnText, maxWidth: 210 }}>
+              {!rep || !rep.available
+                ? "device rules not yet evaluated for this configuration"
+                : `the device does not permit this configuration${
+                    nFail ? ` — ${nFail} rule${nFail === 1 ? "" : "s"} violated` : ""}${
+                    nUnknown ? `, ${nUnknown} cannot be evaluated` : ""}. See the device rules below.`}
             </MDTypography>
           ) : null}
         </MDBox>

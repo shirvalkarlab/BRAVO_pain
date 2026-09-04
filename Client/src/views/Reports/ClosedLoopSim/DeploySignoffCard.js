@@ -69,7 +69,22 @@ function KV({ k, v }) {
   );
 }
 
-function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary }) {
+function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
+                             deploymentReport }) {
+  // THE DEVICE VERDICT GATES THE NUMBER, added 2026-09-04, for the same reason it now gates the
+  // verdict strip: this card printed `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE
+  // sign-off record, gated only on the statistical threshold being available. It had no reference
+  // to the device rules, so a configuration the Percept forbids could be printed, signed and
+  // carried into a programming visit as though it were authorised. That is worse here than on the
+  // strip, because the printed sheet outlives the screen and loses whatever context surrounded it.
+  //
+  // Fail closed: a report that has not loaded, or that carries no device answer, withholds. An
+  // absent verdict is not permission.
+  const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
+  const _vd = (_rep && _rep.verdict_detail) || {};
+  const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
+  const _nFail = ((_rep && _rep.eligibility && _rep.eligibility.failures) || []).length;
+  const _nUnknown = ((_rep && _rep.eligibility && _rep.eligibility.unknowns) || []).length;
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
@@ -192,10 +207,28 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   backgroundColor: th && th.available ? PAL.accentFill : PAL.warnFill,
                   border: `1px solid ${th && th.available ? PAL.accentBorder : PAL.warnBorder}` }}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-                    color: th && th.available ? PAL.accent : PAL.warnText }}>
-                    THRESHOLD TO PROGRAM
+                    color: th && th.available && !deviceBlocks ? PAL.accent : PAL.warnText }}>
+                    {deviceBlocks ? "THRESHOLD TO PROGRAM — WITHHELD" : "THRESHOLD TO PROGRAM"}
                   </MDTypography>
-                  {th && th.available ? (
+                  {deviceBlocks ? (
+                    <>
+                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText,
+                        lineHeight: 1.1 }}>
+                        no value shown
+                      </MDTypography>
+                      <MDTypography variant="caption" display="block"
+                        sx={{ fontSize: 9.5, color: PAL.warnText }}>
+                        {!_rep || !_rep.available
+                          ? "The device rules have not been evaluated for this configuration, so no "
+                            + "value is printed. This sheet is not a record of an authorised setting."
+                          : `The device does not permit this configuration`
+                            + `${_nFail ? `: ${_nFail} rule${_nFail === 1 ? "" : "s"} violated` : ""}`
+                            + `${_nUnknown ? `, ${_nUnknown} cannot be evaluated` : ""}. `
+                            + `No value to program is printed, because a number on a signed sheet `
+                            + `gets entered. Clear the device rules first.`}
+                      </MDTypography>
+                    </>
+                  ) : th && th.available ? (
                     <>
                       <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.accent, lineHeight: 1.1 }}>
                         {`power ≥ ${fmt(th.upper_lsb, 1)} LSB`}

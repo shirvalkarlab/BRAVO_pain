@@ -1020,13 +1020,43 @@ def test_every_report_section_reaches_the_payload():
     # the top level rather than nested. Everything else must appear as a payload key.
     WITHHELD = {"candidates", "manifest", "participant", "blockers"}
 
-    declared = {f.name for f in dataclasses.fields(DeploymentReport)} - WITHHELD
     src = open(AD.__file__).read()
     i = src.index("def report_to_dict(rep)")
     j = src.index("\ndef ", i + 10)
     body = src[i:j]
-    emitted = set(re.findall(r'^\s{8}"([A-Za-z_]+)":', body, flags=re.M))
+    emitted = set(re.findall(r'"([A-Za-z_]+)"\s*:', body))
+
+    declared = {f.name for f in dataclasses.fields(DeploymentReport)} - WITHHELD
     missing = declared - emitted
     assert not missing, (
         f"DeploymentReport sections computed but never serialised: {sorted(missing)}. "
         f"Add a key to report_to_dict, or add the name to WITHHELD with a reason.")
+
+    # AND RECURSE INTO THE NESTED SECTIONS, which is where this guard first failed. The version
+    # above walked only the top-level report and therefore passed while `EligibilityReport.deferred`
+    # was missing from the payload — the exact omission it was written to catch, one level down. A
+    # completeness check that only checks the outer layer gives false assurance, which is worse than
+    # no check, because it stops anyone looking.
+    from ClosedLoopDeployment.types import (EligibilityReport, CoherenceReport, ThresholdPlan,
+                                            ReplayResult, Protocol, EdgeEstimate)
+    NESTED_WITHHELD = {
+        # The replay's per-step trajectories — the time base, the state sequence and the amplitude
+        # itself — are one value per controller step over months of recording. Far too large for a
+        # payload, and the fractions plus the transition count are what a reader acts on. Withheld
+        # deliberately and declared here, which is the distinction this guard exists to enforce: a
+        # field absent by decision is listed with its reason, and a field absent by oversight fails
+        # the test. `amplitude_mA` was found by the recursion on its first run.
+        ReplayResult: {"t_s", "state", "amplitude_mA"},
+        # Rendered through as_rows() rather than field by field.
+        Protocol: set(),
+        EligibilityReport: set(),
+        CoherenceReport: set(),
+        ThresholdPlan: set(),
+        EdgeEstimate: set(),
+    }
+    for cls, withheld in NESTED_WITHHELD.items():
+        want = {f.name for f in dataclasses.fields(cls)} - withheld
+        gone = want - emitted
+        assert not gone, (
+            f"{cls.__name__} fields never serialised to the payload: {sorted(gone)}. "
+            f"Add them to report_to_dict, or to NESTED_WITHHELD with a reason.")

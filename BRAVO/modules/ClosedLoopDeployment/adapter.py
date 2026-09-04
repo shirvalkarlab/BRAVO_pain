@@ -461,6 +461,12 @@ def report_to_dict(rep):
         "eligibility": None if el is None else {
             "eligible": el.eligible, "checked": el.checked, "summary": el.summary(),
             "failures": el.failures, "unknowns": el.unknowns, "advisories": el.advisories,
+            # The fourth bucket. Rows land here when another rule already charged the SAME
+            # consideration from the SAME input, so the observation is kept and only the duplicate
+            # charge against the verdict is dropped. Omitting it made the four bucket lengths fail
+            # to account for the rules checked, which is the arithmetic a reader uses to satisfy
+            # themselves that nothing was quietly discarded.
+            "deferred": getattr(el, "deferred", []) or [],
         },
         "edges": {k: {
             "name": e.name, "estimate": _num(e.estimate),
