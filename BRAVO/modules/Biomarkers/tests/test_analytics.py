@@ -3204,3 +3204,68 @@ def test_block_length_for_returns_one_on_both_real_dependence_regimes():
     for y in (nrs_like, flat):
         L = su.block_length_for(y, y.size)
         assert L >= 1
+
+
+# --- stim-stability: equivalence, and rate as a covariate (2026-09-03) --------------------------
+def test_stability_verdict_separates_shown_stable_from_merely_underpowered():
+    """The original verdict was stim_stable = (p_lrt >= 0.05), a failure to reject. With three eras
+    and modest counts that reads 'stable' exactly when the test has no power — the worst time for a
+    false reassurance, because the band is about to anchor a threshold on a device that actuates.
+    Equivalence inverts the burden: stable only when the largest between-era slope difference is
+    demonstrably smaller than a declared margin.
+    """
+    import numpy as np
+    from modules.Biomarkers.routines import analytics as an
+
+    tight = {"OFF": {"slope_log_or": 0.50, "se": 0.05, "n": 90},
+             "LOW": {"slope_log_or": 0.55, "se": 0.05, "n": 90},
+             "HIGH": {"slope_log_or": 0.52, "se": 0.05, "n": 90}}
+    v = an.stability_equivalence(tight, lrt_p=0.60)
+    assert v["verdict"] == "stable" and v["equivalence_shown"] is True
+
+    # same point estimates, ten times the uncertainty: not rejected, but nothing is demonstrated
+    loose = {k: {**val, "se": 0.50} for k, val in tight.items()}
+    v2 = an.stability_equivalence(loose, lrt_p=0.60)
+    assert v2["verdict"] == "inconclusive" and v2["equivalence_shown"] is False
+    assert "underpowered" in v2["reason"]
+
+    # a rejecting LRT is stim-dependent regardless of the interval
+    v3 = an.stability_equivalence(tight, lrt_p=0.001)
+    assert v3["verdict"] == "stim-dependent"
+
+    # and the old binary would have called BOTH of the first two "stable"
+    assert (0.60 >= 0.05) is True
+
+
+def test_equivalence_needs_two_estimable_eras():
+    from modules.Biomarkers.routines import analytics as an
+    v = an.stability_equivalence({"OFF": {"slope_log_or": 0.5, "se": 0.1, "n": 30},
+                                  "LOW": None, "HIGH": None}, lrt_p=0.9)
+    assert v["verdict"] == "inconclusive" and v["max_abs_diff_log_or"] is None
+
+
+def test_harmonic_landings_fold_about_nyquist_and_are_advisory():
+    """Percept time-domain sensing is 250 Hz, so harmonics above 125 Hz fold back into the scanned
+    spectrum. 110 Hz stimulation puts its 2nd harmonic (220 Hz) at 30 Hz, the top edge of the 8-30 Hz
+    adaptive window."""
+    from modules.Biomarkers.routines import analytics as an
+    got = {h["harmonic"]: h["lands_at_hz"] for h in an.harmonic_landings_hz(110.0, 8.0, 30.0)}
+    assert got[2] == 30.0            # 220 - 250 folds to 30
+    assert got[7] == 20.0            # 770 - 750
+    got55 = {h["harmonic"]: h["lands_at_hz"] for h in an.harmonic_landings_hz(55.0, 8.0, 30.0)}
+    assert got55[4] == 30.0 and got55[5] == 25.0
+    # a rate with nothing in the window returns nothing rather than a nearest match
+    assert an.harmonic_landings_hz(165.0, 12.0, 18.0) == []
+    assert an.harmonic_landings_hz(None, 8.0, 30.0) == []
+
+
+def test_locf_carries_rate_forward_and_nans_unparseable_times():
+    import numpy as np
+    from modules.Biomarkers.routines import analytics as an
+    series = {"t": [1000.0, 2000.0], "y": [55.0, 130.0]}
+    times = ["2025-01-01T00:00:00", "not a time"]
+    out = an._locf_values(times, series)
+    assert out.shape == (2,)
+    assert np.isnan(out[1]), "an unparseable timestamp must not silently inherit a rate"
+    assert an._locf_values(times, None).shape == (2,)
+    assert np.all(np.isnan(an._locf_values(times, None)))

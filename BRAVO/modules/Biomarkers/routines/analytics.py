@@ -4290,9 +4290,147 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         return {"available": False, "reason": f"glmer fit failed: {e}"}
 
 
+#: Declared equivalence margin for the stim-stability verdict, on the log-odds-ratio scale.
+#: log(2) means "the band's slope may differ between stimulation states by up to a factor of two in
+#: odds before we call the biomarker stim-dependent". This is a DECLARED judgement, not an estimate;
+#: it is stated here so it can be argued with rather than buried in a p-value.
+STABILITY_EQUIVALENCE_MARGIN_LOG_OR = float(np.log(2.0))
+
+#: Percept time-domain sampling rate, used to place stimulation harmonics in the scanned spectrum.
+DEVICE_TD_FS_HZ = 250.0
+
+
+def _locf_values(times, series):
+    """Carry a {t:[epoch_s], y:[value]} trajectory forward onto per-sample `times`.
+
+    Same last-observation-carried-forward semantics as _assign_stim_eras, and deliberately a
+    separate function rather than a generalisation of it: that one is load-bearing for the era
+    boundaries shared with deployment_roc_by_era, and widening its contract to carry arbitrary
+    values would put those boundaries at risk for no benefit. Returns a float array aligned to
+    `times`, NaN where the timestamp is unparseable or the series is unusable.
+    """
+    n = 0 if times is None else len(times)
+    out = np.full(n, np.nan, dtype=float)
+    if not series or not series.get("t") or not series.get("y") or n == 0:
+        return out
+    t_dt = pd.to_datetime(pd.Series([str(t) for t in times]), errors="coerce", format="ISO8601")
+    nat = t_dt.isna().to_numpy()
+    t_epoch = (t_dt.to_numpy().astype("datetime64[ns]").astype("int64") / 1e9)
+    st = np.asarray(series["t"], dtype=float)
+    sy = np.asarray(series["y"], dtype=float)
+    if len(st) < 1:
+        return out
+    order = np.argsort(st)
+    st, sy = st[order], sy[order]
+    idx = np.clip(np.searchsorted(st, t_epoch, side="right") - 1, 0, len(st) - 1)
+    out = sy[idx].astype(float)
+    out[nat] = np.nan
+    return out
+
+
+def harmonic_landings_hz(rate_hz, f_lo, f_hi, *, fs=DEVICE_TD_FS_HZ, max_harmonic=8):
+    """Frequencies inside [f_lo, f_hi] where harmonics of `rate_hz` appear after sampling at `fs`.
+
+    Stimulation artifact appears at the stimulation rate and its harmonics. Percept time-domain
+    sensing runs at 250 Hz, so any harmonic above Nyquist folds back into the recorded spectrum and
+    can land inside the band being scanned. A band centred on such a landing may be reporting
+    artifact rather than physiology.
+
+    This is ADVISORY. Tested on the RCS08 record (2026-09-03): responding bands were NOT closer to
+    these landings than non-responding ones (at 110 Hz, 4.52 Hz mean distance for responding against
+    3.90 Hz for non-responding, i.e. slightly farther), so aliasing did not explain the amplitude
+    responses there and bands are flagged for review rather than excluded.
+    """
+    if rate_hz is None or not np.isfinite(rate_hz) or rate_hz <= 0:
+        return []
+    out = []
+    for k in range(1, int(max_harmonic) + 1):
+        raw = float(rate_hz) * k
+        a = abs(raw - round(raw / fs) * fs)          # fold about Nyquist
+        if f_lo <= a <= f_hi:
+            out.append({"harmonic": k, "raw_hz": round(raw, 3), "lands_at_hz": round(a, 3)})
+    return out
+
+
+def _era_slope_table(df, era_col="stim_era", x="band_power", y="pain_high", min_n=6):
+    """Per-era logistic slope on `x` with its standard error, for the equivalence test."""
+    import statsmodels.api as sm
+    out = {}
+    for tag in list(df[era_col].cat.categories) if hasattr(df[era_col], "cat") else sorted(df[era_col].unique()):
+        sub = df[df[era_col] == tag]
+        if len(sub) < min_n or sub[y].nunique() < 2:
+            out[str(tag)] = None
+            continue
+        try:
+            X = sm.add_constant(sub[x].to_numpy())
+            r = sm.GLM(sub[y].to_numpy(), X, family=sm.families.Binomial()).fit()
+            b, se = float(r.params[1]), float(r.bse[1])
+            out[str(tag)] = ({"slope_log_or": b, "se": se, "n": int(len(sub))}
+                             if np.isfinite(b) and np.isfinite(se) else None)
+        except Exception:
+            out[str(tag)] = None
+    return out
+
+
+def stability_equivalence(slope_table, lrt_p, *, margin=STABILITY_EQUIVALENCE_MARGIN_LOG_OR,
+                          conf=0.90):
+    """Turn "the interaction was not significant" into a verdict that distinguishes SHOWN-STABLE
+    from MERELY-UNDERPOWERED.
+
+    Why this exists. The original verdict was `stim_stable = (p_lrt >= 0.05)`, which is a failure to
+    reject. With three eras and modest counts that reads "stable" precisely when the test has no
+    power — the situation in which a false reassurance is most costly, because the biomarker is
+    about to anchor a threshold on a device that actuates. Equivalence testing inverts the burden:
+    the biomarker is called stable only when the largest between-era difference in its slope is
+    demonstrably SMALLER than a declared margin.
+
+    Two one-sided tests, implemented as the conventional (1-2*alpha) interval on the largest
+    pairwise era difference. A 90% interval corresponds to alpha = 0.05 on each side.
+
+    Verdicts:
+      "stim-dependent"  the interaction LRT rejects; the slope demonstrably differs by era.
+      "stable"          LRT does not reject AND the interval on the largest difference lies wholly
+                        inside +/- margin, so equivalence is demonstrated.
+      "inconclusive"    LRT does not reject but the interval is wider than the margin: the data
+                        cannot distinguish a stable biomarker from a materially unstable one.
+    """
+    from scipy.stats import norm
+    usable = {k: v for k, v in (slope_table or {}).items() if v}
+    if len(usable) < 2:
+        return {"verdict": "inconclusive", "reason": "fewer than two eras with an estimable slope",
+                "max_abs_diff_log_or": None, "ci": None, "margin_log_or": float(margin),
+                "n_eras_compared": len(usable)}
+    z = float(norm.ppf(0.5 + conf / 2.0))
+    worst = None
+    keys = sorted(usable)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = usable[keys[i]], usable[keys[j]]
+            diff = a["slope_log_or"] - b["slope_log_or"]
+            se = float(np.sqrt(a["se"] ** 2 + b["se"] ** 2))
+            if worst is None or abs(diff) > abs(worst["diff"]):
+                worst = {"pair": f"{keys[i]} vs {keys[j]}", "diff": diff, "se": se}
+    lo, hi = worst["diff"] - z * worst["se"], worst["diff"] + z * worst["se"]
+    inside = bool(np.isfinite(lo) and np.isfinite(hi) and lo > -margin and hi < margin)
+    rejected = bool(np.isfinite(lrt_p) and lrt_p < 0.05)
+    verdict = "stim-dependent" if rejected else ("stable" if inside else "inconclusive")
+    return {"verdict": verdict, "pair": worst["pair"],
+            "max_abs_diff_log_or": float(abs(worst["diff"])),
+            "ci": [float(lo), float(hi)], "ci_level": conf,
+            "margin_log_or": float(margin), "equivalence_shown": inside,
+            "n_eras_compared": len(usable),
+            "reason": ("interaction LRT rejects" if rejected else
+                       ("largest between-era slope difference lies inside the declared margin"
+                        if inside else
+                        "not rejected, but the interval is wider than the margin: underpowered "
+                        "rather than shown stable"))}
+
+
 def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
                         band_width_hz=5.0, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                        off_max=0.1, low_max=1.5):
+                        off_max=0.1, low_max=1.5,
+                        rate_series=None,
+                        equivalence_margin_log_or=STABILITY_EQUIVALENCE_MARGIN_LOG_OR):
     """Test whether one (channel, band)'s pain-prediction holds across stim states (band x stim-era
     LRT). Compares pain_high ~ band_power + stim_era + (1|era)  (m0, reduced) against
     pain_high ~ band_power * stim_era + (1|era)  (m1, full). The LRT p answers
@@ -4308,6 +4446,24 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
       LOW   off_max <= stim_mA <= low_max
       HIGH  stim_mA > low_max
     Returns {available: False, reason: ...} on failure (no R, no stim, fit fails, only 1 era).
+
+    `rate_series` (optional, added 2026-09-03) is the stimulation RATE trajectory
+    {t:[epoch_s], y:[Hz]}, carried forward onto sample times the same way. Until it was added the
+    scan was amplitude-aware and rate-BLIND: the string `rate_hz` appeared nowhere in this module,
+    so nothing here could know where the stimulation artifact and its aliases fell in the spectrum,
+    nor whether an apparent amplitude effect was really a rate change. Supplying it adds three
+    things to the output and changes none of the existing keys:
+
+      * `rate_composition` — how many samples sat at each rate, and how rate is distributed across
+        the amplitude eras. When rate and amplitude era are strongly associated, the era test is
+        partly a rate test, and the output says so via `rate_confounded_with_era`.
+      * `harmonic_landings` — where this rate's harmonics fold into the scanned band (see
+        harmonic_landings_hz). Advisory, not exclusionary.
+      * `band_near_harmonic_hz` — the distance from this band's centre to the nearest landing.
+
+    `equivalence_margin_log_or` declares how large a between-era difference in the band's slope
+    would have to be to count as instability; see stability_equivalence for why a p-value alone is
+    not enough.
     """
     try:
         from pymer4.models import Lmer
@@ -4405,11 +4561,53 @@ def band_stim_stability(td_detail, channel_raw, center_hz, stim_series=None, *,
                 or_by_era[tag] = None
     except Exception:
         or_by_era = {"OFF": None, "LOW": None, "HIGH": None}
+    # --- rate as a covariate, and the equivalence verdict (2026-09-03) -----------------------
+    rate_vals = _locf_values(times, rate_series)[m] if rate_series else np.full(int(m.sum()), np.nan)
+    rate_info = {"available": False, "reason": "no rate series supplied"}
+    if np.isfinite(rate_vals).any():
+        rr = pd.Series(rate_vals).round(1)
+        comp = rr.value_counts(dropna=True).sort_index()
+        xt = pd.crosstab(df["stim_era"].to_numpy(), rr.to_numpy())
+        # Cramer's V between era and rate. If they move together the era LRT is partly a rate test,
+        # which is exactly the confound the closed-loop screen blocks on and which this module had
+        # no way to see before.
+        try:
+            from scipy.stats import chi2_contingency
+            chi2v, _, _, _ = chi2_contingency(xt.to_numpy()) if min(xt.shape) > 1 else (0.0, 1, 0, None)
+            nn = float(xt.to_numpy().sum()); k = min(xt.shape)
+            cramers_v = float(np.sqrt(chi2v / (nn * (k - 1)))) if nn > 0 and k > 1 else float("nan")
+        except Exception:
+            cramers_v = float("nan")
+        landings = harmonic_landings_hz(float(rr.mode().iloc[0]) if len(rr.mode()) else np.nan,
+                                        float(f.min()), float(f.max()))
+        near = min([abs(float(center_hz) - x["lands_at_hz"]) for x in landings], default=None)
+        rate_info = {
+            "available": True,
+            "n_rates": int(comp.size),
+            "rate_composition": {str(kk): int(vv) for kk, vv in comp.items()},
+            "modal_rate_hz": (float(rr.mode().iloc[0]) if len(rr.mode()) else None),
+            "cramers_v_rate_vs_era": (_f(cramers_v) if np.isfinite(cramers_v) else None),
+            # 0.3 is the conventional "moderate association" mark for Cramer's V; above it, treat the
+            # era result as carrying a rate component rather than a pure amplitude one.
+            "rate_confounded_with_era": (bool(np.isfinite(cramers_v) and cramers_v >= 0.30)
+                                         if np.isfinite(cramers_v) else None),
+            "harmonic_landings": landings,
+            "band_near_harmonic_hz": (_f(near) if near is not None else None),
+        }
+    slope_tbl = _era_slope_table(df)
+    equiv = stability_equivalence(slope_tbl, p_lrt, margin=equivalence_margin_log_or)
     return {
         "available": True, "model": "band x stim_era LRT (glmer logistic, lme4 via pymer4)",
         "formula_reduced": formula_red, "formula_full": formula_full,
         "n": int(m.sum()), "n_clusters": n_clusters,
         "chisq": _f(chisq), "lrt_p": _f(p_lrt),
+        "slope_by_era": slope_tbl,
+        "equivalence": equiv,
+        # Three-way verdict replacing the binary one. `stim_stable` below is retained unchanged for
+        # back-compatibility, but it cannot distinguish "shown stable" from "underpowered"; prefer
+        # this. See stability_equivalence.
+        "stability_verdict": equiv.get("verdict"),
+        "rate": rate_info,
         # The headline interpretation flag: stim-stable iff the interaction LRT is NOT significant.
         # We carry the raw p here; the calling endpoint can FDR if it's running across many bands.
         "stim_stable": (np.isfinite(p_lrt) and p_lrt >= 0.05),

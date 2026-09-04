@@ -75,6 +75,70 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-03 — rate as a biomarker covariate, an equivalence verdict, and closed-loop timing
+
+Three builds, in the order agreed, plus two documents revised for the Parkinson's-mode change.
+
+**1. The biomarker scan was rate-BLIND and now is not.** The string `rate_hz` appeared nowhere in
+the Biomarkers module: the stability test binned only by amplitude era (OFF / LOW / HIGH), so
+nothing there could know where stimulation artifact fell in the spectrum or whether an apparent
+amplitude effect was a rate change. `band_stim_stability` now takes an optional `rate_series` and
+returns a `rate` block: composition per rate, Cramer's V between rate and amplitude era with a
+`rate_confounded_with_era` flag at the conventional 0.30 mark, the harmonic landings for that rate,
+and this band's distance to the nearest one. All additive — no existing key changed.
+
+**`harmonic_landings_hz` folds harmonics about Nyquist** (time-domain sensing is 250 Hz). 110 Hz
+puts its 2nd harmonic at **30 Hz**, the top edge of the 8-30 Hz adaptive window, and 55 Hz lands at
+25 and 30 Hz. This is ADVISORY, not exclusionary, on evidence: tested on the record, responding
+bands are slightly FARTHER from the landings than non-responding ones (110 Hz: 4.52 Hz against
+3.90 Hz), so aliasing does not explain the amplitude responses here. The exposure was larger than
+first reported — 54 responding contrasts, 6 of 12 cells and 1 of the 2 deployable cells sit at
+110 Hz — which makes the negative result better supported, not weaker.
+
+**2. The stability verdict distinguishes SHOWN-STABLE from UNDERPOWERED.** `stim_stable` was
+`p_lrt >= 0.05`, a failure to reject, which reads "stable" precisely when the test has no power.
+That was tolerable when nothing could be enabled and is not now. `stability_equivalence` runs two
+one-sided tests on the largest pairwise between-era difference in the band slope against a declared
+margin of `log(2)`, and returns `stable` / `inconclusive` / `stim-dependent`. Exposed as
+`stability_verdict`; `stim_stable` is retained unchanged for back-compatibility but should not be
+preferred. The margin is a declared judgement stated in the code so it can be argued with.
+
+**3. Closed-loop timing, per PI direction that the transitions are adjustable knobs.** Policy: do
+not model the ramp transient, blank it out, and choose the ramp and blanking from the biomarker's
+own integration window. `percept_adaptive.timing_plan` implements it and
+`estimate_response_latency` measures the empirical input.
+
+**THE MISMATCH THAT SURFACED IS THE MOST IMPORTANT PART.** Dual Threshold averages over **1200 ms**
+by default; every validated band in this project was computed on a Welch integration of
+**4096 ms** (nperseg 1024 at 250 Hz), a factor of 3.4. Deploying the default deploys a DIFFERENT
+FEATURE from the validated one. The adjustable range of the averaging duration is **not published**
+in any supplied document (`D20`), so whether the device can be set that long must be read off the
+Advanced Settings screen; if it cannot, the band needs revalidating at the achievable duration.
+`timing_plan` reports both numbers as separate named fields because this is the parameter most
+easily lost between the two modules.
+
+Blanking floor is ramp + `SETTLE_WINDOWS` x averaging, since device averaging is non-overlapping
+(`D14`) and the estimate carries pre-step signal until one window has turned over. Ramp defaults to
+the integration window, clamped into the manufacturer's 0.5-10 s titration range (`D50`), and the
+output states that the value is NOT empirically grounded until the titration is run.
+`estimate_response_latency` returns tau (63.2% of the change) rather than time-to-plateau so steps
+of different size compare, and returns None for a band that does not move — the finding, not a
+failure. Verified against a synthetic 4.0 s time constant, recovered at 4.5 s on a 0.5 s grid.
+
+**Documents.** `CLOSED_LOOP_REVAMP_PLAN.md` v3 and `ui_panel_disposition.md` v2 were revised for
+Parkinson's mode: eight marked revisions in the plan, five in the UI disposition. Two arguments that
+originally rested partly on the indication ceiling survive on their remaining grounds and say so
+rather than being quietly restated — notably Single Threshold mode, which is now available and is
+still declined, on the physiological ground that its 250 ms transitions suit sub-second beta bursts
+rather than pain varying over hours. New plan sections 10b (timing) and 10c (entrainment, recorded
+as an open to-do and deliberately not acted on, since retrospective data cannot separate an
+entrained band from a pain-linked one).
+
+Suites: StimOptimizer **362 passed / 41 skipped** (was 356), container Biomarkers **324/324** (was
+320). Container synced and workers reloaded.
+
+
+
 ### 2026-09-03 — RCS08 is programmed in PARKINSON'S MODE, so the indication ceiling does not bind
 
 PI decision. Earlier entries in this document concluded that the closed-loop deliverable for RCS08

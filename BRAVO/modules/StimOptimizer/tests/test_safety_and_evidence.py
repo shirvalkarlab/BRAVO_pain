@@ -544,3 +544,70 @@ def test_a_negative_adjusted_slope_in_a_majority_is_required_not_one_lucky_band(
     row = screen.iloc[0]
     assert row.n_era_negative_significant == 3 and row.n_bands == 18
     assert not row.deployable and best is None
+
+
+# --- closed-loop timing: the ramp is a knob, the averaging window must match the biomarker -------
+def test_averaging_recommendation_tracks_the_biomarker_not_the_device_default():
+    """The parameter most easily lost. The biomarker was validated on a 4.096 s Welch integration
+    (nperseg 1024 at 250 Hz); Dual Threshold averages over 1200 ms by default. Deploying the device
+    default means deploying a different feature from the one that was validated, so the plan
+    reports both numbers and says which is which."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    tp = PA.timing_plan()
+    assert tp["biomarker_averaging_window_s"] == pytest.approx(1024 / 250.0)
+    assert tp["recommended_device_averaging_ms"] == pytest.approx(4096.0)
+    assert tp["device_default_averaging_ms"] == 1200.0
+    assert tp["averaging_matches_biomarker"] is False
+    assert any("factor of" in n for n in tp["notes"])
+    # the unpublished-range caveat must travel with the recommendation, not be assumed away
+    assert "averaging duration" in tp["ranges_unpublished"]
+
+
+def test_blanking_covers_the_ramp_plus_the_estimator_turnover():
+    """Device averaging is non-overlapping (D14), so the estimate carries pre-step signal until a
+    full averaging window has passed. Blanking for less than ramp + averaging guarantees the
+    controller acts on a mixture of the old and new states."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    tp = PA.timing_plan()
+    floor = tp["ramp_s"] + tp["recommended_device_averaging_ms"] / 1000.0
+    assert tp["blank_after_step_s"] >= floor
+    assert tp["settle_windows"] >= 1.0
+
+
+def test_ramp_defaults_to_the_integration_window_and_declares_it_is_not_measured():
+    from StimOptimizer.routines import percept_adaptive as PA
+    tp = PA.timing_plan()
+    assert tp["ramp_s"] == pytest.approx(1024 / 250.0)
+    assert tp["ramp_is_empirical"] is False and tp["measured_latency_s"] is None
+    assert any("NOT empirically grounded" in n for n in tp["notes"])
+    tp2 = PA.timing_plan(measured_latency_s=6.0)
+    assert tp2["ramp_s"] == pytest.approx(6.0) and tp2["ramp_is_empirical"] is True
+
+
+def test_ramp_is_clamped_into_the_manufacturers_titration_range():
+    """D50 puts the adjustable ramp interval at 0.5-10 s. A request outside it is clamped and the
+    clamp is disclosed rather than applied silently."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    tp = PA.timing_plan(ramp_s=45.0)
+    assert tp["ramp_s"] == pytest.approx(10.0)
+    assert any("clamped" in n for n in tp["notes"])
+
+
+def test_onset_duration_stays_inside_the_published_dual_mode_range():
+    from StimOptimizer.routines import percept_adaptive as PA
+    tp = PA.timing_plan()
+    lo, hi = PA.ONSET_RANGE_DUAL_MS
+    assert lo <= tp["onset_duration_ms"] <= hi
+
+
+def test_latency_estimator_recovers_a_known_time_constant_and_refuses_an_inert_band():
+    """Returns tau (63.2% of the change), not time-to-plateau, so steps of different size are
+    comparable. A band that does not move returns None — which is the finding, not a failure."""
+    from StimOptimizer.routines import percept_adaptive as PA
+    t = np.arange(0, 40, 0.25)
+    amp = np.where(t < 10, 1.0, 3.0)
+    power = np.where(t < 10, 0.0, 1.0) * (1 - np.exp(-np.clip(t - 10, 0, None) / 4.0))
+    lat = PA.estimate_response_latency(t, power, amp)
+    assert lat == pytest.approx(4.0, abs=0.5)
+    assert PA.estimate_response_latency(t, np.ones_like(t), amp) is None
+    assert PA.estimate_response_latency(t, power, np.ones_like(t)) is None

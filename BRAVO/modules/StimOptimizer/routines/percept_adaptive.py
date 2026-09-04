@@ -32,6 +32,8 @@ candidate must satisfy BOTH bounds.
 """
 from __future__ import annotations
 
+import numpy as np
+
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------------------------
@@ -101,6 +103,160 @@ SIGN_REQUIREMENT_HOLDS_IN_EVERY_THERAPY_DRIVING_MODE = True
 #: feedback bounded only by the clinician's amplitude limits. That is why the deployability screen
 #: requires the sign of the CONFOUND-ADJUSTED slope to be negative and not merely significant.
 DUAL_THRESHOLD_ASSUMES_POWER_FALLS_WITH_AMPLITUDE = True
+
+# ---------------------------------------------------------------------------------------------
+# TIMING: THE RAMP IS A KNOB, AND THE AVERAGING WINDOW SHOULD MATCH THE BIOMARKER
+# ---------------------------------------------------------------------------------------------
+#: PI direction, 2026-09-03. The 2.5-minute and 5-minute transition durations are ADJUSTABLE, so
+#: they are parameters this module chooses rather than device behaviour it must model. The policy
+#: that follows from that: do not try to model what the band does during a ramp — blank the ramp
+#: out and rely on the settled state — but choose the ramp and the blanking from the biomarker's own
+#: integration window rather than by taste.
+#:
+#: WHY THE INTEGRATION WINDOW SETS THE FLOOR. After an amplitude step the band-power estimate still
+#: contains pre-step signal until the estimator's window has fully turned over. Device averaging is
+#: non-overlapping (`D14`), so one averaging duration is the minimum for the estimate to be free of
+#: the old state, and the ramp itself must finish first. Blanking for less than
+#: ramp + averaging guarantees the controller acts on a mixture of the old and new states.
+#: `SETTLE_WINDOWS` is the multiple applied for margin and is a declared choice, not a measurement.
+SETTLE_WINDOWS = 2.0
+
+#: The biomarker's FFT integration, from the Biomarkers pipeline: Welch with nperseg <= 1024 at the
+#: 250 Hz time-domain rate, so 1024 / 250 = 4.096 s. This is the quantity every validated
+#: pain-band association in this project was computed on.
+BIOMARKER_WELCH_NPERSEG = 1024
+BIOMARKER_INTEGRATION_S = BIOMARKER_WELCH_NPERSEG / 250.0
+
+#: Manufacturer titration ramp interval, adjustable 0.5-10 s (`D50`, A610 p. 45), with 30-45 s of
+#: streaming after each step. This is the window inside which an empirically chosen ramp must fall,
+#: and the procedure that would measure the biomarker's response latency directly.
+TITRATION_RAMP_RANGE_S = (0.5, 10.0)
+TITRATION_SETTLE_RANGE_S = (30.0, 45.0)
+
+#: Published adjustable range for the onset duration in Dual Threshold mode, from the ADAPT-PD
+#: methodology paper rather than the device labelling (`D21`, Stanslaski et al. 2024). Medtronic
+#: prints only the 1200 ms default. Ranges for averaging duration, detection blanking and the two
+#: transition durations are NOT published anywhere supplied and must be read off the Advanced
+#: Settings screens before any of the recommendations below can be programmed.
+ONSET_RANGE_DUAL_MS = (1200.0, 2000.0)
+UNPUBLISHED_RANGES = ("averaging duration", "detection blanking duration",
+                      "transition up duration", "transition down duration")
+
+
+def timing_plan(*, mode=None, biomarker_integration_s=BIOMARKER_INTEGRATION_S,
+                ramp_s=None, settle_windows=SETTLE_WINDOWS, measured_latency_s=None):
+    """Closed-loop timing parameters derived from the biomarker's own integration window.
+
+    Returns the averaging duration the device SHOULD use, the ramp to program, how long to blank
+    after a step, and — separately and explicitly reported, because it is the number most easily
+    lost — the averaging window the biomarker was actually validated on.
+
+    ``ramp_s`` defaults to the measured biomarker response latency when one has been supplied, and
+    otherwise to the integration window clamped into the manufacturer's 0.5-10 s titration range.
+    Defaulting to the integration window is the conservative choice: ramping faster than the
+    estimator can follow produces a controller acting on stale power, and the honest way to shorten
+    it is to MEASURE the latency, not to assume it.
+
+    ``measured_latency_s`` is the empirical quantity — how long the band actually takes to reach its
+    new level after a step. Until the titration of `D50` is run it is None, and the returned plan
+    says so rather than implying the ramp was chosen from data.
+    """
+    spec = MODES.get(mode or DUAL)
+    if spec is None:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {sorted(MODES)}")
+    integ = float(biomarker_integration_s)
+    if integ <= 0:
+        raise ValueError("biomarker_integration_s must be positive")
+
+    lat = None if measured_latency_s is None else float(measured_latency_s)
+    chosen_ramp = float(ramp_s) if ramp_s is not None else (lat if lat is not None else integ)
+    lo, hi = TITRATION_RAMP_RANGE_S
+    ramp_clamped = min(max(chosen_ramp, lo), hi)
+
+    # The device's averaging should match what the biomarker was validated on. It currently does not:
+    # Dual Threshold defaults to 1200 ms against a 4096 ms integration window.
+    want_avg_ms = integ * 1000.0
+    dev_avg_ms = float(spec.averaging_duration_ms)
+    settle_s = ramp_clamped + settle_windows * (want_avg_ms / 1000.0)
+
+    notes = []
+    if abs(want_avg_ms - dev_avg_ms) > 1.0:
+        notes.append(
+            f"device averaging duration defaults to {dev_avg_ms:.0f} ms but the biomarker was "
+            f"validated on a {want_avg_ms:.0f} ms integration window, a factor of "
+            f"{want_avg_ms / dev_avg_ms:.1f}. The adjustable range is not published in any supplied "
+            "document, so whether the device can be set this long must be read off the Advanced "
+            "Settings screen. If it cannot, the deployed feature is NOT the validated feature and "
+            "the band should be revalidated at the achievable averaging duration.")
+    if ramp_clamped != chosen_ramp:
+        notes.append(f"requested ramp {chosen_ramp:.2f} s clamped into the manufacturer's "
+                     f"{lo:g}-{hi:g} s titration range (D50)")
+    if lat is None:
+        notes.append("ramp is NOT empirically grounded: no biomarker response latency has been "
+                     "measured. Run the D50 titration (0 mA for 45-60 s, then 0.1-0.5 mA steps, "
+                     "streaming 30-45 s per step) and pass measured_latency_s.")
+    onset_lo, onset_hi = ONSET_RANGE_DUAL_MS
+    onset_ms = min(max(float(spec.onset_duration_ms or onset_lo), onset_lo), onset_hi)
+
+    return {
+        "mode": spec.mode,
+        # reported separately and by name, because it is the parameter that silently differs
+        "biomarker_averaging_window_s": round(integ, 4),
+        "recommended_device_averaging_ms": round(want_avg_ms, 1),
+        "device_default_averaging_ms": dev_avg_ms,
+        "averaging_matches_biomarker": bool(abs(want_avg_ms - dev_avg_ms) <= 1.0),
+        "ramp_s": round(ramp_clamped, 3),
+        "ramp_is_empirical": lat is not None,
+        "measured_latency_s": lat,
+        "blank_after_step_s": round(settle_s, 3),
+        "settle_windows": float(settle_windows),
+        "onset_duration_ms": onset_ms,
+        "onset_range_ms": list(ONSET_RANGE_DUAL_MS),
+        "detection_blanking_default_ms": spec.detection_blanking_ms,
+        "transition_up_ms": spec.transition_up_ms,
+        "transition_down_ms": spec.transition_down_ms,
+        "ranges_unpublished": list(UNPUBLISHED_RANGES),
+        "notes": notes,
+    }
+
+
+def estimate_response_latency(times_s, band_power, amp_mA, *, step_index=None, frac=0.632):
+    """Time for the band to reach `frac` of its total change after an amplitude step.
+
+    This is the measurement that would let `timing_plan` stop guessing. `frac` defaults to 0.632,
+    the first-order time constant, so the returned number is tau rather than a time-to-plateau and
+    is comparable across steps of different size.
+
+    Returns None when there is no usable step or the band does not move, which is itself the
+    finding: a band with no measurable latency after an amplitude step is not being driven by that
+    step. Deliberately assumption-light — no model is fitted — because with one titration session
+    the honest output is a descriptive latency, not a fitted system.
+    """
+    t = np.asarray(times_s, dtype=float)
+    p = np.asarray(band_power, dtype=float)
+    a = np.asarray(amp_mA, dtype=float)
+    if t.size < 4 or not (t.size == p.size == a.size):
+        return None
+    d = np.diff(a)
+    idx = int(np.nanargmax(np.abs(d))) if step_index is None else int(step_index)
+    if not np.isfinite(d[idx]) or d[idx] == 0:
+        return None
+    pre = p[:idx + 1][np.isfinite(p[:idx + 1])]
+    post = p[idx + 1:][np.isfinite(p[idx + 1:])]
+    if pre.size < 2 or post.size < 2:
+        return None
+    p0, p1 = float(np.median(pre)), float(np.median(post[-max(2, post.size // 3):]))
+    if not np.isfinite(p0) or not np.isfinite(p1) or p1 == p0:
+        return None
+    target = p0 + frac * (p1 - p0)
+    t_step = float(t[idx])
+    for tt, pp in zip(t[idx + 1:], p[idx + 1:]):
+        if not np.isfinite(pp):
+            continue
+        if (p1 > p0 and pp >= target) or (p1 < p0 and pp <= target):
+            return float(tt - t_step)
+    return None
+
 
 #: Adaptive Therapy can be driven by a band in this range only. Outside it, sensing is possible but
 #: therapy cannot respond. White paper p. 14 parameter table, "LFP Frequency Range":
