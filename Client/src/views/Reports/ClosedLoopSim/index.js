@@ -29,7 +29,9 @@ import PsdLsbPanel from "./PsdLsbPanel";
 import ConversionModelPanel from "./ConversionModelPanel";
 import DeploySignoffCard from "./DeploySignoffCard";
 import DeploymentVerdictStrip from "./DeploymentVerdictStrip";
+import DeploymentEvidencePanel from "./DeploymentEvidencePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
+import useDeploymentReport from "./useDeploymentReport";
 import PAL from "./palette";
 import "./deployPrint.css";
 
@@ -224,6 +226,25 @@ function ClosedLoopSim() {
     matchDir, cutThr, requestParams,
   });
 
+  // Phase 7. A SEPARATE question from the summary above, and a separate endpoint: the summary asks
+  // where the threshold goes and whether the statistical gates pass; this asks whether the device
+  // would permit the configuration at all and whether the three edges of the amplitude/power/pain
+  // triangle agree in sign. The band-candidate object spells its fields `contact` and
+  // `center_freq_hz`, so they are mapped here rather than inside the hook, which keeps the hook
+  // reusable by any caller that already speaks the module's own vocabulary.
+  const deploymentReport = useDeploymentReport({
+    participantUid: participant_uid,
+    bandCandidate: bc && {
+      channel: bc.contact,
+      centerHz: bc.center_freq_hz,
+      bandWidthHz: bc.bandwidth_hz || 5.0,
+      sensingHemisphere: bc.hemisphere,
+      rateHz: bc.rate_hz,
+      pulseWidthUs: bc.pulse_width_us,
+      thresholdMode: bc.threshold_mode || "dual",
+    },
+  });
+
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -299,6 +320,16 @@ function ClosedLoopSim() {
                   Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
               <Grid item xs={12}>
                 <DeploymentVerdictStrip bandCandidate={bc} summary={summary} />
+              </Grid>
+
+              {/* Phase 7: device eligibility, the three edges with their clustering provenance, and
+                  the sign-coherence verdict. Placed directly under the strip because the panel
+                  disposition put the constraint layer first: on a device that actuates, the reader
+                  needs to know whether a configuration is PERMITTED before reading how well it
+                  scores. The strip answers "does the band pass the statistical gates"; this answers
+                  "may it be programmed", and a band can pass the first and fail the second. */}
+              <Grid item xs={12} id="cl-deployability">
+                <DeploymentEvidencePanel report={deploymentReport} />
               </Grid>
 
               <Grid item xs={12}>

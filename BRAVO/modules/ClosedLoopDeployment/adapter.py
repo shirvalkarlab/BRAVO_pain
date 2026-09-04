@@ -205,3 +205,124 @@ def scale_disagreement(T):
             "note": ("fraction of (time, channel) samples where the linear and mean-of-log scales "
                      "pick a different peak band. The device uses the linear scale (D11); the "
                      "biomarker pipeline validated on mean-of-log.")}
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 7 seam: live platform data -> a JSON-serialisable DeploymentReport for the interface
+# ---------------------------------------------------------------------------------------------
+def _num(x):
+    """JSON-safe number. NaN and infinity are not valid JSON and silently become nulls or crash
+    the serialiser depending on the encoder, so they are converted explicitly here rather than
+    being discovered by the browser."""
+    if x is None:
+        return None
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def report_to_dict(rep):
+    """Flatten a DeploymentReport for the interface.
+
+    The verdict is expressed as THREE states rather than a boolean, because the interface has to
+    distinguish "the device forbids this" from "the evidence does not support it". Those call for
+    different actions by the reader — the first is a configuration problem, the second is a
+    measurement problem — and collapsing them into one "not ready" was the specific complaint the
+    panel disposition raised.
+    """
+    el = rep.eligibility
+    device_ok = bool(el.eligible) if el is not None else None
+    edges_ok = bool(rep.edges) and all(e.resolved for e in rep.edges.values())
+    # PRESERVE THE THREE STATES. `CoherenceReport.coherent` is None when at least one contributing
+    # edge is unresolved, meaning "not established", which is a different finding from False,
+    # meaning "the signs contradict each other". Wrapping it in bool() collapsed None to False and
+    # made the interface report a contradiction that the data had not shown — the exact failure this
+    # panel was rebuilt to prevent.
+    coherent = None if rep.coherence is None else rep.coherence.coherent
+
+    if device_ok is False:
+        verdict = "blocked"
+    elif rep.is_licensed():
+        verdict = "supported"
+    else:
+        verdict = "unsupported"
+
+    return {
+        "available": True,
+        "participant": rep.participant,
+        "verdict": verdict,
+        "licensed": rep.is_licensed(),
+        "verdict_detail": {
+            "device_eligible": device_ok,
+            "all_edges_resolved": edges_ok,
+            "coherent": coherent,
+            "blockers": list(rep.blockers),
+        },
+        "eligibility": None if el is None else {
+            "eligible": el.eligible, "checked": el.checked, "summary": el.summary(),
+            "failures": el.failures, "unknowns": el.unknowns, "advisories": el.advisories,
+        },
+        "edges": {k: {
+            "name": e.name, "estimate": _num(e.estimate),
+            "ci": None if e.ci is None else [_num(e.ci[0]), _num(e.ci[1])],
+            "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
+            "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
+            "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+        } for k, e in (rep.edges or {}).items()},
+        "coherence": None if rep.coherence is None else {
+            "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),
+            "expected_pattern": rep.coherence.expected_pattern,
+            "observed_pattern": rep.coherence.observed_pattern,
+            "n_boot": rep.coherence.n_boot, "note": rep.coherence.note,
+        },
+        "threshold": None if rep.threshold is None else {
+            "upper": _num(rep.threshold.upper), "lower": _num(rep.threshold.lower),
+            "control_authority": _num(rep.threshold.control_authority),
+            "capture_amp_low": _num(rep.threshold.capture_amp_low),
+            "capture_amp_high": _num(rep.threshold.capture_amp_high),
+            "frac_time_below": _num(rep.threshold.frac_time_below),
+            "frac_time_between": _num(rep.threshold.frac_time_between),
+            "frac_time_above": _num(rep.threshold.frac_time_above),
+            "predicted_recapture_alert": rep.threshold.predicted_recapture_alert,
+            "problems": list(rep.threshold.problems), "note": rep.threshold.note,
+        },
+        "manifest": rep.manifest,
+        "candidates": rep.candidates,
+    }
+
+
+def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
+                           power_scale="power_linear", force_refresh=None):
+    """Fetch this participant's data from the platform and build the report.
+
+    Imports of the sibling modules are deferred to call time for the same reason
+    ``StimOptimizer.adapter`` defers its Biomarkers import: at module import time the Django app
+    registry may not be populated, and a module-level import would also create a cycle between the
+    three analysis modules.
+    """
+    from modules.StimOptimizer import adapter as _sa
+    from . import pipeline as _pl
+
+    rd = request_data or {}
+    psd, eps = _sa.evidence_inputs(participant, force_refresh=force_refresh)
+    if psd is None:
+        return {"available": False,
+                "reason": "this participant has no assembled spectra, so no control signal can be "
+                          "evaluated. Sensing recordings must be ingested first."}
+    try:
+        dm = _sa.build_design_matrix(participant, rd)
+    except Exception:
+        dm = None
+
+    cands = candidates or rd.get("Candidates") or []
+    if not cands:
+        return {"available": False,
+                "reason": "no candidate configuration was supplied. Choose a channel and centre "
+                          "frequency on the Biomarker Exploration page first; deployability is "
+                          "evaluated for a specific configuration, not for a participant."}
+    rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
+                  design_matrix=dm, candidates=cands, hemisphere=hemisphere,
+                  power_scale=power_scale)
+    return report_to_dict(rep)

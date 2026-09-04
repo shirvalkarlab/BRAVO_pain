@@ -75,6 +75,55 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-03 (Phase 7) — the deployment report is wired to the interface
+
+**New endpoint `/api/queryClosedLoopDeployment`** (`QueryClosedLoopDeployment` in
+`Server/APIs/DataAnalysis.py`, route in `Server/APIs/urls.py`), backed by
+`ClosedLoopDeployment.adapter.report_for_participant` and `report_to_dict`. It answers a DIFFERENT
+question from `/queryDeploymentSummary` and the two are deliberately separate: the summary asks
+where the threshold goes and whether the statistical gates pass, this asks whether the device would
+permit the configuration at all and whether the three edges agree in sign. **A band can pass every
+gate in the summary and still be undeployable**, most obviously when its power rises with amplitude.
+
+**Frontend: `useDeploymentReport.js` and `DeploymentEvidencePanel.js`**, mounted in
+`views/Reports/ClosedLoopSim/index.js` directly under the verdict strip, because the panel
+disposition put the constraint layer first. Production build passes, eslint clean. Note the band
+candidate spells its fields `contact` and `center_freq_hz`; the mapping to the module's own
+vocabulary happens at the call site in `index.js`, not inside the hook.
+
+The panel shows three things the old layout could not say: a **three-state verdict**
+(blocked / unsupported / supported) because "the device forbids this" and "the evidence does not
+support this" have different remedies; **rule-by-rule eligibility with page citations**, where a
+rule whose value has not been read off the programmer shows as UNKNOWN and blocks rather than
+passing quietly; and **the three edges with their clustering unit and cluster count**, with rows
+below `MIN_RELIABLE_CLUSTERS` marked so an interval that is too narrow cannot pass for a reliable
+one. `MIN_RELIABLE_CLUSTERS` is duplicated in `DeploymentEvidencePanel.js` — **keep it in step with
+`edges.py`.**
+
+**Two real defects found by exercising the endpoint on live data rather than by reading the code.**
+
+First, `report_to_dict` wrapped the coherence verdict in `bool()`. `CoherenceReport.coherent` is
+`None` when a contributing edge is unresolved, meaning "not established", and `bool(None)` is
+`False`, meaning "the signs contradict each other". The interface would have reported a
+contradiction the data never showed — the exact three-state collapse the panel was rebuilt to
+prevent. Now preserved as three states, with a test.
+
+Second, **the pipeline checked device eligibility BEFORE estimating the edges**, so rule `D19` — the
+requirement that power falls as amplitude rises and rises with pain, which is the single most
+important gate because it decides negative versus positive feedback — was reported "not
+determinable" on every run. Phase 2 now runs before Phase 1. A sign is supplied to the gate **only
+when its edge is resolved**: an unresolved edge has a point-estimate sign, but supplying it would
+let the safety gate be satisfied by a direction the data does not support. Also supplying
+`power_scale`, `intent` and `pooled_across_center_or_mode`, which the module knows; unknowns fell
+from 17 to 15 and the remainder genuinely require reading values off the programmer (D04
+neurostimulator count, D13 high-pass, D15 BrainSense Setup channel).
+
+Live payload for RCS08 / ZERO_THREE_RIGHT / 20.5 Hz: 46 KB, JSON-clean with no NaN or Infinity
+literals, verdict `blocked` (15 unevaluable rules), E1 and E2 unresolved, E3 resolved negative,
+coherence `None`. ClosedLoopDeployment suite **123 passed**. Container workers reloaded.
+
+
+
 ### 2026-09-03 (later still) — the ClosedLoopDeployment module exists, and Phase 2 says none survive
 
 Ten files in `BRAVO/modules/ClosedLoopDeployment/`, **121 tests**, built without any new data.

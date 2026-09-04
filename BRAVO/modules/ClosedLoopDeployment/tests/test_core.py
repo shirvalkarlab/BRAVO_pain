@@ -216,3 +216,32 @@ def test_the_rendered_coherence_reason_states_the_device_direction_correctly():
     assert (exp["E1"], exp["E2"], exp["E3"]) == (-1, +1, -1)
     e1, e2, e3 = _edge("E1", -1.0, -1.5, -0.5), _edge("E2", 1.0, 0.5, 1.5), _edge("E3", -1.0, -1.5, -0.5)
     assert "ramps amplitude UP" in C.coherence_report(e1, e2, e3).note
+
+
+def test_an_unresolved_edge_does_not_supply_its_sign_to_the_device_gate():
+    """Rule D19 asks which way the band moves. An unresolved edge HAS a point-estimate sign, but
+    that sign is not established. Supplying it would let the most important safety gate be
+    satisfied by a direction the data does not support."""
+    from ClosedLoopDeployment.pipeline import _facts_for
+    resolved = EdgeEstimate("E1", -1.0, (-1.5, -0.5), 0.01, 50, "setting epoch", 60)
+    spans_zero = EdgeEstimate("E2", 0.9, (-0.2, 2.0), 0.2, 50, "rating", 60)
+    f = _facts_for({"channel": "CH"}, resolved, spans_zero, "power_linear")
+    assert f["power_slope_vs_amplitude_sign"] == -1
+    assert "power_slope_vs_pain_sign" not in f, "an unresolved edge must not supply a sign"
+    assert f["power_scale"] == "linear" and f["intent"] == "adaptive"
+    # asking for the log scale must be reported honestly, not silently corrected to what D11 wants
+    assert _facts_for({}, resolved, resolved, "power_mean_of_log")["power_scale"] == "log"
+
+
+def test_the_payload_keeps_coherence_as_three_states():
+    """None means 'not established' and False means 'the signs contradict'. Collapsing the first
+    into the second makes the interface report a contradiction the data never showed."""
+    from ClosedLoopDeployment.adapter import report_to_dict
+    from ClosedLoopDeployment.types import DeploymentReport
+    e_ok = _edge("E1", -1.0, -1.5, -0.5)
+    e_unres = _edge("E2", 0.5, -0.2, 1.2)
+    rep = DeploymentReport(participant="x", edges={"E1": e_ok, "E2": e_unres, "E3": e_ok})
+    rep.coherence = C.coherence_report(e_ok, e_unres, e_ok)
+    d = report_to_dict(rep)
+    assert d["coherence"]["coherent"] is None
+    assert d["verdict_detail"]["coherent"] is None, "None must not be collapsed to False"

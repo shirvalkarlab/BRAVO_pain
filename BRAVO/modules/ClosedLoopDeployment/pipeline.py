@@ -29,6 +29,34 @@ def _optional(name):
         return None
 
 
+def _facts_for(candidate, e1, e2, power_scale):
+    """The candidate dict augmented with the facts this module has actually established.
+
+    Two rules about what may be filled in here, both of which exist to stop a gate being satisfied
+    by something that was never measured.
+
+    A SIGN IS SUPPLIED ONLY WHEN ITS EDGE IS RESOLVED. Rule D19 asks which way the band moves. An
+    unresolved edge has a point estimate with a sign, but that sign is not established — the
+    interval spans zero. Passing it would let D19 be satisfied by a direction the data does not
+    support, which is precisely the substitution of a guess for a measurement that this module is
+    built to refuse. An absent key is reported as not determinable, and not determinable blocks.
+
+    THE POWER SCALE IS A FACT ABOUT THIS RUN, not an assumption. It is whatever scale the edges were
+    actually estimated on, so if a caller asks for the log scale, D11 correctly fails rather than
+    silently reporting the linear scale the device requires.
+    """
+    f = dict(candidate or {})
+    f.setdefault("intent", "adaptive")
+    f["power_scale"] = "linear" if power_scale == "power_linear" else "log"
+    # One centre frequency and one threshold mode per report, so no pooling occurs by construction.
+    f.setdefault("pooled_across_center_or_mode", False)
+    if e1 is not None and e1.resolved and e1.sign is not None:
+        f["power_slope_vs_amplitude_sign"] = int(e1.sign)
+    if e2 is not None and e2.resolved and e2.sign is not None:
+        f["power_slope_vs_pain_sign"] = int(e2.sign)
+    return f
+
+
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
         hemisphere="Left", strict=True, n_boot=500, seed=0):
@@ -69,21 +97,31 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     ch, fc = first.get("channel"), float(first.get("center_hz", np.nan))
     rep.candidates = cand
 
-    # --- Phase 1: device eligibility, if constraints.py has landed -----------------------------
-    con = _optional("constraints")
-    if con is not None and hasattr(con, "check_eligibility"):
-        rep.eligibility = con.check_eligibility(first, {"uid": participant_uid,
-                                                        "programming_mode": "parkinsons"})
-    else:
-        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
-                            "no candidate may be licensed")
-
-    # --- Phase 2: the three edges ---------------------------------------------------------------
+    # --- Phase 2 runs BEFORE Phase 1 -------------------------------------------------------------
+    # The order looks wrong and is deliberate. Rule D19 — the requirement that band power falls as
+    # amplitude rises and rises with pain — is the single most important device gate, and it cannot
+    # be evaluated until the edges have been estimated. Checking eligibility first would report D19
+    # as "not determinable" on every run, which is the least useful possible answer for the one rule
+    # that decides whether the control loop is negative feedback or positive.
     e1 = E.actuation_edge(T, channel=ch, center_hz=fc, hemisphere=hemisphere, scale=power_scale)
     e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale)
     e3 = E.therapy_edge(design_matrix)
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
     rep.coherence = C.coherence_report(e1, e2, e3)
+
+    # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
+    con = _optional("constraints")
+    if con is not None and hasattr(con, "check_eligibility"):
+        rep.eligibility = con.check_eligibility(_facts_for(first, e1, e2, power_scale),
+                                                {"uid": participant_uid,
+                                                 "indication": "chronic_pain",
+                                                 # PI decision recorded 2026-09-03. This is a
+                                                 # clinical and regulatory determination, not an
+                                                 # engineering conclusion of this module.
+                                                 "programming_mode": "parkinsons"})
+    else:
+        rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
+                            "no candidate may be licensed")
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])

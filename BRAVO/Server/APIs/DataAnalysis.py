@@ -737,6 +737,60 @@ class EmitBandCandidate(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryClosedLoopDeployment(RestViews.APIView):
+    """
+    API View for the closed-loop deployment report (ClosedLoopDeployment module).
+
+    Returns the whole report for ONE candidate configuration: device eligibility against all 51
+    encoded Percept rules, the three edges of the amplitude/power/pain triangle each labelled with
+    the clustering unit it was estimated at, the sign-coherence verdict, and the threshold placement
+    with the device alerts it predicts.
+
+    The verdict is deliberately THREE-valued (``blocked`` / ``unsupported`` / ``supported``) rather
+    than a boolean. A configuration the device forbids and a configuration the evidence does not
+    support call for different actions from the reader — the first is a configuration problem, the
+    second a measurement problem — and collapsing them into a single "not ready" was the specific
+    complaint the panel disposition raised.
+
+    **URL:** ``/queryClosedLoopDeployment``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Candidates (list of candidate dicts), optional
+    Hemisphere (default "Left") and PowerScale (default "power_linear", the device-parity scale of
+    rule D11).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        participant = models.Participant.find(uid=request.data["ParticipantId"])
+        if participant is None:
+            return Response(status=200, data={"available": False,
+                                              "reason": "participant not found"})
+        try:
+            from modules.ClosedLoopDeployment import adapter as cld_adapter
+            Analysis = cld_adapter.report_for_participant(
+                participant, request.data,
+                candidates=request.data.get("Candidates"),
+                hemisphere=request.data.get("Hemisphere", "Left"),
+                power_scale=request.data.get("PowerScale", "power_linear"))
+        except Exception as e:
+            return Response(status=200, data={"available": False,
+                                              "reason": "deployment report error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
 class QueryDeploymentROC(RestViews.APIView):
     """
     API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed
