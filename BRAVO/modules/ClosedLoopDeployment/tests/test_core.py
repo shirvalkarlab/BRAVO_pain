@@ -338,3 +338,39 @@ def test_an_open_circuit_bipolar_pair_fails_d16():
     shorted = CN.check_eligibility({"impedance_ohms": 200.0, "impedance_tested": True},
                                    {"lead_type": "sensight"})
     assert "D16" in {x["rule_id"] for x in shorted.failures}
+
+
+def test_participant_scoped_device_facts_reach_the_participant_dict():
+    """A fact one dictionary away from the rule that reads it is invisible, and the symptom is
+    indistinguishable from missing data: the rule reports "input not supplied" and blocks.
+
+    D04 reads n_neurostimulators and D16 reads lead_type from the PARTICIPANT dict, not the
+    candidate. Merging every device fact into the candidate left both unevaluable while the values
+    were present — which is what the live RCS08 report did before this fix, showing D04 and D16 as
+    unknown with n_neurostimulators=1 and lead_type='sensight' sitting one dict away.
+    """
+    from ClosedLoopDeployment import pipeline as PL, constraints as CN
+    assert "n_neurostimulators" in CN.PARTICIPANT_KEYS
+    assert "lead_type" in CN.PARTICIPANT_KEYS
+
+    dev = {"n_neurostimulators": 1, "lead_type": "sensight", "impedance_ohms": 6322.0,
+           "impedance_tested": True, "_provenance": {"x": "y"}}
+    pf = PL._participant_facts("uid-x", dev, CN)
+    assert pf["n_neurostimulators"] == 1
+    assert pf["lead_type"] == "sensight"
+    assert "_provenance" not in pf, "provenance is diagnostics, never a predicate input"
+    assert "impedance_ohms" not in pf, "candidate-scoped facts must NOT leak into participant"
+    assert pf["programming_mode"] == "parkinsons"
+
+    cf = PL._facts_for({"center_hz": 24.5, "band_width_hz": 5.0}, None, None, "power_linear",
+                       device_facts=dev)
+    assert cf["impedance_ohms"] == 6322.0
+
+    # end to end: both rules become evaluable
+    r = CN.check_eligibility(cf, pf)
+    unknown = {u["rule_id"] for u in r.unknowns}
+    assert "D04" not in unknown and "D16" not in unknown
+    assert "D16" not in {f["rule_id"] for f in r.failures}, "6322 ohm is inside both limits"
+
+    # scope is read from the constraint module, so an unknown module strands nothing silently
+    assert PL._participant_facts("uid-x", dev, None)["uid"] == "uid-x"

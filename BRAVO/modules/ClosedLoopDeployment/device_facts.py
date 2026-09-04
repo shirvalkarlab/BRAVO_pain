@@ -81,3 +81,77 @@ def candidate_impedance_ohm(facts, hemisphere):
     if not (facts or {}).get("available"):
         return None
     return ((facts.get(hemisphere) or {}).get("bipolar_max_ohm"))
+
+
+# ---------------------------------------------------------------------------------------------
+# FACTS THAT CAN ONLY COME FROM A PERSON READING THE PROGRAMMER
+# ---------------------------------------------------------------------------------------------
+#: Values the investigator supplied directly, with the date and the fact that they were STATED
+#: rather than measured from the record. This block is a stopgap and should be read as one: these
+#: belong in a per-participant database row with an audit trail, not in source. They are here, with
+#: provenance on every line, because the alternative was leaving eleven device rules unevaluable —
+#: and an unevaluable rule blocks, so the whole verdict was stuck behind values that take two
+#: minutes to read off a programmer.
+#:
+#: The rule for adding to this block: a value goes here ONLY if a person read it off the device or
+#: stated it as a clinical decision. Anything derivable from the record must be derived, because a
+#: stated value cannot be re-checked when the record changes. Two candidate values were REFUSED
+#: entry on exactly that basis — the LFP capture amplitude (D09), because the surveys measure it and
+#: the stated estimate of 2 uVp would have passed a gate the measured 0.27 uVp median fails, and
+#: the impedance (D16), because 548 recordings carry it.
+PI_STATED_FACTS = {
+    "2e3c75c00d7f4f37b53a048d195f11da": {          # RCS08
+        #: D04. Stated 2026-09-04: a single implanted neurostimulator.
+        "n_neurostimulators": 1,
+        #: D13. Stated 2026-09-04: the user-configurable high-pass is set to 1 Hz, the lower of the
+        #: two selectable values. This matters for a low-centre band: a 10 Hz high-pass would
+        #: attenuate the alpha peak that is the only part of this device's spectrum reaching the
+        #: capture floor.
+        "highpass_hz": 1.0,
+        #: D15. Stated 2026-09-04 and CONFIRMED against the record rather than taken on trust:
+        #: ONE_THREE_LEFT appears as a configured sensing channel in the session reports.
+        "channel_is_brainsense_setup_channel": True,
+        #: D34. Stated 2026-09-04, after an explicit correction: 2.5 mA on the LEFT and 2.0 mA on
+        #: the RIGHT. The first statement had the sides the other way round, so the assignment is
+        #: recorded per side rather than as a single number. These are INTENDED values: the device
+        #: record's SuspendAmplitude fields read 0.0, 1.3 and 1.5 mA, none of them 2.5 or 2.0, so
+        #: nothing here has been programmed yet.
+        "paused_amplitude_mA_by_hemisphere": {"Left": 2.5, "Right": 2.0},
+    },
+}
+
+
+def facts_for_participant(participant_uid, impedance_recordings=None, *, hemisphere=None):
+    """Assemble every device fact this module can establish for one participant.
+
+    Measured values take precedence over stated ones wherever both exist, and the returned dict
+    records which is which under ``_provenance`` so a reader can tell a reading from an assertion.
+    """
+    stated = dict(PI_STATED_FACTS.get(str(participant_uid), {}))
+    out, prov = {}, {}
+
+    paused = stated.pop("paused_amplitude_mA_by_hemisphere", None)
+    if paused and hemisphere in (paused or {}):
+        out["paused_amplitude_mA"] = paused[hemisphere]
+        prov["paused_amplitude_mA"] = f"stated by PI 2026-09-04 for the {hemisphere} hemisphere"
+    for k, v in stated.items():
+        out[k] = v
+        prov[k] = "stated by PI 2026-09-04"
+
+    imp = impedance_facts(impedance_recordings or [])
+    if imp.get("available"):
+        ohm = candidate_impedance_ohm(imp, hemisphere) if hemisphere else None
+        if ohm is not None:
+            out["impedance_ohms"] = ohm
+            prov["impedance_ohms"] = (
+                f"measured: worst bipolar reading on the {hemisphere} lead across "
+                f"{imp['n_records']} impedance recordings, newest record")
+        out["impedance_tested"] = True
+        prov["impedance_tested"] = f"measured: {imp['n_records']} impedance recordings on record"
+        if imp.get("lead_type"):
+            out["lead_type"] = imp["lead_type"]
+            prov["lead_type"] = f"measured: LeadModel {imp.get('lead_model')}"
+        out["_impedance_status"] = imp.get("status_newest")
+        out["_impedance_status_counts"] = imp.get("status_counts")
+    out["_provenance"] = prov
+    return out

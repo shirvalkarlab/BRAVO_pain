@@ -322,7 +322,27 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                 "reason": "no candidate configuration was supplied. Choose a channel and centre "
                           "frequency on the Biomarker Exploration page first; deployability is "
                           "evaluated for a specific configuration, not for a participant."}
+    # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
+    # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
+    dev = {}
+    try:
+        from ClosedLoopDeployment import device_facts as _df
+        from Server import models as _m
+        _p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
+        _sfs = _m.SourceFile.find_all(owner=_p)
+        _imp = list(_m.Recording.find_all(source__in=_sfs, type="MedtronicDeviceImpedance"))
+        _hemi = (cands[0] or {}).get("actuated_hemisphere") or (cands[0] or {}).get(
+            "sensing_hemisphere") or hemisphere
+        dev = _df.facts_for_participant(getattr(_p, "uid", participant), _imp, hemisphere=_hemi)
+    except Exception as exc:                      # never let a fact lookup take down the report
+        dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
-                  power_scale=power_scale)
-    return report_to_dict(rep)
+                  power_scale=power_scale, device_facts=dev)
+    out = report_to_dict(rep)
+    out["device_facts"] = {k: v for k, v in dev.items() if not k.startswith("_")}
+    out["device_facts_provenance"] = dev.get("_provenance", {})
+    out["impedance_status"] = dev.get("_impedance_status")
+    out["impedance_status_counts"] = dev.get("_impedance_status_counts")
+    return out

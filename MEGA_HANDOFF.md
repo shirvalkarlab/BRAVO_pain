@@ -75,6 +75,73 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (later) — device facts wired, and RCS08 now fails D16 and D19 on real evidence
+
+The verdict moved from "blocked because 14 rules cannot be evaluated" to **blocked because two rules
+actually FAIL**, which is a different and far more useful answer. Failures 0 -> 2, unknowns 14 -> 8.
+
+**D16 FAILS: 10885 ohm on the left lead against a 10000 ohm open-circuit limit.** The device's own
+Status field reads INVESTIGATE on **348 of 548** impedance records including the newest; only 200
+read GOOD. The right lead is uniformly healthy at 3664-4936 ohm. The current candidate is
+ONE_THREE_LEFT, i.e. the bad lead. `impedance_facts` returns the WORST bipolar reading per
+hemisphere and never a mean, because D16 is a fault check and averaging is the operation that hides
+one open contact among seven healthy ones.
+
+**D19 FAILS: both slope signs are wrong for the control law.** Power-versus-amplitude came back +1
+where the law requires negative, and power-versus-pain -1 where it requires positive. That is the
+positive-feedback condition — power high, device ramps amplitude up, power goes higher — bounded
+only by the clinician's amplitude limits rather than by physiology. This is the single most
+important gate in the module and it refuses this candidate.
+
+**TWO SILENT-FAILURE BUGS FOUND AND FIXED, both of my own making, both of the same shape: a value
+present in the system but invisible to the code that needs it.**
+
+1. `device_facts.py` was **dead code** — committed in f031579 and imported by nothing, so the claim
+   "D16 now evaluates" was true of the function and false of the running pipeline. Now fetched in
+   `adapter.report_for_participant` (kept out of `pipeline.run` so the pipeline stays free of ORM
+   imports and testable on frames) and threaded through as `device_facts=`.
+2. **Facts were merged into the wrong dictionary.** D04 reads `n_neurostimulators`, D16 reads
+   `lead_type` and D31 reads the BrainSense envelope from the PARTICIPANT dict, not the candidate.
+   Merging everything into the candidate left D04 and D16 unevaluable *while their values were
+   present one dict away* — and that failure is indistinguishable from missing data, because the
+   rule reports "input not supplied" either way. Now routed by the constraint module's own
+   `PARTICIPANT_KEYS`, so a rule that changes which dict it reads cannot strand its input again.
+   Extracted as `pipeline._participant_facts` to be directly testable; the first version of the
+   test asserted through `pipeline.run` and passed vacuously because `rep.eligibility` is None when
+   no data reaches Phase 1.
+
+**Merge precedence:** device facts never overwrite a value the candidate already carries (an
+explicit per-candidate setting is a deliberate override), and keys beginning with an underscore are
+provenance for the interface, never predicate inputs.
+
+**PI_STATED_FACTS block, and what was REFUSED entry.** Values a person read off the programmer live
+in `device_facts.PI_STATED_FACTS` with the date and "stated" on every line; the payload carries
+`device_facts_provenance` so a reader can tell a reading from an assertion. Two candidate values
+were refused entry because the record measures them: the LFP capture amplitude (the stated estimate
+of 2 uVp would have PASSED a gate the measured 0.27 uVp median fails) and the impedance (548
+recordings carry it). D34 is recorded per side after an explicit correction — **2.5 mA LEFT, 2.0 mA
+RIGHT** — and flagged as intended-not-programmed, since the device's SuspendAmplitude fields read
+0.0, 1.3 and 1.5 mA and none of them is 2.5 or 2.0.
+
+**SWEEP RESULTS for the same class of fault elsewhere, both clean:**
+- **Recording load census, all 12 types.** Ten load fine. The two that do not are correct by design:
+  `MedtronicDeviceImpedance` (548/548 inline on metadata) and `PatientControllerEvent` (3186 of 3188
+  inline; two rows carry neither pointer nor metadata and are genuinely empty).
+- **Frontend field mismatches: none.** Each panel has its own endpoint
+  (`queryDeploymentROC`, `queryLsbPower`, `queryPsdLsbConversion`, `queryPsdLsbConversionModel`,
+  `queryDeploymentRocByEra`), so the 13 keys that looked missing are all emitted by the endpoint
+  that panel actually calls. A first pass that checked them against `deployment_summary` alone
+  reported 13 false positives, and a second pass silently narrowed itself by dropping the `data.`
+  root and checked 11 accessors instead of 118 — neither result was trustworthy.
+
+**KNOWN, NOT FIXED: the endpoint takes 73 seconds.** It rebuilds the 109,296-row Phase 0 joined
+table on every request, which is the spinner the PI sees on the live page. Needs the same
+signature-keyed cache the Biomarkers assembled matrix uses.
+
+ClosedLoopDeployment **128 passed**.
+
+
+
 ### 2026-09-04 — D09 softened to a per-bin advisory, and four of my own claims corrected
 
 **D09 is now ADVISORY, not blocking (PI decision).** The guide RECOMMENDS an alpha-beta LFP

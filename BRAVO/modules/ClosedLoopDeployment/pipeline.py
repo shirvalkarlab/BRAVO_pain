@@ -29,7 +29,32 @@ def _optional(name):
         return None
 
 
-def _facts_for(candidate, e1, e2, power_scale):
+def _participant_facts(participant_uid, device_facts=None, constraints_module=None):
+    """Build the PARTICIPANT dict, routing participant-scoped device facts into it.
+
+    A fact one dictionary away from the rule that reads it is invisible, and the symptom is
+    indistinguishable from genuinely missing data: the rule reports "input not supplied" and blocks
+    the verdict. D04 reads ``n_neurostimulators``, D16 reads ``lead_type`` and D31 reads the
+    BrainSense envelope, all from HERE rather than from the candidate — so merging every device
+    fact into the candidate left those rules unevaluable while their values were present. Scope is
+    taken from the constraint module's own ``PARTICIPANT_KEYS`` rather than a list kept here, so a
+    rule that changes which dict it reads cannot silently strand its input again.
+    """
+    facts = {"uid": participant_uid,
+             "indication": "chronic_pain",
+             # PI decision recorded 2026-09-03. This is a clinical and regulatory determination,
+             # not an engineering conclusion of this module.
+             "programming_mode": "parkinsons"}
+    scoped = set(getattr(constraints_module, "PARTICIPANT_KEYS", {}) or {})
+    for k, v in (device_facts or {}).items():
+        if k.startswith("_"):
+            continue
+        if k in scoped and facts.get(k) is None:
+            facts[k] = v
+    return facts
+
+
+def _facts_for(candidate, e1, e2, power_scale, device_facts=None):
     """The candidate dict augmented with the facts this module has actually established.
 
     Two rules about what may be filled in here, both of which exist to stop a gate being satisfied
@@ -54,12 +79,19 @@ def _facts_for(candidate, e1, e2, power_scale):
         f["power_slope_vs_amplitude_sign"] = int(e1.sign)
     if e2 is not None and e2.resolved and e2.sign is not None:
         f["power_slope_vs_pain_sign"] = int(e2.sign)
+    # Participant-level device facts are merged LAST and never overwrite a value the candidate
+    # already carries: an explicit per-candidate setting is a deliberate override, while these are
+    # defaults for the participant. Keys beginning with an underscore are provenance and diagnostics
+    # for the interface, not inputs to any predicate, so they are excluded.
+    for _k, _v in (device_facts or {}).items():
+        if not _k.startswith("_") and f.get(_k) is None:
+            f[_k] = _v
     return f
 
 
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
-        hemisphere="Left", strict=True, n_boot=500, seed=0):
+        hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None):
     """Build the deployment report for one participant.
 
     ``psd_frame`` and ``epochs`` are what ``StimOptimizer.adapter.evidence_inputs`` returns. They are
@@ -112,13 +144,15 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
     con = _optional("constraints")
     if con is not None and hasattr(con, "check_eligibility"):
-        rep.eligibility = con.check_eligibility(_facts_for(first, e1, e2, power_scale),
-                                                {"uid": participant_uid,
-                                                 "indication": "chronic_pain",
-                                                 # PI decision recorded 2026-09-03. This is a
-                                                 # clinical and regulatory determination, not an
-                                                 # engineering conclusion of this module.
-                                                 "programming_mode": "parkinsons"})
+        # Device facts must be routed to the dict the rule actually READS. Several rules take
+        # their input from the PARTICIPANT dict rather than the candidate — D04 reads
+        # n_neurostimulators, D16 reads lead_type, D31 reads the BrainSense envelope — so merging
+        # everything into the candidate left those rules unevaluable while the values sat one
+        # dictionary away. That failure is silent: the rule reports "input not supplied" and the
+        # verdict stays blocked, which looks identical to genuinely missing data.
+        rep.eligibility = con.check_eligibility(
+            _facts_for(first, e1, e2, power_scale, device_facts=device_facts),
+            _participant_facts(participant_uid, device_facts, con))
     else:
         rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
                             "no candidate may be licensed")
