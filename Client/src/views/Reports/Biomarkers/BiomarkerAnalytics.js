@@ -17,6 +17,16 @@ import MDButton from "components/MDButton";
 import BinarizationPreview from "./BinarizationPreview";
 import { SessionController } from "database/session-control";
 import { commitBandCandidate, downloadBandCandidate } from "../ClosedLoopSim/bandCandidateStore";
+// Semantic colour roles are defined once, in the deployment module's palette, and imported here so
+// that a verdict which means the same thing on the Biomarkers page and on the Closed-Loop
+// Deployment page is drawn in the same ink. Duplicating hex values is how the two pages drifted
+// apart in the first place: this file previously hardcoded #0a7f3f for "pass" and #B17500 for
+// "caution", neither of which appears in the palette, so a reader moving between the pages had to
+// re-learn the colour code. Note the discipline the palette itself documents: PAL.warn and PAL.fail
+// are FILL inks whose contrast against white is too low for small text, so where one of them
+// carries a word the word is set in PAL.onWarn (near-black) on top of the fill rather than in the
+// fill colour itself.
+import PAL from "../ClosedLoopSim/palette";
 
 // Publication-quality shared style for every panel — one font, faint gridlines, generous
 // axis-title spacing (standoff), readable tick fonts, x-unified hover. Per-panel props can override
@@ -89,7 +99,143 @@ function Panel({ title, children, lg = 6 }) {
 // Click-validate readout — renders the mixed-effects OR + 95% CI, the stim-stability badge, and
 // the per-era ORs from /queryBandValidation. Stays compact (three lines + one badge) so it tucks
 // under the violin without pushing the layout. Empty-state and in-flight handled.
-function ValidationReadout({ validation, validating, emitContext }) {
+// The stimulation-stability question has FOUR possible answers, and for most of this project's
+// history the interface showed two of them.
+//
+// What the backend computes. `analytics.band_stim_stability` runs a likelihood-ratio test for a
+// band-by-stimulation-era interaction and then, in `analytics.stability_equivalence`, an
+// equivalence test against a declared margin of log(2) on the log-odds-ratio scale — that is, the
+// band's slope is allowed to differ between stimulation states by up to a factor of two in odds
+// before the biomarker is called stimulation-dependent. The equivalence test exists because the
+// older rule was `stim_stable = (p_lrt >= 0.05)`, which is a failure to reject rather than
+// evidence of equivalence: with three eras and modest counts it returned "stable" precisely when
+// the test had no power to see instability, which is the situation in which a false reassurance is
+// most costly, because the band is about to anchor a threshold on a device that actuates. The
+// backend therefore emits `stability_verdict` with three values, and the field is absent altogether
+// when the test could not be run.
+//
+// What goes wrong if the four answers are collapsed. This component previously rendered
+// `s.stim_stable ? "stable" : "dependent"`, so a band whose interval was simply too wide to decide
+// anything was displayed with the same word, the same weight and the same green ink as a band whose
+// between-era difference had been shown to be smaller than the margin. A clinician reading "Stim
+// stable" has no way to tell which of the two they are looking at, and the difference decides
+// whether the band is a defensible control signal.
+//
+// How the four states are distinguished here. All four cells are drawn on every render and exactly
+// one is filled, so a reader can see that a third and fourth answer exist whether or not the
+// current band is in them, and the current answer is legible from POSITION as well as from fill —
+// which means it survives a greyscale print. "Not determinable" and "not tested" take the neutral
+// grey ink and never the failure ink, because in neither case has anything been contradicted; the
+// evidence has not spoken. The two grey states are separated by their own labels and by the detail
+// sentence beneath the track, which names why the question could not be answered.
+const STABILITY_CELLS = [
+  { key: "stable",
+    short: "Equivalent",
+    detail: "the largest between-era difference in the band's slope lies inside the declared margin",
+    // Near-black on the bluish-green fill, not white. Measured WCAG contrast ratios, computed with
+    // the sRGB relative-luminance formula and checked against the palette's own onWarn-on-#E69F00
+    // figure of 7.73:1: white on #009E73 is 3.42:1, below the 4.5:1 floor for small text, while
+    // PAL.onWarn (#1A1A1A) on the same fill is 5.09:1 and clears it. The grey cells below are the
+    // other way round — white on #6C757D is 4.69:1 and passes where #1A1A1A is only 3.71:1 — so
+    // the two fills take different inks, each chosen by its own measurement.
+    fill: PAL.pass, ink: PAL.onWarn },
+  { key: "stim-dependent",
+    short: "Differs by era",
+    detail: "the band-by-era interaction test rejects: the slope demonstrably differs between "
+            + "stimulation states",
+    // PURE BLACK, not PAL.onWarn, on the vermillion fill. #1A1A1A on #D55E00 measures 4.50:1,
+    // which sits exactly on the AA floor with no margin at all — any future darkening of the fill
+    // or lightening of the ink drops it below. #000000 on the same fill measures 5.43:1, so the
+    // margin is real. This is the only place on the page that departs from the palette's onWarn
+    // token, and it departs because the token was specified against the amber fill (7.73:1) where
+    // it has ample room, not against vermillion.
+    fill: PAL.fail, ink: "#000000" },
+  { key: "inconclusive",
+    short: "Not determinable",
+    detail: "the interaction test did not reject, but the interval on the largest between-era "
+            + "difference is wider than the margin, so these data cannot separate a stable "
+            + "biomarker from a materially unstable one",
+    fill: PAL.neutral, ink: "#FFFFFF" },
+  { key: "not_tested",
+    short: "Not tested",
+    detail: "the stability test did not run on this band",
+    fill: PAL.neutral, ink: "#FFFFFF" },
+];
+
+// Resolve the payload into exactly one of the four cells above, and say how we got there. Reading
+// `stability_verdict` in preference to `stim_stable` is the whole point: `stim_stable` is retained
+// in the payload only for backward compatibility and cannot express "not determinable".
+function resolveStability(s) {
+  if (!s || s.available === false) {
+    return { key: "not_tested", why: (s && s.reason) || "no result was returned for this band" };
+  }
+  const v = s.stability_verdict;
+  if (v === "stable" || v === "stim-dependent" || v === "inconclusive") {
+    return { key: v, why: (s.equivalence && s.equivalence.reason) || null };
+  }
+  // A payload from before the equivalence test was added carries only the boolean. We refuse to
+  // promote that boolean into either of the two demonstrated states, because a bare failure to
+  // reject is exactly what the equivalence test was introduced to stop reporting as stability.
+  return { key: "not_tested",
+           why: "this result predates the equivalence test, so it carries only the older "
+                + "not-significant flag, which cannot distinguish a band shown to be equivalent "
+                + "from one the data are simply too sparse to judge" };
+}
+
+// The declared margin and the measured between-era difference are both on the log-odds-ratio scale
+// in the payload. A reader thinks in odds ratios, not log odds, so both are exponentiated here and
+// described as multiplicative factors. Reporting the interval alongside the verdict is what makes
+// the verdict checkable rather than merely asserted.
+function stabilityNumbers(eq) {
+  if (!eq) return null;
+  const asFactor = (x) => (x == null || !Number.isFinite(x) ? null : Math.exp(x));
+  const margin = asFactor(eq.margin_log_or);
+  const diff = asFactor(eq.max_abs_diff_log_or);
+  const ciLo = asFactor(eq.ci && eq.ci[0]);
+  const ciHi = asFactor(eq.ci && eq.ci[1]);
+  if (margin == null && diff == null) return null;
+  const lvl = eq.ci_level != null ? `${(eq.ci_level * 100).toFixed(0)}%` : "";
+  const parts = [];
+  if (diff != null) {
+    parts.push(`Largest between-era difference in the band's slope: a factor of ${diff.toFixed(2)}`
+      + ` in odds${eq.pair ? ` (${eq.pair})` : ""}`
+      + (ciLo != null && ciHi != null
+        ? `, ${lvl} interval ${ciLo.toFixed(2)} to ${ciHi.toFixed(2)}` : ""));
+  }
+  if (margin != null) {
+    parts.push(`declared equivalence margin: a factor of ${margin.toFixed(2)}`);
+  }
+  if (eq.n_eras_compared != null) {
+    parts.push(`${eq.n_eras_compared} era${eq.n_eras_compared === 1 ? "" : "s"} had an estimable slope`);
+  }
+  return `${parts.join(" · ")}.`;
+}
+
+// The track itself: every state named, one filled. The unlit cells are drawn as outlines so the
+// arity of the answer is visible in the component rather than implied by whichever value happens to
+// have arrived.
+function StabilityTrack({ current }) {
+  return (
+    <MDBox display="flex" flexDirection="row" flexWrap="wrap" gap={0.5} mb={0.35}>
+      {STABILITY_CELLS.map((c) => {
+        const lit = c.key === current;
+        return (
+          <MDBox key={c.key} px={1} py={0.3}
+            sx={{ borderRadius: "4px",
+                  backgroundColor: lit ? c.fill : "transparent",
+                  border: `1px solid ${lit ? c.fill : "#C8CED5"}`,
+                  color: lit ? c.ink : "#8A929B" }}>
+            <span style={{ fontSize: 11.5, fontWeight: lit ? 700 : 400, letterSpacing: 0.2 }}>
+              {c.short}
+            </span>
+          </MDBox>
+        );
+      })}
+    </MDBox>
+  );
+}
+
+function ValidationReadout({ validation, validating, emitContext, onCommitted }) {
   // Commit-to-band: when the clicked band is VALIDATED, the user can export it as a §6
   // BandCandidate into the threshold-deployment (Closed-Loop Sim) view. We POST the IDENTICAL
   // band-feature envelope the validation used (emitContext), so the committed candidate is
@@ -117,13 +263,38 @@ function ValidationReadout({ validation, validating, emitContext }) {
   }
   const g = validation.glmer || {};
   const s = validation.stim || {};
-  const verdict = validation.verdict || "—";
-  // Badge color: green for validated, amber for stim-dependent, grey for n.s./degenerate.
-  const badgeColor =
-    /VALIDATED \(stim-stable\)/.test(verdict) ? "#0a7f3f"
-    : /VALIDATED \(stim-dependent\)/.test(verdict) ? "#B17500"
-    : /failed/.test(verdict) ? "#9A3324"
-    : "#6c757d";
+  const rawVerdict = validation.verdict || "—";
+  const stability = resolveStability(s);
+  // The badge string arrives from the backend, where `_band_decide_verdict` still decides the
+  // parenthetical from the older boolean: it prints "VALIDATED (stim-stable)" whenever
+  // `stim_stable` is not explicitly False, which includes both the band whose equivalence has been
+  // demonstrated and the band whose stability could not be determined at all. Since the same
+  // response also carries the three-way `stability_verdict`, the parenthetical is corrected here
+  // rather than repeated, so the largest text on the readout cannot assert a stability the
+  // equivalence test declined to grant. The backend should be changed to emit the three-way label
+  // directly; until it is, this substitution is the honest display and it is confined to the
+  // parenthetical, leaving the mixed-effects half of the verdict untouched.
+  const verdict = /VALIDATED \(stim-stable\)/.test(rawVerdict) && stability.key !== "stable"
+    ? rawVerdict.replace("(stim-stable)",
+        stability.key === "inconclusive" ? "(stim stability not determinable)"
+          : "(stim stability not tested)")
+    : rawVerdict;
+  // Badge ink, from the shared semantic roles rather than local hexes. A verdict that establishes
+  // nothing takes the neutral grey and never the failure ink, because "we could not tell" is not
+  // the same finding as "this failed". PAL.fail and PAL.warn are fill inks, so where the badge is
+  // filled with one of them its text is set in the near-black PAL.onWarn (see the palette's own
+  // note on their contrast against white).
+  const badgeFill =
+    /VALIDATED/.test(verdict) && stability.key === "stable" ? PAL.pass
+    : /VALIDATED/.test(verdict) && stability.key === "stim-dependent" ? PAL.warn
+    : /failed/.test(verdict) ? PAL.fail
+    : PAL.neutral;
+  // Ink per fill, each chosen by its measured contrast rather than by a single rule: white on the
+  // neutral grey (4.69:1, where near-black is only 3.71:1), pure black on the vermillion fail fill
+  // (5.43:1, where the near-black token is 4.50:1 and has no margin), and the near-black token
+  // elsewhere (5.09:1 on the green, 7.73:1 on the amber). See the note on the stability cells above.
+  const badgeInk = badgeFill === PAL.neutral ? "#FFFFFF"
+    : badgeFill === PAL.fail ? "#000000" : PAL.onWarn;
   const fmt = (v, d = 2) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
   const fmtP = (p) => (p == null || !Number.isFinite(p) ? "—"
     : p < 0.001 ? p.toExponential(1) : p.toFixed(3));
@@ -139,7 +310,7 @@ function ValidationReadout({ validation, validating, emitContext }) {
   return (
     <MDBox mt={1}>
       <MDBox display="flex" alignItems="center" gap={1.2} mb={0.5} flexWrap="wrap">
-        <MDBox px={1.6} py={0.5} sx={{ backgroundColor: badgeColor, color: "white",
+        <MDBox px={1.6} py={0.5} sx={{ backgroundColor: badgeFill, color: badgeInk,
           borderRadius: "12px", fontSize: 14, fontWeight: "bold", letterSpacing: 0.3 }}>
           {verdict}
         </MDBox>
@@ -173,22 +344,68 @@ function ValidationReadout({ validation, validating, emitContext }) {
           {`Mixed-effects fit unavailable: ${g.reason || "no result"}.`}
         </MDTypography>
       )}
-      {s.available !== false ? (
+      {/* STIMULATION STABILITY, as a four-state answer rather than a two-state one. The track
+          names every state and fills the one this band is in; the sentences beneath give the
+          reason, the measured between-era difference with its interval, and the declared margin
+          the interval is judged against, so the verdict can be checked rather than taken on
+          trust. */}
+      <MDBox mt={0.6}>
+        <MDTypography variant="caption" color="text" display="block"
+          sx={{ fontSize: 11.5, fontWeight: 700, mb: 0.25 }}>
+          {"Does this band behave the same way under every stimulation state?"}
+        </MDTypography>
+        <StabilityTrack current={stability.key} />
         <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
-          <strong style={{ fontSize: 13, color: s.stim_stable ? "#0a7f3f" : "#B17500" }}>
-            {`Stim ${s.stim_stable ? "stable" : "dependent"}`}
-          </strong>
-          {` — band × stim-era interaction LRT: χ² = ${fmt(s.chisq)}, `}
-          <strong>{`p = ${fmtP(s.lrt_p)}`}</strong>
-          {`. Per-era OR (n): ${erasArr}. `
-           + `Eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
-           + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA).`}
+          {(() => {
+            const cell = STABILITY_CELLS.find((c) => c.key === stability.key);
+            const head = cell ? `${cell.short} — ${cell.detail}.` : "";
+            const why = stability.why && cell && stability.why !== cell.detail
+              ? ` The test reports: ${stability.why}.` : "";
+            return head + why;
+          })()}
         </MDTypography>
-      ) : (
-        <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
-          {`Stim-stability test unavailable: ${s.reason || "no result"}.`}
-        </MDTypography>
-      )}
+        {stabilityNumbers(s.equivalence) ? (
+          <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11, lineHeight: 1.45 }}>
+            {stabilityNumbers(s.equivalence)}
+          </MDTypography>
+        ) : null}
+        {s.available !== false ? (
+          <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5, lineHeight: 1.45 }}>
+            {`Band × stim-era interaction likelihood-ratio test: χ² = ${fmt(s.chisq)}, `}
+            <strong>{`p = ${fmtP(s.lrt_p)}`}</strong>
+            {`. Per-era OR (n): ${erasArr}. `
+             + `Eras: OFF (<${fmt(s.thresholds_mA && s.thresholds_mA.off_max, 2)} mA), `
+             + `LOW (≤${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA), HIGH (>${fmt(s.thresholds_mA && s.thresholds_mA.low_max, 2)} mA). `
+             + "A p-value at or above 0.05 on its own is a failure to reject, not evidence that the "
+             + "band is equivalent across eras; that is what the equivalence margin above decides."}
+          </MDTypography>
+        ) : (
+          <MDTypography variant="caption" color="text" display="block" sx={{ fontSize: 11.5 }}>
+            {`No stability statistics were returned for this band: ${s.reason || "no result"}.`}
+          </MDTypography>
+        )}
+        {/* The rate confound is a third value the backend computes and the interface used to
+            discard. `rate_confounded_with_era` is True, False, or null when Cramér's V could not be
+            computed at all, and the three cases mean different things: a confounded era result is
+            carrying a stimulation-RATE component rather than a pure amplitude one, an unconfounded
+            one is not, and a null means the association between rate and era was not measurable.
+            Only the first two were ever actionable, and none of the three was ever shown. */}
+        {s.rate && s.rate.rate_confounded_with_era !== undefined ? (
+          <MDTypography variant="caption" display="block"
+            sx={{ fontSize: 11, lineHeight: 1.45,
+                  color: s.rate.rate_confounded_with_era === true ? PAL.warnText : PAL.neutral }}>
+            {s.rate.rate_confounded_with_era === true
+              ? "Stimulation rate is moderately or strongly associated with the era labels here, so "
+                + "the per-era differences above carry a rate component and are not a pure amplitude "
+                + "effect."
+              : s.rate.rate_confounded_with_era === false
+                ? "Stimulation rate is not appreciably associated with the era labels, so the "
+                  + "per-era differences above are not explained by rate changes."
+                : "Whether stimulation rate is associated with the era labels could not be measured "
+                  + "on these data, so a rate confound can be neither shown nor ruled out."}
+          </MDTypography>
+        ) : null}
+      </MDBox>
       {/* Commit-to-band: only offered for a VALIDATED verdict and when the parent supplied the
           emit envelope. POSTs /api/emitBandCandidate with the SAME band feature the readout used,
           stashes the returned §6 BandCandidate for the threshold-deployment view, and offers a
@@ -211,6 +428,12 @@ function ValidationReadout({ validation, validating, emitContext }) {
                 if (data && data.available && data.band_candidate) {
                   commitBandCandidate(emitContext.participantUid, data.band_candidate);
                   downloadBandCandidate(emitContext.participantUid, data.band_candidate);
+                  // Tell the page a candidate now exists. The committed candidate lives in
+                  // localStorage, which React cannot observe, and the browser's `storage` event
+                  // fires only for OTHER tabs — so without this callback the PSD-to-LSB panel
+                  // further down this same page would keep showing its empty state until a reload,
+                  // and a reader would reasonably conclude the conversion could not be computed.
+                  if (typeof onCommitted === "function") onCommitted(data.band_candidate);
                   setCommitted({ ok: true, msg: "Committed → Closed-Loop Sim (JSON downloaded)." });
                 } else {
                   setCommitted({ ok: false, msg: (data && data.reason) || "emit failed" });
@@ -225,8 +448,14 @@ function ValidationReadout({ validation, validating, emitContext }) {
             {committing ? "Committing…" : "Commit this band →"}
           </MDButton>
           {committed ? (
-            <MDTypography variant="caption" sx={{ fontSize: 11,
-              color: committed.ok ? "#0a7f3f" : "#9A3324" }}>
+            // The outcome is carried by a filled square in the semantic ink plus the words, rather
+            // than by colouring the words themselves. PAL.pass and PAL.fail are fill inks: as small
+            // text on white they measure about 3.4:1 and 3.9:1, below the 4.5:1 floor, so the
+            // sentence is set in near-black and the colour rides the swatch beside it.
+            <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.onWarn }}>
+              <span style={{ color: committed.ok ? PAL.pass : PAL.fail, marginRight: 4 }}>
+                {committed.ok ? "\u25A0" : "\u25A0"}
+              </span>
               {committed.msg}
             </MDTypography>
           ) : (
@@ -234,6 +463,21 @@ function ValidationReadout({ validation, validating, emitContext }) {
               Export this validated band as a deployment BandCandidate.
             </MDTypography>
           )}
+          {/* A band can pass the mixed-effects test and still have no demonstrated stability across
+              stimulation states. Whether that band may be committed is the PI's call, not this
+              component's, so the button is not gated on it — but the reader is told, next to the
+              button, in the neutral register rather than the failure one. */}
+          {stability.key !== "stable" ? (
+            <MDTypography variant="caption" display="block"
+              sx={{ fontSize: 10.5, color: PAL.neutral, width: "100%" }}>
+              {stability.key === "stim-dependent"
+                ? "This band's slope has been shown to differ between stimulation states. A "
+                  + "threshold set from it will not mean the same thing at every amplitude."
+                : "Equivalence of this band's slope across stimulation states has not been "
+                  + "demonstrated at this sample size, so the committed candidate carries an "
+                  + "undetermined stability, not a clean one."}
+            </MDTypography>
+          ) : null}
         </MDBox>
       ) : null}
     </MDBox>
@@ -241,7 +485,8 @@ function ValidationReadout({ validation, validating, emitContext }) {
 }
 
 
-function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams, matchDirty }) {
+function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, requestParams, matchDirty,
+                                     onBandCommitted }) {
   const ref = useRef(null);
   const [sel, setSel] = useState(null);   // {ci, bi} selected (channel, band-center) for the scatter
   // Click-triggered VALIDATION bundle: { available, glmer:{...}, stim:{...}, verdict } from the
@@ -624,6 +869,7 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                  + "d>0 means the band is higher when pain is high."}
               </MDTypography>
               <ValidationReadout validation={validation} validating={validating}
+                onCommitted={onBandCommitted}
                 emitContext={(participantUid && requestParams && selChannelRaw != null
                               && selCenterHz != null) ? {
                   participantUid,
@@ -693,9 +939,17 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
               as a self-contained IIFE (the proven JSX pattern here) to avoid the react-hooks eslint
               false-positive that a component-body const+map triggers. */}
           {(() => {
-            const rows = ((scan && Array.isArray(scan.channels)) ? scan.channels : [])
-              .filter((c) => c.selected_band);
-            if (!rows.length) return null;
+            // Every channel the scan touched is listed, including the ones for which no band could
+            // be selected. `selected_band` is null when not one band in the sweep produced a
+            // computable correlation, which means the channel was ANALYSED AND YIELDED NOTHING —
+            // a different statement from the channel not having been analysed. Filtering those
+            // rows out, as this table used to, made the two indistinguishable: a reader comparing
+            // a four-contact montage against a three-row table had no way to learn that the fourth
+            // contact had been screened and had come back empty.
+            const all = (scan && Array.isArray(scan.channels)) ? scan.channels : [];
+            const rows = all.filter((c) => c.selected_band);
+            const barren = all.filter((c) => !c.selected_band);
+            if (!rows.length && !barren.length) return null;
             return (
               <MDBox mb={1} mt={0.5} sx={{ overflowX: "auto" }}>
                 <MDTypography variant="caption" display="block" fontWeight="bold" mb={0.5} sx={{ fontSize: 12.5 }}>
@@ -712,7 +966,11 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                   <tbody>
                     {rows.map((c) => {
                       const sb = c.selected_band;
-                      const dc = sb.sign === "positive" ? "#D55E00" : sb.sign === "negative" ? "#0072B2" : "#9AA0A6";
+                      // Direction ink from the shared palette rather than local hexes. The arrow glyph carries
+                      // the same information, so colour here is redundant reinforcement and not the
+                      // only channel; "flat" takes the neutral ink because no direction was established.
+                      const dc = sb.sign === "positive" ? PAL.painHigh
+                        : sb.sign === "negative" ? PAL.painLow : PAL.neutral;
                       const dl = sb.direction === "elevation" ? "\u2191 elevation"
                         : sb.direction === "suppression" ? "\u2193 suppression" : "\u2014 flat";
                       return (
@@ -722,17 +980,47 @@ function SpectralFeatureImportance({ scan, pain, HI, LO, participantUid, request
                           <td style={{ padding: "2px 10px 2px 0", color: dc, fontWeight: 600 }}>{dl}</td>
                           <td style={{ padding: "2px 10px 2px 0" }}>{sb.rho == null ? "\u2014" : sb.rho.toFixed(2)}</td>
                           <td style={{ padding: "2px 10px 2px 0" }}>{sb.auc_signed == null ? "\u2014" : sb.auc_signed.toFixed(2)}</td>
-                          <td style={{ padding: "2px 10px 2px 0", fontWeight: sb.fdr_significant ? 700 : 400,
-                                       color: sb.fdr_significant ? "#0a7f3f" : "#6c757d" }}>
-                            {sb.q == null ? "\u2014" : `${sb.q.toFixed(3)}${sb.fdr_significant ? " \u2713" : ""}`}
+                          {/* The FDR column has THREE states, not two. A q that was computed and
+                              cleared 0.05 is a positive result; a q that was computed and did not
+                              clear it is a negative result; and no q at all — which happens when
+                              the clustered logistic could not be fitted at this band — is neither,
+                              because nothing was tested. The first two used to share the tick
+                              glyph's presence or absence and the third printed an em-dash in the
+                              same grey as a genuine negative, so a reader could not tell an
+                              untested band from a tested one that failed. Each state now carries
+                              its own word, and the two non-positive states are separated by
+                              wording rather than by shade alone. */}
+                          <td style={{ padding: "2px 10px 2px 0",
+                                       fontWeight: sb.fdr_significant ? 700 : 400,
+                                       color: sb.q == null ? PAL.neutral : PAL.onWarn }}>
+                            {sb.q == null
+                              ? "not tested"
+                              : `${sb.q.toFixed(3)}${sb.fdr_significant ? " \u2713" : " (n.s.)"}`}
                           </td>
                         </tr>
                       );
                     })}
+                    {/* Channels the scan screened and for which no band produced a computable
+                        correlation. Rendered as real rows in the neutral ink so the contact is
+                        visibly present and visibly unresolved, rather than absent. */}
+                    {barren.map((c) => (
+                      <tr key={`barren-${c.short}`} style={{ borderBottom: "1px solid #eef1f4" }}>
+                        <td style={{ padding: "2px 10px 2px 0", fontWeight: 600, color: PAL.neutral }}>
+                          {c.short}
+                        </td>
+                        <td colSpan={5} style={{ padding: "2px 10px 2px 0", color: PAL.neutral }}>
+                          {"screened, but no band in the sweep produced a computable correlation"}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-                <MDTypography variant="caption" display="block" mt={0.3} sx={{ fontSize: 11, fontStyle: "italic", color: "#6c757d" }}>
-                  {"\u2713 = survives band\u00d7channel BH-FDR (q<0.05); others are the contact's strongest exploratory band. Signed AUC <0.5 = power falls with pain."}
+                <MDTypography variant="caption" display="block" mt={0.3} sx={{ fontSize: 11, fontStyle: "italic", color: PAL.neutral }}>
+                  {"\u2713 = survives band\u00d7channel BH-FDR (q<0.05). \u201Cn.s.\u201D = a q was computed "
+                   + "and did not clear 0.05, so this is the contact's strongest exploratory band rather "
+                   + "than a validated one. \u201Cnot tested\u201D = no q could be computed at that band, "
+                   + "which is an absence of evidence and not a negative result. Signed AUC <0.5 = power "
+                   + "falls with pain."}
                 </MDTypography>
               </MDBox>
             );
@@ -872,7 +1160,7 @@ const featLabel = (k) => FEATURE_LABELS[k] || String(k).replace(/_/g, " ").repla
 export default function BiomarkerAnalytics({ analytics, summary, metricLabel, recordedPowers, programmedThresholds,
   binStrategy: previewStrategy, binMetricKey: previewMetricKey,
   binPercentileLow: previewPctLow, binPercentileHigh: previewPctHigh,
-  participantUid, requestParams, matchDirty }) {
+  participantUid, requestParams, matchDirty, onBandCommitted }) {
   // Hooks MUST be called unconditionally before any early return (React rules-of-hooks).
   const td = analytics ? (analytics.timedomain || {}) : {};
   const pdRoot = analytics ? (analytics.powerdomain || analytics.chronic || {}) : {};
@@ -1137,7 +1425,8 @@ export default function BiomarkerAnalytics({ analytics, summary, metricLabel, re
   if (scan && scan.channels && scan.channels.length) {
     tdPanels.push(
       <SpectralFeatureImportance key="sfi" scan={scan} pain={pain} HI={HI} LO={LO}
-        participantUid={participantUid} requestParams={requestParams} matchDirty={matchDirty} />
+        participantUid={participantUid} requestParams={requestParams} matchDirty={matchDirty}
+        onBandCommitted={onBandCommitted} />
     );
   }
 

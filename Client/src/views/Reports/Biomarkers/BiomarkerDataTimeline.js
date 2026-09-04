@@ -215,8 +215,18 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
   // (matched PSDs at the current window) exists. `binOf(ch, t)` returns "high"|"low"|"excluded"|
   // "unmatched" for a mark at (canonical channel, epoch seconds) — the lookup the scan model built.
   const binMode = colorMode === "binarization" && !!(scanModel && scanModel.binByKey);
+  // WHETHER MATCHING WAS ACTUALLY ATTEMPTED, which is a separate question from whether the user
+  // asked for binarization colouring. The scan model returns an empty lookup both when it matched
+  // nothing (a measured result) and when it could not run at all for want of a neural-sample index
+  // or a pain series (no result). The lookup Map is truthy in both cases, so `binMode` alone was
+  // true even when nothing had been assessed, and every mark on the timeline then fell through to
+  // the string "unmatched" — asserting, on the strength of a missing input, that the mark had been
+  // checked against the pain ratings and had failed to pair. The scan model now says which case it
+  // is in, and marks in the second case are labelled as not assessed instead.
+  const binAssessed = binMode && scanModel.matchable !== false;
   const binOf = (ch, tSec) => {
     if (!binMode || tSec == null) return null;
+    if (!binAssessed) return "not assessed";
     return scanModel.binByKey.get(`${String(ch).toUpperCase()}|${Math.round(tSec)}`) || "unmatched";
   };
   const hasToggle = typeof setColorMode === "function";
@@ -882,7 +892,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         // open marker still reads as its class.
         const cls = pain.y.map(classifyPain);
         const pm = (scanModel && scanModel.painMatched) || [];
-        const symb = pain.y.map((_v, i) => (pm[i] ? "circle" : "circle-open"));
+        // A THIRD SYMBOL FOR THE THIRD STATE. `painMatched` is only meaningful once matching has
+        // run: when it has not, the array is empty, every lookup is undefined, and the two-symbol
+        // rule below painted EVERY rating as an open circle whose hover read "no neural match" —
+        // a page-wide negative claim manufactured out of an absent input. A rating whose match
+        // status is unknown now gets its own symbol (a small cross, which is neither the closed
+        // circle that means matched nor the open one that means matched-nothing) and its own hover
+        // wording, so the three states are distinguishable at a glance and on inspection.
+        const symb = pain.y.map((_v, i) => (!binAssessed ? "x-thin"
+          : (pm[i] ? "circle" : "circle-open")));
         const classifyName = (v) => {
           if (!cuts || cuts.kind === "none") return "pain";
           if (cuts.kind === "two-cut") return v <= cuts.lowCut ? "low"
@@ -892,7 +910,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         traces.push({ type: "scattergl", mode: "markers", x: pain.t.map(D), y: py,
           marker: { size: 8, symbol: symb, color: cls, line: { width: 1.6, color: cls } },
           opacity: 0.95,
-          customdata: pain.y.map((v, i) => [v, (pm[i] ? "matched" : "no neural match"),
+          customdata: pain.y.map((v, i) => [v,
+            (!binAssessed ? "match not assessed" : (pm[i] ? "matched" : "no neural match")),
             classifyName(v), fmtHoverDate(pain.t[i]), fmtHoverTime(pain.t[i])]),
           hovertemplate: `<b>${pain.metric || "pain"} %{customdata[0]}</b><br>`
             + `%{customdata[3]} · %{customdata[4]}<br>`
@@ -969,6 +988,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
         marker: { symbol: "circle-open", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
         name: "not in binarized set  (no PRO in window / band-power)" });
+      // The fourth state gets a key entry only when the view is actually in it, because a
+      // permanent entry for a state that cannot occur while matching is running would be noise.
+      // When it IS in it, the entry is what tells the reader that the crosses mean an unanswered
+      // question rather than a negative answer.
+      if (!binAssessed) {
+        traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",
+          marker: { symbol: "x-thin", size: 11, color: DIM_GREY, line: { width: 1.5, color: DIM_GREY } },
+          name: "match not assessed  (no neural-sample index or no pain series — nothing was tested)" });
+      }
       // per-rating MODELED LSB still renders in binMode (colored by pain bin); document its shapes.
       // Native is NOT shown here — it's the colored band-power lane trace; these are modeled-at-rating.
       traces.push({ x: [null], y: [null], mode: "markers", type: "scatter",

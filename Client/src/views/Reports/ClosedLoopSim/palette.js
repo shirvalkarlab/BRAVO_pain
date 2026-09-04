@@ -78,6 +78,58 @@ export const PAL = {
   neutralBorder: "#6C757D44",
 };
 
+// ---- Rebuild of 2026-09-04: three further semantic axes ----
+//
+// These were added when the Closed-Loop Deployment page was rebuilt around the device-parameter
+// prescription. They are separate axes from the decision axis above, and the reason they have to be
+// separate is that a single row of the prescription table can be simultaneously "derived from this
+// participant's own data" and "cannot be confirmed enterable without looking at the programmer".
+// One colour axis cannot express two independent facts, so there are two.
+
+// PROVENANCE AXIS — where a number came from. Read off the left edge of a prescription row.
+// A participant-derived value gets the accent blue, because it is the one class of value that
+// carries information from this person's own recording and therefore must not be replaced by a
+// default. A manufacturer default gets NO bar at all, because absence needs nothing remembered in
+// order to be read correctly. A value the clinician must choose gets the hatched amber, and the
+// value column for such a row is left empty on purpose.
+PAL.originParticipant = OKABE_ITO.blue;
+PAL.originManufacturer = null;          // deliberately no ink: absence is the signal
+PAL.originClinician = OKABE_ITO.orange;
+PAL.originNone = OKABE_ITO.gray;
+
+// DEFERRAL INK — a rule whose finding is owned by another rule and counted once. The reddish-purple
+// is the one remaining Okabe–Ito ink that is separable from pass, warn and fail under all the
+// common colour-vision deficiencies, so a reader never has to decide whether a deferred row is a
+// failure.
+PAL.deferred = OKABE_ITO.reddishPurple;
+PAL.deferredFill = "#CC79A715";
+PAL.deferredBorder = "#CC79A755";
+
+// Fail-role fills, for the banners that carry a blocking finding. The decision axis above defined
+// the fail INK but never a fill, so every panel that needed one invented its own.
+PAL.failFill = "#D55E0012";
+PAL.failBorder = "#D55E0055";
+
+// DUTY-STATE RAMP — the three band-power states are ordinally related (below the lower threshold,
+// between the two, above the upper), so they take three shades of ONE hue rather than three hues.
+// Sequential shades encode order; categorical hues would assert that the three states are unrelated
+// kinds, which they are not.
+PAL.dutyBelow = "#9ECAE9";
+PAL.dutyBetween = "#4C93C9";
+PAL.dutyAbove = "#0B4C7C";
+
+// THE CAVEAT CHANNEL. A diagonal hatch laid over a filled mark means "this quantity is modelled or
+// unconfirmed, not observed". It is used for the duty-cycle bar (which assumes open-loop power
+// would persist under closed-loop control), for a disabled read-back checkbox, and for a value the
+// clinician must supply. It is deliberately used for NOTHING else on the page, so that the hatch
+// itself carries the meaning and does not have to be re-learned per panel.
+PAL.hatch = (ink, bg = "transparent") => `repeating-linear-gradient(45deg, ${ink} 0 2px, `
+  + `${bg} 2px 5px)`;
+
+// One monospaced stack for every digit a clinician transcribes, so decimal points line up down a
+// column and a narrow digit cannot be mistaken for a wide one.
+PAL.mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
+
 // Per-era color for the stim-state forest plot + cards. Pooled = accent (it is the reference).
 const ERA_COLORS = {
   OFF: OKABE_ITO.gray,

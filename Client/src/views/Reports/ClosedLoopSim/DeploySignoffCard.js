@@ -71,18 +71,22 @@ function KV({ k, v }) {
 
 function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpoint, summary,
                              deploymentReport }) {
-  // THE DEVICE VERDICT GATES THE NUMBER, added 2026-09-04, for the same reason it now gates the
-  // verdict strip: this card printed `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE
-  // sign-off record, gated only on the statistical threshold being available. It had no reference
-  // to the device rules, so a configuration the Percept forbids could be printed, signed and
-  // carried into a programming visit as though it were authorised. That is worse here than on the
-  // strip, because the printed sheet outlives the screen and loses whatever context surrounded it.
+  // THE DEVICE ANSWER, read from the deployment report rather than from the statistical summary.
   //
-  // Fail closed: a report that has not loaded, or that carries no device answer, withholds. An
-  // absent verdict is not permission.
+  // This card used to print `power ≥ N LSB` at twenty-four-point type inside a PRINTABLE sign-off
+  // record, gated only on the statistical threshold being available. It had no reference to the
+  // device rules at all, so a configuration the Percept forbids could be printed, signed and
+  // carried into a programming visit as though it were authorised. That was first fixed by
+  // suppressing the number when the device answer was negative; as of the 2026-09-04 rebuild the
+  // number is not on this card in any state, because the values to transcribe belong on the
+  // prescription panel, which withholds the whole table on the same condition and carries the
+  // read-back checklist that makes a value safe to act on. One number in one place.
+  //
+  // Fail closed: a report that has not loaded, or that carries no device answer, is treated as a
+  // refusal, because an absent verdict is not permission.
   const _rep = deploymentReport && deploymentReport.data ? deploymentReport.data : deploymentReport;
   const _vd = (_rep && _rep.verdict_detail) || {};
-  const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
+  const deviceOk = !!(_rep && _rep.available && _vd.device_eligible === true);
   const _nFail = ((_rep && _rep.eligibility && _rep.eligibility.failures) || []).length;
   const _nUnknown = ((_rep && _rep.eligibility && _rep.eligibility.unknowns) || []).length;
   const bc = bandCandidate || {};
@@ -127,25 +131,28 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const id = data && data.identity;
   const dc = data && data.device_control;
   const ev = data && data.evidence;
-  const th = data && data.threshold;
-  // ESTIMATED (modeled) threshold for an unsensed-but-modelable band: deployment_summary keeps
-  // threshold.available=False / upper_lsb=None and nests the modeled value under threshold.estimate.
-  // Surface it as an amber ESTIMATED card (power ≈, fail-closed — never as a measured `available`
-  // value), matching what the LSB panel and the top verdict strip show for the same band.
-  const thEst = th && th.estimated && th.estimate ? th.estimate : null;
+  // The threshold object from the statistical summary is deliberately NOT read here any more. The
+  // deployable value and its provenance live on the prescription panel, which is the only surface
+  // with a read-back step, and duplicating the number onto a printable sheet is what allowed a
+  // signed record to disagree with the device rules.
   const pw = data && data.power;
   const fwd = data && data.forward;
-  // Audit C8: "ready to program" keys on the NECESSARY gates alone (a hard prerequisite failing
-  // blocks deployment even at a high passed-count), NOT on n_gates_passed === n_gates. Fall back to
-  // the count only for older payloads that predate ready_to_program.
-  const ready = data
+  // The statistical summary's own readiness flag, which keys on the NECESSARY gates alone rather
+  // than on the passed-count. It is read here only so the gate line can be worded correctly; it no
+  // longer drives a headline or the card's frame, because a statistical readiness flag that knows
+  // nothing about the device rules is not a verdict.
+  const summaryReady = data
     ? (data.ready_to_program != null ? !!data.ready_to_program : data.n_gates_passed === data.n_gates)
     : false;
   const nIndet = (data && data.n_gates_indeterminate) || 0;
 
+  // The card's frame keys on the DEVICE answer and not on the statistical one, so the card's own
+  // chrome cannot imply a permission that the rule table has refused.
+  const frameInk = deviceOk ? PAL.pass : PAL.warn;
+
   return (
     <Card className="cl-signoff-card"
-      sx={{ width: "100%", border: data ? `2px solid ${ready ? PAL.pass : PAL.warn}` : undefined }}>
+      sx={{ width: "100%", border: data ? `2px solid ${frameInk}` : undefined }}>
       <MDBox p={2.5}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
@@ -169,20 +176,50 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
           <MDTypography variant="caption" sx={{ fontSize: 11, color: PAL.fail }}>{`Unavailable: ${err}.`}</MDTypography>
         ) : data ? (
           <>
-            {/* headline verdict — driven by the NECESSARY gates (audit C8), not the passed-count */}
+            {/* NO SECOND VERDICT, changed 2026-09-04. This card used to print its own readiness
+                headline computed from the statistical gates alone, which made it the third verdict
+                statement on a page whose two endpoints answer different questions and can disagree.
+                A printed record carrying a permissive sentence that the device rules contradict is
+                worse than a screen doing so, because the sheet outlives the screen and loses
+                whatever context surrounded it.
+
+                What replaces it is a pointer to the one reconciled verdict, plus the device answer
+                restated in a single line. The device answer is restated rather than omitted because
+                a printed sheet that says nothing about permission can be read as granting it. The
+                statistical gate counts stay, labelled as evidence. */}
             <MDBox p={1} mb={1.5} sx={{ borderRadius: "6px",
-              backgroundColor: ready ? PAL.passFill : PAL.warnFill }}>
-              <MDTypography variant="h6" sx={{ fontSize: 14, color: ready ? PAL.pass : PAL.warnText }}>
-                {ready
-                  ? "Ready to program — all required gates passed"
-                  : (data.n_necessary != null
-                    ? `Not ready — ${data.n_necessary_passed} of ${data.n_necessary} required gates passed`
-                    : "Not ready — review caveats before programming")}
+              backgroundColor: deviceOk ? PAL.passFill : PAL.warnFill }}>
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10,
+                fontWeight: "bold", letterSpacing: 0.4,
+                color: deviceOk ? PAL.pass : PAL.warnText }}>
+                THE VERDICT FOR THIS RECORD IS THE RECONCILED HEADER AT THE TOP OF THIS SHEET
               </MDTypography>
-              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#666" }}>
-                {`${data.n_gates_passed} of ${data.n_gates} total gates passed`}
-                {nIndet ? ` · ${nIndet} not tested` : ""}
-                {` · verdict: ${data.verdict} · match direction: ${data.match_direction}`}
+              <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
+                color: "#2A2A2A", mt: 0.2 }}>
+                {deviceOk
+                  ? "The device rules permit this configuration. Read the header for the evidence "
+                    + "answer as well, because both have to clear before anything is programmed."
+                  : !_rep || !_rep.available
+                    ? "The device rules have not been evaluated for this configuration. This sheet "
+                      + "is not a record of an authorised setting."
+                    : "The device rules do NOT permit this configuration"
+                      + `${_nFail ? `: ${_nFail} rule${_nFail === 1 ? "" : "s"} violated` : ""}`
+                      + `${_nUnknown ? `, ${_nUnknown} that could not be evaluated` : ""}. `
+                      + "This sheet is not a record of an authorised setting."}
+              </MDTypography>
+              <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5,
+                color: "#666", mt: 0.3 }}>
+                {`Statistical gates, as evidence rather than as permission: `
+                  + `${data.n_gates_passed} of ${data.n_gates} passed`}
+                {data.n_necessary != null
+                  ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
+                {nIndet ? `, ${nIndet} not tested` : ""}
+                {`. Summary verdict: ${data.verdict}. Match direction: ${data.match_direction}.`}
+                {summaryReady
+                  ? " The summary's own required gates all passed, which is a statement about "
+                    + "discrimination and not about whether the device will accept the "
+                    + "configuration."
+                  : " The summary's own required gates did not all pass."}
               </MDTypography>
             </MDBox>
 
@@ -203,68 +240,34 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
                   </>
                 ) : null}
 
+                {/* WHERE THE VALUES TO TRANSCRIBE LIVE. This block used to print the threshold
+                    itself at twenty-four-point type. It now points at the prescription panel
+                    instead, for two reasons. The first is that one number belongs in one place: two
+                    renderings of the same threshold on one page can drift, and this card is the one
+                    that gets printed and signed. The second is that a threshold on its own is not
+                    enough to program from — it needs its units, its provenance, the fields it is
+                    coupled to and a read-back step — and all of those are on the prescription
+                    panel, which withholds the whole table on exactly the device condition stated
+                    above. */
+                }
                 <MDBox mt={1.2} p={1.2} sx={{ borderRadius: "6px",
-                  backgroundColor: th && th.available ? PAL.accentFill : PAL.warnFill,
-                  border: `1px solid ${th && th.available ? PAL.accentBorder : PAL.warnBorder}` }}>
+                  backgroundColor: PAL.neutralFill,
+                  border: `1px solid ${PAL.neutralBorder}` }}>
                   <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-                    color: th && th.available && !deviceBlocks ? PAL.accent : PAL.warnText }}>
-                    {deviceBlocks ? "THRESHOLD TO PROGRAM — WITHHELD" : "THRESHOLD TO PROGRAM"}
+                    letterSpacing: 0.4, color: PAL.neutral }}>
+                    VALUES TO TRANSCRIBE
                   </MDTypography>
-                  {deviceBlocks ? (
-                    <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText,
-                        lineHeight: 1.1 }}>
-                        no value shown
-                      </MDTypography>
-                      <MDTypography variant="caption" display="block"
-                        sx={{ fontSize: 9.5, color: PAL.warnText }}>
-                        {!_rep || !_rep.available
-                          ? "The device rules have not been evaluated for this configuration, so no "
-                            + "value is printed. This sheet is not a record of an authorised setting."
-                          : `The device does not permit this configuration`
-                            + `${_nFail ? `: ${_nFail} rule${_nFail === 1 ? "" : "s"} violated` : ""}`
-                            + `${_nUnknown ? `, ${_nUnknown} cannot be evaluated` : ""}. `
-                            + `No value to program is printed, because a number on a signed sheet `
-                            + `gets entered. Clear the device rules first.`}
-                      </MDTypography>
-                    </>
-                  ) : th && th.available ? (
-                    <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.accent, lineHeight: 1.1 }}>
-                        {`power ≥ ${fmt(th.upper_lsb, 1)} LSB`}
-                      </MDTypography>
-                      <MDTypography variant="caption" sx={{ fontSize: 9.5, color: "#777" }}>
-                        {`p${fmt(th.percentile, 0)} of device Timeline LSB · ${th.n_timeline_samples} in-band samples`}
-                      </MDTypography>
-                      {opProvenance && opProvenance.rule_label ? (
-                        <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777", mt: 0.3 }}>
-                          {`Operating point: ${opProvenance.rule_label}`}
-                          {opProvenance.sensitivity != null
-                            ? ` · sens ${fmt(opProvenance.sensitivity)} / spec ${fmt(opProvenance.specificity)}` : ""}
-                          {opProvenance.degenerate ? " · ⚠ degenerate — not deployable" : ""}
-                        </MDTypography>
-                      ) : null}
-                    </>
-                  ) : thEst ? (
-                    <>
-                      <MDTypography variant="h4" sx={{ fontSize: 24, color: PAL.warnText, lineHeight: 1.1 }}>
-                        {`power ≈ ${fmt(thEst.estimated_upper_lsb, 1)} LSB`}
-                      </MDTypography>
-                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#777" }}>
-                        {`ESTIMATED (${thEst.tier || "modeled"}) — device never sensed this band; `}
-                        {thEst.estimated_upper_lsb_lo != null && thEst.estimated_upper_lsb_hi != null
-                          ? `±1σ ${fmt(thEst.estimated_upper_lsb_lo, 1)}–${fmt(thEst.estimated_upper_lsb_hi, 1)} LSB` : ""}
-                        {thEst.freq_extrapolated ? " · ⚠ extrapolated beyond validated 8–30 Hz" : ""}
-                      </MDTypography>
-                      <MDTypography variant="caption" display="block" sx={{ fontSize: 9, color: "#999", mt: 0.3 }}>
-                        For planning only — not a measured prerequisite. See the LSB panel for the ±1σ gauge.
-                      </MDTypography>
-                    </>
-                  ) : (
-                    <MDTypography variant="caption" display="block" sx={{ fontSize: 11, mt: 0.3 }}>
-                      No deployable LSB threshold — no measured Timeline LSB and no modeled estimate for this band.
-                    </MDTypography>
-                  )}
+                  <MDTypography variant="caption" display="block" sx={{ fontSize: 11.5,
+                    color: "#2A2A2A", mt: 0.2 }}>
+                    {deviceOk
+                      ? "The parameter table on the deployment page carries every value to enter, "
+                        + "with its units in a separate column, the minutes-and-seconds reading for "
+                        + "each duration, and a read-back box per row. Transcribe from that table "
+                        + "and not from this sheet, because this sheet has no read-back step."
+                      : "No value to program is printed on this sheet or on the deployment page, "
+                        + "because the device does not permit this configuration. A number on a "
+                        + "signed sheet gets entered."}
+                  </MDTypography>
                 </MDBox>
 
                 {/* Advisory ramp guidance (audit C10): the closed-loop tuning surface is band +

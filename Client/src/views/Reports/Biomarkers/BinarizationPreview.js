@@ -591,10 +591,33 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           {"Band-power LSB appears on the timeline but is not a full-spectrum PSD, so it is not pooled here."}
         </MDTypography>
       ) : (hasTolControl ? (
+        // WHY THIS IS THREE MESSAGES AND NOT ONE. The card falls back to the daily pain-report
+        // distribution whenever no neural sample carries a pain label, and it used to explain that
+        // fallback with a single sentence — "No PSD scan index available" — regardless of the
+        // reason. That sentence is true in only one of the three cases, and in the case that
+        // matters most it is actively wrong: when the scan index and the pain series are both
+        // present and the match window is simply too narrow for anything to pair, the correct
+        // statement is that ZERO of the available neural samples reached a pain rating at this
+        // window, which is a measured result the reader can fix by widening the window. Announcing
+        // a missing input instead sends them looking for a data problem that does not exist. The
+        // scan model now reports which situation it is in, so each gets its own sentence.
         <MDTypography variant="caption" color="dark" sx={{ fontSize: 11.5, fontStyle: "italic", mb: 0.25 }}>
           {(loading || matchedLoading)
             ? "Loading neural-sample availability…"
-            : "No PSD scan index available — showing the daily PRO distribution."}
+            : (scanModel && scanModel.matchable)
+              ? `None of the ${(scanModel.counts && scanModel.counts.n_sessions) || 0} available `
+                + `neural samples fell within \u00b1${matchTolerance} min of a pain rating, so nothing `
+                + "can be binarized at this window. Widen the match window above. The histogram "
+                + "below has fallen back to the daily pain-report distribution, which is a "
+                + "different quantity: it shows the pain scores themselves, not the neural data "
+                + "they could label."
+              : (scanModel && scanModel.unmatchableReason === "no_pain_series")
+                ? "No pain reports are available for the selected metric, so no neural sample can "
+                  + "be labelled and matching was not attempted. This is an absence of pain data, "
+                  + "not a finding about the neural data."
+                : "The neural-sample index for this participant has not been loaded, so matching "
+                  + "was not attempted and nothing here describes how much neural data could be "
+                  + "binarized. The histogram below is the daily pain-report distribution."}
         </MDTypography>
       ) : null)}
 

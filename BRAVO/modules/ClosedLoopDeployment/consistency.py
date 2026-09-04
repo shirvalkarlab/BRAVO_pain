@@ -129,5 +129,7 @@ def coherence_report(e1, e2, e3, *, p=None, n_boot=0):
                  "requires, so the candidate is coherent as physiology and still not deployable.")
     return CoherenceReport(coherent=(bool(ok) and bool(matches_dual)) if ok is not None else None,
                            p_coherent=p, n_boot=n_boot,
-                           expected_pattern=str(exp), observed_pattern=str(obs),
+                           # Passed as mappings. `str(exp)` produced a Python repr that no
+                           # JSON parser can read; see the note on the dataclass fields.
+                           expected_pattern=dict(exp), observed_pattern=dict(obs),
                            cluster_unit=e2.cluster_unit, note=note)

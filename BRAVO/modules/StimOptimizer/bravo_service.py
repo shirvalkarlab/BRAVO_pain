@@ -181,8 +181,17 @@ def run_for_participant(request_data: dict) -> dict:
                         "amp_mA": _jsonable(m.get("x_star", [None, None])[1]),
                         "posterior_mean": _jsonable(m.get("mu_star")),
                         "posterior_sd": _jsonable(m.get("sd_star"))},
-            "optimum_resolved": bool(arm.surface_can_resolve_its_optimum())
+            # `_jsonable`, NOT `bool(...)`. The bool() cast collapsed a three-valued answer to
+            # two: an arm whose predicted advantage was measured and found too small to call, and
+            # an arm whose difference could not be formed at all, both arrived as False. The
+            # interface was recomputing the difference itself to recover the third state.
+            "optimum_resolved": _jsonable(arm.surface_can_resolve_its_optimum())
                                 if hasattr(arm, "surface_can_resolve_its_optimum") else None,
+            # THE COMPARISON THE VERDICT IS ABOUT, serialised rather than left to the interface.
+            # The panel was duplicating sqrt(sd_star^2 + sd_incumbent^2) and hardcoding the
+            # resolution multiple, so a change to either would leave the displayed numbers
+            # silently disagreeing with the verdict printed beside them.
+            "comparison": _arm_comparison(arm),
             "kernel": _jsonable(m.get("kernel")),
             # Use the canonical boolean. `safe_contiguous_ceiling` is a float (NaN when there is no
             # ceiling), never None, so testing it against None was constant True and silently
@@ -282,14 +291,69 @@ def closed_loop_readiness(participant, es, *, include=True) -> dict:
                 "reason": f"closed-loop readiness could not be evaluated: {e}"}
 
 
+def _arm_comparison(arm):
+    """The candidate-versus-incumbent difference and its uncertainty, as the resolution rule sees it.
+
+    Serialised so the interface never reconstructs it. The resolution verdict is a statement about
+    `gain` against `k * sd_of_difference`, and a table that prints two posterior means and two
+    separate standard deviations asks the reader to combine four numbers in their head to see the
+    quantity the verdict is actually about.
+
+    `sd_of_difference` is sqrt(var1 + var2) without the joint covariance term, which the pipeline
+    documents: because nearby cells on a smooth kernel are positively correlated, dropping
+    `-2*cov` OVERSTATES the variance, so the rule is conservative — it can withhold a
+    recommendation it might have supported, but it cannot manufacture one.
+    """
+    import math
+
+    from modules.StimOptimizer import stage1_openloop as _s1
+
+    m = getattr(arm, "meta", None) or {}
+    try:
+        gain = float(m.get("incumbent_mu")) - float(m.get("mu_star"))
+        sd_d = math.sqrt(float(m.get("sd_star")) ** 2 + float(m.get("incumbent_sd") or 0.0) ** 2)
+        if not math.isfinite(sd_d) or sd_d <= 0:
+            sd_d = None
+    except (TypeError, ValueError):
+        gain, sd_d = None, None
+    k = float(getattr(_s1, "RESOLUTION_K", 1.0))
+    return {
+        "gain": _jsonable(gain),
+        "sd_of_difference": _jsonable(sd_d),
+        "k": k,
+        "margin": _jsonable(k * sd_d) if sd_d is not None else None,
+        "sign_convention": ("the objective is a pain score, so LOWER is better and a POSITIVE gain "
+                            "favours the candidate over the setting currently in force"),
+        "note": ("sd_of_difference is sqrt(sd_candidate^2 + sd_incumbent^2). The joint covariance "
+                 "term is omitted because the two cells are not predicted jointly; since nearby "
+                 "cells on a smooth kernel are positively correlated, omitting it overstates the "
+                 "variance and makes the resolution rule conservative rather than permissive."),
+    }
+
+
 def _blockers(rep, arms, observed_amp_range=None) -> list:
     """Plain-language reasons a parameter recommendation is withheld."""
     observed_amp_range = observed_amp_range or {}
     out = []
-    if not any(a.get("optimum_resolved") for a in arms.values()):
-        out.append("No arm can distinguish its own best setting from the setting currently in force: "
-                   "for every arm the predicted gain is smaller than the posterior uncertainty at "
-                   "that cell. The surfaces show where to look next, not what to program.")
+    # THREE STATES, counted separately. A bare truthiness test read `None` as a negative, so once
+    # the pipeline stopped collapsing the tri-state an arm whose difference could not be FORMED
+    # would still have counted towards "every arm was measured and none resolved" — a positive
+    # claim about an arm on which nothing was measured.
+    _resolved = [k for k, a in arms.items() if a.get("optimum_resolved") is True]
+    _too_small = [k for k, a in arms.items() if a.get("optimum_resolved") is False]
+    _unformed = [k for k, a in arms.items() if a.get("optimum_resolved") is None]
+    if not _resolved:
+        msg = ("No arm can distinguish its own best setting from the setting currently in force. "
+               "The surfaces show where to look next, not what to program.")
+        if _too_small:
+            msg += (f" For {len(_too_small)} arm(s) the predicted gain over the setting in force is "
+                    f"smaller than the uncertainty of that difference, which more exposure at those "
+                    f"cells could change.")
+        if _unformed:
+            msg += (f" For {len(_unformed)} arm(s) the difference could not be formed at all because "
+                    f"a posterior was degenerate, so those arms were NOT compared rather than "
+                    f"compared and found wanting; that needs the fit repaired, not more exposure.")
+        out.append(msg)
     for label, a in arms.items():
         if a.get("safe_contiguous") is False:
             out.append(f"{label}: the safe set is not contiguous in amplitude, so the safety model "

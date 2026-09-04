@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from StimOptimizer import pipeline
 from StimOptimizer.routines import plots as PLT
 
 
@@ -149,6 +150,47 @@ def test_gate_missing_incumbent_sd_degrades_to_the_candidate_only():
     assert arm.surface_can_resolve_its_optimum() is True
 
 
-def test_gate_rejects_a_degenerate_zero_variance():
+def test_gate_returns_NONE_not_FALSE_when_the_difference_cannot_be_formed():
+    """Updated 2026-09-04. This test previously asserted `is False` here, which pinned a collapse
+    of three answers into two.
+
+    A zero or non-finite propagated standard deviation does not mean "this arm's advantage was
+    measured and is too small to call". It means the difference could not be FORMED at all, because
+    one of the two posteriors is degenerate — in practice a pulse-width stratum that never
+    delivered the incumbent's rate, so there is no data anywhere near the cell being compared.
+    Those two answers ask opposite things of a reader: the first says collect more exposure at that
+    cell, the second says the fit is broken and no amount of exposure helps until it is repaired.
+    Reporting them identically sent a reader to gather data that could not have resolved anything.
+
+    The slice-level `stage1_openloop.SliceResult.resolves_its_optimum` already returned
+    `bool | None` for exactly this reason, and its docstring calls that the single most important
+    correction in the module; this arm-level method now matches it.
+    """
     arm = _arm(mu_star=-1.0, sd_star=0.0, incumbent_mu=0.0, incumbent_sd=0.0)
-    assert arm.surface_can_resolve_its_optimum() is False
+    assert arm.surface_can_resolve_its_optimum() is None
+
+    # and the genuine negative must still be False, or the tri-state has simply moved the problem
+    measured_and_too_small = _arm(mu_star=-0.1, sd_star=1.0, incumbent_mu=0.0, incumbent_sd=1.0)
+    assert measured_and_too_small.surface_can_resolve_its_optimum() is False
+
+
+def test_an_unformed_difference_never_counts_as_support_for_a_recommendation():
+    """The safety property of the change above. `recommendation_is_supported` used to be a bare
+    `any(...)` over the gate, and a bare truthiness test on `None` happens to give the right answer
+    here — but only by accident, and the same pattern in the API's blocker list did NOT: it counted
+    an unformed arm towards "every arm was measured and none resolved", which is a positive claim
+    about an arm on which nothing was measured. Pinning the arm-level invariant so a future
+    refactor cannot reintroduce it.
+    """
+    degenerate = _arm(mu_star=-1.0, sd_star=0.0, incumbent_mu=0.0, incumbent_sd=0.0)
+    assert degenerate.surface_can_resolve_its_optimum() is None
+
+    rep = pipeline.RunReport(arms={"only_arm": degenerate}, summary=None, manifest={})
+    assert rep.recommendation_is_supported() is False, (
+        "an arm whose difference could not be formed has not supported a recommendation")
+
+    # a genuinely resolved arm alongside it must still support one
+    good = _arm(mu_star=-5.0, sd_star=0.5, incumbent_mu=0.0, incumbent_sd=0.5)
+    rep2 = pipeline.RunReport(arms={"degenerate": degenerate, "good": good},
+                              summary=None, manifest={})
+    assert rep2.recommendation_is_supported() is True

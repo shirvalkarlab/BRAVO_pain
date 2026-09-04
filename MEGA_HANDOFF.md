@@ -75,6 +75,108 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-04 (interface rebuild) — the mode toggle, and seven backend defects the two UI lanes found
+
+The PI asked for the whole interface rebuild plus the mode toggle: "there is no toggle button to
+choose single or dual threshold. That needs to be a toggle at the top for what mode the user wishes,
+perhaps next to what mode is recommended by the module, so that the user can explore and experiment
+with options and knobs." Two parallel lanes did the React work (ClosedLoopSim; Biomarkers plus
+StimOptimizer), and I did the backend and the integration. Reports:
+CLD_REBUILD_REPORT.md and BIOMARKERS_STIMOPT_CONSISTENCY_REPORT.md.
+
+**THE TOGGLE'S BACKEND.** `prescribe_all_modes()` returns all three modes plus the recommendation
+rather than only the recommended one, because a module that returns just its own preference makes
+the clinician's choice unauditable. `rep.prescription` stays as the mode the CANDIDATE asked for and
+`rep.prescriptions` carries all three, so a clinician exploring Single Threshold does not have the
+page snap back to what the module prefers. The field SETS differ, not just the numbers: dual 16
+fields with two hand-set thresholds and TWO onset durations, single 14 with one threshold the DEVICE
+computes (D20) and one onset, single_inverse 0 because it cannot drive therapy.
+
+**SEVEN BACKEND DEFECTS, all found by the lanes and all verified against source before fixing.**
+
+1. **SAFETY. The one row where the error ran toward entering a number that must not be entered.** In
+   Single Threshold the `Single LFP threshold` row arrived with `confirm: "enterable"` while its own
+   `why` said the opposite — the device computes it as 0.75 x (Upper - Lower) + Lower (D20) and the
+   number is shown only for verification. The interface consumes the axis, not the prose, so the
+   front end had to detect the row by matching its `why` text and its author flagged that as a
+   stopgap needing replacement. New status `device_computed` derives `origin: "device"` and
+   `confirm: "verify_only"`; the prose match is now DELETED rather than kept as a fallback, since
+   leaving both would let a future row with similar wording silently acquire the treatment.
+2. **`coherence.expected_pattern` and `observed_pattern` were Python dict reprs, not JSON.** The
+   dataclass fields were `str` and `consistency.py` called `str(exp)`, putting
+   `{'E1': -1, 'E2': 1, ...}` on the wire — single-quoted keys `JSON.parse` cannot read, with
+   apostrophes inside the nested prose. The interface was recovering the three signs with a regular
+   expression over a Python repr, and a serialisation change would have yielded three silently
+   absent signs. Fields are now `dict`.
+3. **No structured field named the inference estimator.** The JavaScript hardcoded
+   `MIN_RELIABLE_CLUSTERS = 40` with a comment claiming to mirror `edges.py`, and by then it was
+   wrong twice over: the constant had stopped being a disqualification floor and become a SWITCH
+   between CR0 and the wild cluster bootstrap-t. New `edges.estimator_for(n_clusters)` is the single
+   definition, returning the estimator, the switch point and why that one; the adapter reads it.
+4. **`StimOptimizer` collapsed a tri-state, in three places.**
+   `pipeline.StimArm.surface_can_resolve_its_optimum` returned `False` both for an arm measured and
+   found too small to call and for an arm whose difference could not be FORMED (a degenerate
+   posterior — typically a stratum that never delivered the incumbent's rate). Those ask opposite
+   things of a reader: collect more exposure, versus repair the fit. It now returns `None`, matching
+   `stage1_openloop.SliceResult.resolves_its_optimum`, whose docstring already called that the
+   single most important correction in the module. `bravo_service` stopped destroying it with
+   `bool(...)`, and `_blockers` now counts the three states separately — a bare truthiness test had
+   counted an unformed arm towards "every arm was measured and none resolved", a positive claim
+   about an arm on which nothing was measured.
+5. **The comparison the verdict is about was not serialised.** New `comparison` block carries
+   `gain`, `sd_of_difference`, `k` and `margin`, computed by the same code that decides the verdict.
+   The page had been duplicating `sqrt(sd_star^2 + sd_incumbent^2)` and hardcoding the resolution
+   multiple, so a change to either would have left displayed intervals silently disagreeing with the
+   verdict beside them. Two numbers disagreeing silently is worse than one being wrong.
+6. **`_band_decide_verdict` asserted a stability the equivalence test declined to grant.** It fell
+   through to `VALIDATED (stim-stable)` whenever `stim_stable` was not explicitly False, which
+   includes `stability_verdict == "inconclusive"` — the interaction test failing to reject while the
+   interval was wider than the declared margin. A failure to reject is not evidence of equivalence.
+   Now reads the three-way verdict and emits `(stim stability not determinable)` or
+   `(stim stability not tested)`. The front end had been rewriting the parenthetical client-side.
+7. **Two provenance axes**, because `status` conflated where a number came from with whether it can
+   be entered. The averaging duration proves they are independent: derived from this participant's
+   integration window AND with an unpublished adjustable range, so `origin: participant` with
+   `confirm: check_on_device`. Plus `enter_as`, the minutes-and-seconds gloss computed in Python so
+   it cannot disagree with JavaScript — the transition durations leave as 150000 and 300000 ms while
+   the A610 shows minutes and seconds.
+
+**FIELD-PAIR COUPLINGS.** The most consequential fact about this configuration belongs to no single
+row: at the derived averaging duration the onset duration is inoperative. Each mode now carries a
+`couplings` list naming both fields, both values, the consequence, the resolution, and what is NOT
+established (no supplied document says whether the device counts onset in averaging windows or FFT
+updates; the reading used is the one Medtronic's matched 1200/1200 ms defaults support).
+
+**One test was updated rather than worked around.**
+`test_gate_rejects_a_degenerate_zero_variance` asserted `is False` for the degenerate case, pinning
+the collapse. It now asserts `is None`, and a second test pins that an unformed difference never
+counts as support for a recommendation.
+
+**Verification.** ClosedLoopDeployment 192 passed; StimOptimizer 368 passed / 41 skipped; container
+Biomarkers 324 passed; ClosedLoopSim JavaScript 30 passed across 2 suites; production build
+compiled with only the pre-existing @mediapipe source-map warning. Live: verdict still blocked,
+device_eligible false, 1 failure (D19), 4 unknowns, 1 deferred. Confirmed in the RUNNING workers by
+`inspect.getsource`, not by the reload flag, and confirmed in the SERVED bundle by string search
+(`verify_only`, `ramp_resolvable`, `streaming session`, `THE DEVICE COMPUTES THIS`, `anti-aligned`,
+`stim stability not determinable`).
+
+**THE SCIENTIFIC STATE CHANGED and the interface had to change with it.** All three edges now
+RESOLVE: E1 +0.0578 LFP power per mA CI [0.0393, 0.0763] p=1e-9 on 64 clusters; E2 -1.4924 pain
+points per unit power CI [-2.401, -0.584] p=0.0013 on 44; E3 -0.1489 pain points per mA
+CI [-0.264, -0.033] p=0.0114 on 89. Coherence is now genuinely `false`, not `null`, AND the reason
+is subtle: observed {E1:+1, E2:-1, E3:-1} against expected {E1:-1, E2:+1, E3:-1}, so
+sign(E1) x sign(E2) = -1 = sign(E3) — the three edges tell one internally CONSISTENT story about the
+physiology. The contradiction is not among the edges but between the physiology and what Dual
+Threshold requires. The panel distinguishes "the edges disagree with each other" from "the edges
+agree with each other but are anti-aligned with the control law", because those ask different things
+of a reader and one red "incoherent" would be wrong.
+
+**Still open.** D29 needs the implant record; D30 is the PI's call on closing the frequency search;
+D31 needs a number Medtronic has not published; D32 needs someone to look at whether a pocket
+adaptor is fitted. D19 was NOT loosened and still fails on evidence.
+
+
+
 ### 2026-09-04 (safety gate) — the page printed a value to program for a configuration the device forbids
 
 Found by a design-critique lane and verified against the source before acting on it. **Three

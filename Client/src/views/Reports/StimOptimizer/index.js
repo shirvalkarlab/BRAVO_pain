@@ -10,6 +10,16 @@
 * smaller than the uncertainty of the difference against the setting in force, so its surface says
 * where to look next, not what to program. Do NOT add a "recommended settings" banner that reads the
 * optimum without gating on `recommendation_supported`.
+*
+* Added 2026-09-04, and please preserve for the same reason. The arms table now carries the GAIN
+* against the setting in force together with one standard deviation of that difference, because
+* that difference is the quantity the verdict is about and printing the two posteriors separately
+* left the reader to combine four numbers by hand. The per-arm chip has THREE states, not two: an
+* arm whose difference was formed and found too small to call reads "not resolved", while an arm
+* whose difference could not be formed at all reads "not determinable" — the backend's boolean
+* reports both as False, and they call for different responses (collect more exposure versus fix
+* the fit). Do NOT collapse those two back together, and do not draw either of them in the failure
+* ink: neither says that a setting is worse, only that the comparison has not been earned.
 */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -28,9 +38,136 @@ import MDAlert from "components/MDAlert";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
+// Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
+// that means the same thing on the deployment page and here is drawn in the same ink. The roles
+// used below are `neutral` for a question that has not been answered and `warnText` for a caveat
+// that has; the failure ink is deliberately not used for either, because neither is a failure.
+import PAL from "views/Reports/ClosedLoopSim/palette";
 
 const MODEBAR = { responsive: true, displaylogo: false,
   modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] };
+
+// THE COMPARISON THIS PAGE EXISTS TO SHOW, COMPUTED WHERE IT CAN BE DISPLAYED.
+//
+// The module's position, which the figures and the withheld recommendation both rest on, is that a
+// predicted optimum means nothing until it is resolved against the uncertainty of ITS OWN
+// DIFFERENCE from the setting currently in force. The backend applies exactly that test in
+// `pipeline.StimArm.surface_can_resolve_its_optimum`: the gain is `incumbent_mu - mu_star` (the
+// objective is a pain score, so lower is better and a positive gain means the candidate is
+// predicted to be better), the standard deviation of the difference is
+// `sqrt(sd_star^2 + incumbent_sd^2)`, and the optimum counts as resolved only when the gain exceeds
+// one such standard deviation.
+//
+// The page used to print the two posterior means and their two separate standard deviations and
+// then a bare resolved / not-resolved chip, which left the reader to combine four numbers in their
+// head to see the quantity the verdict was actually about. Worse, the chip could not distinguish
+// two different situations that the backend's boolean also conflates: an arm whose difference was
+// measured and found too small to call, and an arm for which the difference could not be formed at
+// all — which happens when either posterior standard deviation is missing or non-finite, and which
+// `surface_can_resolve_its_optimum` reports as False along with the genuine negatives. Both sides
+// of the difference are in the payload, so the difference and its uncertainty are recomputed here
+// and the third state is recovered rather than lost.
+//
+// UPDATED 2026-09-04: THE COMPARISON AND THE VERDICT NOW BOTH COME FROM THE BACKEND.
+//
+// This function used to recompute the difference itself and carried its own `RESOLUTION_K = 1.0`
+// mirroring `stage1_openloop.RESOLUTION_K`, with a comment asking a future reader to keep the two in
+// step. That was a real hazard rather than untidiness: if the constant had changed on the Python
+// side, this page would have gone on drawing intervals and resolved/unresolved chips computed
+// against the old multiple, sitting beside a verdict computed against the new one, and nothing would
+// have failed. Two numbers disagreeing silently is worse than one number being wrong.
+//
+// Two backend changes removed the need. `optimum_resolved` is no longer passed through `bool()`, so
+// the three-valued answer survives serialisation: `true` (the gain exceeds the margin), `false` (it
+// was measured and does not), and `null` (the difference could not be formed at all, because a
+// posterior is degenerate — typically a stratum that never delivered the incumbent's rate). And each
+// arm now carries a `comparison` block with `gain`, `sd_of_difference`, `k` and `margin`, computed
+// by the same code that decides the verdict.
+//
+// So the verdict is READ, and the arithmetic is read alongside it rather than repeated. The
+// fallbacks below exist only for a payload predating those changes; when they fire, the page says so
+// rather than presenting a locally-derived answer as the served one.
+function resolutionOf(a) {
+  const num = (x) => (x == null || !Number.isFinite(Number(x)) ? null : Number(x));
+  const cmp = (a && a.comparison) || {};
+  const served = a ? a.optimum_resolved : undefined;
+
+  let gain = num(cmp.gain);
+  let sdDiff = num(cmp.sd_of_difference);
+  let k = num(cmp.k);
+  let derivedLocally = false;
+
+  // Legacy payload: reconstruct only what is missing, and flag that it was reconstructed.
+  if (gain === null || sdDiff === null) {
+    const opt = (a && a.optimum) || {};
+    const muStar = num(opt.posterior_mean);
+    const sdStar = num(opt.posterior_sd);
+    const muInc = num(a && a.incumbent_mu);
+    const sdInc = num(a && a.incumbent_sd);
+    if (muStar !== null && muInc !== null && sdStar !== null && sdInc !== null) {
+      const g = muInc - muStar;
+      const s = Math.sqrt(sdStar * sdStar + sdInc * sdInc);
+      if (Number.isFinite(s) && s > 0) {
+        gain = g;
+        sdDiff = s;
+        derivedLocally = true;
+      } else {
+        gain = g;
+        sdDiff = null;
+      }
+    }
+  }
+  if (k === null) k = 1.0;
+
+  // An interval cannot be drawn around a centre that is not known. The renderer decides whether to
+  // draw the gain and its band by testing `sdDiff` alone, so a response carrying a standard
+  // deviation without a gain would have printed a band around a null centre. Tying them together
+  // here keeps that decision in one place rather than adding a second guard at the call site, where
+  // it would be easy to add a third display later and forget it.
+  if (gain === null) sdDiff = null;
+
+  // The SERVED verdict decides the state. The three cases are distinguished by identity, not by
+  // truthiness, because `null` here means the question could not be put and must not read as "no".
+  let state;
+  let why;
+  if (served === true) {
+    state = "resolved";
+    why = "the predicted gain exceeds one standard deviation of its own difference from the setting "
+          + "in force";
+  } else if (served === false) {
+    state = "unresolved";
+    why = "the predicted gain is smaller than one standard deviation of its own difference from the "
+          + "setting in force, so the two cells are not separated";
+  } else {
+    state = "undeterminable";
+    why = "the difference against the setting in force could not be formed at all, because one of "
+          + "the two posteriors is degenerate — so this arm was not compared, rather than compared "
+          + "and found wanting. That needs the fit repaired rather than more exposure at the cell";
+  }
+
+  return {
+    state,
+    gain,
+    sdDiff,
+    k,
+    derivedLocally,
+    why: derivedLocally
+      ? `${why}. Note that the gain and its standard deviation shown here were reconstructed on `
+        + "this page because the response did not carry them, so they are not guaranteed to match "
+        + "the quantities the verdict was computed from"
+      : why,
+  };
+}
+
+// Chip appearance for the three states. "Not determinable" takes the neutral ink and an outline,
+// never the failure ink and never the same treatment as "not resolved": the first means the
+// question could not be put, the second means it was put and answered no, and a reader deciding
+// what to do next needs to tell them apart.
+const RESOLUTION_CHIP = {
+  resolved: { label: "resolved", color: "success", variant: "filled" },
+  unresolved: { label: "not resolved", color: "default", variant: "outlined" },
+  undeterminable: { label: "not determinable", color: "default", variant: "outlined" },
+};
 
 const FIGURES = [
   ["posterior_surface", "Posterior objective surface with the safe set",
@@ -124,6 +261,18 @@ export default function StimOptimizer() {
   const arms = data.arms || {};
   const current = (arm && arms[arm]) || null;
   const supported = data.recommendation_supported === true;
+  // The banner used to state, whenever a recommendation was withheld, that "for every arm the
+  // predicted gain over the setting currently in force is smaller than the uncertainty of that
+  // difference". That is a positive claim about a measurement, and it is only true of the arms
+  // whose difference could actually be formed. An arm whose posterior at the incumbent cell is
+  // missing or degenerate contributes no such measurement, and asserting one on its behalf is the
+  // same class of error as the resolved/not-resolved chip made: it turns "we could not tell" into
+  // "we checked and it is not enough". The two populations are counted here so the banner can
+  // report each of them.
+  const armStates = Object.values(arms).map((a) => resolutionOf(a).state);
+  const nUnresolved = armStates.filter((s) => s === "unresolved").length;
+  const nUndeterminable = armStates.filter((s) => s === "undeterminable").length;
+  const armWord = (n) => `${n} arm${n === 1 ? "" : "s"}`;
 
   return (
     <DatabaseLayout>
@@ -142,7 +291,20 @@ export default function StimOptimizer() {
                 <MDTypography variant="caption" color="white" component="div" sx={{ mt: 0.5 }}>
                   {supported
                     ? "Only arms marked resolved below have a predicted gain larger than the uncertainty of the difference against the setting in force."
-                    : "For every arm, the predicted gain over the setting currently in force is smaller than the uncertainty of that difference. The surfaces show where to look next, not what to program."}
+                    : (nUndeterminable === 0
+                      ? `For all ${armWord(nUnresolved)}, the predicted gain over the setting `
+                        + "currently in force is smaller than the uncertainty of that difference. "
+                        + "The surfaces show where to look next, not what to program."
+                      : (nUnresolved === 0
+                        ? `For ${armWord(nUndeterminable)}, the difference against the setting `
+                          + "currently in force could not be formed at all, so no arm has been "
+                          + "compared to its incumbent. The surfaces show where to look next, not "
+                          + "what to program."
+                        : `For ${armWord(nUnresolved)}, the predicted gain over the setting `
+                          + "currently in force is smaller than the uncertainty of that "
+                          + `difference. A further ${armWord(nUndeterminable)} could not be `
+                          + "compared to the setting in force at all. The surfaces show where to "
+                          + "look next, not what to program."))}
                 </MDTypography>
                 {(data.blockers || []).map((b, i) => (
                   <MDTypography key={i} variant="caption" color="white" component="div" sx={{ mt: 0.75 }}>
@@ -174,13 +336,23 @@ export default function StimOptimizer() {
                         py={0.4}
                         borderRadius="lg"
                         sx={{
-                          backgroundColor: data.closed_loop.ready ? "success.main" : "warning.main",
+                          // A screen that ran and qualified nothing, and a screen that never ran,
+                          // are different states and the badge used to word them identically as
+                          // "no deployable control signal" — which reads as a measured finding in
+                          // both cases. The served payload carries `n_cells_screened`, so the
+                          // second case can be named for what it is. Neither takes the failure
+                          // colour: an unscreened participant has not failed anything.
+                          backgroundColor: data.closed_loop.ready
+                            ? "success.main"
+                            : (data.closed_loop.n_cells_screened ? "warning.main" : "text.disabled"),
                         }}
                       >
                         <MDTypography variant="caption" color="white" fontWeight="medium">
                           {data.closed_loop.ready
                             ? `${data.closed_loop.n_cells_deployable} of ${data.closed_loop.n_cells_screened} cells deployable`
-                            : "no deployable control signal"}
+                            : (data.closed_loop.n_cells_screened
+                              ? `no deployable control signal \u2014 0 of ${data.closed_loop.n_cells_screened} screened cells qualified`
+                              : "no cells screened \u2014 deployability not yet assessed")}
                         </MDTypography>
                       </MDBox>
                     )}
@@ -253,7 +425,14 @@ export default function StimOptimizer() {
                                     <MDTypography
                                       variant="caption"
                                       fontWeight="medium"
-                                      color={c.deployable ? "success" : "error"}
+                                      // A cell that does not clear the device constraints has
+                                      // not failed in the sense the error ink means; it is simply
+                                      // outside what this device can actuate on, and the reason is
+                                      // spelled out in the next column. The error ink is reserved
+                                      // for a finding that blocks, so this reads in the neutral
+                                      // register and the word carries the meaning.
+                                      sx={{ color: c.deployable ? undefined : PAL.neutral }}
+                                      color={c.deployable ? "success" : "text"}
                                     >
                                       {c.deployable ? "yes" : "no"}
                                     </MDTypography>
@@ -339,7 +518,17 @@ export default function StimOptimizer() {
                 <Table size="small" sx={{ mt: 1 }}>
                   <TableHead>
                     <TableRow>
-                      {["Arm", "Epochs", "Best cell", "Predicted", "\u00b1 SD", "In force", "Optimum"]
+                      {/* The column that decides the verdict is the DIFFERENCE against the setting
+                          in force, together with the uncertainty of that difference — so it is a
+                          column of the table rather than something the reader assembles from the
+                          two posterior columns beside it. "Candidate cell" replaces the old header
+                          "Best cell": the cell is where the surrogate's mean is lowest, which is
+                          not the same as a setting the evidence recommends, and a header should not
+                          say "best" about a cell whose advantage may be indistinguishable from
+                          zero. */}
+                      {["Arm", "Epochs", "Candidate cell", "Predicted \u00b1 SD",
+                        "In force \u00b1 SD", "Gain over in force (\u00b11 SD of the difference)",
+                        "Optimum"]
                         .map((h) => (
                           <TableCell key={h}>
                             <MDTypography variant="caption" fontWeight="medium">{h}</MDTypography>
@@ -348,35 +537,82 @@ export default function StimOptimizer() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {Object.entries(arms).map(([label, a]) => (
-                      <TableRow key={label} hover selected={label === arm}
-                                onClick={() => setArm(label)} sx={{ cursor: "pointer" }}>
-                        <TableCell><MDTypography variant="caption">{label.replace("__", " \u00b7 ")}</MDTypography></TableCell>
-                        <TableCell><MDTypography variant="caption">{a.n_epochs_fitted ?? "\u2014"}</MDTypography></TableCell>
-                        <TableCell>
-                          <MDTypography variant="caption">
-                            {fmt(a.optimum?.freq_hz, 0)} Hz / {fmt(a.optimum?.amp_mA, 1)} mA
-                          </MDTypography>
-                        </TableCell>
-                        <TableCell><MDTypography variant="caption">{fmt(a.optimum?.posterior_mean)}</MDTypography></TableCell>
-                        <TableCell><MDTypography variant="caption">{fmt(a.optimum?.posterior_sd)}</MDTypography></TableCell>
-                        <TableCell>
-                          <MDTypography variant="caption">
-                            {fmt(a.incumbent_mu)}
-                            {a.incumbent_sd === null || a.incumbent_sd === undefined
-                              ? "" : ` \u00b1 ${fmt(a.incumbent_sd)}`}
-                          </MDTypography>
-                        </TableCell>
-                        <TableCell>
-                          <Chip size="small"
-                                color={a.optimum_resolved ? "success" : "default"}
-                                variant={a.optimum_resolved ? "filled" : "outlined"}
-                                label={a.optimum_resolved ? "resolved" : "not resolved"} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {Object.entries(arms).map(([label, a]) => {
+                      const res = resolutionOf(a);
+                      const chip = RESOLUTION_CHIP[res.state];
+                      return (
+                        <TableRow key={label} hover selected={label === arm}
+                                  onClick={() => setArm(label)} sx={{ cursor: "pointer" }}>
+                          <TableCell><MDTypography variant="caption">{label.replace("__", " \u00b7 ")}</MDTypography></TableCell>
+                          <TableCell><MDTypography variant="caption">{a.n_epochs_fitted ?? "\u2014"}</MDTypography></TableCell>
+                          <TableCell>
+                            <MDTypography variant="caption">
+                              {fmt(a.optimum?.freq_hz, 0)} Hz / {fmt(a.optimum?.amp_mA, 1)} mA
+                            </MDTypography>
+                          </TableCell>
+                          <TableCell>
+                            <MDTypography variant="caption">
+                              {`${fmt(a.optimum?.posterior_mean)} \u00b1 ${fmt(a.optimum?.posterior_sd)}`}
+                            </MDTypography>
+                          </TableCell>
+                          <TableCell>
+                            <MDTypography variant="caption">
+                              {fmt(a.incumbent_mu)}
+                              {a.incumbent_sd === null || a.incumbent_sd === undefined
+                                ? "" : ` \u00b1 ${fmt(a.incumbent_sd)}`}
+                            </MDTypography>
+                          </TableCell>
+                          {/* The gain and its interval, in the objective's own units. The interval
+                              is one standard deviation of the difference wide on each side, which
+                              is the width the resolution rule uses — it is NOT a 95% interval and
+                              is not labelled as one. An interval that straddles zero is the visual
+                              form of "this arm has not earned a recommendation". */}
+                          <TableCell>
+                            {res.sdDiff === null ? (
+                              <MDTypography variant="caption" sx={{ color: PAL.neutral }}>
+                                {"not formable"}
+                              </MDTypography>
+                            ) : (
+                              <MDTypography variant="caption"
+                                sx={{ color: res.state === "resolved" ? "inherit" : PAL.warnText }}>
+                                {`${res.gain >= 0 ? "+" : ""}${fmt(res.gain)}`}
+                                {`  (${res.gain - res.sdDiff >= 0 ? "+" : ""}${fmt(res.gain - res.sdDiff)}`}
+                                {` to ${res.gain + res.sdDiff >= 0 ? "+" : ""}${fmt(res.gain + res.sdDiff)})`}
+                              </MDTypography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Tooltip title={res.why}>
+                              <Chip size="small" color={chip.color} variant={chip.variant}
+                                    label={chip.label} />
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
+                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 1 }}>
+                  The objective is a pain score, so lower is better and a POSITIVE gain means the
+                  candidate cell is predicted to be better than the setting in force. An arm is
+                  marked resolved only when that gain exceeds one standard deviation of the
+                  difference itself, propagated from both cells&apos; posteriors as{" "}
+                  <em>sqrt(sd_candidate&sup2; + sd_in-force&sup2;)</em>. The joint covariance
+                  between the two cells is not carried in this payload, so the propagated standard
+                  deviation omits the <em>&minus;2&thinsp;cov</em> term; nearby cells on a smooth
+                  kernel are positively correlated, so the omission overstates the uncertainty and
+                  the test is strictly conservative &mdash; it can withhold a recommendation it
+                  might have supported, but it cannot manufacture one.
+                </MDTypography>
+                <MDTypography variant="caption" color="text" component="div" sx={{ mt: 0.75 }}>
+                  <strong>not resolved</strong> means the comparison was made and the two cells were
+                  not separated. <strong>not determinable</strong> means the comparison could not be
+                  made at all, because a posterior mean or standard deviation this arm needs is
+                  missing or degenerate; it is not a weaker form of the same answer and it calls for
+                  a different response, namely fixing the fit rather than collecting more exposure.
+                  Neither is a recommendation, and neither is drawn in the failure ink, because in
+                  neither case has a setting been shown to be worse.
+                </MDTypography>
               </MDBox>
             </Card>
           </Grid>

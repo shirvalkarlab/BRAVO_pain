@@ -105,8 +105,14 @@ class CoherenceReport:
     """Whether the three edge signs tell a consistent story, with the uncertainty of that claim."""
     coherent: bool | None
     p_coherent: float | None           # bootstrap probability the sign pattern holds
-    expected_pattern: str = ""
-    observed_pattern: str = ""
+    #: The sign patterns as DICTS, not as `str(dict)`. They used to be stringified, which put
+    #: `{'E1': -1, 'E2': 1, ...}` on the wire — single-quoted keys that `JSON.parse` cannot read,
+    #: with apostrophes inside the nested prose. The interface had to recover the three signs with
+    #: a regular expression over a Python repr, and a serialisation change would have silently
+    #: produced three absent signs rather than an error. `expected_pattern` also carries a `why`
+    #: key explaining what the control law requires, so it is a mapping rather than a triple.
+    expected_pattern: dict = field(default_factory=dict)
+    observed_pattern: dict = field(default_factory=dict)
     n_boot: int = 0
     cluster_unit: str = ""
     note: str = ""

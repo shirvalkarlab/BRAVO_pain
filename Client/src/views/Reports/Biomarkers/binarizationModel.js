@@ -118,17 +118,36 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                                           maxPerRating = 3, refractoryMin = 2,
                                           matchDirection = "prior",
                                           allowWindowReuse = false }) {
-  const empty = {
+  // WHY THIS RETURN CARRIES A REASON. There are three quite different situations in which this
+  // function produces no matched samples, and every consumer of the result used to see the same
+  // object for all three:
+  //   (a) the availability payload has not arrived, or carries no psd_scan_index, so MATCHING WAS
+  //       NEVER ATTEMPTED;
+  //   (b) no pain series is available for the selected metric, so again nothing could be attempted;
+  //   (c) both inputs are present and matching ran, but the match window is too narrow for any
+  //       neural sample to reach a pain rating — a real, informative negative.
+  // Case (c) is a finding the reader should act on by widening the window. Cases (a) and (b) are an
+  // absence of inputs and say nothing at all about the data. Because the returned object was
+  // identical, the preview card announced "No PSD scan index available" for case (c) and the
+  // timeline drew every pain rating as an open circle labelled "no neural match" for cases (a) and
+  // (b) — each page asserting, on the strength of missing inputs, a negative result it had not
+  // measured. `matchable` and `unmatchableReason` let each consumer say which situation it is in.
+  const emptyWith = (reason) => ({
     samples: [], binByKey: new Map(), matchedValues: [], cuts: { kind: "none" },
+    // painMatched is length-zero here rather than absent, so a consumer indexing into it gets
+    // `undefined` for every rating instead of reading a stale array from an earlier model.
+    painMatched: [],
+    matchable: false,
+    unmatchableReason: reason,
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
               n_matched_td: 0, n_matched_montage: 0,
               by_source: { low: { td: 0, montage: 0, lsb: 0 },
                            high: { td: 0, montage: 0, lsb: 0 },
                            excluded: { td: 0, montage: 0, lsb: 0 } },
               tolerance_min: toleranceMin, median_abs_offset_min: null },
-  };
-  if (!Array.isArray(scanIndex) || !scanIndex.length || !painSeries
-      || !painSeries.t || !painSeries.t.length) return empty;
+  });
+  if (!Array.isArray(scanIndex) || !scanIndex.length) return emptyWith("no_scan_index");
+  if (!painSeries || !painSeries.t || !painSeries.t.length) return emptyWith("no_pain_series");
 
   const tolSec = (toleranceMin && toleranceMin > 0) ? toleranceMin * 60 : 0;
   // `i0` = original index into painSeries.t/y, captured here so we can map a matched proIdx (an
@@ -350,6 +369,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
 
   return {
     samples, binByKey, matchedValues, cuts, painMatched,
+    // Matching was attempted with both inputs present. `matchedValues.length === 0` from here is
+    // therefore a MEASURED result — the window is too narrow — and consumers may say so.
+    matchable: true,
+    unmatchableReason: null,
     counts: {
       n_sessions: scanIndex.length,
       n_matched: matchedValues.length,

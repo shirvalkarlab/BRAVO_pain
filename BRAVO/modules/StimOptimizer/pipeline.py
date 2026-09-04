@@ -85,7 +85,7 @@ class ArmResult:
     def label(self) -> str:
         return f"{self.site}__{self.hemisphere}"
 
-    def surface_can_resolve_its_optimum(self, k: float = 1.0) -> bool:
+    def surface_can_resolve_its_optimum(self, k: float = 1.0):
         """True only if the candidate BEATS the incumbent by more than the uncertainty of that
         difference.
 
@@ -113,7 +113,15 @@ class ArmResult:
         sd_inc = float(m.get("incumbent_sd") or 0.0)
         sd_diff = float(np.sqrt(float(m["sd_star"]) ** 2 + sd_inc ** 2))
         if not np.isfinite(sd_diff) or sd_diff <= 0:
-            return False
+            # NOT `False`. Returning False here reported "this arm's advantage is too small to
+            # call" for an arm whose difference could not be FORMED at all, and those two answers
+            # ask opposite things of a reader: the first says collect more exposure at that cell,
+            # the second says a posterior is degenerate and no amount of exposure helps until the
+            # fit is repaired. Typically it means a stratum that never delivered the incumbent's
+            # rate, so there is no data anywhere near the cell being compared. The slice-level
+            # method `stage1_openloop.SliceResult.resolves_its_optimum` already returns
+            # `bool | None` for exactly this reason; this one now matches it.
+            return None
         return bool(gain > k * sd_diff)
 
 
@@ -124,7 +132,9 @@ class RunReport:
     manifest: dict
 
     def recommendation_is_supported(self) -> bool:
-        return any(a.surface_can_resolve_its_optimum() for a in self.arms.values())
+        # `is True` rather than a bare truthiness test, so the new `None` state cannot be read as
+        # support. An arm whose difference could not be formed has not supported anything.
+        return any(a.surface_can_resolve_its_optimum() is True for a in self.arms.values())
 
 
 def _queue_frame(ctx, top=25, *, delivered=None, hemisphere=None,

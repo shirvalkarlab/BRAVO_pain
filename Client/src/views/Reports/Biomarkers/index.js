@@ -26,6 +26,20 @@ import {
   saveControls, loadControls, putHeavy, getHeavy, underMemoryPressure, memoryInfo,
 } from "./biomarkerStateStore";
 
+// TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
+// Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
+// preparing for a visit rather than by the clinician during one, which is why they were taken off
+// the clinician route. They are IMPORTED from their original location rather than copied, so there
+// remains one implementation of each and a fix applied there is a fix here. Editing those files is
+// out of scope for this page; only their placement and their framing change.
+import ConversionModelPanel from "views/Reports/ClosedLoopSim/ConversionModelPanel";
+import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
+// The committed band candidate is the only source on this page of the channel and centre frequency
+// PsdLsbPanel needs. It is written to localStorage by the commit button inside BiomarkerAnalytics.
+import { loadBandCandidate } from "views/Reports/ClosedLoopSim/bandCandidateStore";
+// Semantic colour roles, defined once in the deployment module and imported so the two pages agree.
+import PAL from "views/Reports/ClosedLoopSim/palette";
+
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
@@ -164,6 +178,18 @@ function Biomarkers() {
   // we prefer the live one here so the timeline is populated before (and independent of) compute.
   const [availData, setAvailData] = useState(null);
   const [availLoading, setAvailLoading] = useState(false);
+
+  // The band candidate committed for THIS participant, if any. It is the envelope the commit button
+  // in BiomarkerAnalytics writes to localStorage, and it carries the contact, centre frequency and
+  // bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for the band on
+  // screen. It is read here rather than inside the panel because localStorage is not observable
+  // from React: the value is re-read on a participant change and again whenever a commit happens
+  // (see onBandCommitted below), so committing a band updates the panel without a page reload.
+  const [committedBand, setCommittedBand] = useState(null);
+  useEffect(() => {
+    const env = loadBandCandidate(participant_uid);
+    setCommittedBand((env && env.band_candidate) || null);
+  }, [participant_uid]);
 
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
@@ -724,17 +750,40 @@ function Biomarkers() {
                       {/* Persistence status: tells the user this view will survive a trip to the
                           deployment view. Green when the heavy result is cached in memory (instant
                           restore); amber when memory is tight so it'll recompute on return instead. */}
-                      {data && !computing ? (
-                        underMemoryPressure() ? (
-                          <MDTypography variant="caption" sx={{ color: "#8A6100", fontStyle: "italic" }}>
-                            {`⚠ memory tight${memoryInfo() ? ` (${memoryInfo().usedMB.toFixed(0)}/${memoryInfo().limitMB.toFixed(0)} MB)` : ""} — view will recompute on return`}
+                      {/* RETENTION STATUS, WHICH HAS THREE ANSWERS AND USED TO SHOW TWO.
+                          `underMemoryPressure()` returns false both when the heap is comfortably
+                          below the eviction ratio and when the browser does not expose heap
+                          figures at all — `performance.memory` exists on Chromium and not on
+                          Firefox or Safari. The green tick therefore appeared on those browsers as
+                          a confirmed promise that the cached result would survive a trip to the
+                          deployment page, when in truth the guard had simply declined to measure.
+                          The measurement is now read first and its absence is its own state,
+                          worded as a caching decision rather than a guarantee. */}
+                      {data && !computing ? (() => {
+                        const mi = memoryInfo();
+                        if (mi === null) {
+                          return (
+                            <MDTypography variant="caption" sx={{ color: PAL.neutral, fontStyle: "italic" }}>
+                              {"View cached in memory. This browser does not report heap usage, so "
+                               + "whether it survives a return trip cannot be confirmed here."}
+                            </MDTypography>
+                          );
+                        }
+                        if (underMemoryPressure()) {
+                          return (
+                            <MDTypography variant="caption" sx={{ color: PAL.warnText, fontStyle: "italic" }}>
+                              {`Memory tight (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used)`
+                               + " — this view will be recomputed rather than restored on return."}
+                            </MDTypography>
+                          );
+                        }
+                        return (
+                          <MDTypography variant="caption" sx={{ color: PAL.neutral, fontStyle: "italic" }}>
+                            {`View retained in memory (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used)`
+                             + " — it returns without recomputing from the deployment page."}
                           </MDTypography>
-                        ) : (
-                          <MDTypography variant="caption" sx={{ color: "#0a7f3f", fontStyle: "italic" }}>
-                            {"✓ view retained — returns instantly from the deployment page"}
-                          </MDTypography>
-                        )
-                      ) : null}
+                        );
+                      })() : null}
                     </MDBox>
                   </Grid>
 
@@ -926,9 +975,87 @@ function Biomarkers() {
                 participantUid={participant_uid}
                 requestParams={requestParams}
                 matchDirty={dirty}
+                onBandCommitted={(bc) => setCommittedBand(bc || null)}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
+
+            {/* ── DEVICE-SCALE CALIBRATION ──────────────────────────────────────────────────────
+                Two panels relocated here from the Closed-Loop Deployment page. They belong on this
+                page because each answers a question the analyst asks while choosing a band, not a
+                question the clinician asks while programming: the deployment page now carries only
+                what has to be read at a visit.
+
+                The two are complementary and are deliberately framed against each other. The
+                left-hand panel fits a conversion from the participant's OWN paired recordings for
+                the band that has been committed, so it is an observed measurement and is drawn in
+                a solid frame. The right-hand panel serves the frozen per-participant model that
+                the threshold estimator falls back on when the device never sensed a band at all,
+                so every number in it is a MODELLED extrapolation and it is drawn in a dashed
+                frame. The dashed-versus-solid distinction is the deployment page's convention for
+                modelled against observed, applied here for the same reason: a reader should not
+                have to remember which of two adjacent conversion figures was measured. */}
+            <Grid item xs={12}>
+              <MDBox px={2} pt={2}>
+                <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
+                  {"Device-scale calibration"}
+                </MDTypography>
+                <MDTypography variant="body2" color="dark" sx={{ fontSize: 13.5 }}>
+                  {"The exploration above works in physical units; the device works in its own "
+                   + "least-significant-bit units. These two panels are how a band power measured "
+                   + "offline is turned into a number that can be entered on the Percept RC, and "
+                   + "they are placed here because that translation has to be settled before a "
+                   + "programming visit rather than during one. A solid frame marks a quantity "
+                   + "measured from this participant's own paired recordings; a dashed frame marks "
+                   + "a quantity produced by a model standing in for recordings that do not exist."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <MDBox px={2} pb={1}>
+                <MDTypography variant="button" fontWeight="bold" color="dark"
+                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                  {"Does the committed band convert to device units, and is the conversion linear?"}
+                </MDTypography>
+                {/* Solid frame: an OBSERVED quantity. The panel pairs offline PSD epochs with the
+                    device's own LSB recordings for this band and fits the proportional law, and it
+                    reports its own falsification check on that law's slope. */}
+                <MDBox sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 0.75 }}>
+                  <PsdLsbPanel participantUid={participant_uid} bandCandidate={committedBand}
+                    requestParams={requestParams} />
+                </MDBox>
+                <MDTypography variant="caption" color="dark"
+                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
+                  {committedBand
+                    ? "Solid frame: fitted from this participant's own time-matched recordings of "
+                      + "the committed band."
+                    : "Solid frame: this panel fits from observed recordings, so it has nothing to "
+                      + "fit until a band is committed. Click a band in the scan above, then use "
+                      + "\u201CCommit this band\u201D in its validation readout."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <MDBox px={2} pb={1}>
+                <MDTypography variant="button" fontWeight="bold" color="dark"
+                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
+                  {"What conversion is assumed for a band the device never sensed?"}
+                </MDTypography>
+                {/* Dashed frame: a MODELLED quantity. Nothing in this panel was measured at the
+                    band a reader may be considering; the gain there is read off a fitted trend
+                    across frequency, which is exactly the kind of number that should not be
+                    mistaken for an observation. */}
+                <MDBox sx={{ border: `2px dashed ${PAL.neutralBorder}`, borderRadius: 2, p: 0.75 }}>
+                  <ConversionModelPanel participantUid={participant_uid} />
+                </MDBox>
+                <MDTypography variant="caption" color="dark"
+                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
+                  {"Dashed frame: a frozen model, not a measurement. The gain at any particular "
+                   + "band is interpolated from the fitted trend across frequency, so it carries "
+                   + "the trend's assumptions as well as its uncertainty."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
           </Grid>
         </MDBox>
       </DatabaseLayout>

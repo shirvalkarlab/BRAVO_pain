@@ -75,6 +75,29 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": True}) == "VALIDATED (stim-stable)"
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": False}) == "VALIDATED (stim-dependent)"
 
+    # The third and fourth labels, added 2026-09-04. This function used to fall through to
+    # "(stim-stable)" whenever `stim_stable` was not explicitly False, which includes the case
+    # where the equivalence test RAN and could not decide — the interaction test failed to reject
+    # while the interval on the largest between-era slope difference was wider than the declared
+    # margin. A failure to reject is not evidence of equivalence, so the old label asserted in the
+    # badge exactly what the test had declined to grant.
+    assert bs._band_decide_verdict(
+        g, {"available": True, "stim_stable": None, "stability_verdict": "inconclusive"}
+    ) == "VALIDATED (stim stability not determinable)"
+    # an inconclusive verdict wins even if the legacy flag was left permissive, because the
+    # three-way verdict is the authority and the boolean is the thing being deprecated
+    assert bs._band_decide_verdict(
+        g, {"available": True, "stim_stable": True, "stability_verdict": "inconclusive"}
+    ) == "VALIDATED (stim stability not determinable)"
+    # nothing tested at all is its own state and must not read as either answer
+    assert bs._band_decide_verdict(
+        g, {"available": True, "stim_stable": None}
+    ) == "VALIDATED (stim stability not tested)"
+    # and a payload predating the equivalence test, with a positive legacy flag, is unchanged
+    assert bs._band_decide_verdict(
+        g, {"available": True, "stim_stable": True, "stability_verdict": "equivalent"}
+    ) == "VALIDATED (stim-stable)"
+
 
 if __name__ == "__main__":
     import traceback

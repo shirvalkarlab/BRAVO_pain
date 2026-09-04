@@ -3506,6 +3506,22 @@ def _band_decide_verdict(g, h):
         return "candidate (mixed-effects n.s.)"
     if h.get("available") and h.get("stim_stable") is False:
         return "VALIDATED (stim-dependent)"
+    # THE THREE-WAY VERDICT DECIDES THE PARENTHETICAL, not the legacy boolean.
+    #
+    # This used to fall straight through to "(stim-stable)" whenever `stim_stable` was not
+    # explicitly False, which includes the case where the equivalence test ran and could not
+    # decide: the interaction test failed to reject AND the interval on the largest between-era
+    # slope difference was wider than the declared margin. A failure to reject is not evidence of
+    # equivalence, so printing "stim-stable" there asserted exactly what the test had declined to
+    # grant, and it did so in the badge — the shortest and most-read string on the page.
+    #
+    # The front end was rewriting this parenthetical client-side to compensate, which worked but
+    # put the same rule in two places. Reading `stability_verdict` here removes that duplication.
+    _v = h.get("stability_verdict") if h.get("available") else None
+    if _v == "inconclusive":
+        return "VALIDATED (stim stability not determinable)"
+    if _v in (None, "", "not_tested") and h.get("stim_stable") is None:
+        return "VALIDATED (stim stability not tested)"
     return "VALIDATED (stim-stable)"
 
 

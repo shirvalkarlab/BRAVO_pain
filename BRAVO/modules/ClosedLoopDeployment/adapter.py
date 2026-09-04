@@ -27,6 +27,8 @@ import threading as _threading
 import numpy as np
 import pandas as pd
 
+from ClosedLoopDeployment import edges as _edges
+
 #: The scanned band centres and width used throughout this project.
 DEFAULT_BAND_CENTERS_HZ = tuple(float(x) for x in np.arange(10.5, 28.0, 1.0))
 DEFAULT_BAND_WIDTH_HZ = 5.0
@@ -474,6 +476,12 @@ def report_to_dict(rep):
             "p": _num(e.p), "n": int(e.n), "cluster_unit": e.cluster_unit,
             "n_clusters": int(e.n_clusters), "scale": e.scale, "sign": e.sign,
             "resolved": e.resolved, "note": e.note, "confounded_by": list(e.confounded_by),
+            # WHICH ESTIMATOR produced the interval and the p-value, read from edges.py so the
+            # switch has exactly one definition. The deployment panel used to hardcode the cluster
+            # threshold in JavaScript with a comment claiming to mirror edges.py, and by then the
+            # comment was wrong twice over: the constant had stopped being a disqualification floor
+            # and become a choice between two estimators.
+            "inference": _edges.estimator_for(e.n_clusters),
         } for k, e in (rep.edges or {}).items()},
         "coherence": None if rep.coherence is None else {
             "coherent": rep.coherence.coherent, "p_coherent": _num(rep.coherence.p_coherent),

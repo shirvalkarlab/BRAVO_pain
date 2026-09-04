@@ -57,6 +57,44 @@ from .types import EdgeEstimate
 #: warranted costs a false claim about a patient's brain.
 MIN_RELIABLE_CLUSTERS = 40
 
+
+def estimator_for(n_clusters):
+    """Which inference estimator the reported interval and p-value came from.
+
+    THE SINGLE DEFINITION OF THE SWITCH, so that nothing downstream has to restate it. The
+    JavaScript in the deployment panel previously hardcoded the number 40 with a comment saying it
+    mirrored this module, and by then it was wrong twice over: the constant had stopped being a
+    disqualification floor and become a choice between two estimators, so the front end was both
+    duplicating a value it could not see change AND describing it as something it no longer was.
+
+    Returns a small mapping rather than a bare string, because a reader who is told the name of an
+    estimator still needs to know why that one and not the other.
+    """
+    if n_clusters is None:
+        return {"estimator": None, "switch_clusters": MIN_RELIABLE_CLUSTERS,
+                "why": "the cluster count is not recorded, so the estimator cannot be named"}
+    n = int(n_clusters)
+    if n >= MIN_RELIABLE_CLUSTERS:
+        return {
+            "estimator": "cluster-robust (CR0)",
+            "switch_clusters": MIN_RELIABLE_CLUSTERS,
+            "why": (f"{n} clusters is at or above {MIN_RELIABLE_CLUSTERS}, where the "
+                    f"cluster-robust sandwich estimator is reliable enough to report directly. "
+                    f"Its measured rejection rate against a true null in this regime is 0.060 to "
+                    f"0.076 against a nominal 0.05."),
+        }
+    return {
+        "estimator": "wild cluster bootstrap-t (Rademacher, imposed null)",
+        "switch_clusters": MIN_RELIABLE_CLUSTERS,
+        "why": (f"{n} clusters is below {MIN_RELIABLE_CLUSTERS}, where the cluster-robust "
+                f"sandwich is anti-conservative: at five clusters it rejects a true null about "
+                f"29 per cent of the time against a nominal 5 per cent. The interval and the "
+                f"p-value therefore come from the wild cluster bootstrap-t instead. Note that the "
+                f"bootstrap has a discreteness floor — with G clusters the smallest attainable "
+                f"two-sided p-value is 2/2^G, so at five clusters no test at the 5 per cent level "
+                f"exists at all."),
+    }
+
 #: At or below this many clusters the whole Rademacher weight space is ENUMERATED rather than
 #: sampled, because there are only 2**G distinct sign vectors and sampling 999 of them would draw
 #: the same handful repeatedly while pretending to a resolution of one in a thousand. 2**12 = 4096,

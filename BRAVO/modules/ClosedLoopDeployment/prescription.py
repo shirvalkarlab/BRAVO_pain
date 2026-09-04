@@ -188,12 +188,22 @@ class Field_:
             return "manufacturer"
         if self.status == "read_off_programmer":
             return "clinician"
+        if self.status == "device_computed":
+            # Neither "participant" nor "manufacturer" is right here. The number is produced by the
+            # DEVICE, applying a published formula to this participant's captured pair, and what a
+            # clinician needs to know is that it appears on the programmer without being typed.
+            return "device"
         return "participant"
 
     @property
     def confirm(self):
         if self.status == "not_applicable":
             return "not_applicable"
+        if self.status == "device_computed":
+            # The whole point of the new state: this value is CHECKED against the programmer, never
+            # entered into it. Any confirm value that reads as an instruction to type would be
+            # actively dangerous on this row.
+            return "verify_only"
         if self.status == "read_off_programmer" and self.value is None:
             return "must_choose"
         # An unpublished range is the deciding fact regardless of where the value came from: it is
@@ -472,7 +482,16 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
         single = None
         if up is not None and lo is not None:
             single = 0.75 * (float(up) - float(lo)) + float(lo)
-        F.append(Field_("Single LFP threshold", single, "LFP power", "derived",
+        # STATUS `device_computed`, NOT `derived`, and the distinction is a safety one.
+        #
+        # Under `derived` this row came out with confirm "enterable", while its own justification
+        # text said the opposite: the value is NOT typed in, because the device computes it as
+        # 0.75 x (Upper - Lower) + Lower from the captured pair (D20). The interface consumes the
+        # `confirm` axis, not the prose, so the one field in the table where the error runs toward
+        # entering a number that must not be entered was the field labelled enterable. The
+        # front-end had to detect this row by matching its `why` text, which is a fragile stopgap
+        # its author flagged for replacement — this is that replacement.
+        F.append(Field_("Single LFP threshold", single, "LFP power", "device_computed",
                         why="NOT typed in. The device computes it as 0.75 x (Upper - Lower) + "
                             "Lower from the captured pair (D20), so it is shown here for the "
                             "clinician to verify against the device rather than to enter."))
