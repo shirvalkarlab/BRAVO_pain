@@ -186,3 +186,16 @@ Lead: ZERO_THREE_RIGHT @110 Hz, negative clusters, p 0.08/0.16 on 30 steps/5 vis
 underpowered.
 
 The test cannot name a band (establishes existence not location) so it never feeds deployability.
+
+## Threshold sweep: confirms 55 Hz, kills the 110 Hz lead, and the PSD arm is impossible
+
+- ZERO_THREE_RIGHT @55 Hz: p=0.0005 at |t|>=1.5/2.0/2.5/3.0, mass constant 68.56, both hemispheres.
+  Threshold-invariant, POSITIVE. Fourth independent confirmation.
+- ONE_THREE_LEFT: largest-cluster SIGN FLIPS with threshold (- - + Left, + + - - Right). A real
+  effect does not change direction when a threshold moves. Retraction reconfirmed by mechanism.
+- ZERO_THREE_RIGHT @110 Hz Right: p=0.0470 at ONE of four thresholds, 0.15-0.17 at the others. Not a
+  finding. Direction stays negative at every threshold, so it remains the only place the sign is
+  right -- as a prospective hypothesis.
+- Device-PSD arm: 251-797 tiles per channel in clinic windows vs 43k-63k time-domain, ZERO
+  informative cells. Every within-visit result is Welch-from-streaming. The clinic ladders are
+  exactly when streaming runs, which is why the chronic coverage advantage reverses here.

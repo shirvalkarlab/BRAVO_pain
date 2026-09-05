@@ -346,7 +346,8 @@ def _clusters_along_axis(t, threshold):
 
 
 def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, seed=0,
-                             t_threshold=CLUSTER_T_THRESHOLD, bin_mA=AMP_ARM_BIN_MA):
+                             t_threshold=CLUSTER_T_THRESHOLD, bin_mA=AMP_ARM_BIN_MA,
+                             extra_thresholds=()):
     """Family-wise corrected answer to "does this cell respond to amplitude ANYWHERE?"
 
     The null permutes amplitude BETWEEN STEPS WITHIN EACH VISIT. That is the exchangeability the
@@ -356,8 +357,15 @@ def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, se
     about band power", which is the question.
 
     Returns the observed clusters, the largest cluster's family-wise p, and the resolution floor of
-    that p. Read :data:`band_cluster_permutation` module notes above before using it to justify
-    anything: it CANNOT name a band.
+    that p. Read the module notes above before using it to justify anything: it CANNOT name a band.
+
+    ``extra_thresholds`` evaluates additional cluster-forming thresholds in the SAME permutation
+    loop and returns a p for each under ``threshold_sweep``. This is nearly free, because the
+    expensive step is refitting the per-band t values on every permuted replicate and the threshold
+    only affects how those t values are grouped afterwards. It is offered because the threshold is
+    a free parameter (limitation 3) and the honest way to handle that is to show the whole sweep
+    rather than one chosen value -- reporting the sweep is a sensitivity analysis, whereas reporting
+    the best entry of it would be selection.
     """
     centers = sorted(float(c) for c in power_by_center)
     if len(centers) < 3:
@@ -384,7 +392,13 @@ def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, se
 
     t_obs = np.array([_band_t_cluster_robust(Y[:, j], amp, vis, vis)
                       for j in range(len(centers))])
-    obs = _clusters_along_axis(t_obs, t_threshold)
+    # every threshold to evaluate, primary first, de-duplicated but order-preserving
+    thresholds = [float(t_threshold)]
+    for x in extra_thresholds:
+        if float(x) not in thresholds:
+            thresholds.append(float(x))
+    obs_by_thresh = {th: _clusters_along_axis(t_obs, th) for th in thresholds}
+    obs = obs_by_thresh[float(t_threshold)]
     if not obs:
         return {"available": True, "n_clusters": 0, "p_fwer": None,
                 "t_per_band": {c: (None if not np.isfinite(t) else float(t))
@@ -397,19 +411,36 @@ def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, se
 
     rng = np.random.default_rng(seed)
     idx_by_visit = [np.flatnonzero(vis == v) for v in uv]
-    null_max = np.empty(int(n_perm), dtype=float)
+    null_max = {th: np.empty(int(n_perm), dtype=float) for th in thresholds}
     for k in range(int(n_perm)):
         a_perm = amp.copy()
         for ix in idx_by_visit:
             a_perm[ix] = rng.permutation(amp[ix])
+        # the t values are computed ONCE per replicate and reused at every threshold; only the
+        # grouping differs, which is what makes the sweep nearly free
         t_p = np.array([_band_t_cluster_robust(Y[:, j], a_perm, vis, vis)
                         for j in range(len(centers))])
-        cl = _clusters_along_axis(t_p, t_threshold)
-        null_max[k] = max((abs(m) for _, _, m in cl), default=0.0)
+        for th in thresholds:
+            cl = _clusters_along_axis(t_p, th)
+            null_max[th][k] = max((abs(m) for _, _, m in cl), default=0.0)
 
-    biggest = max(obs, key=lambda c: abs(c[2]))
-    mass = abs(biggest[2])
-    p = float((1 + np.sum(null_max >= mass)) / (1 + int(n_perm)))
+    def _p_for(th):
+        cl = obs_by_thresh[th]
+        if not cl:
+            return None, None
+        big = max(cl, key=lambda c: abs(c[2]))
+        m = abs(big[2])
+        return float((1 + np.sum(null_max[th] >= m)) / (1 + int(n_perm))), big
+
+    p, biggest = _p_for(float(t_threshold))
+    sweep = {}
+    for th in thresholds:
+        p_th, big_th = _p_for(th)
+        sweep[th] = {"p_fwer": p_th, "n_clusters": len(obs_by_thresh[th]),
+                     "largest_mass": (None if big_th is None else big_th[2]),
+                     "largest_lo_hz": (None if big_th is None else centers[big_th[0]]),
+                     "largest_hi_hz": (None if big_th is None else centers[big_th[1] - 1]),
+                     "largest_n_bands": (None if big_th is None else big_th[1] - big_th[0])}
     return {
         "available": True,
         "n_clusters": len(obs),
@@ -422,6 +453,7 @@ def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, se
         "p_fwer": p,
         "p_resolution": 1.0 / (1 + int(n_perm)),
         "t_threshold": float(t_threshold),
+        "threshold_sweep": sweep,
         "n_perm": int(n_perm),
         "t_per_band": {c: (None if not np.isfinite(t) else float(t))
                        for c, t in zip(centers, t_obs)},

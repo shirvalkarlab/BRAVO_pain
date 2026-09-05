@@ -277,3 +277,40 @@ def test_the_result_states_that_it_cannot_locate_the_effect():
     r2 = WV.band_cluster_permutation(p2, a2, v2, n_perm=50, seed=0)
     if r2.get("n_clusters") == 0:
         assert "weak evidence of absence" in (r2.get("note") or "")
+
+
+def test_the_threshold_sweep_comes_from_one_permutation_loop_and_matches_separate_runs():
+    """The sweep exists because the cluster-forming threshold is a free parameter, and the honest
+    way to handle that is to show the whole sweep rather than one chosen value. It must therefore be
+    identical to running the test separately at each threshold with the same seed -- otherwise the
+    sweep would be a different, cheaper thing wearing the same name.
+    """
+    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=11)
+    swept = WV.band_cluster_permutation(power, amp, vis, n_perm=200, seed=3,
+                                        t_threshold=2.0, extra_thresholds=(1.5, 3.0))
+    assert set(swept["threshold_sweep"]) == {1.5, 2.0, 3.0}
+    for th in (1.5, 2.0, 3.0):
+        alone = WV.band_cluster_permutation(power, amp, vis, n_perm=200, seed=3, t_threshold=th)
+        got, want = swept["threshold_sweep"][th]["p_fwer"], alone.get("p_fwer")
+        assert got == want, (th, got, want)
+
+
+def test_a_higher_threshold_never_grows_a_cluster():
+    """A sanity property of cluster formation that a bug in the grouping would break: raising the
+    threshold can only remove bands from a run, never add them.
+    """
+    power, amp, vis = _panel(effect_bands=tuple(CEN[12:18]), slope=-0.35, seed=12)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0,
+                                    t_threshold=1.5, extra_thresholds=(2.0, 2.5, 3.0))
+    sizes = {th: d["largest_n_bands"] for th, d in r["threshold_sweep"].items()
+             if d["largest_n_bands"] is not None}
+    ordered = [sizes[th] for th in sorted(sizes)]
+    assert ordered == sorted(ordered, reverse=True), sizes
+
+
+def test_the_primary_threshold_is_always_present_in_the_sweep():
+    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=13)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0, t_threshold=2.0,
+                                    extra_thresholds=(2.0, 2.0))     # duplicates collapse
+    assert list(r["threshold_sweep"]) == [2.0]
+    assert r["threshold_sweep"][2.0]["p_fwer"] == r["p_fwer"]

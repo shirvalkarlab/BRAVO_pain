@@ -75,6 +75,56 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — threshold sweep confirms the 55 Hz result and kills the 110 Hz lead
+
+`band_cluster_permutation` gained `extra_thresholds=`, evaluating several cluster-forming
+thresholds in ONE permutation loop (the t values are refit per replicate; only the grouping
+differs, so the sweep is nearly free). Three tests, including one asserting the swept p is
+IDENTICAL to running each threshold separately at the same seed.
+
+**The threshold was a free parameter I had declared and not examined. Examining it changed two
+conclusions.**
+
+| cell | rate | p @1.5 | p @2.0 | p @2.5 | p @3.0 | sign flips? |
+|---|---|---|---|---|---|---|
+| ONE_THREE_LEFT / Left | 55 | 0.4628 | 0.6697 | 0.7401 | — | **YES** (− − +) |
+| ONE_THREE_LEFT / Right | 55 | 0.3098 | 0.4333 | 0.4658 | 0.5357 | **YES** (+ + − −) |
+| ZERO_THREE_RIGHT / Left | 55 | **0.0005** | **0.0005** | **0.0005** | **0.0005** | no (+ + + +) |
+| ZERO_THREE_RIGHT / Right | 55 | **0.0005** | **0.0005** | **0.0005** | **0.0005** | no (+ + + +) |
+| ZERO_THREE_RIGHT / Left | 110 | 0.0740 | 0.0845 | 0.0915 | 0.1889 | no (− − − −) |
+| ZERO_THREE_RIGHT / Right | 110 | **0.0470** | 0.1614 | 0.1659 | 0.1524 | no (− − − −) |
+
+**1. The 55 Hz positive response is threshold-invariant.** p = 0.0005 at all four thresholds with
+mass constant at 68.56, on both hemispheres. That is what a real effect looks like under this
+sweep, and it is the fourth independent confirmation that the 55 Hz signal is strong and rises
+with amplitude.
+
+**2. The ONE_THREE_LEFT retraction is reconfirmed by a mechanism, not just a p-value.** The SIGN of
+its largest cluster FLIPS with the threshold — negative at |t|>=1.5 and 2.0, positive at 2.5 on the
+Left; positive at 1.5 and 2.0, negative at 2.5 and 3.0 on the Right. A real effect does not change
+direction when a threshold moves. This is noise, and 0 of the thresholds tested reach 0.05.
+
+**3. THE 110 Hz LEAD DOES NOT SURVIVE, and the sweep is exactly what exposed it.**
+ZERO_THREE_RIGHT/Right at 110 Hz reaches p = 0.0470 at |t|>=1.5 and 0.1614, 0.1659, 0.1524 at the
+other three. One of four thresholds below 0.05 is not a finding; reporting only that number would
+have been selection of precisely the kind this sweep exists to prevent. The Left hemisphere never
+reaches 0.05 (0.074 to 0.189). The direction is still consistently negative on both hemispheres at
+every threshold, so it remains the only place the sign is right — but it is a hypothesis for
+prospective collection, not a result.
+
+**THE DEVICE-PSD ARM CANNOT BE RUN ON THIS DESIGN, and now there is a number for why.** Per the
+standing instruction to keep the two power sources separate and report both, both were attempted.
+Tile counts inside clinic windows: **td 43,444-62,784 per channel; device-PSD 251-797** — two
+orders of magnitude sparser. Zero device-PSD cells reached the informative floor, so every
+within-visit result in this project is a Welch-from-streaming result. This is not a contradiction of
+the device-PSD source having HIGHER coverage chronically: the clinic ladders are exactly when
+BrainSense streaming is running, so time-domain tiles are dense there while event and montage PSD
+blocks are not.
+
+Suites: StimOptimizer + ClosedLoopDeployment **616 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — a cluster-based permutation search over the band axis, and it RETRACTS the ONE_THREE_LEFT candidate
 
 `within_visit.band_cluster_permutation`, with 7 tests. Method: Maris & Oostenveld 2007, J Neurosci
