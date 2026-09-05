@@ -75,6 +75,51 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — the within-visit design is now a StimOptimizer builder behind the real gate
+
+`StimOptimizer/routines/within_visit.py`: `step_settled_medians`, `amplitude_arm_bins`,
+`build_within_visit_evidence`, `build_all_within_visit`. Six tests in `test_within_visit.py`.
+
+**Placement was forced by the dependency direction.** ClosedLoopDeployment imports StimOptimizer and
+never the reverse, so a builder in StimOptimizer cannot reach into `clinic_steps.py`. The step/arm
+primitives therefore MOVED to StimOptimizer and `clinic_steps` re-exports them — one function object,
+verified — the same fix applied to `MIN_CAPTURE_SEPARATION_D`. What stays in `clinic_steps` is
+`within_visit_band_scores`, whose harmonic flag needs `harmonic_landings_hz` from Biomarkers; keeping
+it there is what lets StimOptimizer stay free of that import, **asserted by a subprocess test**
+because an in-process check is worthless once anything else has imported Biomarkers (my first
+attempt did exactly that and reported a meaningless True).
+
+**The output is the same mapping `build_all` returns, so `screen_cells` runs unchanged** — the
+majority-of-bands rule, the era-significance condition and the amplitude ceiling all still apply. A
+test proves it end to end: clean synthetic within-visit data with a real negative slope reaches
+`deployable=True` and gets selected, which is what shows the gate was not bypassed. Note
+`screen_cells` returns `(frame, selected_key)`, not a bare frame.
+
+**PRODUCTION RUN, RCS08, three rates: 22 usable cells, 0 deployable.** But most of those zeros are
+thin data, not evidence, and the two must not be reported together. Requiring at least 2 eras and at
+least 16 steps (2 x MIN_ROWS_PER_ARM) leaves **6 informative cells of 22**:
+
+| cell | rate | steps | eras | responding | sig-negative | median sep |
+|---|---|---|---|---|---|---|
+| ONE_THREE_LEFT / Left | 55 | 71 | 6 | 5/18 | 3 | 0.801 |
+| ONE_THREE_LEFT / Right | 55 | 69 | 6 | 6/18 | 4 | 0.576 |
+| ZERO_THREE_RIGHT / Left | 55 | 102 | 12 | 0/18 | 0 | 0.532 |
+| ZERO_THREE_RIGHT / Right | 55 | 100 | 12 | 0/18 | 0 | 0.891 |
+| ZERO_THREE_RIGHT / Left | 110 | 30 | 5 | 0/18 | 0 | n/a |
+| ZERO_THREE_RIGHT / Right | 110 | 30 | 5 | 0/18 | 0 | n/a |
+
+0 of 6 deployable, blocked on the majority rule. The remaining 16 cells carry 3 to 15 steps and
+their zeros are uninformative — two have a single era, so an era-blocked slope is not estimable at
+all. **The builder achieved arms at 0.5 and 4.5 mA**, a 4.0 mA contrast, wider than the 3.5 mA the
+ad-hoc script found and four times the chronic five-era window's 1.0 mA.
+
+**Still no off-landing test of ONE_THREE_LEFT.** It builds at 110 Hz now (15 steps, 4 eras) but falls
+below the 16-step floor, so the 25 Hz-landing question remains open on data rather than on method.
+
+Suites: StimOptimizer + ClosedLoopDeployment **600 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — the WITHIN-VISIT amplitude screen, promoted out of a scratch file
 
 The best-identified design in the project existed only as a bridge script. Now in

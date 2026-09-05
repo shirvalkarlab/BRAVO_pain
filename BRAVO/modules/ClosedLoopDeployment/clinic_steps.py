@@ -285,87 +285,23 @@ DEGENERATE_CI_WIDTH_LOG10 = 0.005
 # streaming tiles, giving arms at 1.0 and 3.5 mA and median separation 0.53 to 0.89 per cell. So
 # separation stops being the binding constraint, which is what the design was for.
 
-#: Amplitude bin width for forming capture arms, in mA.
-#:
-#: A JUDGEMENT, and it exists because the programmer steps finely while a capture arm needs rows.
-#: On RCS08 a single visit carried 29 distinct amplitude levels across 36 steps, so grouping on the
-#: raw level leaves roughly one step per level and no arm reaches MIN_ROWS_PER_ARM. Binning to
-#: 0.5 mA is the coarsest grouping that still separates clinically distinct settings, and it is
-#: declared rather than buried because it changes which steps are contrasted.
-AMP_ARM_BIN_MA = 0.5
-
-#: Minimum settled tiles a step must contribute before its median is used.
-#:
-#: Two is the arithmetic minimum for a median to mean anything. It is deliberately low: on RCS08 the
-#: median step yields only about five settled tiles (roughly fifteen seconds after the ramp
-#: exclusion), so a stricter floor discards most of the record. The thinness is a real limitation of
-#: the present data and is reported per step as ``n_tiles`` rather than hidden.
-MIN_SETTLED_TILES = 2
-
-
-def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
-                         ramp_s=RAMP_WARNING_S, min_tiles=MIN_SETTLED_TILES):
-    """One power vector per step: the median across that step's SETTLED tiles.
-
-    THE UNIT IS THE STEP, NOT THE TILE, and this is the load-bearing choice in the whole screen.
-    A device capture is a short recording summarised to one number, so the step median is its
-    analogue, and a median rather than a mean because a capture window can contain a transient.
-
-    WHAT THE CHOICE ACTUALLY PROTECTS, corrected 2026-09-05 after a test falsified my first
-    explanation. I had claimed that tile-level scoring inflates the standardised SEPARATION,
-    because the within-arm variance becomes a within-step variance. It does not: measured on a
-    construction with a large between-step spread and a small within-step one, separation came out
-    2.54 at step level and 2.64 at tile level, a ratio of 1.04, and the slope was identical to four
-    decimals at -0.2072. The reason is that a Cohen-style d divides by the pooled within-ARM
-    spread, and an arm contains many different steps whichever unit is used, so between-step
-    variation dominates the denominator either way.
-
-    What tiles inflate is the INFERENCE. On the same construction the slope p-value went from
-    4.7e-54 at step level to 1.7e-63 at tile level — ten orders of magnitude — on an n inflated
-    twentyfold from 24 to 480, with the same four visits as clusters. Cluster-robust standard
-    errors do not rescue it, because the cluster count is unchanged while the rows inside each
-    cluster multiply. So the step median is what keeps the p-value honest, and the separation
-    figure would have been trustworthy under either unit.
-
-    ``tile_t`` must be sorted ascending. Returns ``(medians, n_tiles, kept)`` where ``medians`` is
-    (n_kept, n_centres), ``n_tiles`` the settled count per kept step, and ``kept`` the indices of
-    the steps that contributed.
-    """
-    t0 = np.asarray(step_t0, dtype=float)
-    win = np.asarray(step_window_s, dtype=float)
-    tt = np.asarray(tile_t, dtype=float)
-    tp = np.asarray(tile_power, dtype=float)
-    if t0.shape != win.shape:
-        raise ValueError(f"step_t0 {t0.shape} and step_window_s {win.shape} must match")
-    if tp.ndim != 2 or tp.shape[0] != tt.size:
-        raise ValueError(f"tile_power must be (n_tiles, n_centres) aligned to tile_t "
-                         f"({tt.size}); got {tp.shape}")
-    if tt.size and np.any(np.diff(tt) < 0):
-        raise ValueError("tile_t must be sorted ascending")
-
-    meds, counts, kept = [], [], []
-    for i, (a, w) in enumerate(zip(t0, win)):
-        if not np.isfinite(a) or not np.isfinite(w) or w <= ramp_s:
-            continue
-        i0 = int(np.searchsorted(tt, a + ramp_s))
-        i1 = int(np.searchsorted(tt, a + w))
-        if i1 - i0 < int(min_tiles):
-            continue
-        meds.append(np.nanmedian(tp[i0:i1, :], axis=0))
-        counts.append(i1 - i0)
-        kept.append(i)
-    if not meds:
-        return (np.empty((0, tp.shape[1] if tp.ndim == 2 else 0)),
-                np.empty(0, dtype=int), np.empty(0, dtype=int))
-    return np.vstack(meds), np.asarray(counts, dtype=int), np.asarray(kept, dtype=int)
-
-
-def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
-    """Amplitudes rounded to the declared arm bin. See AMP_ARM_BIN_MA for why this is needed."""
-    a = np.asarray(amp_mA, dtype=float)
-    if not np.isfinite(bin_mA) or bin_mA <= 0:
-        raise ValueError(f"bin_mA must be positive and finite, got {bin_mA}")
-    return np.round(a / float(bin_mA)) * float(bin_mA)
+# THE STEP/ARM PRIMITIVES LIVE IN StimOptimizer, NOT HERE, and are re-exported for callers that
+# already import this module. They were written here first and moved on 2026-09-05 once the
+# evidence BUILDER was added to StimOptimizer, because the dependency between the two packages runs
+# one way only — ClosedLoopDeployment imports StimOptimizer, never the reverse — and a builder in
+# StimOptimizer cannot reach back into this file. Re-exporting rather than copying, for the same
+# reason MIN_CAPTURE_SEPARATION_D is now imported rather than restated: two literals encoding one
+# rule is how that constant drifted to a factor of two apart.
+#
+# What stays HERE is `within_visit_band_scores`, because its harmonic-landing flag needs
+# `harmonic_landings_hz` from Biomarkers. Keeping that in this file is precisely what lets the
+# StimOptimizer side stay free of a Biomarkers import, which a test asserts.
+from StimOptimizer.routines.within_visit import (        # noqa: E402  (re-export, not a cycle)
+    AMP_ARM_BIN_MA,
+    MIN_SETTLED_TILES,
+    amplitude_arm_bins,
+    step_settled_medians,
+)
 
 
 def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,

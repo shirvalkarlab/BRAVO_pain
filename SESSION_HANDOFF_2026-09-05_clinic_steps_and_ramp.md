@@ -158,3 +158,14 @@ of an effect.
 
 Open: 27.5 Hz = 55/2 is a true subharmonic; entrainment not excluded. Needs ONE_THREE_LEFT streamed
 at another rate.
+
+## Within-visit is a StimOptimizer builder now
+
+`routines/within_visit.py` -> `build_all_within_visit` returns the same mapping `build_all` does, so
+`screen_cells` (majority rule, era significance, amp ceiling) applies unchanged. Primitives moved
+here from clinic_steps because the dependency runs ClosedLoopDeployment -> StimOptimizer only;
+clinic_steps re-exports them. Biomarkers isolation asserted by SUBPROCESS test.
+
+Production: 22 usable cells, 0 deployable. Only 6 are informative (>=2 eras, >=16 steps). Arms reach
+0.5-4.5 mA. ONE_THREE_LEFT at 110 Hz builds but has 15 steps, below the floor -- so the 25 Hz-landing
+question is still open on data, not method.
