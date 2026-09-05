@@ -169,3 +169,20 @@ clinic_steps re-exports them. Biomarkers isolation asserted by SUBPROCESS test.
 Production: 22 usable cells, 0 deployable. Only 6 are informative (>=2 eras, >=16 steps). Arms reach
 0.5-4.5 mA. ONE_THREE_LEFT at 110 Hz builds but has 15 steps, below the floor -- so the 25 Hz-landing
 question is still open on data, not method.
+
+## Cluster permutation over the band axis — and the candidate is retracted
+
+`within_visit.band_cluster_permutation` (Maris & Oostenveld 2007). 7 tests.
+
+ONE_THREE_LEFT's negative runs at 24.5-27.5 Hz: p_fwer 0.67 (Left) and 0.43 (Right). NOT significant
+family-wise. They were the maximum of a correlated family. My "first clean candidate" claim is
+withdrawn.
+
+Only family-wise significant response anywhere: ZERO_THREE_RIGHT @55 Hz, both hemispheres, 9
+contiguous bands 19.5-27.5 Hz, p = 0.0005 (resolution floor) — and POSITIVE. Third independent
+reproduction of D19 at the deployment rate.
+
+Lead: ZERO_THREE_RIGHT @110 Hz, negative clusters, p 0.08/0.16 on 30 steps/5 visits. Right direction,
+underpowered.
+
+The test cannot name a band (establishes existence not location) so it never feeds deployability.

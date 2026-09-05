@@ -75,6 +75,66 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — a cluster-based permutation search over the band axis, and it RETRACTS the ONE_THREE_LEFT candidate
+
+`within_visit.band_cluster_permutation`, with 7 tests. Method: Maris & Oostenveld 2007, J Neurosci
+Methods 164(1):177-190.
+
+**Why the majority rule could not find a localised signal.** `screen_cells` needs a MAJORITY of 18
+bands to respond. That rule is right about the correlation — 5 Hz bands on a 1 Hz grid overlap
+heavily, so the best of eighteen is the maximum of a correlated family — but it is the wrong
+instrument for an effect confined to a few adjacent centres, which can never reach 50% however
+strong it is. Nothing in this codebase clustered the band axis; it was only ever counted.
+
+**RESULT ON RCS08, six informative cells, 2000 permutations, amplitude permuted WITHIN visit:**
+
+| cell | rate | largest cluster | bands | mass | sign | p_fwer |
+|---|---|---|---|---|---|---|
+| ONE_THREE_LEFT / Left | 55 | 25.5–26.5 | 2 | −5.10 | negative | **0.6697** |
+| ONE_THREE_LEFT / Right | 55 | 13.5–16.5 | 4 | +12.21 | positive | **0.4333** |
+| ZERO_THREE_RIGHT / Left | 55 | 19.5–27.5 | 9 | +68.56 | positive | **0.0005** |
+| ZERO_THREE_RIGHT / Right | 55 | 19.5–27.5 | 9 | +62.78 | positive | **0.0005** |
+| ZERO_THREE_RIGHT / Left | 110 | 14.5–17.5 | 4 | −20.24 | negative | 0.0845 |
+| ZERO_THREE_RIGHT / Right | 110 | 20.5–25.5 | 6 | −70.02 | negative | 0.1614 |
+
+**RETRACTION: the ONE_THREE_LEFT candidate does not survive family-wise correction.** I reported
+3 and 4 "significant negative era-blocked slopes" at 24.5-27.5 Hz as the first clean candidate in
+the project. Under a cluster test those negative runs give p = 0.67 and 0.43 — they are the maximum
+of a correlated family, which is exactly what the majority rule existed to catch. On the Right
+hemisphere the LARGEST cluster is not even the negative one; it is a positive run at 13.5-16.5 Hz.
+
+**The only family-wise significant amplitude response anywhere is POSITIVE.** ZERO_THREE_RIGHT at
+55 Hz, both hemispheres, 9 contiguous bands over 19.5-27.5 Hz, p at the 0.0005 resolution floor —
+no permutation of 2000 produced a larger cluster. Power RISES with amplitude, the positive-feedback
+direction Dual Threshold cannot use. This independently reproduces D19 at the deployment rate by a
+THIRD method (chronic screen, within-visit two-arm capture, and now a cluster permutation), on a
+cell the two-arm test scored 0 of 18 responding.
+
+**A genuine lead at 110 Hz, underpowered rather than null.** Both ZERO_THREE_RIGHT hemispheres show
+large NEGATIVE clusters — the usable direction — at p = 0.0845 and 0.1614 on only 30 steps over 5
+visits. Not evidence, but the only place in this record where the sign is right and the mass is
+substantial.
+
+**THREE LIMITATIONS ENCODED, because they decide how the result may be used.** (1) It establishes
+EXISTENCE, not LOCATION (Sassenhagen & Draschkow 2019, Psychophysiology 56(6):e13335), so it MUST
+NEVER feed the deployability gate — programming needs one band and this cannot name one; a test
+asserts the warning text survives editing. (2) It misses narrow effects, so a null is weak evidence
+of absence. (3) It depends on the cluster-forming threshold, which is a free parameter, not a
+significance level; TFCE (Smith & Nichols 2009) is the upgrade if it ever matters.
+
+**The permutation null repairs the CR0 problem.** The per-band statistic is cluster-robust and the
+wild-bootstrap work established it is anti-conservative at 6-12 clusters. Under permutation that
+cancels for the family-wise p, because the same biased statistic is recomputed on every replicate.
+The per-band t values remain biased and must not be read alone.
+
+The fast estimator was cross-checked against the gate's statsmodels fit: raw CR0 differed by exactly
+sqrt(G/(G-1) * (N-1)/(N-K)) — a measured 1.134349 against a predicted 1.134349 — identifying it as
+the finite-sample correction rather than a modelling difference. Applied, agreement now 1.9e-12.
+
+Suites: StimOptimizer + ClosedLoopDeployment **607 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — the within-visit design is now a StimOptimizer builder behind the real gate
 
 `StimOptimizer/routines/within_visit.py`: `step_settled_medians`, `amplitude_arm_bins`,

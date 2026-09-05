@@ -151,3 +151,129 @@ def test_centre_count_mismatch_raises_rather_than_mislabelling_bands():
         WV.build_within_visit_evidence(S, channel="ZERO_TWO_LEFT", hemisphere="Left",
                                        rate_hz=55.0, centers_hz=CEN[:-3],
                                        tile_t=tt, tile_power=tp)
+
+
+# --- the band-axis cluster permutation test (2026-09-05) -----------------------------------------
+def _panel(n_visits=8, per_visit=12, amps=(1.0, 2.0, 3.0, 4.0), seed=0,
+           effect_bands=(), slope=-0.30, noise=0.25, visit_sd=0.5):
+    """Within-visit panel: a per-visit offset plus an amplitude effect in `effect_bands` only."""
+    rng = np.random.default_rng(seed)
+    vis, amp = [], []
+    for v in range(n_visits):
+        for k in range(per_visit):
+            vis.append(f"v{v}")
+            amp.append(amps[k % len(amps)])
+    vis = np.asarray(vis); amp = np.asarray(amp, dtype=float)
+    off = {v: rng.normal(0, visit_sd) for v in set(vis)}
+    base = np.array([off[v] for v in vis])
+    power = {}
+    for c in CEN:
+        y = 5.0 + base + rng.normal(0, noise, amp.size)
+        if any(abs(c - e) < 1e-9 for e in effect_bands):
+            y = y + slope * amp
+        power[float(c)] = y
+    return power, amp, vis
+
+
+def test_the_fast_estimator_matches_the_gates_statsmodels_fit():
+    """The consistency claim. A fast reimplementation that silently disagreed with
+    `assess_response`'s estimator would make the SEARCH and the VERDICT answer different questions,
+    and the discrepancy would be invisible because both look reasonable in isolation.
+
+    The raw CR0 sandwich differed from statsmodels by exactly sqrt(G/(G-1) * (N-1)/(N-K)) -- the
+    standard finite-sample correction -- measured at a ratio of 1.134349 against a predicted
+    1.134349 on a 90-row, 6-cluster construction. That identified it as the correction rather than a
+    modelling difference, and it is now applied.
+    """
+    import statsmodels.formula.api as smf
+    rng = np.random.default_rng(7)
+    n, nv = 90, 6
+    vis = np.array([f"v{i % nv}" for i in range(n)])
+    amp = rng.choice([1.0, 2.0, 3.0, 4.0], n)
+    off = {v: rng.normal(0, 0.5) for v in set(vis)}
+    y = np.array([5 - 0.25 * a + off[v] + rng.normal(0, 0.3) for a, v in zip(amp, vis)])
+
+    mine = WV._band_t_cluster_robust(y, amp, vis, vis)
+    df = pd.DataFrame({"logp": y, "amp": amp, "era": vis, "clus": vis})
+    res = smf.ols("logp ~ amp + C(era)", data=df).fit(
+        cov_type="cluster", cov_kwds={"groups": df["clus"]})
+    assert abs(mine - float(res.params["amp"] / res.bse["amp"])) < 1e-8
+
+
+def test_clusters_are_runs_of_adjacent_same_signed_bands():
+    t = np.array([0.1, 2.5, 3.0, 2.2, 0.4, -2.1, -2.9, 0.2, 2.4])
+    got = WV._clusters_along_axis(t, 2.0)
+    assert got == [(1, 4, 7.7), (5, 7, -5.0), (8, 9, 2.4)], got
+    # a sign change BREAKS a run even with both sides supra-threshold
+    t2 = np.array([2.5, -2.5, 2.5])
+    assert len(WV._clusters_along_axis(t2, 2.0)) == 3
+    # and nothing supra-threshold gives no clusters
+    assert WV._clusters_along_axis(np.array([0.5, 1.0, -1.2]), 2.0) == []
+
+
+def test_a_localised_effect_is_detected_where_the_majority_rule_cannot_be_satisfied():
+    """The whole reason this test exists. Four adjacent bands of eighteen carry a real effect --
+    22% of the grid, so the 50% majority rule refuses it by construction however strong it is.
+    """
+    eff = tuple(CEN[14:18])                       # 24.5-27.5 Hz, four adjacent centres
+    power, amp, vis = _panel(effect_bands=eff, slope=-0.30, seed=1)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=300, seed=0)
+    assert r["available"] is True
+    assert r["n_clusters"] >= 1
+    L = r["largest_cluster"]
+    assert L["sign"] == "negative", L
+    assert r["p_fwer"] <= 0.05, r["p_fwer"]
+    # the effect occupies well under the majority the gate requires
+    assert len(eff) / len(CEN) < 0.5
+
+
+def test_a_flat_panel_is_not_significant():
+    """Size. No amplitude effect in any band; the largest noise cluster must not be rejected."""
+    power, amp, vis = _panel(effect_bands=(), seed=2)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=300, seed=0)
+    assert r["available"] is True
+    if r.get("p_fwer") is not None:
+        assert r["p_fwer"] > 0.05, (r["p_fwer"], r["largest_cluster"])
+
+
+def test_the_p_value_can_never_beat_its_own_resolution():
+    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.60, seed=3)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=99, seed=0)
+    if r.get("p_fwer") is not None:
+        assert r["p_fwer"] >= r["p_resolution"] - 1e-12
+        assert abs(r["p_resolution"] - 1.0 / 100) < 1e-12
+
+
+def test_it_refuses_rather_than_returning_a_meaningless_number():
+    power, amp, vis = _panel(n_visits=1, seed=4)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=50, seed=0)
+    assert r["available"] is False and "within visits" in r["reason"].lower()
+
+    # a panel where every visit holds ONE amplitude: permuting within visit changes nothing
+    power2, amp2, vis2 = _panel(n_visits=6, per_visit=6, amps=(2.0,), seed=5)
+    r2 = WV.band_cluster_permutation(power2, amp2, vis2, n_perm=50, seed=0)
+    assert r2["available"] is False and "two amplitudes" in r2["reason"].lower()
+
+    # too few centres to have an axis to cluster along
+    r3 = WV.band_cluster_permutation({10.5: np.zeros(20), 11.5: np.zeros(20)},
+                                     np.ones(20), np.array(["a"] * 10 + ["b"] * 10),
+                                     n_perm=50, seed=0)
+    assert r3["available"] is False and "three centres" in r3["reason"].lower()
+
+
+def test_the_result_states_that_it_cannot_locate_the_effect():
+    """Guards a real hazard rather than prose. This test's whole point is that a reader must not be
+    able to take the cluster's frequency limits as a band to program: cluster-sum inference gives
+    weak family-wise control and does not establish location (Sassenhagen & Draschkow 2019). If
+    this warning is ever edited away, the next reader may hand those limits to a clinician.
+    """
+    power, amp, vis = _panel(effect_bands=tuple(CEN[14:18]), slope=-0.30, seed=6)
+    r = WV.band_cluster_permutation(power, amp, vis, n_perm=100, seed=0)
+    note = (r.get("note") or "").lower()
+    assert "not its location" in note or "not location" in note, r.get("note")
+    assert "must not be used to choose a band" in note, r.get("note")
+    # and the flat-panel branch must carry the weak-evidence-of-absence caveat
+    p2, a2, v2 = _panel(effect_bands=(), noise=1.5, seed=7)
+    r2 = WV.band_cluster_permutation(p2, a2, v2, n_perm=50, seed=0)
+    if r2.get("n_clusters") == 0:
+        assert "weak evidence of absence" in (r2.get("note") or "")
