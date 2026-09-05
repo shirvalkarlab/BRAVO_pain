@@ -75,6 +75,44 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — the validation mixed model excludes the first three weeks, and it is currently a no-op
+
+**PI decision:** "in the biomarker module, when we're doing the validation check for the across-eras
+logistic regression mixed-effect model, I need to make sure to exclude the first three weeks due to
+signal drift in the biomarker exploration. Keep all data everywhere else."
+
+Implemented as `analytics.VALIDATION_EXCLUDE_FIRST_WEEKS = 3` and a new
+`exclude_first_weeks=` parameter on **`band_mixedmodel_inference` only** — the model the panel
+reports as "Mixed-effects logistic regression (lme4::glmer, random intercept per weekly era)". The
+scope is deliberately narrow and asserted by a test: `band_stim_stability` (the band x stim-era LRT,
+a different question) and `deployment_roc_by_era` still use the whole record, and the three other
+callers of `_elapsed_week_cluster` are untouched.
+
+**Two design choices worth knowing.** The window is applied BEFORE binarization and before the
+z-score, because both are computed over whatever mask reaches them: applying it afterwards would
+strike the tertile cut and the power scale against a record including the excluded weeks, and on this
+participant pain fell over the year so a full-record cut would label a disproportionate share of the
+retained samples "low". And the week index is anchored on the first sample of the WHOLE record, not
+the first retained one, so the window cannot walk forward as data accumulates.
+
+**MEASURED ON THE LIVE RECORD: it currently removes nothing from any fit.** For `ZERO_TWO_LEFT` at
+20 Hz there are 413 samples with finite band power, 22 of them in weeks 0-2, and **0 of those 22
+carry a finite tertile label** — every one falls in the excluded middle tertile, so the binarization
+was already dropping them. Scanning 6 channels x 6 band centres: **0 of 36 cells have any week-0-2
+sample entering the fit.** The odds ratio is therefore byte-identical either way (OR 2.330,
+[0.669, 8.109], p = 0.1837, n = 84, 29 weekly eras). The payload still reports
+`n_excluded_burn_in = 22` and `n_weeks_before_exclusion = 40`, which is the honest description: 22
+samples fall in the window, none of them was being used.
+
+So this is a prospective guard that costs nothing today and binds later — under a fixed pain cutoff
+instead of a tertile split, under a different metric, or on a participant whose early ratings are
+extreme rather than middling. It is NOT evidence that early drift was harmless; it is evidence that
+the tertile binarization was already removing those samples for an unrelated reason.
+
+Container suite **326 passed**.
+
+
+
 ### 2026-09-05 (later) — no time limiter exists in closed loop; longest-excursion field added; a duty crash fixed
 
 **PI question: can stimulation time be capped, e.g. cycling with a timer in closed loop?** Answered

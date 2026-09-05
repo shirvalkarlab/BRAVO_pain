@@ -2642,6 +2642,28 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
     }
 
 
+#: WEEKS OF RECORD EXCLUDED FROM THE VALIDATION MIXED MODEL, and only from that model.
+#:
+#: PI decision, 2026-09-05: "in the biomarker module, when we're doing the validation check for the
+#: across-eras logistic regression mixed-effect model, I need to make sure to exclude the first
+#: three weeks due to signal drift in the biomarker exploration. Keep all data everywhere else."
+#:
+#: The rationale is that the first weeks after implant carry signal drift — impedance settling and
+#: post-operative change — that is not the physiology the biomarker is meant to track, so a
+#: random-intercept model fitted across weekly eras spends its early eras describing recovery
+#: rather than pain. This is a PROSPECTIVE, DECLARED exclusion of a fixed window, not a
+#: data-dependent one: it is chosen from the implant timeline rather than by looking at which weeks
+#: help the odds ratio, which is what keeps it out of the selective-inference problem the fourteen
+#: finding audit was about.
+#:
+#: SCOPE, deliberately narrow. This applies to `band_mixedmodel_inference` ONLY. The sweep, the
+#: per-band scan, the deployment ROC, the era-stability LRT and everything else continue to use the
+#: whole record, because they answer different questions and the PI asked for the whole record
+#: everywhere else. Anything that widens this scope needs its own decision, not an inference from
+#: this one.
+VALIDATION_EXCLUDE_FIRST_WEEKS = 3
+
+
 def _elapsed_week_cluster(times, n):
     """Integer elapsed-week index from the first sample, as the offline validation (phase2) derives
     its random-intercept cluster: ((t_epoch - t0) / (7*86400)).astype(int). PARITY audit §6a — the
@@ -4167,7 +4189,8 @@ def _rpy2_converter_ctx():
 
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
-                              pain_cutoff=None, cluster="era"):
+                              pain_cutoff=None, cluster="era",
+                              exclude_first_weeks=VALIDATION_EXCLUDE_FIRST_WEEKS):
     """Cluster-robust inference for ONE selected (channel, band) via a logistic MIXED-EFFECTS model
     (pymer4 -> R lme4 glmer): pain_high ~ band_power + (1 | session_cluster).
 
@@ -4207,15 +4230,49 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     # channel's band power is finite; a global cut flips borderline samples high/low between the two
     # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
     chan_finite = np.isfinite(bp_log)
+
+    # THE DECLARED BURN-IN EXCLUSION (see VALIDATION_EXCLUDE_FIRST_WEEKS), applied HERE — before
+    # binarization and before the z-score — and that ordering is a choice worth stating.
+    #
+    # The tertile cut and the standardisation are both computed over whatever mask reaches them. If
+    # the exclusion were applied afterwards, the pain classes and the power scale would be defined
+    # on a record that includes the weeks being excluded, and the retained window would inherit a
+    # cut struck against data it is not being compared to. On this participant pain fell over the
+    # year, so a full-record cut would label a disproportionate share of the retained samples "low"
+    # and the two classes would no longer be tertiles of the analysed population. Excluding first
+    # makes the model self-consistent: the cut, the scale and the fit all describe the same window.
+    #
+    # The window is anchored on the FIRST sample of the whole record, not on the first retained one,
+    # so the exclusion cannot walk forward as data accumulates.
+    _cl_all = _elapsed_week_cluster(times, len(bp_log))
+    n_weeks_before = int(len(np.unique(_cl_all[chan_finite & (_cl_all >= 0)])))
+    burn_in = int(exclude_first_weeks or 0)
+    if burn_in > 0:
+        keep_week = _cl_all >= burn_in
+        n_dropped_burn_in = int(np.count_nonzero(chan_finite & ~keep_week & (_cl_all >= 0)))
+        chan_finite = chan_finite & keep_week
+    else:
+        n_dropped_burn_in = 0
+    if burn_in > 0 and not chan_finite.any():
+        return {"available": False,
+                "reason": (f"the declared {burn_in}-week burn-in exclusion removed every sample on "
+                           f"this channel and band; nothing is left to fit, which is reported "
+                           f"rather than silently falling back to the full record")}
+
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
                          pain_cutoff=pain_cutoff, finite_mask=chan_finite)
     # PARITY (audit §6a): cluster = integer ELAPSED-week index from the first sample (phase2),
     # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
     # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
-    cl = _elapsed_week_cluster(times, len(bp_log))
-    m = np.isfinite(bp_log) & np.isfinite(y)
+    cl = _cl_all
+    m = np.isfinite(bp_log) & np.isfinite(y) & chan_finite
     if m.sum() < 12 or len(np.unique(y[m])) < 2:
-        return {"available": False, "reason": "too few matched samples for a mixed model"}
+        return {"available": False,
+                "reason": ("too few matched samples for a mixed model"
+                           + (f" after the declared {burn_in}-week burn-in exclusion removed "
+                              f"{n_dropped_burn_in} of them" if burn_in > 0 else "")),
+                "excluded_first_weeks": burn_in,
+                "n_excluded_burn_in": n_dropped_burn_in}
     # PARITY (audit §6 minor): z-score with ddof=1 (phase2), matching the offline sample SD.
     _bpm = bp_log[m]
     _sd = np.nanstd(_bpm, ddof=1)
@@ -4256,6 +4313,13 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             return {
                 "available": True, "model": "glmer logistic (lme4 via pymer4)",
                 "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                # The exclusion travels WITH the estimate. A reader comparing this odds
+                # ratio against an earlier one, or against the sweep, must be able to see
+                # that they were fitted on different windows; a footnote elsewhere on the
+                # page is not enough, because the number gets quoted on its own.
+                "excluded_first_weeks": burn_in,
+                "n_excluded_burn_in": n_dropped_burn_in,
+                "n_weeks_before_exclusion": n_weeks_before,
                 "coef": _f(est), "odds_ratio": None,
                 "or_lo": None, "or_hi": None,
                 "z": None, "p": None,
@@ -4280,6 +4344,13 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         return {
             "available": True, "model": "glmer logistic (lme4 via pymer4)",
             "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                # The exclusion travels WITH the estimate. A reader comparing this odds
+                # ratio against an earlier one, or against the sweep, must be able to see
+                # that they were fitted on different windows; a footnote elsewhere on the
+                # page is not enough, because the number gets quoted on its own.
+                "excluded_first_weeks": burn_in,
+                "n_excluded_burn_in": n_dropped_burn_in,
+                "n_weeks_before_exclusion": n_weeks_before,
             "coef": _f(est), "odds_ratio": _f(odds),
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,

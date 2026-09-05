@@ -102,3 +102,15 @@ Cycling is not available with Adaptive Therapy (A610 p. 35, D32) and no duration
 appears in the corpus. `DutyCycle.max_time_at_upper_limit_s` now reports the longest continuous
 excursion instead, and fixing its plumbing exposed a `ValueError` crash in `duty_cycle` that had
 been reading the control-state list as an amplitude array.
+
+## The three-week burn-in exclusion on the validation mixed model
+
+`analytics.VALIDATION_EXCLUDE_FIRST_WEEKS = 3`, applied in `band_mixedmodel_inference` only, before
+binarization and before the z-score, anchored on the first sample of the whole record.
+
+Measured effect on RCS08: **none, today.** 22 samples fall in weeks 0-2 with finite band power and
+none carries a finite tertile label, so all 36 channel-by-band cells scanned fit identically either
+way. Reported in the payload as `n_excluded_burn_in` / `n_weeks_before_exclusion` rather than
+silently, because a reader comparing this odds ratio to the sweep must see which window it used.
+
+Frontend follow-up: the panel does not yet state the exclusion. The keys are in the payload.

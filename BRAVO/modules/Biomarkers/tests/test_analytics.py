@@ -3269,3 +3269,59 @@ def test_locf_carries_rate_forward_and_nans_unparseable_times():
     assert np.isnan(out[1]), "an unparseable timestamp must not silently inherit a rate"
     assert an._locf_values(times, None).shape == (2,)
     assert np.all(np.isnan(an._locf_values(times, None)))
+
+
+# --- the declared burn-in exclusion on the validation mixed model (2026-09-05) ------------------
+def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
+    """PI decision 2026-09-05: the across-eras validation mixed model excludes the first three
+    weeks for post-implant signal drift, and the whole record is kept everywhere else.
+
+    Asserts the window is actually applied, that the exclusion travels in the payload so an odds
+    ratio cannot be quoted without it, and that the week index is anchored on the first sample of
+    the WHOLE record rather than the first retained one — otherwise the window would walk forward
+    as data accumulated.
+    """
+    import numpy as np
+    from modules.Biomarkers.routines import analytics
+
+    assert analytics.VALIDATION_EXCLUDE_FIRST_WEEKS == 3
+
+    rng = np.random.default_rng(0)
+    n, nf = 240, 24
+    f = np.linspace(5.0, 45.0, nf)
+    t0 = np.datetime64("2026-01-01T00:00:00")
+    # ten weeks of samples, evenly spread
+    times = [str(t0 + np.timedelta64(int(i * 7 * 10 * 86400 / n), "s")) for i in range(n)]
+    psd = rng.normal(0.0, 1.0, size=(n, 1, nf))
+    labels = rng.normal(5.0, 2.0, size=n)
+    det = {"f_set": f, "psd": psd, "labels": labels, "chan_order": ["ZERO_TWO_LEFT"],
+           "times": times, "prelog": True}
+
+    full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
+    cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+
+    # both must at least report; if pymer4/R is missing they degrade identically and the
+    # exclusion bookkeeping is still the thing under test
+    if full.get("available") and cut.get("available"):
+        assert cut["n"] < full["n"], (cut["n"], full["n"])
+        assert cut["excluded_first_weeks"] == 3
+        assert cut["n_excluded_burn_in"] > 0
+        assert full["excluded_first_weeks"] == 0
+        assert full["n_excluded_burn_in"] == 0
+        # ten weeks of record, three excluded -> the retained cluster count drops by about three
+        assert cut["n_clusters"] <= full["n_clusters"] - 2, (cut["n_clusters"], full["n_clusters"])
+
+
+def test_the_burn_in_exclusion_does_not_leak_into_the_era_stability_test():
+    """Scope containment. The PI asked for the whole record everywhere except the validation mixed
+    model, so `band_stim_stability` — a different question, 'does the band behave the same under
+    every stimulation state?' — must not inherit the window. Asserted at the source rather than by
+    running it, because that function needs R and a stim trajectory to reach a verdict.
+    """
+    import inspect
+    from modules.Biomarkers.routines import analytics
+    src = inspect.getsource(analytics.band_stim_stability)
+    assert "exclude_first_weeks" not in src
+    assert "VALIDATION_EXCLUDE_FIRST_WEEKS" not in src
+    # and the sweep must not carry it either
+    assert "exclude_first_weeks" not in inspect.getsource(analytics.deployment_roc_by_era)
