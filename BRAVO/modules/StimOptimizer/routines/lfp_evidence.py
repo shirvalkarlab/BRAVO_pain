@@ -167,6 +167,13 @@ class EvidenceAudit:
     amp_col: str | None = None
     rate_col: str | None = None
     era_source: str | None = None
+    # The recent-era restriction, when one was applied. Recorded because a slope fitted on five
+    # eras and one fitted on forty are not the same estimate, and nothing else in the payload
+    # distinguishes them.
+    n_dropped_old_eras: int = 0
+    recent_eras_requested: int | None = None
+    recent_eras_kept: tuple = ()
+    era_order_source: str | None = None
     reason_unusable: str | None = None
 
     def describe(self) -> str:
@@ -211,6 +218,54 @@ def _resolve_col(frame, candidates, what):
                    f"frame has {sorted(frame.columns)}")
 
 
+#: HOW MANY OF THE MOST RECENT ERAS THE RESPONSE TEST MAY USE, or None for all of them.
+#:
+#: PI direction, 2026-09-05: restrict the era calculations to the four or five most recent eras.
+#: The motivation is the same one that drives the burn-in exclusion on the biomarker side — the
+#: early record describes a different physiological and programming state, and blocking on eras
+#: that span the whole implant history asks the model to hold constant something that changed in
+#: kind rather than in degree.
+#:
+#: THE CONFLICT THIS CREATES, which is why the value is not simply set to 5 here. In this module the
+#: era variable is used TWICE: as the blocking factor (``C(era)`` in the slope model) and as the
+#: CLUSTER for the robust standard errors — ``LfpEvidence(era=..., cluster=...)`` is passed the same
+#: array. Restricting to five eras therefore leaves five clusters against a model carrying four era
+#: dummies plus an intercept plus amplitude, which is six parameters. A cluster-robust sandwich with
+#: fewer clusters than parameters is rank-deficient, and this project has already established what
+#: that looks like: zero-width confidence intervals reported at p values near 1e-14. So the
+#: restriction cannot be applied without either dropping the blocking, changing the cluster unit, or
+#: switching to small-sample inference — and which of those is right is an empirical question, not a
+#: default, so it was measured before being set.
+#:
+#: MEASURED, 2026-09-05, on RCS08 at 55 Hz. Three findings decided the value.
+#:
+#: 1. The era-blocked SLOPE does not move at all. It is -0.1222 log per mA on ONE_THREE_LEFT/Left at
+#:    10.5 Hz with all 8 eras, with 5, and with 4 — identical to four decimals while n falls from
+#:    361 to 331 to 328. That is not a coincidence and not a bug: the dropped eras each carried a
+#:    SINGLE amplitude level, so their era dummy absorbs them entirely and they contribute nothing
+#:    to a within-era amplitude slope. The restriction the PI asked for was therefore already
+#:    implicit in the estimator for the slope.
+#: 2. What it does change is the CAPTURE CONTRAST, and materially. Dropping the older eras removes
+#:    the low amplitude levels from the record, so the low capture arm moves from 1.6 mA to 3.5 mA
+#:    and the contrast is measured over 1.0 mA instead of 2.9 mA. On that cell ``direction_ok``
+#:    flips from False to True in 15 of 18 bands: with the full record power RISES from 3.222 to
+#:    4.894 across the arms, and on the recent eras it FALLS from 5.020 to 4.894. The full-record
+#:    capture was inverted because it spanned two programming regimes.
+#: 3. The predicted rank deficiency did NOT materialise — interval widths stay at 0.23 to 0.26 with
+#:    4 and 5 clusters — but the cluster count lands in the anti-conservative regime. A wild cluster
+#:    bootstrap resolves no finer than 1/2**G, which is 0.031 at five clusters and 0.062 at four, so
+#:    at FOUR eras the reported p of 0.0564 sits BELOW its own resolution floor and cannot be
+#:    resolved at all. Five is therefore the smallest defensible window of the two the PI named.
+#:
+#: The verdict is unchanged at 5 and at 4: 2 of 50 cells deployable, 0 of 12 at 55 Hz, and the same
+#: cell selected. So this is a change of reasoning rather than of outcome, which is the honest thing
+#: to record — the binding constraint on that cell moved from capture DIRECTION to capture
+#: SEPARATION, which now sits at 0.41 to 0.52 against a 0.5 floor because the amplitude range
+#: collapsed. Bands with a significant slope fail separation and bands clearing separation have p
+#: between 0.07 and 0.35, an anti-correlation forced by the 1 mA contrast.
+RECENT_ERAS_FOR_RESPONSE = 5
+
+
 def _derive_era(ep, era_col, aud):
     """Era labels for temporal blocking, and an honest record of where they came from.
 
@@ -233,7 +288,8 @@ def _derive_era(ep, era_col, aud):
 
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
                    require_stim_on=True, amp_col=None, era_col="visit", rate_col=None,
-                   time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE):
+                   time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE,
+                   recent_eras=RECENT_ERAS_FOR_RESPONSE):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
     Parameters
@@ -296,6 +352,31 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
         p = p[p["amp"] > 0]
         aud.n_dropped_stim_off = n_before - len(p)
     p = p.dropna(subset=["amp"])
+
+    # RESTRICT TO THE MOST RECENT ERAS, if asked. Applied here rather than earlier so that "most
+    # recent" is measured over the rows that survive the rate and stimulation-on filters — an era
+    # that contributes nothing at this rate is not one of this cell's recent eras, and counting it
+    # would silently shorten the window.
+    #
+    # Ordered by each era's LATEST timestamp, not by its label. Calendar-month labels happen to sort
+    # chronologically but a visit column need not, and ordering by label would quietly select the
+    # alphabetically-last eras on any record whose visit identifiers are not date-like.
+    if recent_eras is not None and int(recent_eras) > 0 and len(p):
+        if "t" in p.columns:
+            order = p.groupby("era")["t"].max().sort_values()
+            aud.era_order_source = "each era's latest timestamp"
+        else:
+            order = pd.Series(sorted(pd.Series(p["era"]).unique()),
+                              index=sorted(pd.Series(p["era"]).unique()))
+            aud.era_order_source = ("era LABEL order — no time column present, so this is only "
+                                    "chronological if the labels are date-like")
+        keep = list(order.index[-int(recent_eras):])
+        n_before = len(p)
+        p = p[p["era"].isin(keep)]
+        aud.n_dropped_old_eras = n_before - len(p)
+        aud.recent_eras_kept = tuple(str(k) for k in keep)
+        aud.recent_eras_requested = int(recent_eras)
+
     aud.n_final = len(p)
     if not len(p):
         aud.reason_unusable = f"nothing left after restricting to {rate_hz:g} Hz with stimulation on"

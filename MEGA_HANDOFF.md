@@ -75,6 +75,51 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later) — the response test now blocks on the 5 most recent eras only
+
+**PI direction:** "let's fix the era calculations so that it is only on the 4 or 5 most recent eras."
+
+`lfp_evidence.RECENT_ERAS_FOR_RESPONSE = 5`, threaded as `recent_eras=` through `build_evidence`,
+`build_all` and `pipeline.live_evidence`. Applied AFTER the rate and stimulation-on filters, so an
+era contributing nothing at the analysed rate does not consume a slot and silently shorten the
+window. Eras are ordered by **each era's latest timestamp, not by label** — calendar-month labels
+sort chronologically but a `visit` column need not, and label ordering would quietly select the
+alphabetically-last eras on any record whose visit identifiers are words. A test pins this with the
+newest era named `alpha` and the oldest `zulu`.
+
+**The slope does not move, and that is not a bug.** On `ONE_THREE_LEFT`/Left at 55 Hz, 10.5 Hz, the
+era-blocked slope is **-0.1222 log per mA with all 8 eras, with 5, and with 4** — identical to four
+decimals while n falls 361 -> 331 -> 328. The dropped eras each carried a SINGLE amplitude level, so
+their era dummy absorbs them entirely and they supply no within-era amplitude contrast. For the
+slope, the restriction the PI asked for was already implicit in the estimator. Pinned by a test,
+because an unchanged estimate is exactly what a restriction that silently failed would also produce.
+
+**What it does change is the CAPTURE CONTRAST, and materially.** Dropping older eras removes the low
+amplitude levels, so the low arm moves from **1.6 mA to 3.5 mA** and the contrast spans 1.0 mA rather
+than 2.9. On that cell `direction_ok` flips **False -> True in 15 of 18 bands**: on the full record
+power RISES across the arms (3.222 -> 4.894) and on the recent eras it FALLS (5.020 -> 4.894). The
+full-record capture was inverted because it straddled two programming regimes. This is the more
+honest quantity — it is the contrast the device would actually capture today.
+
+**The binding constraint moved from direction to separation.** With 5 eras, separation d on that cell
+sits at **0.41 to 0.52 against the 0.5 floor**, because the amplitude range collapsed. Only 4 of 18
+bands clear it, and those four have p of 0.0884, 0.0711, 0.1611 and 0.3491 — while the five bands
+with a significant slope (10.5, 11.5, 14.5, 16.5, 17.5 Hz) all have separation just BELOW 0.5. That
+anti-correlation is forced by the 1 mA contrast, not a coincidence.
+
+**Verdict unchanged: 2 of 50 cells deployable, 0 of 12 at 55 Hz, same cell selected**
+(`ONE_THREE_LEFT`/Left @165 Hz) at all eras, at 5 and at 4. A change of reasoning, not of outcome.
+
+**Why 5 and not 4.** The predicted rank deficiency did not appear — interval widths stay 0.23-0.26 —
+but the cluster count lands in the anti-conservative regime, and a wild cluster bootstrap resolves no
+finer than 1/2**G: 0.031 at five clusters, 0.062 at four. At FOUR eras the reported p of 0.0564 sits
+BELOW its own resolution floor and cannot be resolved at all. Five is the smaller defensible window
+of the two named.
+
+StimOptimizer suite **375 -> 378 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — the validation mixed model excludes the first three weeks, and it is currently a no-op
 
 **PI decision:** "in the biomarker module, when we're doing the validation check for the across-eras

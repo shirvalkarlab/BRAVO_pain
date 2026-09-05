@@ -114,3 +114,18 @@ way. Reported in the payload as `n_excluded_burn_in` / `n_weeks_before_exclusion
 silently, because a reader comparing this odds ratio to the sweep must see which window it used.
 
 Frontend follow-up: the panel does not yet state the exclusion. The keys are in the payload.
+
+## The response test now blocks on the 5 most recent eras
+
+`lfp_evidence.RECENT_ERAS_FOR_RESPONSE = 5`, `recent_eras=` on `build_evidence` / `build_all` /
+`live_evidence`. Ordered by each era's latest timestamp, not by label. Audit carries
+`n_dropped_old_eras`, `recent_eras_kept`, `recent_eras_requested`, `era_order_source`.
+
+Slope unchanged (-0.1222 at 8, 5 and 4 eras) because the dropped eras had one amplitude each and
+contribute nothing within-era. Capture direction flips False -> True on 15 of 18 bands because the
+low arm moves 1.6 -> 3.5 mA. Separation becomes the binding constraint at 0.41-0.52 vs a 0.5 floor.
+Verdict unchanged: 0 of 12 deployable at 55 Hz.
+
+Open: separation is now doing the refusing, and it is doing so at a threshold the 1 mA contrast makes
+almost unreachable. Whether MIN_CAPTURE_SEPARATION_D = 0.5 is the right floor for a 1 mA capture is a
+question I have not put to the PI.

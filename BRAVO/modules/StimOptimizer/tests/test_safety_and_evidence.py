@@ -672,3 +672,86 @@ def test_timing_plan_follows_the_selected_mode():
     assert dual["device_default_averaging_ms"] == 1200.0
     assert single["device_default_averaging_ms"] == 100.0
     assert dual["transition_up_ms"] != single["transition_up_ms"]
+
+
+# --- the recent-era restriction (2026-09-05) -----------------------------------------------------
+def _psd_eras(n=120, t0=1_700_000_000):
+    """PSD rows spanning six calendar months, one channel."""
+    rng = np.random.default_rng(7)
+    log_psd = rng.normal(-1.0, 0.10, size=(n, FREQS.size))
+    # thirty days apart so consecutive epochs land in distinct calendar months
+    t = t0 + np.arange(n) * (30 * 86400 // 20)
+    return pd.DataFrame({"t": t, "channel": ["ZERO_TWO_LEFT"] * n,
+                         "log_psd": list(log_psd), "freqs": [FREQS] * n})
+
+
+def _epochs_eras(t0=1_700_000_000, labels=None, amps=None):
+    """Six epochs, one per era, each two amplitudes wide unless `amps` says otherwise."""
+    s = pd.to_datetime(t0, unit="s", utc=True)
+    amps = amps if amps is not None else [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+    rows = []
+    for i, a in enumerate(amps):
+        st = s + pd.Timedelta(days=30 * i)
+        rows.append(dict(t_start=st, t_end=st + pd.Timedelta(days=30), amp_Left=a,
+                         amp_Right=2.0, rate=55.0,
+                         visit=(labels[i] if labels else i + 1)))
+    return pd.DataFrame(rows)
+
+
+def test_recent_era_restriction_keeps_the_latest_eras_and_records_what_it_dropped():
+    ev_all, aud_all = EV.build_evidence(_psd_eras(), _epochs_eras(), channel="ZERO_TWO_LEFT",
+                                        hemisphere="Left", rate_hz=55.0, era_col="visit",
+                                        recent_eras=None)
+    ev_3, aud_3 = EV.build_evidence(_psd_eras(), _epochs_eras(), channel="ZERO_TWO_LEFT",
+                                    hemisphere="Left", rate_hz=55.0, era_col="visit",
+                                    recent_eras=3)
+    assert aud_all.n_eras > aud_3.n_eras, (aud_all.n_eras, aud_3.n_eras)
+    assert aud_3.n_eras == 3
+    assert aud_3.n_dropped_old_eras > 0
+    assert aud_all.n_dropped_old_eras == 0
+    assert len(aud_3.recent_eras_kept) == 3
+    assert aud_3.recent_eras_requested == 3
+    # the LATEST eras, which with an integer visit column are the highest indices
+    assert set(aud_3.recent_eras_kept) == {"4", "5", "6"}, aud_3.recent_eras_kept
+
+
+def test_recent_eras_are_ordered_by_TIME_not_by_label():
+    """The ordering trap. Calendar-month labels sort chronologically, so a label-ordered
+    implementation passes every date-like fixture and then silently selects the alphabetically-last
+    eras on a record whose visit identifiers are words. Here the newest era is named 'alpha' and
+    the oldest 'zulu', so label order and time order disagree completely.
+    """
+    labels = ["zulu", "yankee", "xray", "charlie", "bravo", "alpha"]   # oldest -> newest
+    _, aud = EV.build_evidence(_psd_eras(), _epochs_eras(labels=labels), channel="ZERO_TWO_LEFT",
+                               hemisphere="Left", rate_hz=55.0, era_col="visit", recent_eras=2)
+    assert set(aud.recent_eras_kept) == {"bravo", "alpha"}, aud.recent_eras_kept
+    assert "each era's latest timestamp" in (aud.era_order_source or "")
+
+
+def test_an_era_with_one_amplitude_contributes_nothing_to_the_within_era_slope():
+    """Why restricting the window left the measured slope unchanged to four decimals.
+
+    An era carrying a SINGLE amplitude level is absorbed entirely by its own dummy in a model with
+    `C(era)`, so it supplies no within-era amplitude contrast and cannot move the slope. Dropping
+    such eras therefore changes n and the cluster count while leaving the estimate identical --
+    which is exactly what happened on RCS08 (-0.1222 log per mA at 8, 5 and 4 eras while n fell
+    from 361 to 328). Pinned because a future reader seeing an unchanged slope would reasonably
+    suspect the restriction was not being applied at all.
+    """
+    import statsmodels.formula.api as smf
+    rng = np.random.default_rng(3)
+    # two eras with real within-era amplitude variation, plus two single-amplitude eras
+    rows = []
+    for era, amps in (("A", [1.0, 2.0, 3.0]), ("B", [2.0, 3.0, 4.0]),
+                      ("C", [5.0]), ("D", [6.0])):
+        for a in amps:
+            for _ in range(6):
+                rows.append(dict(era=era, amp=a,
+                                 logp=-0.2 * a + rng.normal(0, 0.05) + {"A": 0, "B": 1,
+                                                                        "C": 3, "D": 4}[era]))
+    df = pd.DataFrame(rows)
+    full = float(smf.ols("logp ~ amp + C(era)", data=df).fit().params["amp"])
+    trimmed = float(smf.ols("logp ~ amp + C(era)",
+                            data=df[df.era.isin(["A", "B"])]).fit().params["amp"])
+    assert len(df[df.era.isin(["A", "B"])]) < len(df)          # rows really were dropped
+    assert abs(full - trimmed) < 1e-9, (full, trimmed)
