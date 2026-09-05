@@ -10,7 +10,7 @@
  *   3) Empirical µV²/LSB ratio — a confidence-rated FYI cross-check, explicitly NOT the deployable
  *      number.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card } from "@mui/material";
@@ -18,6 +18,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -53,9 +57,6 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   const deviceBlocks = !(_rep && _rep.available && _vd.device_eligible === true);
   const pwRef = useRef(null);
   const thrRef = useRef(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
 
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
@@ -65,27 +66,34 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
   const cutDegenerate = !!(cutpoint && cutpoint.degenerate);
 
-  useEffect(() => {
-    if (!participantUid || channelRaw == null || centerHz == null || cutThr == null) {
-      setData(null);
-      return;
-    }
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryLsbPower", {
-      ParticipantId: participantUid,
-      Channel: channelRaw,
-      CenterHz: Number(centerHz),
-      BandWidthHz: Number(bandWidthHz),
-      MatchDirection: matchDir,
-      Cutpoint: Number(cutThr),
-      ...requestParams,
-    }).then((response) => {
-      const d = response && response.data;
-      if (d && d.available) setData(d);
-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, cutThr, requestParams]);
+  // The request, minus the participant, is the cache key. The operating point is IN it, because
+  // this panel exists to anchor that particular cut-point to device units — a different cut-point
+  // is a different question, not a different view of the same answer.
+  const settings = {
+    Channel: channelRaw,
+    CenterHz: centerHz == null ? null : Number(centerHz),
+    BandWidthHz: Number(bandWidthHz),
+    MatchDirection: matchDir,
+    Cutpoint: cutThr == null ? null : Number(cutThr),
+    ...requestParams,
+  };
+
+  const cached = useCachedResult({
+    moduleKey: CL.lsbPower,
+    uid: participantUid,
+    settings,
+    // Nothing is asked for until the ROC panel has settled on an operating point, because the
+    // request has no meaning without one.
+    enabled: !!participantUid && channelRaw != null && centerHz != null && cutThr != null,
+    fetcher: () => SessionController.query("/api/queryLsbPower",
+      { ParticipantId: participantUid, ...settings })
+      .then((response) => (response && response.data) || null),
+  });
+
+  const raw = cached.data;
+  const data = raw && raw.available ? raw : null;
+  const loading = cached.loading;
+  const err = cached.err || (raw && !raw.available ? (raw.reason || "unavailable") : null);
 
   const tl = data && data.threshold_lsb;
   const pw = data && data.power;
@@ -317,6 +325,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         <MDTypography variant="h6" sx={{ fontSize: 14, mb: 1 }}>
           LSB threshold + power / sample-size
         </MDTypography>
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.lsbPower])} />
 
         {/* Audit [42]: operating-point chip echoing the ROC cut-point that THIS LSB threshold derives
             from — the decision rule + sensitivity/specificity that produced it, then the oriented

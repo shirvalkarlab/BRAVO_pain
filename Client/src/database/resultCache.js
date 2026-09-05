@@ -55,7 +55,18 @@ export const MODULES = {
 // not per component. A hard reload clears it, which is correct — a reload is the user asking for a
 // clean slate, and it is also when a new server build would arrive.
 const STORE = new Map();          // `${module}::${uid}` -> entry
-const MAX_ENTRIES = 6;            // three modules across two participants
+// RAISED FROM 6 TO 24 after the views were wired, because the original figure was set against an
+// assumption that did not survive contact with the closed-loop page: it has SEVEN separate
+// requests, not one, so a single participant occupies nine slots across the three modules rather
+// than three. At six the store silently evicted entries that were still being displayed.
+//
+// The count is also the wrong unit on its own, and this cap is not what keeps the tab safe. The
+// entries differ by three orders of magnitude — the biomarker bundle is around nineteen megabytes
+// and a panel payload around twenty kilobytes — so twenty-four small entries and twenty-four large
+// ones are not comparable amounts of memory. The real bound is the heap-pressure guard in
+// `putResult`, which reclaims other participants first and then declines to store at all. This cap
+// exists only to stop unbounded growth across many participants in one session.
+const MAX_ENTRIES = 24;
 const PRESSURE_RATIO = 0.85;
 
 let SERVER_TOKEN = null;          // last token seen from /api/queryServerIdentity
@@ -118,13 +129,34 @@ export function underMemoryPressure() {
   return mi ? mi.ratio >= PRESSURE_RATIO : false;
 }
 
+/**
+ * Evict one entry, preferring another participant's over the one being read.
+ *
+ * Least-recently-read alone is not good enough here. Every slot is touched on read, so within one
+ * participant the entries that fall out are whichever panels the reader last looked at — which is
+ * an accident of their click order rather than a decision about what is worth keeping. Worse, a
+ * participant being actively worked on can evict their OWN panels while another participant's
+ * abandoned nineteen-megabyte bundle stays resident.
+ *
+ * So the search runs in two passes: other participants first, oldest of those, and only if none
+ * exist does it fall back to the least-recently-read entry of the current participant.
+ */
 function evictOldest(exceptSlot) {
-  let oldest = null;
-  let oldestAt = Infinity;
-  STORE.forEach((v, k) => {
-    if (k !== exceptSlot && v.savedAt < oldestAt) { oldestAt = v.savedAt; oldest = k; }
-  });
-  if (oldest !== null) STORE.delete(oldest);
+  const currentUid = String(exceptSlot || "").split("::")[1] || null;
+  const pick = (predicate) => {
+    let chosen = null;
+    let chosenAt = Infinity;
+    STORE.forEach((v, k) => {
+      if (k === exceptSlot || !predicate(k)) return;
+      if (v.savedAt < chosenAt) { chosenAt = v.savedAt; chosen = k; }
+    });
+    return chosen;
+  };
+  const other = currentUid
+    ? pick((k) => (String(k).split("::")[1] || null) !== currentUid)
+    : null;
+  const victim = other !== null ? other : pick(() => true);
+  if (victim !== null) STORE.delete(victim);
 }
 
 // ---- server identity -------------------------------------------------------------------------

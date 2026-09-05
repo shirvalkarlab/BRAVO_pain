@@ -75,6 +75,62 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (result cache) — the three views wired onto one cache, and two defects in the contract
+
+The PI asked that results and plots persist across switching between the Biomarkers, Stim Parameter
+Optimizer and Closed-Loop Deployment views rather than recomputing from scratch on every sidebar
+click, with an explicit Recompute control that turns amber when the settings change or a new
+biomarker is committed. The store, the hook and the control (`database/resultCache.js`,
+`database/useCachedResult.js`, `views/Reports/RecomputeBar.js`) were written by the PI beforehand and
+were **not** modified. Detail: `SESSION_HANDOFF_2026-09-05_result_cache_wiring.md`.
+
+**THE KEY RULE APPLIED EVERYWHERE: the request, minus the participant, IS the cache key.** A request
+body is by definition the complete list of things that change the answer, so a key derived from it
+cannot fall behind the request; the participant is dropped because the store already keys one entry
+per participant per module. Doing it this way closed a gap that predated the cache — the deployment
+report's fetch effect listed only the primitives it could safely depend on, so the rate, the pulse
+width and the candidate's own threshold mode were SENT to the server but were not part of what
+identified the request. The threshold-mode toggle in `PrescriptionPanel` is deliberately NOT in any
+key: `prescriptions.modes` carries all three modes with their own `fields`, `couplings` and `duty`
+in one payload (verified against `__fixtures__/rcs08_deployment_payload.json`), so switching modes is
+a pure display change and must never mark the page stale.
+
+**SEVEN SLOTS FOR ONE PAGE.** The store holds one entry per `module::participant`, which does not fit
+the deployment page's five requests plus the two panels it lends to the biomarker route. New file
+`views/Reports/moduleCacheKeys.js` extends the module identifier with a panel name (`closedLoop/roc`
+and so on) and owns `markClosedLoopFamilyStale`, which the biomarker view calls on band commit.
+
+**PLOT PERSISTENCE, which is a separate problem from the fetch cache.** Three fixes, all of them
+about not destroying a Plotly node that is still on screen: the deployment page's analyst fold now
+HIDES its three panels instead of unmounting them (mounted on first reveal, so no figure is first
+drawn at zero width); `BiomarkerAnalytics`'s generic `Fig` wrapper purged its node before every
+redraw and carried no `uirevision`, so every figure was rebuilt and lost its zoom, pan and legend
+state on every render of its panel; and `StimOptimizer`'s `FigurePanel` did the same on every arm
+switch. Purge is now on unmount only in all three, and `Fig` sets a constant `uirevision`.
+
+**ONE HEAVY CACHE, NOT TWO.** `Biomarkers/biomarkerStateStore.js` keeps the localStorage CONTROLS
+layer, which is genuinely useful because it survives a reload; its in-memory heavy layer (`HEAP`,
+`putHeavy`, `getHeavy`, `dropHeavy` and its own heap-pressure guard) is DELETED, because
+`resultCache` was generalised from it and two stores holding the same object under independent
+eviction policies would make "is it cached" ambiguous.
+
+**TWO DEFECTS IN THE CONTRACT FILES, reported rather than patched (the PI owns those files).**
+`useCachedResult.recompute()` issues TWO fetches per press — measured with a probe component: 0
+fetches on mount with a stale entry, 2 after one press. `invalidate` publishes a store event, the
+hook re-reads on every event, and on that re-read nothing is cached, so the ordinary first-load path
+starts a request while the deliberate one is still behind the server-identity check. Every view
+therefore goes through `recomputeSlots`, which refreshes the identity and then discards the entries,
+leaving the hook's own path to issue exactly one request each; that property is asserted in the new
+test file. Second, `MAX_ENTRIES = 6` against nine slots for one participant, and a count is the
+wrong unit when one entry is nineteen megabytes and another is twenty kilobytes.
+
+Tests: `database/resultCache.test.js` (ten, the five behaviours the PI named plus isolation and the
+discard-refetches-once property) and `ClosedLoopSim/cachedPanels.smoke.test.js` (six, each rewired
+panel renders and the stale notice appears). Build compiles (pre-existing `@mediapipe` source-map
+warning only); eslint clean on every file touched; `react-scripts test` 4 suites / 46 tests
+passing. **No `BRAVO/` file was changed and the container suite was NOT run this session, so no
+suite count is asserted for it here.**
+
 ### 2026-09-04 (interface rebuild) — the mode toggle, and seven backend defects the two UI lanes found
 
 The PI asked for the whole interface rebuild plus the mode toggle: "there is no toggle button to
@@ -3100,6 +3156,21 @@ into history, not current HEAD.
    by construction (one shared cache) but has no live E2E test across the two call sites.
 3. **`per_pro_lsb_overlay`** (within-rating sliding-window LSB trace + saturation QC) is available
    but not yet drawn — natural next step is a hover/expand detail on a rating's 30 s LSB trace.
+4. **Two changes needed in the result-cache contract files, which the PI owns.** Raised 2026-09-05;
+   the three views work around both in the meantime and say so in their comments.
+   - `useCachedResult.recompute()` issues TWO fetches per press (measured: 0 on mount with a stale
+     entry, 2 after one press). Discarding the entry publishes a store event, the hook re-reads on
+     every event, and on that re-read nothing is cached — so the first-load path starts a request
+     while the deliberate one is still behind the server-identity check. Guarding the auto-fetch
+     against a recompute already in flight would fix it, after which every caller of
+     `views/Reports/moduleCacheKeys.recomputeSlots` can go back to `recompute()`.
+   - `resultCache.MAX_ENTRIES = 6` against nine slots for one participant across the three views,
+     and a count is the wrong unit when one entry is nineteen megabytes and another twenty
+     kilobytes. Either raise the bound, or give the store a sub-key so one module can hold several
+     results and be evicted and invalidated as a unit.
+   - Smaller: `useCachedResult` stringifies a failed request, so the Biomarkers view can no longer
+     hand the response object to `SessionController.displayError` and its 403/500 wording is lost.
+     Carrying the error object alongside the message would restore it.
 
 **Closed (do not re-open):** all four HIGH (C1/C2/C3/C8) + C4; **[5]** (server-side full-array
 cut-point — `operating_points` table); **[42]** (LSB op-point chip + histogram resulting-LSB);
@@ -3232,9 +3303,19 @@ ingest concatenate toggle at `modules/DataCurator.py:148/150`
 **Frontend (`Client/src/views/Reports/`):**
 - `ClosedLoopSim/` — `index.js`, `DeploymentRocPanel.js`, `EraRefitPanel.js`, `LsbPowerPanel.js`,
   `DeploySignoffCard.js`, `DeploymentVerdictStrip.js`, `PsdLsbPanel.js`, `ConversionModelPanel.js`,
-  `palette.js` (Okabe-Ito). Code-split **chunk 431**.
+  `PanelStaleNote.js`, `palette.js` (Okabe-Ito). Code-split **chunk 431**.
 - `Biomarkers/BiomarkerDataTimeline.js` (modeled-LSB markers, chunk **768**),
-  `Biomarkers/BiomarkerAnalytics.js` (spectral caption), `Biomarkers/biomarkerStateStore.js`.
+  `Biomarkers/BiomarkerAnalytics.js` (spectral caption), `Biomarkers/biomarkerStateStore.js`
+  (CONTROLS layer only since 2026-09-05 — the heavy layer moved to the shared result cache).
+
+**Result cache (one store for all three analysis views, 2026-09-05):**
+- `Client/src/database/resultCache.js` — the store; `useCachedResult.js` — the hook every view uses;
+  `views/Reports/RecomputeBar.js` — the shared control. **PI-owned; do not edit without asking.**
+- `views/Reports/moduleCacheKeys.js` — the deployment family's seven slot names,
+  `markClosedLoopFamilyStale`, and `recomputeSlots` (the single-request recompute path, which exists
+  because `recompute()` double-fetches — §4 item 4).
+- `Client/src/database/resultCache.test.js` — the ten behaviour tests;
+  `ClosedLoopSim/cachedPanels.smoke.test.js` — the five rewired panels render, and the stale notice.
 - `Client/build/` — committed compiled bundle (rebuild + commit for any frontend change).
 - `Client/public/static/docs/METHODS_lsb_estimation.html` — served methods doc.
 

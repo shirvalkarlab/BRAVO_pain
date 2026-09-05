@@ -53,12 +53,45 @@ const mergeAxis = (override = {}) => ({
     : { ...AXIS_BASE.title, ...(override.title || {}) },
 });
 
+/**
+ * The generic figure wrapper the analytics panels draw through.
+ *
+ * TWO THINGS HERE WERE DESTROYING THE READER'S VIEW ON EVERY RENDER, and both are fixed below
+ * rather than at the nine call sites.
+ *
+ * The first is that every caller passes its `layout` as an object literal written inline in the
+ * markup, so a new object identity arrives on every render of the surrounding panel even when
+ * nothing about the figure has changed. That object is in this effect's dependency list, so the
+ * effect re-ran on every render — and its cleanup, which ran before each of those redraws as well
+ * as on unmount, destroyed the graph with `Plotly.purge` and built it again from nothing. Any zoom,
+ * pan or legend selection went with it. Moving a slider elsewhere on the page was enough.
+ *
+ * The purge now happens ONLY when the figure really goes away, which is what it is for: releasing
+ * the graph's event handlers and its rendering context. `Plotly.react` is a diff against what is
+ * already drawn, so re-running the effect redraws in place instead of rebuilding.
+ *
+ * The second is that `Plotly.react` keeps the reader's interactions only when the layout carries an
+ * unchanged `uirevision`, and this base layout carried none — so even an in-place redraw reset the
+ * axes to autorange. A constant revision string is added below, the same mechanism and the same
+ * reasoning as the scan figure further down this file.
+ *
+ * Rebuilding the layout objects at the call sites still costs a redraw diff on every render, which
+ * is work that could be avoided by memoising them. That is a performance question rather than a
+ * correctness one, and it is left as a follow-up because it touches nine separate call sites.
+ */
 function Fig({ traces, layout = {}, height = 320 }) {
   const ref = useRef(null);
+  // Purge on unmount only. The node is read at cleanup time rather than captured, because this
+  // effect never re-runs and the ref must be the one that is current when the figure goes away.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
   useEffect(() => {
     if (!ref.current || !traces || traces.length === 0) return;
     const base = {
       ...FIG_BASE, autosize: true, height,
+      // A constant revision string, so Plotly carries the reader's zoom, pan and legend choices
+      // across redraws. It is spread BEFORE the caller's layout so that a caller with a genuine
+      // reason to force a reset can still set its own.
+      uirevision: "biomarker-analytics-figure",
       ...layout,
       xaxis: mergeAxis(layout.xaxis),
       yaxis: mergeAxis(layout.yaxis),
@@ -72,7 +105,8 @@ function Fig({ traces, layout = {}, height = 320 }) {
       modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
       toImageButtonOptions: { format: "png", scale: 2 },   // crisp 2x PNG export for figures/slides
     });
-    return () => { if (ref.current) Plotly.purge(ref.current); };
+    // No cleanup here on purpose: see the note above the component. Purging on each redraw is what
+    // was throwing away the reader's zoom, pan and legend state.
   }, [traces, layout, height]);
   return <div ref={ref} style={{ width: "100%", height }} />;
 }

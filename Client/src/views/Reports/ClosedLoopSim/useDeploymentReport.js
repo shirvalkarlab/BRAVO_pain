@@ -13,8 +13,10 @@
  * Treat a missing report as "not yet answerable" rather than as an error, because the commonest
  * cause is simply that no candidate configuration has been chosen yet.
  */
-import { useEffect, useState } from "react";
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL } from "views/Reports/moduleCacheKeys";
 
 export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale }) {
   const bc = bandCandidate || {};
@@ -38,39 +40,63 @@ export function deploymentReportBody({ participantUid, bandCandidate, hemisphere
   };
 }
 
+/**
+ * The request, minus the participant, is the cache key.
+ *
+ * This is the rule every fetch in the deployment family follows, and it is worth stating once. The
+ * body of the request IS the complete list of things that change the answer — that is what a
+ * request body is — so deriving the settings key from it means the key cannot fall behind the
+ * request. The participant is removed because the cache already stores one entry per participant
+ * per module, so including it would put the same value in the key twice.
+ *
+ * It also fixes a real gap in what used to be watched. The effect this replaces listed only the
+ * primitives it could safely depend on without re-firing every render, which meant the rate, the
+ * pulse width and the candidate's own threshold mode were sent to the server but were NOT part of
+ * what identified the request. A candidate committed at a different rate would have been answered
+ * from a response fitted at the old one. The serialised key has no such problem: it is a string, so
+ * a body rebuilt on every render still compares equal as long as its contents are equal, and every
+ * field participates.
+ */
+function reportSettings(body) {
+  const rest = { ...body };
+  delete rest.ParticipantId;
+  return rest;
+}
+
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
   powerScale, enabled = true }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
+  const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale });
 
-  useEffect(() => {
-    if (enabled === false) return undefined;
-    if (!participantUid || channel == null || centerHz == null) return undefined;
-    let cancelled = false;
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryClosedLoopDeployment",
-      deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale }))
-      .then((response) => {
-        if (cancelled) return;
-        const d = response && response.data;
-        if (d && d.available) { setData(d); setErr(null); }
-        else { setData(null); setErr((d && d.reason) || "unavailable"); }
-        setLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setData(null); setErr("request failed"); setLoading(false);
-      });
-    return () => { cancelled = true; };
-    // The dependency list holds the PRIMITIVES that identify a request, not the `bandCandidate`
-    // object itself. The object is rebuilt on every render of the parent, so depending on it would
-    // re-run this effect every render and issue an unbounded stream of requests to an endpoint that
-    // fits regression models. Everything the request body varies on is listed here.
-  }, [participantUid, channel, centerHz, hemisphere, powerScale, enabled]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const cached = useCachedResult({
+    moduleKey: CL.report,
+    uid: participantUid,
+    settings: reportSettings(body),
+    enabled: enabled !== false && !!participantUid && channel != null && centerHz != null,
+    // The whole response is cached, INCLUDING an {available:false, reason} answer. That answer is
+    // as durable as a successful one — it will not change until an input changes — and it is the
+    // expensive one to rediscover, because the endpoint has to read the participant's recordings
+    // before it can conclude that the configuration cannot be evaluated. Storing only successes
+    // would leave the slowest case uncached.
+    fetcher: () => SessionController.query("/api/queryClosedLoopDeployment", body)
+      .then((response) => (response && response.data) || null),
+  });
 
-  return { data, loading, err };
+  // The external shape of this hook is unchanged, so every consumer keeps working: `data` is the
+  // report only when the server said it was available, and `err` carries the server's own reason
+  // otherwise. The cache fields are ADDED alongside, for the page's Recompute control.
+  const raw = cached.data;
+  const available = !!(raw && raw.available);
+  return {
+    data: available ? raw : null,
+    loading: cached.loading,
+    err: cached.err || (raw && !available ? (raw.reason || "unavailable") : null),
+    stale: cached.stale,
+    staleReasons: cached.staleReasons,
+    computedAt: cached.computedAt,
+    notKept: cached.notKept,
+    recompute: cached.recompute,
+    hasCached: cached.hasCached,
+  };
 }

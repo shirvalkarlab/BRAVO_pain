@@ -7,8 +7,10 @@
  * deterministic backend payload. Each caller still issues its own request (matching the existing
  * per-panel fetch architecture), but they cannot drift in what they ask for.
  */
-import { useEffect, useState } from "react";
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL } from "views/Reports/moduleCacheKeys";
 
 // Build the EXACT body DeploySignoffCard sends, so the strip's verdict/threshold match the card's.
 export function deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
@@ -23,31 +25,36 @@ export function deploymentSummaryBody({ participantUid, channel, centerHz, bandW
 
 export default function useDeploymentSummary({ participantUid, channel, centerHz, bandWidthHz,
   matchDir, cutThr, requestParams, enabled = true }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
+  const body = deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
+    cutThr, requestParams });
+  // The request minus the participant, for the reason given at length in useDeploymentReport: the
+  // body is by definition the complete list of inputs, and the participant is already the other
+  // half of the cache slot.
+  const settings = { ...body };
+  delete settings.ParticipantId;
 
-  useEffect(() => {
+  const cached = useCachedResult({
+    moduleKey: CL.summary,
+    uid: participantUid,
+    settings,
     // `enabled` lets a consumer that receives the summary as a prop skip its own fetch entirely,
     // so the shared single-fetch path doesn't get shadowed by a duplicate request.
-    if (enabled === false) return undefined;
-    if (!participantUid || channel == null || centerHz == null) return undefined;
-    let cancelled = false;
-    setLoading(true); setErr(null);
-    const body = deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
-      cutThr, requestParams });
-    SessionController.query("/api/queryDeploymentSummary", body).then((response) => {
-      if (cancelled) return;
-      const d = response && response.data;
-      if (d && d.available) setData(d);
-      else { setData(null); setErr((d && d.reason) || "unavailable"); }
-      setLoading(false);
-    }).catch(() => {
-      if (cancelled) return;
-      setData(null); setErr("request failed"); setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [participantUid, channel, centerHz, bandWidthHz, matchDir, cutThr, requestParams, enabled]);
+    enabled: enabled !== false && !!participantUid && channel != null && centerHz != null,
+    fetcher: () => SessionController.query("/api/queryDeploymentSummary", body)
+      .then((response) => (response && response.data) || null),
+  });
 
-  return { data, loading, err };
+  const raw = cached.data;
+  const available = !!(raw && raw.available);
+  return {
+    data: available ? raw : null,
+    loading: cached.loading,
+    err: cached.err || (raw && !available ? (raw.reason || "unavailable") : null),
+    stale: cached.stale,
+    staleReasons: cached.staleReasons,
+    computedAt: cached.computedAt,
+    notKept: cached.notKept,
+    recompute: cached.recompute,
+    hasCached: cached.hasCached,
+  };
 }

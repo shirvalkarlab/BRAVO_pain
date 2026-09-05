@@ -22,9 +22,7 @@ import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 import { computeMatchedScanModel } from "./binarizationModel";
-import {
-  saveControls, loadControls, putHeavy, getHeavy, underMemoryPressure, memoryInfo,
-} from "./biomarkerStateStore";
+import { saveControls, loadControls } from "./biomarkerStateStore";
 
 // TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
 // Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
@@ -43,7 +41,12 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
+import { MODULES, memoryInfo, underMemoryPressure } from "database/resultCache";
+import { useCachedResult } from "database/useCachedResult";
 import { usePlatformContext, setContextState } from "context.js";
+
+import RecomputeBar from "views/Reports/RecomputeBar";
+import { markClosedLoopFamilyStale, recomputeSlots } from "views/Reports/moduleCacheKeys";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
 // echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
@@ -99,11 +102,10 @@ function Biomarkers() {
   const persisted = useMemo(() => loadControls(participant_uid), [participant_uid]);
   const P = persisted || {};
 
-  // The heavy result is restored from the module-level LRU cache (survives route unmount/mount).
-  // If a fresh cached bundle exists for this participant, seed `data` with it on the very first
-  // render so the page paints the full analysis immediately instead of the loading view.
-  const cachedHeavy = useMemo(() => getHeavy(participant_uid), [participant_uid]);
-  const [data, setData] = useState((cachedHeavy && cachedHeavy.bundle) || false);
+  // The heavy result now comes from the shared result cache (database/resultCache), read through
+  // the hook below. There is no `data` state on this component any more: holding one would mean the
+  // page could disagree with the store about what has been computed, which is the ambiguity that
+  // removing this file's own heavy layer was meant to end.
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
@@ -161,7 +163,8 @@ function Biomarkers() {
   // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
   const [requestParams, setRequestParams] = useState(
     (persisted && persisted.requestParams) || null);
-  const [computing, setComputing] = useState(false);
+  // There is no `computing` state either: whether a request is in flight is the shared cache hook's
+  // answer to give, and a local copy could only ever disagree with it.
   const [alert, setAlert] = useState(null);
 
   // Raw pain-score distribution for the LIVE binarization preview card. Fetched once per
@@ -203,7 +206,26 @@ function Biomarkers() {
     AllowWindowReuse: allowWindowReuse,
     SlidingWindow: slidingWindow,
   });
-  const compute = () => setRequestParams(snapshot());
+  /**
+   * ASKING FOR A REBUILD, WHICH TAKES MORE THAN SETTING THE REQUEST.
+   *
+   * The shared cache fetches on its own only when it is holding nothing at all. A changed settings
+   * key does NOT start a request: it marks the stored result stale and leaves it on screen, which is
+   * the whole point of the change. So this button cannot work by publishing a new snapshot and
+   * waiting — the new key would miss the stored entry, the previous result would be handed back
+   * marked stale, and no request would ever go out.
+   *
+   * A press therefore does two things: it publishes the snapshot, and it raises a counter. The
+   * effect below sees the counter move and asks for the rebuild. By the time it runs, the render
+   * carrying the new snapshot has committed, so the request that goes out is the one the reader
+   * asked for rather than the one that happened to be on screen when they pressed.
+   */
+  const [computeRequests, setComputeRequests] = useState(0);
+  const servicedComputeRequests = useRef(0);
+  const compute = () => {
+    setRequestParams(snapshot());
+    setComputeRequests((n) => n + 1);
+  };
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
   const dirty = !requestParams || JSON.stringify(requestParams) !== JSON.stringify(snapshot());
@@ -228,41 +250,68 @@ function Biomarkers() {
     setContextState(dispatch, "report", "CustomizedAnalysis");
   }, [participant_uid]);
 
-  // Fetch ONLY when a compute was requested (requestParams set by the Compute button). Progress is
-  // shown INLINE (a labeled bar in the card) instead of the generic "loading data" overlay.
-  useEffect(() => {
-    if (!participant_uid || !requestParams) return undefined;
-    const requestKey = JSON.stringify(requestParams);
-
-    // CACHE HIT: the in-memory LRU holds the heavy result for THIS exact requestParams (e.g. we just
-    // came back from the deployment view). Restore it with zero recompute — instant, identical view.
-    const cached = getHeavy(participant_uid);
-    if (cached && cached.request_key === requestKey) {
-      setData((prev) => (prev === cached.bundle ? prev : cached.bundle));
-      setComputing(false);
-      return undefined;
-    }
-
-    // CACHE MISS: compute (or recompute after a controls change / hard reload). The backend caches
-    // the PSD inputs, so even the ~19 MB analysis returns quickly on a return visit.
-    let cancelled = false;
-    setComputing(true);
-    SessionController.query("/api/queryBiomarkerAnalysis", {
+  // THE HEAVY ANALYSIS, THROUGH THE SHARED CACHE.
+  //
+  // `enabled` is what preserves the rule this page has always followed: nothing is computed until
+  // the reader asks for it. Until a compute has been requested — this session, or in a previous one
+  // whose request was restored from localStorage above — the hook is switched off and issues no
+  // request at all. Once a request exists, the hook's ordinary behaviour is exactly what is wanted:
+  // serve the stored bundle if there is one, fetch once if there is not, and never refetch behind
+  // the reader's back.
+  const cached = useCachedResult({
+    moduleKey: MODULES.biomarkers,
+    uid: participant_uid,
+    // The request the Compute button published IS the settings key. It is built by `snapshot()`
+    // from every control that changes the analysis, which is the same object that has always been
+    // sent to the server, so the key cannot describe a different request from the one that ran.
+    settings: requestParams,
+    enabled: !!participant_uid && !!requestParams,
+    fetcher: () => SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
-    }).then((response) => {
-      if (cancelled) return;
-      setData(response.data);
-      setComputing(false);
-      // Stash in the heap cache (memory-guarded — declines under pressure) so the next return is
-      // instant. Persist the controls+requestParams so a hard reload restores the view too.
-      putHeavy(participant_uid, response.data, requestKey);
-    }).catch((error) => {
-      if (cancelled) return;
-      setComputing(false);
-      SessionController.displayError(error, setAlert);
-    });
-    return () => { cancelled = true; };
-  }, [participant_uid, requestParams]);
+    }).then((response) => response.data),
+  });
+  // `false` rather than null, because every test on this page reads `data` as a flag for "an
+  // analysis has been computed" and the surrounding code was written against that value.
+  const data = cached.data || false;
+  const computing = cached.loading;
+
+  // Errors used to be raised from the fetch's own catch. The hook catches them instead and reports
+  // the message, so the dialog is raised from here. Note what is lost in the handover: the hook
+  // stringifies the error, so the response status is gone by the time it arrives and the dialog
+  // shows the transport's own message rather than this application's wording for a 403 or a 500.
+  // The report accompanying this change asks for the error object to be carried alongside the
+  // message for that reason.
+  useEffect(() => {
+    if (cached.err) SessionController.displayError(cached.err, setAlert);
+  }, [cached.err]);
+
+  // The rebuild the Compute button asked for. See `compute` above for why it is a counter rather
+  // than a direct call.
+  useEffect(() => {
+    if (computeRequests === servicedComputeRequests.current) return;
+    servicedComputeRequests.current = computeRequests;
+    recomputeSlots(participant_uid, [MODULES.biomarkers]);
+  }, [computeRequests, participant_uid]);
+
+  /**
+   * WHAT MAKES THIS PAGE'S RESULT STALE, WHICH IS MORE THAN THE CACHE CAN SEE BY ITSELF.
+   *
+   * The cache compares a stored result against the request that produced it. On this page that
+   * request changes only when Compute is pressed, because the controls are deliberately not wired
+   * to the endpoint — so a reader who drags a percentile slider has changed nothing the cache can
+   * compare, and the cache would go on reporting the displayed analysis as current. The page has
+   * always tracked that drift itself, as `dirty`. Both sources are pooled for the Recompute
+   * control, and the drift case is worded as a full sentence in the same register as the store's own
+   * reasons so that a reader is not left to work out which of two vocabularies they are reading.
+   */
+  const controlsDrifted = !!(requestParams && dirty);
+  const pageStaleReasons = Array.from(new Set([
+    ...(cached.staleReasons || []),
+    ...(controlsDrifted
+      ? ["the controls on this page have been changed since this analysis was computed, so what is "
+         + "shown still describes the previous metric, binarization or matching window"]
+      : []),
+  ]));
 
   // Persist the lightweight control panel + the last-computed requestParams to localStorage whenever
   // they change, so navigating to the deployment view and back (or a hard reload) restores the exact
@@ -422,6 +471,21 @@ function Biomarkers() {
       <DatabaseLayout>
         <MDBox pt={3}>
           <Grid container spacing={2}>
+            {/* The Recompute control, at the top of the page, above everything it describes.
+                Pressing it runs the analysis against the controls as they stand right now, which is
+                the same act as the red button further down — one code path, so the two cannot
+                disagree about what a recompute means. */}
+            <Grid item xs={12}>
+              <RecomputeBar
+                title="pain biomarker exploration"
+                stale={!!(cached.stale || controlsDrifted)}
+                staleReasons={pageStaleReasons}
+                computedAt={cached.computedAt}
+                loading={computing}
+                notKept={cached.notKept}
+                onRecompute={compute}
+              />
+            </Grid>
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>
                 <Grid container>
@@ -975,7 +1039,18 @@ function Biomarkers() {
                 participantUid={participant_uid}
                 requestParams={requestParams}
                 matchDirty={dirty}
-                onBandCommitted={(bc) => setCommittedBand(bc || null)}
+                onBandCommitted={(bc) => {
+                  setCommittedBand(bc || null);
+                  // A committed band is WHAT THE DEPLOYMENT VIEW IS ABOUT, so committing a
+                  // different one puts every deployment answer behind — not wrong about the band it
+                  // was computed for, but no longer about the band that has been chosen. The
+                  // deployment results are marked rather than discarded, so a reader can still see
+                  // what the previous candidate looked like while that page's Recompute control
+                  // tells them it is out of date.
+                  markClosedLoopFamilyStale(participant_uid,
+                    "a new band candidate was committed on the Biomarker Exploration page since "
+                    + "this result was computed");
+                }}
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}

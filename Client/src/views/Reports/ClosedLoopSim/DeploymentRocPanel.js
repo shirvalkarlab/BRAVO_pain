@@ -19,6 +19,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -116,40 +120,49 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   const [matchDir, setMatchDir] = useState("prior");      // deploy default = causal forecasting
   const [rule, setRule] = useState("youden");
   const [logCost, setLogCost] = useState(0);              // log2(cFP/cFN); 0 => symmetric
-  const [roc, setRoc] = useState(null);
-  const [forward, setForward] = useState(null);   // audit C2: forward-chaining / out-of-sample block
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
   const bandWidthHz = bc.bandwidth_hz || 5.0;
 
-  // Fetch ROC whenever the band or the match direction changes.
-  useEffect(() => {
-    if (!participantUid || channelRaw == null || centerHz == null) return;
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryDeploymentROC", {
-      ParticipantId: participantUid,
-      Channel: channelRaw,
-      CenterHz: Number(centerHz),
-      BandWidthHz: Number(bandWidthHz),
-      MatchDirection: matchDir,
-      ...requestParams,
-    }).then((response) => {
-      const data = response && response.data;
-      if (data && data.available && data.roc && data.roc.available) {
-        setRoc(data.roc);
-        setForward(data.forward || null);   // audit C2: held-out forward-chaining trace
-      } else {
-        setRoc(null);
-        setForward(null);
-        setErr((data && (data.reason || (data.roc && data.roc.reason))) || "ROC unavailable");
-      }
-      setLoading(false);
-    }).catch(() => { setRoc(null); setErr("ROC request failed"); setLoading(false); });
-  }, [participantUid, channelRaw, centerHz, bandWidthHz, matchDir, requestParams]);
+  // THE REQUEST, MINUS THE PARTICIPANT, IS THE CACHE KEY.
+  //
+  // The match direction belongs in it and the two controls beside it do not, and the difference is
+  // worth being explicit about because all three look alike on screen. The match direction changes
+  // which neural samples are paired with which pain rating, so it changes what the server computes
+  // and it is part of the request. The decision rule and the cost ratio only choose a point ON the
+  // curve the server already returned; that solve happens in this browser, so putting either in the
+  // key would throw away a curve and refit it in order to move a marker along it.
+  const settings = {
+    Channel: channelRaw,
+    CenterHz: centerHz == null ? null : Number(centerHz),
+    BandWidthHz: Number(bandWidthHz),
+    MatchDirection: matchDir,
+    ...requestParams,
+  };
+
+  const cached = useCachedResult({
+    moduleKey: CL.roc,
+    uid: participantUid,
+    settings,
+    enabled: !!participantUid && channelRaw != null && centerHz != null,
+    fetcher: () => SessionController.query("/api/queryDeploymentROC",
+      { ParticipantId: participantUid, ...settings })
+      .then((response) => (response && response.data) || null),
+  });
+
+  // The envelope is cached and the two pieces this panel draws are read out of it, rather than the
+  // pieces being cached separately: they came from one response and are only meaningful together,
+  // and the reason an unavailable answer gives lives in the envelope beside them.
+  const env = cached.data;
+  const envOk = !!(env && env.available && env.roc && env.roc.available);
+  const roc = envOk ? env.roc : null;
+  const forward = envOk ? (env.forward || null) : null;   // audit C2: held-out forward-chaining trace
+  const loading = cached.loading;
+  const err = cached.err
+    || (env && !envOk
+      ? ((env.reason || (env.roc && env.roc.reason)) || "ROC unavailable")
+      : null);
 
   const costRatio = Math.pow(2, logCost);
   // Audit [5]: snap to the backend's full-array operating point when available; fall back to the
@@ -398,11 +411,15 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       <MDBox p={2}>
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1} flexWrap="wrap" gap={1}>
           <MDTypography variant="h6" sx={{ fontSize: 14 }}>Deployment ROC + cut-point</MDTypography>
-          {/* Match direction silently refits the ROC, the LSB threshold and the sign-off, so label it
-              in clinical terms (not the internal 'prior'/'pro_first' keys) and mark the deploy default. */}
+          {/* Match direction changes which neural samples are paired with which pain rating, so it
+              changes the fit rather than the view. It is labelled in clinical terms (not the internal
+              'prior'/'pro_first' keys) and the deploy default is marked. Since results are now kept
+              across navigation, switching it no longer refits immediately: the curve on screen stays,
+              the notice below says it was computed under the other direction, and the refit happens
+              when it is asked for. */}
           <ToggleButtonGroup size="small" exclusive value={matchDir}
             onChange={(e, v) => { if (v) setMatchDir(v); }}
-            title="Forecasting predicts the NEXT rating from neural data recorded before it (the causal, deployable question). Concurrent pairs each rating with the same-window recording (exploratory). Switching refits the threshold.">
+            title="Forecasting predicts the NEXT rating from neural data recorded before it (the causal, deployable question). Concurrent pairs each rating with the same-window recording (exploratory). Switching does not refit on its own — the curve already computed stays on screen and is marked, and Recompute refits it.">
             <ToggleButton value="prior" sx={{ fontSize: 10, textTransform: "none", py: 0.2 }}>
               Forecasting (deploy default)
             </ToggleButton>
@@ -411,6 +428,10 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             </ToggleButton>
           </ToggleButtonGroup>
         </MDBox>
+
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.roc])} />
 
         {/* Status banner sits ABOVE the figure; the graph node below stays mounted across refits so
             its zoom/pan and DOM are preserved (Plotly.react updates it in place). */}

@@ -15,7 +15,7 @@
  * This is the model the deploy sign-off falls back on (flagged ESTIMATED) when a band has no device
  * LSB recordings of its own. Imperative Plotly.react-once discipline (module standard; commit 255e0ef).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
 import { Card } from "@mui/material";
@@ -23,6 +23,10 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import { SessionController } from "database/session-control";
+import { useCachedResult } from "database/useCachedResult";
+
+import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
+import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
@@ -50,21 +54,25 @@ const shortChannel = (ch) => (ch || "")
 function ConversionModelPanel({ participantUid }) {
   const trendRef = useRef(null);
   const scatterRef = useRef(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
 
-  useEffect(() => {
-    if (!participantUid) { setData(null); return; }
-    setLoading(true); setErr(null);
-    SessionController.query("/api/queryPsdLsbConversionModel", { ParticipantId: participantUid })
-      .then((response) => {
-        const d = response && response.data;
-        if (d && d.available) setData(d);
-        else { setData(null); setErr((d && d.reason) || "no conversion model"); }
-        setLoading(false);
-      }).catch(() => { setData(null); setErr("request failed"); setLoading(false); });
-  }, [participantUid]);
+  // This endpoint takes the participant and nothing else, so the settings object is empty and the
+  // entry can never go stale through a settings change. That is not an oversight: the frozen model
+  // is a property of the participant, and the only things that can invalidate it are a server
+  // restart and a declared upstream change, both of which the cache handles on its own.
+  const cached = useCachedResult({
+    moduleKey: CL.conversionModel,
+    uid: participantUid,
+    settings: {},
+    enabled: !!participantUid,
+    fetcher: () => SessionController.query("/api/queryPsdLsbConversionModel",
+      { ParticipantId: participantUid })
+      .then((response) => (response && response.data) || null),
+  });
+
+  const raw = cached.data;
+  const data = raw && raw.available ? raw : null;
+  const loading = cached.loading;
+  const err = cached.err || (raw && !raw.available ? (raw.reason || "no conversion model") : null);
 
   // ---- (1) gain-anchor vs frequency, one trace per channel ----
   useEffect(() => {
@@ -179,6 +187,9 @@ function ConversionModelPanel({ participantUid }) {
           Frozen per-participant model · per-channel common slope, frequency-specific gain. The
           fallback the threshold estimator uses when the device never sensed a band.
         </MDTypography>
+        <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
+          loading={cached.loading} notKept={cached.notKept}
+          onRecompute={() => recomputeSlots(participantUid, [CL.conversionModel])} />
 
         {loading ? (
           <MDTypography variant="caption" color="text" sx={{ display: "block", mt: 1, fontStyle: "italic", fontSize: 11 }}>

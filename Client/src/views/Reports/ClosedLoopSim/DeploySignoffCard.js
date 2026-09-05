@@ -105,6 +105,26 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
     enabled: !summary,
   });
   const { data, loading, err } = summary || ownSummary;
+
+  // STALENESS MUST REACH A PRINTED RECORD, added 2026-09-04 with the result cache.
+  //
+  // The summary's cache key includes the cut-point, so choosing a new operating point in the ROC
+  // panel marks this page stale rather than silently refetching — which is the behaviour the PI
+  // asked for and is right for a screen. It is not sufficient for a sheet. Everything else on this
+  // card is transient: a reader who sees an amber Recompute bar at the top of the page understands
+  // that the numbers below it describe the previous settings. A printed or exported sign-off record
+  // outlives the screen and loses the bar, so it would assert an operating point that had already
+  // been superseded, with a signature under it.
+  //
+  // The record is therefore marked at its own head and in the exported payload, rather than the
+  // cut-point being exempted from the key. Exempting it would have refetched on every drag of the
+  // operating point — the expensive call this cache exists to avoid — and would have broken the
+  // rule the PI set. Marking keeps both properties: the screen stays responsive, and nothing that
+  // leaves the screen can quietly lag.
+  const _eff = summary || ownSummary;
+  const inputsStale = !!(_eff && _eff.stale);
+  const staleWhy = (_eff && _eff.staleReasons) || [];
+  const computedAt = (_eff && _eff.computedAt) || null;
   // Operating-point provenance for the auditable device-programming record: WHICH rule chose the
   // cut-point and at what sensitivity/specificity. Without this two clinicians could program the same
   // patient at different operating points with identical-looking sign-off sheets.
@@ -120,7 +140,15 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   const exportJson = () => {
     if (!data) return;
     const blob = new Blob([JSON.stringify({ schema_version: "deploy_signoff_v1",
-      generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data }, null, 2)],
+      generated_at: new Date().toISOString(), operating_point: opProvenance, summary: data,
+      // Carried in the FILE, not only on the screen. An export is the most durable form this
+      // record takes and the least likely to be read next to the page that produced it, so a
+      // consumer parsing it must be able to see that the analysis predates the current settings.
+      // `computed_at` is included even when nothing is stale, because a record with no timestamp
+      // cannot be reconciled against anything later.
+      inputs_stale: inputsStale,
+      inputs_stale_reasons: inputsStale ? staleWhy : [],
+      summary_computed_at: computedAt ? new Date(computedAt).toISOString() : null }, null, 2)],
       { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -150,10 +178,45 @@ function DeploySignoffCard({ participantUid, bandCandidate, requestParams, cutpo
   // chrome cannot imply a permission that the rule table has refused.
   const frameInk = deviceOk ? PAL.pass : PAL.warn;
 
+  // The notice is rendered as part of the card's own content rather than as a floating overlay, so
+  // that it survives the print stylesheet. An overlay or a tooltip would be exactly the thing that
+  // disappears on the paper copy.
+  const staleNotice = inputsStale ? (
+    <MDBox className="cl-signoff-stale" mb={1} p={1}
+      sx={{ borderRadius: "4px", backgroundColor: PAL.warnFill, border: `1px solid ${PAL.warnText}` }}>
+      <MDTypography variant="caption" sx={{
+        fontSize: 10, fontWeight: "bold", letterSpacing: 0.3, color: PAL.warnText,
+      }}>
+        THIS RECORD DESCRIBES AN EARLIER ANALYSIS
+      </MDTypography>
+      <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: PAL.warnText }}>
+        {computedAt
+          ? `The analysis below was computed at ${new Date(computedAt).toLocaleString()} and the `
+            + "settings on the page have changed since. Press Recompute before signing or "
+            + "exporting this record."
+          : "The settings on the page have changed since the analysis below was computed. Press "
+            + "Recompute before signing or exporting this record."}
+      </MDTypography>
+      {staleWhy.length ? (
+        <MDBox component="ul" sx={{ pl: 2, my: 0.3 }}>
+          {staleWhy.map((r) => (
+            <MDTypography key={r} component="li" variant="caption" display="list-item"
+              sx={{ fontSize: 9, color: PAL.warnText }}>
+              {r}
+            </MDTypography>
+          ))}
+        </MDBox>
+      ) : null}
+    </MDBox>
+  ) : null;
+
   return (
     <Card className="cl-signoff-card"
-      sx={{ width: "100%", border: data ? `2px solid ${frameInk}` : undefined }}>
+      sx={{ width: "100%", border: data ? `2px solid ${inputsStale ? PAL.warnText : frameInk}` : undefined }}>
       <MDBox p={2.5}>
+        {/* Above the title, because a reader who has already started reading the gate lines has
+            passed the point where this would change what they do with the sheet. */}
+        {staleNotice}
         <MDBox display="flex" justifyContent="space-between" alignItems="center" mb={1}>
           <MDTypography variant="h5" sx={{ fontSize: 18 }}>Deploy-to-Percept review</MDTypography>
           {data ? (

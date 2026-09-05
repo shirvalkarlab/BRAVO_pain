@@ -51,6 +51,9 @@ import MDButton from "components/MDButton";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
+import RecomputeBar from "views/Reports/RecomputeBar";
+import { recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
+
 import {
   loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
 } from "./bandCandidateStore";
@@ -104,6 +107,55 @@ function verdictColor(verdict) {
 // text colour adapts to its fill: near-black on the amber, white on the others.
 function verdictTextColor(verdict) {
   return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
+}
+
+/**
+ * THE PAGE'S OWN DISPLAY STATE, HELD AT MODULE SCOPE FOR THE SAME REASON THE RESULT CACHE IS.
+ *
+ * Caching the fetches is only half of what a reader means by "the page is still where I left it".
+ * This is a route-level component, so React Router destroys its `useState` on navigation, and four
+ * pieces of that state decide what the restored page looks like: whether the analyst fold was open,
+ * which threshold mode was selected, and which operating point and device threshold the panels had
+ * settled on. Losing them means coming back to a page that has the right numbers arranged in the
+ * wrong way — the fold shut on the panel someone was reading, the mode reset from the one they
+ * chose to the one the payload recommends.
+ *
+ * THE OPERATING POINT MATTERS FOR A SECOND AND LESS OBVIOUS REASON. It is an input to the
+ * statistical summary's request, so it is part of that request's cache key. If it came back as
+ * null on every return, the key would not match the entry stored under the cut-point that was in
+ * force, and the page would declare itself stale the moment it reappeared — on a change nobody
+ * made. Keeping it here means the key that is asked for on return is the key that was stored.
+ *
+ * A hard reload clears this, which is correct and matches the result cache: a reload is a request
+ * for a clean slate.
+ */
+const VIEW_STATE = new Map();
+
+function readViewState(uid) { return VIEW_STATE.get(String(uid || "unknown")) || {}; }
+
+function writeViewState(uid, patch) {
+  const k = String(uid || "unknown");
+  VIEW_STATE.set(k, { ...(VIEW_STATE.get(k) || {}), ...patch });
+}
+
+/**
+ * True once `show` has been true at least once, and true forever after.
+ *
+ * This is how the analyst fold keeps its figures. A collapsed panel is HIDDEN rather than
+ * unmounted, so Plotly keeps its own zoom, pan and legend state and reopening the fold shows the
+ * figure exactly as it was left rather than redrawing it from the top. But the panels are not
+ * mounted until the fold has been opened once, because a Plotly graph first drawn inside a
+ * container with `display: none` measures its width as zero and stays that size when the container
+ * becomes visible. Mounting on first reveal means every first draw happens at the width it will be
+ * read at.
+ *
+ * The remaining limit is worth naming: a window resized while the fold is shut leaves those figures
+ * at their previous width until something else prompts Plotly to resize them.
+ */
+function useRevealedOnce(show) {
+  const [revealed, setRevealed] = useState(!!show);
+  useEffect(() => { if (show && !revealed) setRevealed(true); }, [show, revealed]);
+  return revealed;
 }
 
 // A labeled key/value row used across the identity block.
@@ -259,12 +311,16 @@ function ClosedLoopSim() {
   const { participant_uid } = useParams();
   const fileRef = useRef(null);
 
+  // Everything below that describes how the page is ARRANGED is seeded from the retained view
+  // state, so a return to this route restores the arrangement as well as the results.
+  const retained = readViewState(participant_uid);
+
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
-  const [cutpoint, setCutpoint] = useState(null);   // chosen operating point, lifted from the ROC
+  const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
   // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
   // annotate its cut line with the same value.
-  const [lsbThreshold, setLsbThreshold] = useState(null);   // {upperLsb, estimated} | null
-  const [showAnalyst, setShowAnalyst] = useState(false);
+  const [lsbThreshold, setLsbThreshold] = useState(retained.lsbThreshold || null);   // {upperLsb, estimated} | null
+  const [showAnalyst, setShowAnalyst] = useState(!!retained.showAnalyst);
 
   /**
    * THE SELECTED THRESHOLD MODE, held here because two panels depend on it.
@@ -281,7 +337,14 @@ function ClosedLoopSim() {
    * matters because the deployment endpoint fits regression models, and a toggle that refetched
    * would put a model fit behind a button press.
    */
-  const [thresholdMode, setThresholdMode] = useState(null);
+  const [thresholdMode, setThresholdMode] = useState(retained.thresholdMode || null);
+
+  // Retain the four pieces of arrangement across a route unmount. This writes only when one of them
+  // changes, and it writes plain values, so nothing here can hold a stale render's closure.
+  useEffect(() => {
+    if (!participant_uid) return;
+    writeViewState(participant_uid, { cutpoint, thresholdMode, showAnalyst, lsbThreshold });
+  }, [participant_uid, cutpoint, thresholdMode, showAnalyst, lsbThreshold]);
 
   useEffect(() => {
     if (!participant_uid) { navigate("/database", { replace: false }); return; }
@@ -334,6 +397,31 @@ function ClosedLoopSim() {
       thresholdMode: bc.threshold_mode || "dual",
     },
   });
+
+  /**
+   * THE ONE RECOMPUTE CONTROL FOR THIS PAGE, REPORTING ON BOTH PAGE-LEVEL REQUESTS AT ONCE.
+   *
+   * A reader is asking one question — does what I am looking at reflect the settings on this page —
+   * and the page answers it from two endpoints. Giving each its own control would put two of them
+   * at the top disagreeing about whether the page is current, which is the same class of problem
+   * the rebuilt page removed when it reduced three verdicts to one.
+   *
+   * The reasons are pooled and de-duplicated, because both requests see the same server restart and
+   * the same committed-band change and would each report it.
+   */
+  const staleReasons = Array.from(new Set([
+    ...(deploymentReport.staleReasons || []),
+    ...(summary.staleReasons || []),
+  ]));
+  // The OLDER of the two timestamps. Reporting the newer one would let a summary computed a moment
+  // ago speak for a deployment report computed an hour before it.
+  const computedAtCandidates = [deploymentReport.computedAt, summary.computedAt]
+    .filter((t) => t != null);
+  const pageComputedAt = computedAtCandidates.length ? Math.min(...computedAtCandidates) : null;
+
+  const onRecomputePage = () => recomputeClosedLoop(participant_uid);
+
+  const analystRevealed = useRevealedOnce(showAnalyst);
 
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -409,8 +497,19 @@ function ClosedLoopSim() {
             </Grid>
           ) : (
             <>
-              {/* BAND 0 — one reconciled verdict, computed from both endpoints, sticky. */}
+              {/* BAND 0 — one reconciled verdict, computed from both endpoints, sticky. The
+                  Recompute control sits immediately above it, because whether the verdict is
+                  current has to be readable before the verdict itself is read. */}
               <Grid item xs={12}>
+                <RecomputeBar
+                  title="closed-loop deployment"
+                  stale={!!(deploymentReport.stale || summary.stale)}
+                  staleReasons={staleReasons}
+                  computedAt={pageComputedAt}
+                  loading={!!(deploymentReport.loading || summary.loading)}
+                  notKept={deploymentReport.notKept || summary.notKept}
+                  onRecompute={onRecomputePage}
+                />
                 <DeploymentDecisionHeader bandCandidate={bc} summary={summary}
                   deploymentReport={deploymentReport} />
               </Grid>
@@ -476,23 +575,36 @@ function ClosedLoopSim() {
                 </Card>
               </Grid>
 
-              {showAnalyst ? (
-                <>
-                  <Grid item xs={12} md={6} id="cl-roc">
-                    <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
-                      requestParams={requestParams} onCutpoint={setCutpoint}
-                      lsbThreshold={lsbThreshold} />
+              {/* THE THREE ANALYST PANELS, HIDDEN WHEN FOLDED RATHER THAN UNMOUNTED.
+                  Collapsing the fold used to unmount all three, which destroyed their Plotly nodes
+                  along with the zoom, pan and legend state a reader had set, and — before the
+                  results were cached — re-issued all three requests on reopening. They are now kept
+                  mounted and hidden, so reopening the fold shows the figures exactly as they were
+                  left. They are not mounted at all until the fold has been opened once, because a
+                  Plotly graph first drawn inside a hidden container measures itself as zero pixels
+                  wide and keeps that size when the container is shown.
+                  The three sit inside one outer grid item with their own nested container, so that
+                  hiding them is a single style change rather than three, and the two-across layout
+                  of the first two panels is preserved. */}
+              {analystRevealed ? (
+                <Grid item xs={12} sx={{ display: showAnalyst ? "block" : "none" }}>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6} id="cl-roc">
+                      <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} onCutpoint={setCutpoint}
+                        lsbThreshold={lsbThreshold} />
+                    </Grid>
+                    <Grid item xs={12} md={6} id="cl-lsb">
+                      <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} cutpoint={cutpoint}
+                        onLsbThreshold={setLsbThreshold} deploymentReport={deploymentReport} />
+                    </Grid>
+                    <Grid item xs={12} id="cl-era">
+                      <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} />
+                    </Grid>
                   </Grid>
-                  <Grid item xs={12} md={6} id="cl-lsb">
-                    <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
-                      requestParams={requestParams} cutpoint={cutpoint}
-                      onLsbThreshold={setLsbThreshold} deploymentReport={deploymentReport} />
-                  </Grid>
-                  <Grid item xs={12} id="cl-era">
-                    <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
-                      requestParams={requestParams} />
-                  </Grid>
-                </>
+                </Grid>
               ) : null}
 
               {/* The printable record. It keeps the gate checklist and loses its own headline

@@ -22,7 +22,7 @@
 * ink: neither says that a setting is worse, only that the comparison has not been earned.
 */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import {
@@ -38,6 +38,11 @@ import MDAlert from "components/MDAlert";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
+import { MODULES } from "database/resultCache";
+import { useCachedResult } from "database/useCachedResult";
+
+import RecomputeBar from "views/Reports/RecomputeBar";
+import { recomputeSlots } from "views/Reports/moduleCacheKeys";
 // Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
 // that means the same thing on the deployment page and here is drawn in the same ink. The roles
 // used below are `neutral` for a question that has not been answered and `warnText` for a caveat
@@ -46,6 +51,43 @@ import PAL from "views/Reports/ClosedLoopSim/palette";
 
 const MODEBAR = { responsive: true, displaylogo: false,
   modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] };
+
+/**
+ * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
+ *
+ * The endpoint takes six optional parameters besides the participant — the pain sites, the
+ * hemispheres, the wash-in exclusion window, the figure backend, and the depth and width of the
+ * forward simulation behind the trajectory panel. They are documented on `QueryStimOptimizer` in
+ * `BRAVO/Server/APIs/DataAnalysis.py` and applied in `modules/StimOptimizer/bravo_service`
+ * `run_for_participant`, and the values below are exactly those documented defaults. The request is
+ * therefore unchanged in what it asks the server for.
+ *
+ * What changes is that it is now written down here, which is what allows the result cache to key on
+ * it. A cache key has to name everything that changes the answer; a request that relies on the
+ * server's defaults names none of it, so a key derived from such a request would be blind to the
+ * very parameters this page is about. Writing them out also means that the first control added to
+ * this page — a wash-in slider, say — becomes part of the key by being part of this object, rather
+ * than by someone remembering to add it in two places.
+ */
+const OPTIMIZER_REQUEST = {
+  Sites: ["left_leg", "back"],
+  Hemispheres: ["Left", "Right"],
+  WashinMin: 1.0,
+  Backend: "plotly",
+  NBatches: 3,
+  Q: 4,
+};
+
+/**
+ * THE ARM THE READER LAST LOOKED AT, KEPT AT MODULE SCOPE ALONGSIDE THE CACHED RESULT.
+ *
+ * This is a route-level component, so navigating away destroys its state. Now that the surfaces
+ * themselves survive that trip, resetting the selection to the first arm on return would put the
+ * reader back on a different pain site from the one they were reading, with no indication that the
+ * page had moved underneath them. Which arm is selected changes nothing about what was computed —
+ * every arm is in the one payload — so it belongs here rather than in the cache key.
+ */
+const LAST_ARM = new Map();
 
 // THE COMPARISON THIS PAGE EXISTS TO SHOW, COMPUTED WHERE IT CAN BE DISPLAYED.
 //
@@ -185,15 +227,27 @@ const FIGURES = [
 const fmt = (v, d = 2) =>
   (v === null || v === undefined || Number.isNaN(Number(v))) ? "\u2014" : Number(v).toFixed(d);
 
-/** One Plotly figure from server-supplied figure JSON. Plotly.react-once discipline, purge on unmount. */
+/**
+ * One Plotly figure from server-supplied figure JSON.
+ *
+ * PLOT PERSISTENCE. `Plotly.react` updates the graph that is already in the page, diffing against
+ * what is drawn, so a figure whose colours or labels changed does not rebuild the node and does not
+ * discard the zoom, pan and legend selections the reader has set. The version this replaces purged
+ * the node in the effect's cleanup, which ran before every redraw as well as on unmount — so
+ * switching arms, or any change to the figure at all, tore the graph down and built it again from
+ * nothing. The purge now happens only when the panel really goes away, which is where it is needed:
+ * to release the graph's event handlers and any WebGL context it holds.
+ */
 function FigurePanel({ title, blurb, figure }) {
   const ref = useRef(null);
   useEffect(() => {
     const gd = ref.current;
-    if (!gd || !figure) return undefined;
+    if (!gd || !figure) return;
     Plotly.react(gd, figure.data || [], figure.layout || {}, MODEBAR);
-    return () => { if (gd) Plotly.purge(gd); };
   }, [figure]);
+  // The node is read at cleanup time rather than captured at mount, because the container is not in
+  // the page until a figure exists.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
   if (!figure) return null;
   return (
     <MDBox mb={3}>
@@ -206,29 +260,44 @@ function FigurePanel({ title, blurb, figure }) {
 
 export default function StimOptimizer() {
   const { participant_uid } = useParams();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [errorText, setErrorText] = useState(null);
-  const [arm, setArm] = useState(null);
 
-  const load = useCallback(() => {
-    setLoading(true); setErrorText(null);
-    SessionController.query("/api/queryStimOptimizer", {
-      ParticipantId: participant_uid, Backend: "plotly",
-    }).then((response) => {
-      const d = (response && response.data) || {};
-      setData(d); setLoading(false);
-      const keys = Object.keys(d.arms || {});
-      setArm((prev) => (prev && keys.includes(prev) ? prev : (keys[0] || null)));
-    }).catch((error) => {
-      setLoading(false);
-      setErrorText(String((error && error.message) || error));
-    });
-  }, [participant_uid]);
+  const cached = useCachedResult({
+    moduleKey: MODULES.stimOptimizer,
+    uid: participant_uid,
+    // The request, minus the participant, is the cache key: the participant is already the other
+    // half of the cache slot, so including it would put the same value in the key twice.
+    settings: OPTIMIZER_REQUEST,
+    enabled: !!participant_uid,
+    fetcher: () => SessionController.query("/api/queryStimOptimizer",
+      { ParticipantId: participant_uid, ...OPTIMIZER_REQUEST })
+      .then((response) => (response && response.data) || {}),
+  });
 
-  useEffect(() => { load(); }, [load]);
+  const data = cached.data;
+  const loading = cached.loading;
+  const errorText = cached.err;
 
-  if (loading) {
+  const [arm, setArm] = useState(() => LAST_ARM.get(String(participant_uid)) || null);
+  useEffect(() => {
+    if (arm) LAST_ARM.set(String(participant_uid), arm);
+  }, [participant_uid, arm]);
+
+  // THE SELECTED ARM IS DERIVED, NOT ASSIGNED IN THE FETCH CALLBACK.
+  //
+  // It used to be set from inside the response handler, which worked only because a response always
+  // arrived. Now that a result can come back from the cache without any request being made, that
+  // assignment would never run on a return visit and the page would restore its table and its
+  // verdict with no arm selected and no surfaces below them. Deriving the selection from whatever
+  // arms the payload actually contains covers both paths with one rule, and it also repairs the
+  // case where a recompute returns a payload that no longer carries the arm that was selected.
+  const armKeys = Object.keys((data && data.arms) || {});
+  const activeArm = arm && armKeys.includes(arm) ? arm : (armKeys[0] || null);
+
+  // A spinner is shown while a request is in flight AND on the very first paint before the hook's
+  // effect has started one. Without that second condition the page would show its "no parameter
+  // surface could be built" notice for one frame on every first load, which is a false statement
+  // about the data rather than a cosmetic flash.
+  if (loading || (!cached.hasCached && !errorText)) {
     return (
       <DatabaseLayout>
         <MDBox pt={3} display="flex" alignItems="center" justifyContent="center" gap={2}>
@@ -259,7 +328,7 @@ export default function StimOptimizer() {
 
   const dm = data.design_matrix || {};
   const arms = data.arms || {};
-  const current = (arm && arms[arm]) || null;
+  const current = (activeArm && arms[activeArm]) || null;
   const supported = data.recommendation_supported === true;
   // The banner used to state, whenever a recommendation was withheld, that "for every arm the
   // predicted gain over the setting currently in force is smaller than the uncertainty of that
@@ -278,6 +347,21 @@ export default function StimOptimizer() {
     <DatabaseLayout>
       <MDBox pt={3}>
         <Grid container spacing={2}>
+
+          {/* The Recompute control comes before the verdict, because whether the verdict was
+              computed under the settings now on the page has to be readable before the verdict is
+              read. Every surface below it is served from memory until it is pressed. */}
+          <Grid item xs={12}>
+            <RecomputeBar
+              title="stim parameter optimizer"
+              stale={cached.stale}
+              staleReasons={cached.staleReasons}
+              computedAt={cached.computedAt}
+              loading={cached.loading}
+              notKept={cached.notKept}
+              onRecompute={() => recomputeSlots(participant_uid, [MODULES.stimOptimizer])}
+            />
+          </Grid>
 
           {/* ---------- verdict first, before any figure ---------- */}
           <Grid item xs={12}>
@@ -541,7 +625,7 @@ export default function StimOptimizer() {
                       const res = resolutionOf(a);
                       const chip = RESOLUTION_CHIP[res.state];
                       return (
-                        <TableRow key={label} hover selected={label === arm}
+                        <TableRow key={label} hover selected={label === activeArm}
                                   onClick={() => setArm(label)} sx={{ cursor: "pointer" }}>
                           <TableCell><MDTypography variant="caption">{label.replace("__", " \u00b7 ")}</MDTypography></TableCell>
                           <TableCell><MDTypography variant="caption">{a.n_epochs_fitted ?? "\u2014"}</MDTypography></TableCell>
@@ -624,10 +708,10 @@ export default function StimOptimizer() {
                 <MDBox p={2}>
                   <MDBox display="flex" alignItems="center" justifyContent="space-between"
                          flexWrap="wrap" gap={2}>
-                    <MDTypography variant="h6">{arm.replace("__", " \u00b7 ")}</MDTypography>
+                    <MDTypography variant="h6">{activeArm.replace("__", " \u00b7 ")}</MDTypography>
                     <FormControl size="small" sx={{ minWidth: 240 }}>
                       <InputLabel>Arm</InputLabel>
-                      <Select value={arm} label="Arm" onChange={(e) => setArm(e.target.value)}>
+                      <Select value={activeArm} label="Arm" onChange={(e) => setArm(e.target.value)}>
                         {Object.keys(arms).map((k) => (
                           <MenuItem key={k} value={k}>{k.replace("__", " \u00b7 ")}</MenuItem>
                         ))}

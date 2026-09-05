@@ -41,7 +41,15 @@ import { SessionController } from "database/session-control";
 let identityInFlight = null;
 export function refreshServerIdentity() {
   if (identityInFlight) return identityInFlight;
-  identityInFlight = SessionController.query("/api/queryServerIdentity", {})
+  // Wrapped rather than chained directly off the call, so that a transport which returns something
+  // other than a promise cannot throw. This is not a hypothetical tidiness fix: chaining `.then`
+  // straight onto the call raised `TypeError: Cannot read properties of undefined (reading 'then')`
+  // from inside a `useEffect`, which React reports as an error thrown during the commit phase and
+  // which unmounts the whole panel. A best-effort request whose only job is to notice a server
+  // restart must never be able to take a page down; if it cannot report a token the cache simply
+  // compares on the settings key alone, which is the documented degraded behaviour.
+  identityInFlight = Promise.resolve()
+    .then(() => SessionController.query("/api/queryServerIdentity", {}))
     .then((res) => {
       const token = res && res.data ? res.data.boot_token : null;
       const changed = setServerToken(token);
@@ -70,8 +78,13 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
   const [entry, setEntry] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
+  const [errRaw, setErrRaw] = useState(null);
   const [tick, setTick] = useState(0);
   const alive = useRef(true);
+  // Raised synchronously whenever a request is outstanding, so that the automatic-fetch effect and
+  // an explicit recompute cannot both start one. A ref rather than state because the two paths can
+  // run in the same synchronous pass, and a state update is not visible until the next render.
+  const fetchInFlight = useRef(false);
   useEffect(() => () => { alive.current = false; }, []);
 
   // Re-read on cache events so a Recompute control turns red when ANOTHER view commits something.
@@ -81,6 +94,10 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
 
   const run = useCallback((why) => {
     if (!enabled || !uid || typeof fetcherRef.current !== "function") return Promise.resolve(null);
+    // Claimed synchronously, for the reason the automatic-fetch effect below explains: the
+    // `loading` STATE is not readable by a second synchronous pass, so it cannot serve as a guard.
+    if (fetchInFlight.current) return Promise.resolve(null);
+    fetchInFlight.current = true;
     setLoading(true);
     setErr(null);
     return Promise.resolve()
@@ -101,27 +118,69 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
         return bundle;
       })
       .catch((e) => {
-        if (alive.current) setErr(String((e && e.message) || e));
+        // The ORIGINAL rejection is kept alongside the message, because stringifying it here threw
+        // away information the callers need: the Biomarkers view hands the failed response to
+        // `SessionController.displayError`, which reads the status to distinguish a session that
+        // has expired from a server fault, and a bare message collapses those into one sentence.
+        if (alive.current) { setErrRaw(e); setErr(String((e && e.message) || e)); }
         return null;
       })
-      .finally(() => { if (alive.current) setLoading(false); });
+      .finally(() => {
+        fetchInFlight.current = false;
+        if (alive.current) setLoading(false);
+      });
   }, [enabled, uid, moduleKey, key]);
 
   // The only automatic fetch: nothing cached at all. A changed key does NOT trigger one, which is
   // the difference between this and an ordinary data hook.
+  //
+  // THE GUARD IS A REF, NOT THE `loading` STATE, and the difference is not stylistic. An earlier
+  // version tested `if (!loading)`, which cannot work: `setLoading(true)` schedules a state update
+  // rather than applying one, so a second synchronous pass through this effect still sees `false`.
+  // Measured consequence, found by a probe component rather than by reading the code: one press of
+  // Recompute issued TWO fetches. `invalidate` publishes a store event, the hook re-reads on every
+  // event, that read finds nothing cached, and this effect started an ordinary first-load request
+  // while the deliberate one was still waiting behind the server-identity call. On the deployment
+  // page that is two concurrent requests into single-threaded embedded R, so it is a correctness
+  // problem and not merely wasteful.
   useEffect(() => {
     if (!enabled || !uid) return;
     const cached = getResult(moduleKey, uid, key);
     if (cached) { setEntry(cached); return; }
-    if (!loading) run("first load");
-    // `loading` is deliberately not a dependency: including it would re-enter this effect when the
-    // fetch it started sets it, and the guard exists only to avoid a duplicate first request.
+    if (fetchInFlight.current) return;
+    run("first load");
+    // `loading` is deliberately absent from the dependency list: it is state this effect's own
+    // fetch sets, so depending on it would re-enter the effect it just started.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, uid, moduleKey, key, tick, run]);
 
+  /**
+   * Discard the cached result and compute a fresh one, issuing exactly one request.
+   *
+   * The server identity is refreshed FIRST, before anything is discarded, because it can itself
+   * invalidate the whole store: if the server restarted while the tab was open, every entry was
+   * computed by code that is no longer running, and finding that out after refetching one slot
+   * would leave the other eight quietly wrong.
+   *
+   * The in-flight flag is raised synchronously here, before `invalidate` publishes its event, so
+   * the automatic path above sees it on the very next pass. Callers no longer need to sequence
+   * these steps themselves.
+   */
   const recompute = useCallback(() => {
-    invalidate(moduleKey, uid);
-    return refreshServerIdentity().then(() => run("explicit recompute"));
+    if (fetchInFlight.current) return Promise.resolve(null);
+    fetchInFlight.current = true;
+    setLoading(true);
+    return refreshServerIdentity()
+      .then(() => {
+        invalidate(moduleKey, uid);
+        fetchInFlight.current = false;      // released so `run` can claim it in the usual way
+        return run("explicit recompute");
+      })
+      .catch((e) => {
+        fetchInFlight.current = false;
+        if (alive.current) { setErr(String((e && e.message) || e)); setLoading(false); }
+        return null;
+      });
   }, [moduleKey, uid, run]);
 
   const live = (enabled && uid ? getResult(moduleKey, uid, key) : null) || entry;
@@ -130,6 +189,8 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
     data: live ? live.bundle : null,
     loading,
     err,
+    // The unmodified rejection, for callers that need the status rather than the message.
+    errRaw,
     stale: !!(live && live.stale),
     staleReasons: (live && live.staleReasons) || [],
     computedAt: live ? live.computedAt : null,
