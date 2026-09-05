@@ -75,6 +75,63 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — pre-registration filed, and the separation-floor question is settled
+
+**1. THE FIRST PRE-REGISTRATION IN THIS PROJECT.**
+`ClosedLoopDeployment/PREREG_RCS08_110Hz.json`, digest `839d6b6abc4ed2f3`, written with
+`registry.Registry` (which had never been used on a real hypothesis). Two candidates —
+ZERO_THREE_RIGHT sensing Left and Right at 110 Hz, negative amplitude->power cluster — alpha 0.025
+(Bonferroni across the two hemispheres; the cluster test already controls family-wise error across
+the 18 centres internally), primary outcome the family-wise p of the largest NEGATIVE cluster.
+
+A positive cluster is explicitly NOT a positive result: Dual Threshold needs power to FALL as
+amplitude rises, so a rise is the positive-feedback direction and counts as a refusal.
+
+Stopping rule: ONE prospective session, analysis run ONCE, no interim looks, and a second session
+requires a NEW registration. Protocol requirements are derived from this record rather than chosen —
+steps at least 105 s (45 s measured ramp exclusion plus 60 s settled, since the shortest existing
+durations yield zero settled tiles), ladder spanning at least 3.0 mA in the one session, rate/pulse
+width/contacts fixed, and streaming running throughout because the device-PSD source cannot support
+this design.
+
+Explicitly NOT pre-registered, so exploration cannot later be read as confirmation: the 55 Hz
+positive response (established, wrong direction, needs no test); ONE_THREE_LEFT at 24.5-27.5 Hz
+(retracted, its cluster changes sign with the threshold); any claim about WHERE a response sits
+(the cluster test establishes existence, not location); and the 27.5 Hz subharmonic question.
+
+**2. THE SEPARATION FLOOR DOES NOT NEED TO SCALE, AND THE OPEN QUESTION IS CLOSED.** New helpers
+`expected_separation_d`, `within_arm_sd_from_result`, `span_needed_for_separation` in
+`lfp_response.py`, 10 tests.
+
+The tempting fix was to make the 0.5 floor scale with the capture span. That would be WRONG: the
+device places its threshold BETWEEN the two captures, so placeability depends on the ABSOLUTE
+overlap of the two distributions and does not become easier because a narrow ladder was chosen. A
+cell whose captures are 1 mA apart and overlapping really would chatter. The actual defect was that
+ONE refusal covered two situations with opposite remedies — "does not respond" and "responds, but
+the ladder was too narrow to place a threshold" — so the helpers separate them by asking what span
+the observed slope would need.
+
+Measured on all 108 rows: **62 refused, of which 0 are a narrow ladder.** 25 flat (need more than
+the 5.0 mA ceiling), 36 unable to form an arm, 1 arms-inconsistent-with-slope. A test asserts the
+floor is NOT span-scaled so the conclusion cannot be quietly reversed.
+
+**3. AT 110 Hz THE TWO-ARM CAPTURE TEST CANNOT RUN AT ALL** — 36 of 36 rows have neither a finite
+separation nor a finite slope, because 30 steps spread across many 0.5 mA bins leave no bin reaching
+`MIN_ROWS_PER_ARM = 8`. The cluster permutation CAN run there because it uses every step. That is
+why the pre-registration names the cluster test as primary rather than the capture test.
+
+**4. Two defects in my own new code, both caught by running it.** The amplitude ceiling was probed
+with `"AMP_HARD_LIMIT_MA" in globals()` in a module where that constant does not live, so it
+silently defaulted to infinity and the "span unreachable" branch could never fire — it would have
+reported a 62 mA ladder as a protocol instruction. And the first version returned
+`widen_the_ladder` for a band needing 1.78 mA when 2.0 mA was already used, which is incoherent;
+that case now has its own verdict and is diagnostic of era adjustment carrying the relationship
+rather than the amplitude contrast.
+
+Suites: StimOptimizer + ClosedLoopDeployment **620 passed**, 41 skipped — measured, not inferred.
+
+
+
 ### 2026-09-05 (later still) — threshold sweep confirms the 55 Hz result and kills the 110 Hz lead
 
 `band_cluster_permutation` gained `extra_thresholds=`, evaluating several cluster-forming
@@ -316,7 +373,17 @@ Documented on the page in `DutyCyclePanel.js`, where the panel already explains 
 separation is the only protection against acting on one noisy window: *"Capture separation floor 0.5
 is our judgement, not a Medtronic figure."*
 
-**Not settled:** whether 0.5 is the right floor for a capture contrast that the five-era window has
+**~~Not settled~~ — SETTLED 2026-09-05, and the answer is that the floor is not the problem.**
+Measured across all 108 within-visit band-by-cell rows with
+`lfp_response.span_needed_for_separation`: 62 fail separation, and of those **ZERO** would be
+rescued by a wider ladder. 25 are genuinely flat (clearing d=0.5 at their own slope would need more
+than the device's 5.0 mA ceiling), 36 could not form a capture arm at all, and 1 has an adjusted
+slope inconsistent with its raw arms. So loosening or span-scaling the floor would have rescued
+nothing, and the earlier framing that "separation is doing all the refusing at a threshold a 1 mA
+contrast can barely reach" was misleading — the within-visit arms reach 2.0-2.5 mA and separations
+run 0.045 to 2.999. Full detail below; the original entry read:
+
+**~~Not settled:~~** whether 0.5 is the right floor for a capture contrast that the five-era window has
 narrowed to 1.0 mA. The floor was set for a capture spanning the full amplitude range, and at 1.0 mA
 a slope of -0.13 log per mA cannot produce a large separation regardless of how real it is.
 

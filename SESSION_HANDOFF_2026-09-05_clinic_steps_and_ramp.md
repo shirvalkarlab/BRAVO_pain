@@ -213,3 +213,19 @@ The test cannot name a band (establishes existence not location) so it never fee
    Baseline before this work was 607 and 3 tests were added, so 610 is also what the arithmetic
    gives. Commit 3feb220's message carries the wrong figure and cannot be amended after pushing;
    this entry is the correction of record.
+
+## Pre-registration filed, and the separation-floor question closed
+
+PREREG_RCS08_110Hz.json, digest 839d6b6abc4ed2f3. ZERO_THREE_RIGHT L+R @110 Hz, negative cluster,
+alpha 0.025 Bonferroni over the two hemispheres, ONE session, analysis run ONCE, no interim looks.
+Protocol: steps >=105 s, ladder >=3.0 mA in one session, rate/PW/contacts fixed, streaming
+throughout. A POSITIVE cluster counts as a refusal, not a result.
+
+Separation floor: the answer is that it should NOT scale with span. Of 62 band refusals, ZERO are a
+narrow ladder -- 25 flat (need >5.0 mA), 36 cannot form an arm, 1 arms-inconsistent-with-slope. My
+earlier "separation is doing all the refusing at a threshold a 1 mA contrast can barely reach" was
+misleading; within-visit arms reach 2.0-2.5 mA with separations 0.045-2.999.
+
+At 110 Hz the two-arm CAPTURE test cannot run at all (36/36 rows non-estimable, no bin reaches
+MIN_ROWS_PER_ARM=8). The cluster test can, because it uses every step. Hence the pre-registration
+uses the cluster test as primary.
