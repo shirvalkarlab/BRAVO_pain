@@ -257,6 +257,22 @@ class DutyCycle:
     #: by a factor of about two thousand. Any interface that prints a percentage of the day must
     #: refuse to do so when this is True.
     fractions_are_of_observed_samples: bool | None = None
+    #: The LONGEST CONTINUOUS stretch at each amplitude limit, in seconds, from the controller
+    #: replay. Added 2026-09-05 at the PI's request after establishing from the device documents
+    #: that there is no time limiter available in closed loop: "Interleaving and cycling are not
+    #: available in groups with Adaptive Therapy" (A610 p. 35, encoded as D32), and no maximum
+    #: duration, dwell limit or minimum-off period for Adaptive Therapy appears anywhere in the
+    #: supplied corpus. The only bounds on time at the upper limit are therefore the transition
+    #: durations, which slow the approach rather than cutting it off, plus the scheduled outages
+    #: (recharge, impedance test, MRI mode) during which the Paused Amplitude is delivered.
+    #:
+    #: So this is the number a clinician actually needs before consenting to a configuration, and
+    #: it is NOT recoverable from the fractions above: 10% of a day at the upper limit is one
+    #: two-and-a-half-hour block or a hundred ninety-second blips, and those are different things
+    #: to agree to. None means no replay trajectory was available; 0.0 means the limit was never
+    #: reached, which is a different answer.
+    max_time_at_upper_limit_s: float | None = None
+    max_time_at_lower_limit_s: float | None = None
     predicted_failure_mode: str | None = None
     #: How many controller steps an excursion must persist for, per direction, and whether the
     #: onset duration filters anything at all at the chosen averaging duration. See onset_windows.
@@ -836,8 +852,20 @@ def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=
         d.stim_frac_at_lower = getattr(r, "frac_time_at_lower", None)
         if None not in (d.stim_frac_at_upper, d.stim_frac_at_lower):
             d.stim_frac_mid = float(max(0.0, 1.0 - d.stim_frac_at_upper - d.stim_frac_at_lower))
-        amp = getattr(r, "state", None)
-        if amp is not None:
+        # `amplitude_mA`, NOT `state`. Fixed 2026-09-05. This block read `r.state`, which
+        # ReplayResult documents and populates as the CONTROL STATE — a list of the strings
+        # "below", "between" and "above" — while the amplitude trajectory lives in
+        # `amplitude_mA`. The consequence was not a wrong number but a crash:
+        # `np.asarray(state, float)` raises `ValueError: could not convert string to float:
+        # 'below'`, so any configuration whose replay returned a full trajectory took down the
+        # whole prescription. It went unnoticed because RCS08's record is fragmented enough to
+        # take the segment-aggregating path, which returns `state=None` and skipped this block
+        # silently — leaving mean_amplitude_mA, amplitude_duty and both stim_frac fields null on
+        # every live payload rather than raising anywhere a reader would see it.
+        amp = getattr(r, "amplitude_mA", None)
+        d.max_time_at_upper_limit_s = getattr(r, "longest_run_at_upper_s", None)
+        d.max_time_at_lower_limit_s = getattr(r, "longest_run_at_lower_s", None)
+        if amp is not None and len(amp):
             a = np.asarray(amp, float).ravel()
             a = a[np.isfinite(a)]
             if a.size:

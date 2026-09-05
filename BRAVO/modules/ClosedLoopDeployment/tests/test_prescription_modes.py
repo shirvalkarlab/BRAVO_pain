@@ -252,3 +252,58 @@ def test_one_mode_failing_does_not_lose_the_others():
     assert set(A["modes"]) == set(PA.MODES)
     for pr in A["modes"].values():
         assert isinstance(pr, PR.Prescription)
+
+
+# --- the longest continuous excursion at a limit (2026-09-05) -----------------------------------
+def test_duty_reads_the_amplitude_trajectory_not_the_control_state():
+    """Regression. `duty_cycle` read `replay_result.state` where it meant `amplitude_mA`.
+    ReplayResult documents and populates `state` as the CONTROL STATE — a list of the strings
+    "below", "between", "above" — so `np.asarray(state, float)` raised
+    `ValueError: could not convert string to float: 'below'` and took down the whole prescription
+    for any configuration whose replay returned a full trajectory.
+
+    It went unnoticed because RCS08's record is fragmented enough to take the segment-aggregating
+    path, which returns `state=None`; that skipped the block silently and left mean_amplitude_mA,
+    amplitude_duty and both stim_frac fields null on every live payload instead of raising.
+    """
+    import numpy as np
+    from ClosedLoopDeployment import replay as RP, prescription as PRx, types as TY
+    p = np.concatenate([np.full(40, .05), np.full(120, .9), np.full(40, .05)])
+    plan = TY.ThresholdPlan(upper=.5, lower=.2, capture_amp_low=1.0, capture_amp_high=3.0)
+    r = RP.dual_threshold(p, plan=plan, params={"dt_s": 1.2})
+    assert isinstance(r.state[0], str), "state is no longer strings; revisit this regression"
+    d = PRx.duty_cycle(p, upper=.5, lower=.2, dt_s=1.2, replay_result=r)
+    assert d.mean_amplitude_mA is not None and np.isfinite(d.mean_amplitude_mA)
+    assert 1.0 - 1e-9 <= d.mean_amplitude_mA <= 3.0 + 1e-9, d.mean_amplitude_mA
+
+
+def test_longest_excursion_is_a_duration_not_a_total_and_zero_is_not_none():
+    """The number a clinician needs before consenting: 10% of a day at the upper limit is one long
+    block or a hundred blips, and the fractions cannot tell them apart. `None` (no trajectory) and
+    `0.0` (never reached the limit) are different answers and must not be collapsed."""
+    import numpy as np
+    from ClosedLoopDeployment import replay as RP, types as TY
+    plan = TY.ThresholdPlan(upper=.5, lower=.2, capture_amp_low=1.0, capture_amp_high=3.0)
+
+    # one long excursion, then a short one: the LONGEST is reported, not their sum
+    p = np.concatenate([np.full(20, .05), np.full(200, .9), np.full(60, .05), np.full(40, .9)])
+    r = RP.dual_threshold(p, plan=plan, params={"dt_s": 1.0})
+    assert r.longest_run_at_upper_s is not None and r.longest_run_at_upper_s > 0
+
+    # never reaches the upper limit -> 0.0, a real answer
+    r0 = RP.dual_threshold(np.full(200, .05), plan=plan, params={"dt_s": 1.0})
+    assert r0.longest_run_at_upper_s == 0.0
+    assert r0.longest_run_at_lower_s is not None and r0.longest_run_at_lower_s > 0
+
+
+def test_longest_run_helper_uses_a_declared_tolerance_rather_than_equality():
+    """Exact equality would report zero time at the limit whenever the ramp arithmetic lands a
+    fraction of a programmable step short. The tolerance is one A610 amplitude step."""
+    import numpy as np
+    from ClosedLoopDeployment import replay as RP
+    assert RP.AT_LIMIT_TOL_MA == 0.05
+    amp = np.array([1.0, 3.0 - 0.01, 3.0 - 0.01, 3.0 - 0.01, 1.0])   # a step short of the limit
+    assert RP._longest_run_at_level_s(amp, 2.0, 3.0) == pytest.approx(6.0)
+    assert RP._longest_run_at_level_s(amp, 2.0, 3.0, tol=0.0) == 0.0
+    assert RP._longest_run_at_level_s(None, 2.0, 3.0) is None
+    assert RP._longest_run_at_level_s(amp, 2.0, None) is None

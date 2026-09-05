@@ -522,6 +522,13 @@ def report_to_dict(rep):
         "replay": None if rep.replay is None else {
             "frac_time_at_upper": rep.replay.frac_time_at_upper,
             "frac_time_at_lower": rep.replay.frac_time_at_lower,
+            # The longest CONTINUOUS excursion at each limit. Emitted rather than withheld, unlike
+            # the per-step trajectories these are derived from, because they are two scalars and
+            # they answer the question the fractions cannot: how long one stretch at the upper
+            # limit could last. None means no trajectory was available; 0.0 means the limit was
+            # never reached, and those must not be collapsed by the interface.
+            "longest_run_at_upper_s": rep.replay.longest_run_at_upper_s,
+            "longest_run_at_lower_s": rep.replay.longest_run_at_lower_s,
             "n_transitions": rep.replay.n_transitions,
             "saturated": rep.replay.saturated,
             "params": {k: v for k, v in (rep.replay.params or {}).items()},
@@ -554,6 +561,7 @@ def report_to_dict(rep):
                         "qualified_transitions", "unqualified_excursions", "hours_observed",
                         "hours_of_signal", "coverage_frac", "fractions_are_of_observed_samples",
                         "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
+                        "max_time_at_upper_limit_s", "max_time_at_lower_limit_s",
                         "predicted_failure_mode")} | {
                     "caveats": list(pr.duty.caveats or [])},
             } for m, pr in (rep.prescriptions.get("modes") or {}).items()},
@@ -580,6 +588,9 @@ def report_to_dict(rep):
                     # coverage. Any field added to DutyCycle must be added here too.
                     "hours_of_signal", "coverage_frac", "fractions_are_of_observed_samples",
                     "onset_windows_upper", "onset_windows_lower", "onset_inoperative",
+                    # The longest CONTINUOUS excursion at each limit, which the fractions above
+                    # cannot express and which is the number a clinician needs before consenting.
+                    "max_time_at_upper_limit_s", "max_time_at_lower_limit_s",
                     "predicted_failure_mode")} | {
                 "caveats": list(rep.prescription.duty.caveats or [])},
         },

@@ -71,3 +71,34 @@ two or three relationships.
 - "Pooling every rate leaves 1 usable band" was a different statistic quoted as a band count. The
   measured value is **8 of 98** surviving the union of nine rates, against 65 for 55 Hz alone. A
   test now pins it.
+
+---
+
+## Later the same day — the bootstrap wipes out the within-visit result
+
+Re-running the within-visit slopes through `edges._small_sample_inference` (the wild cluster
+bootstrap-t already in the module, Rademacher weights enumerated at or below 12 clusters) leaves
+**zero resolved cells out of 88** — none negative, none positive. The p-value floors explain it:
+5 visits gives 0.0625, 6 gives 0.0312, 7 gives 0.0156, 12 gives 0.00049, and 66 of the 88 intervals
+come back unbounded. Only the ZERO_THREE_RIGHT 55 Hz stratum (12 visits) had the cluster count to
+reject anything, and it rejected nothing.
+
+**So the six "resolved negative" cells reported earlier were the CR0 variance collapse, not a
+finding.** The within-visit design does not resolve the amplitude-power sign in either direction.
+D19 is unchanged, and the honest statement is that no design available on this record resolves it.
+
+## The 55 Hz correction
+
+Cross-thread handoff records the PI's decision that the deployment rate is **55 Hz**. Every negative
+cell in the earlier CR0 table was at 110 Hz, so it described a configuration that will not be
+programmed. At 55 Hz the harmonics fold to 25, 30, 55, 60, 80 and 85 Hz, and the 24.5 Hz candidate
+band spans 22.0-27.0 Hz — **it contains the 25 Hz landing and cannot be assessed for amplitude
+response at all**. The usable window at 55 Hz is 8.5-21.5 Hz, which intersects the capturable range
+(8.8-11.7 Hz, the only bins clearing the 1.2 uVp floor) at roughly 8.5-11.5 Hz.
+
+## No time limiter exists in closed loop
+
+Cycling is not available with Adaptive Therapy (A610 p. 35, D32) and no duration or dwell limit
+appears in the corpus. `DutyCycle.max_time_at_upper_limit_s` now reports the longest continuous
+excursion instead, and fixing its plumbing exposed a `ValueError` crash in `duty_cycle` that had
+been reading the control-state list as an amplitude array.

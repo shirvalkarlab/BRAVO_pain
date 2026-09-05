@@ -146,6 +146,15 @@ class ReplayResult:
     state: list = field(default_factory=list)          # "below" | "between" | "above"
     frac_time_at_upper: float | None = None
     frac_time_at_lower: float | None = None
+    #: The LONGEST CONTINUOUS excursion at each limit, in seconds — not the total. A clinician
+    #: asked to approve a configuration wants to know how long a single stretch at the upper limit
+    #: could last, and a total fraction cannot answer that: 10% of a day at the upper limit is one
+    #: two-and-a-half-hour block or a hundred ninety-second blips, and those are different things to
+    #: consent to. This is also the closest the Percept comes to a duty limiter, because cycling is
+    #: NOT available in a group with Adaptive Therapy (A610 p. 35, encoded as D32) and no maximum
+    #: duration or dwell limit appears anywhere in the supplied device documents.
+    longest_run_at_upper_s: float | None = None
+    longest_run_at_lower_s: float | None = None
     n_transitions: int = 0
     saturated: bool | None = None
     params: dict = field(default_factory=dict)

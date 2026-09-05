@@ -146,6 +146,37 @@ DEFAULT_PARAMS = {
 # --------------------------------------------------------------------------------------------
 # Input handling
 # --------------------------------------------------------------------------------------------
+#: How close to a limit counts as being AT it. Declared by this module, not published: the A610
+#: amplitude control steps in 0.05 mA, so a trajectory sitting within one programmable step of the
+#: limit is at the limit as far as the patient and the programmer are concerned. Using exact
+#: equality instead would report zero time at the limit whenever the ramp arithmetic lands a
+#: fraction of a step short.
+AT_LIMIT_TOL_MA = 0.05
+
+
+def _longest_run_at_level_s(amp, dt_s, level, *, tol=AT_LIMIT_TOL_MA):
+    """Duration of the LONGEST CONTINUOUS stretch within ``tol`` of ``level``, in seconds.
+
+    Returns None when there is no trajectory or no level to compare against, and 0.0 when the
+    trajectory never reaches the level — those are different answers and collapsing them would let
+    "never went there" read as "no data".
+    """
+    if amp is None or level is None or dt_s is None or not np.isfinite(dt_s) or dt_s <= 0:
+        return None
+    a = np.asarray(amp, dtype=float).ravel()
+    a = a[np.isfinite(a)]
+    if a.size == 0 or not np.isfinite(level):
+        return None
+    at = np.abs(a - float(level)) <= float(tol)
+    if not at.any():
+        return 0.0
+    # run lengths of the True blocks, without a Python loop over samples
+    d = np.diff(np.concatenate(([0], at.view(np.int8), [0])))
+    starts = np.flatnonzero(d == 1)
+    ends = np.flatnonzero(d == -1)
+    return float((ends - starts).max() * float(dt_s))
+
+
 def _coerce_series(power_series, dt_s=None):
     """Return ``(t_s, power, dt_s)`` from the several shapes a caller may reasonably have.
 
@@ -546,6 +577,8 @@ def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
         t_s=[float(v) for v in t],
         amplitude_mA=[float(v) for v in amp_out],
         state=state_out,
+        longest_run_at_upper_s=_longest_run_at_level_s(amp_out, dt, amp_high),
+        longest_run_at_lower_s=_longest_run_at_level_s(amp_out, dt, amp_low),
         frac_time_at_upper=at_high,
         frac_time_at_lower=at_low,
         n_transitions=int(n_transitions),
@@ -804,6 +837,7 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
 
     used_steps = 0
     tot_up = tot_lo = 0.0
+    seg_up_runs, seg_lo_runs = [], []
     n_trans = 0
     n_sat = 0
     n_used = 0
@@ -822,6 +856,10 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
             continue
         w = float(b - a)
         if r.frac_time_at_upper is not None:
+            if r.longest_run_at_upper_s is not None:
+                seg_up_runs.append(float(r.longest_run_at_upper_s))
+            if r.longest_run_at_lower_s is not None:
+                seg_lo_runs.append(float(r.longest_run_at_lower_s))
             tot_up += w * float(r.frac_time_at_upper)
         if r.frac_time_at_lower is not None:
             tot_lo += w * float(r.frac_time_at_lower)
@@ -848,6 +886,11 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
         t_s=None, state=None,
         frac_time_at_upper=tot_up / used_steps,
         frac_time_at_lower=tot_lo / used_steps,
+        # The MAXIMUM across segments, not a sum and not a mean. A single excursion cannot span a
+        # gap in the record, so the longest one that actually occurred is the longest seen inside
+        # any one contiguous segment. Summing would invent an excursion that never happened.
+        longest_run_at_upper_s=(max(seg_up_runs) if seg_up_runs else None),
+        longest_run_at_lower_s=(max(seg_lo_runs) if seg_lo_runs else None),
         n_transitions=int(n_trans),
         saturated=bool(n_sat),
         params={"n_segments": int(bounds.size - 1), "n_segments_used": int(n_used),

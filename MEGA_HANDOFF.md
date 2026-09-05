@@ -75,6 +75,47 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later) — no time limiter exists in closed loop; longest-excursion field added; a duty crash fixed
+
+**PI question: can stimulation time be capped, e.g. cycling with a timer in closed loop?** Answered
+from the device documents: **no.** "Interleaving and cycling are not available in groups with
+Adaptive Therapy" (A610 p. 35, already encoded as D32), and no maximum duration, dwell limit or
+minimum-off period for Adaptive Therapy appears anywhere in the supplied corpus. The only bounds on
+time at the upper limit are the two transition durations, which slow the approach rather than cutting
+it off, plus the scheduled outages — Adaptive is auto-paused during recharge, disabled during an
+impedance test and ineligible in MRI mode, and the Paused Amplitude is what gets delivered then.
+Note also D36: the recharge-interval calculator cannot model Adaptive at all and requires it paused.
+
+**New field `DutyCycle.max_time_at_upper_limit_s` (and `_lower_`), from
+`ReplayResult.longest_run_at_upper_s`.** The LONGEST CONTINUOUS excursion, not the total, because
+the fractions cannot express it: 10% of a day at the upper limit is one two-and-a-half-hour block or
+a hundred ninety-second blips, and those are different things to consent to. On the segment-
+aggregating path it is the MAXIMUM across segments, never a sum — an excursion cannot span a gap in
+the record. `None` means no trajectory; `0.0` means the limit was never reached; the interface must
+not collapse them. Tolerance for "at the limit" is one A610 amplitude step (0.05 mA), declared by us,
+because exact equality reports zero whenever the ramp arithmetic lands a fraction of a step short.
+
+**A REAL CRASH FIXED IN `duty_cycle`.** It read `replay_result.state` where it meant
+`amplitude_mA`. ReplayResult documents and populates `state` as the CONTROL STATE — a list of the
+strings "below"/"between"/"above" — so `np.asarray(state, float)` raises
+`ValueError: could not convert string to float: 'below'` and took down the whole prescription for any
+configuration whose replay returned a full trajectory. Reproduced directly before fixing. It went
+unnoticed because RCS08's record takes the segment-aggregating path, which returns `state=None`, so
+the block was skipped silently and left `mean_amplitude_mA`, `amplitude_duty` and both `stim_frac`
+fields null on every live payload rather than raising anywhere a reader would see it. After the fix
+the same synthetic case returns mean_amplitude_mA 2.522 and a 56.4 s longest excursion.
+
+**On the live record every amplitude-side field is still None, correctly.** The replay refuses
+outright: `ramp_resolvable: False`, because the chronic samples arrive every 230 s while the upward
+transition takes 150 s, so no controller trajectory can be simulated. The field will populate only
+from data sampled finer than the transition duration — which the clinic streaming tiles at 3 s are,
+and the chronic record is not. That is the natural follow-up.
+
+Suite 206 -> **209**. The mechanical dataclass-vs-serialiser guard caught both new ReplayResult
+fields before they could be computed and discarded, which is what it exists for.
+
+
+
 ### 2026-09-05 — the clinic sheets beat the JSON for within-visit stimulation, and the ramp is artifact
 
 Detail in `SESSION_HANDOFF_2026-09-05_clinic_steps_and_ramp.md`. New module
