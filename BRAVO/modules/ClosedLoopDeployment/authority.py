@@ -25,7 +25,21 @@ from .types import ThresholdPlan
 #: threshold, not a device-published one: Medtronic documents the alert's existence and its trigger
 #: in words ("minimally responsive") but not a numeric criterion, so the module states its own and
 #: labels it rather than implying the number came from the manufacturer.
-MIN_CAPTURE_SEPARATION_D = 1.0
+#:
+#: IMPORTED RATHER THAN RESTATED, 2026-09-05. This constant was declared here as 1.0 while
+#: StimOptimizer's response test declared the SAME criterion as 0.5, and nothing linked them — two
+#: independent literals encoding one unpublished manufacturer rule, drifted to a factor of two
+#: apart. The consequence was a band that clears the screen and is then called too-close
+#: downstream: any cell with d between 0.5 and 1.0 passed `assess_response` and failed
+#: `threshold_placement`. That was not hypothetical — on RCS08 at 55 Hz with the five-era window,
+#: every band clearing separation sits between 0.51 and 0.93, so all of them fell in the gap.
+#:
+#: PI decision: use the LOOSER criterion for both. Rather than write 0.5 in two places and invite
+#: the same drift again, this module now imports the one definition. If the floor is ever revisited,
+#: it moves in a single file.
+from StimOptimizer.routines.lfp_response import (        # noqa: E402  (constant, not a cycle)
+    MIN_CAPTURE_SEPARATION_D,
+)
 
 #: Rule D27 (A610 p. 73): above these values the stimulation artefact "may cause the LFP to appear
 #: elevated when capturing the Lower LFP Threshold". This is a measurement-validity ceiling on the

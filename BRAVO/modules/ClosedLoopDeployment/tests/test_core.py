@@ -1060,3 +1060,32 @@ def test_every_report_section_reaches_the_payload():
         assert not gone, (
             f"{cls.__name__} fields never serialised to the payload: {sorted(gone)}. "
             f"Add them to report_to_dict, or to NESTED_WITHHELD with a reason.")
+
+
+def test_the_capture_separation_floor_has_exactly_one_definition():
+    """Regression, 2026-09-05. `MIN_CAPTURE_SEPARATION_D` was declared in TWO modules at DIFFERENT
+    values for the SAME unpublished manufacturer rule: 0.5 in StimOptimizer's response test and 1.0
+    in this module's threshold placement. Nothing linked them, so any cell with d between the two
+    cleared the screen and was then called too-close downstream — and on RCS08 at 55 Hz every band
+    that cleared separation sat between 0.51 and 0.93, i.e. entirely inside the gap.
+
+    The PI's decision was to use the looser value for both. This asserts the mechanism rather than
+    the number: `authority` must read the SAME object as `lfp_response`, so a future change moves
+    both. Asserting only equality would pass again the moment someone re-typed the literal.
+    """
+    from StimOptimizer.routines import lfp_response as LR
+    from ClosedLoopDeployment import authority as AU
+
+    assert AU.MIN_CAPTURE_SEPARATION_D is LR.MIN_CAPTURE_SEPARATION_D, (
+        "authority must import the constant, not restate it — two literals is how this drifted "
+        "to a factor of two in the first place")
+    assert LR.MIN_CAPTURE_SEPARATION_D == 0.5
+
+    # and the source really does import rather than assign
+    import inspect
+    src = inspect.getsource(AU)
+    assert "from StimOptimizer.routines.lfp_response import" in src
+    assigns = [ln for ln in src.splitlines()
+               if ln.strip().startswith("MIN_CAPTURE_SEPARATION_D") and "=" in ln
+               and not ln.strip().startswith("#")]
+    assert not assigns, f"authority re-assigns the constant: {assigns}"

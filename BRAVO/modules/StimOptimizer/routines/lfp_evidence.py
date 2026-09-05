@@ -248,9 +248,18 @@ def _resolve_col(frame, candidates, what):
 #: 2. What it does change is the CAPTURE CONTRAST, and materially. Dropping the older eras removes
 #:    the low amplitude levels from the record, so the low capture arm moves from 1.6 mA to 3.5 mA
 #:    and the contrast is measured over 1.0 mA instead of 2.9 mA. On that cell ``direction_ok``
-#:    flips from False to True in 15 of 18 bands: with the full record power RISES from 3.222 to
-#:    4.894 across the arms, and on the recent eras it FALLS from 5.020 to 4.894. The full-record
-#:    capture was inverted because it spanned two programming regimes.
+#:    flips from False to True in 15 of 18 bands. VERIFIED ACROSS ALL 18 BANDS in both windows on
+#:    2026-09-05 after a reviewer caught that the claim had originally been generalised from the
+#:    10.5 Hz band alone: the full-record baseline is False in **all 18** bands, the five-era window
+#:    is True in 15, and the three that stay False are 25.5, 26.5 and 27.5 Hz. At 10.5 Hz power
+#:    RISES from 3.222 to 4.894 across the full-record arms and FALLS from 5.020 to 4.894 on the
+#:    recent ones. The full-record capture was inverted because it spanned two programming regimes.
+#:
+#:    The same table shows the trade in the other direction, which is the part that decides
+#:    anything: full-record separation is 1.01 to 4.88 across the bands, comfortably clearing any
+#:    plausible floor, while the five-era separation is 0.41 to 0.93. So the two windows fail for
+#:    opposite reasons — the long one on direction, the short one on separation — and neither yields
+#:    a deployable cell.
 #: 3. The predicted rank deficiency did NOT materialise — interval widths stay at 0.23 to 0.26 with
 #:    4 and 5 clusters — but the cluster count lands in the anti-conservative regime. A wild cluster
 #:    bootstrap resolves no finer than 1/2**G, which is 0.031 at five clusters and 0.062 at four, so

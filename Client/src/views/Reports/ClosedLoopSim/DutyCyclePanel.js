@@ -307,6 +307,17 @@ export default function DutyCyclePanel({ report, mode }) {
               against acting on one noisy window is the separation between the two thresholds. The
               parameter table above carries the two field values this follows from.
             </MDTypography>
+            {/* PROVENANCE OF THE SEPARATION FLOOR, added 2026-09-05 on the PI's instruction to make
+                it explicit on the page. The sentence is deliberately one line: the number is ours,
+                not Medtronic's, and a reader deciding whether to argue with a refusal needs to know
+                that without reading the module. Until today the same criterion was declared twice
+                at different values (0.5 in StimOptimizer's response test, 1.0 in this module's
+                threshold placement), so a band could clear the screen and be refused here; both now
+                import the looser definition from one place. */}
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
+              color: "#6A6A6A", fontStyle: "italic", mt: 0.4 }}>
+              Capture separation floor 0.5 is our judgement, not a Medtronic figure.
+            </MDTypography>
           </MDBox>
         ) : null}
 

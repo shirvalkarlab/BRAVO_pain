@@ -129,3 +129,15 @@ Verdict unchanged: 0 of 12 deployable at 55 Hz.
 Open: separation is now doing the refusing, and it is doing so at a threshold the 1 mA contrast makes
 almost unreachable. Whether MIN_CAPTURE_SEPARATION_D = 0.5 is the right floor for a 1 mA capture is a
 question I have not put to the PI.
+
+## Capture-separation floor: one definition, looser value, stated on the page
+
+`MIN_CAPTURE_SEPARATION_D` was 0.5 in `lfp_response.py` and 1.0 in `authority.py` — two literals for
+one unpublished rule. PI: use the looser for both. `authority.py` now imports the single definition.
+
+Correction on the record: the "15 of 18 bands flip direction" claim was originally generalised from
+the 10.5 Hz band alone. Verified across all 18 in both windows — full record False in all 18,
+five-era True in 15, the three exceptions 25.5/26.5/27.5 Hz. Full-record separation 1.01-4.88,
+five-era 0.41-0.93, so the windows fail for opposite reasons and neither yields a deployable cell.
+
+Open: is 0.5 right for a 1.0 mA capture contrast? The floor predates the narrowed window.

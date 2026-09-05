@@ -75,6 +75,34 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — one definition of the capture-separation floor, at the looser value
+
+**PI decision:** "use the looser criterion for both and make it explicit on the module web page."
+
+`MIN_CAPTURE_SEPARATION_D` was declared TWICE at DIFFERENT values for the same unpublished
+manufacturer rule — **0.5** in `StimOptimizer/routines/lfp_response.py` (used by `assess_response`,
+and via `LFP.MIN_CAPTURE_SEPARATION_D` at two sites in `stage_gate.py` and one in
+`stage2_closedloop.py`) and **1.0** in `ClosedLoopDeployment/authority.py` (used by
+`threshold_placement`'s recapture-alert prediction). Nothing linked them; both docstrings claimed to
+encode the same "minimally responsive" alert Medtronic describes in words without a number.
+
+**The gap was live, not hypothetical.** Any cell with d between 0.5 and 1.0 cleared the screen and
+was then called too-close downstream. On RCS08 at 55 Hz with the five-era window, every band that
+clears separation sits between **0.51 and 0.93** — all of them inside the gap.
+
+`authority.py` now IMPORTS the one definition rather than restating it, so the floor moves in a
+single file and cannot drift again. Both modules read 0.5 and it is the same object.
+
+Documented on the page in `DutyCyclePanel.js`, where the panel already explains that threshold
+separation is the only protection against acting on one noisy window: *"Capture separation floor 0.5
+is our judgement, not a Medtronic figure."*
+
+**Not settled:** whether 0.5 is the right floor for a capture contrast that the five-era window has
+narrowed to 1.0 mA. The floor was set for a capture spanning the full amplitude range, and at 1.0 mA
+a slope of -0.13 log per mA cannot produce a large separation regardless of how real it is.
+
+
+
 ### 2026-09-05 (later) — the response test now blocks on the 5 most recent eras only
 
 **PI direction:** "let's fix the era calculations so that it is only on the 4 or 5 most recent eras."
@@ -96,10 +124,18 @@ because an unchanged estimate is exactly what a restriction that silently failed
 
 **What it does change is the CAPTURE CONTRAST, and materially.** Dropping older eras removes the low
 amplitude levels, so the low arm moves from **1.6 mA to 3.5 mA** and the contrast spans 1.0 mA rather
-than 2.9. On that cell `direction_ok` flips **False -> True in 15 of 18 bands**: on the full record
-power RISES across the arms (3.222 -> 4.894) and on the recent eras it FALLS (5.020 -> 4.894). The
-full-record capture was inverted because it straddled two programming regimes. This is the more
-honest quantity — it is the contrast the device would actually capture today.
+than 2.9. On that cell `direction_ok` flips **False -> True in 15 of 18 bands** — a claim originally
+generalised from the 10.5 Hz band alone and since VERIFIED across all 18 in both windows
+(2026-09-05, after review): the full-record baseline is False in **all 18**, the five-era window is
+True in 15, and the three staying False are 25.5, 26.5 and 27.5 Hz. At 10.5 Hz power RISES across
+the full-record arms (3.222 -> 4.894) and FALLS on the recent ones (5.020 -> 4.894). The full-record
+capture was inverted because it straddled two programming regimes, so the restricted contrast is the
+more honest quantity — it is what the device would capture today.
+
+The same verification shows the trade in the other direction, which is what actually decides:
+full-record separation runs **1.01 to 4.88** across the bands and clears any plausible floor, while
+the five-era separation runs **0.41 to 0.93**. The two windows therefore fail for opposite reasons —
+the long one on direction, the short one on separation — and neither produces a deployable cell.
 
 **The binding constraint moved from direction to separation.** With 5 eras, separation d on that cell
 sits at **0.41 to 0.52 against the 0.5 floor**, because the amplitude range collapsed. Only 4 of 18
