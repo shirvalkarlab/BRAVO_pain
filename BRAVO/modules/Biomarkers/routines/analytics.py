@@ -2656,6 +2656,31 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: help the odds ratio, which is what keeps it out of the selective-inference problem the fourteen
 #: finding audit was about.
 #:
+#: MEASURED EFFECT ON RCS08, 2026-09-05: this exclusion currently removes NOTHING from any fit, and
+#: the reason is structural rather than incidental. **No pain rating exists before week 5.** The
+#: fit-population census by elapsed week is {5: 6, 7: 2, 9: 2, 10: 3, 11: 5, ...} with weeks 0 to 4
+#: empty, so the window ends two weeks before the first usable sample. 22 samples in weeks 0-2 do
+#: carry finite band power, but 0 of them carry a pain label.
+#:
+#: This was verified under FOUR binarization schemes, because an earlier explanation of mine was
+#: wrong. I first attributed the no-op to the tertile split discarding the middle third, and the PI
+#: correctly objected that a median split excludes nothing and the burn-in samples would then
+#: enter. They do not: under median and under fixed cutoffs at 5 and at 6 the fit population rises
+#: from 84 to 94 samples, yet weeks 0-2 still contribute zero, because the missing thing is the
+#: LABEL and not the class assignment. So the guard is correct and the objection is answered by the
+#: data rather than by the tertile rule.
+#:
+#: OPEN DECISION, deliberately not taken here. The window above is IMPLANT-anchored: three weeks
+#: from the first sample of the record. A DATA-anchored window — three weeks from the first sample
+#: the fit can use — would bind, and its cost is measured: n falls 84 -> 63, weekly eras 29 -> 24,
+#: and the odds ratio moves from 2.330 (95% CI 0.669-8.109, p 0.184) to 1.651 (0.501-5.443,
+#: p 0.410). Going further is hazardous on this record: dropping six weeks of usable data leaves 58
+#: samples in 22 eras and returns OR 2.200 with a CI of width 0.011 and p = 0.0000, which lme4
+#: itself flags as "nearly unidentifiable: very large eigenvalue" — the same variance-collapse
+#: signature that the closed-loop module now guards against with a cluster-count floor. Any move to
+#: a data-anchored window needs the PI's decision and a degeneracy guard, not an inference from
+#: this note.
+#:
 #: SCOPE, deliberately narrow. This applies to `band_mixedmodel_inference` ONLY. The sweep, the
 #: per-band scan, the deployment ROC, the era-stability LRT and everything else continue to use the
 #: whole record, because they answer different questions and the PI asked for the whole record

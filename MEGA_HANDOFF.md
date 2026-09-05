@@ -95,12 +95,24 @@ participant pain fell over the year so a full-record cut would label a dispropor
 retained samples "low". And the week index is anchored on the first sample of the WHOLE record, not
 the first retained one, so the window cannot walk forward as data accumulates.
 
-**MEASURED ON THE LIVE RECORD: it currently removes nothing from any fit.** For `ZERO_TWO_LEFT` at
-20 Hz there are 413 samples with finite band power, 22 of them in weeks 0-2, and **0 of those 22
-carry a finite tertile label** — every one falls in the excluded middle tertile, so the binarization
-was already dropping them. Scanning 6 channels x 6 band centres: **0 of 36 cells have any week-0-2
-sample entering the fit.** The odds ratio is therefore byte-identical either way (OR 2.330,
-[0.669, 8.109], p = 0.1837, n = 84, 29 weekly eras). The payload still reports
+**MEASURED ON THE LIVE RECORD: it currently removes nothing from any fit — and my first
+explanation of why was WRONG.** I attributed it to the tertile split discarding the middle third.
+The PI objected that a median split excludes nothing, so the burn-in samples would then enter. That
+objection was right about the tertile reasoning and wrong about the outcome, and checking it found
+the real cause: **no pain rating exists before week 5.** The fit-population census by elapsed week
+is {5: 6, 7: 2, 9: 2, 10: 3, 11: 5, ...} with weeks 0-4 empty. 22 samples in weeks 0-2 carry finite
+band power and 0 carry a pain label. Verified under four schemes — tertile, median, cutoff>=5 and
+cutoff>=6: the fit population rises from 84 to 94 as the middle stops being discarded, yet weeks 0-2
+still contribute zero, because what is missing is the LABEL, not the class assignment. The odds ratio
+is byte-identical with and without the exclusion (OR 2.330, [0.669, 8.109], p = 0.1837, n = 84, 29
+weekly eras).
+
+**OPEN DECISION for the PI.** The shipped window is IMPLANT-anchored. A DATA-anchored one — three
+weeks from the first usable sample — does bind, at a measured cost: n 84 -> 63, eras 29 -> 24,
+OR 2.330 -> 1.651 (0.501-5.443), p 0.184 -> 0.410. Six weeks is hazardous: 58 samples in 22 eras
+returning OR 2.200 with a CI of width 0.011 and p = 0.0000, which lme4 flags as "nearly
+unidentifiable: very large eigenvalue" — the variance-collapse signature. Needs a decision plus a
+degeneracy guard. The payload still reports
 `n_excluded_burn_in = 22` and `n_weeks_before_exclusion = 40`, which is the honest description: 22
 samples fall in the window, none of them was being used.
 
