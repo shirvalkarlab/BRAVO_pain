@@ -2966,7 +2966,36 @@ committed band's AUC is not being driven by tail samples.
 already robust to outliers** — so the removal moves it only modestly. The statistic that genuinely
 needed protection is the **Pearson** correlation spectrum, and that one already had a 3 MAD filter.
 
-**STILL TO DO after this audit.** Not wired and not audited in depth: `psd_spectra` (not referenced
+**PARTIALLY RESOLVED 2026-09-05 — what is true, and what the remaining decision is.** Investigated
+rather than left as a bare marker. Three things established, one deliberately NOT decided.
+
+*Established.* (a) The six cv_df panels read `LFP_smoothed`, which is `Data[:,0]` — the device's
+chronic ~10-minute LFP power column — Savitzky-Golay smoothed at `adapter.py:600`. That is a
+GENUINELY DIFFERENT QUANTITY from the validated per-rating band, not a variant of it. (b) The
+frontend already DISTINGUISHES the two provenances explicitly, so the "two panels silently disagree
+about what the brain was doing" hazard is NOT live here: `BiomarkerAnalytics.js` carries the
+distinction in code comments at lines 1220-1222 ("chronic" = BrainSense Timeline ~10-min
+around-the-clock LFP power; "powerdomain" = per-session BrainSense streaming band power) and states
+the fixed-frequency caveat at 1376 and the per-contact centre requirement at 1385. (c) The canonical
+outlier rule (`stats_utils.MAD_N_DEFAULT = 5.0`) is indeed NOT applied in these six functions.
+
+*Deliberately not decided, and it is a scientific call rather than a wiring one.* Whether the rule
+SHOULD apply is not uniform across the six. For `lfp_distribution` — a histogram — deleting the tail
+changes exactly what the reader is looking at, and arguably a distribution panel should show its
+outliers. For `roc_analysis` the tail moves the AUC and the argument runs the other way. So applying
+it blanket could be wrong in at least one place, and the honest position is that this needs a
+per-function judgement rather than a sweep.
+
+*Not measured, and stated as such.* The size of the effect on this record is UNKNOWN. Three attempts
+to assemble `cv_df` outside the endpoint failed on helper names that do not exist
+(`_cv_df_for`, `build_cv_df`, `chronic_cv_df`) and then on a null PRO frame; the real construction is
+`adapter.bravo_chronic_to_lfp_df(chronic, pro_df, ...)` at `bravo_service.py:2245`, where `pro_df` is
+a local built deep inside the endpoint function, so reproducing it means replicating most of that
+function. Measuring the impact — how many chronic samples the 5-MAD rule removes, and whether the
+reported AUC and the power-versus-pain correlation move — is the next step and it needs a probe that
+runs INSIDE the endpoint rather than beside it.
+
+**~~STILL TO DO after this audit.~~** Original entry follows. Not wired and not audited in depth: `psd_spectra` (not referenced
 by the frontend), `cluster_scatter` (not referenced), and the chronic cv_df statistics
 (`sliding_window_analytics`, `roc_analysis`, `lfp_distribution`, `power_pain_scatter`,
 `pain_binarization`) which read `LFP_smoothed` from the chronic frame rather than the per-rating band
