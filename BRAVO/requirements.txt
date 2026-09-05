@@ -29,3 +29,15 @@ setuptools==75.8.0
 pywavelets==1.8.0
 nibabel==5.3.2
 PyCap==2.6.0  # REDCap PRO pull (modules/Biomarkers/routines/redcap_client.py)
+# StimOptimizer's interactive figures. The module builds Plotly figure JSON for the browser to
+# draw and never renders images server-side, so this is the pure-Python package ONLY — kaleido and
+# a headless browser are deliberately not needed, which is why routines/plots.py draws its static
+# PNGs with matplotlib instead of exporting the Plotly figures.
+#
+# Its absence was SILENT and cost the Stim Optimizer page every one of its figures. _plotly_figures
+# imports plotly inside the function, so the ImportError was caught by the caller, which set an
+# empty figure dict plus a figures_error string; the page then had nothing to draw. Nothing failed
+# loudly, no test covered it because the figure builders are exercised on the host where plotly IS
+# installed, and the module had been producing good figures as saved PNGs all along — so the
+# natural conclusion was that the interface had never been wired for them, which was wrong.
+plotly==7.0.0
