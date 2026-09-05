@@ -75,6 +75,42 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 — the clinic sheets beat the JSON for within-visit stimulation, and the ramp is artifact
+
+Detail in `SESSION_HANDOFF_2026-09-05_clinic_steps_and_ramp.md`. New module
+`ClosedLoopDeployment/clinic_steps.py`, docstring amendment to
+`Biomarkers/routines/analytics.harmonic_landings_hz`, 8 tests, suite 198 -> 206.
+
+**The chronic settings stream cannot see inside a session.** 6,605 rows -> 1,189 distinct timestamps
+-> 123 epochs of median duration 27.5 h. Its zero within-epoch amplitude variation is circular
+evidence: the epochs are built by detecting changes in that stream. **The lab's 29 testing workbooks
+carry 820 timestamped steps** at one-second resolution over 29 visits, with 40/42 per-hemisphere
+amplitude levels and ten rates. Five parsing traps documented in the module, including that the Drive
+connector's text rendering silently omits the Stim Testing tab and that July 2025 keeps its step
+times in the Notes tab as free text.
+
+**Exposure windows.** Nominal duration is not what happened (median 60 s nominal vs 98 s observed;
+observed shorter in 23% of steps, over twice as long in 24%). min(nominal, observed) minus a 45 s
+ramp: 563 of 820 steps retain settled time, every 30 s step is lost, total 16.2 h / 19,325 tiles.
+Protocol consequence: future amplitude-response sessions need 120 s steps or longer.
+
+**The ramp is the stimulation artifact, and it is a useful positive control.** 13,102 tiles aligned
+to step onset: power tracks amplitude at the stimulation frequency with the right sign and timing,
+the rise is confined to the harmonic landings (0.81 log10 per 100 s at 57.5 Hz against -0.003 away),
+and it is still climbing at 150 s. So harmonic bands are EXCLUSIONARY for amplitude-response work
+while remaining ADVISORY for the pain-biomarker question — both now recorded at
+`harmonic_landings_hz` with the evidence for each. The mask must be built per rate: only 8 of 98
+bands survive the union of nine rates, against 65 for 55 Hz alone.
+
+**Within-visit amplitude result.** 6 resolved-negative cells in 7.8-30 Hz away from landings,
+including ONE_THREE_LEFT at 24.5 Hz (beta -0.0527, CI [-0.0724, -0.0330]) — the direction D19
+requires and the REVERSE of the between-epoch screen for the same channel and band. Three limits:
+the intervals are degenerate at 5-12 visit clusters and only the point estimates should be read;
+every negative is at 110 Hz while the candidate is programmed at 165 Hz, which appears in no fitted
+stratum; and multiplicity is uncorrected over 80%-overlapping bands.
+
+
+
 ### 2026-09-05 — the four blocking unknowns closed; D19 is the only blocker left
 
 Detail in `SESSION_HANDOFF_2026-09-05_four_rule_closures.md`. Suite 192 -> **198 passed**.

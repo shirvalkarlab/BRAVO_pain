@@ -4336,10 +4336,27 @@ def harmonic_landings_hz(rate_hz, f_lo, f_hi, *, fs=DEVICE_TD_FS_HZ, max_harmoni
     can land inside the band being scanned. A band centred on such a landing may be reporting
     artifact rather than physiology.
 
-    This is ADVISORY. Tested on the RCS08 record (2026-09-03): responding bands were NOT closer to
-    these landings than non-responding ones (at 110 Hz, 4.52 Hz mean distance for responding against
-    3.90 Hz for non-responding, i.e. slightly farther), so aliasing did not explain the amplitude
-    responses there and bands are flagged for review rather than excluded.
+    THIS IS ADVISORY FOR THE PAIN-BIOMARKER QUESTION AND EXCLUSIONARY FOR THE AMPLITUDE-RESPONSE
+    QUESTION. The two uses ask different things of the same frequencies and the evidence points
+    opposite ways, so the difference is deliberate rather than an inconsistency:
+
+      * Pain biomarker — advisory. Tested on the RCS08 record (2026-09-03): responding bands were
+        NOT closer to these landings than non-responding ones (at 110 Hz, 4.52 Hz mean distance for
+        responding against 3.90 Hz for non-responding, i.e. slightly farther), so aliasing did not
+        explain the pain associations and bands are flagged for review rather than excluded.
+      * Amplitude response — exclusionary. Measured 2026-09-05 by aligning 13,102 three-second
+        tiles to the moment a clinician logged an amplitude change: during a change the power rise
+        is concentrated at the landings by a factor of roughly fifty (peak 0.81 log10 per 100 s at
+        57.5 Hz under 55 Hz stimulation, against a median of -0.003 in bands away from the
+        landings), because the stimulation artifact scales with the very current being asked about.
+        A slope estimated at a landing measures the stimulator, not the brain. The exclusion is
+        applied by ClosedLoopDeployment.clinic_steps.amplitude_response_band_mask, which calls this
+        function rather than reimplementing it.
+
+    Build the landing set PER RATE. Pooling rates defeats the test: RCS08's ten rates place landings
+    roughly every 5 Hz across the 2.5-99.5 Hz axis, and with a 2.5 Hz tolerance that covers the whole
+    axis: only 8 of 98 bands survive the union of RCS08's nine rates, against 65 for 55 Hz
+    alone. Per rate the landings are sparse and specific.
     """
     if rate_hz is None or not np.isfinite(rate_hz) or rate_hz <= 0:
         return []
