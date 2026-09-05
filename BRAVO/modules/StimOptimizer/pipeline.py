@@ -484,6 +484,17 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
                 f"{name} was supplied both as a run_two_stage argument and inside gate_kwargs. "
                 "Pass it once; the named argument is the documented route.")
         gk[name] = value
+    # `lfp` MAY BE A FACTORY, and when it is, it is called with the frozen configuration.
+    #
+    # This exists because the evidence cannot honestly be chosen before the rate is frozen. Rate and
+    # pulse width freeze in the device the moment BrainSense is configured, so an LFP response
+    # measured at some other rate says nothing about the configuration Stage 2 will actually run.
+    # Passing a pre-selected cell invites exactly that mismatch: on the first live run of
+    # `run_two_stage_live` the screen returned its best cell at 165 Hz while Stage 1 had frozen
+    # 40 Hz, and the gate would have credited a 165 Hz response to a 40 Hz configuration. Accepting
+    # a callable makes the ordering structural rather than something a caller has to remember.
+    if callable(lfp):
+        lfp = lfp(frozen)
     gate = GATE.evaluate_gate(frozen, lfp=lfp, amp_limits=amp_limits, **gk)
     s2 = S2.run_stage2(frozen, gate, lfp=lfp, **(stage2_kwargs or {}))
 
@@ -550,3 +561,99 @@ def _render(ctx, label, outdir, backend, dpi):
             fig.write_html(p, include_plotlyjs="cdn")
         out.append(p)
     return out
+
+
+def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
+                       rate_hz=None, bands=None, force_refresh=None, request_data=None,
+                       washin_min=1.0, **two_stage_kwargs) -> TwoStageReport:
+    """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
+
+    WHY THIS EXISTS. The handoff carried "STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on
+    live data" for three days, and checking it on 2026-09-05 showed the gap was narrower and worse
+    than that sentence suggests. Every piece was present and type-compatible: ``live_evidence``
+    builds and screens the cells, ``LiveEvidence.selected`` is documented as "the one cell handed to
+    the gate" and is constructed as a ``stage_gate.LfpEvidence``, and ``run_two_stage`` accepts
+    exactly that object as ``lfp=``. What was missing was any caller that put the two together —
+    the ONLY callers of ``run_two_stage`` and ``run_stage2`` anywhere in the repository were tests,
+    and the endpoint layer never invoked the staged path at all. So the device's sequencing
+    constraint was encoded, tested, and unreachable from the running system.
+
+    WHY THE DEFAULT WAS NOT MERELY HARMLESS. Left alone, the staged path runs with ``lfp=None``,
+    and the gate then reports the LFP-response condition as NOT ASSESSED, which blocks. That is the
+    safe direction, so nothing unsafe could happen — but it makes two clinically different answers
+    look identical: "no recording could be built for this configuration" and "the recordings were
+    built and the band does not respond". This function keeps them apart by carrying the screen and
+    audit frames onto the manifest whether or not a cell was selected, which is the same reason
+    ``LiveEvidence`` keeps those frames in its result rather than treating them as debug output.
+
+    Returns the ordinary :class:`TwoStageReport`. A gate refusal is a legitimate terminal answer and
+    on this project's current data it is the expected one.
+    """
+    from . import adapter as _AD
+
+    design = _AD.build_design_matrix(participant, request_data, washin_min=washin_min)
+    box = {}
+
+    def _select_after_freezing(frozen):
+        """Choose the evidence cell AT the rate Stage 1 froze, not the best cell at any rate.
+
+        The first version of this function selected the evidence before running Stage 1, and on the
+        live record that produced a real mismatch: the screen's best cell was ONE_THREE_LEFT/Left at
+        165 Hz while Stage 1 froze 40 Hz on both hemispheres. Crediting a 165 Hz LFP response to a
+        40 Hz configuration would have let the gate's response condition pass on a measurement of
+        something the device will not be doing.
+
+        When the two hemispheres freeze DIFFERENT rates there is no single rate to pin, and this
+        refuses rather than picking one. The refusal costs nothing that was available anyway -- the
+        gate blocks on an unassessed response either way -- and it avoids silently attributing one
+        hemisphere's evidence to the other's configuration.
+        """
+        rates = sorted({float(hs.rate_hz) for hs in frozen.settings
+                        if getattr(hs, "rate_hz", None) is not None})
+        pin = rate_hz
+        if pin is None:
+            if len(rates) == 1:
+                pin = rates[0]
+            else:
+                box["ev"] = LiveEvidence(
+                    selected=None, selected_key=None,
+                    selection_note=("the two hemispheres froze different rates %s, so there is no "
+                                    "single rate to pin the evidence to; refusing to attribute one "
+                                    "hemisphere's measurement to the other's configuration"
+                                    % rates))
+                box["frozen_rates"] = rates
+                return None
+        ev_ = live_evidence(participant, amp_ceiling=amp_ceiling, channel=channel,
+                            hemisphere=hemisphere, rate_hz=pin, bands=bands,
+                            force_refresh=force_refresh)
+        box["ev"] = ev_
+        box["pinned_rate_hz"] = float(pin)
+        box["frozen_rates"] = rates
+        return ev_.selected
+
+    rep = run_two_stage(design, lfp=_select_after_freezing, **two_stage_kwargs)
+    ev = box.get("ev") or LiveEvidence()
+
+    # The provenance of the evidence travels with the report. Without this a reader cannot tell
+    # which of the two refusals above they are looking at, and the gate's own text cannot say,
+    # because the gate is handed either a cell or nothing and never learns why.
+    rep.manifest["lfp_evidence"] = {
+        "source": "live",
+        "pinned_rate_hz": box.get("pinned_rate_hz"),
+        "frozen_rates_hz": box.get("frozen_rates"),
+        "selected": ev.selected is not None,
+        "selected_key": (list(ev.selected_key) if ev.selected_key else None),
+        "selection_note": ev.selection_note,
+        "n_cells_screened": (0 if ev.screen is None else int(len(ev.screen))),
+        "n_cells_unbuildable": (0 if ev.audit is None else int(len(ev.audit))),
+        "refusal_class": (
+            "evidence_selected" if ev.selected is not None
+            else ("frozen_rates_disagree" if box.get("pinned_rate_hz") is None
+                  else ("no_cell_deployable" if (ev.screen is not None and len(ev.screen))
+                        else "no_cell_buildable"))),
+        "note": ("`no_cell_buildable` means no configuration had enough data to form the "
+                 "measurement at all, and `no_cell_deployable` means cells were built and screened "
+                 "and none passed. A gate refusal reads identically in both cases, so this field "
+                 "is the only thing that distinguishes absent data from a measured negative."),
+    }
+    return rep

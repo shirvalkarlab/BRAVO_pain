@@ -513,3 +513,52 @@ def test_the_real_design_matrix_cannot_proceed_to_closed_loop():
     assert set(rep.gate.failed_names()) >= {"rate_at_or_above_adaptive_minimum",
                                             "openloop_choice_resolved"}
     assert "adaptive_band_passes_lfp_response" in rep.gate.not_assessed_names()
+
+
+# --- the evidence factory: selection must happen AFTER freezing (2026-09-05) --------------------
+def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
+    """The sequencing fix. Rate and pulse width freeze when BrainSense is configured, so evidence
+    measured at another rate says nothing about the configuration Stage 2 will run. Passing a
+    pre-selected cell invites that mismatch, and it happened on the first live run: the screen's
+    best cell was at 165 Hz while Stage 1 had frozen 40 Hz. Accepting a callable makes the ordering
+    structural instead of something the caller has to remember.
+    """
+    seen = {}
+
+    def factory(frozen):
+        seen["rates"] = sorted({float(h.rate_hz) for h in frozen.settings})
+        seen["called"] = True
+        return _responding_lfp()
+
+    from StimOptimizer import pipeline
+    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0, lfp=factory)
+    assert seen.get("called") is True, "the factory was never called"
+    assert seen["rates"], "the factory did not receive a frozen configuration with rates"
+    # and the evidence it returned actually reached the gate rather than being discarded
+    assert "adaptive_band_passes_lfp_response" in \
+        {c.name for c in rep.gate.conditions}
+
+
+def test_a_plain_evidence_object_still_works_unchanged():
+    """Backward compatibility: the non-callable path is the one every existing caller uses."""
+    from StimOptimizer import pipeline
+    lfp = _responding_lfp()
+    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0, lfp=lfp)
+    names = {c.name for c in rep.gate.conditions}
+    assert "adaptive_band_passes_lfp_response" in names
+
+
+def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks():
+    """A factory that cannot honestly pick a cell returns None, and that must BLOCK rather than
+    pass. This is the path taken when the two hemispheres freeze different rates: there is no single
+    rate to pin the evidence to, and attributing one hemisphere's measurement to the other's
+    configuration would be worse than refusing.
+    """
+    from StimOptimizer import pipeline
+    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
+                                 lfp=lambda frozen: None)
+    assert rep.gate.passed is False
+    assert rep.stage2.started is False
+    # the response condition must be NOT ASSESSED, not passed
+    cond = {c.name: c for c in rep.gate.conditions}["adaptive_band_passes_lfp_response"]
+    assert cond.passed is not True, cond.verdict

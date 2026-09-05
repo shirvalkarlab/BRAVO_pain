@@ -75,6 +75,58 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — the staged path now runs on live data, and pinning the rate changed its answer
+
+`pipeline.run_two_stage_live(participant, ...)` closes the "STILL NOT BUILT" marker. Every piece had
+been present and type-compatible — `live_evidence` builds and screens the cells,
+`LiveEvidence.selected` is documented as "the one cell handed to the gate" and IS constructed as a
+`stage_gate.LfpEvidence`, and `run_two_stage` accepts exactly that as `lfp=`. What was missing was
+any caller joining them: **the only callers of `run_two_stage`/`run_stage2` in the whole repository
+were tests**, and the endpoint layer never invoked the staged path. The device's sequencing
+constraint was encoded, tested, and unreachable from the running system.
+
+**THE FIRST LIVE RUN EXPOSED A DEFECT IN MY OWN WIRING, and it was the unsafe direction.** Selecting
+the evidence before Stage 1 ran, the screen returned its best cell — `ONE_THREE_LEFT / Left /
+165 Hz` — while Stage 1 had frozen **40 Hz on both hemispheres**. The gate's
+`adaptive_band_passes_lfp_response` condition then read **True**: it credited a 165 Hz LFP response
+to a 40 Hz configuration. Rate freezes in the device the moment BrainSense is configured, so a
+response measured at another rate says nothing about what Stage 2 will run.
+
+**Fixed structurally rather than by remembering.** `run_two_stage` now accepts `lfp` as a CALLABLE,
+called with the frozen configuration, so the evidence cannot be chosen before the rate is frozen.
+`run_two_stage_live` passes a factory that pins the selection to the frozen rate, and REFUSES when
+the two hemispheres freeze different rates rather than attributing one hemisphere's measurement to
+the other's configuration.
+
+**With the pinning, the honest answer at 40 Hz is that there is no evidence at all:** 0 cells
+screened, 12 unbuildable, `refusal_class: no_cell_buildable`, and the response condition reads
+**None / NOT ASSESSED** with "35 candidate bands lie inside the adaptive range, but NO LFP EVIDENCE
+was supplied". 40 Hz was never delivered with sensing configured.
+
+**And the staged architecture surfaced its intended conflict on live data for the first time.** Two
+gate conditions fail independently of the LFP question: the frozen rate is 40 Hz against the
+**55 Hz adaptive minimum**, and `openloop_choice_resolved` is False. So Stage 1's own open-loop
+optimum is BELOW the rate floor closed loop requires — the open-loop optimum and the closed-loop
+requirement are in direct conflict, which is exactly what the two-stage separation exists to make
+visible.
+
+The manifest now carries `lfp_evidence` with `pinned_rate_hz`, `frozen_rates_hz` and a
+`refusal_class` of `evidence_selected` / `no_cell_deployable` / `no_cell_buildable` /
+`frozen_rates_disagree` — because a gate refusal reads identically whether the data was absent or
+the response was measured and negative, and nothing else in the payload distinguishes them.
+
+Three tests: the factory receives the frozen configuration, a plain evidence object still works, and
+a factory returning None BLOCKS rather than passing.
+
+**Architecture question left for the PI, not decided here:** `ClosedLoopDeployment` has its own live
+path (`report_for_participant`, `/api/queryClosedLoopDeployment`) and the staged path is now also
+reachable. Which is canonical, and whether the staged path should get an endpoint, is a design call
+rather than a wiring one.
+
+Suites: StimOptimizer + ClosedLoopDeployment **623 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — pre-registration filed, and the separation-floor question is settled
 
 **1. THE FIRST PRE-REGISTRATION IN THIS PROJECT.**
@@ -1999,8 +2051,13 @@ reporting a real negative.
 
 23 tests. StimOptimizer suite 312 -> **335 passed / 41 skipped**, no regressions.
 
-STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on live data, and the two closed-loop paths
-remain unconnected — see the module-interaction note below.
+**~~STILL NOT BUILT~~ — BUILT 2026-09-05.** The original entry read: "Stage 2 does not yet CALL
+lfp_evidence on live data, and the two closed-loop paths remain unconnected." Now
+`pipeline.run_two_stage_live(participant, ...)`. Checking the gap showed it was narrower and worse
+than that sentence: every piece was present and type-compatible, and the ONLY callers of
+`run_two_stage` or `run_stage2` anywhere in the repo were TESTS — the endpoint layer never invoked
+the staged path at all, so the device's sequencing constraint was encoded, tested and unreachable.
+See the 2026-09-05 entry at the top for what running it revealed.
 
 ### 2026-09-02 — the two closed-loop paths do not interfere, and do not interact
 

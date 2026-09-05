@@ -229,3 +229,23 @@ misleading; within-visit arms reach 2.0-2.5 mA with separations 0.045-2.999.
 At 110 Hz the two-arm CAPTURE test cannot run at all (36/36 rows non-estimable, no bin reaches
 MIN_ROWS_PER_ARM=8). The cluster test can, because it uses every step. Hence the pre-registration
 uses the cluster test as primary.
+
+## The staged path is now reachable on live data (and my first wiring was unsafe)
+
+`pipeline.run_two_stage_live(participant, ...)`. Before this, the ONLY callers of run_two_stage /
+run_stage2 in the repo were tests.
+
+MY DEFECT, caught on the first live run: selecting evidence before Stage 1 gave the screen's best
+cell (ONE_THREE_LEFT/Left/165 Hz) while Stage 1 froze 40 Hz, and the gate's response condition read
+True -- crediting a 165 Hz measurement to a 40 Hz configuration. Fixed by making `lfp` acceptable as
+a CALLABLE invoked with the frozen config, so evidence cannot be chosen before the rate is frozen.
+
+Pinned to 40 Hz the honest answer is: 0 cells screened, 12 unbuildable, response NOT ASSESSED. 40 Hz
+was never delivered with sensing.
+
+The architecture surfaced its intended conflict for the first time on live data: Stage 1's optimum
+is 40 Hz, BELOW the 55 Hz adaptive minimum, so the open-loop optimum and the closed-loop rate floor
+are in direct conflict.
+
+OPEN FOR THE PI: ClosedLoopDeployment has its own live path and the staged path is now reachable
+too. Which is canonical, and whether the staged path gets an endpoint, is a design decision.
