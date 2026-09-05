@@ -264,3 +264,144 @@ MIN_VISITS_FOR_CLUSTER_ROBUST = 8
 #: described above used 4 and should not have; it is recorded here so the next run does not repeat
 #: it. Cells whose interval is narrower than this are degenerate rather than precise:
 DEGENERATE_CI_WIDTH_LOG10 = 0.005
+
+
+# =================================================================================================
+# THE WITHIN-VISIT AMPLITUDE-RESPONSE SCREEN
+# =================================================================================================
+# Promoted out of a scratch script on 2026-09-05, because it is the best-identified design in the
+# project and it existed only as a bridge file that the workspace sweep would have removed.
+#
+# WHY IT IS A DIFFERENT DESIGN RATHER THAN A RE-RUN. The chronic screen reads exposure epochs whose
+# amplitude is entangled with calendar time, so era blocking is the only defence against the
+# confound, and on RCS08 that defence fails in both directions: the full-record window fails on
+# capture DIRECTION in all 18 bands (the arms straddle two programming regimes, so power rises
+# across them) and the five-era window fails on capture SEPARATION in 14 of 18 (the amplitude range
+# collapses to 1.0 mA). Inside one clinic visit the rate, pulse width and contacts are fixed and the
+# whole ladder happens within hours, so there is no time confound to adjust for -- and the measured
+# within-visit amplitude span reaches 3.5 mA.
+#
+# Measured on RCS08 at 55 Hz: 229 steps with a settled window over 19 visits, of which 120 carried
+# streaming tiles, giving arms at 1.0 and 3.5 mA and median separation 0.53 to 0.89 per cell. So
+# separation stops being the binding constraint, which is what the design was for.
+
+#: Amplitude bin width for forming capture arms, in mA.
+#:
+#: A JUDGEMENT, and it exists because the programmer steps finely while a capture arm needs rows.
+#: On RCS08 a single visit carried 29 distinct amplitude levels across 36 steps, so grouping on the
+#: raw level leaves roughly one step per level and no arm reaches MIN_ROWS_PER_ARM. Binning to
+#: 0.5 mA is the coarsest grouping that still separates clinically distinct settings, and it is
+#: declared rather than buried because it changes which steps are contrasted.
+AMP_ARM_BIN_MA = 0.5
+
+#: Minimum settled tiles a step must contribute before its median is used.
+#:
+#: Two is the arithmetic minimum for a median to mean anything. It is deliberately low: on RCS08 the
+#: median step yields only about five settled tiles (roughly fifteen seconds after the ramp
+#: exclusion), so a stricter floor discards most of the record. The thinness is a real limitation of
+#: the present data and is reported per step as ``n_tiles`` rather than hidden.
+MIN_SETTLED_TILES = 2
+
+
+def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
+                         ramp_s=RAMP_WARNING_S, min_tiles=MIN_SETTLED_TILES):
+    """One power vector per step: the median across that step's SETTLED tiles.
+
+    THE UNIT IS THE STEP, NOT THE TILE, and this is the load-bearing choice in the whole screen.
+    A device capture is a short recording summarised to one number, so the step median is its
+    analogue, and a median rather than a mean because a capture window can contain a transient.
+
+    WHAT THE CHOICE ACTUALLY PROTECTS, corrected 2026-09-05 after a test falsified my first
+    explanation. I had claimed that tile-level scoring inflates the standardised SEPARATION,
+    because the within-arm variance becomes a within-step variance. It does not: measured on a
+    construction with a large between-step spread and a small within-step one, separation came out
+    2.54 at step level and 2.64 at tile level, a ratio of 1.04, and the slope was identical to four
+    decimals at -0.2072. The reason is that a Cohen-style d divides by the pooled within-ARM
+    spread, and an arm contains many different steps whichever unit is used, so between-step
+    variation dominates the denominator either way.
+
+    What tiles inflate is the INFERENCE. On the same construction the slope p-value went from
+    4.7e-54 at step level to 1.7e-63 at tile level — ten orders of magnitude — on an n inflated
+    twentyfold from 24 to 480, with the same four visits as clusters. Cluster-robust standard
+    errors do not rescue it, because the cluster count is unchanged while the rows inside each
+    cluster multiply. So the step median is what keeps the p-value honest, and the separation
+    figure would have been trustworthy under either unit.
+
+    ``tile_t`` must be sorted ascending. Returns ``(medians, n_tiles, kept)`` where ``medians`` is
+    (n_kept, n_centres), ``n_tiles`` the settled count per kept step, and ``kept`` the indices of
+    the steps that contributed.
+    """
+    t0 = np.asarray(step_t0, dtype=float)
+    win = np.asarray(step_window_s, dtype=float)
+    tt = np.asarray(tile_t, dtype=float)
+    tp = np.asarray(tile_power, dtype=float)
+    if t0.shape != win.shape:
+        raise ValueError(f"step_t0 {t0.shape} and step_window_s {win.shape} must match")
+    if tp.ndim != 2 or tp.shape[0] != tt.size:
+        raise ValueError(f"tile_power must be (n_tiles, n_centres) aligned to tile_t "
+                         f"({tt.size}); got {tp.shape}")
+    if tt.size and np.any(np.diff(tt) < 0):
+        raise ValueError("tile_t must be sorted ascending")
+
+    meds, counts, kept = [], [], []
+    for i, (a, w) in enumerate(zip(t0, win)):
+        if not np.isfinite(a) or not np.isfinite(w) or w <= ramp_s:
+            continue
+        i0 = int(np.searchsorted(tt, a + ramp_s))
+        i1 = int(np.searchsorted(tt, a + w))
+        if i1 - i0 < int(min_tiles):
+            continue
+        meds.append(np.nanmedian(tp[i0:i1, :], axis=0))
+        counts.append(i1 - i0)
+        kept.append(i)
+    if not meds:
+        return (np.empty((0, tp.shape[1] if tp.ndim == 2 else 0)),
+                np.empty(0, dtype=int), np.empty(0, dtype=int))
+    return np.vstack(meds), np.asarray(counts, dtype=int), np.asarray(kept, dtype=int)
+
+
+def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
+    """Amplitudes rounded to the declared arm bin. See AMP_ARM_BIN_MA for why this is needed."""
+    a = np.asarray(amp_mA, dtype=float)
+    if not np.isfinite(bin_mA) or bin_mA <= 0:
+        raise ValueError(f"bin_mA must be positive and finite, got {bin_mA}")
+    return np.round(a / float(bin_mA)) * float(bin_mA)
+
+
+def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,
+                             rate_hz=None, bin_mA=AMP_ARM_BIN_MA):
+    """Score every band's amplitude response on within-visit steps.
+
+    ``power_by_center`` maps a band centre in Hz to one power value per step, ``visits`` supplies
+    the era AND the cluster — the visit is the repeat unit here, because amplitude varies WITHIN a
+    visit, which is precisely what the chronic epochs could not offer and what makes era blocking
+    informative rather than absorptive.
+
+    ``rate_hz``, when given, flags each band that contains a folded stimulation harmonic. The flag
+    is REPORTED AND NOT ACTED ON. Co-location with a landing is a coincidence until tested: on
+    RCS08 the two channels carrying responses at the 25 Hz landing move in OPPOSITE directions with
+    p below 1e-3, which an aliased harmonic cannot produce, since the landing is a property of the
+    stimulation and the sampling rate and is therefore identical on every sensing channel.
+    """
+    amp = amplitude_arm_bins(amp_mA, bin_mA)
+    vis = np.asarray(visits)
+    landings = ([float(d["lands_at_hz"]) for d in harmonic_landings_hz(float(rate_hz), 5.0, 32.5)]
+                if rate_hz is not None else [])
+    rows = []
+    for c in sorted(power_by_center):
+        p = np.asarray(power_by_center[c], dtype=float)
+        if p.shape != amp.shape:
+            raise ValueError(f"band {c}: power {p.shape} does not match amplitude {amp.shape}")
+        r = response_fn(p, amp, era=vis, cluster=vis)
+        rows.append({
+            "center_hz": float(c),
+            "on_harmonic_landing": bool([x for x in landings if abs(x - float(c)) <= BAND_HALF_HZ]),
+            "responds": r.responds, "direction_ok": r.direction_ok,
+            "separation_d": r.separation_d,
+            "slope_log_per_mA": r.slope_log_per_mA, "slope_p": r.slope_p,
+            "slope_unadjusted": r.slope_unadjusted,
+            "amp_low_mA": r.amp_low_mA, "amp_high_mA": r.amp_high_mA,
+            "n_low": r.n_low, "n_high": r.n_high, "n_eras": r.n_eras,
+            "n_steps": int(amp.size),
+        })
+    return rows

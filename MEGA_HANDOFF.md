@@ -75,6 +75,60 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 (later still) — the WITHIN-VISIT amplitude screen, promoted out of a scratch file
+
+The best-identified design in the project existed only as a bridge script. Now in
+`ClosedLoopDeployment/clinic_steps.py` as `step_settled_medians`, `amplitude_arm_bins` and
+`within_visit_band_scores`, with 6 tests.
+
+**Why it is a different design, not a re-run.** The chronic screen reads exposure epochs whose
+amplitude is entangled with calendar time, and on RCS08 that fails in BOTH directions: the
+full-record window fails on capture DIRECTION in all 18 bands (arms straddle two programming
+regimes so power rises across them) and the five-era window fails on capture SEPARATION in 14 of 18
+(range collapses to 1.0 mA). Inside one clinic visit rate, pulse width and contacts are fixed and
+the ladder happens within hours, so there is no time confound to adjust for — and the within-visit
+span reaches **3.5 mA**.
+
+**Measured at 55 Hz:** 229 steps with a settled window over 19 visits, 120 carrying streaming tiles,
+221 step-level rows, 4 cells reaching minimum arm size. Arms at **1.0 and 3.5 mA**; median
+separation 0.53–0.89 per cell with 11 of 18 bands clearing 0.5 on `ONE_THREE_LEFT`. **Separation
+stops being the binding constraint**, which is what the design was for. Only the time-domain family
+survived; device-PSD cells fell below minimum arm size.
+
+**Seven bands pass both the response test and a significant negative slope**, all `ONE_THREE_LEFT`,
+both hemispheres, 24.5–27.5 Hz, slopes −0.188 to −0.215, p 0.0005 to 0.047, separations 1.11–1.47.
+Adjusted and unadjusted slopes agree closely, so this is NOT a sign flip from conditioning — the
+opposite of the chronic result.
+
+**HARMONIC PROXIMITY IS NOT CONTAMINATION.** PI: "the subharmonics should not be interpreted as
+contamination unless there is clear and rigorous evidence." All seven bands contain the 25 Hz
+landing of the 5th harmonic (275 Hz folded about 250 Hz sampling). My rate-swap test could NOT
+answer it — `ONE_THREE_LEFT` has no usable 110 Hz data and every 110 Hz slope returns NaN with zero
+eras, so a "0 of 6 significant" reading there is missing data, not a null. But a within-rate
+contrast does answer it: at 24.5–27.5 Hz, **`ONE_THREE_LEFT` falls (−0.19 to −0.21) while
+`ZERO_THREE_RIGHT` rises (+0.18 to +0.57), p = 0.0000, on the identical band, rate and visits.** An
+aliased harmonic is a property of stimulation and sampling and is IDENTICAL on every sensing
+channel, so it cannot produce opposite signs. The flag is reported, never acted on, and a test pins
+that.
+
+**Separately: 27.5 Hz is exactly 55/2**, a true subharmonic, where a response would be nonlinear
+entrainment — real physiology reporting what the stimulator is doing rather than what pain is doing.
+Against pure entrainment: the negative slope is not tuned to 27.5 Hz but runs across 24.5–26.5 Hz at
+similar magnitude. Unresolved; needs `ONE_THREE_LEFT` streamed at a rate where neither 25 nor
+27.5 Hz is special.
+
+**A correction to my own reasoning, caught by a test.** I justified the step-median unit by claiming
+tile-level scoring inflates the standardised SEPARATION. It does not — measured 2.54 step vs 2.64
+tile, ratio 1.04, slope identical to four decimals — because a Cohen-style d divides by the pooled
+within-ARM spread and an arm contains many steps either way. What tiles inflate is the INFERENCE:
+p from 4.7e-54 to 1.7e-63, ten orders of magnitude, on n inflated 20x from 24 to 480 with the
+cluster count unchanged. The step median keeps the p-value honest; the separation was safe either
+way. Docstring and test both now state the measured behaviour.
+
+Suites: ClosedLoopDeployment + StimOptimizer **594 passed**, 41 skipped.
+
+
+
 ### 2026-09-05 (later still) — one definition of the capture-separation floor, at the looser value
 
 **PI decision:** "use the looser criterion for both and make it explicit on the module web page."

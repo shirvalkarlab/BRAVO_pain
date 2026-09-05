@@ -141,3 +141,20 @@ five-era True in 15, the three exceptions 25.5/26.5/27.5 Hz. Full-record separat
 five-era 0.41-0.93, so the windows fail for opposite reasons and neither yields a deployable cell.
 
 Open: is 0.5 right for a 1.0 mA capture contrast? The floor predates the narrowed window.
+
+## The within-visit screen is now module code
+
+`clinic_steps.step_settled_medians` / `amplitude_arm_bins` / `within_visit_band_scores`, 6 tests.
+Unit is the STEP (median of settled tiles), arms binned at 0.5 mA, era and cluster are the visit.
+
+55 Hz result: arms 1.0/3.5 mA, separation 0.53-0.89 median, 7 bands on ONE_THREE_LEFT (24.5-27.5 Hz,
+both hemispheres) pass response AND a significant negative slope. Not deployable — responds reaches
+5-6 of 18 against the 50% majority rule.
+
+Harmonic flag is REPORTED, never acted on, per PI. The evidence against contamination is
+within-rate: ONE_THREE_LEFT falls and ZERO_THREE_RIGHT rises on the identical band/rate/visits, which
+an alias cannot do. The rate-swap test failed for want of 110 Hz data on ONE_THREE_LEFT, not for want
+of an effect.
+
+Open: 27.5 Hz = 55/2 is a true subharmonic; entrainment not excluded. Needs ONE_THREE_LEFT streamed
+at another rate.
