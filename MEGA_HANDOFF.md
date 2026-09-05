@@ -75,6 +75,90 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 — D19 is structural, not a band-selection problem; plotly was missing; three figure fixes
+
+**D19 SCREENED EXHAUSTIVELY AND IT CANNOT BE SATISFIED BY CHOOSING A DIFFERENT BAND.** All six
+sensing channels crossed with all eighteen band centres, 108 cells, artifact
+`RCS08_D19_polarity_screen.csv`. D19 requires band power to FALL as amplitude rises and RISE as
+pain rises.
+
+- Amplitude -> power slope: resolved (95% CI excludes zero) in **36 of 108** cells and **POSITIVE
+  in all 36**. Zero cells anywhere have a resolved negative slope, and only 3 of the 72 unresolved
+  cells even carry a negative point estimate (all `ZERO_THREE_LEFT`, minimum -0.00083).
+- Power -> pain slope: resolved in **22 of 108** and **NEGATIVE in all 22**. Zero positive.
+- Corrected outcome: **0 PASS, 18 FAIL, 90 not determinable.** The 18 FAIL are all
+  `ONE_THREE_LEFT`, the only channel where both signs are established.
+- Current candidate `ONE_THREE_LEFT` @ 24.5 Hz: amplitude slope **+0.0578** (CI 0.0393 to 0.0763,
+  64 clusters), pain slope **-1.492** (CI -2.401 to -0.584).
+
+Both halves point the wrong way, consistently, everywhere the direction can be established.
+
+**Why it is structural.** The measured polarity — amplitude up gives power up, and higher power
+goes with LOWER pain — is a physiologically COHERENT triangle (more stimulation, more power, less
+pain). It is incompatible with the device only because the therapy-driving control polarity is
+fixed. From `percept_adaptive.MODES`, carrying the manufacturer's own wording: `dual` and `single`
+both expect "when stimulation is High the LFP must be suppressed relative to Low (e.g. alpha-beta)"
+and both have `can_drive_therapy=True`; `single_inverse` expects "when stimulation is Low the LFP
+must be suppressed relative to High (e.g. gamma)" and has `can_drive_therapy=False`. **RCS08's
+direction matches only `single_inverse` — the one mode that is Sensing Only and cannot actuate.**
+Under `dual` or `single` the loop would reduce amplitude exactly when the patient is in pain, since
+low power means high pain and low power means ramp down. That is why no choice of thresholds
+repairs it and why the gate stays blocking.
+
+Caution for whoever screens this again: `e1_sign`/`e2_sign` come back as FLOAT columns, so
+`value is None` is False for `NaN` and an unresolved cell gets counted as a definite FAIL. Use
+`pd.isna`. My first pass reported "FAIL 108" for exactly this reason.
+
+**Live rule status now: verdict `blocked`, 51 checked, 1 failure (D19), 4 unknowns, 26 advisories,
+1 deferred.** The four unknowns and precisely what each needs:
+
+| Rule | Needs | Who can supply it |
+|---|---|---|
+| D29 | aligned-segment / calibration record | the implant or programming record |
+| D30 | `frequency_search_closed` (currently `None`) | PI decision, not a measurement |
+| D31 | BrainSense min rate, max rate, max pulse width (all `None`) | read off the A610; unpublished in either document |
+| D32 | `has_pocket_adaptor` only — multiple rates, interleaving, cycling and patient limits all now resolve False | hardware fact |
+
+**`plotly` was missing from the server image (`bba7e5a`), and it cost the Stim Optimizer page every
+figure it had.** See the figure-conventions skill `bravo-stimoptimizer-figures` for the full trap.
+Short version: `_plotly_figures` imports plotly INSIDE the function, the caller caught the
+ImportError and set an empty figure dict, and no test caught it because the builders are exercised
+on the analysis host where plotly IS installed. The five figures and the React iteration over them
+had existed all along. Pinned `plotly==7.0.0` in `BRAVO/requirements.txt`; a container install needs
+`--break-system-packages` and is ephemeral. After the fix, 20 of 20 figures build (five for each of
+four arms), zero `figure_errors`.
+
+**The figure headline had been applying the criterion the honesty gate was corrected away from
+(`142d382`).** `plots._incumbent_verdict` compared the gain against `opt_posterior_sd` — the
+CANDIDATE's posterior SD at the grid minimum — ignoring the incumbent's own, which is exactly the
+form the gate abandoned on 2026-08-30. For five days a figure could print the strong claim on an arm
+the module reported as unresolved. The rule now lives once in `routines/resolution.py`, a leaf module
+(it cannot live in `plots.py` or `stage1_openloop.py` — `stage1_openloop` imports `routines.plots`).
+All four call sites read `sd_of_difference` and `is_resolved` from it; `RESOLUTION_K` has one
+definition re-exported under its old name. Live check: all four arms report `optimum_resolved` False
+with gain below sd_of_difference (0.351 vs 0.978, 0.122 vs 1.432, 0.311 vs 1.473, 1.099 vs 1.529).
+
+Gotcha recorded because it cost a round: `optimum_resolved` is NOT inside the `comparison` block.
+`_arm_comparison` emits `gain`, `k`, `margin`, `note`, `sd_of_difference`, `sign_convention`; the
+verdict sits one level up on the arm.
+
+Also: per-figure failures now surface as `figure_errors` keyed by figure name (a raising builder is
+distinguished from an absent one, which means the service and `plots.py` have drifted apart), and
+`FigurePanel` renders the reason instead of a blank space. The posterior surface is now primary at
+620px above a divider, with the other four under a "WHERE TO LOOK NEXT" heading. No separate safety
+panel was added — the safe set is a contour on the posterior surface and the ceilings are in the
+tables.
+
+**Result cache wired across the three analysis views (`8e4ee18`).** See the commit for the three
+defects in my own contract files, all found by measurement: `recompute()` issued TWO concurrent
+fetches (the guard tested the `loading` STATE, which a second synchronous pass cannot see),
+`MAX_ENTRIES` was 6 against nine slots for one participant, and the hook stringified a failed
+request and discarded the status the Biomarkers view needs. The sign-off card now carries staleness
+at its head and in its export, because a printed sheet outlives the amber Recompute bar.
+
+Suites: StimOptimizer **375 passed / 41 skipped**; frontend **5 suites / 50 tests**.
+
+
 ### 2026-09-05 (result cache) — the three views wired onto one cache, and two defects in the contract
 
 The PI asked that results and plots persist across switching between the Biomarkers, Stim Parameter
