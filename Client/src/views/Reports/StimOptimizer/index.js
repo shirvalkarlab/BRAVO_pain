@@ -211,17 +211,36 @@ const RESOLUTION_CHIP = {
   undeterminable: { label: "not determinable", color: "default", variant: "outlined" },
 };
 
+/**
+ * The five figures, with the one that answers the page's question marked as primary.
+ *
+ * WHY ONE IS LARGER THAN THE OTHERS. Five figures at identical size read as five equally important
+ * results, and they are not. The page exists to ask a single question — is the predicted optimum
+ * separated from the setting currently in force? — and only the posterior surface answers it. The
+ * other four say where to look NEXT, which is a different and secondary question: useful for
+ * planning the next visit, not for deciding what to program. Rendering them all the same size left
+ * a reader to work out that ranking for themselves, and the ordering alone did not convey it.
+ *
+ * The safe set is not a sixth figure. It is drawn as a contour ON the posterior surface, and the
+ * numeric safety ceilings live in the tables above, so there is no separate safety panel to
+ * separate out.
+ */
 const FIGURES = [
   ["posterior_surface", "Posterior objective surface with the safe set",
-   "Predicted pain objective across the frequency x amplitude grid. Lower is better. Tested cells are overlaid; the dashed contour is the safe-set boundary."],
+   "Predicted pain objective across the frequency x amplitude grid. Lower is better. Tested cells are overlaid; the dashed contour is the safe-set boundary.",
+   "primary"],
   ["acquisition", "Where the search explores versus exploits",
-   "The acquisition surface and its argmax, with the exploration share of each selection. A high exploration share means the surrogate cannot yet separate cells by predicted benefit."],
+   "The acquisition surface and its argmax, with the exploration share of each selection. A high exploration share means the surrogate cannot yet separate cells by predicted benefit.",
+   "secondary"],
   ["trajectory", "Search trajectory across simulated batches",
-   "Parameters sampled, the safety value at each sample, and the running best estimate, over forward-simulated batches."],
+   "Parameters sampled, the safety value at each sample, and the running best estimate, over forward-simulated batches.",
+   "secondary"],
   ["dual_model", "Composite objective against the preference model",
-   "The scalar objective and the illustrative preference model on shared axes, with both optima marked. Disagreement between them is informative, not an error."],
+   "The scalar objective and the illustrative preference model on shared axes, with both optima marked. Disagreement between them is informative, not an error.",
+   "secondary"],
   ["coverage", "Coverage: what the grid has never tested",
-   "Posterior standard deviation across the grid, with the optimistic bound in never-tested cells. This is the visual form of the unexplored-region audit."],
+   "Posterior standard deviation across the grid, with the optimistic bound in never-tested cells. This is the visual form of the unexplored-region audit.",
+   "secondary"],
 ];
 
 const fmt = (v, d = 2) =>
@@ -238,8 +257,9 @@ const fmt = (v, d = 2) =>
  * nothing. The purge now happens only when the panel really goes away, which is where it is needed:
  * to release the graph's event handlers and any WebGL context it holds.
  */
-function FigurePanel({ title, blurb, figure }) {
+function FigurePanel({ title, blurb, figure, prominence, error }) {
   const ref = useRef(null);
+  const primary = prominence === "primary";
   useEffect(() => {
     const gd = ref.current;
     if (!gd || !figure) return;
@@ -248,12 +268,42 @@ function FigurePanel({ title, blurb, figure }) {
   // The node is read at cleanup time rather than captured at mount, because the container is not in
   // the page until a figure exists.
   useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
-  if (!figure) return null;
+
+  // A FIGURE THAT FAILED SAYS SO, rather than leaving a gap. This used to `return null` whenever
+  // the figure was absent, which made a per-figure failure indistinguishable from a figure that was
+  // never requested — and the backend was equally quiet about it, catching each builder's exception
+  // and logging at debug level so the payload simply lacked the key. Between the two, a broken
+  // figure produced an empty space on the page and no explanation anywhere. The server now returns
+  // `figure_errors` keyed by the same name, and this renders it.
+  if (!figure) {
+    if (!error) return null;
+    return (
+      <MDBox mb={3} p={1.5} sx={{
+        borderRadius: "6px", border: "1px solid #e0c187", backgroundColor: "#fdf6e7",
+      }}>
+        <MDTypography variant="button" fontWeight="medium">{title}</MDTypography>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 10.5, color: "#8a6a1f" }}>
+          {`This figure could not be built, so it is absent rather than empty. `
+            + `${error.error_type || "Error"}: ${error.message || "no message supplied"}`}
+        </MDTypography>
+        <MDTypography variant="caption" display="block" sx={{ fontSize: 9.5, color: "#8a6a1f" }}>
+          {`Builder: ${error.builder || "unknown"}. The other figures on this page are unaffected.`}
+        </MDTypography>
+      </MDBox>
+    );
+  }
+
   return (
-    <MDBox mb={3}>
-      <MDTypography variant="button" fontWeight="medium">{title}</MDTypography>
+    <MDBox mb={primary ? 4 : 3}>
+      <MDTypography variant={primary ? "h6" : "button"} fontWeight="medium"
+        sx={primary ? { fontSize: 15 } : undefined}>
+        {title}
+      </MDTypography>
       <MDTypography variant="caption" color="text" component="div" sx={{ mb: 1 }}>{blurb}</MDTypography>
-      <MDBox ref={ref} sx={{ width: "100%", minHeight: 380 }} />
+      {/* The primary figure is given roughly two thirds more height. The question it answers is
+          read off the surface itself — whether the optimum and the incumbent are separated — and
+          that is exactly the judgement a cramped colour map makes hard. */}
+      <MDBox ref={ref} sx={{ width: "100%", minHeight: primary ? 620 : 380 }} />
     </MDBox>
   );
 }
@@ -728,9 +778,31 @@ export default function StimOptimizer() {
                   </MDTypography>
                   <Divider sx={{ my: 2 }} />
 
-                  {FIGURES.map(([key, title, blurb]) => (
-                    <FigurePanel key={key} title={title} blurb={blurb}
-                                 figure={(current.figures || {})[key]} />
+                  {/* The primary figure, alone and above the divider, because it is the one that
+                      answers the page's question. */}
+                  {FIGURES.filter(([, , , p]) => p === "primary").map(([key, title, blurb, prom]) => (
+                    <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
+                                 figure={(current.figures || {})[key]}
+                                 error={(current.figure_errors || {})[key]} />
+                  ))}
+
+                  <Divider sx={{ my: 2 }} />
+                  <MDTypography variant="caption" display="block"
+                    sx={{ fontSize: 10, fontWeight: "bold", letterSpacing: 0.4, color: "#888" }}>
+                    WHERE TO LOOK NEXT
+                  </MDTypography>
+                  <MDTypography variant="caption" display="block"
+                    sx={{ fontSize: 10.5, color: "#666", mb: 1.5 }}>
+                    These four describe how the search is behaving and what the grid has not yet
+                    tested. They inform which settings to try at the next visit; they are not
+                    statements about what to program now, which is the question the surface above
+                    answers.
+                  </MDTypography>
+
+                  {FIGURES.filter(([, , , p]) => p !== "primary").map(([key, title, blurb, prom]) => (
+                    <FigurePanel key={key} title={title} blurb={blurb} prominence={prom}
+                                 figure={(current.figures || {})[key]}
+                                 error={(current.figure_errors || {})[key]} />
                   ))}
 
                   {current.figures_error && (

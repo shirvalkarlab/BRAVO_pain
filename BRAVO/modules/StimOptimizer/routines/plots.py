@@ -876,15 +876,36 @@ def _incumbent_verdict(ctx) -> str:
     better" in that case is false; the defensible statement is that the difference is not
     resolved against the posterior SD. Only a non-negative minimum supports the stronger claim.
     """
+    from . import resolution as RES        # imported here: stage1_openloop imports this module
+
     m = ctx.meta
     mu_min = float(m["mu_min"])
     if mu_min >= 0.0:
         return "Nothing on the grid is predicted better than the incumbent"
-    sd_opt = float(m.get("opt_posterior_sd", float("nan")))
-    if np.isfinite(sd_opt) and abs(mu_min) < sd_opt:
+
+    # THE PROPAGATED SD OF THE DIFFERENCE, not the candidate's SD alone. Corrected 2026-09-04.
+    #
+    # This compared `abs(mu_min)` against `opt_posterior_sd`, the candidate's posterior standard
+    # deviation at the grid minimum, and ignored the incumbent's own. That is exactly the criterion
+    # the honesty gate was corrected away from on 2026-08-30, so the headline could print the
+    # strong claim on an arm the module itself reported as unresolved — the figure contradicting the
+    # verdict beside it. On arm left_leg__Right (gain 1.117, candidate SD 0.989, incumbent SD
+    # 0.923) the old form read "predicted 1.12 NRS points better" with no caveat, while the
+    # propagated SD of 1.353 leaves the difference unresolved.
+    #
+    # `routines.resolution` is now the single definition, shared with the gate in
+    # pipeline.ArmResult and with the `comparison` block the API serialises.
+    gain = abs(mu_min)
+    sd_diff = RES.sd_of_difference(m.get("opt_posterior_sd"), m.get("incumbent_sd"))
+    resolved = RES.is_resolved(gain, m.get("opt_posterior_sd"), m.get("incumbent_sd"))
+    if resolved is None:
+        return ("Best cell is predicted better than the incumbent, but the difference could not be "
+                "formed: a posterior at one of the two cells is degenerate")
+    if resolved is False:
         return ("Best cell is predicted better than the incumbent but NOT resolved: "
-                f"gain {abs(mu_min):.2f} < posterior SD {sd_opt:.2f}")
-    return f"Best cell is predicted {abs(mu_min):.2f} NRS points better than the incumbent"
+                f"gain {gain:.2f} < SD of the difference {sd_diff:.2f}")
+    return (f"Best cell is predicted {gain:.2f} NRS points better than the incumbent, "
+            f"resolved against an SD of the difference of {sd_diff:.2f}")
 
 
 def mpl_fig1_posterior_surface(ctx: FigureContext):

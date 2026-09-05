@@ -206,9 +206,16 @@ def run_for_participant(request_data: dict) -> dict:
         }
         if backend == "plotly":
             try:
-                entry["figures"] = _plotly_figures(ctx)
+                _fig = _plotly_figures(ctx)
+                entry["figures"] = _fig["figures"]
+                # Per-figure failures, keyed by the same name the page uses to look the figure up,
+                # so a panel can render the reason in place of the figure it expected. Distinct
+                # from `figures_error`, which means the whole attempt failed and there is nothing
+                # at all to draw — most often because plotly is missing from the image.
+                entry["figure_errors"] = _fig["figure_errors"]
             except Exception as e:
                 entry["figures"] = {}
+                entry["figure_errors"] = {}
                 entry["figures_error"] = str(e)
         arms[label] = entry
 
@@ -306,17 +313,18 @@ def _arm_comparison(arm):
     """
     import math
 
-    from modules.StimOptimizer import stage1_openloop as _s1
+    from modules.StimOptimizer.routines import resolution as _RES
 
     m = getattr(arm, "meta", None) or {}
     try:
         gain = float(m.get("incumbent_mu")) - float(m.get("mu_star"))
-        sd_d = math.sqrt(float(m.get("sd_star")) ** 2 + float(m.get("incumbent_sd") or 0.0) ** 2)
-        if not math.isfinite(sd_d) or sd_d <= 0:
-            sd_d = None
     except (TypeError, ValueError):
-        gain, sd_d = None, None
-    k = float(getattr(_s1, "RESOLUTION_K", 1.0))
+        gain = None
+    # The same propagation the gate and the figure headline use, so the three cannot disagree.
+    sd_d = _RES.sd_of_difference(m.get("sd_star"), m.get("incumbent_sd"))
+    if not math.isfinite(sd_d) or sd_d <= 0:
+        sd_d = None
+    k = _RES.RESOLUTION_K
     return {
         "gain": _jsonable(gain),
         "sd_of_difference": _jsonable(sd_d),
@@ -430,21 +438,54 @@ def _blockers(rep, arms, observed_amp_range=None) -> list:
     return out
 
 
+#: The five figures the browser draws, in the order the page presents them. The order is not
+#: cosmetic and is documented in the figure-conventions skill: the posterior surface is the panel
+#: that answers the page's question — whether the predicted optimum is separated from the setting
+#: currently in force — and the four that follow are secondary to it.
+PLOTLY_FIGURES = (
+    ("posterior_surface", "fig1_posterior_surface"),
+    ("acquisition", "fig2_acquisition_decomposition"),
+    ("trajectory", "fig3_search_trajectory"),
+    ("dual_model", "fig4_dual_model"),
+    ("coverage", "fig5_coverage_map"),
+)
+
+
 def _plotly_figures(ctx) -> dict:
-    """Plotly figure JSON for the browser. Never renders images server-side (no kaleido)."""
+    """Plotly figure JSON for the browser. Never renders images server-side (no kaleido).
+
+    RETURNS BOTH the figures and a per-figure error map, because the previous shape could lose a
+    figure without saying so. This function used to catch each figure's exception and log it at
+    DEBUG level, so a single broken figure simply did not appear in the returned dict; the caller
+    sets `figures_error` only when the WHOLE call raises, and the page had nothing to render and
+    nothing to report. That is the same failure class as the missing plotly dependency, which cost
+    this page all five figures while looking like an interface that had never been wired for them.
+
+    A figure that fails now names itself, its exception type and its message, so the panel can say
+    which one is missing and why instead of rendering an empty box.
+    """
     import json as _json
+    import traceback as _tb
+
     import plotly.io as pio
     out = {}
-    for name, fn in (("posterior_surface", "fig1_posterior_surface"),
-                     ("acquisition", "fig2_acquisition_decomposition"),
-                     ("trajectory", "fig3_search_trajectory"),
-                     ("dual_model", "fig4_dual_model"),
-                     ("coverage", "fig5_coverage_map")):
+    errors = {}
+    for name, fn in PLOTLY_FIGURES:
         f = getattr(PLT, fn, None)
         if f is None:
+            # A builder that is not present at all is a different fault from one that raised: it
+            # means this service and plots.py have drifted apart, which a deployment can cause and
+            # which no amount of data will fix.
+            errors[name] = {"builder": fn, "error_type": "MissingBuilder",
+                            "message": (f"plots.{fn} does not exist in this build, so the figure "
+                                        f"could not be attempted. The service and plots.py have "
+                                        f"drifted apart.")}
             continue
         try:
             out[name] = _json.loads(pio.to_json(f(ctx)))
         except Exception as e:
-            _log.debug("StimOptimizer: figure %s failed (%s)", fn, e)
-    return out
+            errors[name] = {"builder": fn, "error_type": type(e).__name__, "message": str(e)}
+            # Kept at debug for the traceback, which is too long for a payload, while the summary
+            # above travels to the browser.
+            _log.debug("StimOptimizer: figure %s failed: %s", fn, _tb.format_exc())
+    return {"figures": out, "figure_errors": errors}

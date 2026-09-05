@@ -82,6 +82,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 import pandas as pd
 
+from .routines.resolution import RESOLUTION_K as _RES_K
 from .routines import acquisition as ACQ
 from .routines import objective as OBJ
 from .routines import plots as PLT
@@ -99,7 +100,9 @@ PW_STRATUM_MIN_EPOCHS = 8
 #: a gain must exceed one SD of its own difference. This is the same value
 #: ``pipeline.ArmResult.surface_can_resolve_its_optimum`` uses by default, kept identical so the two
 #: entry points cannot disagree about whether the same surface resolves its own optimum.
-RESOLUTION_K = 1.0
+#: Re-exported from routines.resolution, which is now the single definition, so that the
+#: existing importers of `stage1_openloop.RESOLUTION_K` keep working.
+RESOLUTION_K = _RES_K
 
 #: Amplitude ceiling the search may propose, in mA. PI-declared (2026-08-30) and identical to the
 #: top of ``routines/plots.AMP_GRID``; restated here as a named constant because Stage 2 and the

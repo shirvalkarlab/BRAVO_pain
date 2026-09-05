@@ -110,8 +110,13 @@ class ArmResult:
         """
         m = self.meta
         gain = float(m["incumbent_mu"]) - float(m["mu_star"])          # >0 means candidate is better
-        sd_inc = float(m.get("incumbent_sd") or 0.0)
-        sd_diff = float(np.sqrt(float(m["sd_star"]) ** 2 + sd_inc ** 2))
+        # THE SHARED RULE, from routines.resolution. The propagation and the three-state answer
+        # used to be spelled out here, in stage1_openloop, in bravo_service and — incorrectly — in
+        # the figure headline, which compared against the candidate's SD alone. Four copies of one
+        # criterion is how a figure comes to contradict the verdict printed beside it.
+        from .routines import resolution as _RES
+
+        sd_diff = _RES.sd_of_difference(m.get("sd_star"), m.get("incumbent_sd"))
         if not np.isfinite(sd_diff) or sd_diff <= 0:
             # NOT `False`. Returning False here reported "this arm's advantage is too small to
             # call" for an arm whose difference could not be FORMED at all, and those two answers
@@ -122,7 +127,7 @@ class ArmResult:
             # method `stage1_openloop.SliceResult.resolves_its_optimum` already returns
             # `bool | None` for exactly this reason; this one now matches it.
             return None
-        return bool(gain > k * sd_diff)
+        return _RES.is_resolved(gain, m.get("sd_star"), m.get("incumbent_sd"), k=k)
 
 
 @dataclass
