@@ -189,8 +189,11 @@ The test cannot name a band (establishes existence not location) so it never fee
 
 ## Threshold sweep: confirms 55 Hz, kills the 110 Hz lead, and the PSD arm is impossible
 
-- ZERO_THREE_RIGHT @55 Hz: p=0.0005 at |t|>=1.5/2.0/2.5/3.0, mass constant 68.56, both hemispheres.
-  Threshold-invariant, POSITIVE. Fourth independent confirmation.
+- ZERO_THREE_RIGHT @55 Hz: p=0.0005 at |t|>=1.5/2.0/2.5/3.0 on BOTH hemispheres, always positive.
+  Masses (corrected after review, read from the artifact): Left 68.5645 at all four thresholds;
+  Right 62.7849 at 1.5/2.0/2.5 and 59.8663 at 3.0. The invariance claim rests on the p and the sign,
+  which hold; my earlier "mass constant 68.56 on both hemispheres" was the Left value applied to
+  both and wrongly called constant.
 - ONE_THREE_LEFT: largest-cluster SIGN FLIPS with threshold (- - + Left, + + - - Right). A real
   effect does not change direction when a threshold moves. Retraction reconfirmed by mechanism.
 - ZERO_THREE_RIGHT @110 Hz Right: p=0.0470 at ONE of four thresholds, 0.15-0.17 at the others. Not a
@@ -199,3 +202,14 @@ The test cannot name a band (establishes existence not location) so it never fee
 - Device-PSD arm: 251-797 tiles per channel in clinic windows vs 43k-63k time-domain, ZERO
   informative cells. Every within-visit result is Welch-from-streaming. The clinic ladders are
   exactly when streaming runs, which is why the chronic coverage advantage reverses here.
+
+## Two corrections to the record (2026-09-05, after review)
+
+1. The 55 Hz cluster mass is NOT "constant at 68.56 on both hemispheres". 68.5645 is the Left value
+   and is constant across all four thresholds; the Right value is 62.7849 at |t|>=1.5/2.0/2.5 and
+   59.8663 at |t|>=3.0. The threshold-invariance claim stands on the p-value (0.0005 everywhere) and
+   the sign (positive everywhere), both of which hold.
+2. The suite figure of 616 was never measured. Run now: **610 passed, 41 skipped, 651 collected.**
+   Baseline before this work was 607 and 3 tests were added, so 610 is also what the arithmetic
+   gives. Commit 3feb220's message carries the wrong figure and cannot be amended after pushing;
+   this entry is the correction of record.

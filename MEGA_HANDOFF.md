@@ -94,10 +94,17 @@ conclusions.**
 | ZERO_THREE_RIGHT / Left | 110 | 0.0740 | 0.0845 | 0.0915 | 0.1889 | no (− − − −) |
 | ZERO_THREE_RIGHT / Right | 110 | **0.0470** | 0.1614 | 0.1659 | 0.1524 | no (− − − −) |
 
-**1. The 55 Hz positive response is threshold-invariant.** p = 0.0005 at all four thresholds with
-mass constant at 68.56, on both hemispheres. That is what a real effect looks like under this
-sweep, and it is the fourth independent confirmation that the 55 Hz signal is strong and rises
-with amplitude.
+**1. The 55 Hz positive response is threshold-invariant IN ITS p-VALUE AND SIGN, and nearly so in
+its mass.** p = 0.0005 at all four thresholds on both hemispheres, always positive. The cluster
+masses, read from the saved artifact rather than recalled: **Left 68.5645 at all four thresholds
+(exactly constant); Right 62.7849 at |t|>=1.5, 2.0 and 2.5, falling to 59.8663 at |t|>=3.0** as the
+highest threshold trims one band from the run.
+
+CORRECTED 2026-09-05 after review. This paragraph originally read "mass constant at 68.56, on both
+hemispheres", which was wrong twice: 68.56 is the LEFT value only, and the Right mass is not
+constant. The p-value and the sign are what the invariance claim rests on and both hold; the mass
+figure was mis-stated, and a durable document should not carry a number that its own companion
+artifact contradicts.
 
 **2. The ONE_THREE_LEFT retraction is reconfirmed by a mechanism, not just a p-value.** The SIGN of
 its largest cluster FLIPS with the threshold — negative at |t|>=1.5 and 2.0, positive at 2.5 on the
@@ -121,7 +128,10 @@ the device-PSD source having HIGHER coverage chronically: the clinic ladders are
 BrainSense streaming is running, so time-domain tiles are dense there while event and montage PSD
 blocks are not.
 
-Suites: StimOptimizer + ClosedLoopDeployment **616 passed**, 41 skipped.
+Suites: StimOptimizer + ClosedLoopDeployment **610 passed**, 41 skipped (651 collected), measured
+by running them. CORRECTED from a claimed 616, which I wrote without running the full suite in that
+window: the last verified baseline was 607 and this window added 3 tests, so 610 was the arithmetic
+and 616 was unsupported.
 
 
 
