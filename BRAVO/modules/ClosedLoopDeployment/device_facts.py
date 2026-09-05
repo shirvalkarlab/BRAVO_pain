@@ -115,6 +115,48 @@ def candidate_impedance_ohm(facts, hemisphere):
 #: the impedance (D16), because 548 recordings carry it.
 PI_STATED_FACTS = {
     "2e3c75c00d7f4f37b53a048d195f11da": {          # RCS08
+        #: D32. Stated 2026-09-05 in answer to a direct question: no pocket adaptor, each lead
+        #: connects to the Percept RC directly. A pocket adaptor is a short connector body used in
+        #: the generator pocket to mate a lead or extension whose connector does not fit the
+        #: generator, and A610 pp. 34-35 states that BrainSense cannot be configured in a
+        #: hemisphere containing one. This CANNOT be derived: no field in any of the 1,154 session
+        #: reports records accessory hardware, because the implant knows its leads and not what is
+        #: spliced in front of them. It is a fact from the operative record.
+        "has_pocket_adaptor": False,
+        #: D29. Stated 2026-09-05: "there are no vertically aligned segments that are stimulated
+        #: anymore. It's all ring stimulation." A610 p. 39 requires vertically aligned segments to
+        #: share amplitude and electrode polarity when BrainSense is configured, and that condition
+        #: only arises when aligned segments are DIRECTIONALLY STEERED, meaning driven at different
+        #: current fractions. Activating 1a, 1b and 1c together at equal fraction is ring
+        #: stimulation implemented on a segmented level, and the rule does not bear on it.
+        #:
+        #: MEASURED, and not exactly zero, which is why the number is written down rather than
+        #: the ruling. Across all 1,154 session reports 98.50% of segmented levels are ring-mode
+        #: (13,918 of 14,130): 13,550 have all three segments at one identical current fraction and
+        #: 368 have a single segment active. The remaining 212 levels (1.50%) DO carry unequal
+        #: fractions, for example -21 with -9. The PI's word was "anymore", so historical steering
+        #: is consistent with the statement, but this flag is set to False on a 98.50% measurement
+        #: plus a clinical ruling, not on a clean zero.
+        #:
+        #: It is nonetheless the right value for THIS rule, for a reason independent of the
+        #: percentage: those 212 are steered WITHIN a level -- two segments of the same level at
+        #: different fractions -- and p. 39 compares segments ACROSS levels at the same angular
+        #: position. On that comparison the amplitude mismatch count is ZERO across all 17,102
+        #: vertically aligned pairs, so the condition the rule guards against does not occur in
+        #: this record at all.
+        #:
+        #: Recorded because my own check misread this. It flagged 600 of those 17,102 pairs as
+        #: mismatched, but every one was a ring-to-ring bipolar montage (level 1 at +21/64 as the
+        #: anode ring, level 2 at -21/64 as the cathode ring) rather than a steered pair. The
+        #: magnitudes matched in every single pair; only the sign differed, which is what makes a
+        #: bipolar configuration bipolar. Seeing segment NAMES in the contact list is not evidence
+        #: that steering is in use.
+        "segmental_steering_in_use": False,
+        #: D31. Stated 2026-09-05: "we're gonna use 55 Hertz. That's it." This is the deployment
+        #: rate decision, not a device limit. It is recorded here so a candidate builder uses the
+        #: chosen rate rather than carrying forward the 165 Hz configuration that earlier screens
+        #: were built around.
+        "deployment_rate_hz": 55.0,
         #: D04. Stated 2026-09-04: a single implanted neurostimulator.
         "n_neurostimulators": 1,
         #: D13. Stated 2026-09-04: the user-configurable high-pass is set to 1 Hz, the lower of the
@@ -133,6 +175,73 @@ PI_STATED_FACTS = {
         "paused_amplitude_mA_by_hemisphere": {"Left": 2.5, "Right": 2.0},
     },
 }
+
+
+#: D31. WHAT THE DEVICE HAS ACTUALLY ACCEPTED, per hemisphere, as (rate_hz, pulse_width_us).
+#:
+#: Measured 2026-09-05 by walking all 1,154 session reports and collecting every group carrying a
+#: ``SensingChannel``. This exists because D31 was written to compare a candidate against the
+#: BrainSense parameter envelope, and that envelope is NOT PUBLISHED: the A610 guide states only
+#: that the maximum pulse width and maximum rate are lower and the minimum rate higher than for a
+#: group without BrainSense, without giving any of the three numbers, and a search of the entire
+#: JSON corpus found no field carrying them either. The only path in 1,154 files combining a
+#: rate/pulse-width/frequency name with a limit word is ``IndefiniteStreaming[].SampleRateInHz``,
+#: which is the sensing sample rate and not a stimulation limit.
+#:
+#: So the rule stops asking for a number it will never get and asks an answerable question instead:
+#: has this exact rate and pulse width been programmed in a BrainSense group on this hemisphere?
+#: A demonstrated configuration is stronger evidence than a limit comparison, because the device
+#: itself accepted it.
+#:
+#: Two asymmetries in this table matter and would be hidden by pooling the hemispheres. 55 Hz with
+#: 60 us appears 1,274 times on the LEFT and never on the right; 165 Hz with 60 us appears 152
+#: times on the LEFT and never on the right, where 165 Hz has only run at 80 and 160 us. The
+#: observed minimum rate in a sensing group is 55 Hz on both sides against 10 Hz in non-sensing
+#: groups, which is consistent with the guide's claim that the BrainSense minimum is higher, and
+#: bounds it at 55 Hz or below without revealing its value.
+BRAINSENSE_PROGRAMMED_PAIRS = {
+    "Left": {
+        (55.0, 60.0): 1274, (55.0, 100.0): 280, (55.0, 140.0): 4, (55.0, 180.0): 72,
+        (110.0, 60.0): 104, (110.0, 100.0): 692, (110.0, 180.0): 14,
+        (125.0, 60.0): 30,
+        (145.0, 60.0): 12, (145.0, 120.0): 92, (145.0, 140.0): 164, (145.0, 180.0): 14,
+        (165.0, 60.0): 152, (165.0, 140.0): 76,
+    },
+    "Right": {
+        (55.0, 150.0): 160, (55.0, 160.0): 3146, (55.0, 180.0): 36,
+        (110.0, 60.0): 304, (110.0, 100.0): 438, (110.0, 180.0): 258,
+        (125.0, 60.0): 80,
+        (145.0, 60.0): 88, (145.0, 140.0): 260, (145.0, 160.0): 80, (145.0, 180.0): 26,
+        (165.0, 80.0): 152, (165.0, 160.0): 322,
+    },
+}
+
+#: Provenance for the table above, carried onto the report so a reader can tell a measurement from
+#: an assertion and can see how stale it is.
+BRAINSENSE_PAIRS_PROVENANCE = (
+    "measured 2026-09-05 from all 1,154 RCS08 session reports; counts are group records carrying "
+    "a SensingChannel, not distinct programming events"
+)
+
+
+def brainsense_pair_programmed(rate_hz, pulse_width_us, hemisphere):
+    """Has this exact (rate, pulse width) been programmed in a BrainSense group on this side?
+
+    Returns True when the pair appears in the measured table, False when the hemisphere is known
+    and the pair is absent from it, and None when any input is missing or the hemisphere is not
+    one this device has. The False case is deliberately NOT a device prohibition: absence means the
+    combination has never been demonstrated here, which is a weaker statement than being
+    forbidden, and the caller must present it that way.
+    """
+    if hemisphere not in BRAINSENSE_PROGRAMMED_PAIRS:
+        return None
+    if rate_hz is None or pulse_width_us is None:
+        return None
+    try:
+        key = (float(rate_hz), float(pulse_width_us))
+    except (TypeError, ValueError):
+        return None
+    return key in BRAINSENSE_PROGRAMMED_PAIRS[hemisphere]
 
 
 def facts_for_participant(participant_uid, impedance_recordings=None, *,

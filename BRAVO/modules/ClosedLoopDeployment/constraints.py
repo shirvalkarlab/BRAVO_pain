@@ -309,7 +309,14 @@ PARTICIPANT_KEYS = {
     "programming_mode": "D03. The mode the device is actually programmed in, which is a different "
                         "fact from the clinical indication.",
     "n_neurostimulators": "D04. Currently unread for RCS08.",
-    "brainsense_min_rate_hz": "D31. Read off the A610 rate control after a BrainSense group exists.",
+    "segmental_steering_in_use": "D29. Whether any segmented level is driven with unequal current "
+                                 "fractions. False means every level is a ring, so no vertically "
+                                 "aligned pair can disagree and the p.39 requirement cannot be "
+                                 "violated. Measured 98.50% ring on RCS08.",
+    "brainsense_min_rate_hz": "D31. NOT PUBLISHED by Medtronic and absent from all 1,154 session "
+                              "reports, so this is usually None and the rule now resolves through "
+                              "the measured pair table instead. Kept as a fallback for the day "
+                              "someone reads it off the A610 rate control.",
     "brainsense_max_rate_hz": "D31.",
     "brainsense_max_pulse_width_us": "D31.",
     "lead_type": "D16. '1x4' or 'sensight'; decides the short-circuit limit.",
@@ -324,6 +331,8 @@ PARTICIPANT_KEYS = {
 # Field readers. Every predicate goes through these so that a missing, null or unparseable field
 # becomes None (not determinable) at exactly one place in the file.
 # ------------------------------------------------------------------------------------------------
+from . import device_facts as _DF
+
 def _num(d, key):
     """Return the field as a float, or None when it is absent or not a number.
 
@@ -819,24 +828,75 @@ def _p_d28(candidate, participant):
 def _p_d29(candidate, participant):
     """Vertically aligned segments must share amplitude and polarity when BrainSense is configured.
 
+    THE RULE ONLY BINDS WHEN ALIGNED SEGMENTS ARE STEERED, and establishing that took a correction
+    of my own reasoning, so it is written down here rather than left as a judgement call.
+
+    A610 p. 39 states: "Vertically aligned segments must have the same amplitude and electrode
+    polarity when BrainSense is configured." Vertically aligned means the same angular position on
+    adjacent levels -- 1a with 2a, 1b with 2b, 1c with 2c on a SenSight lead. The condition the
+    sentence guards against is those pairs being driven DIFFERENTLY, which requires directional
+    steering. Activating 1a, 1b and 1c together at one identical current fraction is RING
+    stimulation implemented on a segmented level, and the rule does not bear on it.
+
+    Measured on RCS08 across all 1,154 session reports: 98.50% of segmented levels are ring-mode
+    (13,918 of 14,130), and the 1.50% that are steered are steered WITHIN a level (two segments at
+    different fractions), which is not the cross-level comparison this rule makes. Across 17,102
+    vertically aligned pairs the amplitude mismatch count was ZERO; the only cross-level differences
+    were polarity signs in ring-to-ring bipolar montages, where level 1 is the anode ring at +21/64
+    and level 2 the cathode ring at -21/64. Equal magnitude, opposite sign, which is simply what
+    makes a bipolar configuration bipolar.
+
+    My first pass got this wrong in an instructive way: it saw segment NAMES in the contact list
+    and concluded steering was in use, then reported 600 records as violations. Seeing a segmented
+    contact is not evidence that the segment is being steered.
+
+    So when the record or the investigator establishes that segmental steering is not in use, this
+    rule is satisfied because its precondition is absent. That is deliberately expressed as a
+    satisfied rule rather than a skipped one, because a future participant WITH a steered
+    configuration must still be checked -- the closure is specific to ring stimulation, not to
+    this rule being uninteresting.
+
     The rest of D29 is a workflow hazard rather than a check: changing the electrode configuration
     resets amplitude to zero and clears the BrainSense configuration, and after the OptiStim step
     the captured thresholds survive while the amplitudes that produced them do not, which silently
     detaches a threshold from its calibration. That hazard is in the human text so that it appears
     on the report next to this check.
     """
-    return _flag(candidate, "vertically_aligned_segments_matched")
+    matched = _flag(candidate, "vertically_aligned_segments_matched")
+    if matched is not None:
+        return matched
+    # No aligned pair is steered, so no aligned pair can disagree.
+    steered = _flag(participant, "segmental_steering_in_use")
+    if steered is False:
+        return True
+    return None
 
 
 def _p_d30(candidate, participant):
-    """The open-loop frequency search must be closed before BrainSense is configured.
+    """The chosen rate must be acknowledged as committed for THIS deployment attempt.
 
-    Pulse width and rate cannot be adjusted once BrainSense has been set up for either hemisphere,
-    and re-enabling them requires deleting the group and reprogramming it without BrainSense or
-    changing the electrode configuration, which by D29 also clears the captured thresholds. So the
-    StimOptimizer's frequency search and the closed-loop configuration are sequential and not
-    concurrent, and this rule is where that ordering is enforced rather than assumed.
+    REWORDED 2026-09-05 after the PI rejected the previous framing, correctly. This rule used to
+    require that "the open-loop frequency search is closed", which imported a permanence the device
+    does not ask for and the science does not allow. Nothing prevents testing more open-loop
+    frequencies later; the PI's words were "of course, we can always test more open loop
+    frequencies in real life."
+
+    What the device actually constrains is narrower and purely operational. Per A610 p. 34 footnote
+    a and p. 44, pulse width and rate cannot be adjusted once BrainSense has been set up in a
+    group. Changing either afterwards requires removing BrainSense from the group -- deleting it and
+    reprogramming without BrainSense -- or changing the electrode configuration, which by D29 also
+    clears the captured thresholds. So the cost of changing your mind about rate is the group plus
+    the threshold capture, not the ability to do further research.
+
+    The flag therefore asks a per-attempt question rather than a permanent one: is this rate the one
+    to commit for this attempt, understanding what changing it later costs? A later attempt at a
+    different rate is a new group and a new capture, and this rule does not object to it.
     """
+    committed = _flag(candidate, "rate_committed_for_this_attempt")
+    if committed is not None:
+        return committed
+    # The old key is still honoured so a caller that has not been updated keeps working rather
+    # than silently reverting to not-determinable.
     return _flag(candidate, "frequency_search_closed")
 
 
@@ -861,10 +921,41 @@ def _p_d31(candidate, participant):
         lo, hi = GENERAL_ENVELOPE["pulse_width_us"]
         if not (lo <= pw <= hi):
             return False
+    # ---------------------------------------------------------------------------------------
+    # THE EVIDENCE PATH, added 2026-09-05, which is why this rule no longer blocks.
+    #
+    # The rule was written to compare the candidate against the BrainSense parameter envelope,
+    # and that envelope is not published. The A610 guide says only that a BrainSense group has a
+    # lower maximum pulse width, a lower maximum rate and a HIGHER minimum rate than a group
+    # without it, and prints none of the three numbers. A search of all 1,154 RCS08 session
+    # reports found no field carrying them either: the only path in the entire corpus combining a
+    # rate, pulse-width or frequency name with a limit, minimum, maximum or bound word is
+    # IndefiniteStreaming[].SampleRateInHz, which is the sensing sample rate and not a
+    # stimulation limit. So waiting for the declared values means blocking forever.
+    #
+    # The answerable question is whether the device has ALREADY ACCEPTED this exact rate and
+    # pulse width in a BrainSense group on this hemisphere. A demonstrated configuration is
+    # better evidence than a limit comparison, because it is the device's own verdict rather than
+    # our reading of a document. If the pair has been programmed, the envelope admits it, whatever
+    # the undisclosed numbers are.
+    #
+    # The hemisphere is not optional here. On RCS08, 55 Hz with 60 us appears 1,274 times on the
+    # LEFT and never on the right, and 165 Hz with 60 us appears 152 times on the LEFT and never
+    # on the right, where 165 Hz has only ever run at 80 and 160 us. Pooling the sides would
+    # licence a right-hemisphere configuration on left-hemisphere evidence.
+    hemi = _text(candidate, "sensing_hemisphere") or _text(candidate, "hemisphere")
+    hemi = {"left": "Left", "right": "Right"}.get(hemi) if hemi else None
+    programmed = _DF.brainsense_pair_programmed(rate, pw, hemi)
+    if programmed is True:
+        return True
+
     bs_min = _num(participant, "brainsense_min_rate_hz")
     bs_max = _num(participant, "brainsense_max_rate_hz")
     bs_pw_max = _num(participant, "brainsense_max_pulse_width_us")
     if bs_min is None or rate is None:
+        # Not determinable, and the observer text distinguishes the two reasons: the pair has
+        # never been demonstrated on this side (a weak statement, not a prohibition) versus the
+        # declared limits being absent. Never-demonstrated must NOT be reported as forbidden.
         return None
     if rate < bs_min:
         return False
@@ -894,7 +985,19 @@ def _p_d32(candidate, participant):
         checks["patient_limits_configured"] = True
     verdict = True
     for key in checks:
+        # PARTICIPANT FALLBACK, added 2026-09-05 after this rule read None on a fact that had
+        # been supplied. `has_pocket_adaptor` is a property of the implanted hardware, so it
+        # arrives on the PARTICIPANT dict, while the other exclusions are properties of the group
+        # being proposed and arrive on the CANDIDATE. Reading only the candidate left the fact one
+        # dictionary away from the rule that needed it, which is indistinguishable from the fact
+        # never having been supplied -- the same failure mode that has bitten this module before.
+        #
+        # The candidate is consulted first so a per-hemisphere override still wins: the A610
+        # exclusion is phrased per hemisphere, and a participant with an adaptor on one side only
+        # must be able to say so.
         value = _flag(candidate, key)
+        if value is None:
+            value = _flag(participant, key)
         if value:
             # One declared exclusion is enough to disqualify, and saying so immediately is safe
             # here because no later flag could turn a violation back into a pass.

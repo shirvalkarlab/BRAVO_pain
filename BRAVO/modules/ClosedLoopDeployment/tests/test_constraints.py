@@ -304,16 +304,22 @@ def test_d09_uses_the_conservative_of_the_two_documented_floors():
 # ------------------------------------------------------------------------------------------------
 # The two unknowns.
 # ------------------------------------------------------------------------------------------------
-def test_the_two_unknown_rules_block_on_the_record_as_it_stands():
-    """With D04 and D31 unread, a candidate that satisfies every other rule is still not eligible.
+def test_the_remaining_unknown_blocks_on_the_record_as_it_stands():
+    """With D04 unread, a candidate that satisfies every other rule is still not eligible.
 
-    This is the situation today, and the required behaviour is refusal. The two unknowns are also
-    the ONLY blockers on this candidate, which is what makes the report actionable: read two values
-    off the device and the configuration is licensable.
+    UPDATED 2026-09-05. This test used to assert that D04 AND D31 were both unknown, which was
+    right when D31 waited on the BrainSense parameter envelope. That envelope is not published and
+    is absent from all 1,154 session reports, so waiting for it meant blocking forever; D31 now
+    resolves through the measured pair table instead, asking whether the device has already
+    accepted this rate and pulse width in a BrainSense group on this hemisphere. The fixture
+    candidate is a Right-hemisphere configuration at 110 Hz and 60 us, which appears 304 times in
+    the measured Right table, so D31 passes on evidence.
+
+    The required behaviour on the remaining unknown is unchanged: refusal, not a quiet pass.
     """
     report = check(passing_candidate(), rcs08_participant())
     assert report.failures == [], [r["rule_id"] for r in report.failures]
-    assert ids(report.unknowns) == {"D04", "D31"}
+    assert ids(report.unknowns) == {"D04"}
     assert all(row["kind"] == "value_not_read_off_programmer" for row in report.unknowns)
     assert report.eligible is False
     assert report.checked == 51
@@ -327,8 +333,10 @@ def test_the_two_unknowns_are_distinguishable_from_an_undeclared_input():
     report = check(passing_candidate(paused_amplitude_mA=None), rcs08_participant())
     by_kind = {row["rule_id"]: row["kind"] for row in report.unknowns}
     assert by_kind["D04"] == "value_not_read_off_programmer"
-    assert by_kind["D31"] == "value_not_read_off_programmer"
     assert by_kind["D34"] == "input_not_supplied"
+    # D31 is deliberately NOT asserted here any more: it no longer waits on a value read off the
+    # programmer, so it is not an example of that category.
+    assert "D31" not in by_kind
 
 
 def test_d31_still_fails_outright_when_the_general_envelope_is_breached():
@@ -754,3 +762,106 @@ def test_the_deferral_graph_is_acyclic_and_points_at_real_rules():
         assert deferring != owner
         assert len(why) > 80, "a deferral must carry its reasoning, not just a pointer"
     CN._validate_deferral_graph()
+
+
+
+# ------------------------------------------------------------------------------------------------
+# The 2026-09-05 closures: D31 on measured evidence, D29 on ring stimulation, D32 on the
+# participant dict. Each of these replaced a rule that could not be satisfied by any attainable
+# input, so each test pins the specific thing that changed.
+# ------------------------------------------------------------------------------------------------
+def test_d31_passes_on_a_pair_the_device_has_actually_accepted():
+    """A demonstrated configuration beats a limit comparison, because the device itself accepted it.
+
+    55 Hz with 60 us has been programmed in a Left-hemisphere BrainSense group 1,274 times, so the
+    undisclosed envelope admits it whatever its numbers are. This is the PI's chosen deployment
+    rate as of 2026-09-05.
+    """
+    from ClosedLoopDeployment import device_facts as DF
+    assert DF.brainsense_pair_programmed(55.0, 60.0, "Left") is True
+    cand = passing_candidate(rate_hz=55.0, pulse_width_us=60.0, sensing_hemisphere="Left")
+    report = check(cand, rcs08_participant())
+    assert "D31" not in ids(report.unknowns)
+    assert "D31" not in ids(report.failures)
+
+
+def test_d31_never_reports_a_never_programmed_pair_as_forbidden():
+    """Absence of evidence is not a prohibition, and the distinction is load-bearing.
+
+    55 Hz with 60 us has never been programmed on the RIGHT, where 55 Hz has only run at 150, 160
+    and 180 us. That means the combination is undemonstrated on that side, NOT that the device
+    refuses it -- so with no declared limits the rule must return not-determinable rather than a
+    failure. Pooling the hemispheres would have licensed this configuration on left-hemisphere
+    evidence, which is why the lookup is per side.
+    """
+    from ClosedLoopDeployment import device_facts as DF
+    assert DF.brainsense_pair_programmed(55.0, 60.0, "Right") is False
+    assert DF.brainsense_pair_programmed(55.0, 160.0, "Right") is True
+    cand = passing_candidate(rate_hz=55.0, pulse_width_us=60.0, sensing_hemisphere="Right")
+    verdict = constraints.RULES_BY_ID["D31"].predicate(cand, rcs08_participant())
+    assert verdict is None, f"undemonstrated must be not-determinable, got {verdict!r}"
+
+
+def test_d31_still_fails_a_rate_outside_the_general_envelope():
+    """The evidence path must not rescue a physically impossible rate."""
+    cand = passing_candidate(rate_hz=300.0, sensing_hemisphere="Left")
+    assert constraints.RULES_BY_ID["D31"].predicate(cand, rcs08_participant()) is False
+
+
+def test_d29_is_satisfied_when_no_segment_is_steered():
+    """Ring stimulation makes the p.39 requirement unreachable, so the rule is satisfied.
+
+    Measured on RCS08: 98.50% of segmented levels are ring-mode, the steered remainder is steered
+    WITHIN a level rather than across levels, and the amplitude mismatch count across 17,102
+    vertically aligned pairs is zero. The closure is specific to ring stimulation -- a participant
+    with a steered configuration must still be checked, which is why an explicit per-candidate
+    finding still wins over the participant-level fact.
+    """
+    part = dict(rcs08_participant())
+    part["segmental_steering_in_use"] = False
+    cand = dict(passing_candidate())
+    cand.pop("vertically_aligned_segments_matched", None)
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is True
+
+    # an explicit per-candidate finding of a MISMATCH must still fail, closure notwithstanding
+    cand["vertically_aligned_segments_matched"] = False
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is False
+
+    # and with steering in use and nothing measured, it must go back to not-determinable
+    part["segmental_steering_in_use"] = True
+    cand.pop("vertically_aligned_segments_matched")
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is None
+
+
+def test_d32_reads_the_pocket_adaptor_from_the_participant_dict():
+    """The fact is a property of the implanted hardware, so it arrives on the participant.
+
+    Regression: it was supplied on the participant while the rule read only the candidate, and the
+    rule reported not-determinable on a fact that had been given. A fact one dictionary away from
+    the rule that needs it is indistinguishable from a fact never supplied.
+    """
+    part = dict(rcs08_participant())
+    part["has_pocket_adaptor"] = False
+    cand = dict(passing_candidate())
+    cand.pop("has_pocket_adaptor", None)
+    assert constraints.RULES_BY_ID["D32"].predicate(cand, part) is not None
+
+    # a candidate-level override still wins, because the A610 exclusion is per hemisphere
+    cand["has_pocket_adaptor"] = True
+    assert constraints.RULES_BY_ID["D32"].predicate(cand, part) is False
+
+
+def test_d30_asks_a_per_attempt_question_not_a_permanent_one():
+    """Reworded 2026-09-05: committing a rate for one attempt is not closing the search forever."""
+    cand = dict(passing_candidate())
+    cand.pop("frequency_search_closed", None)
+    cand.pop("rate_committed_for_this_attempt", None)
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is None
+
+    cand["rate_committed_for_this_attempt"] = True
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is True
+
+    # the retired key keeps working so an un-updated caller does not silently regress
+    cand.pop("rate_committed_for_this_attempt")
+    cand["frequency_search_closed"] = True
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is True

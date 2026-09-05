@@ -75,6 +75,29 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-05 — the four blocking unknowns closed; D19 is the only blocker left
+
+Detail in `SESSION_HANDOFF_2026-09-05_four_rule_closures.md`. Suite 192 -> **198 passed**.
+
+**D31, D32, D29 closed and D30 reworded, so unknowns go 4 -> 0.** The single most useful finding:
+the BrainSense parameter envelope is not published AND is absent from all 1,154 session reports, so
+D31 as written would have blocked forever. It now asks whether the device has already accepted this
+rate and pulse width in a BrainSense group on this hemisphere, from a measured table of 19 pairs.
+PI fixed the rate at **55 Hz**, which on the LEFT has been programmed with 60 us **1,274 times**.
+Hemisphere matters: 55/60 never appears on the right. An undemonstrated pair returns None, not
+False.
+
+**D29 was closed on a 98.50% measurement, not a clean zero** — 212 of 14,130 segmented levels
+(1.50%) do carry unequal current fractions. Those are steered WITHIN a level, whereas A610 p. 39
+compares ACROSS levels, where the amplitude mismatch count is zero across 17,102 aligned pairs.
+
+**D19 still fails on evidence** and no threshold choice repairs it.
+
+**Two things a future session must not inherit.** The 165 Hz screen output cannot be relabelled as
+55 Hz — screen, prescription and all three edges need re-running. And the clinic-sheet parse was
+DISCARDED: `read_file_content` returns only some tabs, so the Stim Testing tab must be reached via
+the xlsx export.
+
 ### 2026-09-05 — D19 is structural, not a band-selection problem; plotly was missing; three figure fixes
 
 **D19 SCREENED EXHAUSTIVELY AND IT CANNOT BE SATISFIED BY CHOOSING A DIFFERENT BAND.** All six
