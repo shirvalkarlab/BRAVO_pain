@@ -652,7 +652,14 @@ def test_frame_from_lsb_cache_accepts_a_family_whose_spectra_are_one_array():
     empty[CHANNEL]["psd"]["calibrated"] = []
     EV.frame_from_lsb_cache(empty)           # must not raise
 
+    # A missing value inside the array must survive as a missing value rather than becoming a
+    # number. The per-band columns are named `band_lsb_<centre>`, and column 0 of the stored array
+    # is the lowest centre, so that is the column to look in -- there is no column called
+    # "band_power", which is what I first wrote.
     holed = _copy.deepcopy(as_array)
     holed[CHANNEL]["td"]["lsb"][0, 0] = np.nan
     g = EV.frame_from_lsb_cache(holed)
-    assert g["band_power"].isna().any(), "a missing value became a number"
+    lowest = min(float(c) for c in as_lists[CHANNEL]["centers_hz"])
+    col = "band_lsb_%g" % lowest
+    assert col in g.columns, "expected a %s column, got %s" % (col, list(g.columns)[:6])
+    assert g[col].isna().any(), "a missing value became a number"
