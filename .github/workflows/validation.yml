@@ -81,3 +81,6 @@ jobs:
             reports/validation/backend-status.json
             reports/validation/frontend-status.json
             reports/validation/branch-summary.json
+            reports/validation/lint-python.json
+            reports/validation/lint-javascript.json
+            reports/validation/lint-summary.json

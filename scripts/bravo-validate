@@ -22,9 +22,10 @@ assert_image_file() {
 case "$MODE" in
   prepare)
     docker build --target server-deps -t bravo-local:validation-deps .
-    docker build -t "$PYTHON_IMAGE" - <<'DOCKERFILE'
+    docker build --build-arg "RUFF_VERSION=$(python3 scripts/validation/lint.py --ruff-version)" -t "$PYTHON_IMAGE" - <<'DOCKERFILE'
 FROM bravo-local:validation-deps
-RUN python3 -m pip install --break-system-packages pytest==8.3.5 pytest-cov==6.0.0 coverage==7.6.12
+ARG RUFF_VERSION
+RUN python3 -m pip install --break-system-packages pytest==8.3.5 pytest-cov==6.0.0 coverage==7.6.12 "ruff==$RUFF_VERSION"
 DOCKERFILE
     docker build -t "$CLIENT_IMAGE" -f - . <<'DOCKERFILE'
 FROM node:22-bookworm
@@ -75,6 +76,11 @@ DOCKERFILE
   coverage)
     python3 scripts/validation/coverage_gate.py
     ;;
+  lint)
+    assert_image_file "$CLIENT_IMAGE" Client/package.json /usr/src/Client/package.json
+    assert_image_file "$CLIENT_IMAGE" Client/package-lock.json /usr/src/Client/package-lock.json
+    python3 scripts/validation/lint.py
+    ;;
   build)
     docker build -t bravo-local:validation-candidate .
     ;;
@@ -84,6 +90,7 @@ DOCKERFILE
     ;;
   check)
     python3 -m unittest discover -s scripts/validation -p 'test_*.py'
+    "$0" lint
     "$0" backend
     "$0" frontend
     "$0" coverage
@@ -91,7 +98,7 @@ DOCKERFILE
     printf '%s\n' 'Portable local gate passed. Private-data, Chrome and deployed acceptance remain separate.'
     ;;
   *)
-    printf '%s\n' 'Usage: scripts/bravo-validate {prepare|backend|frontend|coverage|build|check|live}' >&2
+    printf '%s\n' 'Usage: scripts/bravo-validate {prepare|lint|backend|frontend|coverage|build|check|live}' >&2
     exit 2
     ;;
 esac

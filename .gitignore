@@ -330,6 +330,7 @@ backups/
 
 # Local participant QC artifacts (keep source, rules and builders versionable)
 /reports/
+/output/
 /outputs/
 /tmp/oura-qc/
 /outputs/01a065ca-efeb-7041-a5ca-edd51e369b54/
