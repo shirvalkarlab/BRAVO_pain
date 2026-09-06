@@ -969,39 +969,120 @@ def _stamp_td_product(td_recordings):
     return td_recordings
 
 
+# One private file per participant bounds superseded entries. No background work
+# or analysis result caching is introduced by this raw-tile optimization.
+_RAW_LSB_SHARED_MAX_BYTES = 512 * 1024 * 1024
+_RAW_LSB_SHARED_FORMAT = 2
+
+
+def _raw_lsb_signature(participant_uid, channels, td, events, montage, centers, identity):
+    """Bind both cache tiers to canonical inputs, producer code and decoded content."""
+    import hashlib
+    import pickle
+    from pathlib import Path
+    producer = hashlib.sha256()
+    for path in (__file__, analytics.__file__, availability.__file__):
+        producer.update(Path(path).read_bytes())
+    payload_hash = hashlib.sha256()
+
+    class DigestWriter:
+        def write(self, data):
+            payload_hash.update(data)
+            return memoryview(data).nbytes
+
+    pickle.dump((td, events, montage), DigestWriter(), protocol=5)
+    payload = payload_hash.hexdigest()
+    constants = (analytics.RAW_LSB_WINDOW_SECONDS, analytics.LSB_PER_UV2_TRANSFORM,
+                 analytics.LSB_PER_DEVICE_PSD, availability.PRO_LSB_SATURATION_UV)
+    return (_RAW_LSB_SHARED_FORMAT, str(participant_uid), identity, producer.hexdigest(),
+            payload, tuple(channels), tuple(np.asarray(centers, dtype=float)), constants)
+
+
+def _raw_lsb_shared_path(participant_uid):
+    """One owner-only cache file per participant, atomically replaced on changes."""
+    import hashlib
+    directory = os.path.join(os.path.dirname(_psd_cache_dir()), "raw_lsb_shared")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    owner = hashlib.sha256(str(participant_uid).encode()).hexdigest()
+    return os.path.join(directory, owner + ".pkl")
+
+
+def _raw_lsb_shared_load(participant_uid, signature):
+    """The private local cache is optional; malformed/obsolete entries are misses."""
+    import pickle
+    try:
+        with open(_raw_lsb_shared_path(participant_uid), "rb") as source:
+            if os.fstat(source.fileno()).st_size > _RAW_LSB_SHARED_MAX_BYTES:
+                return None
+            entry = pickle.load(source)
+        if entry["signature"] == signature:
+            return entry["payload"]
+    except Exception:
+        _log.debug("Raw tile cache unavailable; rebuilding", exc_info=True)
+    return None
+
+
+def _raw_lsb_shared_store(participant_uid, signature, payload):
+    """Unique temporary files prevent concurrent writers sharing a partial file."""
+    import pickle
+    import tempfile
+    temporary = None
+    try:
+        path = _raw_lsb_shared_path(participant_uid)
+        fd, temporary = tempfile.mkstemp(prefix=".raw-lsb-", dir=os.path.dirname(path))
+        with os.fdopen(fd, "wb") as target:
+            class BoundedWriter:
+                def write(self, data):
+                    if target.tell() + memoryview(data).nbytes > _RAW_LSB_SHARED_MAX_BYTES:
+                        raise ValueError("Raw tile cache exceeds its size limit")
+                    return target.write(data)
+
+            pickle.dump({"signature": signature, "payload": payload}, BoundedWriter(), protocol=5)
+        os.replace(temporary, path)
+        return True
+    except Exception:
+        _log.debug("Raw tile cache could not be saved", exc_info=True)
+        return False
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
-                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS):
-    """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
-    (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
-    { raw_channel: availability.raw_lsb_spectrum_cache(...) }. montage_psd_blocks (the montage/survey
-    device-PSD snapshots) are folded into the cache's PSD family alongside the patient-event PSDs."""
+                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
+                          use_shared_cache=True):
+    """Reuse complete tiles only while canonical inputs and their producer match.
+
+    Actual decoded content is hashed because it may have been loaded before the
+    manifest was read. A changed cohort during this call fails instead of publishing
+    mixed-revision tiles. Storage failures cause a fresh build, not partial results.
+    """
     if not channels:
         return {}
-    # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
-    sig = _lsb_spectrum_signature(participant_uid, np.asarray([], dtype=float),
-                                  td_recordings, event_psd_blocks, centers,
-                                  montage_psd_blocks=montage_psd_blocks) + "|raw"
+    identity = _analysis_identity(participant_uid)
+    sig = _raw_lsb_signature(participant_uid, channels, td_recordings, event_psd_blocks,
+                             montage_psd_blocks, centers, identity)
     with _RAW_LSB_CACHE_MEMO_LOCK:
-        cached = _RAW_LSB_CACHE_MEMO.get(sig)
-    if cached is not None:
-        return cached
-    cen = np.asarray(centers, dtype=float)
-    out = {}
-    for raw_ch in channels:
-        key = availability._canon_channel(raw_ch)
-        try:
-            out[raw_ch] = availability.raw_lsb_spectrum_cache(
-                key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
-                montage_psd_recordings=montage_psd_blocks)
-        except Exception as e:
-            _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
+        out = _RAW_LSB_CACHE_MEMO.get(sig)
+    if out is None and use_shared_cache:
+        out = _raw_lsb_shared_load(participant_uid, sig)
+    required = {"td", "psd", "centers_hz", "window_s"}
+    built = not isinstance(out, dict) or any(
+        not isinstance(out.get(ch), dict) or not required.issubset(out[ch])
+        for ch in channels)
+    if built:
+        out = {ch: availability.raw_lsb_spectrum_cache(
+            availability._canon_channel(ch), np.asarray(centers, dtype=float),
+            td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
+            montage_psd_recordings=montage_psd_blocks) for ch in channels}
+    if _analysis_identity(participant_uid) != identity:
+        raise RuntimeError("Analysis inputs changed while preparing raw neural tiles; retry the analysis.")
     with _RAW_LSB_CACHE_MEMO_LOCK:
-        existing = _RAW_LSB_CACHE_MEMO.get(sig)
-        if existing is not None:
-            return existing
-        if len(_RAW_LSB_CACHE_MEMO) >= _RAW_LSB_CACHE_MEMO_MAX:
-            _RAW_LSB_CACHE_MEMO.pop(next(iter(_RAW_LSB_CACHE_MEMO)), None)
+        if sig not in _RAW_LSB_CACHE_MEMO and len(_RAW_LSB_CACHE_MEMO) >= _RAW_LSB_CACHE_MEMO_MAX:
+            _RAW_LSB_CACHE_MEMO.pop(next(iter(_RAW_LSB_CACHE_MEMO)))
         _RAW_LSB_CACHE_MEMO[sig] = out
+    if built and use_shared_cache:
+        _raw_lsb_shared_store(participant_uid, sig, out)
     return out
 
 

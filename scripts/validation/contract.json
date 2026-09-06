@@ -56,7 +56,8 @@
       "BRAVO/modules/HomeNeuralTimeline.py",
       "BRAVO/Server/APIs/HomeNeuralTimeline.py",
       "BRAVO/modules/ClosedLoopDeployment/clinic_steps.py",
-      "BRAVO/modules/StimOptimizer/routines/within_visit.py"
+      "BRAVO/modules/StimOptimizer/routines/within_visit.py",
+      "BRAVO/modules/Biomarkers/routines/live_match_scalar.py"
     ],
     "critical_functions": {
       "BRAVO/modules/Biomarkers/bravo_service.py": [
@@ -70,12 +71,20 @@
         "_analysis_identity",
         "_atomic_savez",
         "_load_pros_raw",
-        "_pro_set_signature"
+        "_pro_set_signature",
+        "_raw_lsb_signature",
+        "_raw_lsb_shared_path",
+        "_raw_lsb_shared_load",
+        "_raw_lsb_shared_store",
+        "_raw_lsb_cache_cached",
+        "_raw_lsb_signature.DigestWriter.write",
+        "_raw_lsb_shared_store.BoundedWriter.write"
       ],
       "BRAVO/modules/StimOptimizer/adapter.py": [
         "_unambiguous_group_settings",
         "_reconcile_settings_rows",
-        "_session_timestamp"
+        "_session_timestamp",
+        "_use_stream_or_build_one"
       ],
       "BRAVO/modules/StimOptimizer/bravo_service.py": [
         "_plotly_figures"
@@ -127,6 +136,17 @@
       "BRAVO/modules/ClosedLoopDeployment/replay.py": [
         "_longest_run_at_level_s",
         "dual_threshold_segments"
+      ],
+      "BRAVO/modules/Biomarkers/routines/availability.py": [
+        "_lsb_family_mat",
+        "_lsb_rows_to_mat",
+        "_pad_owned_windows",
+        "_pad_windows_in_extent",
+        "_cap_nearest_windows",
+        "_padded_nanmedian",
+        "_lsb_none_lists",
+        "live_lsb_spectrum_match",
+        "_live_lsb_spectrum_match_vectorized"
       ]
     }
   },
@@ -354,6 +374,15 @@
       "alternative_evidence": "Portable ClosedLoopDeployment and StimOptimizer suites plus Biomarkers analytics regressions; exact changed functions require 95 percent true branch coverage.",
       "owner": "Aditya integration maintainers",
       "revisit": "Expand scope when modifying any remaining inherited function; never exclude a newly changed helper to satisfy coverage."
+    },
+    {
+      "path": "BRAVO/modules/Biomarkers/routines/availability.py",
+      "source_revision": "e8c200052f718701a301a5ca9a9a47270b3eeea4",
+      "reason": "Reviewed upstream matcher vectorization and new bounded-memory dispatch are strict functions; unrelated inherited availability helpers remain measured legacy code.",
+      "risk": "No whole-file95 percent claim for unchanged inherited extraction/plot helpers.",
+      "alternative_evidence": "Full availability regressions, independent scalar matching oracle and strict branch coverage for every changed helper/matcher.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Extend strict scope whenever remaining availability helpers change."
     }
   ]
 }
