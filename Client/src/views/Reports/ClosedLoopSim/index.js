@@ -67,6 +67,7 @@ import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
 import DutyCyclePanel from "./DutyCyclePanel";
+import BandStabilityPanel from "./BandStabilityPanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import PAL from "./palette";
@@ -529,6 +530,18 @@ function ClosedLoopSim() {
               {/* BAND 3 — the evidence triangle and the three-valued coherence answer. */}
               <Grid item xs={12} id="cl-evidence">
                 <EvidenceTrianglePanel report={deploymentReport} />
+              </Grid>
+
+              {/* BAND 3b — does this band mean the same thing about pain at every stimulation
+                  setting? Added 2026-09-06 on the PI's instruction, because the biomarkers page
+                  computed this and the deployment page never saw it. It sits directly under the
+                  evidence triangle because it qualifies the same relationship the triangle draws:
+                  a band whose meaning shifts with the current is a different kind of problem from
+                  one whose relationship is simply weak, and the two would otherwise be read as
+                  one. The panel handles a null value and renders an honest empty state. */}
+              <Grid item xs={12} id="cl-stability">
+                <BandStabilityPanel stability={deploymentReport?.data?.band_stability
+                  || deploymentReport?.band_stability} />
               </Grid>
 
               {/* BAND 4 — the transcription surface. Withholds its values while the device verdict

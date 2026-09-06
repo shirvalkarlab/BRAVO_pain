@@ -3325,3 +3325,218 @@ def test_the_burn_in_exclusion_does_not_leak_into_the_era_stability_test():
     assert "VALIDATION_EXCLUDE_FIRST_WEEKS" not in src
     # and the sweep must not carry it either
     assert "exclude_first_weeks" not in inspect.getsource(analytics.deployment_roc_by_era)
+
+
+# =============================================================================================
+# The pain-relationship estimate that the closed-loop module now inherits from this page.
+#
+# These tests cover `band_pain_tracking`, which was moved here out of
+# ClosedLoopDeployment/edges.py so that there is one calculation of "does this band track the
+# patient's pain" instead of two. The closed-loop module calls this function; it no longer does
+# the arithmetic itself.
+#
+# Plain `abs()` comparisons are used rather than pytest helpers because this file is run by
+# _agent_bridge/run_tests.py inside the container, where pytest is not imported.
+# =============================================================================================
+def _tracking_table(n_groups=60, per_group=8, slope=1.5, within_noise=0.05, group_noise=0.0,
+                    seed=0, channel="CH", center_hz=20.5):
+    """A table shaped like the one the closed-loop module builds, with a known slope planted.
+
+    One row is one spectral sample. The pain score is fixed WITHIN a group, because that is how the
+    real data behaves: one pain report is matched to a stretch of recording holding many samples,
+    and every one of those samples carries that same report's score. Planting it this way is what
+    makes the grouping in the estimator do any work.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for gi in range(n_groups):
+        x_g = rng.normal(0.0, 1.0)
+        pain_g = 3.0 + slope * x_g + rng.normal(0.0, group_noise) if group_noise else 3.0 + slope * x_g
+        for _ in range(per_group):
+            rows.append({"channel": channel, "center_hz": center_hz,
+                         "power_linear": x_g + rng.normal(0.0, within_noise),
+                         "nrs": pain_g, "report_id": f"r{gi}"})
+    return pd.DataFrame(rows)
+
+
+def test_band_pain_tracking_recovers_a_planted_slope_and_says_it_tracks():
+    """The number returned must be the slope of pain on band power in the units both are stored in.
+
+    A slope of 1.5 pain points per unit of power is planted, so the estimate has a right answer to
+    be checked against rather than only a sign.
+    """
+    out = analytics.band_pain_tracking(_tracking_table(n_groups=60, slope=1.5),
+                                       channel="CH", center_hz=20.5)
+    assert out["verdict"] == analytics.PAIN_TRACKING_TRACKS, out
+    assert abs(out["estimate"] - 1.5) < 0.15, out["estimate"]
+    assert out["n_groups"] == 60 and out["n"] == 480, (out["n_groups"], out["n"])
+    assert out["ci"][0] < 1.5 < out["ci"][1], out["ci"]
+    # 60 groups is above the switch, so the grouped estimator is used directly
+    assert "CR0" in out["inference"]["estimator"], out["inference"]
+    assert out["slope_units"] == "change in nrs per one unit of power_linear", out["slope_units"]
+
+
+def test_band_pain_tracking_counts_each_pain_report_once_not_each_sample():
+    """The grouping has to be doing the work, or every p-value on this page is overstated.
+
+    Each row is copied five times. A copy is not new evidence about anything -- it is the same
+    spectral sample and the same pain report written down again -- so an honest interval must come
+    back the same width. An interval that ignores the grouping instead shrinks by roughly the
+    square root of five, because it counts each copy as a fresh independent observation. Both
+    numbers are computed here so the test shows the size of what the grouping is protecting
+    against, rather than only asserting that nothing happened.
+    """
+    import statsmodels.api as sm
+
+    tbl = _tracking_table(n_groups=45, per_group=4, seed=1)
+    dup = pd.concat([tbl] * 5, ignore_index=True)
+
+    once = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
+    fived = analytics.band_pain_tracking(dup, channel="CH", center_hz=20.5)
+    assert once["n_groups"] == fived["n_groups"] == 45, (once["n_groups"], fived["n_groups"])
+    assert fived["n"] == 5 * once["n"], (once["n"], fived["n"])
+    assert abs(fived["estimate"] - once["estimate"]) < 1e-9, "copies must not move the slope"
+
+    w_once = once["ci"][1] - once["ci"][0]
+    w_fived = fived["ci"][1] - fived["ci"][0]
+    assert abs(w_fived - w_once) / w_once < 0.02, (w_once, w_fived)
+
+    # what the same data does to an interval that treats every row as independent
+    def _naive_width(d):
+        X = sm.add_constant(d["power_linear"].to_numpy(float))
+        r = sm.OLS(d["nrs"].to_numpy(float), X).fit()
+        return float(2 * 1.96 * r.bse[1])
+
+    n_once, n_fived = _naive_width(tbl), _naive_width(dup)
+    assert n_fived < 0.55 * n_once, (n_once, n_fived)
+    # On this fixture the grouped interval is about 1.7 times the width of the one that counted the
+    # copies, which is the precision the grouping declines to claim. The check is 1.4 rather than
+    # 1.7 so that it fails on the grouping being dropped and not on a small change of fixture.
+    assert w_fived > 1.4 * n_fived, (w_fived, n_fived)
+
+
+def test_band_pain_tracking_refuses_rather_than_treating_every_sample_as_independent():
+    """With no grouping column the honest answer is "not assessed", not a slope."""
+    tbl = _tracking_table(n_groups=20).drop(columns=["report_id"])
+    out = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
+    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED, out
+    assert out["estimate"] is None and out["ci"] is None and out["p"] is None, out
+    assert "pseudoreplication" in out["why"], out["why"]
+
+
+def test_band_pain_tracking_says_not_resolved_not_not_assessed_on_noise():
+    """THE DISTINCTION THIS PROJECT KEEPS LOSING.
+
+    Band power unrelated to pain must come back as "we looked and could not establish a
+    direction", which is a result. It must NOT come back as "not assessed", which means we never
+    looked, and it must still carry the slope it measured. Collapsing the two has destroyed real
+    findings here three times, because a band that was never assessed then reads in a report as a
+    band that failed.
+    """
+    rng = np.random.default_rng(7)
+    tbl = _tracking_table(n_groups=50, slope=0.0, seed=7)
+    tbl["nrs"] = np.repeat(rng.normal(4.0, 2.0, 50), 8)     # pain unrelated to power
+    out = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
+    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_RESOLVED, out
+    assert out["estimate"] is not None, "an unresolved estimate must still report its slope"
+    assert out["ci"] is not None and out["ci"][0] < 0 < out["ci"][1], out["ci"]
+    assert "no direction is established" in out["why"], out["why"]
+
+
+def test_the_three_verdicts_are_words_that_cannot_be_read_as_true_or_false():
+    """A guard against the next person casting this to a boolean.
+
+    If these ever become True/False/None, "not assessed" and "not resolved" both become falsey and
+    the difference is gone with no error anywhere.
+    """
+    words = [analytics.PAIN_TRACKING_TRACKS, analytics.PAIN_TRACKING_NOT_RESOLVED,
+             analytics.PAIN_TRACKING_NOT_ASSESSED]
+    assert len(set(words)) == 3, words
+    for w in words:
+        assert isinstance(w, str) and w and not isinstance(w, bool), w
+        assert bool(w) is True, w      # every one of them is truthy, so a truth test cannot sort them
+
+
+def test_band_pain_tracking_switches_to_the_bootstrap_when_there_are_few_pain_reports():
+    """Below the named group count the interval and p-value must come from the wild cluster
+    bootstrap, and the result must say so, because a grouped standard error on a handful of groups
+    is too narrow and manufactures resolution."""
+    out = analytics.band_pain_tracking(_tracking_table(n_groups=9, per_group=6, seed=2),
+                                       channel="CH", center_hz=20.5)
+    assert out["n_groups"] == 9, out["n_groups"]
+    assert "FEW CLUSTERS" in out["note"], out["note"][:200]
+    assert "bootstrap" in out["inference"]["estimator"], out["inference"]
+    assert out["inference"]["switch_clusters"] == analytics.MIN_RELIABLE_CLUSTERS
+    assert out["verdict"] in (analytics.PAIN_TRACKING_TRACKS,
+                              analytics.PAIN_TRACKING_NOT_RESOLVED), out["verdict"]
+
+
+def test_band_pain_tracking_names_the_power_scale_it_used_and_the_scale_changes_the_slope():
+    """The stimulator adds up power on a linear scale (device rule D11) while this page's plots use
+    a decibel-like scale, so a slope means different things on the two and the result has to say
+    which one it is. Reporting the two as if interchangeable is how a number gets quoted against
+    the wrong units."""
+    tbl = _tracking_table(n_groups=50, slope=1.0, seed=3)
+    tbl["power_linear"] = tbl["power_linear"] - tbl["power_linear"].min() + 1.0
+    tbl["power_log"] = 10.0 * np.log10(tbl["power_linear"])
+    lin = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5,
+                                       power_column="power_linear")
+    log = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5,
+                                       power_column="power_log")
+    assert lin["power_column"] == "power_linear" and log["power_column"] == "power_log"
+    assert abs(lin["estimate"] - log["estimate"]) > 1e-6, (lin["estimate"], log["estimate"])
+    assert "power_log" in log["slope_units"], log["slope_units"]
+
+
+def test_band_pain_tracking_from_detail_groups_on_the_rating_not_on_the_sample():
+    """The biomarker page holds its spectra in the pooled detail structure, so the wrapper has to
+    find the channel and band, attach each sample's rating grouping, and hand the same estimator
+    the same kind of table. Four samples share each rating here, so the group count must come back
+    as the number of ratings and not the number of samples."""
+    det = _planted_detail(E=48, center=20.0, beta=0.6, seed=4)
+    det["rating_group"] = np.repeat(np.arange(12), 4)          # 12 ratings, 4 samples each
+
+    # The expected sample count is worked out from the same feature the wrapper uses, not written
+    # in as 48. Some of this synthetic detail's band powers come out at or below zero, so they have
+    # no logarithm and the estimator drops them; hard-coding 48 would make the test fail for the
+    # right behaviour. What is being checked is that the row count is the number of samples with a
+    # usable band power, and the group count is the number of ratings behind them -- not 48 and
+    # not 12 by luck.
+    bp_log, _labels, rg, _t = analytics._band_feature_from_detail(det, "ZERO_TWO_LEFT", 20.0)
+    finite = np.isfinite(bp_log)
+    n_expected = int(finite.sum())
+    groups_expected = int(len(np.unique(np.asarray(rg)[finite])))
+    assert n_expected < 48, "this fixture is meant to contain some unusable samples"
+
+    for scale, col in (("log", "band_power_log"),
+                       ("device_linear", "band_power_device_linear")):
+        out = analytics.band_pain_tracking_from_detail(det, "ZERO_TWO_LEFT", 20.0,
+                                                       power_scale=scale)
+        assert out["verdict"] in (analytics.PAIN_TRACKING_TRACKS,
+                                  analytics.PAIN_TRACKING_NOT_RESOLVED,
+                                  analytics.PAIN_TRACKING_NOT_ASSESSED), out
+        assert out["group_column"] == "rating_group", out["group_column"]
+        assert out["power_column"] == col, out["power_column"]
+        if out["verdict"] != analytics.PAIN_TRACKING_NOT_ASSESSED:
+            assert out["n_groups"] == groups_expected, (out["n_groups"], groups_expected)
+            assert out["n"] == n_expected, (out["n"], n_expected)
+            # each rating stands for several samples, which is the whole reason for the grouping
+            assert out["n"] > out["n_groups"], (out["n"], out["n_groups"])
+
+
+def test_band_pain_tracking_from_detail_says_not_assessed_for_a_channel_that_is_not_there():
+    out = analytics.band_pain_tracking_from_detail(_planted_detail(E=20), "NOT_A_CHANNEL", 20.0)
+    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED, out
+    assert out["estimate"] is None, out
+
+
+def test_band_pain_tracking_from_detail_rejects_a_scale_it_does_not_have():
+    """Silently picking a scale would put a slope in the wrong units on the screen."""
+    try:
+        analytics.band_pain_tracking_from_detail(_planted_detail(E=20), "ZERO_TWO_LEFT", 20.0,
+                                                 power_scale="millivolts")
+    except ValueError as e:
+        assert "power_scale" in str(e), str(e)
+    else:
+        raise AssertionError("an unknown power scale must raise rather than be guessed at")
+

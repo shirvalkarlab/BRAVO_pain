@@ -73,9 +73,16 @@ def test_actuation_edge_refuses_a_single_setting_epoch():
 
 
 def test_state_edge_refuses_when_the_rating_cluster_is_absent():
+    """The wording of the refusal changed when this calculation moved onto the biomarker page, and
+    the new sentence is checked here instead of the old one. It now names the column that was
+    missing and says in ordinary words what would go wrong without it, rather than calling it a
+    "rating-level cluster"; the refusal itself, and the absent slope, are unchanged.
+    """
     T = _toy_table().drop(columns=["report_id"])
     e = E.state_edge(T, channel="CH", center_hz=20.5)
-    assert e.estimate is None and "rating-level cluster is unavailable" in e.note
+    assert e.estimate is None
+    assert "no report_id column" in e.note, e.note
+    assert "pseudoreplication" in e.note, e.note
 
 
 def test_max_statistic_permutation_permutes_whole_epochs():
@@ -432,8 +439,12 @@ def test_fingerprint_tracks_array_valued_spectra_and_not_merely_the_timestamps()
     b = AD._joined_signature(_bump_spectrum(psd), None, (20.5,), 5.0)
     assert a != b
 
-    # a frame carrying none of the named columns is reported as such, never as a healthy hash
-    assert AD._frame_fingerprint(pd.DataFrame({"zz": [1]}), ("t",))[0] == "no_columns"
+    # A frame carrying none of the named columns now RAISES. It used to return a "no_columns"
+    # marker, which was still safer than a false hash, but only in the case where EVERY name was
+    # missing; one missing name out of five went unreported, which is the case that actually
+    # happened. See test_adapter_caching.py for the full set of conditions on this.
+    with pytest.raises(KeyError):
+        AD._frame_fingerprint(pd.DataFrame({"zz": [1]}), ("t",))
     assert AD._frame_fingerprint(None, ("t",)) == ("none",)
 
 
@@ -497,18 +508,25 @@ def test_fingerprint_says_when_it_could_not_hash_rather_than_degrading_silently(
     """A fingerprint that quietly fell back to the shape would reintroduce the stale-table risk the
     content hash exists to remove, so the mode is the first element of the returned tuple.
 
-    Updated 2026-09-04: a frame carrying NONE of the named columns now returns "no_columns" rather
-    than "hashed". The old assertion accepted "hashed" for that case, which was the behaviour that
-    let a fingerprint over a nonexistent column list look healthy while tracking nothing.
+    Updated 2026-09-04: a frame carrying NONE of the named columns returned "no_columns" rather
+    than "hashed". The original assertion accepted "hashed" for that case, which was the behaviour
+    that let a fingerprint over a nonexistent column list look healthy while tracking nothing.
+
+    Updated again 2026-09-06, and this is the change that closes the hole properly. Returning a
+    marker only helped when EVERY named column was missing. The mistake that actually happened was
+    two names right and three wrong, which still returned "hashed" over the two that existed. A
+    named column that is not on the frame now raises, so the case cannot arise at all. The
+    conditions on the four ways of naming columns live in test_adapter_caching.py.
     """
     from ClosedLoopDeployment import adapter as AD
     psd, _ = _tiny_inputs()
     assert AD._frame_fingerprint(psd, ("t", "channel", "log_psd"))[0] == "hashed"
     assert AD._frame_fingerprint(None, ("x",)) == ("none",)
-    assert AD._frame_fingerprint(psd, ("nonexistent",))[0] == "no_columns"
-    # a partial overlap still hashes, over the columns that ARE present, and names them
-    fp = AD._frame_fingerprint(psd, ("t", "nonexistent"))
-    assert fp[0] == "hashed" and [c for c, _ in fp[2]] == ["t"]
+    with pytest.raises(AD.MissingFingerprintColumn):
+        AD._frame_fingerprint(psd, ("nonexistent",))
+    # and a PARTIAL overlap raises too, which is the case that bit us
+    with pytest.raises(AD.MissingFingerprintColumn):
+        AD._frame_fingerprint(psd, ("t", "nonexistent"))
 
 
 def test_annotating_a_column_the_join_ignores_does_not_invalidate():
@@ -1089,3 +1107,103 @@ def test_the_capture_separation_floor_has_exactly_one_definition():
                if ln.strip().startswith("MIN_CAPTURE_SEPARATION_D") and "=" in ln
                and not ln.strip().startswith("#")]
     assert not assigns, f"authority re-assigns the constant: {assigns}"
+
+
+# =============================================================================================
+# E2 is now INHERITED from the biomarker page rather than computed twice.
+# =============================================================================================
+def test_state_edge_returns_exactly_what_the_biomarker_page_computes():
+    """The whole point of the change: one calculation, not two that can disagree.
+
+    Every field of the edge is compared against the biomarker page's own result on the same table.
+    An equality check rather than a tolerance, because these are meant to be the same numbers and
+    not merely close ones -- a tolerance here would let a second implementation creep back in.
+    """
+    from Biomarkers.routines import analytics
+    T = _toy_table(n_epochs=8, per_epoch=6)
+    e = E.state_edge(T, channel="CH", center_hz=20.5)
+    out = analytics.band_pain_tracking(T, channel="CH", center_hz=20.5,
+                                       pain_column="nrs", power_column="power_linear",
+                                       group_column="report_id")
+    assert e.estimate == out["estimate"], (e.estimate, out["estimate"])
+    assert e.ci == out["ci"], (e.ci, out["ci"])
+    assert e.p == out["p"], (e.p, out["p"])
+    assert (e.n, e.n_clusters) == (out["n"], out["n_groups"])
+    assert e.note == out["note"]
+    assert e.cluster_unit == "report_id" and e.scale == "power_linear"
+
+
+def test_state_edge_does_not_do_the_arithmetic_itself_any_more():
+    """Asserted on the source, because the failure this guards against is someone pasting the
+    regression back into this function for convenience. Two copies would then drift and the panel
+    and the biomarker page could print different slopes for the same band."""
+    import inspect
+    src = inspect.getsource(E.state_edge)
+    assert "band_pain_tracking(" in src, "E2 must ask the biomarker page for the answer"
+    assert "_cluster_ols(" not in src, "E2 must not fit its own regression"
+    assert "_small_sample_inference(" not in src, "E2 must not run its own bootstrap switch"
+
+
+def test_state_edge_keeps_never_assessed_apart_from_no_direction_established():
+    """Three answers, and the two negative-looking ones must not be interchangeable.
+
+    "We could not assess this band" has no slope at all. "We assessed it and could not establish a
+    direction" has a slope and an interval that spans zero. A reader who cannot tell these apart
+    will throw away a band that was never measured, which has already happened three times in this
+    project.
+    """
+    from Biomarkers.routines import analytics
+    never = E.state_edge(_toy_table().drop(columns=["report_id"]), channel="CH", center_hz=20.5)
+    assert never.estimate is None and never.ci is None and never.p is None
+    assert never.resolved is False
+
+    rng = np.random.default_rng(11)
+    noisy = _toy_table(n_epochs=45, per_epoch=4, seed=11)
+    noisy["nrs"] = rng.normal(5.0, 2.0, len(noisy))          # pain unrelated to power
+    undecided = E.state_edge(noisy, channel="CH", center_hz=20.5)
+    assert undecided.estimate is not None, "an unresolved edge must still carry its slope"
+    assert undecided.resolved is False
+    # and the two states are genuinely different objects, not the same one twice
+    assert (never.estimate is None) != (undecided.estimate is None)
+
+    # the words on the biomarker side agree with the packing on this side
+    assert analytics.band_pain_tracking(
+        _toy_table().drop(columns=["report_id"]), channel="CH",
+        center_hz=20.5)["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED
+    assert analytics.band_pain_tracking(
+        noisy, channel="CH", center_hz=20.5)["verdict"] == analytics.PAIN_TRACKING_NOT_RESOLVED
+
+
+def test_the_biomarker_module_still_does_not_import_the_closed_loop_module():
+    """The import direction is load-bearing and this is the only way to check it honestly.
+
+    ClosedLoopDeployment may import Biomarkers. Biomarkers must never import
+    ClosedLoopDeployment, or the two would wait for each other and neither would load. The check
+    runs in a FRESH interpreter on purpose: asking `sys.modules` inside this test process proves
+    nothing, because this process imported the closed-loop module at the top of the file, so the
+    name would be present whether or not Biomarkers pulled it in.
+    """
+    import subprocess, sys, os
+    code = ("import sys;"
+            "from Biomarkers.routines import analytics;"
+            "print([m for m in sys.modules if m.startswith('ClosedLoopDeployment')])")
+    # edges.py sits at <modules>/ClosedLoopDeployment/edges.py, so two levels up is <modules>,
+    # which is the directory both packages are found under.
+    modules_dir = os.path.dirname(os.path.dirname(os.path.abspath(E.__file__)))
+    env = dict(os.environ, PYTHONPATH=modules_dir)
+    r = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr[-600:]
+    assert r.stdout.strip().endswith("[]"), r.stdout
+
+
+def test_the_closed_loop_module_reaches_the_biomarker_page_for_this_and_re_exports_the_toolkit():
+    """The other half of the direction: this module DOES depend on Biomarkers now, and the names it
+    used to define are still reachable under their old spellings so nothing downstream broke."""
+    from Biomarkers.routines import analytics
+    assert E.band_pain_tracking is analytics.band_pain_tracking
+    assert E.MIN_RELIABLE_CLUSTERS == analytics.MIN_RELIABLE_CLUSTERS
+    for name in ("estimator_for", "wild_cluster_bootstrap_t", "wild_cluster_bootstrap_ci",
+                 "_cluster_ols", "_small_sample_inference", "_BootstrapPlan",
+                 "_rademacher_weights", "_cr0_variance", "MAX_ENUMERABLE_CLUSTERS"):
+        assert getattr(E, name) is getattr(analytics, name), name
+

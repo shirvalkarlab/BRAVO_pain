@@ -75,6 +75,107 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-06 — three parallel lanes: caching, the pain relationship moved to Biomarkers, and the stability answer reaches the deployment page
+
+Run as three sub-agents with disjoint file ownership, at the PI's instruction, plus explicit rules
+forbidding them to run git, edit this file, or replace whole module directories in the container.
+Verified afterwards: HEAD unchanged, nothing staged, this file untouched by them, and only the files
+each lane owned were modified.
+
+**1. WHERE THE SLOW PAGE ACTUALLY COMES FROM, measured, and it is not what I said twice before.**
+A cold request is about 72 s. The two upstream input fetches are **95.7% of it** (71.46 s of a
+74.67 s staged run); the joined table is 3.6% and all the estimates together are 0.2%. Both fetches
+call `settings_stream`, which reads and decrypts the same 1,136 Percept files, so it runs TWICE per
+cold build -- roughly **34 of the 72 seconds is the same reading done a second time**.
+
+The real hole was WHERE the 2026-09-04 memo lived. The server runs FOUR gunicorn workers, each with
+its own memory, with reload enabled -- so "computed once" was true per worker per restart, and the
+first request to each worker still paid 72 s. `adapter.py` now also writes the cached inputs to
+`BRAVOStorage/cache/closed_loop/`, keyed on the same content signature: 5.5 MB, 0.01 s to write,
+0.01 s to read. **First request in a fresh worker: 71.66 s -> 3.25 s, 22 times faster.** No expiry
+by design -- a new ingest changes the key and nothing else does.
+
+**The PI's premise needed correcting, gently.** The in-clinic testing sheets are not read by this
+endpoint at all -- zero functions from `clinic_steps.py` or `within_visit.py` appear in the profile
+-- so a new sheet cannot change what the page returns, and keying this cache on the sheet would have
+invented a dependency the code does not have. Where the sheet genuinely IS an input is the separate
+current-against-band-power calculation over every band, electrode and visit, and that is where the
+sheet-aware key went: `amplitude_response_cached`, 1.38 s to compute, 0.21 s from cache. A corrected
+current in the sheet, an appended step, or a re-decoded recording all invalidate it; an added
+annotation column does not. Nothing in the server calls it yet.
+
+**The 2026-09-04 fingerprint trap was still live and is now closed properly.** Confirmed before
+fixing: naming one absent column alongside a real one produced a key over the real one alone and
+still called itself "hashed". A missing named column now RAISES, with four ways to name one
+(required / alternative spellings / at-least-one-of / hashed-if-present-and-recorded-either-way).
+27 new tests in `tests/test_adapter_caching.py`.
+
+**2. THE PAIN RELATIONSHIP MOVED TO THE BIOMARKERS PAGE, and the audit changed what the job was.**
+The PI's instruction was that the closed-loop side should inherit this rather than recompute it. The
+audit found the two sides were **never computing the same quantity**, so there was nothing to
+reconcile: closed-loop fits a straight line of the continuous pain score on power on the
+STIMULATOR'S OWN SCALE, one row per pain report; the biomarkers page cuts pain into thirds and fits
+a logistic curve with a random offset per week on LOG power divided by its own scatter, and drops
+the first three weeks. Sharper finding: searching the whole Biomarkers package for the stimulator's
+linear power scale returned NOTHING -- this was not a duplicated calculation that had drifted, it was
+a calculation that existed only in the consuming module.
+
+`band_pain_tracking` now lives in `Biomarkers/routines/analytics.py` and `state_edge` calls it;
+`edges.py` went 744 -> 252 lines. Verified by freezing the pre-change file and running both versions
+on the same live table in one pass: **108 of 108 band cells exactly identical** on slope, interval,
+p-value, counts, sign and verdict -- exact equality, not a tolerance. The logistic mixed model, the
+thirds cut and the three-week exclusion stayed where they were, because they answer a different
+question.
+
+**3. THE "DOES THIS BAND MEAN THE SAME THING AT EVERY SETTING" ANSWER NOW REACHES THE DEPLOYMENT
+PAGE.** New `ClosedLoopDeployment/stability.py` reuses the answer the biomarkers path already
+computed (no model refitted) and returns FOUR values: behaves the same / behaves differently /
+cannot tell / not tested. **The module exposes no boolean about the conclusion at all** -- no
+`.stable`, no `.passed`, no `.ok` -- and the only true-or-false key says whether the test ran. A
+test enforces that by name.
+
+The reason, caught on live data: on `ONE_THREE_LEFT` at 12.5 Hz the old two-valued `stim_stable`
+flag reads **True**, which downstream looks like a pass, but the interval on the largest difference
+between stimulation states runs from -1.23 to +0.22 against a declared margin of 0.69 -- so the data
+**cannot tell** a steady band from a materially unsteady one. DO NOT read `stim_stable` on the
+deployment page; read `band_stability["answer"]` and handle all four values. Wired into
+`report_for_participant` and verified live: answer "cannot tell", one boolean in the payload,
+JSON-clean. Panel `BandStabilityPanel.js` mounted under the evidence triangle.
+
+**IT BLOCKS NOTHING, and that is the PI's decision to make.** Every other blocking rule in this
+module is a device rule traceable to a page of a Medtronic manual; this is a statistical finding
+about one participant. `blocking_status` says so in the payload.
+
+**4. THE HEAT MAPS, and a protocol point that no analysis can fix.** Frequency band against
+delivered current, one white-to-red ramp, value printed in every cell, count of settled 3-second
+chunks under each column, and bands where a multiple of the stimulation frequency folds in drawn as
+grey hatching rather than coloured. Two panels per figure, because on the best visit power differs
+by 5.5 dB across the 18 bands but only 0.3 dB across the currents, so one absolute scale renders the
+current effect as no visible change.
+
+**On contacts 0 and 3 of the RIGHT electrode the direction differs by rate**: at 110 Hz the lower
+bands FALL with current (10.5 Hz -0.69, 11.5 -0.76, 14.5 -0.86), which is the direction Dual
+Threshold needs; at 55 Hz every one of the 12 usable bands RISES. **But the two rates were tested on
+visits 13 months apart, so rate and the passage of time cannot be separated**, and only one visit in
+the whole record tested two rates with enough settled signal -- and those two rates share only four
+usable bands. **So one visit must step the current at two different rates, and no visit does.** Also
+found: on the 2026-08-18 visit the right-side current is strongly tied to clock time (r = +0.768,
+p = 0.000049), which is why the left-current version was drawn.
+
+**Known limit of the figure, following from the colour scheme requested:** a single white-to-red ramp
+cannot encode a direction, so the second panel measures each band from its own lowest value and every
+cell reads positive by construction. It shows how much a band moves, not which way. Three of 31
+possible electrode-and-side pairings were drawn; all 31 are in the accompanying table.
+
+Suites: ClosedLoopDeployment plus StimOptimizer **682 passed, 41 skipped**. Biomarkers **336 passed**
+in the container.
+
+**Still open for the PI:** whether "behaves differently" should block a deployment; whether to add a
+direction strip beside the heat maps; and the duplicated `settings_stream` read (about 34 s of a
+cold build), which needs an optional argument on two `StimOptimizer/adapter.py` functions.
+
+
+
 ### 2026-09-06 — my pre-registration labelled the brain side wrongly; corrected by amendment
 
 **The PI caught this: a channel name ending in _LEFT or _RIGHT already says which side of the brain
