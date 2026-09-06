@@ -75,6 +75,140 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-06 (later) - a real units error found by the PI, the pain-tracking quantity replaced with area under the curve, the duplicate file read removed, and the heat maps redone
+
+**1. A UNITS ERROR IN THE LOW-VERSUS-HIGH CURRENT COMPARISON. The PI asked which units it used and
+suspected a mistake; he was right.** In `StimOptimizer/routines/lfp_response.py`, the two power
+readings and the switching value the device derives from them were in device units, but the effect
+size checked against 0.50 was computed on `np.log(p)`. Those are different scales.
+
+MEASURED across 504 band-and-electrode combinations: correcting it to device units CHANGES THE
+ANSWER FOR 33 of them -- 21 that cleared 0.50 on the logarithm do NOT clear it in device units (the
+dangerous direction, admitted when they should not have been) and 12 go the other way. The two
+numbers correlate at 0.94, but the disagreement is not confined to borderline cases: on
+ZERO_THREE_RIGHT at 110 Hz the logarithm gives 5.22 and device units 2.43 for the same pair.
+
+The fix uses device units, because the device places its switching value BETWEEN the two readings in
+its own units, so what matters is how much the readings scatter in those units. The log-scale number
+is kept as `separation_d_on_log` so the two can always be compared. HONEST COST, recorded at the
+point of change: band power is right-skewed, so a standardised gap on the raw device scale is
+influenced more by the higher-power group's scatter than a log-scale one is. That is presumably why
+the logarithm was there. It does not change the decision.
+
+**TWO DIFFERENT QUANTITIES ARE BOTH CALLED DEVICE UNITS and they differ by more than two orders of
+magnitude.** The 3-second chunk data the plots use runs 113 to 4699 (median 305) and matches what the
+page shows. The closed-loop evidence path's readings run 0.23 to 9.11 because `device_band_power`
+sums squared magnitude measured in MICROVOLTS, so it lands in physical units, not device counts. The
+conversion is already a documented constant: `LSB_PER_UV2_TRANSFORM = 352.62` (PI decision
+2026-06-27), with `LSB_PER_DEVICE_PSD = 73.63` for the PSD-only case, and a THIRD, unrelated constant
+`ADC_NV_PER_LSB = 146 nV/LSB` for time-domain samples which the code itself flags as a distinct
+quantity. NEITHER SCALE IS AN ERROR, but a power value from one path is not the same number as one
+shown on the page, so anything placing them side by side must convert first. NOT YET VERIFIED on
+identical rows: the medians compared came from different bands and electrodes, so their ratio of
+about 189 is an order-of-magnitude check, not a test of the constant.
+
+**2. THE PAIN-TRACKING QUANTITY REPLACED, on the PI's instruction.** His reasoning is the design
+constraint: the device switches state at a programmed value, which is a binary decision, so the
+quantity that predicts pain should be a binary-classification quantity. He also said the existing
+biomarker-page approach is valid and should be kept.
+
+DELETED: `band_pain_tracking`, `band_pain_tracking_from_detail`, `PAIN_TRACKING_TRACKS`,
+`PAIN_TRACKING_NOT_RESOLVED`, `PAIN_TRACKING_NOT_ASSESSED`. Four files referred to them; all fixed.
+The names now appear ONLY in two tests that assert their absence and one explanatory comment.
+
+BUILT: `band_pain_auc_export` and `band_pain_correlation_export` in
+`Biomarkers/routines/analytics.py`, covering every sensing contact pair and every whole-hertz band
+centre from 8 to 30 Hz. On RCS08 that is 6 contact pairs x 23 centres = 138 rows per table, every row
+assessed, 1000 resamples each. Three-word answers, never a boolean. The value meaning no relationship
+is written on every row as its own column (0.5 for classification, 0 for correlation) so the two
+tables cannot be read against the wrong comparison.
+
+**THE THING THAT WOULD HAVE FAILED SILENTLY, and the lane caught it itself.** `EdgeEstimate.resolved`
+means "the interval excludes ZERO", and `consistency.py` and device rule D19 read only `resolved` and
+`sign`. An area under the curve lies between 0 and 1 and is measured against 0.5, so storing it raw
+would have made `resolved` TRUE for EVERY band ever computed and destroyed the one check the module
+exists to perform. `state_edge` therefore stores the value and both interval ends with 0.5
+SUBTRACTED, so "excludes zero" means exactly "excludes 0.5". A test fails if the subtraction is
+removed. A band whose interval runs 0.47 to 0.66 has established nothing; stored raw it would have
+read as established.
+
+It also fixed a defect in the pre-existing `deployment_roc`, which reports the LARGER of the value and
+one minus it, so it can never fall below 0.5 and its interval cannot honestly straddle 0.5. The new
+tables fix the comparison direction (more power against more pain) BEFORE looking at the data, so a
+value below 0.5 is a real reading meaning more power goes with LESS pain.
+
+**THE LIVE RESULT, and it is a sign problem. 42 of 138 rows have an interval excluding 0.5, and 41 of
+those 42 have the value BELOW 0.5 -- more band power goes with LESS pain.** Two contact pairs carry
+almost all of it: `0-3+ Right` across 13 to 30 Hz (values 0.35 to 0.43, n = 440 pain reports) and
+`1-3+ Left` across 8 to 30 Hz (values 0.26 to 0.33, n = 163). The single exception is `1-3+ Right` at
+12 Hz, value 0.589, interval 0.500 to 0.690, which only barely excludes 0.5.
+WHY THIS MATTERS: Dual Threshold suppression raises current when band power is high. If more power
+goes with LESS pain, suppressing power would raise pain, so the control law would be pointed the
+wrong way for these contacts. This needs the PI's judgement before any of it feeds a prescription.
+
+CAVEATS the lane declared, both real. No correction was applied for looking at 138 combinations, and
+23 centres per contact are nowhere near independent because neighbouring 5 Hz bands overlap heavily --
+so 42 is not a count of 42 independent findings. And the power feature is NOT the stimulator's units:
+it is the average over the band of a LOGARITHM of power already standardised within each recording
+source. Area under the curve is rank-based and so is unaffected by a monotone transform applied
+uniformly, but standardising SEPARATELY WITHIN EACH SOURCE is not uniform across the pooled set and
+can change the ordering between sources -- NOT CHECKED how many sources contribute per row. The
+Pearson table is definitely affected, because a correlation is not rank-based. If the PI wants these
+in device units, the pooling step upstream has to change, not the export.
+
+**3. THE DUPLICATE FILE READ IS GONE. Cold build 71.23 s -> 35.40 s.** Two functions in
+`StimOptimizer/adapter.py` each fetched inputs and both called `settings_stream`, reading and
+decrypting the same 568 stored files twice (1,136 reads). Both now accept an optional already-built
+stream, keyword-only and defaulting to None so no existing caller changes, and
+`evidence_inputs_cached` builds it once. Measured old/new/old/new to control for the operating system
+caching files: 74.13 -> 35.71 and 68.32 -> 35.08. Whole page request 76.66 s -> 41.55 s.
+
+PROVED UNCHANGED, not just faster: the three returned objects identical (6,226 / 123 / 92 rows), the
+joined table identical at 112,068 rows, and the whole report walked value by value, 1,321 values,
+ZERO differences. Plus a control the brief did not ask for -- the report built twice down the NEW path
+alone, also zero differences -- without which agreement between old and new could have been agreement
+between two runs of something that varies anyway. Verified both functions build the stream identically
+(no filtering by either) with a test that records the calls and requires them equal, and a second test
+that copies the frame and requires it unchanged.
+
+SPEED LADDER NOW: first ever request, nothing cached ~35 s (was ~72); first request in a fresh worker
+with the cache file present 3.25 s; later requests in that worker from memory.
+
+**4. THE HEAT MAPS REDONE IN DEVICE UNITS with the PI's own averaging rule.** His rule: each value is
+the mean of the ten 3-second pieces in the 30 seconds IMMEDIATELY BEFORE the next current change, and
+it applies ONLY across a run of monotonically increasing currents -- never carried across a drop to
+zero and back up, because the preceding window would then not reflect the setting being left. New
+function in `StimOptimizer/routines/within_visit.py` alongside the old one (which other code uses).
+
+**A VISIT WHERE EACH SIDE WAS RAMPED ALONE EXISTS: 2026-08-18, in clinic, 55 Hz** -- which is the
+fixed deployment rate. Left stepped 1.0 to 3.5 mA with the right at 0.0 mA throughout (6 of 8 settings
+accepted), then the right stepped 0.5 to 3.0 mA with the left at 0.0 mA (5 of 7 accepted), about
+fifteen minutes apart. Correlation between the two sides across that visit is -0.012, against 0.98 on
+2026-06-24. Of 54 visit-and-rate combinations searched, more than thirty have a correlation of 1.0 or
+above 0.99 -- the stimulators were moved in lockstep -- and only six have a usable single-side stretch.
+
+**NINE OF TWENTY BANDS ARE MEASURING THE STIMULATOR, NOT THE BRAIN.** At 55 Hz with sampling at 250
+per second the stimulator and its folded multiples land at 25, 30, 55, 60, 80, 85, 110 and 115 Hz.
+TWO OF THOSE SIT INSIDE THE 8-30 Hz BIOMARKER RANGE: the 22.5 and 27.5 Hz bands. Of the four bands in
+that range only 12.5 and 17.5 Hz are clean. This is unavoidable at the fixed 55 Hz rate and it hits
+the pre-registered 24.5 Hz candidate, whose 22-27 Hz window contains the 25 Hz landing. Before those
+rows were marked, the largest apparent effect on the figure was the artifact: 23121 device units and
+4.8x on one panel, and 45506 device units and 18.2x on another.
+
+In the CLEAN bands the response to current is modest and holds no direction: 7.5 Hz rises to 2.49x at
+2 mA then falls back to 1.41 by 3.5 mA; 12.5 Hz peaks 1.44x then returns to 1.11; 17.5 Hz peaks 1.79x
+then returns to 1.05. A control law needs a consistent direction across the working range.
+
+Suites: ClosedLoopDeployment plus StimOptimizer **717 passed, 41 skipped**.
+
+**OPEN FOR THE PI:** whether a negative pain relationship (more power, less pain) on those two contact
+pairs rules them out for suppression-based closed loop; whether the 22.5 and 27.5 Hz contamination at
+55 Hz rules out the pre-registered candidate band; whether to verify the 352.62 constant on identical
+rows; and whether the Pearson table needs rebuilding on device units, which requires changing the
+pooling step upstream rather than the export.
+
+
+
 ### 2026-09-06 — three parallel lanes: caching, the pain relationship moved to Biomarkers, and the stability answer reaches the deployment page
 
 Run as three sub-agents with disjoint file ownership, at the PI's instruction, plus explicit rules
@@ -120,7 +254,8 @@ the first three weeks. Sharper finding: searching the whole Biomarkers package f
 linear power scale returned NOTHING -- this was not a duplicated calculation that had drifted, it was
 a calculation that existed only in the consuming module.
 
-`band_pain_tracking` now lives in `Biomarkers/routines/analytics.py` and `state_edge` calls it;
+`band_pain_tracking` lived briefly in `Biomarkers/routines/analytics.py` and was DELETED the
+same day on the PI's instruction -- see the 2026-09-06 entry above for what replaced it. `state_edge` called it;
 `edges.py` went 744 -> 252 lines. Verified by freezing the pre-change file and running both versions
 on the same live table in one pass: **108 of 108 band cells exactly identical** on slope, interval,
 p-value, counts, sign and verdict -- exact equality, not a tolerance. The logistic mixed model, the

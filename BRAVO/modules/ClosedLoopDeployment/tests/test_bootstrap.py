@@ -454,16 +454,50 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
     assert "FEW CLUSTERS" in e.note, "the historical marker stays, as information"
 
 
-def test_the_state_edge_and_therapy_edge_switch_on_the_same_condition():
+def test_the_therapy_edge_switches_to_the_wild_cluster_bootstrap_at_few_clusters():
+    """This used to be one test asserting that the pain edge and the therapy edge switched
+    inference method on the same condition. That claim is no longer true and the test has been
+    split rather than relabelled: the pain edge no longer fits a regression at all, so it has
+    nothing to switch, and its own behaviour is checked in the test below this one. The therapy
+    edge is unchanged, and so are its assertions.
+    """
     import pandas as pd
-    e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
-    assert e2.n_clusters == 9 and "WILD CLUSTER BOOTSTRAP-t" in e2.note
     dm = pd.DataFrame({"epoch": np.arange(10), "amp_mA_Left": np.linspace(1, 4, 10),
                        "nrs": 6 - 0.8 * np.linspace(1, 4, 10)
                               + np.random.default_rng(0).normal(0, 0.15, 10)})
     e3 = E.therapy_edge(dm)
     assert e3.n_clusters == 10 and "WILD CLUSTER BOOTSTRAP-t" in e3.note
     assert e3.p >= 2.0 / 2 ** 10
+
+
+def test_the_pain_edge_gets_its_uncertainty_by_resampling_whole_pain_reports():
+    """What the pain edge does NOW, asserted on what it does rather than on what it no longer does.
+
+    THE WILD CLUSTER BOOTSTRAP IS GENUINELY NOT USED HERE, and this is a change of method and not
+    only of routine. That bootstrap flips the sign of whole clusters of regression residuals with
+    the null imposed, works out how often the resulting t statistic beats the observed one, and
+    inverts that test to get a confidence set for a regression coefficient. The pain edge no longer
+    has a regression coefficient: it carries how far this band's power gets above or below coin
+    flipping at telling high pain from low pain, and its interval is the 2.5th to 97.5th percentile
+    of that quantity recomputed on whole pain reports drawn with replacement.
+
+    What IS preserved is the principle both methods exist for -- the resampling unit is the cluster,
+    here the pain report, never the individual spectral sample -- because many spectral samples can
+    share one pain report and therefore share its score exactly, and resampling samples would
+    manufacture confidence out of recording coverage. So: same principle, different quantity,
+    different kind of interval, and the note has to say which.
+    """
+    e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
+    assert e2.cluster_unit == "report_id", e2.cluster_unit
+    assert e2.n_clusters == 9, e2.n_clusters
+    assert "resampling whole pain reports rather than individual samples" in e2.note, e2.note
+    assert "area under the curve minus 0.5" in e2.scale, e2.scale
+    assert "WILD CLUSTER BOOTSTRAP-t" not in e2.note, \
+        "the pain edge must not claim an inference method it does not use"
+    # this toy table separates the two pain states completely, which collapses the interval to a
+    # point. The edge must say that is a limit of the method, not report it as exact knowledge.
+    if e2.ci is not None and abs(e2.ci[1] - e2.ci[0]) < 1e-12:
+        assert "THE INTERVAL HAS NO WIDTH" in e2.note, e2.note
 
 
 def test_the_edge_refuses_to_fall_back_to_cr0_when_the_bootstrap_cannot_be_formed():

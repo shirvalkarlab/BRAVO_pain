@@ -4763,170 +4763,833 @@ def _small_sample_inference(y, X, groups, *, coef_index=1, n_boot=999, seed=0, a
     return ci["p_at_null"], ci["ci"], note, ci
 
 
-# --- The pain-relationship estimate the closed-loop module now inherits ----------------------
-#: The three answers this estimate can give. Kept as words rather than as True/False on purpose.
-#:
-#: This project has been damaged three separate times by turning the answer into a yes-or-no value.
-#: "We could not work this out" and "we worked it out and the band does not track pain" are
-#: completely different statements, and a True/False value has no room for the first one, so it
-#: gets stored as False and then read as a negative finding. A band that was never assessed then
-#: appears in a report as a band that failed, which is how a real biomarker gets discarded. The
-#: three words below cannot be collapsed by accident, because nothing downstream can treat a string
-#: as a boolean without saying so.
-PAIN_TRACKING_TRACKS = "tracks"              # an interval that excludes zero: a direction is established
-PAIN_TRACKING_NOT_RESOLVED = "not_resolved"  # estimated, but the interval spans zero (or is unbounded)
-PAIN_TRACKING_NOT_ASSESSED = "not_assessed"  # never estimated: the data needed was not there
+# --- What the closed-loop page inherits: how well a band tells high pain from low pain ------
+#
+# WHY THIS IS A CLASSIFICATION QUANTITY AND NOT A SLOPE. The stimulator changes what it is doing
+# when band power crosses a value that has been programmed into it. That is a yes-or-no decision
+# about the state of the brain signal: either the power is above the programmed value or it is
+# below it. So the number that says whether a band is worth using to drive that decision should be
+# a number about telling two states apart, and the area under the curve is exactly that: it is the
+# chance that a randomly chosen high-pain moment has more power in the band than a randomly chosen
+# low-pain moment. A straight-line slope answers a different question (how many pain points go with
+# one unit of power) and it does not tell a reader how well the two pain states can be separated.
+# The earlier version of this code fitted that slope; it has been removed, on the PI's instruction,
+# and replaced by the two tables below.
+#
+# 0.5 IS THE VALUE THAT MEANS NOTHING WAS FOUND. An area under the curve of 0.5 is what coin
+# flipping gives. So the question a reader asks of every row of the table below is whether the
+# confidence interval stays wholly on one side of 0.5. An interval that touches or crosses 0.5
+# means nothing was established for that band, which is NOT the same as establishing that the band
+# is useless.
+#
+# THE THREE ANSWERS ARE WORDS, NOT True OR False. This project has been damaged three separate
+# times by turning this answer into a yes-or-no value. "We could not work this out" and "we worked
+# it out and this band separates high pain from low pain no better than coin flipping" are
+# completely different statements, and a True/False value has no room for the first one, so it gets
+# stored as False and then read as a negative finding. A band that was never assessed then appears
+# in a report as a band that failed, which is how a real biomarker gets thrown away. The three
+# words below cannot be collapsed by accident, because nothing downstream can treat a string as a
+# yes-or-no value without saying so in its own source.
+#: The interval stays wholly on one side of the no-relationship value, so something was established.
+BAND_PAIN_ESTABLISHED = "established"
+#: The number was computed, but its interval includes the no-relationship value. Nothing established.
+BAND_PAIN_NOT_RESOLVED = "not_resolved"
+#: The number was never computed, because the data it needs was not there. Nothing established.
+BAND_PAIN_NOT_ASSESSED = "not_assessed"
+
+#: The band centre frequencies both export tables cover by default: every whole number of hertz
+#: from 8 to 30 inclusive, which with the 5 Hz band width used throughout this project means bands
+#: spanning 5.5-10.5 Hz up to 27.5-32.5 Hz. 8 to 30 Hz is the range the PI asked for and it is also
+#: the range the Percept stimulator will sense a band in. Note that the bands at the two ends of
+#: this list stick out past 8 Hz and past 30 Hz, so every row of both tables carries a column
+#: saying whether that row's band lies wholly inside 8 to 30 Hz.
+DEFAULT_PAIN_BAND_CENTERS_HZ = tuple(float(c) for c in range(8, 31))
 
 
-def band_pain_tracking(table, *, channel, center_hz, pain_column="nrs",
-                       power_column="power_linear", group_column="report_id",
-                       n_boot=999, seed=0):
-    """Does this band's power track the patient's reported pain, holding the settings still?
+def _report_clusters_in_time_order(group_ids, row_times, row_values):
+    """Put the pain reports in the time order they happened, and choose the resampling block length.
 
-    THE LITERAL QUANTITY. A straight line is fitted through the points (band power, pain score) for
-    one sensing channel and one centre frequency, and the number returned is that line's slope: how
-    many points the pain score changes for a one-unit change in band power, in whatever units the
-    power column is stored in. Nothing is standardised and nothing is binned, so the slope keeps the
-    units of the two things being related and can be read directly.
+    Both export tables get their confidence interval by resampling whole pain reports, and one of
+    the two resampling schemes (the moving block) only means anything if neighbouring positions in
+    the list of reports are neighbouring in time. So the reports are sorted by the earliest sample
+    time belonging to each of them. A report whose sample times will not parse is put at the end,
+    keeping the order its identifier already had, which for the identifiers this project uses is
+    the order the pain reports were matched in.
 
-    ONE ROW OF DATA is one spectral sample for that channel and band, carrying the pain score of
-    whichever report it was matched to. Several rows therefore repeat the same pain score, which is
-    exactly why the grouping below is not optional.
-
-    THE GROUPING is ``group_column`` -- by default the pain report, which is the thing that carries
-    one independent observation of the power-to-pain relationship. If that column is absent the
-    function refuses to estimate rather than falling back to treating every spectral sample as its
-    own observation, because that fallback is the mistake the audit was called to find and it
-    inflates significance instead of losing it. Refusing is reported as "not assessed".
-
-    WHICH POWER SCALE. The default is the LINEAR band power column, because the stimulator itself
-    computes its control signal as a linear sum of squared magnitude (device rule D11, see
-    ``ClosedLoopDeployment/constraints.py``), so a slope meant to predict what the device will do
-    has to be on the device's own scale. The biomarker page's own displays use a logarithmic scale
-    instead, and a caller wanting that should pass the logarithmic column by name. The two are not
-    interchangeable and the column used is reported back on every result.
-
-    UNCERTAINTY. The interval and the p-value come from grouped (CR0) standard errors when there
-    are at least ``MIN_RELIABLE_CLUSTERS`` groups, and from the wild cluster bootstrap below that,
-    which is the same switch every other estimate in this project uses. ``estimator_for`` names
-    which one was used and why.
-
-    RETURNS a dictionary whose ``verdict`` is one of the three words above -- never a True/False
-    value. See the note beside those constants for why that matters.
+    ``group_ids`` is one pain-report identifier per row, ``row_times`` one time string per row (or
+    None), and ``row_values`` one continuous pain score per row, which is what the block length is
+    chosen from. Returns (cluster_of_row, n_reports, block_len).
     """
-    def _blank(verdict, why, *, n=0, n_groups=0, note=""):
-        return {"verdict": verdict, "why": why, "estimate": None, "ci": None, "p": None,
-                "n": int(n), "n_groups": int(n_groups), "group_column": group_column,
-                "power_column": power_column, "pain_column": pain_column,
-                "slope_units": (f"change in {pain_column} per one unit of {power_column}"),
-                "inference": None, "note": note or why}
+    uniq = np.unique(group_ids)
+    n_cl = len(uniq)
+    if n_cl == 0:
+        return np.zeros(0, dtype=int), 0, 1
+    if row_times is not None and len(row_times) == len(group_ids):
+        t_epoch = pd.to_datetime(pd.Series([str(s) for s in row_times]), errors="coerce", utc=True)
+        t_sec = t_epoch.astype("int64").to_numpy() / 1e9
+        cl_time = {}
+        for c in uniq:
+            vals = t_sec[group_ids == c]
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            cl_time[c] = float(vals.min()) if vals.size else np.inf
+        order = sorted(range(n_cl), key=lambda i: (cl_time[uniq[i]], uniq[i]))
+    else:
+        order = list(range(n_cl))
+    ordered = uniq[np.asarray(order, dtype=int)]
+    cl_pos = {c: i for i, c in enumerate(ordered)}
+    cluster_of_row = np.array([cl_pos[c] for c in group_ids], dtype=int)
+    vals = np.asarray(row_values, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cl_mean = np.array([float(np.nanmean(vals[group_ids == c])) for c in ordered])
+    return cluster_of_row, n_cl, _auto_block_len(cl_mean)
 
+
+def _one_report_one_vote_weights(cluster_of_row, n_reports):
+    """One weight per row, so that every pain report counts once no matter how many spectral
+    samples happened to be matched to it.
+
+    A pain report that the recording happened to cover with twenty spectral samples is not twenty
+    independent observations of that patient's pain; it is one observation looked at twenty times.
+    How many samples a report attracted is a fact about when the device was recording, not about
+    how informative that report is. So each row is weighted by one divided by the number of rows
+    belonging to its pain report, which makes every report carry a total weight of exactly one.
+
+    This matters more than it looks. Both numbers below are averages over PAIRS of samples, one
+    high-pain and one low-pain, so without this weighting a report with many samples on one side
+    contributes its own sample count MULTIPLIED BY the other side's sample count of the pairs, and
+    a single well-covered day can decide the answer for the whole band.
+    """
+    counts = np.bincount(cluster_of_row, minlength=int(n_reports)).astype(float)
+    counts[counts <= 0] = 1.0
+    return 1.0 / counts[cluster_of_row]
+
+
+def _weighted_pearson_matrix(x, y, W):
+    """Pearson correlation between x and y for EVERY row of a (B, N) weight matrix at once.
+
+    ``W[b, j]`` is how many times row j appears in resample b (whole numbers for a bootstrap, ones
+    and zeros for leaving one report out), multiplied by that row's one-report-one-vote weight. The
+    same weighted-mean, weighted-variance and weighted-covariance formulas as an ordinary Pearson
+    correlation, just carrying the weights through. Returns a (B,) array; resamples with no spread
+    left in either variable come back as NaN, and the caller drops those.
+    """
+    W = np.asarray(W, dtype=np.float64)
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    wsum = W.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mx = (W * x[None, :]).sum(axis=1) / wsum
+        my = (W * y[None, :]).sum(axis=1) / wsum
+        dx = x[None, :] - mx[:, None]
+        dy = y[None, :] - my[:, None]
+        cxy = (W * dx * dy).sum(axis=1)
+        cxx = (W * dx * dx).sum(axis=1)
+        cyy = (W * dy * dy).sum(axis=1)
+        r = cxy / np.sqrt(cxx * cyy)
+    r = np.asarray(r, dtype=float)
+    r[~np.isfinite(wsum) | (wsum <= 0)] = np.nan
+    r[~np.isfinite(r)] = np.nan
+    return r
+
+
+def _resample_weight_matrix(cluster_of_row, n_reports, n_boot, block_len, rng, row_weight=None):
+    """The (B, N) weight matrix that resamples whole pain reports with replacement.
+
+    With ``block_len`` of 1 this draws pain reports one at a time with replacement, which is the
+    ordinary bootstrap over reports. With a longer block length it draws runs of neighbouring
+    reports instead (a circular moving block, Politis and Romano), which keeps the tendency of pain
+    scores on nearby days to resemble each other; ``_auto_block_len`` chooses the length from the
+    measured autocorrelation of the pain scores and returns 1 when there is none.
+
+    Written out here rather than reusing ``_block_bootstrap_aucs`` because that function goes
+    straight on to compute an area under the curve, while both export tables need the SAME weight
+    matrix fed to two different statistics. The drawing rules are identical to that function's, and
+    there is a test that checks the two agree when both are given the same seed.
+    """
+    B = int(n_boot)
+    K = int(n_reports)
+    if block_len is None or block_len <= 1:
+        picks = rng.integers(0, K, size=(B, K))
+    else:
+        L = int(block_len)
+        n_blocks = int(np.ceil(K / L))
+        starts = rng.integers(0, K, size=(B, n_blocks))
+        offs = np.arange(L)
+        idx = (starts[:, :, None] + offs[None, None, :]) % K
+        picks = idx.reshape(B, -1)[:, :K]
+    cl_counts = np.zeros((B, K), dtype=np.float64)
+    np.add.at(cl_counts, (np.arange(B)[:, None], picks), 1.0)
+    W = cl_counts[:, cluster_of_row]
+    if row_weight is not None:
+        W = W * np.asarray(row_weight, dtype=np.float64)[None, :]
+    return W
+
+
+def _leave_one_report_out_weight_matrix(cluster_of_row, n_reports, row_weight=None):
+    """The (K, N) weight matrix that leaves out one whole pain report at a time.
+
+    Row i is every sample except the ones belonging to report i. This is what the lopsidedness
+    correction on the confidence interval is estimated from (see ``_bca_ci``): how much the answer
+    moves when any single pain report is dropped.
+    """
+    K = int(n_reports)
+    W = np.ones((K, len(cluster_of_row)), dtype=np.float64)
+    for i in range(K):
+        W[i, cluster_of_row == i] = 0.0
+    if row_weight is not None:
+        W = W * np.asarray(row_weight, dtype=np.float64)[None, :]
+    return W
+
+
+def _bootstrap_two_sided_p(boot, null_value):
+    """A two-sided p-value read off the resamples, against the value that means no relationship.
+
+    Twice the smaller of the share of resamples at or below the no-relationship value and the share
+    at or above it, capped at 1. The smallest number this can return is one divided by one more
+    than the count of usable resamples, and that number is returned alongside it so that nobody
+    reads a p-value of 0.002 from 500 resamples as though it had been measured to that precision.
+    """
+    b = np.asarray(boot, dtype=float)
+    b = b[np.isfinite(b)]
+    n = int(b.size)
+    if n < 2:
+        return None, None
+    resolution = 1.0 / (n + 1.0)
+    lo_share = float(np.mean(b <= null_value))
+    hi_share = float(np.mean(b >= null_value))
+    p = min(1.0, 2.0 * min(lo_share, hi_share))
+    return float(max(p, resolution)), float(resolution)
+
+
+def _pain_split(labels, *, strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                pain_cutoff=None, rating_group=None):
+    """Split the continuous pain scores into high pain and low pain, and say in words how.
+
+    The splitting itself is ``_binarize_labels``, which is what the biomarker page already uses, so
+    the two agree by construction. What this adds is the sentence and the two numbers that have to
+    travel with every exported row: a reader who is shown a number for how well a band separates
+    high pain from low pain cannot interpret it at all without being told where the line between
+    high and low was drawn.
+
+    THE LINE IS DRAWN ON ONE PAIN SCORE PER PAIN REPORT, not on one per spectral sample. If it were
+    drawn on the samples, a pain report that the device happened to cover with many recordings would
+    appear many times in the list the percentiles are computed from and would drag the line towards
+    its own value, so whether a pain score counted as high or low would depend partly on when the
+    device was recording. ``_binarize_labels`` does this when it is given the report identifiers,
+    and it is given them here.
+
+    Returns (binary_labels, description_sentence, low_cut, high_cut).
+    """
+    y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
+                         pain_cutoff=pain_cutoff, rating_group=rating_group)
+    v = np.asarray(labels, dtype=float)
+    ref = v[np.isfinite(v)]
+    if rating_group is not None:
+        rg = np.asarray(rating_group)
+        if rg.shape == v.shape:
+            seen = {}
+            fin = np.isfinite(v)
+            for gid, val in zip(rg[fin], v[fin]):
+                seen.setdefault(gid, float(val))
+            if seen:
+                ref = np.asarray(list(seen.values()), dtype=float)
+    if ref.size == 0:
+        return y, "no pain scores were present, so no split could be made", None, None
+    if strategy in ("tertile", "percentile"):
+        lo_q = 33.3333 if strategy == "tertile" else float(low_pct)
+        hi_q = 66.6667 if strategy == "tertile" else float(high_pct)
+        lo = float(np.percentile(ref, lo_q))
+        hi = float(np.percentile(ref, hi_q))
+        why = (f"the pain scores were split into thirds, using one score per pain report: a score "
+               f"of {lo:.3g} or below counts as low pain, {hi:.3g} or above counts as high pain, "
+               f"and the scores in between were left out of this comparison")
+        return y, why, lo, hi
+    if strategy == "kmeans":
+        why = ("the pain scores were split into two groups by clustering the scores themselves, "
+               "using one score per pain report; the halfway point between the two group averages "
+               "is the line between low pain and high pain")
+        return y, why, None, None
+    cut = (float(pain_cutoff) if (strategy == "cutoff" and pain_cutoff is not None)
+           else float(np.median(ref)))
+    named = "the number the caller supplied" if strategy == "cutoff" else "the middle pain score"
+    why = (f"the pain scores were split at {cut:.3g}, which is {named}, using one score per pain "
+           f"report: that score or above counts as high pain, below it counts as low pain, and no "
+           f"score was left out")
+    return y, why, cut, cut
+
+
+def _blank_band_answer(reason, *, n_samples=0, n_reports=0, **extra):
+    """The result for a band that could not be assessed at all: no number, and the reason why."""
+    out = dict(extra)
+    out["answer"] = BAND_PAIN_NOT_ASSESSED
+    out["why"] = reason
+    out["n_spectral_samples"] = int(n_samples)
+    out["n_pain_reports"] = int(n_reports)
+    return out
+
+
+def band_pain_auc(power, pain_labels, report_group, *, times=None, strategy="tertile",
+                  low_pct=33.3333, high_pct=66.6667, pain_cutoff=None, n_boot=500, seed=0,
+                  alpha=0.05, power_feature="band power"):
+    """How well one band's power tells this patient's high-pain moments from the low-pain ones.
+
+    THE LITERAL QUANTITY. The number returned as ``auc`` is the chance that a randomly picked
+    high-pain moment has MORE power in this band than a randomly picked low-pain moment, with tied
+    values counting as half. 0.5 is what coin flipping gives. Above 0.5 means more power in the band
+    goes with more pain; below 0.5 means more power goes with less pain. Both are informative and
+    both are reported as they come out.
+
+    WHICH WAY ROUND THE COMPARISON GOES IS FIXED IN ADVANCE, and this is a deliberate difference
+    from ``deployment_roc``. That function reports the larger of the value and one minus the value,
+    which can never fall below 0.5, so its interval cannot honestly straddle 0.5 and it needs a
+    correction term to be read against. Here the comparison is fixed before the data is looked at --
+    more power against more pain -- so a value below 0.5 is a real reading (more power in this band
+    goes with LESS pain) and 0.5 is exactly what no relationship gives, with no correction needed.
+    That is what makes the interval-against-0.5 test in the exported table mean what a reader will
+    take it to mean.
+
+    EVERY PAIN REPORT COUNTS ONCE, however many spectral samples were matched to it, and the
+    confidence interval comes from resampling whole pain reports rather than individual samples.
+    Both of those are the same choice for the same reason: the pain report is the thing that carries
+    one independent observation of this patient's pain, and the number of spectral samples attached
+    to one report is a fact about recording coverage. See ``_one_report_one_vote_weights``.
+
+    WHICH POWER SCALE, AND WHY IT DOES NOT MATTER FOR THIS NUMBER. This number depends only on the
+    ORDER of the power values, not on their size, so it comes out identically whether the power is
+    in the stimulator's own units, in a logarithm of those units, or in any other rescaling that
+    keeps the values in the same order. That is worth stating because everything else in this
+    project has to be careful to stay in the stimulator's units. Here it makes no difference, and
+    there is a test that checks it. ``power_feature`` is carried through to the result purely so the
+    exported table can say what the numbers were computed on.
+
+    THE INTERVAL IS REPORTED TWICE. ``auc_low``/``auc_high`` are the plain 2.5th and 97.5th
+    percentiles of the resamples, and that is the interval the three-word answer reads, because it
+    is the more cautious of the two and it is the one this project's earlier work settled on for
+    deciding whether anything beats coin flipping. ``auc_low_corrected``/``auc_high_corrected``
+    additionally correct for the resamples sitting off-centre and for their lopsidedness (the
+    bias-corrected and accelerated interval of Efron, see ``_bca_ci``). Both are published, so the
+    choice is visible rather than tacit.
+
+    Returns a dictionary whose ``answer`` is one of ``BAND_PAIN_ESTABLISHED``,
+    ``BAND_PAIN_NOT_RESOLVED`` or ``BAND_PAIN_NOT_ASSESSED`` -- never a True or False value.
+    """
+    base = {"auc": None, "auc_low": None, "auc_high": None,
+            "auc_low_corrected": None, "auc_high_corrected": None,
+            "auc_per_sample": None, "no_relationship_value": 0.5,
+            "p_two_sided": None, "p_smallest_reportable": None,
+            "n_high_pain_samples": 0, "n_low_pain_samples": 0,
+            "pain_split_rule": None, "pain_low_cut": None, "pain_high_cut": None,
+            "n_resamples_used": 0, "resampling_unit": "one pain report",
+            "block_length_reports": None, "power_feature": str(power_feature),
+            "confidence_level": float(1.0 - alpha)}
+    x = np.asarray(power, dtype=float)
+    lab = np.asarray(pain_labels, dtype=float)
+    if x.size == 0 or lab.size != x.size:
+        return _blank_band_answer("no band power values were available for this contact and band",
+                                  **base)
+    if report_group is None:
+        return _blank_band_answer(
+            "the pain report identifiers were not supplied, so every spectral sample would have to "
+            "be counted as its own independent observation of this patient's pain. That is the "
+            "pseudoreplication this project's audit was called to find, and it makes a band look "
+            "more convincing than the data can support, so no number is computed here",
+            n_samples=int(x.size), **base)
+    rg = np.asarray(report_group)
+    y_all, split_why, lo_cut, hi_cut = _pain_split(
+        lab, strategy=strategy, low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff,
+        rating_group=rg)
+    base["pain_split_rule"] = split_why
+    base["pain_low_cut"] = lo_cut
+    base["pain_high_cut"] = hi_cut
+    m = np.isfinite(x) & np.isfinite(y_all)
+    n_ok = int(m.sum())
+    if n_ok == 0:
+        return _blank_band_answer(
+            "no spectral sample had both a usable band power value and a pain score on one side of "
+            "the high-or-low split", **base)
+    xs = x[m]
+    ys = y_all[m].astype(int)
+    gs = rg[m]
+    ts = (np.asarray(times)[m] if (times is not None and len(times) == x.size) else None)
+    n_pos = int(np.sum(ys == 1))
+    n_neg = int(np.sum(ys == 0))
+    base["n_high_pain_samples"] = n_pos
+    base["n_low_pain_samples"] = n_neg
+    n_rep_seen = int(len(np.unique(gs)))
+    if n_pos == 0 or n_neg == 0:
+        return _blank_band_answer(
+            f"all {n_ok} usable samples fell on the same side of the high-or-low pain split "
+            f"({n_pos} high pain, {n_neg} low pain), so there is nothing to tell apart",
+            n_samples=n_ok, n_reports=n_rep_seen, **base)
+    cluster_of_row, n_reports, block_len = _report_clusters_in_time_order(gs, ts, lab[m])
+    base["block_length_reports"] = int(block_len)
+    if n_reports < 2:
+        return _blank_band_answer(
+            f"only {n_reports} pain report is behind these samples; resampling pain reports needs "
+            "at least two, and a comparison resting on one report would say nothing about this "
+            "patient beyond that single day",
+            n_samples=n_ok, n_reports=n_reports, **base)
+    w = _one_report_one_vote_weights(cluster_of_row, n_reports)
+    auc = float(_weighted_auc_matrix(xs, ys, w[None, :])[0])
+    auc_per_sample = float(_weighted_auc_matrix(xs, ys, np.ones((1, n_ok)))[0])
+    if not np.isfinite(auc):
+        return _blank_band_answer(
+            "the comparison could not be formed on these samples even though both pain states are "
+            "present, which happens when every band power value is the same number",
+            n_samples=n_ok, n_reports=n_reports, **base)
+    base["auc"] = auc
+    base["auc_per_sample"] = (auc_per_sample if np.isfinite(auc_per_sample) else None)
+    base["n_spectral_samples"] = n_ok
+    base["n_pain_reports"] = n_reports
+    rng = np.random.default_rng(seed)
+    W = _resample_weight_matrix(cluster_of_row, n_reports, n_boot, block_len, rng, row_weight=w)
+    boot = _weighted_auc_matrix(xs, ys, W)
+    boot = boot[np.isfinite(boot)]
+    base["n_resamples_used"] = int(boot.size)
+    p, res = _bootstrap_two_sided_p(boot, 0.5)
+    base["p_two_sided"] = p
+    base["p_smallest_reportable"] = res
+    if boot.size < BOOT_CI_VALID_FLOOR:
+        base["answer"] = BAND_PAIN_NOT_RESOLVED
+        base["why"] = (
+            f"the value came out at {auc:.3f}, but only {int(boot.size)} of the {int(n_boot)} "
+            f"resamples kept both pain states present, which is fewer than the "
+            f"{BOOT_CI_VALID_FLOOR} this project requires before it will quote a confidence "
+            "interval. No interval is given, so nothing is established either way. This says how "
+            "few pain reports there are, not how small the effect is")
+        return base
+    lo = float(np.percentile(boot, 100.0 * alpha / 2.0))
+    hi = float(np.percentile(boot, 100.0 * (1.0 - alpha / 2.0)))
+    jack = _weighted_auc_matrix(
+        xs, ys, _leave_one_report_out_weight_matrix(cluster_of_row, n_reports, row_weight=w))
+    c_lo, c_hi, _z0, _a = _bca_ci(auc, boot, jack, alpha=alpha)
+    base.update({"auc_low": lo, "auc_high": hi,
+                 "auc_low_corrected": c_lo, "auc_high_corrected": c_hi})
+    if lo > 0.5 or hi < 0.5:
+        which = ("more power in this band goes with MORE pain" if auc > 0.5
+                 else "more power in this band goes with LESS pain")
+        base["answer"] = BAND_PAIN_ESTABLISHED
+        base["why"] = (
+            f"the value is {auc:.3f} and its {100 * (1 - alpha):.0f}% interval runs from {lo:.3f} "
+            f"to {hi:.3f}, which stays wholly on one side of the 0.5 that coin flipping would "
+            f"give, so this band does tell high pain from low pain in this patient: {which}")
+        # A COLLAPSED INTERVAL IS NOT A PRECISE ONE, and saying so is not optional. When the two
+        # pain states do not overlap at all in this band, every resample returns the same value and
+        # the interval comes out with no width. Quoting "0.000 to 0.000" without this sentence
+        # would invite a reader to take the value as known exactly, when what has actually happened
+        # is that resampling a handful of pain reports has run out of ways to disagree with itself.
+        if abs(hi - lo) < 1e-12:
+            base["why"] += (
+                f". THE INTERVAL HAS NO WIDTH, and that is a limit of the method rather than a "
+                f"claim of certainty: the high-pain and low-pain samples do not overlap at all in "
+                f"this band, so every one of the {int(boot.size)} resamples returned the same "
+                f"value. With only {n_reports} pain reports behind it, a complete separation is "
+                f"still consistent with a range of true values, and this interval cannot show that "
+                f"range")
+    else:
+        base["answer"] = BAND_PAIN_NOT_RESOLVED
+        base["why"] = (
+            f"the value is {auc:.3f} but its {100 * (1 - alpha):.0f}% interval runs from {lo:.3f} "
+            f"to {hi:.3f}, which includes the 0.5 that coin flipping would give. Nothing is "
+            f"established for this band: it may separate high pain from low pain, it may separate "
+            f"them the other way round, or it may not separate them at all. This is not a finding "
+            f"that the band is useless")
+    return base
+
+
+def band_pain_correlation(power, pain_labels, report_group, *, times=None, n_boot=500, seed=0,
+                          alpha=0.05, power_feature="band power"):
+    """The Pearson correlation between one band's power and the patient's pain score.
+
+    THE LITERAL QUANTITY. ``pearson_r`` is the ordinary Pearson correlation coefficient between the
+    band power of a spectral sample and the continuous pain score matched to it, on a scale from -1
+    to +1. Nothing is split into high and low here; that is what ``band_pain_auc`` does. This is
+    the quantity the plot at the bottom of the biomarker exploration page shows, and the PI asked
+    for it to be exported as a table so the closed-loop side can read it beside the classification
+    number.
+
+    EVERY PAIN REPORT COUNTS ONCE. The correlation reported is weighted so that each pain report
+    carries a total weight of one however many spectral samples were matched to it, for the reason
+    set out in ``_one_report_one_vote_weights``. The unweighted per-sample correlation is reported
+    beside it as ``pearson_r_per_sample``, because that is the number the page's own plot draws and
+    a silent redefinition would leave a reader unable to reconcile the two.
+
+    THE CONFIDENCE INTERVAL IS NOT THE TEXTBOOK ONE, on purpose. The usual interval for a
+    correlation assumes every point is an independent observation. Here many spectral samples share
+    a single pain report and therefore share its pain score exactly, so that assumption is false
+    and the textbook interval comes out far too narrow. The interval here is obtained by resampling
+    whole pain reports, which is the same resampling the classification number above uses, so the
+    two tables' intervals mean the same kind of thing.
+
+    THE POWER SCALE MATTERS FOR THIS NUMBER, unlike for the classification number. A correlation
+    changes when the power is put through a logarithm, because a correlation is about straight-line
+    agreement and a logarithm is not a straight line. ``power_feature`` therefore has to be read
+    off every exported row before the number means anything.
+
+    Returns a dictionary whose ``answer`` is one of the three words, never True or False. The value
+    that means no relationship is 0 here, not 0.5.
+    """
+    base = {"pearson_r": None, "pearson_r_low": None, "pearson_r_high": None,
+            "pearson_r_low_corrected": None, "pearson_r_high_corrected": None,
+            "pearson_r_per_sample": None, "no_relationship_value": 0.0,
+            "p_two_sided": None, "p_smallest_reportable": None,
+            "pain_split_rule": ("none: this number uses the continuous pain score as it stands and "
+                                "does not split it into high pain and low pain"),
+            "n_resamples_used": 0, "resampling_unit": "one pain report",
+            "block_length_reports": None, "power_feature": str(power_feature),
+            "confidence_level": float(1.0 - alpha)}
+    x = np.asarray(power, dtype=float)
+    lab = np.asarray(pain_labels, dtype=float)
+    if x.size == 0 or lab.size != x.size:
+        return _blank_band_answer("no band power values were available for this contact and band",
+                                  **base)
+    if report_group is None:
+        return _blank_band_answer(
+            "the pain report identifiers were not supplied, so every spectral sample would have to "
+            "be counted as its own independent observation of this patient's pain. That is the "
+            "pseudoreplication this project's audit was called to find, and it makes a band look "
+            "more convincing than the data can support, so no number is computed here",
+            n_samples=int(x.size), **base)
+    rg = np.asarray(report_group)
+    m = np.isfinite(x) & np.isfinite(lab)
+    n_ok = int(m.sum())
+    if n_ok < 3:
+        return _blank_band_answer(
+            f"only {n_ok} spectral samples had both a usable band power value and a matched pain "
+            "score, and a correlation needs at least three",
+            n_samples=n_ok, n_reports=(int(len(np.unique(rg[m]))) if n_ok else 0), **base)
+    xs = x[m]
+    ys = lab[m]
+    gs = rg[m]
+    ts = (np.asarray(times)[m] if (times is not None and len(times) == x.size) else None)
+    cluster_of_row, n_reports, block_len = _report_clusters_in_time_order(gs, ts, ys)
+    base["block_length_reports"] = int(block_len)
+    if n_reports < 3:
+        return _blank_band_answer(
+            f"only {n_reports} pain report(s) are behind these samples. A correlation against pain "
+            "needs at least three different pain reports to be about this patient rather than "
+            "about one or two particular days",
+            n_samples=n_ok, n_reports=n_reports, **base)
+    w = _one_report_one_vote_weights(cluster_of_row, n_reports)
+    r = float(_weighted_pearson_matrix(xs, ys, w[None, :])[0])
+    r_per_sample = float(_weighted_pearson_matrix(xs, ys, np.ones((1, n_ok)))[0])
+    base["pearson_r_per_sample"] = (r_per_sample if np.isfinite(r_per_sample) else None)
+    base["n_spectral_samples"] = n_ok
+    base["n_pain_reports"] = n_reports
+    if not np.isfinite(r):
+        return _blank_band_answer(
+            "the correlation could not be formed because the band power values, or the pain "
+            "scores, are all the same number once each pain report is counted once",
+            n_samples=n_ok, n_reports=n_reports, **base)
+    base["pearson_r"] = r
+    rng = np.random.default_rng(seed)
+    W = _resample_weight_matrix(cluster_of_row, n_reports, n_boot, block_len, rng, row_weight=w)
+    boot = _weighted_pearson_matrix(xs, ys, W)
+    boot = boot[np.isfinite(boot)]
+    base["n_resamples_used"] = int(boot.size)
+    p, res = _bootstrap_two_sided_p(boot, 0.0)
+    base["p_two_sided"] = p
+    base["p_smallest_reportable"] = res
+    if boot.size < BOOT_CI_VALID_FLOOR:
+        base["answer"] = BAND_PAIN_NOT_RESOLVED
+        base["why"] = (
+            f"the correlation came out at {r:+.3f}, but only {int(boot.size)} of the "
+            f"{int(n_boot)} resamples produced a usable value, which is fewer than the "
+            f"{BOOT_CI_VALID_FLOOR} this project requires before it will quote a confidence "
+            "interval. Nothing is established either way. This says how few pain reports there "
+            "are, not how small the correlation is")
+        return base
+    lo = float(np.percentile(boot, 100.0 * alpha / 2.0))
+    hi = float(np.percentile(boot, 100.0 * (1.0 - alpha / 2.0)))
+    jack = _weighted_pearson_matrix(
+        xs, ys, _leave_one_report_out_weight_matrix(cluster_of_row, n_reports, row_weight=w))
+    c_lo, c_hi, _z0, _a = _bca_ci(r, boot, jack, alpha=alpha)
+    base.update({"pearson_r_low": lo, "pearson_r_high": hi,
+                 "pearson_r_low_corrected": c_lo, "pearson_r_high_corrected": c_hi})
+    if lo > 0.0 or hi < 0.0:
+        which = ("more power in this band goes with a higher pain score" if r > 0
+                 else "more power in this band goes with a lower pain score")
+        base["answer"] = BAND_PAIN_ESTABLISHED
+        base["why"] = (
+            f"the correlation is {r:+.3f} and its {100 * (1 - alpha):.0f}% interval runs from "
+            f"{lo:+.3f} to {hi:+.3f}, which stays wholly on one side of zero, so a relationship is "
+            f"established: {which}")
+    else:
+        base["answer"] = BAND_PAIN_NOT_RESOLVED
+        base["why"] = (
+            f"the correlation is {r:+.3f} but its {100 * (1 - alpha):.0f}% interval runs from "
+            f"{lo:+.3f} to {hi:+.3f}, which includes zero. Nothing is established for this band: "
+            f"the relationship may go either way or may not be there at all. This is not a finding "
+            f"that the band is unrelated to pain")
+    return base
+
+
+def band_pain_auc_from_table(table, *, channel, center_hz, pain_column="nrs",
+                             power_column="power_linear", group_column="report_id",
+                             time_column=None, strategy="tertile", low_pct=33.3333,
+                             high_pct=66.6667, pain_cutoff=None, n_boot=500, seed=0, alpha=0.05):
+    """``band_pain_auc`` for a caller that already holds a tidy table of spectral samples.
+
+    The closed-loop module builds its own table, one row per spectral sample, with columns for the
+    sensing channel, the band centre frequency, the band power, the pain score and the pain report
+    the sample belongs to. This pulls out the rows for one channel and one band centre and hands
+    them to the same estimator the exported tables use, so the closed-loop page and the biomarker
+    page cannot print two different numbers for the same band.
+    """
     need = {power_column, pain_column, "channel", "center_hz"}
     have = set(table.columns) if table is not None else set()
     if table is None or len(table) == 0 or not need.issubset(have):
-        return _blank(PAIN_TRACKING_NOT_ASSESSED,
-                      f"missing columns: {sorted(need - have)}")
-    d = table[(table.channel == channel) & (np.isclose(table.center_hz, center_hz))].copy()
+        return _blank_band_answer(
+            f"the table handed in does not have the columns this needs: {sorted(need - have)}",
+            auc=None, no_relationship_value=0.5, power_feature=str(power_column))
+    d = table[(table.channel == channel) & (np.isclose(table.center_hz, center_hz))]
     if group_column not in d.columns:
-        return _blank(PAIN_TRACKING_NOT_ASSESSED,
-                      f"no {group_column} column: the grouping that makes each pain report count "
-                      "once is unavailable, and estimating this slope without it would treat "
-                      "every spectral sample as an independent observation, which is the "
-                      "pseudoreplication the audit flagged",
-                      n=len(d))
+        return _blank_band_answer(
+            f"no {group_column} column: the grouping that makes each pain report count once is not "
+            "there, and computing this without it would treat every spectral sample as an "
+            "independent observation of the patient's pain, which is the pseudoreplication this "
+            "project's audit was called to find",
+            n_samples=int(len(d)), auc=None, no_relationship_value=0.5,
+            power_feature=str(power_column))
     d = d.dropna(subset=[power_column, pain_column, group_column])
-    n_groups_seen = int(d[group_column].nunique())
-    if len(d) < 6:
-        return _blank(PAIN_TRACKING_NOT_ASSESSED, "too few usable samples",
-                      n=len(d), n_groups=n_groups_seen)
-    y = d[pain_column].to_numpy(float)
-    g = d[group_column].to_numpy()
-    X = np.column_stack([np.ones(len(d)), d[power_column].to_numpy(float)])
-    res, bse, n_groups = _cluster_ols(y, X, g)
-    if res is None:
-        return _blank(PAIN_TRACKING_NOT_ASSESSED,
-                      f"fewer than two {group_column} groups; a slope needs at least two groups "
-                      "to be identifiable once each group counts once",
-                      n=len(d), n_groups=n_groups)
-    b = float(res.params[1])
-    se = float(bse[1])
-    p, ci = float(res.pvalues[1]), (b - 1.96 * se, b + 1.96 * se)
-    note = ("clustered at the rating, which is the unit that carries one independent observation "
-            "of pain. ")
-    if n_groups < MIN_RELIABLE_CLUSTERS:
-        note += (f"FEW CLUSTERS: {n_groups} ratings is below {MIN_RELIABLE_CLUSTERS}. ")
-        p, ci, boot_note, _ = _small_sample_inference(y, X, g, n_boot=n_boot, seed=seed)
-        note += boot_note
-    else:
-        note += (f"Inference is CR0 cluster-robust on {n_groups} clusters, at or above the "
-                 f"{MIN_RELIABLE_CLUSTERS}-cluster point where that approximation is usually "
-                 "adequate.")
-    if ci is not None and ((ci[0] > 0 and ci[1] > 0) or (ci[0] < 0 and ci[1] < 0)):
-        verdict = PAIN_TRACKING_TRACKS
-        why = (f"the interval {ci[0]:.4g} to {ci[1]:.4g} lies wholly on one side of zero, so a "
-               "direction is established: "
-               + ("higher band power goes with higher pain" if b > 0
-                  else "higher band power goes with lower pain"))
-    elif ci is None:
-        verdict = PAIN_TRACKING_NOT_RESOLVED
-        why = ("the slope was estimated but no interval could be formed, so no direction is "
-               "established. This says how few pain reports there are, not how small the effect is")
-    else:
-        verdict = PAIN_TRACKING_NOT_RESOLVED
-        why = (f"the interval {ci[0]:.4g} to {ci[1]:.4g} contains zero, so this band may track "
-               "pain in either direction or not at all; no direction is established")
-    return {"verdict": verdict, "why": why,
-            "estimate": b, "ci": (float(ci[0]), float(ci[1])) if ci is not None else None,
-            "p": p, "n": int(len(d)), "n_groups": int(n_groups),
-            "group_column": group_column, "power_column": power_column,
-            "pain_column": pain_column,
-            "slope_units": f"change in {pain_column} per one unit of {power_column}",
-            "inference": estimator_for(n_groups), "note": note}
+    if len(d) == 0:
+        return _blank_band_answer(
+            f"no rows are left for channel {channel} at a band centred on {float(center_hz):g} Hz "
+            "once the rows missing the band power, the pain score or the pain report are dropped",
+            auc=None, no_relationship_value=0.5, power_feature=str(power_column))
+    times = (d[time_column].to_numpy() if (time_column and time_column in d.columns) else None)
+    return band_pain_auc(d[power_column].to_numpy(float), d[pain_column].to_numpy(float),
+                         d[group_column].to_numpy(), times=times, strategy=strategy,
+                         low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff,
+                         n_boot=n_boot, seed=seed, alpha=alpha, power_feature=str(power_column))
 
 
-def band_pain_tracking_from_detail(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
-                                   power_scale="log", n_boot=999, seed=0):
-    """``band_pain_tracking`` for the biomarker page's own rating-matched spectra.
+def _pooled_power_feature_name(td_detail):
+    """A plain sentence naming what the band power values in these pooled spectra actually are.
 
-    The closed-loop module reaches ``band_pain_tracking`` with a table it has already built from
-    exposure epochs. The biomarker page holds its spectra in the pooled ``td_detail`` structure
-    instead, so this wrapper pulls out the one channel and band, attaches each sample's matched pain
-    score and its rating grouping, and hands the result to the same estimator. Using the same
-    estimator is the point: two functions with slightly different rules for dropping samples would
-    give two different slopes for the same band and nobody could say which was right.
-
-    ``power_scale`` chooses the units the slope is expressed in, and the choice matters:
-
-      "log"            the decibel-like scale this page's own plots use, 10 * log10 of mean band
-                       power. The slope reads as pain points per decibel.
-      "device_linear"  mean band power itself, obtained by undoing that logarithm. This is the
-                       scale the stimulator computes on (device rule D11), so it is the scale to
-                       ask for when the slope is going to be compared with a closed-loop estimate.
-
-    Returns the same dictionary ``band_pain_tracking`` returns, with the same three-word verdict,
-    or a "not assessed" result when the channel or band is not present.
+    Written out on every row of both exported tables. Without it a reader has no way to know that
+    the numbers are not the stimulator's own band power, and the correlation table in particular
+    cannot be interpreted at all without knowing whether a logarithm was taken.
     """
-    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz,
-                                     band_width_hz=band_width_hz)
-    if feat is None:
-        return band_pain_tracking(None, channel=channel_raw, center_hz=center_hz,
-                                  pain_column="pain_score", group_column="rating_group")
-    bp_log, labels, rating_group, _times = feat
-    if power_scale == "device_linear":
-        power = 10.0 ** (np.asarray(bp_log, float) / 10.0)
-        col = "band_power_device_linear"
-    elif power_scale == "log":
-        power = np.asarray(bp_log, float)
-        col = "band_power_log"
-    else:
-        raise ValueError("power_scale must be 'log' or 'device_linear', "
-                         f"not {power_scale!r}; there is no third scale in use here")
-    tbl = pd.DataFrame({"channel": channel_raw, "center_hz": float(center_hz),
-                        col: power, "pain_score": np.asarray(labels, float),
-                        "rating_group": np.asarray(rating_group)})
-    return band_pain_tracking(tbl, channel=channel_raw, center_hz=float(center_hz),
-                              pain_column="pain_score", power_column=col,
-                              group_column="rating_group", n_boot=n_boot, seed=seed)
+    if td_detail is None:
+        return "unknown"
+    if td_detail.get("prelog", False):
+        return ("the average over the band of a logarithm of power that was already standardised "
+                "within each recording source before pooling; NOT the stimulator's own units, and "
+                "the stimulator's units cannot be recovered from it")
+    return ("ten times the base-ten logarithm of the average power over the band, computed here "
+            "from the linear power in the pooled spectra")
+
+
+def _sweep_contacts_and_bands(td_detail, channels, centers, band_width_hz):
+    """Yield (channel name, band centre, band power per sample, pain scores, report identifiers,
+    sample times) for every sensing contact pair and every band centre asked for.
+
+    One place decides which contacts and which band centres a sweep covers, so the two exported
+    tables cannot end up covering different ones and then being compared row for row by a reader
+    who assumes they match.
+    """
+    chans = list(channels) if channels is not None else list(td_detail.get("chan_order", []))
+    cens = list(centers) if centers is not None else list(DEFAULT_PAIN_BAND_CENTERS_HZ)
+    for ch in chans:
+        for fc in cens:
+            feat = _band_feature_from_detail(td_detail, ch, float(fc),
+                                             band_width_hz=float(band_width_hz))
+            if feat is None:
+                yield str(ch), float(fc), None, None, None, None
+                continue
+            bp, labels, rg, times = feat
+            yield str(ch), float(fc), bp, labels, rg, times
+
+
+def _band_row_header(channel, center_hz, band_width_hz):
+    """The columns that name which contact pair, which side of the brain and which band a row is
+    about.
+
+    A channel name fixes the side of the brain: ZERO_THREE_RIGHT is contacts 0 and 3 on the RIGHT
+    electrode. Both are spelled out as their own columns so no reader has to decode the device's
+    spelling, and so a row can never be quoted without saying which side of the brain it came from.
+    """
+    fmt = format_channel(channel)
+    w = float(band_width_hz)
+    lo = float(center_hz) - w / 2.0
+    hi = float(center_hz) + w / 2.0
+    return {
+        "channel": str(channel),
+        "contacts": fmt.get("contacts"),
+        "brain_side": (fmt.get("hemisphere") or "unknown"),
+        "band_center_hz": float(center_hz),
+        "band_low_hz": lo,
+        "band_high_hz": hi,
+        "band_width_hz": w,
+        "band_fully_inside_8_to_30_hz": bool(lo >= 8.0 - 1e-9 and hi <= 30.0 + 1e-9),
+    }
+
+
+#: The columns both exported tables start with, in the order they appear.
+_BAND_ROW_HEADER_COLUMNS = ["channel", "contacts", "brain_side", "band_center_hz", "band_low_hz",
+                           "band_high_hz", "band_width_hz", "band_fully_inside_8_to_30_hz"]
+
+
+def _order_export_columns(out, preferred):
+    """Put the naming columns first, then the numbers a reader looks at first, then the rest."""
+    lead = [c for c in _BAND_ROW_HEADER_COLUMNS if c in out.columns]
+    tail = [c for c in preferred if c in out.columns and c not in lead]
+    rest = [c for c in out.columns if c not in lead + tail]
+    return out[lead + tail + rest]
+
+
+def band_pain_auc_export(td_detail, *, channels=None, centers=None, band_width_hz=5.0,
+                         strategy="tertile", low_pct=33.3333, high_pct=66.6667, pain_cutoff=None,
+                         n_boot=500, seed=0, alpha=0.05):
+    """THE TABLE THE CLOSED-LOOP PAGE INHERITS: one row per sensing contact pair per band centre,
+    saying how well that band's power tells this patient's high-pain moments from the low-pain ones.
+
+    One row for every contact pair present in the pooled spectra and every band centre in
+    ``centers`` (by default every whole hertz from 8 to 30). Each row carries the value, its
+    confidence interval, how many pain reports are behind it, how the pain scores were split into
+    high and low, and a three-word answer that is never a True or False value.
+
+    HOW TO READ A ROW. ``auc`` of 0.5 is what coin flipping gives, so the question is whether the
+    interval from ``auc_low`` to ``auc_high`` stays wholly on one side of 0.5. When it does,
+    ``answer`` is "established". When it crosses 0.5, ``answer`` is "not_resolved", and that means
+    nothing was established for that band -- it is NOT a finding that the band is useless. When the
+    number could not be computed at all, ``answer`` is "not_assessed" and there is no value in the
+    row. Those three are different and must stay different.
+
+    WHAT THE POWER IS. The band power here is whatever ``_band_feature_from_detail`` returns for the
+    pooled spectra it is handed, which for the biomarker page's own pooled spectra is the average
+    over the band of a logarithm of power that has already been standardised within each recording
+    source so that recordings of different kinds can be pooled. That is NOT the stimulator's own
+    units, and the stimulator's units cannot be recovered from it, because the standardising step
+    threw the scale away. It does not matter for THIS table -- the value above depends only on the
+    order of the power values, so any rescaling that keeps them in order gives the same answer --
+    but it does matter for the companion correlation table, and the ``power_feature`` column says
+    what the numbers were computed on, on every row of both.
+
+    BANDS OVERLAP HEAVILY, and no correction for having looked at many of them is applied here. A
+    5 Hz wide band centred on 15 Hz and one centred on 16 Hz share most of their frequencies, so
+    the 23 default centres are nowhere near 23 independent looks at the data. A reader counting how
+    many rows came out "established" must not treat that count as a count of independent findings.
+    """
+    if not td_detail:
+        return pd.DataFrame(columns=_BAND_ROW_HEADER_COLUMNS + ["answer", "why"])
+    feat_name = _pooled_power_feature_name(td_detail)
+    rows = []
+    for ch, fc, bp, labels, rg, times in _sweep_contacts_and_bands(
+            td_detail, channels, centers, band_width_hz):
+        row = _band_row_header(ch, fc, band_width_hz)
+        if bp is None:
+            row.update(_blank_band_answer(
+                f"contact pair {ch}, or the band centred on {fc:g} Hz, is not present in the "
+                "pooled spectra handed in", auc=None, no_relationship_value=0.5,
+                power_feature=feat_name))
+        else:
+            row.update(band_pain_auc(bp, labels, rg, times=times, strategy=strategy,
+                                     low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff,
+                                     n_boot=n_boot, seed=seed, alpha=alpha,
+                                     power_feature=feat_name))
+        rows.append(row)
+    return _order_export_columns(
+        pd.DataFrame(rows),
+        ["answer", "auc", "auc_low", "auc_high", "no_relationship_value", "p_two_sided",
+         "n_pain_reports", "n_spectral_samples", "n_high_pain_samples", "n_low_pain_samples",
+         "pain_split_rule", "pain_low_cut", "pain_high_cut", "why"])
+
+
+def band_pain_correlation_export(td_detail, *, channels=None, centers=None, band_width_hz=5.0,
+                                 n_boot=500, seed=0, alpha=0.05):
+    """The companion table: one row per sensing contact pair per band centre, giving the Pearson
+    correlation between that band's power and the patient's continuous pain score.
+
+    The same contacts and the same band centres as ``band_pain_auc_export``, so the two tables can
+    be read side by side row for row. Each row carries the correlation, its confidence interval, how
+    many pain reports are behind it, and the same three-word answer. The value that means no
+    relationship is 0 here rather than 0.5, and the ``no_relationship_value`` column says so on
+    every row, so the two tables can never be read against the wrong comparison.
+
+    A CORRELATION DOES DEPEND ON THE POWER SCALE, so the ``power_feature`` column has to be read
+    before the number means anything. For the biomarker page's pooled spectra the power is a
+    logarithm that has been standardised within each recording source, which is what the page's own
+    plot draws. The extra ``pearson_r_after_undoing_the_logarithm`` column gives the same
+    correlation computed after undoing that logarithm, so a reader can see whether the answer turns
+    on the scale; that column is proportional to power rather than being in the stimulator's units,
+    because the standardising step threw the scale away and it cannot be recovered from these
+    spectra.
+
+    Bands overlap heavily and no correction for having looked at many of them is applied; see
+    ``band_pain_auc_export``.
+    """
+    if not td_detail:
+        return pd.DataFrame(columns=_BAND_ROW_HEADER_COLUMNS + ["answer", "why"])
+    feat_name = _pooled_power_feature_name(td_detail)
+    rows = []
+    for ch, fc, bp, labels, rg, times in _sweep_contacts_and_bands(
+            td_detail, channels, centers, band_width_hz):
+        row = _band_row_header(ch, fc, band_width_hz)
+        if bp is None:
+            row.update(_blank_band_answer(
+                f"contact pair {ch}, or the band centred on {fc:g} Hz, is not present in the "
+                "pooled spectra handed in", pearson_r=None, no_relationship_value=0.0,
+                power_feature=feat_name))
+            rows.append(row)
+            continue
+        row.update(band_pain_correlation(bp, labels, rg, times=times, n_boot=n_boot, seed=seed,
+                                         alpha=alpha, power_feature=feat_name))
+        # The same correlation after undoing the logarithm, so a reader can see whether the answer
+        # turns on the scale the power is expressed in. Same resampling and same seed, so the only
+        # thing that differs between the two numbers is the scale.
+        undone = band_pain_correlation(10.0 ** (np.asarray(bp, dtype=float) / 10.0), labels, rg,
+                                       times=times, n_boot=n_boot, seed=seed, alpha=alpha,
+                                       power_feature=feat_name + ", with the logarithm undone")
+        row["pearson_r_after_undoing_the_logarithm"] = undone.get("pearson_r")
+        row["pearson_r_after_undoing_the_logarithm_low"] = undone.get("pearson_r_low")
+        row["pearson_r_after_undoing_the_logarithm_high"] = undone.get("pearson_r_high")
+        row["answer_after_undoing_the_logarithm"] = undone.get("answer")
+        rows.append(row)
+    return _order_export_columns(
+        pd.DataFrame(rows),
+        ["answer", "pearson_r", "pearson_r_low", "pearson_r_high", "no_relationship_value",
+         "p_two_sided", "pearson_r_per_sample", "n_pain_reports", "n_spectral_samples",
+         "pain_split_rule", "pearson_r_after_undoing_the_logarithm",
+         "pearson_r_after_undoing_the_logarithm_low", "pearson_r_after_undoing_the_logarithm_high",
+         "answer_after_undoing_the_logarithm", "why"])
+
+
+def read_band_pain_auc_from_export(auc_table, *, channel, center_hz, tol_hz=0.01):
+    """Look up one contact pair and one band centre in a table from ``band_pain_auc_export``.
+
+    THE ONE PLACE THAT DOES THIS LOOKUP, so the closed-loop page and anything else reading the
+    exported table agree on what counts as a match and on what happens when there is no row. A band
+    centre is matched within ``tol_hz`` hertz rather than exactly, because a centre frequency that
+    has been through a comma-separated file comes back as 15.000000000000002 often enough to matter.
+
+    Returns the row as a dictionary, or a "not assessed" dictionary naming what was looked for and
+    not found. A missing row is never returned as a value near 0.5, because a reader would take
+    that for a measurement showing no separation when in fact nothing was measured.
+    """
+    if auc_table is None or len(auc_table) == 0:
+        return _blank_band_answer(
+            "the exported table of how well each band tells high pain from low pain is empty, so "
+            "there is nothing to read for any band", auc=None, no_relationship_value=0.5)
+    need = {"channel", "band_center_hz", "auc", "answer"}
+    if not need.issubset(set(auc_table.columns)):
+        return _blank_band_answer(
+            "the table handed in is not a table of how well each band tells high pain from low "
+            f"pain; it is missing the columns {sorted(need - set(auc_table.columns))}",
+            auc=None, no_relationship_value=0.5)
+    sel = auc_table[(auc_table["channel"].astype(str) == str(channel))
+                    & (np.abs(pd.to_numeric(auc_table["band_center_hz"], errors="coerce")
+                              - float(center_hz)) <= float(tol_hz))]
+    if len(sel) == 0:
+        return _blank_band_answer(
+            f"the exported table has no row for contact pair {channel} at a band centred on "
+            f"{float(center_hz):g} Hz, so how well that band tells high pain from low pain has not "
+            "been worked out. This is an absent row, not a measurement showing no separation",
+            auc=None, no_relationship_value=0.5)
+    return {k: (None if (isinstance(v, float) and not np.isfinite(v)) else v)
+            for k, v in sel.iloc[0].to_dict().items()}
 
 
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,

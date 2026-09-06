@@ -466,3 +466,220 @@ def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, se
                  "counts; only the family-wise p is calibrated, because the permutation recomputes "
                  "the same biased statistic under the null."),
     }
+
+
+# =================================================================================================
+# AVERAGING THE LAST 30 SECONDS BEFORE THE CURRENT IS CHANGED AGAIN
+# =================================================================================================
+# Added 2026-09-06 at the PI's instruction, and it is a DIFFERENT rule from the one
+# `step_settled_medians` above applies. That older function throws away the first 45 seconds of each
+# setting and takes the MEDIAN of whatever 3 second pieces are left, wherever in the setting they
+# happen to fall. The rule below takes the MEAN of the ten 3 second pieces that make up the last 30
+# seconds a setting was held, counting backwards from the moment the current was changed again.
+#
+# WHY THE LAST 30 SECONDS AND NOT THE FIRST. When the programmer raises the current the device does
+# not jump to the new value, it slides up to it, and the earlier ramp work in this project measured
+# the stimulation-frequency artefact still climbing 150 seconds after a step began. The last 30
+# seconds a setting was held are therefore the most settled part of it, and they are the part
+# furthest away from the slide.
+#
+# WHY THE CURRENT MUST HAVE GONE UP TO REACH THE SETTING. The PI's words: the rule "should only
+# apply when the stimulus amplitude is being monotonically increased. For example, 1, 1.1, 1.2. If
+# the stimulation amplitude value goes 0 and then goes back up to another amplitude, of course you
+# shouldn't use that same rule because then it's not reflecting the last amplitude." If a setting
+# was reached by turning the current DOWN, then whatever is left over in the brain signal from the
+# higher current that came before it is still washing out during the 30 seconds we are about to
+# average, and the number would be a mixture of two currents rather than a measurement of one. So a
+# setting is only measured when the current that came immediately before it, at the same
+# stimulation rate, was LOWER.
+#
+# WHERE THE 30 SECONDS ARE TAKEN FROM, which is the part that has to be got right. The 30 seconds
+# end at the moment the NEXT setting starts, and they lie inside the setting we are measuring, so
+# the average always describes the current that was actually running during those 30 seconds. It is
+# never the 30 seconds after the change. The function refuses to let the window slide back past the
+# start of its own setting: if a setting was held for less than 30 seconds, the window is cut short
+# at the setting's own start and the piece count is reported as short rather than being topped up
+# from the setting before it.
+
+#: Length of one piece of recording, in seconds. Three seconds is what the streaming cache already
+#: cuts the recording into, so this is the cache's own granularity and not a new choice.
+CHUNK_S = 3.0
+
+#: How far back from the next current change the average reaches, in seconds. The PI asked for 30
+#: seconds, which at three seconds a piece is exactly ten pieces.
+PRE_CHANGE_WINDOW_S = 30.0
+
+#: How many three second pieces must be present before an average is reported. Ten is the number
+#: the 30 second window holds when the recording has no gap in it. A setting with fewer pieces than
+#: this gets no number at all, and the plotting code leaves that square of the picture empty
+#: instead of colouring it, because colouring a square computed from three pieces the same way as a
+#: square computed from ten would hide the difference.
+MIN_CHUNKS_PRE_CHANGE = 10
+
+
+def rising_current_settings(current_mA, block=None, *, tol_mA=1e-9):
+    """Say, for each setting in a time-ordered list, whether the current went UP to reach it.
+
+    ``current_mA`` is the stimulation current of each setting, in milliamps, in the order the
+    settings were run. ``block`` optionally labels which stimulation rate (or whichever other
+    grouping the caller wants) each setting belongs to; a setting is never compared with a setting
+    in a different block, because a current of 2 mA at 10 Hz and a current of 2 mA at 55 Hz are not
+    two points on one ladder.
+
+    Returns two boolean arrays of the same length as ``current_mA``:
+
+    ``reached_by_rise``
+        True when the setting immediately before this one, in the same block, carried a STRICTLY
+        smaller current. False for the first setting of a block, because there is nothing before it
+        to compare with, and False when the current stayed the same or fell.
+    ``followed_by_rise``
+        True when the setting immediately after this one, in the same block, carries a strictly
+        larger current. This is reported for the caller's information: it says whether the moment
+        the 30 second window ends is a further step UP the ladder or is instead the ladder being
+        abandoned, and the PI's example of the current dropping to zero and climbing again is
+        exactly the case this column marks.
+    """
+    a = np.asarray(current_mA, dtype=float)
+    n = a.size
+    if block is None:
+        b = np.zeros(n, dtype=object)
+    else:
+        b = np.asarray(block, dtype=object)
+        if b.size != n:
+            raise ValueError(f"block has {b.size} entries but current_mA has {n}")
+    tol = float(tol_mA)
+    up_from_previous = np.zeros(n, dtype=bool)
+    up_to_next = np.zeros(n, dtype=bool)
+    for i in range(1, n):
+        if b[i] == b[i - 1] and np.isfinite(a[i]) and np.isfinite(a[i - 1]):
+            if a[i] - a[i - 1] > tol:
+                up_from_previous[i] = True
+                up_to_next[i - 1] = True
+    return up_from_previous, up_to_next
+
+
+def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
+                                  block=None, step_end_t=None,
+                                  window_s=PRE_CHANGE_WINDOW_S,
+                                  min_chunks=MIN_CHUNKS_PRE_CHANGE,
+                                  require_rise_into_setting=True):
+    """One band-power vector per setting: the MEAN of the pieces in the last ``window_s`` seconds.
+
+    THE NUMBERS COME OUT IN THE UNITS ``tile_power`` IS ALREADY IN, and nothing here takes a
+    logarithm. The device forms band power as the linear sum of squared magnitude across the band,
+    so a device band power is a number of order a hundred, and the mean of ten such numbers is
+    another number of order a hundred. If a caller hands in logarithms this function will happily
+    average logarithms, so the caller must hand in the device's own numbers.
+
+    Arguments
+    ---------
+    step_t0
+        The moment each setting started, in epoch seconds, in time order.
+    current_mA
+        The stimulation current of each setting, in milliamps. This must be the current of the ONE
+        side whose ladder is being measured. Handing in the other side's current, or a sum of the
+        two, would test the wrong ladder.
+    tile_t, tile_power
+        The recording cut into three second pieces: ``tile_t`` the start of each piece in epoch
+        seconds, sorted ascending, and ``tile_power`` a ``(n_pieces, n_bands)`` array of band
+        power. Rows whose band power is entirely missing are ignored.
+    block
+        Optional label per setting, passed through to :func:`rising_current_settings`. Pass the
+        stimulation rate here when a visit ran more than one rate.
+    step_end_t
+        Optional explicit end for each setting, in epoch seconds. When it is not given, a setting
+        is taken to end when the next setting in the same block starts, and the last setting of a
+        block gets no window at all, because we do not know when the current was changed again and
+        guessing would put the window somewhere the current may already have moved.
+    window_s
+        How far back from the end of the setting to reach. Thirty seconds by default.
+    min_chunks
+        How many pieces must be found in that window before an average is reported. Ten by default.
+    require_rise_into_setting
+        When True, which is the default, a setting is only measured if the current went UP to reach
+        it. Set it to False only to see what the looser rule would have given; the numbers it lets
+        through are mixtures of the setting and the higher current that preceded it.
+
+    Returns ``(power, table)``. ``power`` is a ``(n_settings, n_bands)`` array whose refused rows
+    are all missing. ``table`` is a ``pandas.DataFrame`` with one row per setting carrying the
+    current, the window that was used, how many pieces were found, whether the setting was
+    accepted, and if it was refused, the plain reason why.
+    """
+    t0 = np.asarray(step_t0, dtype=float)
+    amp = np.asarray(current_mA, dtype=float)
+    tt = np.asarray(tile_t, dtype=float)
+    tp = np.asarray(tile_power, dtype=float)
+    n = t0.size
+    if amp.size != n:
+        raise ValueError(f"step_t0 has {n} entries but current_mA has {amp.size}")
+    if tp.ndim != 2 or tp.shape[0] != tt.size:
+        raise ValueError(f"tile_power must be (n_pieces, n_bands) aligned to tile_t "
+                         f"({tt.size}); got {tp.shape}")
+    if tt.size and np.any(np.diff(tt) < 0):
+        raise ValueError("tile_t must be sorted ascending")
+    if step_end_t is not None and np.asarray(step_end_t, dtype=float).size != n:
+        raise ValueError("step_end_t must have one entry per setting")
+    if not np.isfinite(window_s) or window_s <= 0:
+        raise ValueError(f"window_s must be positive and finite, got {window_s}")
+
+    n_bands = tp.shape[1]
+    up_from_previous, up_to_next = rising_current_settings(amp, block)
+    b = (np.zeros(n, dtype=object) if block is None else np.asarray(block, dtype=object))
+
+    # When the caller did not say when each setting ended, a setting ends when the next one in the
+    # same block starts. The last setting of a block therefore has no end, and gets no window.
+    if step_end_t is None:
+        t_end = np.full(n, np.nan)
+        for i in range(n - 1):
+            if b[i] == b[i + 1]:
+                t_end[i] = t0[i + 1]
+    else:
+        t_end = np.asarray(step_end_t, dtype=float).copy()
+
+    power = np.full((n, n_bands), np.nan)
+    rows = []
+    for i in range(n):
+        want_lo = t_end[i] - float(window_s)
+        lo = max(want_lo, t0[i]) if np.isfinite(t_end[i]) else np.nan
+        n_found = 0
+        if np.isfinite(t_end[i]):
+            sel = (tt >= lo) & (tt < t_end[i])
+            if sel.any():
+                sub = tp[sel, :]
+                sel_rows = ~np.all(~np.isfinite(sub), axis=1)
+                sub = sub[sel_rows, :]
+                n_found = int(sub.shape[0])
+            else:
+                sub = np.empty((0, n_bands))
+        else:
+            sub = np.empty((0, n_bands))
+
+        reason = ""
+        if require_rise_into_setting and not up_from_previous[i]:
+            reason = ("the current did not go up to reach this setting, so the 30 seconds would "
+                      "mix this setting with the higher or equal current before it")
+        elif not np.isfinite(t_end[i]):
+            reason = ("the moment the current was next changed is not known, so there is no "
+                      "30 second window that is certain to sit inside this setting")
+        elif n_found < int(min_chunks):
+            reason = (f"only {n_found} three second pieces of recording were found in the "
+                      f"{float(window_s):g} seconds before the next current change, and "
+                      f"{int(min_chunks)} are required")
+        if not reason:
+            power[i, :] = np.nanmean(sub, axis=0)
+
+        rows.append(dict(
+            setting_index=i,
+            block=b[i],
+            current_mA=float(amp[i]) if np.isfinite(amp[i]) else np.nan,
+            t_start_s=float(t0[i]),
+            t_next_change_s=float(t_end[i]) if np.isfinite(t_end[i]) else np.nan,
+            window_start_s=float(lo) if np.isfinite(lo) else np.nan,
+            window_shortened_by_setting_start=bool(np.isfinite(t_end[i]) and want_lo < t0[i]),
+            current_rose_into_this_setting=bool(up_from_previous[i]),
+            next_change_is_a_further_rise=bool(up_to_next[i]),
+            n_chunks_found=n_found,
+            accepted=(not reason),
+            refusal_reason=reason,
+        ))
+    return power, pd.DataFrame(rows)

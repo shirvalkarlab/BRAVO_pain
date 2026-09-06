@@ -314,3 +314,177 @@ def test_the_primary_threshold_is_always_present_in_the_sweep():
                                     extra_thresholds=(2.0, 2.0))     # duplicates collapse
     assert list(r["threshold_sweep"]) == [2.0]
     assert r["threshold_sweep"][2.0]["p_fwer"] == r["p_fwer"]
+
+
+# =================================================================================================
+# AVERAGING THE LAST 30 SECONDS BEFORE THE CURRENT IS CHANGED AGAIN
+# =================================================================================================
+# These tests are about a rule the PI stated in words, so each one is named after the sentence of
+# his it is checking. Every band power here is a plain number of order a hundred, the way the
+# device reports it, and no test takes a logarithm of anything.
+
+LADDER_BANDS = 4
+
+
+def _ladder(currents, *, hold_s=60.0, t_start=1_700_000_000.0, rate=55.0):
+    """One setting per current, each held ``hold_s`` seconds, the next starting when the last ends."""
+    t = float(t_start)
+    t0, rows = [], []
+    for c in currents:
+        t0.append(t)
+        rows.append(rate)
+        t += float(hold_s)
+    return np.asarray(t0), np.asarray(currents, dtype=float), np.asarray(rows, dtype=float)
+
+
+def _pieces(t0, currents, hold_s=60.0, *, per_mA=10.0, base=100.0, piece_s=3.0, gap_from=None):
+    """Three second pieces covering every setting, band power rising 10 device units per milliamp.
+
+    ``gap_from`` optionally starves ONE setting, given by its index, of all but two of its pieces,
+    which is how the fewer-than-ten-pieces case is built.
+    """
+    ts, ps = [], []
+    for i, (a, c) in enumerate(zip(t0, currents)):
+        n = int(hold_s // piece_s)
+        keep = range(n) if gap_from != i else range(2)
+        for j in keep:
+            ts.append(a + j * piece_s)
+            ps.append(np.full(LADDER_BANDS, base + per_mA * c))
+    o = np.argsort(np.asarray(ts, dtype=float))
+    return np.asarray(ts, dtype=float)[o], np.vstack(ps)[o]
+
+
+def test_the_number_is_the_mean_of_the_ten_pieces_in_the_last_thirty_seconds():
+    t0, amp, rate = _ladder([1.0, 1.1, 1.2, 1.3])
+    tt, tp = _pieces(t0, amp)
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    acc = T[T.accepted]
+    # The first setting of the block has nothing before it to rise from; the last has no next
+    # change. The two in the middle are measured.
+    assert list(acc.current_mA) == [1.1, 1.2]
+    assert list(acc.n_chunks_found) == [10, 10]
+    # 100 + 10 per mA, and the window sits inside the setting it is describing, so 1.1 mA reads 111.
+    assert np.allclose(P[1, :], 111.0)
+    assert np.allclose(P[2, :], 112.0)
+    assert np.all(~np.isfinite(P[0, :])) and np.all(~np.isfinite(P[3, :]))
+
+
+def test_the_window_ends_where_the_next_setting_starts_and_never_reaches_past_it():
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0, 4.0])
+    tt, tp = _pieces(t0, amp)
+    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    r = T.iloc[1]
+    assert r.t_next_change_s == t0[2]
+    assert r.window_start_s == t0[2] - WV.PRE_CHANGE_WINDOW_S
+    assert r.window_start_s >= t0[1]           # inside its own setting, not the one before it
+    assert not r.window_shortened_by_setting_start
+
+
+def test_a_current_that_drops_to_zero_and_climbs_again_does_not_carry_the_earlier_ladder_across():
+    # The PI's own example: 1, 2, 3, then 0, then 0.5 and 1.0 again. The 0 breaks the ladder, and
+    # the settings on either side of the break must not be measured as if the ladder continued.
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0, 0.0, 0.5, 1.0, 1.5])
+    tt, tp = _pieces(t0, amp)
+    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    got = dict(zip(T.setting_index, T.accepted))
+    assert got[2] is True or bool(got[2])       # 3.0 mA was reached by a rise from 2.0
+    assert not bool(got[3])                     # 0.0 mA was reached by the current being switched off
+    assert bool(T.iloc[2].next_change_is_a_further_rise) is False   # what follows 3.0 is the drop
+    # 0.5 mA sits after the break. It is reached by a rise from zero, so the rule measures it, but
+    # the number describes 0.5 mA and NOT the 3.0 mA that ran before the break, because the window
+    # lies inside the 0.5 mA setting.
+    assert bool(got[4])
+    assert np.isclose(T.iloc[4].window_start_s, t0[5] - WV.PRE_CHANGE_WINDOW_S)
+    assert T.iloc[4].window_start_s > t0[3]
+
+
+def test_a_setting_reached_by_turning_the_current_down_is_refused_with_a_reason():
+    t0, amp, rate = _ladder([1.0, 3.0, 2.0, 2.5])
+    tt, tp = _pieces(t0, amp)
+    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    row = T.iloc[2]                              # 2.0 mA, arrived at by dropping from 3.0
+    assert not row.accepted
+    assert "did not go up" in row.refusal_reason
+    loose = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate,
+                                             require_rise_into_setting=False)[1]
+    assert bool(loose.iloc[2].accepted)          # the looser rule lets it through, on request
+
+
+def test_fewer_than_ten_pieces_gets_no_number_and_reports_the_count_it_actually_found():
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0, 4.0])
+    tt, tp = _pieces(t0, amp, gap_from=2)        # setting 2 keeps only its first two pieces
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    row = T.iloc[2]
+    assert row.n_chunks_found == 0               # the two it kept are at the START, not the last 30 s
+    assert not row.accepted
+    assert "three second pieces" in row.refusal_reason
+    assert np.all(~np.isfinite(P[2, :]))         # nothing to colour, so nothing is returned
+    assert bool(T.iloc[1].accepted)              # its neighbour is unaffected
+
+
+def test_a_setting_held_briefly_has_its_window_cut_at_its_own_start_not_topped_up():
+    # The middle setting is held only 12 seconds, so a full 30 second window would reach back into
+    # the setting before it and average two different currents together. It must be cut instead.
+    t0 = np.array([0.0, 100.0, 112.0, 200.0]) + 1_700_000_000.0
+    amp = np.array([1.0, 2.0, 3.0, 4.0])
+    rate = np.full(4, 55.0)
+    ends = np.r_[t0[1:], t0[-1] + 100.0]
+    ts, ps = [], []
+    for a, e, c in zip(t0, ends, amp):
+        j = 0
+        while a + j * 3.0 < e:                   # pieces never spill into the next setting
+            ts.append(a + j * 3.0)
+            ps.append(np.full(LADDER_BANDS, 100.0 + 10.0 * c))
+            j += 1
+    o = np.argsort(np.asarray(ts))
+    tt, tp = np.asarray(ts)[o], np.vstack(ps)[o]
+    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    row = T.iloc[1]                              # 2.0 mA, held 100 s to 112 s
+    assert row.window_shortened_by_setting_start
+    assert row.window_start_s == t0[1]
+    assert row.n_chunks_found == 4                # 12 s of a 3 s grid, not the ten a full window has
+    assert not row.accepted
+    assert bool(T.iloc[2].accepted)              # the long setting after it is unaffected
+    assert int(T.iloc[2].n_chunks_found) == 10
+
+
+def test_two_stimulation_rates_are_never_treated_as_one_ladder():
+    t0, amp, _ = _ladder([1.0, 2.0, 3.0, 1.0, 2.0, 3.0])
+    block = np.array([55.0, 55.0, 55.0, 10.0, 10.0, 10.0])
+    tt, tp = _pieces(t0, amp)
+    _, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=block)
+    assert not bool(T.iloc[3].accepted)          # 1.0 mA at 10 Hz does not rise from 3.0 mA at 55 Hz
+    assert "did not go up" in T.iloc[3].refusal_reason
+    assert not bool(T.iloc[2].accepted)          # 3.0 mA at 55 Hz has no next change at 55 Hz
+    assert "not known" in T.iloc[2].refusal_reason
+
+
+def test_the_average_is_in_the_units_it_was_given_and_takes_no_logarithm():
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0, 4.0])
+    tt, tp = _pieces(t0, amp, base=150.0, per_mA=25.0)
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    assert np.allclose(P[1, :], 200.0)           # 150 + 25 x 2, in the device's own numbers
+    assert np.allclose(P[2, :], 225.0)
+    assert P[1, 0] > 10.0                         # a logarithm of 200 would be about 2.3
+
+
+def test_it_complains_rather_than_guessing_when_the_pieces_do_not_line_up():
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0])
+    tt, tp = _pieces(t0, amp)
+    with pytest.raises(ValueError, match="current_mA"):
+        WV.mean_power_before_next_change(t0, amp[:2], tt, tp, block=rate)
+    with pytest.raises(ValueError, match="sorted ascending"):
+        WV.mean_power_before_next_change(t0, amp, tt[::-1], tp, block=rate)
+    with pytest.raises(ValueError, match="n_bands"):
+        WV.mean_power_before_next_change(t0, amp, tt, tp[:5, :], block=rate)
+
+
+def test_the_older_median_rule_is_still_there_and_still_does_its_own_thing():
+    # Other code calls step_settled_medians, so adding the new rule must not have moved it.
+    assert hasattr(WV, "step_settled_medians") and hasattr(WV, "mean_power_before_next_change")
+    t0, amp, rate = _ladder([1.0, 2.0, 3.0, 4.0], hold_s=120.0)
+    tt, tp = _pieces(t0, amp, hold_s=120.0)
+    med, cnt, kept = WV.step_settled_medians(t0, np.full(4, 120.0), tt, tp)
+    assert len(kept) == 4                        # the old rule measures every setting
+    P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
+    assert int(T.accepted.sum()) == 2            # the new rule measures only the middle two

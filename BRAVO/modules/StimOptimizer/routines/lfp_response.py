@@ -75,7 +75,11 @@ class ResponseResult:
     power_high: float = float("nan")
     derived_threshold: float = float("nan")
     captures_inverted: bool | None = None
-    separation_d: float = float("nan")
+    separation_d: float = float("nan")        # device units — the scale the device thresholds in
+    #: The same quantity computed on the logarithm of power. This is what `separation_d` used to
+    #: hold before 2026-09-06. It is kept so the two scales can be compared on any record and so
+    #: the correction is auditable; nothing decides anything on it.
+    separation_d_on_log: float = float("nan")
     slope_log_per_mA: float = float("nan")
     slope_ci: tuple = (float("nan"), float("nan"))
     slope_p: float = float("nan")
@@ -89,7 +93,9 @@ class ResponseResult:
         verdict = "RESPONDS" if self.responds else "DOES NOT RESPOND"
         return (f"{verdict} — {self.reason} | captures {self.power_low:.4g} -> {self.power_high:.4g} "
                 f"device units at {self.amp_low_mA:.1f} -> {self.amp_high_mA:.1f} mA, "
-                f"separation d={self.separation_d:.2f}, era-adjusted log slope "
+                f"the two readings are {self.separation_d:.2f} scatter-widths apart in device "
+                f"units ({self.separation_d_on_log:.2f} if measured on the logarithm), "
+                f"era-adjusted log slope "
                 f"{self.slope_log_per_mA:+.4f}/mA (p={self.slope_p:.4g})")
 
 
@@ -180,10 +186,38 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     thr = 0.75 * (P_hi - P_lo) + P_lo
 
     lg = np.log(p)
-    s_lo, s_hi = lg[m_lo], lg[m_hi]
-    pooled = np.sqrt(((s_lo.size - 1) * s_lo.var(ddof=1) + (s_hi.size - 1) * s_hi.var(ddof=1))
-                     / max(1, s_lo.size + s_hi.size - 2))
-    sep_d = float(abs(s_lo.mean() - s_hi.mean()) / pooled) if pooled > 0 else float("inf")
+
+    # HOW FAR APART THE TWO POWER MEASUREMENTS ARE, IN DEVICE UNITS. Corrected 2026-09-06 after the
+    # PI asked which units this used and suspected an error. He was right: until today this number
+    # was computed on np.log(p) while everything around it was in device units, and the two are not
+    # the same scale.
+    #
+    # WHY DEVICE UNITS ARE THE RIGHT SCALE HERE. The device puts its switching value BETWEEN the two
+    # measurements, at 0.75 of the way from the lower to the higher, and it does that arithmetic in
+    # its own units (manual p. 39: band power is the linear sum of squared magnitude, giving values
+    # of order 100-200). Whether the signal will actually spend reliable time on both sides of that
+    # switching value therefore depends on how much the readings scatter in DEVICE UNITS around it.
+    # A gap measured on the logarithm answers a different question, and because a logarithm squashes
+    # large values, two readings that look well separated on a log scale can overlap badly in the
+    # units the device works in, and the other way round.
+    #
+    # A CAVEAT RECORDED HONESTLY RATHER THAN HIDDEN. Band power is strongly right-skewed, so a
+    # standardised gap on the raw device scale is influenced more by the scatter of the
+    # higher-power group than a log-scale one would be. That is a real statistical cost and it is
+    # why the logarithm was used originally. It does not change the decision: the quantity this test
+    # is meant to protect is the placement of a switching value in device units, so device units are
+    # what it must be measured in. The log-scale number is kept alongside as
+    # `separation_d_on_log` so the two can always be compared and so the change is auditable.
+    def _standardised_gap(v_lo, v_hi):
+        pooled_sd = np.sqrt(((v_lo.size - 1) * v_lo.var(ddof=1)
+                             + (v_hi.size - 1) * v_hi.var(ddof=1))
+                            / max(1, v_lo.size + v_hi.size - 2))
+        if not np.isfinite(pooled_sd) or pooled_sd <= 0:
+            return float("inf")
+        return float(abs(v_lo.mean() - v_hi.mean()) / pooled_sd)
+
+    sep_d = _standardised_gap(p[m_lo], p[m_hi])                 # device units — the one that counts
+    sep_d_log = _standardised_gap(lg[m_lo], lg[m_hi])           # kept only for comparison
 
     expected_lower_at_high = (mode_requires == "suppression")
     observed_lower_at_high = P_hi < P_lo
@@ -246,6 +280,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
                           amp_low_mA=lo_a, amp_high_mA=hi_a,
                           power_low=P_lo, power_high=P_hi, derived_threshold=float(thr),
                           captures_inverted=inverted, separation_d=sep_d,
+                          separation_d_on_log=sep_d_log,
                           slope_log_per_mA=slope, slope_ci=ci, slope_p=pval,
                           slope_unadjusted=slope_unadj, n_eras=n_eras, notes=notes)
 

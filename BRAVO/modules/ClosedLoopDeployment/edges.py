@@ -3,8 +3,13 @@
 The triangle is the module's whole argument. Closing the loop on a band requires all three of:
 
   E1  amplitude -> band power    the device can MOVE the signal (otherwise there is no control)
-  E2  band power -> pain         the signal TRACKS the patient (otherwise control is pointless)
+  E2  band power -> pain         the signal TELLS THE PATIENT'S HIGH PAIN FROM THEIR LOW PAIN
+                                 (otherwise control is pointless)
   E3  amplitude -> pain          the therapy WORKS (otherwise there is nothing to automate)
+
+E2 IS NOT A SLOPE. It used to be one. It is now how far this band's power gets above or below coin
+flipping at separating high-pain moments from low-pain ones, because the stimulator switches state
+when power crosses a value programmed into it and that is a yes-or-no decision. See ``state_edge``.
 
 and requires their signs to be mutually consistent, which is what consistency.py tests.
 
@@ -51,10 +56,11 @@ from Biomarkers.routines.analytics import (      # noqa: F401  (re-exported on p
     MIN_RELIABLE_CLUSTERS,
     MAX_ENUMERABLE_CLUSTERS,
     estimator_for,
-    band_pain_tracking,
-    PAIN_TRACKING_TRACKS,
-    PAIN_TRACKING_NOT_RESOLVED,
-    PAIN_TRACKING_NOT_ASSESSED,
+    band_pain_auc_from_table,
+    read_band_pain_auc_from_export,
+    BAND_PAIN_ESTABLISHED,
+    BAND_PAIN_NOT_RESOLVED,
+    BAND_PAIN_NOT_ASSESSED,
     _cluster_ols,
     _rademacher_weights,
     _cr0_variance,
@@ -123,37 +129,105 @@ def actuation_edge(T, *, channel, center_hz, hemisphere="Left", scale="power_lin
                         note=note, confounded_by=conf)
 
 
+#: What the E2 estimate is a number of, written on every E2 estimate this module produces.
+#:
+#: E2 no longer carries a slope. It carries how far this band's power gets above or below coin
+#: flipping at telling the patient's high-pain moments from the low-pain ones, which is why 0.5 has
+#: been subtracted; see ``state_edge`` for why that subtraction is what makes the rest of the
+#: module keep working correctly.
+E2_QUANTITY = ("how far above or below coin flipping this band's power gets at telling high-pain "
+               "moments from low-pain ones, as area under the curve minus 0.5")
+
+
 def state_edge(T, *, channel, center_hz, outcome="nrs", scale="power_linear",
-               cluster="report_id", n_boot=999, seed=0):
-    """E2: does the band track the patient's pain at fixed stimulation?
+               cluster="report_id", n_boot=500, seed=0, strategy="tertile"):
+    """E2: how well does this band's power tell the patient's high pain from their low pain?
 
-    THIS FUNCTION NO LONGER DOES THE ARITHMETIC. It asks the biomarker page for the answer, through
-    ``Biomarkers.routines.analytics.band_pain_tracking``, and then packs that answer into the
-    ``EdgeEstimate`` shape the rest of this module reads. The calculation used to be written out
-    here as well as there, which meant the deployment panel and the biomarker page could print two
-    different slopes for the same band with no way to tell which one to believe.
+    WHAT CHANGED AND WHY, because this is not the same quantity it used to be. This function used
+    to fit a straight line through band power against the pain score and report its slope. The PI
+    has rejected that and it has been deleted. The stimulator changes what it is doing when band
+    power crosses a value programmed into it, which is a yes-or-no decision about the state of the
+    brain signal, so the quantity that decides whether a band is worth driving that decision with
+    has to be a quantity about telling two states apart. That quantity is the area under the curve,
+    it is computed on the biomarker side, and this function reads it.
 
-    Cluster unit is the RATING. One pain report is matched to a window containing many spectral
-    samples; those samples share the report's value entirely, so they carry one observation of the
-    pain-power relationship between them.
+    WHAT MAY BE HANDED IN as the first argument, either of two things:
 
-    THE THREE-WAY ANSWER SURVIVES THE PACKING, and that is the only delicate part of this wrapper.
-    ``band_pain_tracking`` says "tracks", "not resolved" or "not assessed" in words. An
-    ``EdgeEstimate`` carries that same distinction in its fields rather than in a word: an estimate
-    that was never worked out has no slope at all (``estimate`` is None), while one that was worked
-    out but left the direction open has a slope and an interval that spans zero, so ``resolved`` is
-    False. Those are different states and downstream code already tells them apart. What must never
-    happen is a "not assessed" result arriving with a slope attached, because it would then read as
-    a measured absence of any relationship. The mapping below therefore drops the slope exactly
-    when the verdict is "not assessed", and a test checks that.
+      * the exported table from ``Biomarkers.routines.analytics.band_pain_auc_export`` -- one row
+        per sensing contact pair per band centre. This is the table the PI asked the biomarker page
+        to produce and the closed-loop page to inherit, and handing it in is the intended route.
+      * this module's own table of spectral samples, one row per sample, with columns for the
+        channel, the band centre, the band power, the pain score and the pain report. The same
+        estimator is then run on those rows directly, through
+        ``Biomarkers.routines.analytics.band_pain_auc_from_table``.
+
+    Either way there is ONE estimator, on the biomarker side, so the deployment panel and the
+    biomarker page cannot print two different numbers for the same band. Which of the two routes
+    was taken is written on the note.
+
+    WHY 0.5 IS SUBTRACTED FROM THE NUMBER BEFORE IT IS STORED. An ``EdgeEstimate`` defines
+    ``resolved`` as its interval excluding ZERO, and everything downstream -- the sign coherence
+    test in ``consistency.py``, device rule D19 -- reads only ``resolved`` and ``sign``. An area
+    under the curve is measured against 0.5, not zero, so storing it raw would make ``resolved``
+    trivially true for every band and would silently destroy the one check this module exists to
+    perform. Subtracting 0.5 from the value and from both ends of its interval makes "the interval
+    excludes zero" mean exactly "the interval excludes 0.5", and makes a positive sign mean exactly
+    "more power in this band goes with more pain", which is the sign D19 asks for. The raw value
+    and its raw interval are written out in full on the note, so nothing is hidden by the shift.
+    ``scale`` names the quantity, so no reader can mistake it for a slope.
+
+    THE THREE-WAY ANSWER SURVIVES THE PACKING, and that is the delicate part. The biomarker side
+    says "established", "not resolved" or "not assessed" in words. An ``EdgeEstimate`` carries the
+    same distinction in its fields rather than in a word: a band that was never assessed has no
+    value at all (``estimate`` is None), while one that was assessed but left the answer open has a
+    value and an interval that spans zero once shifted, so ``resolved`` is False. What must never
+    happen is a "not assessed" result arriving with a value attached, because it would then read as
+    a measurement showing no separation. The mapping below drops the value exactly when the answer
+    is "not assessed", and a test checks it.
     """
-    out = band_pain_tracking(T, channel=channel, center_hz=center_hz, pain_column=outcome,
-                             power_column=scale, group_column=cluster, n_boot=n_boot, seed=seed)
-    if out["verdict"] == PAIN_TRACKING_NOT_ASSESSED:
-        return EdgeEstimate("E2", None, None, None, out["n"], cluster, out["n_groups"], scale,
-                            note=out["note"])
-    return EdgeEstimate("E2", out["estimate"], out["ci"], out["p"], out["n"], cluster,
-                        out["n_groups"], scale, note=out["note"])
+    from_export = (T is not None and hasattr(T, "columns")
+                   and {"channel", "band_center_hz", "auc", "answer"}.issubset(set(T.columns)))
+    if from_export:
+        out = read_band_pain_auc_from_export(T, channel=channel, center_hz=center_hz)
+        route = ("read out of the table the biomarker page exported, which is the intended route: "
+                 "the number was computed once, on the biomarker side, and inherited here")
+    else:
+        out = band_pain_auc_from_table(T, channel=channel, center_hz=center_hz,
+                                       pain_column=outcome, power_column=scale,
+                                       group_column=cluster, strategy=strategy,
+                                       n_boot=n_boot, seed=seed)
+        route = ("computed by the biomarker page's own estimator, called here on this module's "
+                 "table of spectral samples because no exported table was handed in. The exported "
+                 "table is the intended route; this one runs the same estimator on the same rules")
+    n = int(out.get("n_spectral_samples") or 0)
+    n_reports = int(out.get("n_pain_reports") or 0)
+    split = out.get("pain_split_rule") or "the pain split was not recorded"
+    if out.get("answer") == BAND_PAIN_NOT_ASSESSED:
+        note = (f"NOT ASSESSED, so there is no number here at all and this must not be read as a "
+                f"measurement showing that the band does not separate high pain from low pain. "
+                f"{out.get('why', '')}. This answer was {route}.")
+        return EdgeEstimate("E2", None, None, None, n, cluster, n_reports, E2_QUANTITY, note=note)
+    auc = out.get("auc")
+    lo, hi = out.get("auc_low"), out.get("auc_high")
+    est = (float(auc) - 0.5) if auc is not None else None
+    ci = ((float(lo) - 0.5, float(hi) - 0.5) if (lo is not None and hi is not None) else None)
+    raw_ci = (f"{float(lo):.3f} to {float(hi):.3f}" if (lo is not None and hi is not None)
+              else "no interval could be formed")
+    note = (
+        f"The number stored on this estimate is {('%.3f' % est) if est is not None else 'absent'}, "
+        f"which is the area under the curve minus 0.5. THE RAW AREA UNDER THE CURVE IS "
+        f"{('%.3f' % auc) if auc is not None else 'absent'} and its "
+        f"{100 * float(out.get('confidence_level') or 0.95):.0f}% interval is {raw_ci}; 0.5 is what "
+        f"coin flipping would give, and 0.5 was subtracted so that this module's existing test of "
+        f"whether an interval excludes zero becomes a test of whether it excludes coin flipping. "
+        f"Clustered on the pain report: {n_reports} pain reports behind {n} spectral samples, and "
+        f"the confidence interval comes from resampling whole pain reports rather than individual "
+        f"samples, because many samples can share one pain report and therefore share its score "
+        f"exactly. How pain was split into high and low: {split}. What the power values are: "
+        f"{out.get('power_feature', 'not recorded')}. {out.get('why', '')}. This answer was "
+        f"{route}.")
+    return EdgeEstimate("E2", est, ci, out.get("p_two_sided"), n, cluster, n_reports,
+                        E2_QUANTITY, note=note)
 
 
 def therapy_edge(design_matrix, *, outcome="nrs", amp_col="amp_mA_Left", cluster="epoch",

@@ -494,3 +494,128 @@ def test_clearing_this_process_does_not_by_default_clear_the_shared_files():
     assert AD.shared_cache_stats()["entries"] == 1
     AD.clear_inputs_cache(shared=True)
     assert AD.shared_cache_stats()["entries"] == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# THE PARTICIPANT'S STORED PERCEPT FILES ARE READ ONCE PER COLD BUILD, NOT TWICE
+# ---------------------------------------------------------------------------------------------
+#: WHY THESE TESTS EXIST. `evidence_inputs_cached` needs two things from StimOptimizer: the pair of
+#: assembled spectra and exposure epochs, and the epoch-level design matrix. Each of those two calls
+#: used to build the dated settings stream for itself, which means reading, decrypting and parsing
+#: every stored Percept file the participant has. On participant RCS08 that is 1,136 files and about
+#: 34 seconds, and it was happening twice on a genuinely cold build. This function now builds that
+#: frame once and hands the same object to both calls. The tests below check the call count, and
+#: separately check that the three things the function returns are unchanged by the sharing, because
+#: a page that got faster while reporting a different estimate would be much worse than a slow page.
+def _settings_stream_frame():
+    """A settings stream in exactly the columns StimOptimizer.adapter.settings_stream returns."""
+    rows = []
+    for hours, amp, pw in ((0.0, 2.0, 60.0), (6.0, 3.0, 60.0), (12.0, 3.0, 90.0)):
+        t = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(hours=hours)
+        for hemi in ("Left", "Right"):
+            rows.append({"t": t, "src": "history", "hemi": hemi, "amp": amp, "pw": pw,
+                         "rate": 150.0, "upper": 5.0, "cathode": "1-2", "schema": "hemisphere"})
+    return pd.DataFrame(rows)
+
+
+def _pain_report_frame():
+    t0 = pd.Timestamp("2026-01-01T00:00:00Z")
+    return pd.DataFrame([{"t_utc": t0 + pd.Timedelta(hours=h), "nrs": v, "vas": v * 10.0}
+                         for h, v in ((1.0, 7.0), (2.0, 6.0), (7.0, 4.0),
+                                      (8.0, 5.0), (13.0, 3.0), (14.0, 2.0))])
+
+
+@pytest.fixture
+def live_inputs(monkeypatch):
+    """Wire up a cold build that touches no database, and count the file reads.
+
+    Three things stand in for the platform. The identity of the set of recordings, which normally
+    asks the database, becomes a fixed value so the cache key is stable. The Biomarkers service,
+    which the two StimOptimizer functions reach for by the name ``modules.Biomarkers.bravo_service``,
+    becomes a small stand-in holding the three things they call. And the settings stream builder is
+    replaced by a counter that hands back a fixed frame, which is what makes the duplicate read
+    visible at all, since the frame that comes back is identical either way.
+
+    Everything else is the real code: the real ``evidence_inputs``, the real ``build_design_matrix``,
+    and the real caching in this module.
+    """
+    import sys
+    import types
+
+    from StimOptimizer import adapter as SA
+
+    calls = []
+
+    def counting_settings_stream(participant, **kwargs):
+        calls.append((participant, dict(kwargs)))
+        return _settings_stream_frame()
+
+    bravo_service = types.ModuleType("modules.Biomarkers.bravo_service")
+    bravo_service._cached_psd_matrix = lambda uid, force_refresh=None: {}
+    bravo_service._load_pros = lambda request_data, participant: _pain_report_frame()
+    bravo_service._pro_times_utc_series = lambda df: df["t_utc"]
+    pkg_biomarkers = types.ModuleType("modules.Biomarkers")
+    pkg_biomarkers.bravo_service = bravo_service
+    pkg_modules = types.ModuleType("modules")
+    pkg_modules.Biomarkers = pkg_biomarkers
+    monkeypatch.setitem(sys.modules, "modules", pkg_modules)
+    monkeypatch.setitem(sys.modules, "modules.Biomarkers", pkg_biomarkers)
+    monkeypatch.setitem(sys.modules, "modules.Biomarkers.bravo_service", bravo_service)
+
+    monkeypatch.setattr(SA, "settings_stream", counting_settings_stream)
+    monkeypatch.setattr(AD, "recording_set_signature",
+                        lambda participant: ("PARTICIPANT", 1, 1, "a fixed content hash"))
+    return calls
+
+
+def test_a_cold_build_reads_the_percept_files_only_once(live_inputs):
+    """The saving itself. Two calls need the same settings stream and only one read happens."""
+    AD.evidence_inputs_cached("PARTICIPANT")
+    assert len(live_inputs) == 1, (
+        "the participant's stored Percept files were read %d times in one cold build; "
+        "the point of the change is that they are read once" % len(live_inputs))
+
+
+def test_the_one_frame_that_is_built_is_asked_for_with_no_extra_arguments(live_inputs):
+    """If this function asked for a different frame from the one the two StimOptimizer functions
+    build for themselves, then sharing it would change what they saw."""
+    AD.evidence_inputs_cached("PARTICIPANT")
+    assert live_inputs == [("PARTICIPANT", {})]
+
+
+def test_sharing_one_frame_gives_the_same_three_results_as_building_two(live_inputs, monkeypatch):
+    """The result must be unchanged, not merely faster.
+
+    The comparison is against the two functions called separately, each building its own frame,
+    which is exactly what this module used to do.
+    """
+    from StimOptimizer import adapter as SA
+
+    psd_shared, eps_shared, dm_shared = AD.evidence_inputs_cached("PARTICIPANT")
+    n_after_shared = len(live_inputs)
+
+    psd_apart, eps_apart = SA.evidence_inputs("PARTICIPANT")
+    dm_apart = SA.build_design_matrix("PARTICIPANT")
+
+    assert n_after_shared == 1
+    assert len(live_inputs) == 3, "the two separate calls should each have read the files"
+    assert psd_shared is None and psd_apart is None
+    assert len(eps_shared) == 3, f"expected three exposure epochs, got {len(eps_shared)}"
+    pd.testing.assert_frame_equal(eps_shared, eps_apart)
+    assert len(dm_shared) == 3, f"expected three design matrix rows, got {len(dm_shared)}"
+    pd.testing.assert_frame_equal(dm_shared, dm_apart)
+
+
+def test_a_second_request_reads_nothing_at_all(live_inputs):
+    """The file cache that was already in place, still working on top of the change."""
+    AD.evidence_inputs_cached("PARTICIPANT")
+    AD.evidence_inputs_cached("PARTICIPANT")
+    AD.clear_inputs_cache()                     # forget this process's memory, keep the files
+    AD.evidence_inputs_cached("PARTICIPANT")
+    assert len(live_inputs) == 1
+
+
+def test_asking_for_a_refresh_rebuilds_and_reads_once_not_twice(live_inputs):
+    AD.evidence_inputs_cached("PARTICIPANT")
+    AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
+    assert len(live_inputs) == 2

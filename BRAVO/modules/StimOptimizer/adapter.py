@@ -159,6 +159,50 @@ def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataF
     return out.sort_values("t").reset_index(drop=True)
 
 
+#: The columns that every settings stream must carry. ``settings_stream`` always returns a frame
+#: with these columns, including when it found nothing at all and returns zero rows. Anything handed
+#: in through the optional ``stream`` argument below is checked against this list.
+_STREAM_REQUIRED_COLUMNS = ("t", "src", "hemi", "amp", "pw", "rate", "cathode", "schema")
+
+
+def _use_stream_or_build_one(participant, stream):
+    """Give back the settings stream that was handed in, or build a fresh one when none was.
+
+    WHY THIS EXISTS. Reading, decrypting and parsing the participant's stored Percept files is the
+    single most expensive thing this module does. Measured on participant RCS08 through the bridge
+    on 2026-09-06, one pass opens 568 stored files (556 of type MedtronicJSON and 12 of type
+    DefaultType), takes 33.65 seconds and yields 6,617 settings rows. Two functions in this file
+    each needed that same frame, so a caller that wanted both paid for it twice, which is 1,136 file
+    reads instead of 568. Both of those functions now take an optional ``stream`` argument, and when
+    a caller passes the frame it already built, the second pass does not happen. When a caller
+    passes nothing, the frame is built here exactly as it always was, so no existing caller changes
+    behaviour.
+
+    A FRAME THAT IS MISSING A COLUMN RAISES HERE RATHER THAN BEING QUIETLY ACCEPTED. This project
+    has already been bitten once by a place that named columns which did not exist on the real frame
+    and then carried on as if everything were fine, so the wrong answer was produced with no error
+    anywhere. If somebody hands in an object that is not a pandas frame, or a frame that does not
+    carry the columns the settings stream is defined to carry, that is a programming mistake and it
+    stops here with a message naming what was missing.
+
+    Note that an empty settings stream is a legitimate answer and is accepted: a participant with no
+    readable Percept files gets zero rows, but ``settings_stream`` still labels those zero rows with
+    the full set of columns, so the check below passes.
+    """
+    if stream is None:
+        return settings_stream(participant)
+    if not isinstance(stream, pd.DataFrame):
+        raise TypeError("the stream argument must be the pandas frame that "
+                        "StimOptimizer.adapter.settings_stream returns, or None to build one here; "
+                        f"got {type(stream).__name__}")
+    missing = [c for c in _STREAM_REQUIRED_COLUMNS if c not in stream.columns]
+    if missing:
+        raise KeyError("the stream handed in is missing the columns "
+                       f"{missing}, which the settings stream is defined to carry; it has "
+                       f"{sorted(stream.columns)}")
+    return stream
+
+
 def exposure_epochs(stream: pd.DataFrame) -> pd.DataFrame:
     """Collapse the settings stream into exposure epochs, opening a new one on ANY change.
 
@@ -269,7 +313,7 @@ def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
     return out
 
 
-def evidence_inputs(participant, *, force_refresh=None, sources=None):
+def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=None):
     """Live platform data -> ``(psd_frame, epochs)`` ready for ``routines.lfp_evidence``.
 
     This is the seam that made Stage 2 runnable on real recordings. It reuses the Biomarkers
@@ -282,11 +326,19 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None):
 
     Returns ``(None, epochs)`` when the participant has no assembled spectra, rather than raising —
     a participant with settings but no sensing is a normal state, not an error.
+
+    ``stream`` is an optional settings stream that the caller has already built. Pass the frame that
+    ``settings_stream`` returned and this function will use it instead of reading, decrypting and
+    parsing the participant's stored Percept files a second time. Leave it as None and the frame is
+    built here, which is what every caller written before this argument existed does. The frame this
+    function builds for itself is ``settings_stream(participant)`` with no arguments beyond the
+    participant and with no filtering applied afterwards, so a caller that hands in exactly that
+    gets exactly the same epochs it would have got otherwise.
     """
     from modules.Biomarkers import bravo_service as _bs      # local: avoids a module-level cycle
     from .routines import lfp_evidence as _ev
 
-    epochs = exposure_epochs(settings_stream(participant))
+    epochs = exposure_epochs(_use_stream_or_build_one(participant, stream))
     mat = _bs._cached_psd_matrix(getattr(participant, "uid", participant),
                                  force_refresh=force_refresh)
     if not mat:
@@ -312,15 +364,23 @@ def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rate
 
 
 def build_design_matrix(participant, request_data=None, *, washin_min=1.0,
-                        items=PRO_ITEMS) -> pd.DataFrame:
+                        items=PRO_ITEMS, stream=None) -> pd.DataFrame:
     """End-to-end: platform data -> the epoch matrix ``StimOptimizer.pipeline.run`` consumes.
 
     Reuses Biomarkers' own pain-report loader and UTC normalization so there is ONE definition of a
     rating timestamp across the two modules.
+
+    ``stream`` is an optional settings stream that the caller has already built. Pass the frame that
+    ``settings_stream`` returned and this function will use it instead of reading, decrypting and
+    parsing the participant's stored Percept files a second time. Leave it as None and the frame is
+    built here, which is what every caller written before this argument existed does. The frame this
+    function builds for itself is ``settings_stream(participant)`` with no arguments beyond the
+    participant and with no filtering applied afterwards, which is the same frame
+    ``evidence_inputs`` builds for itself, so one frame can safely serve both.
     """
     from modules.Biomarkers import bravo_service as _bs
 
-    stream = settings_stream(participant)
+    stream = _use_stream_or_build_one(participant, stream)
     if stream.empty:
         return pd.DataFrame()
     ep = exposure_epochs(stream)

@@ -1110,68 +1110,179 @@ def test_the_capture_separation_floor_has_exactly_one_definition():
 
 
 # =============================================================================================
-# E2 is now INHERITED from the biomarker page rather than computed twice.
+# E2 IS NO LONGER A SLOPE. It is how well the band tells high pain from low pain, it is computed
+# on the biomarker page, and this module reads it.
+#
+# The PI rejected the straight-line slope this used to be: the stimulator switches state when band
+# power crosses a value programmed into it, which is a yes-or-no decision about the state of the
+# brain signal, so the quantity that decides whether a band is worth driving that decision with has
+# to be a quantity about telling two states apart. That is the area under the curve.
 # =============================================================================================
-def test_state_edge_returns_exactly_what_the_biomarker_page_computes():
-    """The whole point of the change: one calculation, not two that can disagree.
+def _auc_export_for(channel="CH", center_hz=20.5, auc=0.72, lo=0.61, hi=0.83,
+                    answer=None, n_reports=30, n_samples=120):
+    """A table shaped exactly like the one the biomarker page exports, with values put in by hand.
 
-    Every field of the edge is compared against the biomarker page's own result on the same table.
-    An equality check rather than a tolerance, because these are meant to be the same numbers and
-    not merely close ones -- a tolerance here would let a second implementation creep back in.
+    Hand-made rather than computed so that a test of the PACKING cannot pass or fail because of
+    something the estimator did. What is being checked here is that this module reads the table
+    correctly, and that requires knowing the answer in advance.
     """
     from Biomarkers.routines import analytics
-    T = _toy_table(n_epochs=8, per_epoch=6)
+    if answer is None:
+        answer = (analytics.BAND_PAIN_ESTABLISHED if (lo > 0.5 or hi < 0.5)
+                  else analytics.BAND_PAIN_NOT_RESOLVED)
+    return pd.DataFrame([{
+        "channel": channel, "contacts": "0-2", "brain_side": "Left",
+        "band_center_hz": float(center_hz), "band_low_hz": center_hz - 2.5,
+        "band_high_hz": center_hz + 2.5, "band_width_hz": 5.0,
+        "band_fully_inside_8_to_30_hz": True,
+        "answer": answer, "auc": auc, "auc_low": lo, "auc_high": hi,
+        "no_relationship_value": 0.5, "p_two_sided": 0.01,
+        "n_pain_reports": n_reports, "n_spectral_samples": n_samples,
+        "n_high_pain_samples": 60, "n_low_pain_samples": 60,
+        "pain_split_rule": "the pain scores were split into thirds, using one score per pain report",
+        "confidence_level": 0.95, "power_feature": "a standardised logarithm of band power",
+        "why": "a sentence from the biomarker page",
+    }])
+
+
+def test_state_edge_reads_the_table_the_biomarker_page_exported():
+    """The intended route, and what the PI asked for: the number is worked out once on the biomarker
+    page and inherited here. Nothing is recomputed, so the deployment panel and the biomarker page
+    cannot print two different numbers for the same band."""
+    tbl = _auc_export_for(auc=0.72, lo=0.61, hi=0.83)
+    e = E.state_edge(tbl, channel="CH", center_hz=20.5)
+    assert e.name == "E2"
+    assert abs(e.estimate - (0.72 - 0.5)) < 1e-12, e.estimate
+    assert abs(e.ci[0] - (0.61 - 0.5)) < 1e-12 and abs(e.ci[1] - (0.83 - 0.5)) < 1e-12, e.ci
+    assert (e.n, e.n_clusters) == (120, 30), (e.n, e.n_clusters)
+    assert e.resolved is True and e.sign == 1
+    assert "read out of the table the biomarker page exported" in e.note, e.note
+    # the raw value has to be legible on the estimate, not only the shifted one
+    assert "0.720" in e.note and "0.610 to 0.830" in e.note, e.note
+    assert "split into thirds" in e.note, e.note
+
+
+def test_state_edge_stores_the_value_measured_against_half_so_resolved_still_means_something():
+    """THE CORRECTNESS POINT OF THE WHOLE REWIRING, and the one that would fail silently.
+
+    An EdgeEstimate defines `resolved` as its interval excluding ZERO, and everything downstream
+    reads only `resolved` and `sign`. An area under the curve is measured against 0.5, and its
+    interval lies between 0 and 1, so storing it raw would make `resolved` true for every band ever
+    computed and would destroy the one check this module exists to perform. 0.5 is therefore
+    subtracted from the value and from both ends of its interval.
+
+    A band whose interval runs from 0.47 to 0.66 has established nothing. Stored raw, that interval
+    excludes zero and would read as established. Stored shifted, it spans zero and reads as
+    unresolved, which is the truth.
+    """
+    established = E.state_edge(_auc_export_for(auc=0.72, lo=0.61, hi=0.83),
+                               channel="CH", center_hz=20.5)
+    undecided = E.state_edge(_auc_export_for(auc=0.56, lo=0.47, hi=0.66),
+                             channel="CH", center_hz=20.5)
+    assert established.resolved is True, established.ci
+    assert undecided.resolved is False, undecided.ci
+    assert undecided.estimate is not None, "an unresolved band must still carry its value"
+    assert undecided.ci[0] < 0.0 < undecided.ci[1], undecided.ci
+    # both raw intervals sit wholly above zero, which is exactly why the shift is load-bearing
+    assert 0.61 > 0 and 0.47 > 0
+    # and a band where more power goes with LESS pain reads as a negative sign, not as absent
+    other_way = E.state_edge(_auc_export_for(auc=0.28, lo=0.17, hi=0.39),
+                             channel="CH", center_hz=20.5)
+    assert other_way.resolved is True and other_way.sign == -1, (other_way.ci, other_way.sign)
+    assert abs(other_way.estimate + 0.22) < 1e-12, other_way.estimate
+
+
+def test_state_edge_names_the_quantity_so_nobody_reads_it_as_a_slope():
+    """It used to be a slope in pain points per unit of power. It is not one now, and the estimate
+    has to say so on itself, because a reader who assumes the old meaning will read 0.22 as a tiny
+    effect when it is in fact a band that separates high pain from low pain 72% of the time."""
+    e = E.state_edge(_auc_export_for(), channel="CH", center_hz=20.5)
+    assert "coin flipping" in e.scale, e.scale
+    assert "area under the curve minus 0.5" in e.scale, e.scale
+    assert e.scale == E.E2_QUANTITY
+    assert "slope" not in e.scale.lower(), e.scale
+
+
+def test_state_edge_returns_exactly_what_the_biomarker_page_computes_on_this_modules_own_table():
+    """The second route. When no exported table is handed in, this module's own table of spectral
+    samples goes to the SAME estimator on the biomarker side.
+
+    Every field is compared against the biomarker page's own result on the same rows. An equality
+    check rather than a tolerance, because these are meant to be the same numbers and not merely
+    close ones -- a tolerance here would let a second implementation creep back in.
+    """
+    from Biomarkers.routines import analytics
+    T = _toy_table(n_epochs=45, per_epoch=4, seed=5)
     e = E.state_edge(T, channel="CH", center_hz=20.5)
-    out = analytics.band_pain_tracking(T, channel="CH", center_hz=20.5,
-                                       pain_column="nrs", power_column="power_linear",
-                                       group_column="report_id")
-    assert e.estimate == out["estimate"], (e.estimate, out["estimate"])
-    assert e.ci == out["ci"], (e.ci, out["ci"])
-    assert e.p == out["p"], (e.p, out["p"])
-    assert (e.n, e.n_clusters) == (out["n"], out["n_groups"])
-    assert e.note == out["note"]
-    assert e.cluster_unit == "report_id" and e.scale == "power_linear"
+    out = analytics.band_pain_auc_from_table(T, channel="CH", center_hz=20.5, pain_column="nrs",
+                                             power_column="power_linear",
+                                             group_column="report_id", n_boot=500, seed=0)
+    assert e.estimate == out["auc"] - 0.5, (e.estimate, out["auc"])
+    assert e.ci == (out["auc_low"] - 0.5, out["auc_high"] - 0.5), (e.ci, out["auc_low"])
+    assert e.p == out["p_two_sided"], (e.p, out["p_two_sided"])
+    assert (e.n, e.n_clusters) == (out["n_spectral_samples"], out["n_pain_reports"])
+    assert e.cluster_unit == "report_id"
+    assert "computed by the biomarker page's own estimator" in e.note, e.note
 
 
-def test_state_edge_does_not_do_the_arithmetic_itself_any_more():
-    """Asserted on the source, because the failure this guards against is someone pasting the
-    regression back into this function for convenience. Two copies would then drift and the panel
-    and the biomarker page could print different slopes for the same band."""
+def test_state_edge_does_not_do_the_arithmetic_itself():
+    """Asserted on the source, because the failure this guards against is someone pasting a
+    calculation back into this function for convenience. Two copies would then drift and the panel
+    and the biomarker page could print different numbers for the same band."""
     import inspect
     src = inspect.getsource(E.state_edge)
-    assert "band_pain_tracking(" in src, "E2 must ask the biomarker page for the answer"
+    assert ("band_pain_auc_from_table(" in src and "read_band_pain_auc_from_export(" in src), \
+        "E2 must ask the biomarker page for the answer by one of its two routes"
     assert "_cluster_ols(" not in src, "E2 must not fit its own regression"
     assert "_small_sample_inference(" not in src, "E2 must not run its own bootstrap switch"
+    assert "roc_auc_score" not in src, "E2 must not compute its own area under the curve"
+    assert "_weighted_auc_matrix" not in src, "E2 must not compute its own area under the curve"
 
 
-def test_state_edge_keeps_never_assessed_apart_from_no_direction_established():
+def test_state_edge_keeps_never_assessed_apart_from_nothing_established():
     """Three answers, and the two negative-looking ones must not be interchangeable.
 
-    "We could not assess this band" has no slope at all. "We assessed it and could not establish a
-    direction" has a slope and an interval that spans zero. A reader who cannot tell these apart
-    will throw away a band that was never measured, which has already happened three times in this
-    project.
+    "We could not assess this band" has no value at all. "We assessed it and established nothing"
+    has a value and an interval that spans 0.5. A reader who cannot tell these apart will throw away
+    a band that was never measured, which has already happened three times in this project.
     """
     from Biomarkers.routines import analytics
     never = E.state_edge(_toy_table().drop(columns=["report_id"]), channel="CH", center_hz=20.5)
     assert never.estimate is None and never.ci is None and never.p is None
     assert never.resolved is False
+    assert "NOT ASSESSED" in never.note, never.note
+    assert "must not be read as a measurement" in never.note, never.note
+    assert "no report_id column" in never.note, never.note
+    assert "pseudoreplication" in never.note, never.note
 
+    undecided = E.state_edge(_auc_export_for(auc=0.53, lo=0.44, hi=0.62),
+                             channel="CH", center_hz=20.5)
+    assert undecided.estimate is not None, "a band that was assessed must still carry its value"
+    assert undecided.resolved is False
+    # and the two states are genuinely different, not the same one twice
+    assert (never.estimate is None) != (undecided.estimate is None)
+
+    # a band that is simply not in the exported table is "not assessed", never a value near 0.5
+    absent = E.state_edge(_auc_export_for(channel="CH"), channel="OTHER_CH", center_hz=20.5)
+    assert absent.estimate is None and absent.resolved is False, absent
+    assert "no row for contact pair" in absent.note, absent.note
+
+    # the words on the biomarker side agree with the packing on this side
+    assert analytics.band_pain_auc_from_table(
+        _toy_table().drop(columns=["report_id"]), channel="CH",
+        center_hz=20.5)["answer"] == analytics.BAND_PAIN_NOT_ASSESSED
+
+
+def test_a_noise_band_is_not_resolved_on_this_modules_own_table_either():
+    """The same three-way answer has to survive the route that does not go through the exported
+    table, or the two routes would disagree about a band with nothing in it."""
     rng = np.random.default_rng(11)
     noisy = _toy_table(n_epochs=45, per_epoch=4, seed=11)
     noisy["nrs"] = rng.normal(5.0, 2.0, len(noisy))          # pain unrelated to power
-    undecided = E.state_edge(noisy, channel="CH", center_hz=20.5)
-    assert undecided.estimate is not None, "an unresolved edge must still carry its slope"
-    assert undecided.resolved is False
-    # and the two states are genuinely different objects, not the same one twice
-    assert (never.estimate is None) != (undecided.estimate is None)
-
-    # the words on the biomarker side agree with the packing on this side
-    assert analytics.band_pain_tracking(
-        _toy_table().drop(columns=["report_id"]), channel="CH",
-        center_hz=20.5)["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED
-    assert analytics.band_pain_tracking(
-        noisy, channel="CH", center_hz=20.5)["verdict"] == analytics.PAIN_TRACKING_NOT_RESOLVED
+    e = E.state_edge(noisy, channel="CH", center_hz=20.5)
+    assert e.estimate is not None, "an unresolved edge must still carry its value"
+    assert e.resolved is False, e.ci
+    assert "Nothing is established" in e.note, e.note
 
 
 def test_the_biomarker_module_still_does_not_import_the_closed_loop_module():
@@ -1200,10 +1311,16 @@ def test_the_closed_loop_module_reaches_the_biomarker_page_for_this_and_re_expor
     """The other half of the direction: this module DOES depend on Biomarkers now, and the names it
     used to define are still reachable under their old spellings so nothing downstream broke."""
     from Biomarkers.routines import analytics
-    assert E.band_pain_tracking is analytics.band_pain_tracking
+    assert E.band_pain_auc_from_table is analytics.band_pain_auc_from_table
+    assert E.read_band_pain_auc_from_export is analytics.read_band_pain_auc_from_export
     assert E.MIN_RELIABLE_CLUSTERS == analytics.MIN_RELIABLE_CLUSTERS
     for name in ("estimator_for", "wild_cluster_bootstrap_t", "wild_cluster_bootstrap_ci",
                  "_cluster_ols", "_small_sample_inference", "_BootstrapPlan",
-                 "_rademacher_weights", "_cr0_variance", "MAX_ENUMERABLE_CLUSTERS"):
-        assert getattr(E, name) is getattr(analytics, name), name
+                 "_rademacher_weights", "_cr0_variance", "MAX_ENUMERABLE_CLUSTERS",
+                 "BAND_PAIN_ESTABLISHED", "BAND_PAIN_NOT_RESOLVED", "BAND_PAIN_NOT_ASSESSED"):
+        assert getattr(E, name) == getattr(analytics, name), name
+    # the deleted straight-line calculation must not be reachable from this module either
+    for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
+                 "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
+        assert not hasattr(E, gone), f"{gone} is still reachable from the closed-loop module"
 

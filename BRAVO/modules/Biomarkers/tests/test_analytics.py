@@ -2858,12 +2858,51 @@ def test_iid_ci_is_suppressed_under_the_same_floor_as_the_headline_ci():
 def test_all_deployment_binarizations_pass_rating_group():
     """The audit named deployment_roc; the same omission was in deployment_roc_by_era and
     threshold_drift_by_week. A pseudoreplicated cut point defines the classes partly by how often a
-    rating happened to be sampled."""
+    rating happened to be sampled.
+
+    THIS TEST USED TO COUNT A LITERAL STRING and require exactly three matches, which is why it
+    started failing the moment a fourth place began passing the rating group correctly. It now
+    reads the file's own syntax tree and lists every call to the splitting function by the function
+    it sits in, so adding a correct new call cannot break it and adding an incorrect one cannot
+    slip past. The places that deliberately do NOT pass the rating group are named below with the
+    reason, so the exemptions are visible here rather than hidden behind a count.
+    """
+    import ast
     from modules.Biomarkers.routines import analytics as an
-    src = open(an.__file__).read()
-    assert src.count("pain_cutoff=pain_cutoff, rating_group=rating_group") == 3
-    # and nothing in the deployment family still binarizes without it
-    assert "pain_cutoff=pain_cutoff)\n    m = np.isfinite(bp_log)" not in src
+    tree = ast.parse(open(an.__file__).read())
+    owners = [(n.lineno, n.end_lineno, n.name) for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef)]
+
+    def owner_of(line):
+        best = None
+        for a, b, name in owners:
+            if a <= line <= b and (best is None or a > best[0]):
+                best = (a, name)
+        return best[1] if best else "<module>"
+
+    passes, omits = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_binarize_labels":
+            where = owner_of(node.lineno)
+            (passes if any(k.arg == "rating_group" for k in node.keywords) else omits).add(where)
+    assert omits <= {
+        # counts high and low on the neural samples for a histogram; it is not an estimate, and
+        # it is handed a flat array of one score per session with no report grouping to pass
+        "matched_sample_counts",
+        # these two split on ONE channel's own samples through `finite_mask`, reproducing the
+        # offline per-channel cut on purpose (parity audit section 6b)
+        "band_mixedmodel_inference", "band_stim_stability",
+        # KNOWN GAP, pre-existing and reported to the PI rather than changed here: this helper
+        # sits inside deployment_roc_by_era and draws its high-or-low pain line on one score per
+        # spectral sample even though the report grouping is in scope two lines above it.
+        # Changing it would move already-published numbers for the stimulation-state comparison,
+        # which is not what this pass was asked to do.
+        "_roc_for",
+    }, f"a new place splits pain without the report grouping: {sorted(omits)}"
+    # every estimate that reports a number per band must be in the passing list
+    for must in ("deployment_roc", "threshold_drift_by_week", "deployment_forward_chaining",
+                 "spectral_feature_importance", "_pain_split"):
+        assert must in passes, f"{must} must draw the pain line on one score per pain report"
 
 
 # --- F13: the AUC estimand must be on the same unit as its interval (2026-09-02) ---------------
@@ -3328,215 +3367,372 @@ def test_the_burn_in_exclusion_does_not_leak_into_the_era_stability_test():
 
 
 # =============================================================================================
-# The pain-relationship estimate that the closed-loop module now inherits from this page.
+# What the closed-loop page inherits from this page: how well a band tells high pain from low pain.
 #
-# These tests cover `band_pain_tracking`, which was moved here out of
-# ClosedLoopDeployment/edges.py so that there is one calculation of "does this band track the
-# patient's pain" instead of two. The closed-loop module calls this function; it no longer does
-# the arithmetic itself.
+# These tests cover the two export tables the PI asked for -- one of areas under the curve and one
+# of Pearson correlations, both covering every sensing contact pair and every 5 Hz wide band
+# centred from 8 to 30 Hz -- and the single-band estimators underneath them. They replace the tests
+# of `band_pain_tracking`, which fitted a straight line through band power against the pain score
+# and has been deleted on the PI's instruction: the stimulator switches state when power crosses a
+# value programmed into it, which is a yes-or-no decision, so the quantity that says whether a band
+# is worth using has to be a quantity about telling two states apart.
 #
-# Plain `abs()` comparisons are used rather than pytest helpers because this file is run by
-# _agent_bridge/run_tests.py inside the container, where pytest is not imported.
+# Plain `abs()` comparisons and try/except are used rather than pytest helpers because this file is
+# run by _agent_bridge/run_tests.py inside the container, where pytest is not imported.
 # =============================================================================================
-def _tracking_table(n_groups=60, per_group=8, slope=1.5, within_noise=0.05, group_noise=0.0,
-                    seed=0, channel="CH", center_hz=20.5):
-    """A table shaped like the one the closed-loop module builds, with a known slope planted.
+def _band_arrays(n_reports=40, per_report=3, effect=0.0, seed=0, pain_low=1.0, pain_high=9.0):
+    """Band power, pain scores and pain report identifiers, with a known amount of separation.
 
-    One row is one spectral sample. The pain score is fixed WITHIN a group, because that is how the
-    real data behaves: one pain report is matched to a stretch of recording holding many samples,
-    and every one of those samples carries that same report's score. Planting it this way is what
-    makes the grouping in the estimator do any work.
+    One row is one spectral sample. The pain score is the same for every sample belonging to one
+    pain report, because that is what the real data looks like: one survey gets matched to several
+    recordings, and those recordings then all carry that one survey's score. ``effect`` is how many
+    standard deviations of band power one standard deviation of pain buys, so 0 means the band and
+    the pain score have nothing to do with each other.
     """
     rng = np.random.default_rng(seed)
-    rows = []
-    for gi in range(n_groups):
-        x_g = rng.normal(0.0, 1.0)
-        pain_g = 3.0 + slope * x_g + rng.normal(0.0, group_noise) if group_noise else 3.0 + slope * x_g
-        for _ in range(per_group):
-            rows.append({"channel": channel, "center_hz": center_hz,
-                         "power_linear": x_g + rng.normal(0.0, within_noise),
-                         "nrs": pain_g, "report_id": f"r{gi}"})
-    return pd.DataFrame(rows)
+    pain_per_report = rng.uniform(pain_low, pain_high, n_reports)
+    pain = np.repeat(pain_per_report, per_report)
+    rg = np.repeat(np.arange(n_reports), per_report)
+    z = (pain - pain.mean()) / (pain.std() if pain.std() > 0 else 1.0)
+    power = rng.normal(0.0, 1.0, pain.size) + effect * z
+    t0 = np.datetime64("2025-01-01T00:00:00")
+    times = np.array([str(t0 + np.timedelta64(int(6 * i), "h")) for i in range(pain.size)])
+    return power, pain, rg, times
 
 
-def test_band_pain_tracking_recovers_a_planted_slope_and_says_it_tracks():
-    """The number returned must be the slope of pain on band power in the units both are stored in.
-
-    A slope of 1.5 pain points per unit of power is planted, so the estimate has a right answer to
-    be checked against rather than only a sign.
-    """
-    out = analytics.band_pain_tracking(_tracking_table(n_groups=60, slope=1.5),
-                                       channel="CH", center_hz=20.5)
-    assert out["verdict"] == analytics.PAIN_TRACKING_TRACKS, out
-    assert abs(out["estimate"] - 1.5) < 0.15, out["estimate"]
-    assert out["n_groups"] == 60 and out["n"] == 480, (out["n_groups"], out["n"])
-    assert out["ci"][0] < 1.5 < out["ci"][1], out["ci"]
-    # 60 groups is above the switch, so the grouped estimator is used directly
-    assert "CR0" in out["inference"]["estimator"], out["inference"]
-    assert out["slope_units"] == "change in nrs per one unit of power_linear", out["slope_units"]
-
-
-def test_band_pain_tracking_counts_each_pain_report_once_not_each_sample():
-    """The grouping has to be doing the work, or every p-value on this page is overstated.
-
-    Each row is copied five times. A copy is not new evidence about anything -- it is the same
-    spectral sample and the same pain report written down again -- so an honest interval must come
-    back the same width. An interval that ignores the grouping instead shrinks by roughly the
-    square root of five, because it counts each copy as a fresh independent observation. Both
-    numbers are computed here so the test shows the size of what the grouping is protecting
-    against, rather than only asserting that nothing happened.
-    """
-    import statsmodels.api as sm
-
-    tbl = _tracking_table(n_groups=45, per_group=4, seed=1)
-    dup = pd.concat([tbl] * 5, ignore_index=True)
-
-    once = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
-    fived = analytics.band_pain_tracking(dup, channel="CH", center_hz=20.5)
-    assert once["n_groups"] == fived["n_groups"] == 45, (once["n_groups"], fived["n_groups"])
-    assert fived["n"] == 5 * once["n"], (once["n"], fived["n"])
-    assert abs(fived["estimate"] - once["estimate"]) < 1e-9, "copies must not move the slope"
-
-    w_once = once["ci"][1] - once["ci"][0]
-    w_fived = fived["ci"][1] - fived["ci"][0]
-    assert abs(w_fived - w_once) / w_once < 0.02, (w_once, w_fived)
-
-    # what the same data does to an interval that treats every row as independent
-    def _naive_width(d):
-        X = sm.add_constant(d["power_linear"].to_numpy(float))
-        r = sm.OLS(d["nrs"].to_numpy(float), X).fit()
-        return float(2 * 1.96 * r.bse[1])
-
-    n_once, n_fived = _naive_width(tbl), _naive_width(dup)
-    assert n_fived < 0.55 * n_once, (n_once, n_fived)
-    # On this fixture the grouped interval is about 1.7 times the width of the one that counted the
-    # copies, which is the precision the grouping declines to claim. The check is 1.4 rather than
-    # 1.7 so that it fails on the grouping being dropped and not on a small change of fixture.
-    assert w_fived > 1.4 * n_fived, (w_fived, n_fived)
+def _pooled_detail_with_one_good_band(n_reports=40, per_report=3, center=20.0, effect=0.9, seed=0):
+    """Pooled spectra shaped like the biomarker page's own, with a separation planted in ONE band
+    on ONE contact pair, so a sweep over contacts and bands has something to find and somewhere to
+    correctly find nothing."""
+    power, pain, rg, times = _band_arrays(n_reports=n_reports, per_report=per_report,
+                                          effect=effect, seed=seed)
+    rng = np.random.default_rng(seed + 1)
+    f = np.arange(2.0, 40.0, 0.5)
+    chans = ["ZERO_TWO_LEFT", "ONE_THREE_RIGHT"]
+    psd = rng.normal(0.0, 1.0, (pain.size, len(chans), f.size))
+    band = (f >= center - 2.5) & (f < center + 2.5)
+    psd[:, 0, :][:, band] = power[:, None] + rng.normal(0.0, 0.05, (pain.size, int(band.sum())))
+    return {"f_set": f, "psd": psd, "labels": pain, "chan_order": chans,
+            "rating_group": rg, "times": list(times), "prelog": True}
 
 
-def test_band_pain_tracking_refuses_rather_than_treating_every_sample_as_independent():
-    """With no grouping column the honest answer is "not assessed", not a slope."""
-    tbl = _tracking_table(n_groups=20).drop(columns=["report_id"])
-    out = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
-    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED, out
-    assert out["estimate"] is None and out["ci"] is None and out["p"] is None, out
+def test_band_pain_auc_finds_a_planted_separation_and_says_it_is_established():
+    """A band that really does separate this patient's high pain from their low pain must come back
+    with a value above 0.5, an interval that stays above 0.5, and the word "established"."""
+    power, pain, rg, times = _band_arrays(n_reports=45, per_report=3, effect=1.1, seed=0)
+    out = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=400, seed=1)
+    assert out["answer"] == analytics.BAND_PAIN_ESTABLISHED, out
+    assert out["auc"] > 0.5, out["auc"]
+    assert out["auc_low"] > 0.5, (out["auc_low"], out["auc_high"])
+    assert out["no_relationship_value"] == 0.5, out
+    assert "MORE pain" in out["why"], out["why"]
+
+
+def test_band_pain_auc_says_not_resolved_on_noise_and_never_calls_it_a_negative_finding():
+    """The distinction this project has been damaged by three times. A band with nothing in it must
+    come back "not resolved" with an interval that crosses 0.5, and the sentence must not read as
+    having established that the band is useless."""
+    power, pain, rg, times = _band_arrays(n_reports=45, per_report=3, effect=0.0, seed=3)
+    out = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=400, seed=1)
+    assert out["answer"] == analytics.BAND_PAIN_NOT_RESOLVED, out
+    assert out["auc"] is not None, "a band that was assessed must still carry its value"
+    assert out["auc_low"] <= 0.5 <= out["auc_high"], (out["auc_low"], out["auc_high"])
+    assert "not a finding" in out["why"], out["why"]
+    assert "Nothing is established" in out["why"], out["why"]
+
+
+def test_band_pain_auc_refuses_rather_than_counting_every_sample_as_its_own_pain_report():
+    """Without the pain report identifiers there is no way to stop each spectral sample being
+    counted as an independent observation of the patient's pain, which makes a band look more
+    convincing than the data can support. Refusing is reported as "not assessed", with no value."""
+    power, pain, _rg, times = _band_arrays(n_reports=30, per_report=4, effect=1.0, seed=5)
+    out = analytics.band_pain_auc(power, pain, None, times=times)
+    assert out["answer"] == analytics.BAND_PAIN_NOT_ASSESSED, out
+    assert out["auc"] is None, out
     assert "pseudoreplication" in out["why"], out["why"]
 
 
-def test_band_pain_tracking_says_not_resolved_not_not_assessed_on_noise():
-    """THE DISTINCTION THIS PROJECT KEEPS LOSING.
-
-    Band power unrelated to pain must come back as "we looked and could not establish a
-    direction", which is a result. It must NOT come back as "not assessed", which means we never
-    looked, and it must still carry the slope it measured. Collapsing the two has destroyed real
-    findings here three times, because a band that was never assessed then reads in a report as a
-    band that failed.
-    """
-    rng = np.random.default_rng(7)
-    tbl = _tracking_table(n_groups=50, slope=0.0, seed=7)
-    tbl["nrs"] = np.repeat(rng.normal(4.0, 2.0, 50), 8)     # pain unrelated to power
-    out = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5)
-    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_RESOLVED, out
-    assert out["estimate"] is not None, "an unresolved estimate must still report its slope"
-    assert out["ci"] is not None and out["ci"][0] < 0 < out["ci"][1], out["ci"]
-    assert "no direction is established" in out["why"], out["why"]
-
-
-def test_the_three_verdicts_are_words_that_cannot_be_read_as_true_or_false():
-    """A guard against the next person casting this to a boolean.
-
-    If these ever become True/False/None, "not assessed" and "not resolved" both become falsey and
-    the difference is gone with no error anywhere.
-    """
-    words = [analytics.PAIN_TRACKING_TRACKS, analytics.PAIN_TRACKING_NOT_RESOLVED,
-             analytics.PAIN_TRACKING_NOT_ASSESSED]
+def test_the_three_answers_are_three_different_words_and_no_true_or_false_carries_them():
+    """The three answers must stay three. A True or False value has no room for "we could not work
+    this out", so it gets stored as False and then read as "this band failed"."""
+    words = [analytics.BAND_PAIN_ESTABLISHED, analytics.BAND_PAIN_NOT_RESOLVED,
+             analytics.BAND_PAIN_NOT_ASSESSED]
     assert len(set(words)) == 3, words
     for w in words:
-        assert isinstance(w, str) and w and not isinstance(w, bool), w
-        assert bool(w) is True, w      # every one of them is truthy, so a truth test cannot sort them
+        assert isinstance(w, str) and w not in ("True", "False", "true", "false"), w
+    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=1.1, seed=0)
+    for out in (analytics.band_pain_auc(power, pain, rg, times=times, n_boot=300, seed=1),
+                analytics.band_pain_auc(power, pain, None),
+                analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=300, seed=1)):
+        assert out["answer"] in words, out["answer"]
+        assert not isinstance(out["answer"], bool), out
+        # nothing in the result may be a True/False value standing in for the answer
+        bools = [k for k, v in out.items() if isinstance(v, bool)]
+        assert not bools, f"a True/False value could be mistaken for the answer: {bools}"
 
 
-def test_band_pain_tracking_switches_to_the_bootstrap_when_there_are_few_pain_reports():
-    """Below the named group count the interval and p-value must come from the wild cluster
-    bootstrap, and the result must say so, because a grouped standard error on a handful of groups
-    is too narrow and manufactures resolution."""
-    out = analytics.band_pain_tracking(_tracking_table(n_groups=9, per_group=6, seed=2),
-                                       channel="CH", center_hz=20.5)
-    assert out["n_groups"] == 9, out["n_groups"]
-    assert "FEW CLUSTERS" in out["note"], out["note"][:200]
-    assert "bootstrap" in out["inference"]["estimator"], out["inference"]
-    assert out["inference"]["switch_clusters"] == analytics.MIN_RELIABLE_CLUSTERS
-    assert out["verdict"] in (analytics.PAIN_TRACKING_TRACKS,
-                              analytics.PAIN_TRACKING_NOT_RESOLVED), out["verdict"]
+def test_band_pain_auc_is_unchanged_by_any_rescaling_that_keeps_the_power_values_in_order():
+    """The claim made in the docstring, checked. This number depends only on the order of the power
+    values, so the scale the power is expressed in cannot change it. That is why this table does not
+    have to be in the stimulator's own units, while the correlation table does."""
+    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=1.0, seed=7)
+    base = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=300, seed=1)
+    for name, rescaled in (("times ten then shifted", 10.0 * power + 3.0),
+                           ("raised to the power ten", 10.0 ** (power / 10.0)),
+                           ("cubed", power ** 3)):
+        other = analytics.band_pain_auc(rescaled, pain, rg, times=times, n_boot=300, seed=1)
+        assert abs(other["auc"] - base["auc"]) < 1e-12, (name, other["auc"], base["auc"])
+        assert abs(other["auc_low"] - base["auc_low"]) < 1e-12, name
+        assert abs(other["auc_high"] - base["auc_high"]) < 1e-12, name
+        assert other["answer"] == base["answer"], name
 
 
-def test_band_pain_tracking_names_the_power_scale_it_used_and_the_scale_changes_the_slope():
-    """The stimulator adds up power on a linear scale (device rule D11) while this page's plots use
-    a decibel-like scale, so a slope means different things on the two and the result has to say
-    which one it is. Reporting the two as if interchangeable is how a number gets quoted against
-    the wrong units."""
-    tbl = _tracking_table(n_groups=50, slope=1.0, seed=3)
-    tbl["power_linear"] = tbl["power_linear"] - tbl["power_linear"].min() + 1.0
-    tbl["power_log"] = 10.0 * np.log10(tbl["power_linear"])
-    lin = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5,
-                                       power_column="power_linear")
-    log = analytics.band_pain_tracking(tbl, channel="CH", center_hz=20.5,
-                                       power_column="power_log")
-    assert lin["power_column"] == "power_linear" and log["power_column"] == "power_log"
-    assert abs(lin["estimate"] - log["estimate"]) > 1e-6, (lin["estimate"], log["estimate"])
-    assert "power_log" in log["slope_units"], log["slope_units"]
+def test_a_pain_report_covered_by_many_recordings_does_not_get_more_say_than_one_covered_by_few():
+    """One pain report is one observation of this patient's pain however many recordings happened to
+    land on it. Copying one report's samples must leave the reported value untouched; the unweighted
+    per-sample value is reported beside it precisely so this difference is visible rather than
+    silent, and it does move."""
+    power, pain, rg, times = _band_arrays(n_reports=30, per_report=2, effect=0.8, seed=11)
+    keep = (rg == 0)
+    extra = np.repeat(np.where(keep)[0], 9)          # report 0 now has 20 samples, the rest have 2
+    p2 = np.concatenate([power, power[extra]])
+    l2 = np.concatenate([pain, pain[extra]])
+    g2 = np.concatenate([rg, rg[extra]])
+    t2 = np.concatenate([times, times[extra]])
+    one = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=300, seed=1)
+    many = analytics.band_pain_auc(p2, l2, g2, times=t2, n_boot=300, seed=1)
+    assert abs(many["auc"] - one["auc"]) < 1e-9, (one["auc"], many["auc"])
+    assert abs(many["auc_per_sample"] - one["auc_per_sample"]) > 1e-6, \
+        "the per-sample value must be shown to move, or the weighting is not doing anything"
 
 
-def test_band_pain_tracking_from_detail_groups_on_the_rating_not_on_the_sample():
-    """The biomarker page holds its spectra in the pooled detail structure, so the wrapper has to
-    find the channel and band, attach each sample's rating grouping, and hand the same estimator
-    the same kind of table. Four samples share each rating here, so the group count must come back
-    as the number of ratings and not the number of samples."""
-    det = _planted_detail(E=48, center=20.0, beta=0.6, seed=4)
-    det["rating_group"] = np.repeat(np.arange(12), 4)          # 12 ratings, 4 samples each
-
-    # The expected sample count is worked out from the same feature the wrapper uses, not written
-    # in as 48. Some of this synthetic detail's band powers come out at or below zero, so they have
-    # no logarithm and the estimator drops them; hard-coding 48 would make the test fail for the
-    # right behaviour. What is being checked is that the row count is the number of samples with a
-    # usable band power, and the group count is the number of ratings behind them -- not 48 and
-    # not 12 by luck.
-    bp_log, _labels, rg, _t = analytics._band_feature_from_detail(det, "ZERO_TWO_LEFT", 20.0)
-    finite = np.isfinite(bp_log)
-    n_expected = int(finite.sum())
-    groups_expected = int(len(np.unique(np.asarray(rg)[finite])))
-    assert n_expected < 48, "this fixture is meant to contain some unusable samples"
-
-    for scale, col in (("log", "band_power_log"),
-                       ("device_linear", "band_power_device_linear")):
-        out = analytics.band_pain_tracking_from_detail(det, "ZERO_TWO_LEFT", 20.0,
-                                                       power_scale=scale)
-        assert out["verdict"] in (analytics.PAIN_TRACKING_TRACKS,
-                                  analytics.PAIN_TRACKING_NOT_RESOLVED,
-                                  analytics.PAIN_TRACKING_NOT_ASSESSED), out
-        assert out["group_column"] == "rating_group", out["group_column"]
-        assert out["power_column"] == col, out["power_column"]
-        if out["verdict"] != analytics.PAIN_TRACKING_NOT_ASSESSED:
-            assert out["n_groups"] == groups_expected, (out["n_groups"], groups_expected)
-            assert out["n"] == n_expected, (out["n"], n_expected)
-            # each rating stands for several samples, which is the whole reason for the grouping
-            assert out["n"] > out["n_groups"], (out["n"], out["n_groups"])
+def test_the_interval_comes_from_resampling_pain_reports_not_individual_samples():
+    """Doubling every sample adds no new information about this patient, because the same pain
+    reports are behind it. An interval built by resampling samples would narrow by about a factor of
+    the square root of two; one built by resampling pain reports must barely move."""
+    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=0.8, seed=13)
+    one = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=500, seed=1)
+    idx = np.arange(power.size)
+    two = analytics.band_pain_auc(np.concatenate([power, power[idx]]),
+                                  np.concatenate([pain, pain[idx]]),
+                                  np.concatenate([rg, rg[idx]]),
+                                  times=np.concatenate([times, times[idx]]),
+                                  n_boot=500, seed=1)
+    assert two["n_spectral_samples"] == 2 * one["n_spectral_samples"], (one, two)
+    assert two["n_pain_reports"] == one["n_pain_reports"], (one["n_pain_reports"],
+                                                            two["n_pain_reports"])
+    w1 = one["auc_high"] - one["auc_low"]
+    w2 = two["auc_high"] - two["auc_low"]
+    assert abs(w2 / w1 - 1.0) < 0.15, (w1, w2, "the interval tracked the sample count, not the "
+                                               "pain report count")
+    assert one["resampling_unit"] == "one pain report", one["resampling_unit"]
 
 
-def test_band_pain_tracking_from_detail_says_not_assessed_for_a_channel_that_is_not_there():
-    out = analytics.band_pain_tracking_from_detail(_planted_detail(E=20), "NOT_A_CHANNEL", 20.0)
-    assert out["verdict"] == analytics.PAIN_TRACKING_NOT_ASSESSED, out
-    assert out["estimate"] is None, out
+def test_a_band_whose_power_goes_the_other_way_is_reported_below_half_and_not_folded_up():
+    """The deliberate difference from deployment_roc. That function reports the larger of the value
+    and one minus the value, so it can never fall below 0.5 and its interval cannot honestly
+    straddle 0.5. Here the comparison is fixed before the data is looked at, so a band where more
+    power goes with LESS pain reads below 0.5 and says so."""
+    power, pain, rg, times = _band_arrays(n_reports=45, per_report=3, effect=-1.1, seed=17)
+    out = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=400, seed=1)
+    assert out["answer"] == analytics.BAND_PAIN_ESTABLISHED, out
+    assert out["auc"] < 0.5, out["auc"]
+    assert out["auc_high"] < 0.5, (out["auc_low"], out["auc_high"])
+    assert "LESS pain" in out["why"], out["why"]
 
 
-def test_band_pain_tracking_from_detail_rejects_a_scale_it_does_not_have():
-    """Silently picking a scale would put a slope in the wrong units on the screen."""
-    try:
-        analytics.band_pain_tracking_from_detail(_planted_detail(E=20), "ZERO_TWO_LEFT", 20.0,
-                                                 power_scale="millivolts")
-    except ValueError as e:
-        assert "power_scale" in str(e), str(e)
-    else:
-        raise AssertionError("an unknown power scale must raise rather than be guessed at")
+def test_every_row_says_where_the_line_between_high_pain_and_low_pain_was_drawn():
+    """A number for how well a band separates high pain from low pain cannot be interpreted without
+    being told where high pain starts, so the sentence and the two cut values travel with it."""
+    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=0.6, seed=19)
+    tert = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=200, seed=1)
+    assert "split into thirds" in tert["pain_split_rule"], tert["pain_split_rule"]
+    assert tert["pain_low_cut"] is not None and tert["pain_high_cut"] is not None, tert
+    assert tert["pain_low_cut"] < tert["pain_high_cut"], tert
+    assert tert["n_high_pain_samples"] > 0 and tert["n_low_pain_samples"] > 0, tert
+    med = analytics.band_pain_auc(power, pain, rg, times=times, strategy="median",
+                                  n_boot=200, seed=1)
+    assert "split at" in med["pain_split_rule"], med["pain_split_rule"]
+    assert "%.3g" % med["pain_low_cut"] in med["pain_split_rule"], med["pain_split_rule"]
+    # the middle third is left out by the tertile split and kept by the median split
+    assert (med["n_high_pain_samples"] + med["n_low_pain_samples"]
+            > tert["n_high_pain_samples"] + tert["n_low_pain_samples"]), (tert, med)
 
+
+def test_the_line_between_high_and_low_pain_is_drawn_on_one_score_per_pain_report():
+    """If the line were drawn on the samples, a pain report the device happened to cover with many
+    recordings would appear many times in the list the percentiles are computed from and would drag
+    the line towards its own value. Whether a score counted as high pain would then depend partly
+    on when the device was recording."""
+    power, pain, rg, times = _band_arrays(n_reports=21, per_report=2, effect=0.5, seed=23)
+    hi = int(np.argmax(pain))
+    extra = np.repeat(np.where(rg == rg[hi])[0], 20)
+    plain = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=200, seed=1)
+    lopsided = analytics.band_pain_auc(np.concatenate([power, power[extra]]),
+                                       np.concatenate([pain, pain[extra]]),
+                                       np.concatenate([rg, rg[extra]]),
+                                       times=np.concatenate([times, times[extra]]),
+                                       n_boot=200, seed=1)
+    assert abs(plain["pain_low_cut"] - lopsided["pain_low_cut"]) < 1e-9, \
+        (plain["pain_low_cut"], lopsided["pain_low_cut"])
+    assert abs(plain["pain_high_cut"] - lopsided["pain_high_cut"]) < 1e-9, \
+        (plain["pain_high_cut"], lopsided["pain_high_cut"])
+
+
+def test_the_p_value_is_never_quoted_below_the_precision_the_resamples_can_support():
+    """500 resamples cannot measure a p-value of 0.0001, and quoting one would invite a reader to
+    believe a precision that is not there."""
+    power, pain, rg, times = _band_arrays(n_reports=45, per_report=3, effect=1.4, seed=29)
+    out = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=300, seed=1)
+    assert out["p_smallest_reportable"] is not None, out
+    assert out["p_two_sided"] >= out["p_smallest_reportable"] - 1e-12, out
+    assert abs(out["p_smallest_reportable"] - 1.0 / (out["n_resamples_used"] + 1.0)) < 1e-12, out
+
+
+def test_the_resampling_agrees_with_the_one_the_deployment_roc_already_used():
+    """The new weight matrix is written out separately because both export tables need the same
+    matrix fed to two different statistics. Given the same seed it must draw the same resamples as
+    the function this page already used, or there would be two resampling schemes in one file."""
+    power, pain, rg, times = _band_arrays(n_reports=30, per_report=3, effect=0.7, seed=31)
+    y = (pain >= np.median(pain)).astype(int)
+    cluster_of_row, K, block_len = analytics._report_clusters_in_time_order(rg, times, pain)
+    a = analytics._block_bootstrap_aucs(power, y, cluster_of_row, K, 200, block_len,
+                                        np.random.default_rng(4))
+    W = analytics._resample_weight_matrix(cluster_of_row, K, 200, block_len,
+                                          np.random.default_rng(4))
+    b = analytics._weighted_auc_matrix(power, y, W)
+    assert np.allclose(np.nan_to_num(a, nan=-1), np.nan_to_num(b, nan=-1)), "the two disagree"
+
+
+def test_the_exported_table_covers_every_contact_pair_and_every_band_centre_from_8_to_30_hz():
+    """What the PI asked for: one row per electrode contact pair per band centre, across 8 to 30 Hz.
+    Each row must name the contact pair, which side of the brain it is on, the band, the value, its
+    interval, how many pain reports are behind it and how pain was split."""
+    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
+    tbl = analytics.band_pain_auc_export(det, n_boot=200, seed=1)
+    assert list(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ)[0] == 8.0
+    assert list(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ)[-1] == 30.0
+    assert len(analytics.DEFAULT_PAIN_BAND_CENTERS_HZ) == 23
+    assert len(tbl) == 2 * 23, len(tbl)
+    for col in ("channel", "contacts", "brain_side", "band_center_hz", "band_low_hz",
+                "band_high_hz", "band_fully_inside_8_to_30_hz", "answer", "auc", "auc_low",
+                "auc_high", "no_relationship_value", "n_pain_reports", "n_spectral_samples",
+                "pain_split_rule", "power_feature", "why"):
+        assert col in tbl.columns, col
+    assert set(tbl.channel) == {"ZERO_TWO_LEFT", "ONE_THREE_RIGHT"}, set(tbl.channel)
+    assert set(tbl.brain_side) == {"Left", "Right"}, set(tbl.brain_side)
+    # the bands at the two ends stick out past 8 and past 30 Hz and are flagged as such
+    ends = tbl[tbl.band_center_hz.isin([8.0, 30.0])]
+    assert not ends.band_fully_inside_8_to_30_hz.any(), ends[["band_center_hz"]]
+    mids = tbl[tbl.band_center_hz.isin([15.0, 20.0])]
+    assert mids.band_fully_inside_8_to_30_hz.all(), mids[["band_center_hz"]]
+    assert (tbl.no_relationship_value.dropna() == 0.5).all(), "0.5 is what coin flipping gives"
+    # the planted band on the planted contact pair is found, and the same band on the other pair
+    # is correctly not established
+    good = tbl[(tbl.channel == "ZERO_TWO_LEFT") & (tbl.band_center_hz == 20.0)].iloc[0]
+    other = tbl[(tbl.channel == "ONE_THREE_RIGHT") & (tbl.band_center_hz == 20.0)].iloc[0]
+    assert good["answer"] == analytics.BAND_PAIN_ESTABLISHED, dict(good)
+    assert other["answer"] != analytics.BAND_PAIN_ESTABLISHED, dict(other)
+
+
+def test_the_exported_table_says_not_assessed_for_a_contact_pair_that_is_not_there():
+    """An absent contact pair must not appear as a value near 0.5, which a reader would take for a
+    measurement showing no separation."""
+    det = _pooled_detail_with_one_good_band(n_reports=20, per_report=2)
+    tbl = analytics.band_pain_auc_export(det, channels=["NOT_A_CONTACT"], centers=[20.0],
+                                         n_boot=100, seed=1)
+    assert len(tbl) == 1
+    assert tbl.answer.iloc[0] == analytics.BAND_PAIN_NOT_ASSESSED, dict(tbl.iloc[0])
+    assert tbl.auc.iloc[0] is None or not np.isfinite(tbl.auc.iloc[0]), tbl.auc.iloc[0]
+    assert "not present" in tbl.why.iloc[0], tbl.why.iloc[0]
+
+
+def test_the_correlation_table_covers_the_same_rows_and_is_measured_against_zero_not_half():
+    """The companion table. It must cover the same contact pairs and band centres so the two can be
+    read side by side, and every row must say that the value meaning no relationship is 0 here
+    rather than 0.5, so the two tables can never be read against the wrong comparison."""
+    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
+    auc = analytics.band_pain_auc_export(det, centers=[15.0, 20.0], n_boot=200, seed=1)
+    cor = analytics.band_pain_correlation_export(det, centers=[15.0, 20.0], n_boot=200, seed=1)
+    assert len(cor) == len(auc), (len(cor), len(auc))
+    assert list(cor.channel) == list(auc.channel), "the two tables must line up row for row"
+    assert list(cor.band_center_hz) == list(auc.band_center_hz)
+    assert (cor.no_relationship_value.dropna() == 0.0).all(), "zero means no relationship here"
+    for col in ("pearson_r", "pearson_r_low", "pearson_r_high", "pearson_r_per_sample",
+                "n_pain_reports", "answer", "power_feature", "why"):
+        assert col in cor.columns, col
+    good = cor[(cor.channel == "ZERO_TWO_LEFT") & (cor.band_center_hz == 20.0)].iloc[0]
+    assert good["answer"] == analytics.BAND_PAIN_ESTABLISHED, dict(good)
+    assert good["pearson_r"] > 0, good["pearson_r"]
+    assert good["pearson_r_low"] > 0, (good["pearson_r_low"], good["pearson_r_high"])
+    assert -1.0 <= good["pearson_r"] <= 1.0
+
+
+def test_the_correlation_says_none_where_the_other_table_says_how_pain_was_split():
+    """The correlation uses the continuous pain score and does not split it, and the row has to say
+    so, or a reader comparing the two tables will assume both used the same high-or-low split."""
+    power, pain, rg, times = _band_arrays(n_reports=30, per_report=3, effect=0.9, seed=37)
+    out = analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=200, seed=1)
+    assert out["pain_split_rule"].startswith("none"), out["pain_split_rule"]
+    assert "continuous pain score" in out["pain_split_rule"], out["pain_split_rule"]
+
+
+def test_the_correlation_moves_with_the_power_scale_and_the_other_number_does_not():
+    """The reason the two tables need different warnings on them. A correlation is about
+    straight-line agreement, so putting the power through a logarithm changes it. The area under the
+    curve depends only on the order of the values, so it does not."""
+    power, pain, rg, times = _band_arrays(n_reports=40, per_report=3, effect=1.0, seed=41)
+    curved = 10.0 ** (power / 2.0)                  # same order, very different spacing
+    r_flat = analytics.band_pain_correlation(power, pain, rg, times=times, n_boot=200, seed=1)
+    r_curved = analytics.band_pain_correlation(curved, pain, rg, times=times, n_boot=200, seed=1)
+    a_flat = analytics.band_pain_auc(power, pain, rg, times=times, n_boot=200, seed=1)
+    a_curved = analytics.band_pain_auc(curved, pain, rg, times=times, n_boot=200, seed=1)
+    assert abs(r_curved["pearson_r"] - r_flat["pearson_r"]) > 0.05, \
+        (r_flat["pearson_r"], r_curved["pearson_r"])
+    assert abs(a_curved["auc"] - a_flat["auc"]) < 1e-12, (a_flat["auc"], a_curved["auc"])
+
+
+def test_the_correlation_table_also_reports_the_value_with_the_logarithm_undone():
+    """The power in the pooled spectra is a logarithm that has already been standardised within each
+    recording source, so the stimulator's own units cannot be recovered from it. The extra column
+    lets a reader see whether the answer turns on the scale."""
+    det = _pooled_detail_with_one_good_band(n_reports=30, per_report=2, center=20.0, effect=1.0)
+    cor = analytics.band_pain_correlation_export(det, centers=[20.0], n_boot=200, seed=1)
+    for col in ("pearson_r_after_undoing_the_logarithm",
+                "pearson_r_after_undoing_the_logarithm_low",
+                "pearson_r_after_undoing_the_logarithm_high",
+                "answer_after_undoing_the_logarithm"):
+        assert col in cor.columns, col
+    row = cor[cor.channel == "ZERO_TWO_LEFT"].iloc[0]
+    assert row["pearson_r_after_undoing_the_logarithm"] is not None
+    assert "NOT the stimulator's own units" in row["power_feature"], row["power_feature"]
+
+
+def test_reading_a_band_that_is_not_in_the_exported_table_says_not_assessed_and_carries_no_value():
+    """The lookup the closed-loop page goes through. A missing row must never come back as a value
+    near 0.5, because that reads as a measurement showing no separation when nothing was measured."""
+    det = _pooled_detail_with_one_good_band(n_reports=20, per_report=2)
+    tbl = analytics.band_pain_auc_export(det, centers=[20.0], n_boot=100, seed=1)
+    hit = analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT", center_hz=20.0)
+    assert hit["answer"] in (analytics.BAND_PAIN_ESTABLISHED, analytics.BAND_PAIN_NOT_RESOLVED)
+    assert hit["auc"] is not None
+    for miss in (analytics.read_band_pain_auc_from_export(tbl, channel="NOPE", center_hz=20.0),
+                 analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT",
+                                                          center_hz=11.0),
+                 analytics.read_band_pain_auc_from_export(None, channel="ZERO_TWO_LEFT",
+                                                          center_hz=20.0)):
+        assert miss["answer"] == analytics.BAND_PAIN_NOT_ASSESSED, miss
+        assert miss["auc"] is None, miss
+    # a centre frequency that has been through a comma-separated file still matches
+    near = analytics.read_band_pain_auc_from_export(tbl, channel="ZERO_TWO_LEFT",
+                                                    center_hz=20.000000000000004)
+    assert near["answer"] == hit["answer"], (near["answer"], hit["answer"])
+
+
+def test_the_old_straight_line_calculation_is_gone_from_this_page():
+    """The PI asked for it to be killed, not left beside the new one. Two functions answering the
+    same question is how the deployment panel and this page came to print different numbers for the
+    same band."""
+    for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
+                 "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
+        assert not hasattr(analytics, gone), f"{gone} is still on the biomarker page"
