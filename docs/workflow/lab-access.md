@@ -57,6 +57,10 @@ to stay awake and connected. The Mac App Store Tailscale client requires desktop
 login after a reboot. A laptop test host is therefore not automatically an
 unattended, reboot-resilient production service.
 
+For host setup, automatic reconnection and public-route verification, follow
+[Tailscale hosting](tailscale-hosting.md). Check the effective settings and actual
+site access rather than relying on the menu icon alone.
+
 Funnel is included in Tailscale plans. Free-plan eligibility is separate from
 whether the feature exists; verify the account's permitted use before promising
 ongoing free institutional hosting. See the [official Funnel guide](https://tailscale.com/docs/features/tailscale-funnel)
