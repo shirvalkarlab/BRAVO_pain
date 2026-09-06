@@ -182,7 +182,8 @@ def test_era_and_cluster_are_populated_because_amplitude_is_confounded_with_time
 def test_unknown_channel_is_reported_not_silently_empty():
     ev, aud = EV.build_evidence(_psd(), _epochs(), channel="NOPE", hemisphere="Left",
                                 rate_hz=165.0, bands=[(20.0, 5.0)])
-    assert ev is None and "no PSD rows" in aud.reason_unusable
+    assert ev is None and "no rows of sensed signal" in aud.reason_unusable
+    assert "NOPE" in aud.reason_unusable
 
 
 def test_build_all_keys_on_channel_hemisphere_rate_and_audits_unusable_cells():

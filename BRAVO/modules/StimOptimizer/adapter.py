@@ -313,19 +313,101 @@ def attach_pros(epochs: pd.DataFrame, pro_df: pd.DataFrame, pro_times_utc,
     return out
 
 
-def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=None):
-    """Live platform data -> ``(psd_frame, epochs)`` ready for ``routines.lfp_evidence``.
+#: The two things ``evidence_inputs`` can hand back as the sensed half of the join.
+#:
+#: ``"calibrated"`` is the one to use and is the default. It reads the Biomarkers module's cache of
+#: three-second tiles, in which band power has ALREADY been put on the device's own number scale by
+#: the lab's own calibration, inside that module. Nothing is rescaled on the way through here.
+#:
+#: ``"decibel_density"`` is the route this function used until 2026-09-06: the assembled spectra,
+#: which store a decibel power density that the closed-loop module then linearised and integrated
+#: across the band. That quantity is proportional to the one the device works in but is not on the
+#: device's scale, so a number from it cannot be compared against a threshold programmed into the
+#: device. It is kept because the before-and-after comparison of the change needs it and because
+#: other work may want the spectra themselves.
+BAND_POWER_CALIBRATED = "calibrated"
+BAND_POWER_DECIBEL_DENSITY = "decibel_density"
+
+
+def _calibrated_lsb_cache(uid, _bs):
+    """The Biomarkers cache of three-second tiles with band power on the device's scale.
+
+    Returns ``{}`` when this participant has no time-domain recordings to tile, which is a normal
+    state for someone with stimulation settings but no sensing.
+
+    Also returns ``{}`` when the Biomarkers service in front of us does not offer the cache at all.
+    That happens with the small stand-in modules the adapter tests install in place of the real
+    service, which hold only the handful of functions those tests need. Reporting "no sensed signal"
+    for a service that cannot supply any is the same answer as for a participant who has none, and
+    it is the answer those tests already expect. A service that DOES offer the cache and then fails
+    is a real failure and is left to raise.
+    """
+    needed = ("_load_recordings", "TIMEDOMAIN_TYPES", "_derive_chan_order",
+              "_raw_lsb_cache_cached", "_event_psd_lsb_blocks", "_montage_psd_lsb_blocks")
+    if any(not hasattr(_bs, name) for name in needed):
+        return {}
+    td = _bs._load_recordings(uid, _bs.TIMEDOMAIN_TYPES)
+    channels = _bs._derive_chan_order(td)
+    if not channels:
+        return {}
+    return _bs._raw_lsb_cache_cached(
+        uid, channels, td, _bs._event_psd_lsb_blocks(uid),
+        montage_psd_blocks=_bs._montage_psd_lsb_blocks(uid))
+
+
+def _deployable_band_span(_bs):
+    """The band centres worth carrying: those the device could actually place a sensing window on.
+
+    The lab's own two constants set this range, and they are read rather than restated. Everything
+    outside it is excluded for a device reason and not a statistical one: nothing above 30 Hz can be
+    programmed as an adaptive sensing band at all, so a band up there is not deployment evidence
+    however it behaves, and the lab marks the device's own readings as calibrated only inside this
+    same range. Carrying all 98 stored centres instead of these 22 would quadruple the size of a
+    frame that is already large and would add nothing a deployment could use.
+
+    Returns ``None`` when the service does not expose the constants, which means "carry every centre
+    the cache holds" rather than a guess at the range.
+    """
+    try:
+        from modules.Biomarkers.routines import analytics as _an
+    except Exception:                                     # pragma: no cover - stand-in service
+        return None
+    lo = getattr(_an, "LSB_VALIDATED_HZ_LO", None)
+    hi = getattr(_an, "LSB_DEPLOYABLE_HZ_HI", None)
+    if lo is None or hi is None:
+        return None
+    return (float(lo), float(hi))
+
+
+def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=None,
+                    band_power=BAND_POWER_CALIBRATED):
+    """Live platform data -> ``(sensed_frame, epochs)`` ready for ``routines.lfp_evidence``.
 
     This is the seam that made Stage 2 runnable on real recordings. It reuses the Biomarkers
-    assembled PSD matrix rather than re-deriving spectra, so the two modules share one definition of
-    what the brain was doing at a given moment, and it builds the exposure epochs from THIS module's
-    settings reconstruction, so they share one definition of what stimulation was being delivered.
+    module's own sensed signal rather than re-deriving spectra, so the two modules share one
+    definition of what the brain was doing at a given moment, and it builds the exposure epochs from
+    THIS module's settings reconstruction, so they share one definition of what stimulation was
+    being delivered.
 
-    The PSD matrix is expensive to build and is cached by the Biomarkers layer; ``force_refresh``
-    is passed through for the rare case where that cache must be rebuilt.
+    WHAT CHANGED, 2026-09-06. This used to hand back the assembled spectra, which store a decibel
+    power density, and the closed-loop module then linearised and integrated that density to get
+    band power. Nobody had ever calibrated that recipe, so the numbers were proportional to the
+    quantity the device works in but sat about two hundred times below it, while being labelled as
+    being in the device's units. The Biomarkers module already computes band power on the device's
+    own scale, in three-second tiles across the whole recording history, using the recipe the lab
+    validated and the calibration numbers that go with it. This function now reads those tiles. No
+    scale factor is applied here or anywhere else in the closed-loop module; the multiplication that
+    puts the numbers on the device's scale happens inside the Biomarkers module, where it is
+    calibrated and tested. Pass ``band_power=BAND_POWER_DECIBEL_DENSITY`` to get the older frame,
+    which is what the before-and-after comparison of this change uses.
 
-    Returns ``(None, epochs)`` when the participant has no assembled spectra, rather than raising —
-    a participant with settings but no sensing is a normal state, not an error.
+    The tiles are expensive to build and are cached by the Biomarkers layer, keyed on which
+    recordings exist rather than on time, so a changed record produces a new key by itself.
+    ``force_refresh`` is passed through to the assembled-spectra route, which is the only one of the
+    two that takes it.
+
+    Returns ``(None, epochs)`` when the participant has no sensed signal, rather than raising — a
+    participant with settings but no sensing is a normal state, not an error.
 
     ``stream`` is an optional settings stream that the caller has already built. Pass the frame that
     ``settings_stream`` returned and this function will use it instead of reading, decrypting and
@@ -339,11 +421,30 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
     from .routines import lfp_evidence as _ev
 
     epochs = exposure_epochs(_use_stream_or_build_one(participant, stream))
-    mat = _bs._cached_psd_matrix(getattr(participant, "uid", participant),
-                                 force_refresh=force_refresh)
-    if not mat:
+    uid = getattr(participant, "uid", participant)
+
+    if band_power == BAND_POWER_DECIBEL_DENSITY:
+        mat = _bs._cached_psd_matrix(uid, force_refresh=force_refresh)
+        if not mat:
+            return None, epochs
+        return _ev.frame_from_matrix(mat, sources=sources), epochs
+    if band_power != BAND_POWER_CALIBRATED:
+        raise ValueError(f"band_power must be {BAND_POWER_CALIBRATED!r} or "
+                         f"{BAND_POWER_DECIBEL_DENSITY!r}, got {band_power!r}")
+
+    cache = _calibrated_lsb_cache(uid, _bs)
+    if not cache:
         return None, epochs
-    return _ev.frame_from_matrix(mat, sources=sources), epochs
+    span = _deployable_band_span(_bs)
+    centers = None
+    if span is not None:
+        lo, hi = span
+        stored = np.asarray(next(iter(cache.values()))["centers_hz"], float)
+        centers = [float(c) for c in stored if lo - 1e-9 <= c <= hi + 1e-9]
+    frame = _ev.frame_from_lsb_cache(cache, centers_hz=centers, sources=sources)
+    if frame is None or not len(frame):
+        return None, epochs
+    return frame, epochs
 
 
 def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rates=None,
@@ -356,9 +457,10 @@ def evidence_for_participant(participant, *, hemispheres=("Left", "Right"), rate
     which. Callers handing this to the stage gate should report both.
     """
     from .routines import lfp_evidence as _ev
-    psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources)
+    psd, epochs = evidence_inputs(participant, force_refresh=force_refresh, sources=sources,
+                                  band_power=kw.pop("band_power", BAND_POWER_CALIBRATED))
     if psd is None:
-        return {}, pd.DataFrame([{"reason_unusable": "no assembled PSD spectra for this participant",
+        return {}, pd.DataFrame([{"reason_unusable": "no sensed signal for this participant",
                                   "usable": False}])
     return _ev.build_all(psd, epochs, hemispheres=hemispheres, rates=rates, channels=channels, **kw)
 
