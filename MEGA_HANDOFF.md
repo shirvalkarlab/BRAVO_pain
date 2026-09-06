@@ -75,6 +75,49 @@
 
 ## 0. Recent work (newest first)
 
+### 2026-09-06 — my pre-registration labelled the brain side wrongly; corrected by amendment
+
+**The PI caught this: a channel name ending in _LEFT or _RIGHT already says which side of the brain
+the electrode is on.** So my label "ZERO_THREE_RIGHT / sensing Left" was self-contradictory. The
+second word was never the electrode side. It is which side's STIMULATION CURRENT is used as the
+predictor variable. Written out properly:
+
+| electrode sits on | current varied on | pairing | rate |
+|---|---|---|---|
+| ONE_THREE_LEFT — Left | Left | same side | 55 Hz |
+| ONE_THREE_LEFT — Left | Right | opposite sides | 55 Hz |
+| ZERO_THREE_RIGHT — Right | Left | opposite sides | 55 Hz |
+| ZERO_THREE_RIGHT — Right | Right | same side | 55 Hz |
+| ZERO_THREE_RIGHT — Right | Left | opposite sides | 110 Hz |
+| ZERO_THREE_RIGHT — Right | Right | same side | 110 Hz |
+
+**The code was already right; only my labels and my prose were wrong.**
+`lfp_evidence._sensing_side` reads the side off the channel name and `_laterality` compares it
+against the stimulating side, returning same-side / opposite-sides / unknown. Device rule D39
+(A610 pp. 37, 39) already makes an opposite-sides pairing a documented fallback needing an explicit
+extra configuration step on the programmer, and rule D38 (p. 44) records that both BrainSense and
+Adaptive Therapy are configured one side at a time.
+
+**No conclusion moves, but the deployment reading of one does.** The strong 55 Hz result holds on
+the SAME-SIDE pairing (electrode right, current right) as well as the opposite-sides one — both at
+p = 0.0005 — so the finding that signal power RISES with current, in the direction the control law
+cannot use, stands on the pairing that needs no extra configuration step. The retracted
+ONE_THREE_LEFT candidate was non-significant on both pairings (p = 0.6697 same side, 0.4333 opposite
+sides). The 110 Hz hypothesis is now explicitly two candidates of different practical cost: the
+same-side one is programmable as is, the opposite-sides one needs the D39 step first.
+
+**Filed as an AMENDMENT rather than an edit**, because `registry.Registry` appends and never
+overwrites and demands a non-empty reason. Ledger now holds 1 registration plus 1 amendment, digest
+`de5d1d4577e18363`, tamper check passing.
+
+**Traceability table added for the PI's second question** — which stimulation-influence measurements
+actually reach the closed-loop module: `RCS08_stim_influence_traceability.csv`. Four of six are
+wired; the two that are not are `analytics.band_stim_stability` and `analytics.stability_equivalence`,
+which are computed on the Biomarkers page and imported by neither `ClosedLoopDeployment` nor
+`StimOptimizer`.
+
+
+
 ### 2026-09-05 (later still) — the staged path now runs on live data, and pinning the rate changed its answer
 
 `pipeline.run_two_stage_live(participant, ...)` closes the "STILL NOT BUILT" marker. Every piece had
