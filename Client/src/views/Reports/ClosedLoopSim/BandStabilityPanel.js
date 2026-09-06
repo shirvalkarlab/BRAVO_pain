@@ -265,7 +265,7 @@ export default function BandStabilityPanel({ stability }) {
             <MDTypography variant="caption" sx={{ color: PAL.warnText, lineHeight: 1.4 }}>
               A multiple of the stimulation rate folds back into the recording
               {" "}{fmtNum(s.distance_to_nearest_artifact_hz, 1)} Hz from the middle of this band,
-              so some of the power here is the stimulator rather than the brain.
+              so some of the power here is a folded multiple of the stimulation rate.
             </MDTypography>
           </MDBox>
         ) : null}

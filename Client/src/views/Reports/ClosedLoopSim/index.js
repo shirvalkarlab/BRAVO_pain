@@ -68,6 +68,7 @@ import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import PrescriptionPanel from "./PrescriptionPanel";
 import DutyCyclePanel from "./DutyCyclePanel";
 import BandStabilityPanel from "./BandStabilityPanel";
+import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import PAL from "./palette";
@@ -619,6 +620,28 @@ function ClosedLoopSim() {
                   </Grid>
                 </Grid>
               ) : null}
+
+              {/* HOW STIMULATION CURRENT MOVED BAND POWER, measured three separate ways and put
+                  side by side: from the raw voltage trace, from the device's own spectrum, and from
+                  the device's own band-power reading.
+
+                  PLACED AT THE BOTTOM on the PI's instruction, 2026-09-06: "This three-source
+                  comparison panel is exactly what needs to go into the closed-loop deployment
+                  module at the bottom." It was first mounted directly under the band-stability
+                  panel; this is lower, and the position is also the right one on the merits, since
+                  the panel is informative only -- it gates nothing, no verdict on this page reads
+                  it, and it carries no badge.
+
+                  IT SITS OUTSIDE THE COLLAPSED ANALYST FOLD ABOVE, DELIBERATELY. Its figures are
+                  Plotly, and the comment on that fold records the reason: a Plotly graph first
+                  drawn inside a hidden container measures itself as zero pixels wide and keeps that
+                  size when the container is later shown. Moving this panel inside the fold would
+                  reintroduce exactly that bug.
+
+                  The signoff card stays last, because it is the printable record. */}
+              <Grid item xs={12} id="cl-three-source">
+                <ThreeSourceResponsePanel report={deploymentReport} />
+              </Grid>
 
               {/* The printable record. It keeps the gate checklist and loses its own headline
                   verdict and its own threshold cell, so the page cannot contain two answers. */}

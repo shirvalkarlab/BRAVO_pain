@@ -1216,4 +1216,40 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "blocking_status": _stab_err.BLOCKING_STATUS,
             "answers_possible": list(_stab_err.ANSWERS),
         }
+
+    # ---------------------------------------------------------------------------------------------
+    # HOW STIMULATION CURRENT MOVED BAND POWER, MEASURED THREE SEPARATE WAYS AND PUT SIDE BY SIDE.
+    #
+    # WHY THIS IS ON THIS PAGE. Closed loop watches the power in one band and moves the current when
+    # that power crosses a threshold typed into the stimulator. There are three different ways to get
+    # a band power out of this device -- from the streamed voltage trace, from the device's own
+    # onboard spectrum, and from the band power the device computes on board and reports directly --
+    # and they come from three different recordings. Whoever is about to program a threshold should be
+    # able to see all three next to each other over the same stimulation settings, in the device's own
+    # units, before they pick a number.
+    #
+    # THIS GATES NOTHING, and that is deliberate rather than an oversight. The payload says so in
+    # `gates_nothing`, no verdict on this page reads it, and no blocking rule depends on it. The PI
+    # asked for it as something informative for the person reading the page, and a comparison of
+    # three measurement routes is not a device rule traceable to a page of a Medtronic manual, which
+    # is what every blocking rule here is.
+    #
+    # AND IT MUST NOT BE READ AS THREE INDEPENDENT CONFIRMATIONS. The device computes its own band
+    # power on board from the very voltage trace the first route reads, and the contact surveys
+    # behind the second route are where the conversion into device units was fitted in the first
+    # place. Agreement across the three says the conversion is behaving. The payload carries that
+    # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
+    try:
+        from . import three_source_response as _3src
+        from . import three_source_plots as _3plot
+        out["three_source_response"] = _3plot.report_payload(
+            _3src.build_for_participant(getattr(participant, "uid", participant)))
+    except Exception as _exc:                          # never let this take down the whole report
+        # Say WHY it is missing, for the same reason as the stability block above: an absent key
+        # reads on the page as "does not apply", and this having failed is not that.
+        out["three_source_response"] = {
+            "comparisons": [], "gates_nothing": True,
+            "absent_reason": ("the three-way comparison of how current moves band power could not "
+                              f"be assembled: {_exc!r}"),
+        }
     return out

@@ -173,7 +173,7 @@ def amplitude_response_band_mask(rate_hz, centers_hz, *, tol_hz=BAND_HALF_HZ,
         amplitude change the power rise is concentrated at the landings by a factor of roughly fifty
         (0.81 log10 per 100 s at the stimulation frequency against -0.003 away from it), because the
         stimulation artifact scales with the current being asked about. A slope estimated at a
-        landing is measuring the stimulator, not the brain.
+        landing carries a folded multiple of the stimulation rate.
 
     IMPORTANT: this mask must be built PER RATE. Pooling rates defeats it — RCS08's ten rates put
     landings roughly every 5 Hz across the 2.5-99.5 Hz axis, and with a 2.5 Hz tolerance that covers
