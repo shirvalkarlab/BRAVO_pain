@@ -99,6 +99,26 @@ def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
     return np.round(a / float(bin_mA)) * float(bin_mA)
 
 
+#: Most changes of current a single ramp may contain before the block is refused as a recording in
+#: which the amplitude never holds still. Measured 2026-09-06 across the whole RCS08 record: clinic
+#: step ladders use a MEDIAN OF 4 increments per step and 35 at the very most (a 0-to-3.5 mA sweep
+#: the device chose to deliver in 35 pieces over 75 s). The refused regime is two orders of
+#: magnitude away -- a median of 494 changes per block, up to 5,139 -- so any threshold between
+#: about 50 and 400 separates them cleanly and 100 is not a delicate choice.
+MAX_INCREMENTS_PER_RAMP = 100
+
+
+class ContinuousAmplitudeError(ValueError):
+    """Raised when a block's current never holds still, so it has no ramps or plateaus.
+
+    Deliberately an exception rather than an empty return. An empty frame is indistinguishable
+    from "this block had no amplitude changes at all", and the two need different handling: the
+    first means the caller pointed a step-ladder routine at an at-home recording, the second means
+    the stimulation simply sat at one value. Callers that sweep many blocks should catch this and
+    count it, which is what the all-sessions extraction now does.
+    """
+
+
 def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=10.0,
                                 tol_mA=1e-9):
     """When did the device actually finish moving the current? Measured, not assumed.
@@ -139,6 +159,34 @@ def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=1
                                      "mA_from", "mA_to", "hold_s", "plateau_end"])
     ch = np.where(np.abs(np.diff(a)) > tol_mA)[0] + 1
     rows, i = [], 0
+    # ------------------------------------------------------------------------------------------
+    # REFUSE THE RECORDING WHERE THE AMPLITUDE NEVER HOLDS STILL. Found 2026-09-06 while auditing
+    # this function against the whole record, and it is a defect of the burst rule above rather
+    # than a property of the data.
+    #
+    # Two regimes are present in RCS08's record and they need different treatment. Of 600 blocks
+    # with a moving amplitude, 583 are STEP LADDERS -- a median of 4 increments then a 57.5 s hold,
+    # which is what this function is for. The other 17 are recordings in which the amplitude
+    # changes almost continuously: a median of 494 changes per block, and in the worst case 5,139
+    # changes across 615.6 s with only 3.85 s of hold at the end.
+    #
+    # Because every consecutive change there is closer together than ``burst_gap_s``, the burst
+    # rule glues thousands of them into ONE block and reports it as a single 615-second "ramp".
+    # That number is not wrong arithmetically, it is MEANINGLESS as a description -- there is no
+    # ramp and no plateau in such a recording, and a caller that takes it at face value would
+    # exclude ten minutes of signal to protect against a settling transient that has no defined
+    # start. These blocks are at-home sessions rather than clinic ladders.
+    #
+    # So: say so and return nothing, rather than returning a description that reads as a ramp.
+    # The ``min_hold_s`` filter already removed them in practice, which is why the 326-step
+    # analysis was unaffected -- but it removed them silently and for the wrong reason.
+    if ch.size > MAX_INCREMENTS_PER_RAMP:
+        span = t[ch[-1]] - t[ch[0]] if ch.size > 1 else 0.0
+        raise ContinuousAmplitudeError(
+            f"the amplitude changes {ch.size} times over {span:.1f} s in this block, more than "
+            f"the {MAX_INCREMENTS_PER_RAMP} allowed for a step ladder. This is a recording in "
+            f"which the current never holds still, so it has no ramps and no plateaus to measure; "
+            f"pass it to a routine written for continuously varying amplitude instead.")
     while i < ch.size:
         j = i
         while j + 1 < ch.size and (t[ch[j + 1]] - t[ch[j]]) <= burst_gap_s:

@@ -615,3 +615,35 @@ def test_ramp_windows_come_from_the_device_and_a_burst_is_one_step():
     assert len(WV.ramp_windows_from_amplitude(t, a2)) == 0
     # And an amplitude record that never moves yields nothing rather than raising.
     assert len(WV.ramp_windows_from_amplitude(t, np.zeros_like(t))) == 0
+
+
+def test_a_block_whose_current_never_holds_still_is_refused_not_described_as_a_ramp():
+    """Found 2026-09-06 auditing this function against RCS08's whole record.
+
+    17 of 600 blocks with a moving amplitude are at-home recordings where the current changes
+    almost continuously -- a median of 494 changes, worst case 5,139 over 615.6 s with 3.85 s of
+    hold. The burst rule glued those into ONE block and called it a 615-second ramp, which is
+    arithmetically true and meaningless: there is no ramp and no plateau to measure.
+    """
+    t = np.arange(0.0, 600.0, 0.5)
+    a = 2.0 + 0.3 * np.sin(np.arange(t.size) / 3.0)      # never holds still
+    with pytest.raises(WV.ContinuousAmplitudeError) as e:
+        WV.ramp_windows_from_amplitude(t, a)
+    msg = str(e.value)
+    assert "never holds still" in msg, "the error must say what the block IS, not only what failed"
+    assert str(WV.MAX_INCREMENTS_PER_RAMP) in msg, "it must name the threshold it exceeded"
+
+    # A real ladder with the largest increment count actually observed (35) must still pass, so
+    # the guard cannot be tightened into the working range without this test failing.
+    t2 = np.arange(0.0, 400.0, 0.5)
+    a2 = np.zeros_like(t2)
+    for k in range(35):                                   # 35 increments over 70 s, then a hold
+        a2[t2 >= 10.0 + 2.0 * k] = 0.1 * (k + 1)
+    W = WV.ramp_windows_from_amplitude(t2, a2)
+    assert len(W) == 1, "the 35-increment ladder observed on 2026-06-24 must not be refused"
+    assert W.n_increments.iloc[0] == 35
+    assert W.hold_s.iloc[0] > 200.0
+
+    # And a block whose current simply sits at one value returns EMPTY rather than raising: that
+    # is a different situation and the caller needs to tell them apart.
+    assert len(WV.ramp_windows_from_amplitude(t2, np.full_like(t2, 2.0))) == 0
