@@ -500,8 +500,23 @@ def shared_cache_stats():
             files = []
     with _SHARED_CACHE_LOCK:
         events = dict(_SHARED_CACHE_EVENTS)
+    # SKIP A FILE THAT HAS GONE RATHER THAN RAISING. Found 2026-09-06 by the agent that ported this
+    # mechanism to the Biomarkers module, which guarded it in its own copy and reported this one
+    # rather than editing another module's file.
+    #
+    # The `listdir` above is wrapped and this was not, so the two calls disagreed about how hostile
+    # the filesystem is. There are four worker processes: one can be inside `clear_shared_cache`
+    # while another is here, and then `getsize` raises FileNotFoundError straight out of a function
+    # whose entire job is to report a number for the interface. A statistics call must never be the
+    # thing that breaks a page.
+    total = 0
+    for f in files:
+        try:
+            total += _os.path.getsize(_os.path.join(d, f))
+        except OSError:
+            pass
     return {"directory": d, "entries": len(files), "files": files,
-            "bytes": sum(_os.path.getsize(_os.path.join(d, f)) for f in files) if d else 0,
+            "bytes": total if d else 0,
             "max_bytes_per_entry": _SHARED_CACHE_MAX_BYTES, "events": events}
 
 

@@ -870,12 +870,492 @@ def _stamp_td_product(td_recordings):
     return td_recordings
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# THE SAME 3 s-TILE CACHE, SHARED BETWEEN THE SERVER'S WORKER PROCESSES AND ACROSS RESTARTS
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#: WHY A FILE AND NOT JUST THE TWO MEMOS ABOVE. `_RAW_LSB_CACHE_MEMO` lives in one process's
+#: memory, and the server runs FOUR worker processes (boot.sh caps gunicorn at four, because
+#: sixteen exhausted the lab machine's memory). Two requests from the same page can land on two
+#: different workers, so the memo alone makes "built once" true per worker and not per
+#: participant: the first request to reach each worker pays the whole build, and there are four
+#: workers. The development server also runs with reload enabled, so every edit to any Python file
+#: replaces all four workers and throws every memo away again. That is why the band-by-length-of-
+#: signal panel still felt slow after the memo went in.
+#:
+#: THE MEASUREMENT THAT DECIDED THIS, taken on participant RCS08 through the bridge on 2026-09-06,
+#: stage by stage in a genuinely fresh process. Reading and decoding the stored Percept files takes
+#: 1.55 s for the time-domain products, 0.36 s for the montage and survey products and 0.35 s for
+#: the patient-event spectra. Fetching the pain reports from REDCap takes 0.86 s. Matching the
+#: reports against the tiles and computing every statistic the panel shows takes 2.34 s. Cutting
+#: the whole recording history into 3 s tiles and computing a 98-band spectrum for each of them
+#: takes 37.09 s — that one step is the delay the PI reported. The finished tiles for all six
+#: sensing contact pairs (298,953 time-domain tiles and 5,525 device-spectrum windows) hold 245 MB
+#: once each window family's rows are stored as one array; they write in 0.10 s and read back in
+#: 0.05 s. So a worker that finds the file does in a twentieth of a second what would otherwise
+#: take thirty-seven seconds.
+#:
+#: WHAT IS DELIBERATELY NOT DONE HERE. There is no expiry time. An expiry-based cache serves a
+#: stale answer for however long the window lasts and then hides the fact by fixing itself, and
+#: this project has already lost a session to that class of confusion. The file is keyed on the
+#: identity and content of every recording that feeds it, so a new ingest replaces it immediately
+#: and nothing else does.
+#:
+#: THE PAIN REPORTS ARE NOT IN HERE, AND THAT IS THE POINT. What this file holds is the 3 s tile
+#: cache, which `raw_lsb_spectrum_cache` builds with no knowledge of any rating — the same tiles
+#: serve every choice of pain score, every match rule and every length of signal. The pain reports
+#: are fetched from REDCap on every single request, exactly as before, and matched against the
+#: tiles live. So a pain report filed one second ago is in the answer, and this cache cannot make
+#: any statement about pain stale. Caching the reports themselves was refused for measured reasons
+#: (commit c70e0b0); nothing here revisits that.
+_RAW_LSB_SHARED_KIND = "raw_lsb_tiles"
+_SHARED_CACHE_SUBDIR = "biomarker_shared"
+
+#: Refuse to write an entry larger than this. A cache is a convenience and must never be the
+#: reason a disk fills up on a machine that is also holding the participant's recordings. The
+#: RCS08 entry measures 245 MB, so this is roughly four times the size of the thing it is sized
+#: for, and the storage volume holding it had 122 GB free when this was written.
+_SHARED_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+
+#: Bumped whenever the shape of what gets stored changes. It is part of the file name, so an older
+#: file is never read by newer code; the old file is simply not looked for and gets swept by
+#: `clear_shared_cache`.
+_SHARED_CACHE_FORMAT = 1
+
+#: Bumped by hand whenever the RULE that produces the tiles changes in a way the constants below
+#: do not capture — the tiling itself, the quality gate, the channel assignment. This module
+#: already carries `_CHANNEL_CANON_VERSION`, `_TD_CENTERED_VERSION` and `_TD_MISSING_VERSION` for
+#: the per-recording spectrum files for the same reason.
+_RAW_LSB_RULE_VERSION = "v1_tiles"
+
+#: Tests and any caller who wants no file at all point this at a directory of their own or set it
+#: to None. None means "this process's memory only" and is not an error.
+_SHARED_CACHE_DIR_OVERRIDE = None
+
+_SHARED_CACHE_EVENTS = {"hits": 0, "misses": 0, "writes": 0, "refused_too_big": 0,
+                        "unreadable": 0, "no_directory": 0, "wrong_channels": 0,
+                        "unpackable": 0, "swept": 0}
+_SHARED_CACHE_LOCK = threading.Lock()
+
+
+def shared_cache_dir():
+    """Where the shared files go, or None when there is nowhere to put them.
+
+    The platform already keeps a cache directory next to the participant's recordings, which is
+    where the per-recording spectrum files live, so this uses the same place rather than inventing
+    a location. Returning None when Django is not configured is what lets the tests run with no
+    server and no disk writing at all.
+    """
+    if _SHARED_CACHE_DIR_OVERRIDE is not None:
+        d = str(_SHARED_CACHE_DIR_OVERRIDE)
+    else:
+        try:
+            base_dir = os.path.dirname(_psd_cache_dir())        # .../cache
+        except Exception:
+            return None
+        if not base_dir:
+            return None
+        d = os.path.join(base_dir, _SHARED_CACHE_SUBDIR)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        return None
+    return d
+
+
+def _shared_path(kind, participant_uid, signature):
+    """The file name for one stored product.
+
+    The participant is in the name in plain text, before the hash of the signature, for two
+    reasons: a person looking at the directory can tell whose files these are, and writing a new
+    entry can find and remove that same participant's superseded entries without opening any of
+    them.
+    """
+    d = shared_cache_dir()
+    if d is None:
+        return None
+    import hashlib
+    key = hashlib.blake2b(repr(signature).encode("utf8"), digest_size=20).hexdigest()
+    return os.path.join(d, f"{kind}.v{_SHARED_CACHE_FORMAT}.{participant_uid}.{key}.pkl")
+
+
+def _shared_load(kind, participant_uid, signature):
+    """The stored product for this signature, or None.
+
+    THE STORED SIGNATURE IS CHECKED AGAINST THE REQUESTED ONE rather than trusted from the file
+    name. The name holds a hash, and a hash can in principle collide; more practically, a file
+    could be left behind by code that built its signature differently. Comparing the signature
+    itself means a mismatch is a miss and a rebuild, never a wrong answer.
+
+    Every failure here is a miss, never an exception. A half-written file, a payload written by a
+    different numpy version, a permissions change — none of those is a reason for a clinician's
+    page to return an error, because the correct answer is always still obtainable by rebuilding.
+    """
+    import pickle
+    p = _shared_path(kind, participant_uid, signature)
+    if p is None:
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["no_directory"] += 1
+        return None
+    if not os.path.exists(p):
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["misses"] += 1
+        return None
+    try:
+        with open(p, "rb") as fh:
+            stored = pickle.load(fh)
+        if not isinstance(stored, dict) or stored.get("signature") != signature:
+            raise ValueError("the signature stored in the file is not the one being asked for")
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["hits"] += 1
+        return stored["payload"]
+    except Exception as exc:
+        _log.info("Biomarkers: discarding an unreadable shared tile-cache file %s (%r)", p, exc)
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["unreadable"] += 1
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return None
+
+
+def _sweep_superseded_entries(kind, participant_uid, keep_path):
+    """Remove this participant's older entries of the same kind once a new one has landed.
+
+    A new ingest changes the signature, so the new entry lands under a new name and the old one
+    would otherwise sit there forever. One entry is 245 MB on RCS08, so a month of daily uploads
+    would leave seven gigabytes of files that can never be read again. Only this participant's
+    files of this kind are touched, and only after the replacement is safely in place.
+    """
+    d = shared_cache_dir()
+    if d is None:
+        return 0
+    prefix = f"{kind}.v"
+    marker = f".{participant_uid}."
+    removed = 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith(prefix) or marker not in name:
+            continue
+        full = os.path.join(d, name)
+        if full == keep_path:
+            continue
+        try:
+            os.remove(full)
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["swept"] += removed
+    return removed
+
+
+def _shared_store(kind, participant_uid, signature, payload):
+    """Write the product where the other worker processes can find it. True if it landed.
+
+    WRITTEN TO A TEMPORARY NAME AND THEN MOVED INTO PLACE. All four workers can finish the same
+    build at the same moment, and a reader can arrive in the middle of a write. Writing straight to
+    the final name would let that reader see a truncated file; `os.replace` is atomic within a
+    directory, so a reader sees either the old complete file or the new complete file and never a
+    partial one. The temporary name carries the process id so two writers cannot tread on each
+    other's temporary file either.
+    """
+    import datetime
+    import pickle
+    p = _shared_path(kind, participant_uid, signature)
+    if p is None:
+        return False
+    tmp = f"{p}.{os.getpid()}.tmp"
+    try:
+        written = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        blob = pickle.dumps({"signature": signature, "payload": payload,
+                             "written_utc": written}, protocol=5)
+        if len(blob) > _SHARED_CACHE_MAX_BYTES:
+            with _SHARED_CACHE_LOCK:
+                _SHARED_CACHE_EVENTS["refused_too_big"] += 1
+            _log.info("Biomarkers: not sharing a %.1f MB %s entry through a file (limit %.0f MB); "
+                      "it stays in this process's memory only",
+                      len(blob) / 1e6, kind, _SHARED_CACHE_MAX_BYTES / 1e6)
+            return False
+        with open(tmp, "wb") as fh:
+            fh.write(blob)
+        os.replace(tmp, p)
+        with _SHARED_CACHE_LOCK:
+            _SHARED_CACHE_EVENTS["writes"] += 1
+        _sweep_superseded_entries(kind, participant_uid, p)
+        return True
+    except Exception as exc:
+        _log.info("Biomarkers: could not write the shared tile-cache file %s (%r)", p, exc)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def shared_cache_stats():
+    """What the shared files have done, for the interface and for the tests."""
+    d = shared_cache_dir()
+    files, total = [], 0
+    if d is not None:
+        try:
+            files = sorted(f for f in os.listdir(d) if f.endswith(".pkl"))
+        except OSError:
+            files = []
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(d, f))
+            except OSError:
+                pass                    # a concurrent write can sweep a file between the two calls
+    with _SHARED_CACHE_LOCK:
+        events = dict(_SHARED_CACHE_EVENTS)
+    return {"directory": d, "entries": len(files), "files": files, "bytes": total,
+            "max_bytes_per_entry": _SHARED_CACHE_MAX_BYTES, "events": events}
+
+
+def clear_shared_cache():
+    """Remove every shared file, including ones written by an older format version."""
+    d = shared_cache_dir()
+    removed = 0
+    if d is not None and os.path.isdir(d):
+        for f in list(os.listdir(d)):
+            if f.endswith(".pkl") or f.endswith(".tmp"):
+                try:
+                    os.remove(os.path.join(d, f))
+                    removed += 1
+                except OSError:
+                    pass
+    with _SHARED_CACHE_LOCK:
+        for k in _SHARED_CACHE_EVENTS:
+            _SHARED_CACHE_EVENTS[k] = 0
+    return removed
+
+
+def _raw_lsb_constants_block():
+    """Every constant the stored tiles depend on, so editing one of them misses the file.
+
+    A file that outlives the process has to answer a question a memo never faces: the code that
+    wrote it may not be the code that reads it. Changing the transform's calibration constant, the
+    tile width or the band on which the device spectrum is trusted changes every number in the
+    file while leaving every recording untouched, so none of it would show up in a recording key.
+    Folding the constants into the key means such an edit misses the file and rebuilds, which is
+    the same protection the per-recording spectrum files already get from their own version
+    strings in `_recording_psd_cache_path`.
+    """
+    return (
+        _RAW_LSB_RULE_VERSION,
+        _CHANNEL_CANON_VERSION,
+        float(analytics.RAW_LSB_WINDOW_SECONDS),
+        float(analytics.LSB_PER_UV2_TRANSFORM),
+        float(analytics.LSB_PER_DEVICE_PSD),
+        float(analytics.LSB_VALIDATED_HZ_LO),
+        float(analytics.LSB_DEPLOYABLE_HZ_HI),
+        float(analytics.TRANSFORM_WIN_SECONDS),
+        float(analytics.TRANSFORM_STEP_SECONDS),
+        float(availability.PRO_LSB_SATURATION_UV),
+    )
+
+
+def _raw_lsb_recording_identity(participant_uid):
+    """Identity AND content of every database row that feeds the tiles, with no file decoded.
+
+    WHY THIS IS A SEPARATE KEY FROM `_lsb_spectrum_signature`. That signature is built from the
+    DECODED recordings, which is fine for a memo the decode has already paid for, but it cannot be
+    the key of a file: the whole point of the file is to be found before any heavy work is done,
+    and the warming entry point below has to be able to ask "is this already built?" without
+    reading 569 stored Percept files. This key is built from the database rows alone, which cost
+    0.33 s to fetch for RCS08's 4,078 rows.
+
+    WHAT IS IN IT, AND WHAT HAD TO BE ADDED. For the file-backed products — the time-domain
+    streams, the indefinite streams and the montage and survey recordings — the row carries a
+    content hash (`hashed`), so identity plus that hash plus the type is content-complete, which is
+    the same choice `ClosedLoopDeployment.adapter.recording_set_signature` makes and for the same
+    stated reason: a re-decode that replaces a recording in place changes neither a count nor a
+    latest date, and a count alone would also miss a deletion balanced by an insertion.
+
+    Two things had to be ADDED beyond that, because the tiles depend on inputs `hashed` does not
+    cover:
+
+      * THE PATIENT-EVENT ROWS CARRY NO CONTENT HASH AT ALL. Measured on RCS08: 0 of 3,246
+        PatientControllerEvent rows have one, because their spectra are not in a stored file — the
+        per-hemisphere `Frequency` and `FFTBinData` ARE the row's `metadata`. Keying those rows on
+        identity alone would leave every change to a patient-event spectrum invisible to the cache,
+        so the whole of each such row's `metadata` is hashed. It costs 0.13 s for all 3,246 rows.
+      * THE SENSING FIELDS STAMPED ON A FILE-BACKED ROW AFTER DECODING. `CenterFrequencyHz`,
+        `FreqScheduleHz` and `ContactSchedule` are written onto `Recording.metadata` at decode time
+        rather than living in the stored file, and they decide which sensing contact pair a
+        patient-event spectrum is assigned to. They can therefore change with no change to
+        `hashed`, so they are in the key too.
+    """
+    import hashlib
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return None
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    if not SourceFiles:
+        return None
+    types = list(TIMEDOMAIN_TYPES) + list(AVAILABILITY_PSD_TYPES) + [PATIENT_EVENT_TYPE]
+    rows = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
+    if not rows:
+        return None
+    parts = []
+    for r in rows:
+        rtype = str(getattr(r, "type", ""))
+        md = getattr(r, "metadata", None)
+        if rtype == PATIENT_EVENT_TYPE:
+            extra = repr(md)                        # the row's metadata IS this product's content
+        elif isinstance(md, dict):
+            extra = "%r|%r|%r" % (md.get("CenterFrequencyHz"), md.get("FreqScheduleHz"),
+                                  md.get("ContactSchedule"))
+        else:
+            extra = ""
+        parts.append("%s~%s~%s~%s" % (getattr(r, "uid", ""), getattr(r, "hashed", "") or "",
+                                      rtype, extra))
+    h = hashlib.sha1()
+    for s in sorted(parts):                          # sorted, so row order can never move the key
+        h.update(s.encode("utf8", "replace"))
+        h.update(b"\x00")
+    return (str(participant_uid), len(SourceFiles), len(rows), h.hexdigest()[:20])
+
+
+def _raw_lsb_shared_signature(participant_uid, centers, *, identity=None):
+    """The full key of one stored tile-cache file, or None when it cannot be built.
+
+    The sensing contact pairs are NOT in the key, and do not need to be: the list of pairs is
+    derived from the recordings by `_derive_chan_order`, so the recording identity already decides
+    it. `_raw_lsb_cache_cached` still checks that every pair it was asked for is present in a file
+    it loads and treats a shortfall as a miss, so the one path that could go wrong — a caller
+    asking for a pair the stored product does not hold — rebuilds instead of answering short.
+    """
+    ident = _raw_lsb_recording_identity(participant_uid) if identity is None else identity
+    if ident is None:
+        return None
+    cen = np.asarray(centers, dtype=float)
+    import hashlib
+    return (ident, hashlib.sha1(cen.tobytes()).hexdigest()[:16], int(cen.size),
+            _raw_lsb_constants_block())
+
+
+# Which fields of a window family are stored in which shape. Storing the per-window rows as one
+# array rather than as a list of lists is what brings the RCS08 entry from 272 MB to 245 MB and,
+# far more importantly, its read from 0.56 s to 0.05 s: a list of lists has to be rebuilt as
+# 29 million separate Python numbers, an array does not.
+_RAW_LSB_FLOAT_VECTORS = ("t", "n_finite_s")
+_RAW_LSB_BOOL_VECTORS = ("saturated", "ok")
+_RAW_LSB_MATRICES = ("lsb",)
+_RAW_LSB_BOOL_MATRICES = ("calibrated",)
+
+
+def _raw_lsb_pack(by_channel):
+    """The tile cache in the shape it is stored in. Raises if anything is not as expected.
+
+    The caller treats a failure here as "do not share this one", never as a failed request.
+    """
+    out = {}
+    for ch, entry in (by_channel or {}).items():
+        if not isinstance(entry, dict):
+            out[ch] = entry
+            continue
+        nC = int(np.asarray(entry.get("centers_hz") or [], dtype=float).size)
+        packed_entry = {k: v for k, v in entry.items() if k not in ("td", "psd")}
+        for fam_name in ("td", "psd"):
+            fam = entry.get(fam_name)
+            if not isinstance(fam, dict):
+                packed_entry[fam_name] = fam
+                continue
+            fam_out = {}
+            for k, v in fam.items():
+                if k == availability._LSB_MAT_MEMO_KEY:
+                    # The matcher parks its own converted matrix in the family dict. Storing it
+                    # would put the same numbers in the file twice: measured on RCS08, the entry
+                    # goes from 245 MB to 511 MB if this is left in.
+                    continue
+                if k in _RAW_LSB_MATRICES:
+                    fam_out[k] = availability._lsb_rows_to_mat(v or [], nC)
+                elif k in _RAW_LSB_BOOL_MATRICES:
+                    fam_out[k] = (np.asarray(v, dtype=bool) if v is not None and len(v)
+                                  else np.empty((0, nC), dtype=bool))
+                elif k in _RAW_LSB_FLOAT_VECTORS:
+                    fam_out[k] = np.asarray(v if v is not None else [], dtype=float)
+                elif k in _RAW_LSB_BOOL_VECTORS:
+                    fam_out[k] = np.asarray(v if v is not None else [], dtype=bool)
+                elif k == "source":
+                    src = [str(s) for s in (v or [])]
+                    labels = sorted(set(src))
+                    code = {s: i for i, s in enumerate(labels)}
+                    fam_out[k] = {"labels": labels,
+                                  "codes": np.asarray([code[s] for s in src], dtype=np.int32)}
+                else:
+                    fam_out[k] = v
+            packed_entry[fam_name] = fam_out
+        out[ch] = packed_entry
+    return out
+
+
+def _raw_lsb_unpack(stored):
+    """The stored shape turned back into what `raw_lsb_spectrum_cache` returns.
+
+    Every field goes back to the list it was built as, with ONE deliberate exception: the
+    per-window spectra stay as the float array they were stored as. Turning 29 million numbers
+    back into Python floats would cost most of what the file saves, and the only reader of that
+    field is `availability._lsb_family_mat`, which wants a float array and now accepts one
+    directly (see its own note). The values are the same either way: the array is exactly what
+    that function builds from the list, checked value by value in
+    tests/test_shared_raw_lsb_cache.py.
+
+    THE RETURNED PRODUCT IS READ-ONLY TO CALLERS, or must be copied before being changed. Every
+    worker that loads this file, and every panel served by that worker, is handed the same object,
+    exactly as with the in-process memo. The spectra array is additionally marked non-writeable by
+    `_lsb_family_mat`, so an attempt to change it fails loudly instead of quietly corrupting what
+    another panel is about to read.
+    """
+    out = {}
+    for ch, entry in (stored or {}).items():
+        if not isinstance(entry, dict):
+            out[ch] = entry
+            continue
+        rebuilt = {k: v for k, v in entry.items() if k not in ("td", "psd")}
+        for fam_name in ("td", "psd"):
+            fam = entry.get(fam_name)
+            if not isinstance(fam, dict):
+                rebuilt[fam_name] = fam
+                continue
+            fam_out = {}
+            for k, v in fam.items():
+                if k in _RAW_LSB_MATRICES and isinstance(v, np.ndarray):
+                    fam_out[k] = v
+                elif k == "source" and isinstance(v, dict) and "codes" in v:
+                    labels = list(v.get("labels") or [])
+                    fam_out[k] = [labels[int(i)] for i in np.asarray(v["codes"]).tolist()]
+                elif isinstance(v, np.ndarray):
+                    fam_out[k] = v.tolist()
+                else:
+                    fam_out[k] = v
+            rebuilt[fam_name] = fam_out
+        out[ch] = rebuilt
+    return out
+
+
 def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
-                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS):
+                          *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
+                          use_shared_cache=True):
     """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
     (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
     { raw_channel: availability.raw_lsb_spectrum_cache(...) }. montage_psd_blocks (the montage/survey
-    device-PSD snapshots) are folded into the cache's PSD family alongside the patient-event PSDs."""
+    device-PSD snapshots) are folded into the cache's PSD family alongside the patient-event PSDs.
+
+    THREE PLACES THE ANSWER CAN COME FROM, cheapest first: this process's own memo, the file the
+    other worker processes share (see the long note above this function), and a build. Anything
+    that goes wrong with the file is a rebuild, never a failed request.
+
+    `use_shared_cache=False` bypasses the file in both directions, neither reading nor writing it.
+    It exists so that a build with the cache out of the picture can be compared against a build
+    that used it, which is how the stored product is checked against a fresh one.
+    """
     if not channels:
         return {}
     # reuse the recording-identity signature with an EMPTY pro set so the key is PRO-independent.
@@ -886,6 +1366,31 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
         cached = _RAW_LSB_CACHE_MEMO.get(sig)
     if cached is not None:
         return cached
+
+    shared_sig = None
+    if use_shared_cache and shared_cache_dir() is not None:
+        try:
+            shared_sig = _raw_lsb_shared_signature(participant_uid, centers)
+        except Exception as exc:
+            _log.info("Biomarkers: could not build the shared tile-cache key (%r); this request "
+                      "builds the tiles itself", exc)
+            shared_sig = None
+    if shared_sig is not None:
+        stored = _shared_load(_RAW_LSB_SHARED_KIND, participant_uid, shared_sig)
+        if stored is not None:
+            loaded = None
+            try:
+                loaded = _raw_lsb_unpack(stored)
+            except Exception as exc:
+                _log.warning("Biomarkers: could not read back the shared tile cache (%r); "
+                             "rebuilding", exc)
+            if loaded is not None and all(ch in loaded for ch in channels):
+                _remember_raw_lsb_cache(sig, loaded)
+                return loaded
+            if loaded is not None:
+                with _SHARED_CACHE_LOCK:
+                    _SHARED_CACHE_EVENTS["wrong_channels"] += 1
+
     cen = np.asarray(centers, dtype=float)
     out = {}
     for raw_ch in channels:
@@ -896,6 +1401,23 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
                 montage_psd_recordings=montage_psd_blocks)
         except Exception as e:
             _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
+    remembered = _remember_raw_lsb_cache(sig, out)
+    if remembered is not out:
+        return remembered                      # another thread won the race; reuse its result
+    if shared_sig is not None:
+        try:
+            _shared_store(_RAW_LSB_SHARED_KIND, participant_uid, shared_sig, _raw_lsb_pack(out))
+        except Exception as exc:
+            with _SHARED_CACHE_LOCK:
+                _SHARED_CACHE_EVENTS["unpackable"] += 1
+            _log.info("Biomarkers: the tiles could not be put in shareable shape (%r); they stay "
+                      "in this process's memory only", exc)
+    return out
+
+
+def _remember_raw_lsb_cache(sig, out):
+    """Put the tiles in this process's memo, bounded. Returns whatever is in the memo afterwards,
+    which is another thread's result when that thread got there first."""
     with _RAW_LSB_CACHE_MEMO_LOCK:
         existing = _RAW_LSB_CACHE_MEMO.get(sig)
         if existing is not None:
@@ -903,7 +1425,62 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
         if len(_RAW_LSB_CACHE_MEMO) >= _RAW_LSB_CACHE_MEMO_MAX:
             _RAW_LSB_CACHE_MEMO.pop(next(iter(_RAW_LSB_CACHE_MEMO)), None)
         _RAW_LSB_CACHE_MEMO[sig] = out
-    return out
+        return out
+
+
+def warm_shared_raw_cache(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
+    """Build the shared tile-cache file for this participant if it is not already there.
+
+    SAFE TO CALL AFTER AN INGEST, WHICH IS WHAT IT IS FOR. The shared file makes any one worker's
+    build help all four workers; this makes even the FIRST page view after an upload fast, because
+    the build has already happened. The two are complementary, not alternatives.
+
+    CHEAP WHEN THERE IS NOTHING TO DO. The only work an already-warm participant costs is the key,
+    which is built from database rows alone — 0.46 s on RCS08's 4,078 rows — and one test for the
+    existence of a file. No stored Percept file is opened and no tile is computed.
+
+    IT NEVER RAISES. An ingest must not fail because a cache could not be warmed, so every failure
+    is logged and reported in the returned dictionary instead. The returned `status` is one of
+    "already_warm", "built", "no_directory", "no_recordings", "nothing_to_build" or "failed".
+    """
+    t0 = _time.perf_counter()
+
+    def done(status, **extra):
+        out = {"status": status, "participant": str(participant_uid),
+               "seconds": round(_time.perf_counter() - t0, 3)}
+        out.update(extra)
+        return out
+
+    try:
+        if shared_cache_dir() is None:
+            return done("no_directory")
+        identity = _raw_lsb_recording_identity(participant_uid)
+        if identity is None:
+            return done("no_recordings")
+        sig = _raw_lsb_shared_signature(participant_uid, centers, identity=identity)
+        path = _shared_path(_RAW_LSB_SHARED_KIND, participant_uid, sig)
+        if path is not None and os.path.exists(path):
+            return done("already_warm", path=path)
+
+        td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+        psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        channels = list(dict.fromkeys(availability._canon_channel(c)
+                                      for c in (_derive_chan_order(td) or [])))
+        if not channels:
+            return done("nothing_to_build")
+        sensing_idx = _build_sensing_config_index(list(td or []))
+        event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
+        montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+        _stamp_td_product(list(td or []))
+        _raw_lsb_cache_cached(participant_uid, channels,
+                              list(td or []) + list(psd_list or []), event_blocks,
+                              montage_psd_blocks=montage_blocks, centers=centers)
+        landed = bool(path is not None and os.path.exists(path))
+        return done("built", path=path, file_written=landed, channels=channels)
+    except Exception as exc:
+        _log.warning("Biomarkers: warming the shared tile cache for %s did not finish (%r); "
+                     "nothing else is affected", participant_uid, exc, exc_info=True)
+        return done("failed", error=repr(exc))
 
 
 def _live_pro_lsb_spectrum(participant_uid, pro_times, channels, td_recordings, event_psd_blocks,
@@ -1707,15 +2284,31 @@ def warm_psd_cache(participant_uid, pro_times=None, decoded_td=None, decoded_psd
     "90% CPU across all cores" stall: without it the warm re-decodes every .bdat from the DB through
     its own 16-worker pool, duplicating the decode the timeline render just paid and starving the
     foreground render. With it, the eager warm Welch's the already-decoded data and only writes caches.
+
+    THE 3 s-TILE CACHE IS WARMED HERE TOO, which is what wires it into ingestion. This function is
+    called from exactly two places, both of them off the request thread: the end of
+    `DataCurator.MedtronicPerceptJSONDecoder`, in a daemon thread, once the newly uploaded
+    recordings have been committed; and `_PSD_WARM_POOL`, the single background thread the timeline
+    fires. So the tiles for a participant who has just had a file uploaded are built before anyone
+    asks for them, and the FIRST page view after an upload is fast rather than the second. It costs
+    0.43 s on a participant whose tiles are already there (the key only — no stored file is opened
+    and no tile is computed), and it cannot raise: see `warm_shared_raw_cache`.
     """
+    out = None
     try:
         if (decoded_td is not None or decoded_psd is not None) and pro_times is not None:
-            return _warm_centered_matrix_from_decoded(
+            out = _warm_centered_matrix_from_decoded(
                 participant_uid, decoded_td or [], decoded_psd or [], pro_times)
-        return _cached_psd_matrix(participant_uid, pro_times=pro_times)
+        else:
+            out = _cached_psd_matrix(participant_uid, pro_times=pro_times)
     except Exception as e:
         _log.warning("Biomarkers: warm_psd_cache failed for %s (%s)", participant_uid, e)
-        return None
+    # The two products are independent, so the tiles are warmed even when the spectra above failed.
+    tiles = warm_shared_raw_cache(participant_uid)
+    if tiles.get("status") == "built":
+        _log.info("Biomarkers: built the shared 3 s-tile cache for %s in %.1f s after an ingest "
+                  "or a timeline render", participant_uid, tiles.get("seconds", float("nan")))
+    return out
 
 
 def _warm_centered_matrix_from_decoded(participant_uid, td_list, psd_list, pro_times):

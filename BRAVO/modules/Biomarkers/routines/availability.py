@@ -1341,7 +1341,14 @@ def _lsb_family_mat(family, nC):
     non-writeable so an accidental attempt to edit it fails loudly rather than silently corrupting
     a cache other panels share.
     """
-    rows = family.get("lsb") or []
+    rows = family.get("lsb")
+    if rows is None:
+        rows = []
+    # `family.get("lsb") or []` was what stood here, and it cannot stay: a family restored from the
+    # shared tile-cache file holds its spectra as one float array, and asking a two-dimensional
+    # array whether it is truthy raises rather than answering. Taking the value and replacing only
+    # a missing one keeps every other case identical, and has the incidental benefit that an empty
+    # family now hits its own memo instead of building a fresh empty list on every call.
     memo = family.get(_LSB_MAT_MEMO_KEY)
     if memo is not None and memo[0] is rows and memo[1] == nC:
         return memo[2]
@@ -1362,7 +1369,27 @@ def _lsb_rows_to_mat(rows, nC):
     family converts in ONE C-level call instead of W x C Python assignments. Anything ragged, short
     or None-valued falls back to the explicit element-by-element fill, which is what the
     pre-vectorised code did unconditionally, so the result is identical either way.
+
+    ALREADY A MATRIX: a window family restored from the shared tile-cache file
+    (`bravo_service._raw_lsb_unpack`) holds its per-window spectra as one float array rather than
+    as a list of lists, because turning 29 million numbers back into Python floats on every worker
+    would cost most of what the file saves. Such an array is exactly what this function builds from
+    the equivalent list of lists — the two are compared value by value in
+    tests/test_shared_raw_lsb_cache.py — so it is handed straight back. A width that does not match
+    the band-centre count is padded or trimmed the same way the element-by-element path would.
     """
+    if isinstance(rows, np.ndarray):
+        m = np.asarray(rows, dtype=float)
+        if m.ndim == 1:
+            m = m.reshape((0, nC)) if m.size == 0 else m.reshape((1, m.size))
+        if m.ndim != 2:
+            return np.empty((0, nC), dtype=float)
+        if m.shape[1] == nC:
+            return m
+        out = np.full((m.shape[0], nC), np.nan, dtype=float)
+        w = min(nC, m.shape[1])
+        out[:, :w] = m[:, :w]
+        return out
     if not rows:
         return np.empty((0, nC), dtype=float)
     if all(type(r) is list and len(r) == nC for r in rows):
