@@ -847,7 +847,8 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
                                   block=None, step_end_t=None,
                                   window_s=PRE_CHANGE_WINDOW_S,
                                   min_chunks=MIN_CHUNKS_PRE_CHANGE,
-                                  require_rise_into_setting=True):
+                                  require_rise_into_setting=True,
+                                  ramp_end_t=None, ramp_margin_s=RAMP_EXCLUDE_S):
     """One band-power vector per setting: the MEAN of the pieces in the last ``window_s`` seconds.
 
     THE NUMBERS COME OUT IN THE UNITS ``tile_power`` IS ALREADY IN, and nothing here takes a
@@ -878,6 +879,29 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         guessing would put the window somewhere the current may already have moved.
     window_s
         How far back from the end of the setting to reach. Thirty seconds by default.
+    ramp_end_t, ramp_margin_s
+        Optional per-setting moment the current FINISHED MOVING, from the device's own amplitude
+        record, plus how long after that to keep excluding. When ``ramp_end_t`` is given the window
+        is clipped so it cannot begin before ``ramp_end_t + ramp_margin_s``; a setting whose clipped
+        window then holds fewer than ``min_chunks`` pieces is refused with a reason naming the ramp.
+
+        WHY THIS CLIP EXISTS, added 2026-09-06 at the PI's request. The rule this function
+        implements -- average the last ``window_s`` seconds before the current next moves -- assumes
+        the setting has been held for longer than ``window_s``. Measured across RCS08's whole record,
+        that assumption fails on 188 of 600 plateaus, where the hold after the ramp is under 30 s and
+        a 30 s look-back therefore reaches back into the ramp and averages signal recorded while the
+        current was still changing. On the specific visits behind the published figures the exposure
+        is much smaller because those visits hold longer -- 2 of 27 plateaus on 2026-08-18, 1 of 33
+        on 2026-06-24, and 6 of 29 on 2025-08-21 -- but it is not zero, and the 2025-08-21 visit is
+        the pre-registered one.
+
+        THIS IS A CLIP AND NOT A NEW RULE. Where the hold is longer than the window, which is the
+        common case, nothing changes and the values are identical. Passing ``ramp_end_t=None``
+        reproduces the original behaviour exactly, which is why every existing test still passes
+        unchanged. Get the ramp ends from :func:`ramp_windows_from_amplitude`, which measures them
+        from ``BrainSenseLfp[].LfpData[].{Left,Right}.mA`` rather than assuming a fixed duration --
+        the ramp is NOT predictable from the step size, running 0.0 s for a single-increment step and
+        up to 75.0 s for one the device chose to deliver in 35 pieces.
     min_chunks
         How many pieces must be found in that window before an average is reported. Ten by default.
     require_rise_into_setting
@@ -906,6 +930,14 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         raise ValueError("step_end_t must have one entry per setting")
     if not np.isfinite(window_s) or window_s <= 0:
         raise ValueError(f"window_s must be positive and finite, got {window_s}")
+    ramp_end = None
+    if ramp_end_t is not None:
+        ramp_end = np.asarray(ramp_end_t, dtype=float)
+        if ramp_end.shape != t0.shape:
+            raise ValueError(f"ramp_end_t has shape {ramp_end.shape} but there are {t0.shape[0]} "
+                             f"settings; pass one measured ramp end per setting, or None")
+        if not np.isfinite(ramp_margin_s) or ramp_margin_s < 0:
+            raise ValueError(f"ramp_margin_s must be finite and not negative, got {ramp_margin_s}")
 
     n_bands = tp.shape[1]
     up_from_previous, up_to_next = rising_current_settings(amp, block)
@@ -926,6 +958,16 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
     for i in range(n):
         want_lo = t_end[i] - float(window_s)
         lo = max(want_lo, t0[i]) if np.isfinite(t_end[i]) else np.nan
+        # CLIP AT THE MEASURED END OF THE RAMP, when the caller supplies one. Without this the
+        # window silently reaches back into the stretch where the current was still moving on any
+        # setting held for less than window_s -- 188 of 600 plateaus across RCS08's record. Where
+        # the hold is longer than the window, which is the common case, this changes nothing and
+        # the values are bit-identical to the unclipped rule.
+        clipped_by_ramp = False
+        if ramp_end_t is not None and np.isfinite(lo):
+            floor_t = float(ramp_end[i]) + float(ramp_margin_s)
+            if np.isfinite(floor_t) and floor_t > lo:
+                lo, clipped_by_ramp = floor_t, True
         n_found = 0
         if np.isfinite(t_end[i]):
             sel = (tt >= lo) & (tt < t_end[i])
@@ -946,6 +988,11 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         elif not np.isfinite(t_end[i]):
             reason = ("the moment the current was next changed is not known, so there is no "
                       "30 second window that is certain to sit inside this setting")
+        elif n_found < int(min_chunks) and clipped_by_ramp:
+            reason = (f"the current finished moving only {float(t_end[i]) - float(ramp_end[i]):.0f} "
+                      f"seconds before it was changed again, so after excluding the ramp and "
+                      f"{float(ramp_margin_s):.0f} further seconds only {n_found} three second "
+                      f"pieces were left, fewer than the {int(min_chunks)} required")
         elif n_found < int(min_chunks):
             reason = (f"only {n_found} three second pieces of recording were found in the "
                       f"{float(window_s):g} seconds before the next current change, and "

@@ -647,3 +647,55 @@ def test_a_block_whose_current_never_holds_still_is_refused_not_described_as_a_r
     # And a block whose current simply sits at one value returns EMPTY rather than raising: that
     # is a different situation and the caller needs to tell them apart.
     assert len(WV.ramp_windows_from_amplitude(t2, np.full_like(t2, 2.0))) == 0
+
+
+def test_the_look_back_window_is_clipped_at_the_measured_end_of_the_ramp():
+    """PI, 2026-09-06: render the heat maps off the measured ramp.
+
+    The 30-second look-back assumes the setting was held longer than 30 s. Across RCS08's record
+    that fails on 188 of 600 plateaus, where the look-back reaches back into the stretch in which
+    the current was still moving. This pins BOTH that the clip works and that it changes nothing
+    where the hold is long, because the second half is what makes it a clip and not a new rule.
+    """
+    tt = np.arange(0.0, 500.0, 3.0)
+    tp = np.full((tt.size, 2), 100.0)
+    t0 = np.array([100.0, 200.0, 300.0])
+    amp = np.array([1.0, 2.0, 3.0])          # rising, so no setting is refused for direction
+    t_end = np.array([200.0, 300.0, 480.0])
+    # Setting 1 is held from 200 to 300 but the current is still MOVING until 285, so the last
+    # 30 s (270-300) is mostly ramp. Make that stretch loud so an unclipped average must differ.
+    ramp_end = np.array([115.0, 285.0, 315.0])
+    tp[(tt >= 270.0) & (tt < 290.0), :] = 900.0
+
+    unclipped, Tu = WV.mean_power_before_next_change(t0, amp, tt, tp, step_end_t=t_end)
+    clipped, Tc = WV.mean_power_before_next_change(t0, amp, tt, tp, step_end_t=t_end,
+                                                   ramp_end_t=ramp_end, ramp_margin_s=5.0)
+    assert bool(Tu.iloc[1]["accepted"]), "the fixture must ACCEPT setting 1 unclipped, or the " \
+                                        "clip is never exercised and the test proves nothing"
+
+    # THE CLIP DID SOMETHING: either the value changed, or the setting is now refused for having
+    # too little signal left once the ramp is excluded.
+    row = Tc.iloc[1]
+    if bool(row["accepted"]):
+        assert unclipped[1, 0] != clipped[1, 0], (
+            "the unclipped window averaged the loud ramp; the clipped one must not")
+        assert clipped[1, 0] == pytest.approx(100.0), "only the settled level should remain"
+        assert row["window_start_s"] >= 285.0 + 5.0 - 1e-9, "the window must start after the ramp"
+    else:
+        why = str(row["refusal_reason"])
+        assert "finished moving" in why, why
+
+    # WHERE THE HOLD IS LONG THE CLIP CHANGES NOTHING. Setting 2 runs 300 to 480 with the current
+    # settled by 315, so its last 30 s is nowhere near the ramp and the two rules must agree.
+    assert np.allclose(unclipped[2, :], clipped[2, :], equal_nan=True), (
+        "where the hold is longer than the window the clip must change nothing")
+    assert bool(Tu.iloc[2]["accepted"]) and bool(Tc.iloc[2]["accepted"])
+
+    # PASSING None REPRODUCES THE ORIGINAL BEHAVIOUR BIT FOR BIT on every setting.
+    again, _ = WV.mean_power_before_next_change(t0, amp, tt, tp, step_end_t=t_end, ramp_end_t=None)
+    assert np.allclose(again, unclipped, equal_nan=True)
+
+    # A wrong-length ramp list is refused rather than silently broadcast.
+    with pytest.raises(ValueError, match="one measured ramp end per setting"):
+        WV.mean_power_before_next_change(t0, amp, tt, tp, step_end_t=t_end,
+                                         ramp_end_t=np.array([115.0]))
