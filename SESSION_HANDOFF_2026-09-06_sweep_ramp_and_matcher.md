@@ -321,6 +321,65 @@ satisfy on both sides of the peak at different currents. Worth deciding before t
 
 ---
 
+## 4b. "The matrices and the plots don't display" — diagnosed and fixed (`7ab2d1b`)
+
+The PI reported that the matrices on the Biomarker page and the plots on the closed-loop page showed
+nothing. **Both symptoms are one chain: my omission upstream, and correct behaviour downstream.**
+
+### Cause 1 — I never rebuilt the served bundle. This was mine.
+
+`BandTimeSweepPanel.js` and the `index.js` that mounts it were committed in `e1cc557`. **The bundle
+was never rebuilt.** The repo commits `Client/build/` alongside source and nginx serves the mounted
+build, so the panel existed in source and was in **none** of the served chunks — `grep BandTimeSweep
+Client/build/static/js/*.js` returned nothing, and the build manifest was stamped 22:28 against
+source written at 23:09.
+
+**A React component absent from the bundle cannot render AND cannot log an error.** The page simply
+has nothing there, which is exactly what the PI saw and gives a reader no clue. `bravo-session-rules`
+Rule 2 exists for this and I did not follow it. After rebuilding, the panel is in
+`860.bbc9a360.chunk.js` and the server was reloaded.
+
+### Cause 2 — the closed-loop page was working correctly
+
+It returned `available: False` with: *"no candidate configuration was supplied. Choose a channel and
+centre frequency on the Biomarker Exploration page first; deployability is evaluated for a specific
+configuration, not for a participant."* That is `adapter.py:1134-1136` behaving as designed.
+
+**Verified by supplying one** rather than argued: with `ZERO_TWO_LEFT` / Left / 26.0 Hz / 55 Hz the
+report comes back `available: True` with 22 keys, `three_source_response` carrying **4 comparisons
+over 11 located current ladders**, and `band_stability` present. The closed-loop panels work. They
+were waiting on a choice made on the page whose selection panel was missing from the bundle.
+
+### Ruled out by measurement, not by reasoning
+
+* **plotly is present in the container at 7.0.0** (with numpy 2.1.3, pandas 2.2.3, scipy 1.14.1) and
+  is in `BRAVO/requirements.txt`. Checked FIRST because its absence silently cost this project every
+  Stim Optimizer figure once before, and because the container install was made with
+  `--break-system-packages` and does not survive a rebuild. Not the cause this time.
+* **Container staleness.** The container's `ClosedLoopDeployment/adapter.py` carries the
+  `three_source` wiring and its `Biomarkers/bravo_service.py` carries `band_time_sweep_for_participant`.
+* **The panel's own request needed no change:** `BandTimeSweepPanel.js:189-195` posts
+  `ParticipantId`, `BandTimeSweep: "1"` and `SweepMetric` to `/api/queryBiomarkerAnalysis`, and
+  `bravo_service.py:3000-3002` dispatches on that flag.
+
+### Three probes of mine were wrong before they were right — recorded so the dead ends are not re-walked
+
+1. **`report_for_participant` takes a PARTICIPANT OBJECT, not a request dict.** Passing
+   `{"ParticipantId": uid}` hits the no-candidate early return and reports zero figure keys — which
+   looks identical to a broken payload and nearly had me report the closed-loop module as broken.
+2. The sweep entry point is **`band_time_sweep_for_participant`**, not `..._for_request`.
+3. I grepped the bundle for `no-discrimination` (hyphenated) and `no_relationship_value` and got
+   zero, which looked like a missing required statement. **The panel says "no discrimination"
+   unhyphenated.** Both required notes are present in the panel body and in the bundle — the
+   optimism note at `BandTimeSweepPanel.js:299` onwards, explicitly commented as being in the panel
+   and not only in a caption, and the 0.5 note at line 342. My check was wrong, not the panel.
+
+### `/usr/src/BRAVO` IS NOT A LIVE MOUNT OF THE REPO ROOT
+
+`MEGA_HANDOFF.md` does not exist there. The container holds only the `BRAVO/` subtree, and backend
+files reach it by explicit copy through the bridge. Do not assume a host commit is visible to the
+running server.
+
 ## 5. Open at the end of this session
 
 1. **Commit identity.** `bravo-session-rules` Rule 4 asks for commits under the PI's name and email.
