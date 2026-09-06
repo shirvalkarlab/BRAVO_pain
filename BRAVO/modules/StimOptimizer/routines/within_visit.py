@@ -33,12 +33,49 @@ from .lfp_evidence import EvidenceAudit
 
 #: Seconds after a step's onset that are discarded as ramp transient.
 #:
-#: The clinic sheets themselves warn that the amplitude ramps rather than stepping, and the ramp
-#: analysis measured the stimulation-frequency artefact still RISING at 150 s -- far beyond the
-#: 30-45 s the sheets suggest. 45 s is therefore the sheets' own figure and not a safe one; it is
-#: used because a longer exclusion leaves almost no settled signal (the median step is 60 s), and
-#: the residual risk is recorded rather than removed.
-RAMP_EXCLUDE_S = 45.0
+#: CHANGED FROM 45.0 TO 20.0 ON 2026-09-06, because the device's own amplitude record was read for
+#: the first time and the 45 was five times too large for the band range the biomarker uses. The
+#: two measurements behind the old and new figures ask DIFFERENT QUESTIONS and both are kept below,
+#: because a reader who conflates them will put the wrong number back.
+#:
+#: WHAT THE OLD 45 WAS FOR. The clinic sheets warn that the amplitude ramps rather than stepping,
+#: and an earlier ramp analysis measured the STIMULATION-FREQUENCY artefact -- the band containing
+#: the stimulation rate itself -- still rising at 150 s. 45 s was the sheets' own figure, adopted
+#: because a longer exclusion left almost no settled signal, with the residual risk recorded rather
+#: than removed. That measurement is not superseded: nothing below says the stimulation-frequency
+#: band settles quickly, and a caller working in that band should pass a longer ``ramp_s``.
+#:
+#: WHAT THE NEW 20 IS FOR, and how it was measured. On RCS08's 2026-08-18 clinic visit the
+#: per-sample amplitude in ``BrainSenseLfp[].LfpData[].{Left,Right}.mA`` (2 Hz, on the same clock as
+#: the neural signal) shows that each "step" on the sheet is a BURST of 4-5 small increments the
+#: device delivers over a few seconds -- 0.5, 0.6, 0.7, 0.8, 1.0 -- followed by a hold. Across all
+#: 27 steps on both stimulators the current finishes moving in 6.5 s median, 9.0 s at most on the
+#: left and 17.5 s at most on the right. Holds are 57.5 s median. So 20 s covers the worst case
+#: observed with a margin, and it is the smallest defensible figure rather than a comfortable one.
+#:
+#: AND WHY A SHORTER EXCLUSION IS NOT MERELY CHEAPER BUT BETTER. Aligning 1-second epochs to the
+#: moment each ramp finished, across 15 left plateaus, band power in 8-30 Hz deviates from its own
+#: settled level by 5-20% with NO monotonic decay and no difference between harmonic-contaminated
+#: and clean bands -- there is no settling transient left to exclude. Meanwhile a single 1-second
+#: epoch swings by about 100% as one standard deviation inside a stretch where the amplitude is not
+#: changing at all. The noise is five times the transient, so what the analysis needs is MORE
+#: settled seconds to average, not a wider guard band: the 45 kept 754 settled epochs where 0 s
+#: keeps 1423. The two rules agree on the SIGN of the amplitude relationship in 22 of 23 bands, so
+#: this change buys precision and does not buy a different answer -- which is also why it is safe.
+#:
+#: Tables: RCS08_20260818_device_amplitude_steps.csv, RCS08_20260818_settling_profile.csv.
+RAMP_EXCLUDE_S = 20.0
+
+#: The longest ramp actually observed in the device's own amplitude record, in seconds. Kept as a
+#: named number so that a future reader can see what ``RAMP_EXCLUDE_S`` above has to cover, and so
+#: that a test can assert the exclusion is not smaller than the thing it exists to exclude.
+LONGEST_OBSERVED_RAMP_S = 17.5
+
+#: Ramp exclusion for a band containing the stimulation rate itself. NOT the default: see the block
+#: above. The earlier measurement found that artefact still rising at 150 s, so no exclusion this
+#: module offers makes such a band safe, and a caller who needs one should treat the band as
+#: unusable rather than pass a larger number and believe the problem is handled.
+STIM_FREQUENCY_BAND_UNSAFE_AT_ANY_EXCLUSION = True
 
 #: Amplitude bin width for forming capture arms, in mA.
 #:
@@ -62,9 +99,185 @@ def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
     return np.round(a / float(bin_mA)) * float(bin_mA)
 
 
-def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
-                         ramp_s=RAMP_EXCLUDE_S, min_tiles=MIN_SETTLED_TILES):
-    """One power vector per step: the median across that step's SETTLED tiles.
+def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=10.0,
+                                tol_mA=1e-9):
+    """When did the device actually finish moving the current? Measured, not assumed.
+
+    This replaces the visit sheet as the source of step timing. The sheet gives one hand-written
+    time per setting and a printed warning that the ramp takes 30-45 s. The device's own record
+    (``BrainSenseLfp[].LfpData[].{Left,Right}.mA``, 2 Hz, on the same clock as the neural signal)
+    shows what really happens: a setting the sheet records as one step is a BURST of four or five
+    small increments -- 0.5, 0.6, 0.7, 0.8, 1.0 -- delivered over a few seconds, then a hold. On
+    RCS08's 2026-08-18 visit the current finishes moving in 6.5 s median and 9.0 s at most for an
+    ordinary 0.5 mA step; the single 17.5 s case was a double-size 1.0 mA jump.
+
+    A BURST IS ONE STEP. Consecutive changes closer together than ``burst_gap_s`` belong to the same
+    ramp, and the plateau begins at the LAST of them. Treating each increment as its own step would
+    turn one clinical setting into five, each with a few seconds of signal.
+
+    WHY THERE IS NO AMPLITUDE-DEPENDENT MARGIN HERE, tested at the PI's request 2026-09-06. Ramp
+    duration against the current stepped to gives r = +0.33, p = 0.108 -- not significant. It tracks
+    how many increments the device chose (r = +0.69, p = 0.0001), not how high the current is. So a
+    single flat margin after the measured ramp is what the data supports, and a per-amplitude rule
+    would add complexity for about ten seconds at the low end.
+
+    Returns a DataFrame with one row per plateau: ``ramp_start``, ``ramp_end``, ``ramp_s``,
+    ``n_increments``, ``mA_from``, ``mA_to``, ``hold_s``, ``plateau_end``. Pass ``ramp_end`` as
+    ``step_t0`` to :func:`step_settled_stats` so the exclusion runs from the measured end of the
+    ramp rather than from a nominal onset.
+    """
+    t = np.asarray(amp_t, dtype=float)
+    a = np.asarray(amp_mA, dtype=float)
+    if t.shape != a.shape:
+        raise ValueError(f"amp_t {t.shape} and amp_mA {a.shape} must match")
+    ok = np.isfinite(t) & np.isfinite(a)
+    t, a = t[ok], a[ok]
+    if t.size and np.any(np.diff(t) < 0):
+        order = np.argsort(t); t, a = t[order], a[order]
+    if t.size < 2:
+        return pd.DataFrame(columns=["ramp_start", "ramp_end", "ramp_s", "n_increments",
+                                     "mA_from", "mA_to", "hold_s", "plateau_end"])
+    ch = np.where(np.abs(np.diff(a)) > tol_mA)[0] + 1
+    rows, i = [], 0
+    while i < ch.size:
+        j = i
+        while j + 1 < ch.size and (t[ch[j + 1]] - t[ch[j]]) <= burst_gap_s:
+            j += 1
+        ramp_start, ramp_end = t[ch[i]], t[ch[j]]
+        nxt = t[ch[j + 1]] if j + 1 < ch.size else t[-1]
+        hold = nxt - ramp_end
+        if hold >= min_hold_s:
+            rows.append(dict(ramp_start=float(ramp_start), ramp_end=float(ramp_end),
+                             ramp_s=float(ramp_end - ramp_start), n_increments=int(j - i + 1),
+                             mA_from=float(a[ch[i] - 1]), mA_to=float(a[ch[j]]),
+                             hold_s=float(hold), plateau_end=float(nxt)))
+        i = j + 1
+    return pd.DataFrame(rows)
+
+
+def amplitude_response_shape(amp_mA, power, *, min_points=8):
+    """Does band power rise and then FALL across the currents tested, rather than run straight?
+
+    WHY THIS EXISTS, and it is not a refinement. Every amplitude test in this project fits a
+    straight line: the slope sign, the polarity rule, the two-point comparison. A relationship that
+    rises to a peak inside the tested range and comes back down has a straight-line slope near zero,
+    so all of those report "does not respond" -- while the response is in fact large. Measured on
+    RCS08 ONE_THREE_LEFT, 2026-08-18, 55 Hz, 15 amplitude steps: on the eight bands from 23 to 30 Hz
+    a straight line explains 0.0-4.5% of the variation and allowing a peak explains 38-74%.
+
+    WHAT THE PEAK IS NOT, and I had this wrong for one turn on 2026-09-06 before the PI corrected
+    me. I first read the peak as stimulation artifact, because the affected bands coincided with the
+    folded harmonic landings. That inference was wrong and the reasons are worth recording, since it
+    is an easy trap:
+
+    * A stimulation artifact GROWS WITH CURRENT and keeps growing. Measured on this same visit, the
+      bands containing the 55 Hz stimulation rate itself rise MONOTONICALLY to 18.2 times their
+      starting value. A folded harmonic is that same artifact reappearing at a lower frequency, so
+      it must have the same monotonic shape. A response that comes back down cannot be it.
+    * The apparent coincidence with the harmonic landings was a THRESHOLD ARTEFACT of my own making.
+      The curvature p-values run smoothly with frequency -- 0.711 at 20 Hz, 0.261 at 21, 0.055 at
+      22, 0.026 at 23, then below 0.001 -- so the "clean split" was just where a 0.05 cutoff crossed
+      a continuous gradient.
+    * A folded harmonic lands at ONE frequency (25.0 Hz at 55 Hz stimulation). It cannot produce a
+      smoothly DRIFTING peak position across neighbouring bands, which is what the data show: the
+      peak current falls from 2.17 mA at 22 Hz to 1.72 mA at 29 Hz, r = -0.89, p = 0.0013 over the
+      nine bands where the peak is resolved.
+
+    So a detected peak is a real, organised amplitude response with a turning point, and the honest
+    description is that the relationship is not monotonic. Whether it is physiological is a separate
+    question this function does not answer; a harmonic check remains worth running alongside, but a
+    peak is not evidence for artifact and the absence of one is not evidence against it.
+
+    WHAT IT DELIBERATELY DOES NOT DO. It does not gate, score or veto anything, and it does not
+    replace the linear fit. It answers one question so that a "does not respond" verdict can say
+    whether it means "flat" or "not straight", which are different findings that the linear test
+    alone renders identical.
+
+    Returns a dict: ``curves`` (bool, the quadratic term is significant), ``peaks_inside`` (bool,
+    and the curve opens downward with its turning point among the currents tested), ``peak_mA``,
+    ``p_curvature``, ``r2_linear``, ``r2_quadratic``, and ``verdict`` in plain words.
+    """
+    x = np.asarray(amp_mA, dtype=float)
+    y = np.asarray(power, dtype=float)
+    if x.shape != y.shape:
+        raise ValueError(f"amp_mA {x.shape} and power {y.shape} must match")
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    out = dict(curves=False, peaks_inside=False, peak_mA=float("nan"),
+               p_curvature=float("nan"), r2_linear=float("nan"), r2_quadratic=float("nan"),
+               n=int(x.size), verdict="not assessed")
+    # Three coefficients plus a residual degree of freedom is the arithmetic floor; min_points is
+    # the practical one. Below it the F test is not merely weak, it is undefined or absurd.
+    if x.size < max(4, min_points) or np.unique(x).size < 3:
+        out["verdict"] = (f"not assessed: {x.size} usable points at "
+                          f"{np.unique(x).size} distinct currents")
+        return out
+    ss = float(np.sum((y - y.mean()) ** 2))
+    if ss <= 0:
+        out["verdict"] = "not assessed: band power does not vary at all"
+        return out
+    lin = np.polyfit(x, y, 1)
+    qua = np.polyfit(x, y, 2)
+    rss1 = float(np.sum((y - np.polyval(lin, x)) ** 2))
+    rss2 = float(np.sum((y - np.polyval(qua, x)) ** 2))
+    dof = x.size - 3
+    out["r2_linear"] = 1.0 - rss1 / ss
+    out["r2_quadratic"] = 1.0 - rss2 / ss
+    if rss2 <= 0 or dof < 1:
+        out["verdict"] = "not assessed: the quadratic fit is exact, so its residual has no spread"
+        return out
+    f_stat = ((rss1 - rss2) / 1.0) / (rss2 / dof)
+    from scipy import stats as _st
+    out["p_curvature"] = float(1.0 - _st.f.cdf(f_stat, 1, dof))
+    out["curves"] = bool(out["p_curvature"] < 0.05)
+    peak = -qua[1] / (2.0 * qua[0]) if qua[0] != 0 else float("nan")
+    out["peaks_inside"] = bool(out["curves"] and qua[0] < 0
+                               and np.isfinite(peak) and x.min() <= peak <= x.max())
+    out["peak_mA"] = float(peak) if out["peaks_inside"] else float("nan")
+    if out["peaks_inside"]:
+        out["verdict"] = (f"rises then falls, peaking at {out['peak_mA']:.2f} mA inside the "
+                          f"{x.min():.2f}-{x.max():.2f} mA tested; a straight line explains "
+                          f"{100 * out['r2_linear']:.0f}% of the variation and a curve "
+                          f"{100 * out['r2_quadratic']:.0f}%. A LINEAR SLOPE OR TWO-POINT "
+                          f"COMPARISON WILL REPORT THIS AS NO RESPONSE")
+    elif out["curves"]:
+        out["verdict"] = ("curved but without a peak inside the currents tested, so a straight "
+                          "line understates it without inverting it")
+    else:
+        out["verdict"] = "no curvature detected; a straight line is an adequate summary"
+    return out
+
+
+#: How a step's settled values are combined into one number. PI decision 2026-09-06: "generate
+#: those new plots not using the middle value of the whole settled plateau but using the average of
+#: the settled values. We've already decided that the averaging is better."
+#:
+#: WHY IT WAS THE MIDDLE VALUE BEFORE, and why changing it is now safe. The median was chosen
+#: because a capture window can contain a transient and a middle value ignores it. That reason has
+#: since been measured away for the settled portion: aligning 1-second epochs to the moment each
+#: ramp finished, across 15 plateaus, band power deviates from its own settled level by 5-20% with
+#: NO monotonic decay -- there is no transient left inside the window the exclusion hands over.
+#:
+#: WHAT THE CHANGE COSTS, stated because it is not free. Single short epochs are strongly
+#: right-skewed: at 1-second resolution the 99.5th percentile is 7 times the median across bands and
+#: 12 times at 8 Hz. A mean is pulled upward by those excursions and a median is not, so the mean of
+#: a plateau sits above its median by an amount that depends on how many excursions that plateau
+#: happened to contain. Both are computed and returned, so the difference is always inspectable
+#: rather than a matter of belief.
+STEP_SUMMARY = "mean"
+
+def step_settled_stats(step_t0, step_window_s, tile_t, tile_power, *,
+                       ramp_s=RAMP_EXCLUDE_S, min_tiles=MIN_SETTLED_TILES,
+                       summary=STEP_SUMMARY, return_both=False):
+    """One power vector per step: the AVERAGE across that step's SETTLED tiles.
+
+    ``summary`` is ``"mean"`` (the default since 2026-09-06) or ``"median"``. With
+    ``return_both=True`` the return gains a fourth element, the other summary computed on identical
+    tiles, so a caller can report how far apart they are without re-deriving the windows.
+
+    Named ``step_settled_stats`` because it no longer only returns medians; ``step_settled_medians``
+    remains as a thin alias pinned to ``summary="median"`` so that existing callers and tests keep
+    their exact previous behaviour rather than silently changing summary.
 
     THE UNIT IS THE STEP, NOT THE TILE. A device capture is a short recording summarised to one
     number, so the step median is its analogue, and a median rather than a mean because a capture
@@ -94,7 +307,9 @@ def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
     if tt.size and np.any(np.diff(tt) < 0):
         raise ValueError("tile_t must be sorted ascending")
 
-    meds, counts, kept = [], [], []
+    if summary not in ("mean", "median"):
+        raise ValueError(f"summary must be 'mean' or 'median'; got {summary!r}")
+    meds, counts, kept, others = [], [], [], []
     for i, (a, w) in enumerate(zip(t0, win)):
         if not np.isfinite(a) or not np.isfinite(w) or w <= ramp_s:
             continue
@@ -102,13 +317,33 @@ def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
         i1 = int(np.searchsorted(tt, a + w))
         if i1 - i0 < int(min_tiles):
             continue
-        meds.append(np.nanmedian(tp[i0:i1, :], axis=0))
+        block = tp[i0:i1, :]
+        # Both are computed on IDENTICAL tiles so the pair is comparable by construction. The cost
+        # of the second one is a single pass over a block of at most a few hundred rows.
+        m_mean = np.nanmean(block, axis=0)
+        m_med = np.nanmedian(block, axis=0)
+        meds.append(m_mean if summary == "mean" else m_med)
+        others.append(m_med if summary == "mean" else m_mean)
         counts.append(i1 - i0)
         kept.append(i)
     if not meds:
         n_cen = tp.shape[1] if tp.ndim == 2 else 0
-        return (np.empty((0, n_cen)), np.empty(0, dtype=int), np.empty(0, dtype=int))
-    return np.vstack(meds), np.asarray(counts, dtype=int), np.asarray(kept, dtype=int)
+        empty = (np.empty((0, n_cen)), np.empty(0, dtype=int), np.empty(0, dtype=int))
+        return empty + (np.empty((0, n_cen)),) if return_both else empty
+    out = (np.vstack(meds), np.asarray(counts, dtype=int), np.asarray(kept, dtype=int))
+    return out + (np.vstack(others),) if return_both else out
+
+
+def step_settled_medians(step_t0, step_window_s, tile_t, tile_power, *,
+                         ramp_s=RAMP_EXCLUDE_S, min_tiles=MIN_SETTLED_TILES):
+    """The middle value across each step's settled tiles -- the behaviour before 2026-09-06.
+
+    Kept as a named alias rather than deleted so that a caller which genuinely wants the middle
+    value says so, and so that existing tests pin the old behaviour explicitly instead of depending
+    on what the default happens to be. New work should call :func:`step_settled_stats`.
+    """
+    return step_settled_stats(step_t0, step_window_s, tile_t, tile_power,
+                              ramp_s=ramp_s, min_tiles=min_tiles, summary="median")
 
 
 def build_within_visit_evidence(steps, *, channel, hemisphere, rate_hz, centers_hz,
@@ -149,7 +384,9 @@ def build_within_visit_evidence(steps, *, channel, hemisphere, rate_hz, centers_
                                f"{amp_col}")
         return None, aud
 
-    med, cnt, kept = step_settled_medians(S["t0"].to_numpy(float),
+    # The AVERAGE of the settled values, not the middle one -- PI decision 2026-09-06. See the
+    # STEP_SUMMARY block for what the change costs and why it is now safe.
+    med, cnt, kept = step_settled_stats(S["t0"].to_numpy(float),
                                           S["window_s"].to_numpy(float),
                                           tile_t, tile_power,
                                           ramp_s=ramp_s, min_tiles=min_tiles)

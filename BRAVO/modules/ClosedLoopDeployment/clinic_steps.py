@@ -81,6 +81,18 @@ from Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
 USE_INTERSECTION_OF_NOMINAL_AND_OBSERVED = True
 
 #: The sheets' own warning, printed in the Stim Testing tab: "*NOTE STIM TAKES 30-45 s TO RAMP UP".
+#:
+#: THIS IS A RECORD OF WHAT THE SHEET CLAIMS, NOT A SETTING. It is kept because the claim is on the
+#: sheet and a reader needs to be able to see it, and because parsing code may want to compare a
+#: step's duration against it. Nothing should use it as an exclusion window.
+#:
+#: THE SHEET OVERSTATES THE RAMP BY THREE TO FIVE TIMES. Measured 2026-09-06 from the device's own
+#: per-sample amplitude record (``BrainSenseLfp[].LfpData[].{Left,Right}.mA`` at 2 Hz, on the same
+#: clock as the neural signal) across all 27 steps of RCS08's 2026-08-18 visit: the current finishes
+#: moving in 6.5 s median, 9.0 s at most for an ordinary 0.5 mA step, and 17.5 s in the one case
+#: that was a double-size 1.0 mA jump. What the sheet describes as a 30-45 s ramp is the device
+#: delivering a burst of four or five small increments over a few seconds. The operative exclusion
+#: is ``StimOptimizer.routines.within_visit.RAMP_EXCLUDE_S``, which carries the full provenance.
 RAMP_WARNING_S = 45.0
 
 #: MEASURED, 2026-09-05, and it contradicts the warning above for artifact-sensitive work. Aligning

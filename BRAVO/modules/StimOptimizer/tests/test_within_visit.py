@@ -488,3 +488,130 @@ def test_the_older_median_rule_is_still_there_and_still_does_its_own_thing():
     assert len(kept) == 4                        # the old rule measures every setting
     P, T = WV.mean_power_before_next_change(t0, amp, tt, tp, block=rate)
     assert int(T.accepted.sum()) == 2            # the new rule measures only the middle two
+
+
+# --- the measured ramp exclusion and the peaked-response check (2026-09-06) --------------------
+def test_the_ramp_exclusion_covers_the_longest_ramp_actually_observed():
+    """The exclusion exists to remove the ramp, so it must not be shorter than the ramp.
+
+    Measured from the device's own 2 Hz amplitude record on RCS08's 2026-08-18 visit: 6.5 s median,
+    17.5 s at most across both stimulators. This asserts the relationship rather than the numbers,
+    so a future measurement can move both without the test becoming a lie.
+    """
+    assert WV.RAMP_EXCLUDE_S >= WV.LONGEST_OBSERVED_RAMP_S, (
+        "the ramp exclusion is shorter than the longest ramp measured from the device")
+    # And it must not drift back to a figure that discards most of a 57 s hold for nothing.
+    assert WV.RAMP_EXCLUDE_S <= 30.0, (
+        "an exclusion this long throws away most of the settled signal; see the provenance block")
+
+
+def test_a_peaked_response_is_reported_as_peaked_and_not_as_flat():
+    """The failure this guards: a rise-then-fall reads as 'does not respond' to a linear test.
+
+    Built to match what the harmonic-contaminated bands actually do on RCS08 -- power peaking near
+    1.8 mA across a 0-3.5 mA ladder -- with the straight-line slope near zero by construction.
+    """
+    amp = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5] * 2, dtype=float)
+    # A downward parabola centred at 1.75 mA, so the linear slope through it is ~0.
+    power = 400.0 - 90.0 * (amp - 1.75) ** 2
+    rng = np.random.RandomState(0)
+    power = power + rng.normal(0, 4.0, size=power.size)
+
+    lin_slope = np.polyfit(amp, power, 1)[0]
+    assert abs(lin_slope) < 12.0, "fixture is wrong: the linear slope should be near zero"
+
+    out = WV.amplitude_response_shape(amp, power)
+    assert out["curves"] is True
+    assert out["peaks_inside"] is True
+    assert 1.5 < out["peak_mA"] < 2.0
+    assert out["p_curvature"] < 0.01
+    # The point of the whole function: the linear summary is bad and the peaked one is good.
+    assert out["r2_linear"] < 0.15
+    assert out["r2_quadratic"] > 0.85
+    assert "peaking at" in out["verdict"]
+    # The verdict must warn that the module's own linear tests will miss this, which is the whole
+    # reason the function exists. It must NOT assert an artefact interpretation: that reading was
+    # tried on 2026-09-06 and refuted, because a stimulation artefact grows monotonically with
+    # current while this comes back down. See the docstring.
+    assert "NO RESPONSE" in out["verdict"]
+    assert "HARMONIC" not in out["verdict"]
+
+
+def test_a_straight_relationship_is_not_reported_as_curved():
+    amp = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5] * 2, dtype=float)
+    rng = np.random.RandomState(1)
+    power = 100.0 + 40.0 * amp + rng.normal(0, 5.0, size=amp.size)
+    out = WV.amplitude_response_shape(amp, power)
+    assert out["curves"] is False
+    assert out["peaks_inside"] is False
+    assert np.isnan(out["peak_mA"])
+    assert out["r2_linear"] > 0.85
+    assert "no curvature" in out["verdict"]
+
+
+def test_too_few_points_says_not_assessed_rather_than_guessing():
+    out = WV.amplitude_response_shape([0.0, 1.0, 2.0], [10.0, 20.0, 15.0])
+    assert out["curves"] is False
+    assert out["verdict"].startswith("not assessed")
+    assert np.isnan(out["p_curvature"])
+    # A constant signal has no variation to explain, and must not come back as a fitted result.
+    flat = WV.amplitude_response_shape([0.0, 1.0, 2.0, 3.0] * 3, [5.0] * 12)
+    assert flat["verdict"].startswith("not assessed")
+
+
+def test_the_step_summary_is_the_average_and_the_middle_value_stays_available():
+    """PI decision 2026-09-06: average the settled values rather than take the middle one.
+
+    Uses a block with a few large upward excursions, which is what real 1-second epochs contain --
+    the 99.5th percentile is about 7 times the median. The mean must be pulled up by them and the
+    median must not, because that difference is the whole reason the choice matters.
+    """
+    excl = WV.RAMP_EXCLUDE_S
+    t = np.arange(0.0, 200.0, 1.0)
+    p = np.full((t.size, 1), 10.0)
+    p[(t >= excl + 5) & (t < excl + 8), 0] = 200.0        # three big excursions inside the plateau
+    window = excl + 60.0
+
+    mean_out = WV.step_settled_stats([0.0], [window], t, p)
+    med_out = WV.step_settled_medians([0.0], [window], t, p)
+    assert mean_out[0][0, 0] > med_out[0][0, 0], (
+        "the mean must be pulled up by the excursions and the median must not")
+    assert np.isclose(med_out[0][0, 0], 10.0)
+    # identical tiles behind both, so the counts cannot differ
+    assert mean_out[1][0] == med_out[1][0]
+
+    both = WV.step_settled_stats([0.0], [window], t, p, return_both=True)
+    assert len(both) == 4
+    assert np.isclose(both[0][0, 0], mean_out[0][0, 0])
+    assert np.isclose(both[3][0, 0], med_out[0][0, 0]), "the fourth return is the other summary"
+    assert WV.STEP_SUMMARY == "mean"
+
+
+def test_ramp_windows_come_from_the_device_and_a_burst_is_one_step():
+    """A setting the sheet records as one step is a burst of small increments, then a hold.
+
+    Built to match RCS08's actual record: 0.5, 0.6, 0.7, 0.8, 1.0 over a few seconds, then ~57 s
+    of hold. The burst must collapse to ONE plateau whose start is the measured end of the ramp.
+    """
+    t = np.arange(0.0, 400.0, 0.5)                        # the device samples amplitude at 2 Hz
+    a = np.zeros_like(t)
+    a[(t >= 10.0)] = 0.2
+    a[(t >= 11.0)] = 0.3
+    a[(t >= 12.5)] = 0.4
+    a[(t >= 14.0)] = 0.5                                  # ramp ends here: 4 increments over 4 s
+    a[(t >= 90.0)] = 0.6
+    a[(t >= 91.5)] = 1.0                                  # a second burst, 1.5 s
+    W = WV.ramp_windows_from_amplitude(t, a)
+    assert len(W) == 2, W
+    assert np.isclose(W.ramp_end.iloc[0], 14.0)
+    assert np.isclose(W.ramp_s.iloc[0], 4.0)
+    assert W.n_increments.iloc[0] == 4
+    assert np.isclose(W.mA_from.iloc[0], 0.0) and np.isclose(W.mA_to.iloc[0], 0.5)
+    assert W.hold_s.iloc[0] > 70.0
+    assert np.isclose(W.ramp_s.iloc[1], 1.5) and W.n_increments.iloc[1] == 2
+
+    # A change with no hold after it is not a plateau and must not be reported as one.
+    a2 = np.zeros_like(t); a2[(t >= 395.0)] = 1.0
+    assert len(WV.ramp_windows_from_amplitude(t, a2)) == 0
+    # And an amplitude record that never moves yields nothing rather than raising.
+    assert len(WV.ramp_windows_from_amplitude(t, np.zeros_like(t))) == 0

@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from ClosedLoopDeployment import clinic_steps as CS
+from StimOptimizer.routines import within_visit as WV
 # The response function is INJECTED rather than imported by clinic_steps itself, so the
 # module does not depend on the scorer and a caller can screen against a different one.
 from StimOptimizer.routines import lfp_response as LR
@@ -90,27 +91,34 @@ def _tiles(t_start=0.0, n=400, step=3.0, n_cen=4, seed=0):
 
 
 def test_settled_medians_exclude_the_ramp_and_stop_at_the_window_end():
-    """The ramp exclusion has to bite at both ends, or a step's median silently includes the
-    transient the sheets warn about (and which the ramp analysis measured still rising at 150 s).
+    """The ramp exclusion has to bite at both ends, or a step's summary silently includes the
+    transient.
+
+    KEYED OFF THE OPERATIVE CONSTANT, NOT A LITERAL. This test hardcoded 45 until 2026-09-06, when
+    the exclusion was changed to the measured 20 s and the test failed for the right reason -- it
+    was pinning the number rather than the behaviour. ``CS.RAMP_WARNING_S`` is NOT the right constant
+    to key off either: that records what the clinic sheet claims, which the device's own amplitude
+    record shows is three to five times too long.
     """
+    excl = WV.RAMP_EXCLUDE_S
+    window = excl + 55.0
     t, p = _tiles(n=200, step=1.0)
-    # one step starting at t=0 with a 100 s window: settled tiles are 45 <= dt < 100
     p[:] = 1.0
-    p[(t >= 0) & (t < 45), :] = 99.0          # ramp tiles, must be excluded
-    p[(t >= 100), :] = 77.0                   # past the window, must be excluded
-    med, cnt, kept = CS.step_settled_medians([0.0], [100.0], t, p)
+    p[(t >= 0) & (t < excl), :] = 99.0        # inside the exclusion, must be dropped
+    p[(t >= window), :] = 77.0                # past the window, must be dropped
+    med, cnt, kept = CS.step_settled_medians([0.0], [window], t, p)
     assert kept.tolist() == [0]
-    assert cnt[0] == 55, cnt[0]               # 45..99 inclusive at 1 s spacing
+    assert cnt[0] == 55, cnt[0]               # excl .. window-1 inclusive at 1 s spacing
     assert np.allclose(med, 1.0), med
 
 
 def test_a_step_with_too_few_settled_tiles_is_dropped_not_imputed():
     t, p = _tiles(n=200, step=1.0)
     # window only 1 s past the ramp -> a single settled tile, below MIN_SETTLED_TILES
-    med, cnt, kept = CS.step_settled_medians([0.0], [CS.RAMP_WARNING_S + 1.0], t, p)
+    med, cnt, kept = CS.step_settled_medians([0.0], [WV.RAMP_EXCLUDE_S + 1.0], t, p)
     assert kept.size == 0 and med.shape[0] == 0
-    # and a window entirely inside the ramp is dropped too
-    med2, _, kept2 = CS.step_settled_medians([0.0], [CS.RAMP_WARNING_S - 1.0], t, p)
+    # and a window entirely inside the exclusion is dropped too
+    med2, _, kept2 = CS.step_settled_medians([0.0], [WV.RAMP_EXCLUDE_S - 1.0], t, p)
     assert kept2.size == 0 and med2.shape[0] == 0
 
 
@@ -134,7 +142,7 @@ def test_tiles_inflate_the_p_value_by_orders_of_magnitude_but_not_the_separation
         amp = 1.0 if k < per_step else 4.0
         level = (2.0 if amp == 1.0 else 1.0) + rng.normal(0, 0.35)   # BETWEEN-step spread
         for j in range(n_tiles):
-            rows_t.append(k * 1000.0 + CS.RAMP_WARNING_S + j)
+            rows_t.append(k * 1000.0 + WV.RAMP_EXCLUDE_S + j)
             rows_p.append(level + rng.normal(0, 0.01))               # tiny WITHIN-step spread
             amps.append(amp); steps.append(k)
     tt = np.asarray(rows_t); tp = np.asarray(rows_p)[:, None]
@@ -142,7 +150,7 @@ def test_tiles_inflate_the_p_value_by_orders_of_magnitude_but_not_the_separation
 
     med, cnt, kept = CS.step_settled_medians(
         [k * 1000.0 for k in range(2 * per_step)],
-        [float(n_tiles + CS.RAMP_WARNING_S + 5)] * (2 * per_step), tt, tp)
+        [float(n_tiles + WV.RAMP_EXCLUDE_S + 5)] * (2 * per_step), tt, tp)
     amp_step = np.array([1.0 if k < per_step else 4.0 for k in kept])
     vis_step = np.array([f"v{k % 4}" for k in kept])
 
