@@ -188,7 +188,7 @@ def test_oura_rejects_invalid_policy_and_sample_contract(tmp_path, monkeypatch):
     assert len(oura.sample_times(sample)) == 0
 
 
-def test_oura_mask_shape_and_missing_metadata_identity():
+def test_oura_mask_shape_and_missing_metadata_identity(synthetic_oura_policy):
     sample = oura_row([1], [1]); sample['Missing'] = np.zeros((2, 1))
     with pytest.raises(ValueError, match='mask shapes'): oura.apply_quality_control({'HeartRate': [sample]})
     assert oura.day_label({}) is None

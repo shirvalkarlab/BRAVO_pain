@@ -117,10 +117,13 @@ For future source updates, retain these remotes and pristine tracking branches:
 | `origin` | `https://github.com/Fixel-Institute/BRAVO.git` | `development` |
 | `shirvalkar` | `https://github.com/shirvalkarlab/BRAVO_pain.git` | `PS_closedloop_deployment` |
 
-Agents must read the supplied `AGENTS.md`. When using the full `BRAVO_platform`
-workspace, run its `scripts/session_bootstrap.sh` once per session from the
-workspace directory. Preserve dirty work and divergence; never stash, reset,
-switch branches or force a source update to make deployment convenient. An
+Agents must read the repository's `AGENTS.md` and any parent instructions. Run
+this checkout's `scripts/session_bootstrap.sh` once per session, unless a parent
+workspace bootstrap already ran in this session. The standalone clone includes
+everything required for this bootstrap; it does not require a sibling directory.
+Preserve dirty work and divergence: with a dirty worktree fetch only, leaving
+every local branch unchanged. Never stash, reset, switch branches or force a
+source update to make deployment convenient. An
 archive without Git history can build an image, but cannot support the managed
 upstream-update workflow until its correct repository history is restored.
 
@@ -160,13 +163,22 @@ deployment operation, not a harmless browser-opening command. Complete the
 
 ## Move the existing appliance
 
-Transfer four things through the approved private transfer path:
+Transfer these things through the approved private transfer path:
 
 1. The exact reviewed Aditya source snapshot and repository history described above.
 2. A newly created appliance backup whose checksum/restore check passes.
 3. The destination's local, readable copy of the original neural JSON directory.
 4. The single nightly Codex automation's setup, reviewed for the destination's
    actual paths and host. Automation state is not in the appliance backup.
+5. A separately inventoried private operational context package: relevant
+   `output/weekly-reviews/` visit, question, confirmation and delivery ledgers;
+   nightly notification/deduplication records and upstream observed-head history;
+   approved slide specifications, construction helpers, source/readback manifests
+   and latest review findings under `output/slides/`. These are ignored and are
+   **not** in the source clone or appliance backup. Preserve hashes and identify
+   the current authoritative version; do not indiscriminately transfer temporary
+   outputs. If upstream observation continuity cannot be verified, start a fresh
+   48-hour observation window instead of inventing history.
 
 On the source computer:
 
@@ -192,7 +204,11 @@ approved protected transfer/storage location. Preserve the encryption and hash
 keys together with the database/storage; never regenerate them for restored data.
 
 On a clean destination, obtain the source snapshot, install/start Docker and
-place the neural folder locally. Leave `.env.appliance` absent; **skip `init`**.
+place the neural folder locally. Resolve the actual readable comparison folder
+and writable Dropbox export folder too. Download cloud-only inputs. Make these
+directories accessible to the destination Docker VM with the required read/write
+permissions; host existence alone does not prove the VM can mount them.
+Leave `.env.appliance` absent; **skip `init`**.
 Build the expected local image before restoration so storage operations do not
 depend on a pre-existing image tag:
 
@@ -200,18 +216,33 @@ depend on a pre-existing image tag:
 docker build -t bravo-local:aditya .
 scripts/bravo-appliance restore-check /absolute/path/to/bravo-appliance-TIMESTAMP.tar.gz
 RCS08_NEURAL_SOURCE="/absolute/destination/neural/folder" \
+  RCS08_EXPORT_SOURCE="/absolute/destination/Dropbox/BRAVO Data" \
+  RCS08_COMPARISON_SOURCE="/absolute/destination/comparison/folder" \
   scripts/bravo-appliance restore /absolute/path/to/bravo-appliance-TIMESTAMP.tar.gz --replace-existing-data
 scripts/bravo-appliance sync-source "/absolute/destination/neural/folder"
+```
+
+Replace every example path above with the verified destination. If comparisons
+are stored in `secrets/rcs08_comparisons`, use that restored directory's absolute
+destination path. All three temporary overrides are necessary because `restore`
+starts services while the copied `.env.appliance` still contains source-host
+paths. The existing `sync-source` helper persists **only** the neural path.
+Immediately afterward, privately edit only `RCS08_EXPORT_SOURCE` and
+`RCS08_COMPARISON_SOURCE` in `.env.appliance` to the same verified destination
+paths. Preserve every credential and encryption value. Do not print the file.
+The current restore helper has no general host-path rewrite option.
+
+Only after all three paths are persisted, run:
+
+```bash
 scripts/bravo-appliance up
 scripts/bravo-appliance check
 ```
 
-The temporary `RCS08_NEURAL_SOURCE` override is necessary because `restore`
-starts services before a later `sync-source` command can change the old host
-path stored in the backup. Compose uses that explicit environment override for
-the restore invocation; `sync-source` then saves the destination path permanently.
-The helper verifies that the supplied directory exists. Do not create an empty
-directory merely to make an incorrect source path appear valid.
+Confirm the actual container mounts and a successful export manifest at the
+intended Dropbox destination. Do not create empty input folders merely to make
+incorrect source paths appear valid. The export bind explicitly refuses to
+create a missing host path.
 
 `restore` replaces the configured database and storage. The explicit
 `--replace-existing-data` flag is mandatory. If destination data already exists,
@@ -322,6 +353,16 @@ and acceptance checks work there. Disable the old host's automatic run before
 enabling the destination's; do not leave two hosts refreshing the same sources
 or independently promoting code. Verify the actual destination schedule and
 record its first completed run. A configured timer is not proof that it ran.
+
+Also verify the destination's BRAVO Codex project, required workflow skills,
+authenticated Google Drive/Slides and Slack capabilities, Monday 09:00 Pacific
+weekly review, and GPT-6 Astra / High nightly configuration. Restore the private
+operational ledgers before any notification-producing run so retries do not send
+duplicates. A CLI installation alone does not establish these desktop capabilities.
+Use the supported automation tools to transfer/reconfigure schedules, never raw
+file copies that could leave both hosts active. Read back both hosts' ownership
+state and retain a dated handoff receipt with source SHA, image identity, backup
+and private-manifest hashes, resolved paths, acceptance results and scheduler owner.
 
 The `bravo-sync` container now runs
 `run_rcs08_scheduler --external-maintenance` and handles manual requests only.

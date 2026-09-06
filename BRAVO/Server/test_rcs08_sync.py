@@ -49,8 +49,19 @@ class RCS08SyncHelperTests(SimpleTestCase):
         self.assertEqual(records[0]["name"], "7")
 
     def test_reviewed_timestamp_corrections_match_fail_closed_keys(self):
-        with open(RCS08Sync.TIMESTAMP_CORRECTIONS_FILE, newline="", encoding="utf-8") as source:
-            corrections = list(csv.DictReader(source))
+        # Invented identities and times exercise exact matching without shipping
+        # or reading the participant's reviewed correction table.
+        corrections = [dict(
+            record_id="SYNTHETIC08", redcap_event_name="synthetic_arm_1",
+            redcap_repeat_instrument="synthetic_daily", redcap_repeat_instance=str(i),
+            original_redcap_timestamp=f"2020-01-0{i} 10:00:00",
+            corrected_survey_start=f"2020-01-0{i} 11:00:00",
+        ) for i in range(1, 4)]
+        path = RCS08Sync.STORAGE_PATH / "synthetic_timestamp_corrections.csv"
+        with path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(corrections[0]))
+            writer.writeheader()
+            writer.writerows(corrections)
         live_rows = [
             {
                 "record_id": correction["record_id"],
@@ -61,9 +72,18 @@ class RCS08SyncHelperTests(SimpleTestCase):
             }
             for correction in corrections
         ]
-        corrected, count = RCS08Sync._apply_timestamp_corrections(live_rows)
+        with mock.patch.object(RCS08Sync, "TIMESTAMP_CORRECTIONS_FILE", path):
+            corrected, count = RCS08Sync._apply_timestamp_corrections(live_rows)
+            for field in live_rows[0]:
+                mismatched = [dict(row) for row in live_rows]
+                mismatched[0][field] = "nonmatching"
+                with self.subTest(field=field), self.assertRaisesRegex(RCS08Sync.SyncError, "exactly one"):
+                    RCS08Sync._apply_timestamp_corrections(mismatched)
+            with self.assertRaisesRegex(RCS08Sync.SyncError, "exactly one"):
+                RCS08Sync._apply_timestamp_corrections(live_rows + [dict(live_rows[0])])
         self.assertEqual(count, 3)
         self.assertEqual(corrected[0][RCS08Sync.REDCAP_TIMESTAMP], corrections[0]["corrected_survey_start"])
+        self.assertEqual(live_rows[0][RCS08Sync.REDCAP_TIMESTAMP], corrections[0]["original_redcap_timestamp"])
 
     def test_oura_merge_replaces_a_refetched_day(self):
         old = {

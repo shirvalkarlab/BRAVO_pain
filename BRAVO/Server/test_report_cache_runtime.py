@@ -1,4 +1,5 @@
 """Real cache/DRF runtime tests using synthetic users and temporary storage only."""
+import pytest
 import gzip
 import json
 import os
@@ -17,6 +18,19 @@ from rest_framework.views import APIView
 from modules import Database, ReportCache
 
 
+def test_identity_tracks_effective_policy_content_and_missing_file(synthetic_oura_policy):
+    """Cache eligibility must track the same bytes used by Oura QC."""
+    original = ReportCache.analysis_policy_identity()
+    assert ReportCache.analysis_policy_identity() == original
+    text = synthetic_oura_policy.read_text()
+    synthetic_oura_policy.write_text(text.replace("2026-05-28", "2026-05-29"))
+    assert ReportCache.analysis_policy_identity() != original
+    synthetic_oura_policy.unlink()
+    with pytest.raises(FileNotFoundError):
+        ReportCache.analysis_policy_identity()
+
+
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class ReportCacheRuntimeTests(SimpleTestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

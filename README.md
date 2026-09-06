@@ -97,10 +97,12 @@ This checkout combines the branches needed for local Shirvalkar Lab development 
 | `PS_closedloop_deployment` | `shirvalkar/PS_closedloop_deployment` | Clean local copy of Prasad's closed-loop work. |
 | `aditya` | Initially copied from `development` | Working branch for local integrations and custom development. |
 
-Use `aditya` for ordinary work. In this workspace run
-`../scripts/session_bootstrap.sh` once at session start. It fetches both remotes
-and reports branch state. If the working tree is dirty, keep its branch and
-changes intact: do not switch, stash, reset, merge or rebase automatically.
+Use `aditya` for ordinary work. Read the repository's [agent instructions](AGENTS.md)
+and run `scripts/session_bootstrap.sh` once at session start from this checkout.
+It verifies source remote URLs, fetches both sources and reports branch state.
+If a parent workspace bootstrap already ran in this session, do not run another.
+If the working tree is dirty, keep every local branch and file intact: fetch only;
+do not switch, stash, reset, merge, rebase or update another local branch automatically.
 Review incoming changes before an explicitly authorized integration on a clean
 working tree:
 

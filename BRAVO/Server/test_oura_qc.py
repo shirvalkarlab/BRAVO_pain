@@ -2,7 +2,10 @@ import copy
 import datetime as dt
 import unittest
 import numpy as np
+import pytest
 from modules.OURA.QualityControl import apply_quality_control, policy, timeline_series, PACIFIC
+
+pytestmark = pytest.mark.usefixtures("synthetic_oura_policy")
 
 
 def record(day, times, values, kind='HeartRate'):

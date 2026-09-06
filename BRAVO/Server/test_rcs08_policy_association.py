@@ -108,6 +108,7 @@ class PolicyCacheIdentityTests(unittest.TestCase):
             cache = root/'cache'
             cache.mkdir()
             context = {'Path': Path, 'hashlib': hashlib, 'json': json,
+                       'QualityControl': NS(POLICY_PATH=root/'config/rcs08_oura_exclusion_windows.csv'),
                        '__file__': str(root/'modules/ReportCache.py'), 'wraps': wraps,
                        'VERSION': 'synthetic', 'MAX_AGE': None, 'gzip': gzip,
                        'directory': lambda: cache, 'revision': lambda: 'unchanged-input',

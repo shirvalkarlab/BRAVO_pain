@@ -1,0 +1,83 @@
+name: BRAVO validation
+
+on:
+  push:
+    branches: [aditya]
+  pull_request:
+    branches: [aditya]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bravo-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-gate:
+    name: Portable acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      DOCKER_BUILDKIT: "1"
+      BUILDKIT_PROGRESS: plain
+
+    steps:
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record source and runner identity
+        id: identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/bravo-ci" reports/validation
+          {
+            printf 'tested_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'event_sha=%s\n' "$GITHUB_SHA"
+            printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'ref=%s\n' "$GITHUB_REF"
+            printf 'run_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            uname -a
+            python3 --version
+            docker version
+            free -h
+            df -h . /var/lib/docker
+          } | tee "$RUNNER_TEMP/bravo-ci/identity.log"
+
+      # Reuse the application Dockerfile, including its embedded R dependencies.
+      # Do not mount appliance data, secrets, source workbooks or deployment ports.
+      - name: Prepare clean validation images
+        timeout-minutes: 50
+        run: scripts/bravo-validate prepare 2>&1 | tee "$RUNNER_TEMP/bravo-ci/prepare.log"
+
+      # bash -e -o pipefail propagates tests, true coverage and build failures
+      # through tee. This is the local acceptance command, with its documented private/optional boundaries.
+      - name: Run portable tests, branch coverage and production build
+        timeout-minutes: 60
+        run: scripts/bravo-validate check 2>&1 | tee "$RUNNER_TEMP/bravo-ci/check.log"
+
+      # Only explicit portable outputs: never upload all of reports/ or outputs/.
+      # Diagnostic evidence is retained on failure; upload success is not acceptance.
+      - name: Retain portable validation evidence
+        if: ${{ always() && steps.identity.outcome == 'success' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-validation-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false
+          path: |
+            ${{ runner.temp }}/bravo-ci/identity.log
+            ${{ runner.temp }}/bravo-ci/prepare.log
+            ${{ runner.temp }}/bravo-ci/check.log
+            reports/validation/python.json
+            reports/validation/coverage-final.json
+            reports/validation/backend-status.json
+            reports/validation/frontend-status.json
+            reports/validation/branch-summary.json

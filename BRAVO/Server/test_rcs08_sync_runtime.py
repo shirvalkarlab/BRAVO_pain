@@ -3,6 +3,7 @@
 These tests import the real module, use disposable ORM/storage, and replace only
 external API/decoder/canonicalization boundaries. No deployment data is needed.
 """
+import pytest
 import csv
 import datetime as dt
 import hashlib
@@ -21,6 +22,7 @@ from Server import models
 from modules import Database, DataCurator, RCS08Sync
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class SyncRuntimeTests(TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

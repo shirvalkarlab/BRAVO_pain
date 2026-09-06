@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local-only validation. Never mounts appliance secrets, data, or service ports.
+# Portable local/CI validation. Never mounts appliance secrets, data, or service ports.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -39,9 +39,14 @@ DOCKERFILE
     rm -f "$RESULTS/python.json" "$RESULTS/backend-status.json"
     # Legacy checkouts may contain a mysql.config; never expose its contents to tests.
     : > "$RESULTS/empty-mysql.config"
+    backend_mounts=(-v "$ROOT/BRAVO:/workspace/BRAVO:ro")
+    if [[ -e "$ROOT/BRAVO/mysql.config" ]]; then
+      backend_mounts+=(-v "$RESULTS/empty-mysql.config:/workspace/BRAVO/mysql.config:ro")
+    fi
+    # Clean source releases omit mysql.config. Do not ask Docker to create a
+    # mountpoint inside their read-only source mount; Django uses SQLite there.
     docker run --rm --network none \
-      -v "$ROOT/BRAVO:/workspace/BRAVO:ro" \
-      -v "$RESULTS/empty-mysql.config:/workspace/BRAVO/mysql.config:ro" \
+      "${backend_mounts[@]}" \
       -v "$ROOT/Client/src:/workspace/Client/src:ro" \
       -v "$ROOT/scripts/validation:/workspace/scripts/validation:ro" \
       -v "$RESULTS:/results" -w /workspace/BRAVO \

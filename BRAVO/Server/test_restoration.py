@@ -1,4 +1,5 @@
 """Regression checks for restored functionality and performance contracts."""
+import pytest
 import copy
 import random
 from django.test import SimpleTestCase
@@ -58,6 +59,7 @@ class StoredSurveyTests(SimpleTestCase):
         self.assertEqual(result['ChannelNames'],['[REDCap] Pain - Score'])
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class SharedReportCacheTests(SimpleTestCase):
     def setUp(self):
         import tempfile
@@ -162,6 +164,7 @@ class SnapshotCacheTests(SimpleTestCase):
             self.assertIs(processNeuralActivitySnapshot(recording,None,{}),value)
             read.assert_called_once_with('processed','processedhash')
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class PersistentReportCacheTests(SimpleTestCase):
     setUp = SharedReportCacheTests.setUp
     request = SharedReportCacheTests.request

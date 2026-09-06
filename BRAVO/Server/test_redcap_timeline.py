@@ -1,4 +1,5 @@
 """Synthetic timeline contracts: source equivalence, QC, clocks and permissions."""
+import pytest
 import copy
 import datetime as dt
 import hashlib
@@ -195,6 +196,7 @@ class HistoricalScoringTests(unittest.TestCase):
         self.assertEqual(history.source_columns('Stage 0', 'pain_vas_long'), ['pain_vas_long'])
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()

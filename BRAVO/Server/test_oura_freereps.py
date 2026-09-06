@@ -1,4 +1,5 @@
 """Synthetic FreeReps adapter contracts; no private data or remote requests."""
+import pytest
 import copy
 import json
 import tempfile
@@ -23,6 +24,7 @@ def row(day='2026-06-01', start=1780293600., data=None, descriptor=None, include
                                                                   'TotalSleepDuration': 900, 'Efficiency': 75}}
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class AdapterTests(unittest.TestCase):
     def test_metrics_units_real_scores_zeros_and_days(self):
         activity = row(descriptor={'Steps': 0, 'HighActivityTime': 120, 'SedentaryActivityTime': 7200})
@@ -131,6 +133,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(finite(np.int64(0)),0)
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.factory=APIRequestFactory()

@@ -1,6 +1,5 @@
 """Remove direct patient identifiers without shifting scientific timestamps."""
 import json
-import re
 
 FIELDS = frozenset({'PatientFirstName', 'PatientLastName', 'PatientId', 'PatientDateOfBirth'})
 
@@ -21,7 +20,7 @@ def sanitize_patient_identifiers(raw, study_id='RCS08'):
             if isinstance(value, (dict, list)):
                 raise ValueError('Unexpected structured patient identifier')
             # Keep existing blank/block-character redaction as-is.
-            if value is None or value == 0 or not re.search(r'[A-Za-z0-9]', str(value)):
+            if value is None or value == 0 or not any(character.isalnum() for character in str(value)):
                 continue
             replacement = study_id if field == 'PatientId' else ''
             if value != replacement:

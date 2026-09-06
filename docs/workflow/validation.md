@@ -28,7 +28,10 @@ pytest-cov 6.0.0 and coverage.py 7.6.12. Backend execution has no network, servi
 ports, deployment environment, secrets or appliance-volume mounts. It uses an
 in-memory SQLite database and disposable filesystem. A backend `.env` is refused.
 Preparation needs network access to install declared dependencies;
-tests do not fetch source participant data.
+tests do not fetch source participant data. Synthetic policy/model fixtures and the
+separate, explicit private calibration acceptance checks are documented in
+[portable fixtures](portable-fixtures.md). Private calibration skips in this
+portable run do not count as private scientific acceptance.
 
 The existing Python deployment deliberately remains Docker plus its requirements
 file. The scientific stack embeds distro R, `rpy2`, `lme4`, `lmerTest`, and
@@ -142,16 +145,54 @@ fixtures and generic behavior checks. Never copy those local evidence directorie
 into CI artifacts. Keep one local current state record with active handles,
 tested source identity and next actions; do not imply work continued while paused.
 
-## Current readiness boundary
+## GitHub CI and readiness boundary
 
-There is no repository acceptance CI workflow in this checkout's `.github`
-directory; existing issue templates are not CI. No cloud execution, push,
-protection change, deployment or independent clinical/model approval is implied
-by adoption of this guide. A future shared release needs the same portable gate
-from a clean checkout at its actual final SHA, verified required-check policy,
-and separate private-data acceptance. Local task evidence should be described as
-local-only. An image built from an uncommitted worktree needs its source snapshot
-fingerprint as well as the base commit; the commit alone does not identify it.
+[BRAVO validation](../../.github/workflows/validation.yml) runs the same `prepare`
+and `check` commands from a clean checkout on pushes to `aditya`, pull requests
+targeting `aditya`, and manual dispatch. The required job name is **Portable
+acceptance**. It uses an ephemeral GitHub-hosted Ubuntu 24.04 runner, a read-only
+repository token with credentials removed after checkout, and no deployment
+secrets or private source data. Tests retain their network-disabled containers.
+The production image is built locally on that runner; nothing is deployed or
+published as an image. The pinned official
+[checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) and
+[upload-artifact v7.0.1](https://github.com/actions/upload-artifact/releases/tag/v7.0.1)
+commits were resolved from their release tags when this workflow was authored.
+
+Preparation and acceptance run sequentially with failure propagation; test,
+coverage or build failure fails the job. Only explicit portable logs, coverage,
+status reports and tested-commit identity are retained for seven days, including
+diagnostics after failure. The artifact is evidence, not an independent success
+gate. No participant evidence directories, raw data, model assets, secrets or
+deployment environment are uploaded. Do not add private fixtures to this gate.
+
+The job is bounded to 120 minutes (50 for preparation, 60 for acceptance).
+The standard private-repository Linux runner currently provides
+[2 CPUs, 8 GB RAM and 14 GB SSD](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The scientific Python/R images and frontend production build must fit this
+capacity; a timeout, dependency download failure or resource exhaustion is a
+failed/unverified run, never grounds to drop tests or silently select a paid
+larger runner. Clean hosted execution and immutable dependency reproducibility
+remain unverified until evidenced by a run; see the dependency-lock limits above.
+
+After each authorized push, match the final local commit, remote `aditya` commit,
+and workflow run `headSha`; inspect the **Portable acceptance** job conclusion.
+For pull requests inspect the checkout's recorded `tested_commit`, which normally
+identifies GitHub's temporary merge candidate rather than just the PR head.
+Revalidate when the candidate or base changes, including a final documentation
+commit. Missing, skipped, cancelled, pending or failed checks do not establish
+acceptance. In GitHub's effective branch rules, require **Portable acceptance**
+from GitHub Actions on `aditya`, require an up-to-date tested candidate and review
+under the owner's policy, and inspect bypass permissions. Configuring or changing
+those rules needs authorization; the YAML alone does not enforce merging. Private
+repository plan/permission limits and unconfigured protection must be reported
+explicitly, not described as protection in place.
+
+CI proves the portable gate only. Separate private-data, browser, deployed and
+independent scientific/model acceptance remain required. Local-only evidence
+must still be labeled local-only. An image built from an uncommitted worktree
+needs its source snapshot fingerprint as well as the base commit; the commit
+alone does not identify it.
 
 ## Upstream updates
 

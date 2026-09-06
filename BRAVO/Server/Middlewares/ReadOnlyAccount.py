@@ -67,16 +67,24 @@ READ_ONLY_REQUEST_TYPES = {
 }
 
 
+_INVALID_REQUEST_TYPE = object()
+
+
 def _json_request_type(request):
     if not request.body:
         return None
     try:
         payload = json.loads(request.body)
     except (TypeError, ValueError, UnicodeDecodeError):
-        return None
+        return _INVALID_REQUEST_TYPE
     if not isinstance(payload, dict):
-        return None
-    return payload.get("RequestType")
+        return _INVALID_REQUEST_TYPE
+    request_type = payload.get("RequestType")
+    # Missing type is valid for a profile read; malformed data is not. Avoid
+    # unhashable list/dict membership and never reinterpret bad data as a read.
+    if request_type is not None and not isinstance(request_type, str):
+        return _INVALID_REQUEST_TYPE
+    return request_type
 
 
 def is_read_only_user(user):

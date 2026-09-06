@@ -25,7 +25,7 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             user = models.PlatformUser.find(api_token=secure_key)
             if not user:
                 return None
-            
+
             enforce_viewer_access(user, request)
             request.csrf_processing_done = True
             user.api_access = True
@@ -33,14 +33,19 @@ class BRAVOAPIAuthentication(BaseAuthentication):
 
         elif "X-Secure-Auth-Token" in request.headers:
             auth_token = request.headers["X-Secure-Auth-Token"]
-            auth_record = models.AuthenticationTokens.objects.filter(token=auth_token, date__lte=models.current_time() + 3600*5).first()
+            # Auth.UserLogin records the creation time, not an expiry timestamp.
+            # Preserve the five-hour lifetime and reject future-dated records.
+            now = models.current_time()
+            auth_record = models.AuthenticationTokens.objects.filter(
+                token=auth_token, date__gte=now - 3600*5, date__lte=now,
+            ).first()
             if not auth_record:
                 return None
-            
+
             user = auth_record.user
             if not user:
                 return None
-            
+
             enforce_viewer_access(user, request)
             request.csrf_processing_done = True
             user.api_access = True
@@ -54,4 +59,3 @@ class BRAVOCSRFViewMiddleware(CsrfViewMiddleware):
         if "X-Secure-API-Key" in request.headers:
             return None
         return super().process_view(request, callback=callback, callback_args=callback_args, callback_kwargs=callback_kwargs)
-        

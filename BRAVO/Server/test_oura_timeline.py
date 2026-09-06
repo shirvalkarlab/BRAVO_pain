@@ -1,4 +1,5 @@
 """Independent synthetic contracts for the first-party Oura timeline."""
+import pytest
 import copy
 import json
 import tempfile
@@ -217,6 +218,7 @@ class TimelineTests(unittest.TestCase):
 
 
 
+@pytest.mark.usefixtures("synthetic_oura_policy")
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()

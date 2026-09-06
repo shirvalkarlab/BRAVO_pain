@@ -8,6 +8,8 @@ from modules import RCS08OuraFreshness as fresh
 from modules import Database, RCS08Sync
 from Server.management.commands.index_rcs08_oura_measurement import Command
 
+pytestmark = pytest.mark.usefixtures("synthetic_oura_policy")
+
 NOW = dt.datetime(2026, 9, 5, 12, tzinfo=dt.timezone.utc).timestamp()
 
 

@@ -11,6 +11,13 @@
       ".py"
     ],
     "critical_globs": [
+      "BRAVO/modules/PerceptPresentationPrivacy.py",
+      "BRAVO/modules/RCS08Exports.py",
+      "BRAVO/Server/management/commands/export_rcs08.py",
+      "BRAVO/Server/authentication.py",
+      "BRAVO/Server/Middlewares/ReadOnlyAccount.py",
+      "BRAVO/Server/Middlewares/LoopbackSecurity.py",
+      "BRAVO/Server/Middlewares/TransportCookies.py",
       "BRAVO/modules/AnalysisData.py",
       "BRAVO/modules/AnalysisJobs.py",
       "BRAVO/modules/FeatureAvailability.py",

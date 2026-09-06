@@ -14,6 +14,8 @@ from django.http import HttpResponse
 from filelock import FileLock, Timeout
 from rest_framework.renderers import JSONRenderer
 
+from modules.OURA import QualityControl
+
 VERSION = "aditya-integrated-reports-2"
 MAX_AGE = None  # Input revisions and processing/configuration keys determine freshness.
 _calculation_revision = ContextVar("report_revision", default=None)
@@ -31,7 +33,7 @@ def analysis_policy_identity():
     """
     module_root = Path(__file__).resolve().parent
     files = (module_root / "RCS08DataPolicy.py", module_root / "OURA" / "QualityControl.py",
-             module_root.parent / "config" / "rcs08_oura_exclusion_windows.csv")
+             QualityControl.POLICY_PATH)
     hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in files]
     return hashlib.sha256(json.dumps(hashes).encode()).hexdigest()
 
