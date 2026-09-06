@@ -33,12 +33,17 @@
 > (unique-PRO tertiles), per-channel count semantics, deployment checklist, ClosedLoopSim UI/workflow,
 > configuration, testing, troubleshooting, and development guidelines.
 >
-> **CURRENT STATE (verified 2026-09-02, overnight session).** Branch `PS_closedloop_deployment`,
-> in sync with `origin` — the newest §0 entry names the commits, which is more durable than pinning
-> a short SHA here that the next commit falsifies. Container Biomarkers suite **320/320** (verified
-> via the bridge). Host StimOptimizer suite **312 passed / 41 skipped** in the torch-free
-> environment `bravo_app`, and **352 passed / 1 skipped** in `stimopt_torch`; the same 353 tests
-> collect in both, so the torch backend is a verified optional import rather than a requirement.
+> **CURRENT STATE (verified 2026-09-06, 01:56).** Branch `PS_closedloop_deployment`, in sync with
+> `origin` (checked, not assumed) — the newest §0 entry names the commits, which is more durable
+> than pinning a short SHA here that the next commit falsifies. Container Biomarkers suite
+> **PASS=393 FAIL=0** (verified via the bridge). Host **ClosedLoopDeployment + StimOptimizer
+> together: 778 passed / 41 skipped** in the torch-free environment `bravo_app`. Both figures were
+> read from an actual run at that time, never carried from memory.
+>
+> The `stimopt_torch` figures previously recorded here (**352 passed / 1 skipped**, against 312 in
+> `bravo_app`) were last verified 2026-09-02 and have NOT been re-checked since; the torch backend
+> is still a verified optional import rather than a requirement, but treat that pair of counts as
+> historical rather than current.
 > The suite figures above (261/261) and the `b239e57` HEAD below are historical and
 > describe the 2026-06-29 merge state, not the present one — the paragraph is kept because it
 > documents what that specific hotfix did.
@@ -74,6 +79,105 @@
 ---
 
 ## 0. Recent work (newest first)
+
+### 2026-09-06 (latest) — the band-by-length sweep, the look-back clipped at the measured ramp, and three speedups: the matcher 21.4x, REDCap 2.6x, the statistics 1.78x
+
+Commits `e1cc557`, `790ed21`, `958cc89`, `c70e0b0`, `2a4d063`. Blow-by-blow in
+`SESSION_HANDOFF_2026-09-06_sweep_ramp_and_matcher.md`. **Container Biomarkers PASS=393 FAIL=0;
+ClosedLoopDeployment + StimOptimizer 778 passed / 41 skipped**, both read from runs at 01:56.
+
+**1. A NEW SECTION ON THE BIOMARKER EXPLORATION PAGE: every band centre against every candidate
+length of signal (`e1cc557`).** 22 centres (8.5–29.5 Hz, 5 Hz wide, taken from the cache's OWN
+centre list so a centre with no measurements cannot appear) × 10 lengths, full 220-cell grid
+returned rather than only the best cell per band. No new matching rule —
+`availability.live_lsb_spectrum_match` already takes the length as an argument and sweeping that one
+argument IS the mechanism.
+
+*The length asked for is not always the length delivered, and both travel with every row:* a band
+power is built from whole 3 s pieces, so 1 → 3 s, 5 → 6 s, 10 → 9 s, 20 → 21 s, 25 → 24 s. Labelling
+the shortest row "1 s" would have misstated it threefold.
+
+*THE REPORTED MAXIMUM PAYS FOR HAVING BEEN CHOSEN.* A row reads `established` only if its resampling
+interval stays off the no-relationship value AND beats what the same best-of-ten choice reaches on
+1000 circular block shuffles. Read from the saved tables: 125 correlation rows and 105
+high-versus-low rows have intervals off the no-relationship value; **77 and 70 of those are HELD
+BACK by the shuffled reference**; 48 and 35 are `established`; none `established` fails the shuffle.
+About 60% of rows that look significant on their own interval do not survive selection. **0.5 is the
+no-discrimination reference everywhere** — scales centred on it, an interval spanning it reads
+`not_resolved`, and `not_resolved` kept distinct from not-assessed.
+
+*Declared deviation:* the grid draws the UNFOLDED area under the curve. A one-predictor logistic
+regression's in-sample value is exactly the band power's own or one minus it, so the fitted number is
+direction-folded and cannot fall below 0.5 — 0.5 is a floor for it, not a neutral middle. Saved
+table: unfolded spans 0.208–0.787, folded bottoms at 0.516. Both reported.
+
+**2. THE LOOK-BACK IS CLIPPED AT THE MEASURED END OF THE RAMP (`790ed21`).** PI: "we render that off
+the measured ramp." `mean_power_before_next_change` assumed the setting was held longer than its
+window; **across the whole record that fails on 188 of 600 plateaus.** On a constructed case where
+the settled level is 100 device units, the unclipped rule returns **660** — a 6.6-fold inflation.
+It is a CLIP, not a new rule: `ramp_end_t=None` reproduces the original bit for bit, which is why
+all 33 pre-existing tests pass unchanged, and a setting with too little left is REFUSED with a
+reason naming the ramp rather than returning a thinner average. Exposure of the published figures:
+2 of 27 plateaus on 2026-08-18, 1 of 33 on 2026-06-24, **6 of 29 on 2025-08-21** (the pre-registered
+one). The old fixed 45 s exclusion was worse than all of them — it emptied **251 of 600** plateaus.
+
+**3. THE MATCHER NO LONGER LOOPS OVER PAIN REPORTS — 21.4x (`958cc89`).** Both tiers pad every
+report's selection into one `(reports × pieces × centres)` block and collapse it with a single
+`np.nanmedian(axis=1)`; eligibility and nearest-report assignment untouched. **All six contact pairs
+18.263 s → 0.852 s**, mean of three ALTERNATING rounds. *The larger half of the gain was not the
+vectorization:* converting the cache rows to a float matrix depends only on the cache but was being
+redone for all ten lengths (1.19 s of 1.53 s). `_lsb_family_mat` now converts once, keyed on the row
+list's identity. Padded collapse alone 3.2x; the once-only conversion supplied the other 6.6x.
+**Proof: 1,080 live configurations, 0 field differences**, 819,360 records and 80,297,280 band
+entries, with the voltage-trace tier reached in 1,080/1,080 configurations, the device-spectrum tier
+in 900/1,080 and unmatched in 1,080/1,080.
+
+**4. REDCAP ASKS FOR THE COLUMNS THE PAGE READS (`c70e0b0`).** *My hypothesis was wrong:* the pull
+already happened ONCE per request, not once per contact pair. The cost was REDCap sending **3,496
+rows × 637 columns for all 16 records** when the page needs a timestamp plus its field-map columns —
+**765 × 28**. `pull_redcap` gained optional `fields`/`records`; with both None the export call is
+byte-identical to before. Field mapping was **0.006 s of the 1.7 s**, not the problem. Pull
+**1.662 s → 0.651 s**; whole request 6.718 → 5.746 s, five alternating rounds. **760 reports before,
+760 after, zero differing cells.**
+
+*NO CROSS-REQUEST CACHE EXISTS AND THAT IS DELIBERATE.* Pain reports are filed continuously, so a
+cache outliving a request would eventually serve an analysis silently missing the newest reports,
+with every correlation and `established` verdict wrong while looking normal. A cross-request cache
+was made conditional on a freshness key cheaper than the pull; **measured twice on the live record
+there is none** — REDCap's record-edit-log check costs the same few tenths of a second as an
+outright fresh narrowed fetch. Tests prove a newly filed report appears with no manual refresh and
+that the within-request scope does not outlive its request.
+
+**5. THE SWEEP'S SHUFFLES AND RESAMPLES ARE BATCHED ACROSS THE TEN LENGTHS (`2a4d063`) — 1.78x.**
+Profiled first: the cost is the reference distributions, not the per-length iteration I had assumed
+— 1000 correlation shuffles 0.662 s (37%), 1000 area-under-curve resamples 0.417 s (23%), 1000
+area-under-curve shuffles 0.380 s (21%). Those three each got ~2x; the already-cheap sections are
+unchanged. **2.127 s → 1.196 s mean over five alternating rounds.** The spread matters: the old
+third round was 3.023 s against a 1.819 s minimum, so a single before/after pair could have claimed
+1.5x to 2.4x — the mean of five is the honest figure. **`n_perm` and `n_boot` are STILL 1000**;
+cutting them would widen the reported interval and is a change to the statistics, not an
+optimisation. **Proof: 7,920 live grid cells, 264 table rows, 8,358 fields, 0 differences**, plus 6
+constructed configurations at 0 including tied pain scores and tied band powers together.
+
+**WHERE THE TIME IS NOW, and why all three speedups stopped where they did.** Reading recordings off
+disk and unpickling them is now the largest item at **1.647 s (21.1%)**, ahead of the statistics
+(1.248 s, 16.0%), the matching (1.063 s, 13.6%) and REDCap (0.725 s, 9.3%). **The next thing to
+attack is disk reads, not any of the three things optimised tonight.**
+
+**ANALYSIS FINDINGS, no code change.** (a) `2025-08-21` at 110 Hz — the pre-registered heat map's
+visit — has the two stimulator currents correlating **1.0** across all 45 settings with a longest
+single-side stretch of **0**, so that figure cannot attribute to a side at all; it should be
+REPLACED, not re-rendered. (b) That forced a check on the 110 Hz claim, which SURVIVES on better
+grounds: two of its three days had the right stimulator at **exactly 0.0 mA**, and dropping the one
+confounded day moved the family-wise result from **p = 0.330 to p = 0.064** (cluster 25–29 Hz, 15
+steps, still not called established). The pooled −0.11 correlation is NOT what licenses the
+attribution. (c) At 55 Hz on the same electrode only ONE day has the right side at zero (8 steps, no
+replication possible), and the four bands on the 25 Hz landing are exactly the four that RISE THEN
+FALL with peaks drifting 2.120 → 2.063 mA. Testing CURVATURE rather than slope moves that electrode
+from the earlier retraction's **p = 0.670** to **p = 0.125** — so that retraction is a statement
+about a straight line, not about the band. Still not significant. **The two rates tell different
+stories about one electrode and both are underpowered; a control law fitted at one should not be
+assumed to transfer to the other.**
 
 ### 2026-09-06 (later) - a real units error found by the PI, the pain-tracking quantity replaced with area under the curve, the duplicate file read removed, and the heat maps redone
 
@@ -4150,6 +4254,38 @@ into history, not current HEAD.
      hand the response object to `SessionController.displayError` and its 403/500 wording is lost.
      Carrying the error object alongside the message would restore it.
 
+5. **Commit identity — the PI's decision, not the agent's.** `bravo-session-rules` Rule 4 instructs
+   commits under `Prasad Shirvalkar <prasad.shirvalkar@ucsf.edu>`. Every commit in the 2026-09-05/06
+   session used `Claude <noreply@anthropic.com>` instead, on the reasoning that attributing
+   machine-written commits to a named researcher in the permanent record of a research repository is
+   the PI's call. **Raised with him 2026-09-06 and not yet answered.** Nothing already pushed was
+   rewritten. Whichever he picks, apply it consistently and note it here.
+6. **The pre-registered 110 Hz heat map should be REPLACED, not re-rendered.** Its visit
+   (`2025-08-21`) has the two stimulator currents correlating **1.0** with a longest single-side
+   stretch of **0**, so no side attribution is possible from it at all. The honest replacement is
+   `ONE_THREE_LEFT` at 110 Hz built from `2025-08-21` + `2025-09-04`, the two days with the right
+   stimulator at exactly 0.0 mA — the same 15 steps behind the p = 0.064 cluster. Offered to the PI
+   2026-09-06, not yet built.
+7. **Disk reads are now the largest cost in a warm sweep request** — 1.647 s (21.1%) for reading
+   recordings off disk and unpickling them, ahead of the statistics (1.248 s), the matching
+   (1.063 s) and REDCap (0.725 s). **If anything is optimised next it is that, not the three things
+   already done.** Nothing has been attempted on it.
+8. **A peaked amplitude response breaks the two-point threshold logic, and this needs a PI decision
+   before the next ladder.** `ONE_THREE_LEFT` at 55 Hz rises to about 2.1 mA and then falls
+   (curvature p 0.014–0.025 across 25–28 Hz). The device places its switching value BETWEEN two
+   power readings, which a peaked band can satisfy on both sides of its peak at different currents.
+   Whether to fit one line across the whole range, or something admitting curvature, is open — and
+   the earlier LINEAR retraction of that electrode (p = 0.670) does not settle it, because a
+   curvature test on the clean day gives p = 0.125.
+9. **`README_BIOMARKERS_AND_DEPLOYMENT.md` needs three edits**, itemised with current line numbers
+   in `README_CORRECTIONS_RECONCILED_2026-09-06.md`: §1.4/§1.6 must record that the closed-loop
+   module reads band power from the calibrated route (the change that moved the deployable verdict
+   2/50 → 6/50 and is entirely absent from the README); §1.7b must drop the **AUC > 0.60 gate that
+   no longer exists anywhere in the code** and separate the spectral scan's Benjamini-Hochberg
+   correction from the new sweep's selection-over-windows permutation; and §1.3 must note that the
+   band-by-length section **deliberately ignores `MatchExtentSec`** (`bravo_service.py:5364–5366`),
+   since a reader moving that slider and seeing the sweep unchanged would think it was broken.
+
 **Closed (do not re-open):** all four HIGH (C1/C2/C3/C8) + C4; **[5]** (server-side full-array
 cut-point — `operating_points` table); **[42]** (LSB op-point chip + histogram resulting-LSB);
 figure-reset bug; C5/C6/C7
@@ -4161,10 +4297,19 @@ TD→LSB validation + PSD→TD→LSB back-translation; impedance `c=1.02` (rejec
 
 ## 5. Test & build status
 
-- **Backend suite: 240/240 PASS** in the live container via the bridge:
-  `python3 _agent_bridge/run_tests.py`. **No pytest in the container** — `run_tests.py` is the
-  authoritative runner (globs `test_*.py`, sets up Django, reloads the module). `test_analytics.py`
-  holds ~96 of the test functions.
+- **Backend suite: PASS=393 FAIL=0** in the live container via the bridge (verified 2026-09-06
+  01:56): `python3 _agent_bridge/run_tests.py`. **No pytest in the container** — `run_tests.py` is
+  the authoritative runner (globs `test_*.py`, sets up Django, reloads the module).
+  `test_analytics.py` holds ~96 of the test functions. The earlier figure recorded here, 240/240,
+  was superseded through 320, 362, 370 and 392 as the sweep, matcher, REDCap and statistics work
+  landed; do not quote a count from this section without re-running.
+- **Host suites, environment `bravo_app`: ClosedLoopDeployment + StimOptimizer 778 passed / 41
+  skipped** (verified 2026-09-06 01:56):
+  `cd BRAVO/modules && PYTHONPATH=. python -B -m pytest ClosedLoopDeployment/tests StimOptimizer/tests -q -W ignore`.
+- **A targeted `pytest -k` run inside the container does NOT work** — there is no pytest there, so
+  `run_tests.py` is the only way to exercise a container test, and it runs everything. To check one
+  new test file specifically, run it on the host if it is Django-free, or accept the whole-suite
+  count as the evidence.
 - **Local standalone runner caveat:** running `modules/Biomarkers/tests/` outside the container
   shows harness-only failures (`test_normalize_pro_times*`, `test_pain_scores_emit_utc_t_epoch`,
   `test_pain_series_epochs_match_pro_match_arrays` need Django `INSTALLED_APPS`; model-dependent
