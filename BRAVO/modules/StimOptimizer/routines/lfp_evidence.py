@@ -87,6 +87,111 @@ def _to_utc(values, *, unit="s"):
 LOG_SCALES = {"db10": 10.0, "log10": 1.0}
 DEFAULT_LOG_SCALE = "db10"
 
+# =================================================================================================
+# PUTTING THIS MODULE'S BAND POWER ONTO THE DEVICE'S OWN NUMBER SCALE
+# =================================================================================================
+# THE PROBLEM, found 2026-09-06 because the PI said the closed-loop page's numbers looked wrong.
+# He was right. He said they "shouldn't span values of one to nine, they should be in the hundreds
+# minimum and often probably in the thousands", and as shipped they spanned about 0.04 to 27.
+#
+# ``band_power_linear`` below undoes the stored logarithm and integrates power density across the
+# band. Its own docstring says that gives the device's quantity "up to a fixed scale factor" -- and
+# THAT FACTOR WAS NEVER APPLIED ANYWHERE. There was a constant for it,
+# ``ClosedLoopDeployment.constraints.LFP_POWER_LSB_TO_UV2 = 0.01``, but the only thing in the whole
+# repository that touched it was one test asserting its value; no production code multiplied by it.
+# So every band power this module produced was the device's quantity divided by roughly two hundred,
+# and it was labelled as being in the device's units.
+#
+# WHY A CONSTANT IS THE RIGHT SHAPE OF FIX, AND WHY IT CHANGES NO CONCLUSION. The lab's own
+# calibration note (Biomarkers/routines/analytics.py, above LSB_PER_UV2_TRANSFORM) sets this out:
+# the scale factor is multiplicative on the whole feature column, so within a single-source feature
+# it CANCELS inside a correlation or an area under the curve, and it cancels inside any standardised
+# effect size. It matters for exactly two things -- the absolute values displayed, and any comparison
+# against a threshold programmed in the device's units. Both of those are what the PI is asking
+# about. So applying it corrects the displayed scale and the threshold arithmetic while leaving every
+# slope sign, p-value and verdict in this module untouched.
+#
+# WHY NOT THE LAB'S EXISTING CONSTANTS. ``LSB_PER_UV2_TRANSFORM = 352.62`` is calibrated for a
+# DIFFERENT signal-processing recipe -- its note names it precisely: "RC+S-Hann / 256-pt zero-padded
+# FFT / peak-amplitude / mean-magnitude band power", reproduced bit-for-bit. This module does
+# something else: it exponentiates a dB10 power DENSITY and integrates it over the band. A different
+# reduction has a different constant, and nobody had ever measured this one.
+# ``LFP_POWER_LSB_TO_UV2 = 0.01`` (i.e. 100) descends from ``LSB_RULE_OF_THUMB``, whose own comment
+# calls it "carried here only as the schema default".
+#
+# HOW THIS NUMBER WAS MEASURED, on RCS08's own record, on 2026-09-06.
+# Two independent references, on rows matched by electrode, band centre AND moment (within 2 s):
+#
+#   (a) against the band power derived from the raw samples -- the scale the platform's exploration
+#       pages display -- 4,555 paired rows: median factor 216.6, and stable across band centres
+#       (215.2, 214.2, 216.1, 215.5, 221.7 for 12.5/17.5/22.5/24.5/27.5 Hz) and across all six
+#       electrodes (207.1 to 219.6).
+#
+#   (b) against the DEVICE'S OWN reported LFP Power -- 6,835 paired rows. Four of the six electrodes
+#       agree tightly with (a): ZERO_THREE_LEFT 218, ZERO_TWO_RIGHT 215-223, ONE_THREE_RIGHT 202-213,
+#       ZERO_TWO_LEFT 204-212, with a 10th-to-90th spread as narrow as 1.23x on two of them, which is
+#       comparable to the 1.19x fold error the lab's own transform calibration reports.
+#
+# Two independent references converging on about 215 is the reason for the value below.
+#
+# THE HONEST LIMITATION, recorded here because it is not resolved and must not be forgotten.
+# The other TWO electrodes in reference (b) disagree, and they disagree in a structured way rather
+# than noisily: ONE_THREE_LEFT gives 85, 70, 57, 54, 51 and ZERO_THREE_RIGHT gives 62, 46, 36, 33,
+# 29 across those same five band centres -- both FALLING with frequency, with 10th-to-90th spreads
+# up to 14.8x. Those two are precisely the electrodes with the most device-reported windows (797 and
+# 384, against 251-294 for the rest), which is a hint rather than an explanation: the device reports
+# LFP Power for the ONE band it was configured to sense, and reading its value at other band centres
+# is not the same thing as the device having measured them. Until that is understood, a value from
+# this module carries a genuine uncertainty of roughly a factor of two on those two electrodes, and
+# should not be compared against a programmed threshold there without checking it against the
+# device's own reading for that specific band. This does not affect any sign, slope or verdict, for
+# the cancellation reason above.
+#
+# WHY THERE IS NO NEW CONSTANT HERE, AND WHY MY FIRST ATTEMPT AT ONE WAS WRONG.
+#
+# I initially set a constant of 215 here, measured tonight by matching rows between two
+# representations of this participant's signal. The PI asked why the lab's existing calibration was
+# not being used instead. Reading HANDOFF_TD_LSB_calibration_2026-06-27.md settled it against me,
+# and the reasons are worth keeping because they are easy to walk back into.
+#
+# FIRST, A WRITTEN DECISION FORBIDS IT. That handoff records, as an architecture decision of the PI
+# dated 2026-06-27 and marked "no open option": the deployable source of truth for band power in the
+# device's units is the TD transform route with k = 352.62, and it is "the PRIMARY way LSB is
+# computed for both the exploratory panels and the deployment fallback -- NOT a second DSP to
+# maintain". It names both consumers explicitly, and one of them is this module. The whole purpose
+# of that decision was to REMOVE a split in which one path silently used a different recipe and a
+# different constant from the lab's headline model. Adding a fifth recipe with a fifth constant
+# would rebuild exactly the split the decision exists to eliminate.
+#
+# SECOND, THAT HANDOFF ALREADY CATALOGUES MY MISTAKE BY NAME. Its "ERROR 3 -- Conflating the two
+# scale constants" records that each signal-processing recipe has its OWN constant: the transform
+# route gives 352.62, welch256 gives 270.22, welch250 gives 265.17, and a per-window variant gives
+# 326. So a new number for a new recipe is not automatically a discovery; it is the predictable
+# consequence of using a recipe nobody calibrated.
+#
+# THIRD, AND DECISIVELY, MY MEASUREMENT WAS NOT GOOD ENOUGH TO STAND ON. The lab's transform
+# calibration reports r = 0.9927, RMSE 60.6 device units, and a median fold error of 1.092 with 93.9%
+# of blocks inside 1.5x. My paired ratio gave a median fold error of 2.70x with one constant, and
+# even with a separate constant per electrode and band the 90th percentile was 4.14x and the worst
+# case 13.9x. That handoff's "ERROR 1" states the diagnostic plainly: if a pairing does not
+# reproduce k = 352.6 with r = 0.9927 then the pairing itself is wrong, because non-coincident or
+# wrong-product pairing drops the correlation to about 0.13. Mine did not reproduce it, so the honest
+# reading is that 215 measured my pairing error, not a property of the device.
+#
+# WHAT THE ACTUAL FIX IS. Band power in this module must come from the calibrated route rather than
+# from integrating a stored decibel power density, which is what ``band_power_linear`` below does and
+# which no calibration covers. The calibrated helper already exists and its own docstring describes
+# it as "One helper, one constant, used by both the Biomarker exploration panels and the deployment
+# modeled fallback": ``Biomarkers.routines.analytics.td_to_lsb``, which applies the transform recipe
+# (mean-detrend, rcs-Hann taper, zero-pad to 256, real FFT, peak scale, sum of squared magnitude over
+# the band) and multiplies by 352.62. The 3-second tiles held in the Biomarkers raw cache are that
+# same quantity already computed, which is why the platform's own pages read in the hundreds to
+# thousands while this module read in single digits.
+#
+# Until this module is switched onto that route, its band power is proportional to the device's
+# quantity but NOT on the device's scale, and the docstring of ``band_power_linear`` says so. Nothing
+# should compare a value from here against a threshold programmed in device units.
+
 
 def band_power_linear(log_psd, freqs, center_hz, width_hz, *, log_scale=DEFAULT_LOG_SCALE):
     """Device-style band power from a LOG power spectrum: linearise, then integrate over the band.

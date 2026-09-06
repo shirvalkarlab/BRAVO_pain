@@ -136,6 +136,28 @@ GENERAL_ENVELOPE = {
 
 #: D11. One unit of LFP Power is approximately this many microvolts squared. LFP Power is a linear
 #: sum of squared magnitude, so this conversion is a scaling and not a log transform.
+#:
+#: DO NOT USE THIS TO CONVERT THIS PROJECT'S BAND POWER, and note that nothing does. Corrected
+#: 2026-09-06 after the PI asked whether the closed-loop page's numbers were on the right scale.
+#: Three separate things were true and are worth keeping apart.
+#:
+#: FIRST, this number is a rule of thumb, not a calibration. It descends from
+#: ``Biomarkers.bravo_service.LSB_RULE_OF_THUMB``, whose own comment says it is "carried here only
+#: as the schema default". It is recorded here because the device programming guide quotes it, so it
+#: belongs in a ledger of what the device's documentation says -- which is what this file is for.
+#:
+#: SECOND, no production code has ever multiplied by it. The only thing in the repository that
+#: touches it is one test asserting its value. It is a documented device fact, not a working
+#: conversion, and reading it as the latter is the mistake that made the page's numbers wrong.
+#:
+#: THIRD, the conversion this project actually needs is a different quantity measured for a
+#: different signal-processing recipe, and it lives with the code that needs it:
+#: ``StimOptimizer.routines.lfp_evidence.DEVICE_UNITS_PER_INTEGRATED_BAND_POWER``. That one was
+#: measured on RCS08's own paired recordings in 2026-09-06 and its provenance, its agreement across
+#: two independent references, and the two electrodes where it is NOT trustworthy are all written
+#: out at the top of that module. The lab's third constant, ``LSB_PER_UV2_TRANSFORM = 352.62``, is a
+#: fourth quantity again -- calibrated for the Hann-windowed 256-point zero-padded transform route,
+#: not for integrating a power density.
 LFP_POWER_LSB_TO_UV2 = 0.01
 
 #: D46. Snapshot and event capacity, after which the oldest snapshots are overwritten silently.

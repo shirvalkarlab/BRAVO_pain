@@ -311,7 +311,18 @@ def test_matrix_to_evidence_round_trip_uses_the_db_convention():
                                 rate_hz=165.0, bands=[(20.0, 5.0)])
     assert ev is not None and aud.n_final > 0
     bp = ev.power_for(20.0, 5.0)
-    # logX is a flat -1 dB, so linear power density is 10**(-0.1) per bin over 5 bins at 1 Hz
+    # THE DECIBEL CONVENTION, which is what this test is named for. The fixture's spectrum is a flat
+    # -1 dB, so undoing the logarithm the db10 way gives a linear power density of 10**(-0.1) in
+    # every bin, and five one-hertz bins across the band sum to 5 * 10**(-0.1). Reading the stored
+    # value as a plain base-ten logarithm instead would give 5 * 10**(-1) -- a tenfold error that
+    # this comparison catches and that would not raise anywhere else.
+    #
+    # NOTE, 2026-09-06: for part of one night this expectation carried a unit-conversion factor as
+    # well, because I had added one here. It was removed after HANDOFF_TD_LSB_calibration_2026-06-27
+    # showed that a new constant for this recipe contradicts a written architecture decision and
+    # that my measurement of it was not sound. This value is therefore the INTEGRATED POWER DENSITY
+    # and is deliberately NOT on the device's own number scale; see the block at the top of
+    # lfp_evidence.py for what that means for anything downstream.
     assert bp[0] == pytest.approx(5 * 10 ** (-0.1), rel=1e-6)
 
 
