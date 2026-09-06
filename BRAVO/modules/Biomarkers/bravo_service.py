@@ -19,6 +19,9 @@ import math
 import logging
 import threading
 import time as _time
+import contextlib as _contextlib
+import contextvars as _contextvars
+import functools as _functools
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -2007,6 +2010,79 @@ def _resolve_field_map(request_data, participant):
     return request_data.get("RedcapFieldMap") or _load_pt_config(participant, request_data)
 
 
+def _redcap_narrow_pull_enabled():
+    """Whether to request only the columns the patient field map consumes (the default).
+
+    Set BRAVO_REDCAP_NARROW_PULL=0 to send the full-project export request instead. This is a
+    switch for a REDCap-side surprise, NOT a freshness switch: both settings go to the server on
+    every request and neither can return a report that is out of date.
+    """
+    return str(os.environ.get("BRAVO_REDCAP_NARROW_PULL", "1")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+# WITHIN ONE REQUEST ONLY. This holds the pain reports already fetched during the request being
+# served, so a request whose panels ask for them twice fetches them once. It is a ContextVar set
+# and cleared by `_pro_scoped` around each endpoint, so it cannot outlive the request that filled
+# it and therefore cannot serve a report set that is missing a newly filed report. THERE IS NO
+# CROSS-REQUEST CACHE HERE, DELIBERATELY -- see the note on `_pro_scoped`.
+_PRO_REQUEST_CACHE = _contextvars.ContextVar("bravo_pro_request_cache", default=None)
+
+
+@_contextlib.contextmanager
+def pro_request_scope():
+    """Open the within-request pain-report scope; reentrant, so nesting shares the outer scope.
+
+    NO CROSS-REQUEST CACHE IS BUILT, ON PURPOSE. Patients and clinicians file pain reports
+    continuously, so a cache that outlived a request would eventually hand a biomarker analysis a
+    report set that is one report short, with no error to show for it. Measured on the live record,
+    a cross-request cache could not pay for itself either. The cheapest check that could prove a
+    remembered report set still complete is REDCap's own record-edit log,
+    `export_logging(log_type="record", begin_time=...)`. On the live RCS08 record that check and
+    an outright fresh fetch of the reports, narrowed to the columns the field map consumes, cost
+    the same to within the run-to-run scatter of the network -- both a few tenths of a second. So a
+    cross-request cache would buy nothing and could hand back a pain-report table one report short.
+    That trade is not worth taking. `_agent_bridge/_sync_redcap/_rc_probe2.py` is the script that
+    times both; re-run it for current numbers rather than trusting a figure quoted here, since they
+    move with the network.
+    """
+    existing = _PRO_REQUEST_CACHE.get()
+    if existing is not None:
+        yield existing
+        return
+    token = _PRO_REQUEST_CACHE.set({})
+    try:
+        yield _PRO_REQUEST_CACHE.get()
+    finally:
+        _PRO_REQUEST_CACHE.reset(token)
+
+
+def _pro_scoped(fn):
+    """Run one endpoint inside `pro_request_scope`."""
+    @_functools.wraps(fn)
+    def inner(*args, **kwargs):
+        with pro_request_scope():
+            return fn(*args, **kwargs)
+    return inner
+
+
+def _pro_scope_key(request_data, participant):
+    """Identity of a pain-report fetch inside one request: everything `_load_pros_raw` reads.
+
+    Returns None when the fetch must not be shared (an inline `ProcessedPRO` is already in memory,
+    so there is nothing to save by remembering it).
+    """
+    if request_data.get("ProcessedPRO"):
+        return None
+    field_map = _resolve_field_map(request_data, participant)
+    try:
+        fm = json.dumps(field_map, sort_keys=True, default=str) if field_map else None
+    except Exception:
+        return None
+    return (str(request_data.get("RedcapRecordId")), str(request_data.get("PtConfig")),
+            str(getattr(participant, "uid", None) or getattr(participant, "name", None)), fm)
+
+
 def _load_pros(request_data, participant=None):
     """Resolve the tidy PRO DataFrame (canonical columns: `date_time_s1_daily`, `nrs`, `vas`, ...),
     NORMALIZED to a canonical UTC time column at this single ingestion choke-point.
@@ -2018,9 +2094,20 @@ def _load_pros(request_data, participant=None):
     string un-representable downstream, we compute the correct UTC instant ONCE here, in a derived
     `_pro_time_utc` column, and every reader (`_pro_match_arrays`, `availability.pain_series`,
     `pain_scores_for_participant`, ...) consumes that column instead of re-localizing.
+
+    Inside `pro_request_scope` the answer is remembered FOR THAT REQUEST ONLY, so a request that
+    asks twice fetches once. A hit hands back its own copy, so one panel adding a column cannot
+    disturb another.
     """
-    df = _load_pros_raw(request_data, participant)
-    return _normalize_pro_times(df)
+    cache = _PRO_REQUEST_CACHE.get()
+    key = _pro_scope_key(request_data, participant) if cache is not None else None
+    if key is not None and key in cache:
+        got = cache[key]
+        return got.copy() if got is not None else None
+    df = _normalize_pro_times(_load_pros_raw(request_data, participant))
+    if key is not None:
+        cache[key] = df.copy() if df is not None else None
+    return df
 
 
 def _load_pros_raw(request_data, participant=None):
@@ -2037,10 +2124,37 @@ def _load_pros_raw(request_data, participant=None):
     if request_data.get("ProcessedPRO"):
         return pd.DataFrame(request_data["ProcessedPRO"])
     if os.environ.get("REDCAP_API_URL") and os.environ.get("REDCAP_API_TOKEN"):
-        df = redcap_client.pull_redcap()  # token via env vars
         field_map = _resolve_field_map(request_data, participant)
         if field_map:
+            # ASK REDCAP FOR LESS, DO NOT REMEMBER ANYTHING. Every request still goes to the
+            # server, so a pain report filed a second ago is in the answer; the only change is
+            # that we request the 24 columns of this participant's daily pain survey instead of
+            # all 637 columns of every participant. Measured on the live RCS08 record: 1.386 s
+            # for the full export against 0.292 s for the narrowed one, producing a pain-report
+            # table with the same 760 rows, the same columns and zero differing cells.
+            fields, records = redcap_client.redcap_fields_for_field_map(field_map)
+            df = None
+            if fields and _redcap_narrow_pull_enabled():
+                try:
+                    df = redcap_client.pull_redcap(fields=fields, records=records)
+                    # A patient field map whose timestamp column is a survey-generated field
+                    # cannot be requested by name. If the narrowed export came back without the
+                    # column `process_redcap` needs, fall back to the full export rather than
+                    # let the pain reports come out short or raise at the caller.
+                    if field_map.get("timestamp_label") not in getattr(df, "columns", []):
+                        _log.warning(
+                            "Biomarkers: the narrowed REDCap request did not return the report "
+                            "timestamp column %r, so the full export is being used instead.",
+                            field_map.get("timestamp_label"))
+                        df = None
+                except Exception as e:
+                    _log.warning("Biomarkers: the narrowed REDCap request failed (%s); falling "
+                                 "back to the full export.", e, exc_info=True)
+                    df = None
+            if df is None:
+                df = redcap_client.pull_redcap()  # token via env vars
             return redcap_client.process_redcap(df, field_map)
+        df = redcap_client.pull_redcap()  # token via env vars
         df = df.reset_index()
         rid = request_data.get("RedcapRecordId")
         if rid is not None and "record_id" in df.columns:
@@ -2803,6 +2917,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                 "montage_events": {"events": [], "n": 0}, "psd_scan_index": []}
 
 
+@_pro_scoped
 def availability_for_participant(request_data):
     """Lightweight DATA-AVAILABILITY payload for one participant — no biomarker computation.
 
@@ -2866,6 +2981,7 @@ def availability_for_participant(request_data):
             "label_metric": label_metric, "message": msg}
 
 
+@_pro_scoped
 def run_for_participant(request_data):
     """Assemble inputs from the DB + REDCap and run the biomarker pipeline for one participant.
 
@@ -3541,6 +3657,7 @@ def _band_decide_verdict(g, h):
     return "VALIDATED (stim-stable)"
 
 
+@_pro_scoped
 def _validate_band_core(request_data):
     """Shared heavy-lifting core for the per-band validation + BandCandidate emission.
 
@@ -5276,6 +5393,7 @@ def deployment_summary(request_data):
     }
 
 
+@_pro_scoped
 def pain_scores_for_participant(request_data):
     """Return the participant's pain-score reports over time, per metric, JSON-able for the card.
 
