@@ -184,8 +184,20 @@ function in `StimOptimizer/routines/within_visit.py` alongside the old one (whic
 fixed deployment rate. Left stepped 1.0 to 3.5 mA with the right at 0.0 mA throughout (6 of 8 settings
 accepted), then the right stepped 0.5 to 3.0 mA with the left at 0.0 mA (5 of 7 accepted), about
 fifteen minutes apart. Correlation between the two sides across that visit is -0.012, against 0.98 on
-2026-06-24. Of 54 visit-and-rate combinations searched, more than thirty have a correlation of 1.0 or
-above 0.99 -- the stimulators were moved in lockstep -- and only six have a usable single-side stretch.
+2026-06-24.
+
+COUNTS CORRECTED 2026-09-06 against the saved table `onesided_current_visit_search_RCS08.csv` after
+a reviewer caught me restating the sub-agent's prose without checking it. The table has **53** data
+rows, not 54. **33** have a correlation of 0.99 or above (27 of them exactly 1.0) -- stimulators
+moved in lockstep, so no change can be attributed to one side -- and **12** have no correlation
+defined at all, because one side never moved across the whole block so there is no spread to
+correlate. **SEVEN** rows have a single-side stretch of at least 4 settings, not six: 2026-04-16 at
+55 Hz (9 settings, right side moved 0-1.6 mA, left held at 0), 2026-08-18 at 10 Hz and at 55 Hz
+(8 each, left moved 0-3.5 mA, right held at 0), 2026-06-24 at 55 Hz (7, right moved 2.6-3.0 mA but
+the two sides correlate at 0.98 across the visit so this one is NOT clean), 2026-09-02 at 55 Hz
+(7, right moved 1.9-3.0 mA, left held at 3.5), 2026-09-02 at 110 Hz (6, left moved 1.0-2.5 mA, right
+held at 2.0), and the at-home session of 2026-03-31 at 55 Hz (4, right moved 0-1.6 mA, left held at
+0). Six rows have a stretch of at least 6 settings, which is probably where the "six" came from.
 
 **NINE OF TWENTY BANDS ARE MEASURING THE STIMULATOR, NOT THE BRAIN.** At 55 Hz with sampling at 250
 per second the stimulator and its folded multiples land at 25, 30, 55, 60, 80, 85, 110 and 115 Hz.
