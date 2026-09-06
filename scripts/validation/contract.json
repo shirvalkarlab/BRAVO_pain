@@ -76,7 +76,9 @@
         "_raw_lsb_shared_path",
         "_raw_lsb_shared_load",
         "_raw_lsb_shared_store",
-        "_raw_lsb_cache_cached"
+        "_raw_lsb_cache_cached",
+        "_raw_lsb_signature.DigestWriter.write",
+        "_raw_lsb_shared_store.BoundedWriter.write"
       ],
       "BRAVO/modules/StimOptimizer/adapter.py": [
         "_unambiguous_group_settings",
