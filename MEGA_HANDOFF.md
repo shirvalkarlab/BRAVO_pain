@@ -33,12 +33,15 @@
 > (unique-PRO tertiles), per-channel count semantics, deployment checklist, ClosedLoopSim UI/workflow,
 > configuration, testing, troubleshooting, and development guidelines.
 >
-> **CURRENT STATE (verified 2026-09-06, 01:56).** Branch `PS_closedloop_deployment`, in sync with
+> **CURRENT STATE (verified 2026-09-06, 04:45).** Branch `PS_closedloop_deployment`, in sync with
 > `origin` (checked, not assumed) — the newest §0 entry names the commits, which is more durable
 > than pinning a short SHA here that the next commit falsifies. Container Biomarkers suite
-> **PASS=393 FAIL=0** (verified via the bridge). Host **ClosedLoopDeployment + StimOptimizer
-> together: 778 passed / 41 skipped** in the torch-free environment `bravo_app`. Both figures were
-> read from an actual run at that time, never carried from memory.
+> **PASS=420 FAIL=0**. Host **ClosedLoopDeployment + StimOptimizer together: 779 passed / 41
+> skipped / 0 failed**, environment `bravo_app`. Both read from runs at that time, never carried
+> from memory.
+>
+> The `stimopt_torch` figures previously recorded here (**352 passed / 1 skipped**) have NOT been
+> re-checked since 2026-09-02 and are historical, not current.
 >
 > The `stimopt_torch` figures previously recorded here (**352 passed / 1 skipped**, against 312 in
 > `bravo_app`) were last verified 2026-09-02 and have NOT been re-checked since; the torch backend
@@ -79,6 +82,65 @@
 ---
 
 ## 0. Recent work (newest first)
+
+### 2026-09-06 (latest) — the Biomarker tile cache shared across worker processes, the decode-pathway review, and a regression of mine caught by measuring something else
+
+Commits `2bef090`, `b657968`, `931cb81`. Detail in
+`SESSION_HANDOFF_2026-09-06_sweep_ramp_and_matcher.md` §4c and §4d. **Container Biomarkers PASS=420
+FAIL=0; ClosedLoopDeployment + StimOptimizer 779 passed / 41 skipped / 0 failed.**
+
+**1. THE BIOMARKER MODULE'S 3-SECOND TILE CACHE IS NOW SHARED BETWEEN WORKER PROCESSES
+(`2bef090`).** The PI reported it "spends considerable time reloading" with no new recordings, and
+the cause was cache SCOPE, not a missing cache. Timed stage by stage in a fresh process, **cutting
+the recording history into 3 s tiles and computing a 98-band spectrum for each is 37.09 s** of the
+cold request; everything else is small (decode 1.55 s, montage/survey 0.36 s, event spectra 0.35 s,
+REDCap 0.86 s, all statistics 2.34 s). Those tiles lived in a per-process memo and there are **four
+workers with reload on**, so the 37 s was paid by the first request to reach each worker and by all
+four again after any Python edit. **Fresh process with the shared file present: 42.83 s → 6.06 s.**
+The cold build costs 2.45 s more, paid once per ingest rather than once per worker per reload.
+Warming is wired into the existing ingest hook, so the FIRST page view after an upload is fast.
+
+**THE LANE REFUSED MY KEY DESIGN AND WAS RIGHT.** I briefed it to key the file on the recordings AND
+the pain-report set. The tiles know nothing about any rating and serve every pain score, so keying on
+the report set would have discarded a 37 s build every time a report was filed — continuously — for
+tiles that were still correct. Proven both ways: 760 reports against 720 changes 19,464 of 27,309
+payload values, and causes **0 file writes**. Also `_lsb_spectrum_signature` could not be the file
+key, because it is built from DECODED recordings while the point of a file is to be found BEFORE
+decoding; the key is built from database rows alone in 0.33 s.
+
+**2. THE DECODE-PATHWAY REVIEW CORRECTED THE PREMISE I GAVE IT.** Reading bytes off disk is **2.89 s
+of a 60.4 s page request — 4.8 percent**, not the 21 percent I briefed; it looks larger because the
+work spreads over sixteen threads. **The cost is re-derivation:** the channel-name normaliser is
+called **72,425,865 times per request and 99.87 percent come from ONE line**, a spectrum-record scan
+that walks all 4,010 records once per pain report re-deriving properties of each record. Its
+prototype ran that path **9.233 s → 0.551 s with 159,600 fields proven identical**. **Entanglement is
+favourable: exactly one site is genuinely entangled** (`compute_psd_pain_correlation`, which computes
+spectra and correlates against pain in one pass, ported verbatim from the source notebook), so a
+reshape would be a refactor rather than a rewrite. **The PI's architecture decision is open and a
+multiple-choice question is waiting for him.**
+
+**3. THE SETTINGS STREAM WAS BUILT THREE TIMES PER STIM OPTIMIZER REQUEST (`b657968`).** One pass
+opens 568 stored files, takes 33.17 s and yields 6,617 rows. Both consumers have carried an optional
+`stream` argument all along whose docstring says passing it avoids the rebuild, and **nothing was
+passing it**. Sharing it at two sites: **118.58 s → 85.80 s, saved 32.78 s (27.6%), report identical
+at 754,853 chars.** That is ONE pass of three removed — **not** the review's 63.74 s projection, and
+**65.71 s of stream-building remains** for a third consumer.
+
+**4. A REGRESSION I SHIPPED IN `2bef090`, FOUND WHILE MEASURING SOMETHING ELSE (`b657968`).** Storing
+the spectra as one array broke `lfp_evidence._matrix`, which opened with `if not rows:` — truthiness
+of a 2-D array raises. **From `2bef090` onward the calibrated band-power route raised for any
+participant whose tiles came from the file, and it failed QUIETLY:** the endpoint still returned arms
+from the other route, so the page looked normal and carried a thinner answer. Fixed in the shared
+helper (my first attempt patched the call sites and moved the failure one level deeper). Live: the
+calibrated route now returns **304,478 rows** where it had raised. No test caught it because every
+fixture in that suite builds lists; one now builds the array form and asserts an identical frame.
+
+**5. AND I PUSHED `b657968` WITH THAT TEST FAILING**, its message claiming "779 passed" when the run
+in its own cell printed "1 failed, 778 passed" — I wrote the count I expected rather than the one
+that printed. Corrected in `931cb81`. Four of my own fixtures were wrong before one was right,
+including an assertion on a column named `band_power` that does not exist (the real names are
+`band_lsb_<centre>`).
+
 
 ### 2026-09-06 (latest) — the band-by-length sweep, the look-back clipped at the measured ramp, and three speedups: the matcher 21.4x, REDCap 2.6x, the statistics 1.78x
 

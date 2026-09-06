@@ -374,11 +374,257 @@ were waiting on a choice made on the page whose selection panel was missing from
    optimism note at `BandTimeSweepPanel.js:299` onwards, explicitly commented as being in the panel
    and not only in a caption, and the 0.5 note at line 342. My check was wrong, not the panel.
 
-### `/usr/src/BRAVO` IS NOT A LIVE MOUNT OF THE REPO ROOT
+### `/usr/src/BRAVO` IS a live mount of the host `BRAVO/` subtree — I GOT THIS WRONG FIRST
 
-`MEGA_HANDOFF.md` does not exist there. The container holds only the `BRAVO/` subtree, and backend
-files reach it by explicit copy through the bridge. Do not assume a host commit is visible to the
-running server.
+**The wrong claim is in three places, named precisely so a future reader can find all of them:** an
+earlier version of this section, which was committed in **`b700717`** (`git log -S` confirms that
+commit introduced the text into this file); the commit message of **`b700717`** itself ("records that
+/usr/src/BRAVO is NOT a live mount of the repo root"); and the commit message of **`7ab2d1b`**
+("backend files reach it by explicit copy through the bridge"). Commit messages cannot be edited
+after pushing, so both stand uncorrected in the log and this paragraph is the correction of record.
+**The claim is wrong.** Tested directly
+at 04:23: `mount` reports `mac on /usr/src/BRAVO type virtiofs (rw,relatime)`, a file written on the
+host was visible in the container immediately, and this holds for `modules/` as well as
+`_agent_bridge/`. **So copying files in through the bridge is unnecessary** — write on the host and
+run.
+
+My only evidence for the wrong claim was that `/usr/src/BRAVO/MEGA_HANDOFF.md` does not exist. That
+observation is correct and I over-inferred from it: the mount is the **`BRAVO/` subtree**, not the
+repo root, so repo-root files (`MEGA_HANDOFF.md`, `SESSION_HANDOFF_*.md`, `README_*.md`, `Client/`)
+are genuinely absent while everything under `BRAVO/` is live. Found by the decode-review agent, which
+verified the mount table rather than accepting my brief's assertion.
+
+Still true and unaffected: there is **no pytest in the container**, so `_agent_bridge/run_tests.py`
+is the only container runner and it runs the whole suite.
+
+## 4c. The Biomarker tile cache is now shared between worker processes (`2bef090`)
+
+PI report: *"I thought that the Biomarker Module had a cached datastore that wouldn't reload if no
+new data were added. Right now, it spends considerable time reloading, and there's no new data
+added."* He was right, and the cause was cache **scope**, not a missing cache.
+
+### The cost was one step, isolated by timing the stages in a fresh process
+
+| step | seconds |
+|---|---|
+| decode the stored time-domain Percept files (386 payloads) | 1.55 |
+| decode the montage and survey files (446 payloads) | 0.36 |
+| read the patient-event spectra off the database rows (4,010 blocks) | 0.35 |
+| fetch the 760 pain reports from REDCap | 0.86 |
+| build the sensing-configuration index and contact-pair list | 0.004 |
+| **cut the history into 3 s tiles and compute a 98-band spectrum for each** | **37.09** |
+| match the reports against the tiles and compute every statistic | 2.34 |
+
+Those tiles lived only in `_RAW_LSB_CACHE_MEMO`, inside **one** process. Four workers with reload on
+means the 37 s was paid by the first request to reach each worker, and by all four again after any
+Python edit.
+
+### Measured in genuinely fresh processes — one new interpreter per number
+
+| what the worker sees | before | after |
+|---|---|---|
+| cold, no file, first call in the process | 42.83 s | 45.28 s (builds, then writes) |
+| **fresh process with the file already present** | **not possible** | **6.06 s** |
+| same process, second call | 5.41 s | 5.12 s |
+
+A warm same-process call would have proved nothing about the actual problem, which is why every
+number is a new interpreter. **The 47 s penalty is gone from every worker but the first.** A worker
+that finds the file is now as fast as one already holding the tiles in memory. The cold build costs
+**2.45 s more** — the key, the storable shape, and writing 245.9 MB — paid once per ingest rather
+than once per worker per reload.
+
+### THE LANE REFUSED MY KEY DESIGN AND WAS RIGHT — the most important thing here
+
+I briefed it to key the file on the recordings **and** the pain-report set. `raw_lsb_spectrum_cache`
+takes **no report times at all**: the tiles know nothing about any rating, and the same tiles serve
+every pain score, every match rule and every length of signal. Keying on the report set would have
+**discarded a 37 s build every time a report was filed** — continuously — for tiles that were still
+perfectly correct. My instruction would have left the cache nearly useless.
+
+Proven both ways with the file warm: 760 reports against 720 changes **19,464 of 27,305** payload
+values, so the answer does track the reports; and it causes **0 file writes**, so the tiles are not
+rebuilt. Nothing about `c70e0b0` is revisited — the reports are fetched from REDCap every request
+and matched live, and **this file cannot serve a stale pain report because no rating is in it.**
+
+### And `_lsb_spectrum_signature` could not be the file key
+
+It is built from the **decoded** recordings, which is fine for a memo the decode has already paid
+for, but the whole point of a file is to be found **before** any decoding — the warming entry point
+especially must answer "is this built?" without opening 569 stored Percept files. So
+`_raw_lsb_recording_identity` keys on the database rows alone: **0.33 s** for RCS08's 4,078 rows.
+Verified independently that the key builder contains no report, rating or REDCap term.
+
+### Three things had to go into the key that a content hash does not cover
+
+1. **`PatientControllerEvent` rows carry no content hash — 0 of 3,246** — because their spectra
+   **are** the row metadata rather than a stored file. The metadata is hashed (0.127 s for all
+   3,246). Without this, every change to a patient-event spectrum would have been invisible to the
+   cache, which is exactly a cache serving a stale answer.
+2. **`CenterFrequencyHz`, `FreqScheduleHz`, `ContactSchedule`** are stamped onto `Recording.metadata`
+   at decode time and decide which contact pair a patient-event spectrum belongs to. They can change
+   with no content-hash change.
+3. **Every constant the stored numbers depend on** — tile width, the transform calibration, the
+   device-spectrum bridge constant and its trusted band, the window and hop, the saturation limit,
+   the channel-naming rule, a hand-bumped rule version. **A file outlives the process that wrote
+   it** and would otherwise be served to new code.
+
+**No expiry anywhere**, verified. **Payload unchanged: 27,305 values compared, 0 different**, with
+four fields excluded and named — `wall_seconds`, `matched_seconds`, `total_seconds`,
+`logistic_fit_crosscheck.seconds` — the payload's own report of how long it took, and the only
+fields that differed.
+
+### Stored as arrays because the READ is eleven times faster
+
+245.29 MB against 272.05 MB as lists, but 0.05 s to read against 0.56 s — a list of lists has to be
+rebuilt as 29 million separate Python numbers. Two size decisions worth keeping: the matcher's own
+converted matrix is **stripped before storing** or the file would double to 511 MB, and a superseded
+key's entry is removed after its replacement is safely in place, or a month of daily uploads would
+leave **seven gigabytes that can never be read again**.
+
+### Warming is wired, and no file outside the lane's own had to change
+
+`DataCurator.MedtronicPerceptJSONDecoder` **already** ends by firing a daemon thread calling
+`bravo_service.warm_psd_cache(uid)` with a broad except, so the tile warm went there. Both live
+callers are off the request thread. Cold 40.46 s; already warm **0.43 s** (the key only, no stored
+file opened); the wired path on RCS08 with tiles present **0.81 s**, no rebuild, no write. **It
+never raises** — an upload must not fail because a cache could not be warmed. So the **first** page
+view after an upload is fast, which is what was asked for. `DataCurator.py` is unmodified; verified.
+
+### It also found a latent bug in the closed-loop sibling, which I fixed
+
+`ClosedLoopDeployment.adapter.shared_cache_stats` wrapped its `listdir` and left the `getsize` in the
+same function unguarded. With four workers, one can be inside `clear_shared_cache` while another is
+here, and `FileNotFoundError` escapes from a function whose whole job is to report a number for the
+interface. It now skips a file that has gone. **The lane guarded it in its own copy and reported
+this one rather than editing another module's file** — the correct call.
+
+### One suite run to ignore, and why
+
+An intervening `PASS=418 FAIL=2` should be disregarded: that suite was already running while
+`bravo_service.py` was being edited, and the container runner re-imports test modules but **not** the
+module under test, so it checked new tests against old code. Settled tree is **PASS=420 FAIL=0**,
+confirmed by the lane twice and by me once independently. Host suites 778 passed / 41 skipped.
+
+### A misread of mine, recorded
+
+The lane's `artifacts_created` listed `analytics.py`, `DataCurator.py` and
+`Server/APIs/DataHandler.py`, and I initially took that as edits to files I had forbidden. **They
+were read-only snapshots saved as artifacts.** All three are unmodified in the working tree; the
+diffs are empty. Check `git status`, not the artifact list, before accusing a lane of straying.
+
+## 4d. The decode-pathway review, and the two commits it produced (`b657968`, `931cb81`)
+
+Commissioned by the PI: review the whole codebase with attention to *"designing a common pathway for
+data decoding, something better than an intermediate step decoder that minimizes computation time."*
+Full report in the artifact `REVIEW_common_decode_pathway.md` (version 2).
+
+### THE PREMISE I GAVE IT WAS WRONG, and this is the first thing to know
+
+I briefed it that reading recordings off disk was the top cost, at 1.647 s and 21.1 percent of a warm
+request. **Reading and un-pickling every stored file for RCS08 is 2.89 s of a 60.4 s request — 4.8
+percent.** It looks larger than it is because the work spreads over sixteen threads: the
+thread-seconds add to 39.8 but compress into 2.89 s of wall clock. **A cache of decoded bytes cannot
+save more than about three seconds on that page, however it is built.**
+
+**The cost is re-derivation, not decoding.** In one Biomarker page request the channel-name
+normaliser is called **72,425,865 times, and 72,332,380 of those — 99.87 percent — come from one
+line**: the spectrum-record scan inside `per_pro_lsb`, which walks all 4,010 spectrum records once
+per pain report and re-normalises every record's channel name and re-parses its timestamp on every
+pass. Both are properties of the record; the request already had both values 72 million times over.
+
+### Entanglement — the finding most likely to change the architecture decision
+
+**Decoding is separable almost everywhere.** Exactly **one** site is genuinely entangled:
+`compute_psd_pain_correlation` computes spectra and correlates them against pain in a single pass,
+ported verbatim from the source notebook. That is the one piece that touches the statistics.
+Everything else lifted cleanly, including the largest re-derivation site, which the lane lifted into
+a prototype without moving a number.
+
+So **when the moment comes, option 1 is a refactor and not a rewrite** — but two of the files most in
+need of it were being edited by another agent while the review was written, so it could not start.
+
+### The prototype: 9.233 s to 0.551 s, 16.75x, with 159,600 fields proven identical
+
+Built as a parallel function importing into nothing, measured against the current path in
+alternating rounds, and its tests are framed so the prototype cannot quietly disagree with the code
+it is measured against. It declined to use a profiler for the stage breakdown, on the ground that the
+call volume inflates one stage severalfold and invalidates every comparison drawn from it.
+
+### D5 landed — but at HALF the review's figure, and I measured rather than inherited it
+
+The review found `settings_stream` built **three times** per Stim Optimizer request at 31.87 s each,
+and reported 63.74 s recoverable. Both consumers have carried an optional `stream` argument all along
+whose docstring says passing it avoids the rebuild; **nothing was passing it.**
+
+I shared the stream at the two call sites I could verify from the call chain and measured the result:
+
+| | before | after |
+|---|---|---|
+| `settings_stream` passes | 3 | **2** |
+| seconds inside it | 99.46 | **65.71** |
+| whole endpoint | 118.58 s | **85.80 s** (saved 32.78, 27.6%) |
+| report | — | **identical, 754,853 chars both ways, same four arms** |
+
+**One pass of three, not two.** The honest number is 32.78 s, not the review's 63.74 s, and **65.71 s
+of stream-building remains** — a third consumer still builds its own and deserves the same treatment.
+One pass costs 33.17 s and yields 6,617 rows for RCS08, measured.
+
+### AND IT SURFACED A REGRESSION I HAD SHIPPED SIX COMMITS EARLIER
+
+`2bef090` (mine, tonight) made the shared tile cache store each window family's spectra as **one
+float array** rather than a list of lists, because the read is eleven times faster.
+`lfp_evidence._matrix` opened with `if not rows:` — and asking a two-dimensional array whether it is
+truthy raises `ValueError("The truth value of an array with more than one element is ambiguous")`.
+
+**From `2bef090` onward, `frame_from_lsb_cache` raised for any participant whose tiles came back from
+the file rather than from a fresh build — which is the ordinary case.** It failed **quietly**: the
+calibrated band-power route came back empty while the endpoint still returned arms from the other
+route, so the page looked normal and carried a thinner answer. That is the failure mode this project
+keeps paying for and I introduced this instance of it.
+
+Fixed in `_matrix`, the shared helper — **my first attempt patched the two call sites and the failure
+moved one level deeper into the same function**, which is recorded because it is the obvious wrong
+fix. Live confirmation: the calibrated route now returns **304,478 rows and 123 epochs** where it had
+raised.
+
+The tile-cache agent fixed this same pattern in **its own** file and could not touch `StimOptimizer`,
+so it reported it. The report was right and **I missed the cross-module consequence when I committed
+`2bef090`.** `_RAW_LSB_MATRICES = ("lsb",)` is the list of keys that become arrays; if it grows,
+every `or []` on the new key needs the same treatment.
+
+**No test caught it** because every fixture in that suite builds its families as lists. There is now
+one that builds the array form from the module's own `_plain_cache()` helper and asserts it gives the
+identical frame — 20 rows either way.
+
+### THREE OF MY OWN TEST FIXTURES WERE WRONG BEFORE ONE WAS RIGHT, and I committed one of them
+
+Recorded because the pattern matters more than the individual mistakes.
+
+1. A hand-built fixture missing the required `centers_hz` key per entry.
+2. Reshaping the device-spectrum family's empty spectra to an array produced a shape pandas refused.
+3. Dropping `lsb` while leaving 20 timestamps in place raises *"All arrays must be of the same
+   length"* — **which is correct**, because such a family is internally inconsistent. The test now
+   asserts the consistently-empty case.
+4. The final assertion looked for a column called `band_power`. **There is no such column** — the
+   per-band columns are `band_lsb_<centre>`. I invented the name instead of reading the frame.
+
+**`b657968` was pushed with that test failing, and its message claims "779 passed" when the run in
+its own cell printed "1 failed, 778 passed".** I wrote the count I expected rather than the count
+that printed. Corrected in `931cb81`, which states the error, because a pushed commit message cannot
+be edited. Settled state: **779 passed, 41 skipped, 0 failed.**
+
+### Defects the review found and I have NOT fixed, ranked by consequence
+
+Four could produce a wrong scientific number:
+
+1. A recording is silently dropped when its spectrum fails — bare `except Exception: continue`, no log.
+2. **Clustered significance returns a missing value on any failure, unlogged** — and it feeds the
+   multiple-comparison correction that decides whether a band reads as established.
+3. The per-recording spectrum cache is keyed on hand-maintained version strings, and the
+   missing-fraction limit the stored numbers depend on is **not in the key**.
+4. A failed channel disappears from the payload with only a log entry.
+
+Six more waste time without changing a number.
 
 ## 5. Open at the end of this session
 
