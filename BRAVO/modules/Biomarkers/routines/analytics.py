@@ -2161,6 +2161,83 @@ def _weighted_auc_matrix(use_score, y, W):
     return auc
 
 
+def bootstrap_auc_from_row_picks(use_score, y, picks):
+    """The same de-folded, tie-aware area under the curve that ``_weighted_auc_matrix`` returns for
+    a resample, computed straight from the drawn row numbers without ever building the
+    (resamples by rows) matrix of multiplicities.
+
+    IT RETURNS THE SAME DOUBLES, NOT MERELY THE SAME QUANTITY. Let ``W[b, j]`` be the number of
+    times row ``j`` was drawn into resample ``b``. Then
+    ``bootstrap_auc_from_row_picks(use_score, y, picks)`` is equal, element by element and bit for
+    bit, to ``_weighted_auc_matrix(use_score, y, W)``. Two things make that true rather than
+    approximately true:
+
+    * Every quantity on the way to the answer is a WHOLE NUMBER (or a whole number of halves), and
+      small: a multiplicity is at most the number of rows drawn, a running total of low-pain weight
+      is at most that same number, and their product summed over the tie groups is at most the
+      number of rows cubed. For the sizes this module works at -- a few hundred to a few thousand
+      pain reports -- that is far below the largest whole number a double holds exactly (about
+      9.0e15), so none of the additions or multiplications rounds at all. Where nothing rounds, the
+      order the additions are done in cannot change the answer, which is what lets the low-pain
+      running total be accumulated over tie groups here instead of over rows there.
+    * The division at the end is the identical division of two exactly-equal doubles.
+
+    The last multiplication is arranged as ``2 * running total - low-pain weight``, halved once at
+    the end, so that no intermediate is a half-integer. That is a whole-number rearrangement of
+    ``running total before the group + half the group's own low-pain weight``, which is the tie
+    convention ``_weighted_auc_matrix`` uses and this function must not depart from.
+
+    ``use_score`` is one score per row, ``y`` is 1 for a high-pain row, 0 for a low-pain one, and
+    anything else for a row the split left out (such a row contributes nothing, exactly as it
+    contributes nothing there). ``picks`` is the drawn row numbers, one row per resample. Returns
+    one area under the curve per resample; a resample that lost either state comes back non-finite.
+    """
+    s = np.asarray(use_score, dtype=np.float64)
+    yy = np.asarray(y, dtype=np.float64)
+    picks = np.asarray(picks)
+    if picks.ndim == 1:
+        picks = picks[None, :]
+    B = int(picks.shape[0])
+    n = int(s.size)
+    if n == 0 or B == 0:
+        return np.full(B, np.nan)
+    # THE SAME SORT AND THE SAME GROUPING RULE as _weighted_auc_matrix: a mergesort of the scores,
+    # and a new tie group wherever the sorted score strictly increases.
+    perm = np.argsort(s, kind="mergesort")
+    ss = s[perm]
+    starts = np.empty(n, dtype=bool)
+    starts[0] = True
+    if n > 1:
+        starts[1:] = np.diff(ss) > 0
+    gid_sorted = np.cumsum(starts) - 1
+    G = int(gid_sorted[-1]) + 1
+    gid = np.empty(n, dtype=np.int64)
+    gid[perm] = gid_sorted
+    # Three lanes so that a row the split left out lands in a lane nothing reads, rather than being
+    # miscounted as a low-pain row. The lane is the FASTEST-moving part of the bin number, which
+    # was measured against the other way round: putting the lane first makes the two lanes
+    # contiguous to read but scatters the counting across three distant regions of memory, and it
+    # came out slower (0.101 s against 0.094 s over twenty-three band centres at the live size).
+    lane = np.where(yy == 1, 0, np.where(yy == 0, 1, 2)).astype(np.int64)
+    key_of_row = gid * 3 + lane
+    keys = key_of_row[picks]
+    keys += (np.arange(B, dtype=np.int64) * (3 * G))[:, None]
+    counts = np.bincount(keys.ravel(), minlength=B * 3 * G).reshape(B, G, 3)
+    gpos = counts[:, :, 0].astype(np.float64)
+    gneg = counts[:, :, 1].astype(np.float64)
+    npos = gpos.sum(axis=1)
+    nneg = gneg.sum(axis=1)
+    run = np.cumsum(gneg, axis=1)
+    run *= 2.0
+    run -= gneg
+    run *= gpos
+    u = 0.5 * run.sum(axis=1)
+    auc = np.full(B, np.nan)
+    ok = (npos > 0) & (nneg > 0)
+    auc[ok] = u[ok] / (npos[ok] * nneg[ok])
+    return auc
+
+
 def _jackknife_cluster_aucs(use_score, y, cluster_of_row, K):
     """Delete-one-CLUSTER jackknife AUCs (de-folded), vectorized. Row i of the (K, N) weight matrix is
     all-ones with cluster i zeroed -> the AUC on every sample EXCEPT cluster i. Used for the BCa
@@ -6780,8 +6857,12 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
     resemble each other and an independent shuffle would make the reference too easy to beat. The
     block length is chosen from the measured autocorrelation of the pain scores.
 
-    Every shuffle's whole grid is three matrix products per length of signal, so the entire
-    reference costs a handful of matrix operations rather than n_perm * 10 * C correlations.
+    Every shuffle's whole grid is TWO matrix products in total -- not two per length of signal --
+    so the entire reference costs a handful of matrix operations rather than n_perm * 10 * C
+    correlations. The ten lengths of signal are stood side by side into one right-hand side so that
+    the shuffled pain scores are read from memory twice instead of thirty times, which is where the
+    time was going; see the note in the body about why that leaves every number unchanged and how
+    that is checked.
     Returns ``{"p95", "p99", "max_abs_by_perm", "block_length", "p_selection_aware" (C,)}``.
     """
     from .stats_utils import block_length_for, circular_block_perm_matrix, permutation_null_resolution
@@ -6799,15 +6880,40 @@ def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
     Yp = yu[perm]                                                        # (S, nP)
     S = Yp.shape[0]
     best = np.zeros((S, C), dtype=np.float64)
+    # ALL TEN LENGTHS' MATRIX PRODUCTS ARE TAKEN IN TWO PRODUCTS RATHER THAN THIRTY. The shuffled
+    # pain scores are the same thousand-by-a-few-hundred matrix for every length of signal, so
+    # written a length at a time that matrix is read from memory thirty times to produce only
+    # twenty-two columns of answer each time, which is what the product spends its time on rather
+    # than on the multiplying. Standing the ten lengths' right-hand sides side by side reads it
+    # twice and asks for all the columns at once: measured on the real record, twenty of these
+    # products take 0.063 s written separately and 0.021 s written as one.
+    #
+    # THE NUMBERS ARE THE SAME ONES, AND THAT IS CHECKED RATHER THAN ASSUMED. A matrix product
+    # accumulates each answer over the pain reports in an order the linear-algebra library chooses,
+    # and in principle a library could choose differently when asked for more columns at once,
+    # which would move the last bit of a correlation and could in turn move a verdict. On the build
+    # this runs on it does not: the two forms agree on every one of 440,000 numbers. That is a
+    # measured property of the library, not a guarantee about every future version of it, so
+    # `test_sweep_statistics_exact.py` asserts it directly. If a library upgrade ever breaks it the
+    # test fails loudly instead of the verdicts moving quietly.
+    masks, filled = [], []
     for t in range(T):
-        M = np.isfinite(Xu[t])                                           # (nP, C)
-        Xf = np.where(M, Xu[t], 0.0)
+        Mt = np.isfinite(Xu[t])
+        masks.append(Mt)
+        filled.append(np.where(Mt, Xu[t], 0.0))
+    rhs_masks = np.concatenate([m.astype(np.float64) for m in masks], axis=1)   # (nP, T*C)
+    rhs = np.concatenate([rhs_masks] + filled, axis=1)                          # (nP, 2*T*C)
+    g_lin = Yp @ rhs                                                            # (S, 2*T*C)
+    g_sq = (Yp * Yp) @ rhs_masks                                                # (S, T*C)
+    for t in range(T):
+        M = masks[t]                                                     # (nP, C)
+        Xf = filled[t]
         n = M.sum(axis=0).astype(np.float64)                             # (C,)
         sx = Xf.sum(axis=0)
         sxx = (Xf * Xf).sum(axis=0)
-        sy = Yp @ M                                                      # (S, C)
-        syy = (Yp * Yp) @ M
-        sxy = Yp @ Xf
+        sy = g_lin[:, t * C:(t + 1) * C]                                 # (S, C)
+        syy = g_sq[:, t * C:(t + 1) * C]
+        sxy = g_lin[:, (T + t) * C:(T + t + 1) * C]
         with np.errstate(invalid="ignore", divide="ignore"):
             cxy = sxy - sx[None, :] * sy / n[None, :]
             cxx = (sxx - sx * sx / n)[None, :]
@@ -6838,7 +6944,9 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
     neither direction.
 
     The ranks of the band power do not change when the labels are shuffled, so the whole reference
-    is one matrix product per length of signal against the fixed ranks.
+    is one matrix product against the fixed ranks -- one product in total, with the ten lengths of
+    signal stood side by side, for the reason and with the check described on the correlation
+    reference above.
     """
     from .stats_utils import block_length_for, circular_block_perm_matrix
     T, P, C = X.shape
@@ -6858,13 +6966,22 @@ def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
     Yp = yl[perm]                                                        # (S, nL) still 0/1
     S = Yp.shape[0]
     best = np.zeros((S, C), dtype=np.float64)
+    # ONE MATRIX PRODUCT FOR ALL TEN LENGTHS instead of twenty, for the reason written out on the
+    # correlation reference above, and with the same requirement that the numbers be the same ones
+    # and the same test asserting it.
+    oks, rank_blocks = [], []
     for t in range(T):
-        ok = np.isfinite(Xl[t])
-        ranks = np.where(ok, average_ranks_columns(Xl[t]), 0.0)          # (nL, C)
-        n_pos = Yp @ ok.astype(np.float64)                               # (S, C)
+        ok_t = np.isfinite(Xl[t])
+        oks.append(ok_t)
+        rank_blocks.append(np.where(ok_t, average_ranks_columns(Xl[t]), 0.0))   # (nL, C)
+    rhs = np.concatenate([o.astype(np.float64) for o in oks] + rank_blocks, axis=1)
+    g = Yp @ rhs                                                         # (S, 2*T*C)
+    for t in range(T):
+        ok = oks[t]
+        n_pos = g[:, t * C:(t + 1) * C]                                  # (S, C)
         n_all = ok.sum(axis=0).astype(np.float64)[None, :]
         n_neg = n_all - n_pos
-        rank_sum_pos = Yp @ ranks                                        # (S, C)
+        rank_sum_pos = g[:, (T + t) * C:(T + t + 1) * C]                 # (S, C)
         with np.errstate(invalid="ignore", divide="ignore"):
             u = rank_sum_pos - n_pos * (n_pos + 1.0) / 2.0
             a = u / (n_pos * n_neg)
@@ -7040,13 +7157,23 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
             picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
             xb = x[idx][picks]
             yb = y[idx][picks]
+            # THE SAME SUBTRACTIONS, THE SAME PRODUCTS AND THE SAME ROW SUMS as the plain form
+            # (mean, then difference, then three sums along the row), only with the differences
+            # written back over the drawn values and one buffer reused for all three products
+            # instead of five new arrays of a thousand resamples by a few hundred pain reports.
+            # Correlating real-valued band powers DOES round, unlike the whole-number counting the
+            # high-pain-against-low-pain resample does, so the order of every addition here is left
+            # exactly as it was; only the allocations are gone.
             with np.errstate(invalid="ignore", divide="ignore"):
-                mx = xb.mean(axis=1, keepdims=True)
-                my = yb.mean(axis=1, keepdims=True)
-                dx = xb - mx
-                dy = yb - my
-                rb = ((dx * dy).sum(axis=1)
-                      / np.sqrt((dx * dx).sum(axis=1) * (dy * dy).sum(axis=1)))
+                xb -= xb.mean(axis=1, keepdims=True)
+                yb -= yb.mean(axis=1, keepdims=True)
+                prod = xb * yb
+                sxy = prod.sum(axis=1)
+                np.multiply(xb, xb, out=prod)
+                sxx = prod.sum(axis=1)
+                np.multiply(yb, yb, out=prod)
+                syy = prod.sum(axis=1)
+                rb = sxy / np.sqrt(sxx * syy)
             boot_lo, boot_hi, n_res = _percentile_interval(rb)
         shuf_p95 = shuf_p99 = None
         p_sel = None
@@ -7129,16 +7256,23 @@ def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivere
         n_res = 0
         if int(m.sum()) >= 8 and len(np.unique(yb[m])) == 2:
             idx = np.where(m)[0]
-            W = np.zeros((int(n_boot), idx.size), dtype=np.float64)
             picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
-            np.add.at(W, (np.arange(int(n_boot))[:, None], picks), 1.0)
             # THE ORIENTATION IS FIXED ONCE, ON THE WHOLE SAMPLE, AND NEVER RE-CHOSEN INSIDE A
             # RESAMPLE. Re-folding each resample would push every one of them to or above 0.5 and
             # produce an interval that cannot include 0.5 however little the band carries, which is
             # the audited convention `_weighted_auc_matrix` was written for. Fixing it instead lets
             # a resample fall below 0.5, which is what makes an interval spanning 0.5 mean
             # something.
-            ab = _weighted_auc_matrix(x[idx], yb[idx], W)
+            #
+            # The drawn row numbers go straight into the counting, rather than first being turned
+            # into a thousand-by-a-few-hundred matrix of multiplicities and then handed to
+            # `_weighted_auc_matrix`. The two return the same doubles, bit for bit, because every
+            # step is whole-number arithmetic small enough for a double to hold exactly; the
+            # argument is written out on `bootstrap_auc_from_row_picks` and there is a test that
+            # asserts the equality on constructed cases including ties, a constant band and missing
+            # measurements. THE DRAW ITSELF IS UNCHANGED -- same generator, same call, same size,
+            # same place in the order -- so every resample is the same resample it was before.
+            ab = bootstrap_auc_from_row_picks(x[idx], yb[idx], picks)
             boot_lo, boot_hi, n_res = _percentile_interval(ab)
         shuf_p95 = shuf_p99 = None
         p_sel = None
