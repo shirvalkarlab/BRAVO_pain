@@ -43,13 +43,14 @@ for acceptance because it deletes the lock. Docker base tags, apt packages and
 some Python requirements are not yet an immutable full lock: clean rebuild
 reproducibility is **unverified**, even when a cached local build works.
 
-The entry point runs tooling regressions, backend tests, frontend tests, true
+The entry point runs tooling regressions, correctness lint, backend tests, frontend tests, true
 branch coverage and the production Docker build sequentially. A failed test or
 coverage gate stops acceptance. It never starts or replaces the live app.
 Individual commands are available to diagnose a failed stage:
 
 ```bash
 scripts/bravo-validate backend
+scripts/bravo-validate lint
 scripts/bravo-validate frontend
 scripts/bravo-validate coverage
 scripts/bravo-validate build
@@ -60,6 +61,49 @@ scripts/bravo-validate live
 successful browser interaction. The candidate tag is
 `bravo-local:validation-candidate`; no tag or port in this guide starts Prasad's
 separate deployment. Do not mount private data into the portable test runner.
+
+## Correctness lint and inherited warnings
+
+`scripts/bravo-validate lint` runs before runtime tests in the shared local/CI
+gate. It uses network-disabled validation containers, Ruff **0.16.6** pinned from
+the [official release](https://github.com/astral-sh/ruff/releases/tag/0.16.6), and
+ESLint **8.8.0** from the existing frontend lockfile. `prepare` installs Ruff into
+the isolated Python test image; version mismatches require re-preparation.
+Before even standalone lint executes, the runner compares both
+`Client/package.json` and `Client/package-lock.json` with their copies in the
+prepared client image. A changed plugin or lockfile fails with a request to run
+`prepare`, even when the ESLint version itself is unchanged.
+
+The scope is discovered from the coverage contract's critical file patterns and
+whole files containing its critical functions: currently **60 Python** and **51
+JavaScript** runtime files. New matching modules are included automatically;
+missing or empty critical scope fails. Ruff checks `E9` and all Pyflakes `F`
+rules. Syntax errors, undefined names, invalid expressions, duplicate arguments,
+and other selected correctness errors fail. `F401` unused imports and `F841`
+unused locals are explicitly advisory; they remain in reports and are not
+silently suppressed. ESLint uses the existing `react-app`/`react-app/jest`
+configuration: all errors fail, and warnings remain visible. The production
+React build also has ESLint enabled, but its warnings alone do not fail that
+build. This dedicated gate includes unimported critical files as well.
+
+The initial lint baseline has **13 Python maintenance warnings** and **21
+JavaScript warnings**, including inherited unused values, loose equality and
+hook dependencies. These are open maintenance findings, not a warning-free
+claim. The broader Python Bugbear audit also found 32 advisories, mostly explicit
+zip strictness and exception chaining; Bugbear/style rules are not part of this
+correctness gate. We do not blanket-reformat scientific legacy code to erase
+those findings. The Aditya maintainer owns review when modifying the affected
+module; a substantial behavior change still needs its own tests and scientific
+review. This scope does not claim repository-wide lint compliance or replace
+the full-tree coverage baseline.
+
+Fresh `lint-python.json`, `lint-javascript.json` and `lint-summary.json` reports
+are retained with CI's other portable artifacts. Unexpected tool failures,
+invalid/missing reports, missing ESLint source entries, and source changes during
+lint fail acceptance. Tooling regressions invoke the real pinned linters on
+synthetic Python syntax/undefined-name errors and an ESLint undefined-name error,
+then assert that the gate fails. They require the same prepared Docker images;
+missing tools are not silently skipped.
 
 ## Coverage scope and legacy adoption
 
