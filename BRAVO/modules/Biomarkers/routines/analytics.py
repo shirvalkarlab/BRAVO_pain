@@ -5807,27 +5807,43 @@ def _locf_values(times, series):
 def harmonic_landings_hz(rate_hz, f_lo, f_hi, *, fs=DEVICE_TD_FS_HZ, max_harmonic=8):
     """Frequencies inside [f_lo, f_hi] where harmonics of `rate_hz` appear after sampling at `fs`.
 
-    Stimulation artifact appears at the stimulation rate and its harmonics. Percept time-domain
-    sensing runs at 250 Hz, so any harmonic above Nyquist folds back into the recorded spectrum and
-    can land inside the band being scanned. A band centred on such a landing may be reporting
-    artifact rather than physiology.
+    ARITHMETIC, AND ONLY ARITHMETIC. Percept time-domain sensing runs at 250 Hz, so a whole multiple
+    of the stimulation rate that lies above half the sampling rate reappears at a lower frequency
+    after the sampling folds it down. This function reports the frequencies inside [f_lo, f_hi] where
+    that happens. Saying a band CARRIES A FOLDED MULTIPLE OF THE STIMULATION RATE is a statement
+    about where numbers land and needs no assumption about what is being measured.
 
-    THIS IS ADVISORY FOR THE PAIN-BIOMARKER QUESTION AND EXCLUSIONARY FOR THE AMPLITUDE-RESPONSE
-    QUESTION. The two uses ask different things of the same frequencies and the evidence points
-    opposite ways, so the difference is deliberate rather than an inconsistency:
+    WHAT MUST NOT BE SAID, corrected 2026-09-06 after the PI rejected the stronger claim on the
+    evidence below. A band that carries a folded multiple of the stimulation rate is NOT thereby
+    measuring the stimulator rather than the brain, and this function's output must not be described
+    as marking contamination. Earlier revisions of this docstring said both, and both were wrong:
 
-      * Pain biomarker — advisory. Tested on the RCS08 record (2026-09-03): responding bands were
-        NOT closer to these landings than non-responding ones (at 110 Hz, 4.52 Hz mean distance for
-        responding against 3.90 Hz for non-responding, i.e. slightly farther), so aliasing did not
-        explain the pain associations and bands are flagged for review rather than excluded.
-      * Amplitude response — exclusionary. Measured 2026-09-05 by aligning 13,102 three-second
-        tiles to the moment a clinician logged an amplitude change: during a change the power rise
-        is concentrated at the landings by a factor of roughly fifty (peak 0.81 log10 per 100 s at
-        57.5 Hz under 55 Hz stimulation, against a median of -0.003 in bands away from the
-        landings), because the stimulation artifact scales with the very current being asked about.
-        A slope estimated at a landing measures the stimulator, not the brain. The exclusion is
-        applied by ClosedLoopDeployment.clinic_steps.amplitude_response_band_mask, which calls this
-        function rather than reimplementing it.
+      * A stimulation artefact grows with the current and keeps growing. On the RCS08 record
+        (2026-08-18 visit) the bands that carry 55 Hz itself do exactly that, rising monotonically
+        to 18.2 times their starting value. The bands whose folded landing sits between 22 and
+        30 Hz instead rise and then FALL, peaking near 1.8 mA, and the PI has independently observed
+        a two-peaked shape in the same recordings. A quantity that comes back down as the current
+        keeps rising is not that artefact, so the landing alone does not establish what the band is
+        measuring.
+      * The affected bands do NOT split cleanly along the landing frequencies. The curvature
+        p-values run smoothly across frequency; the apparent clean split was a 0.05 cutoff drawn
+        across a continuous gradient, not a boundary in the data.
+
+    SO THE FLAG IS ADVISORY FOR BOTH QUESTIONS IT IS USED ON, and what it advises is care with the
+    amplitude response of the flagged band, not disbelief in it:
+
+      * Pain biomarker. Tested on the RCS08 record (2026-09-03): responding bands were NOT closer to
+        these landings than non-responding ones (at 110 Hz, 4.52 Hz mean distance for responding
+        against 3.90 Hz for non-responding, i.e. slightly farther), so the folding did not explain
+        the pain associations and bands are flagged for review rather than excluded.
+      * Amplitude response. Measured 2026-09-05 by aligning 13,102 three-second tiles to the moment
+        a clinician logged an amplitude change: during a change the power rise is concentrated at
+        the landings (peak 0.81 log10 per 100 s at 57.5 Hz under 55 Hz stimulation, against a median
+        of -0.003 in bands away from the landings). That is a measured concentration and it is the
+        reason to treat a slope estimated at a landing with care; it is not evidence about what the
+        band is measuring, and the shape of the response with current (above) argues against reading
+        it as the stimulator. ClosedLoopDeployment.clinic_steps.amplitude_response_band_mask calls
+        this function rather than reimplementing it, and owns what it does with the flag.
 
     Build the landing set PER RATE. Pooling rates defeats the test: RCS08's ten rates place landings
     roughly every 5 Hz across the 2.5-99.5 Hz axis, and with a 2.5 Hz tolerance that covers the whole
@@ -6177,3 +6193,1387 @@ def psd_spectrogram(td_detail, times, db=True, fmax=100.0, region_map=None):
                          "z": [[_f(v) for v in row] for row in zt]})
     return {"freqs": [float(x) for x in fz], "times": list(times),
             "unit": "dB" if db else "power", "channels": channels}
+
+
+# =================================================================================================
+# HOW WELL EACH BAND TRACKS PAIN, AT EVERY LENGTH OF SIGNAL AVERAGED INTO ONE MEASUREMENT
+# =================================================================================================
+#
+# WHAT THIS SECTION IS FOR. The panel at the bottom of the biomarker exploration page asks one
+# question over a grid: if the band power fed to a decision were the average over the last N
+# seconds of recording, how well would that number track the patient's own pain score? The grid
+# runs over band centre on one axis and over the length of signal averaged into one measurement on
+# the other. It is meant for looking at the SHAPE of that surface, which is why the whole grid is
+# returned and not only the best cell in each row.
+#
+# TWO NUMBERS PER CELL, AND THEY MEAN DIFFERENT THINGS.
+#   * The Pearson correlation between the band power and the continuous pain score. The value that
+#     means no relationship is 0, and the value runs from -1 to +1.
+#   * The area under the curve of a one-predictor logistic regression that predicts whether a pain
+#     report was a high-pain one or a low-pain one from that band's power. THE VALUE THAT MEANS NO
+#     DISCRIMINATION IS 0.5, NOT 0. Every interval, colour scale and verdict in this section is
+#     referenced to 0.5, and an interval that spans 0.5 means the question was not settled -- it is
+#     never a negative result.
+#
+# THE LENGTH OF SIGNAL IS NOT FREELY CHOOSABLE. The module's band power comes from a cache that
+# slices the whole recording history into fixed non-overlapping tiles of RAW_LSB_WINDOW_SECONDS
+# (3 s). A request for N seconds is served by the nearest max(1, round(N / 3)) tiles, so the
+# shortest measurement that exists at all is one 3 s tile: a request for 1 s is delivered as 3 s.
+# `integration_time_tile_count` computes the tile count and the seconds ACTUALLY delivered, and
+# every row of every table below carries both the requested and the delivered figure. Reading the
+# requested figure as though it had been delivered would misstate the shortest measurement by
+# threefold.
+#
+# WHY THE BEST CELL IN A ROW IS AN OPTIMISTIC NUMBER. Taking the largest of ten values, one per
+# length of signal, is a choice made after seeing the answers. The ten are strongly related to one
+# another (a 45 s average and a 60 s average share most of their tiles), so they are nowhere near
+# ten independent looks, but they are not one look either: the largest of them is larger than the
+# value that same length of signal would give on a fresh set of pain reports, and its ordinary
+# p-value is not the probability of what was actually done. This module therefore reports, beside
+# every best cell, the largest value the SAME best-of-ten selection produced when the pain scores
+# were shuffled -- so a reader compares the observed best against the distribution of bests under
+# no relationship rather than against the distribution of a single value.
+
+#: The lengths of signal, in seconds, that one band-power measurement may be averaged over. The
+#: PI's list. Requests shorter than one tile are delivered as one tile; see the module note above.
+BAND_TIME_SWEEP_SECONDS = (1.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 45.0, 60.0, 300.0)
+
+#: The span of band centres the sweep covers, in hertz. The firmware can only place an adaptive
+#: sensing band between 8 and 30 Hz (design ledger section 1), so a centre outside this span could
+#: not be acted on from this page even if it tracked pain perfectly.
+BAND_TIME_SWEEP_CENTER_LO_HZ = 8.0
+BAND_TIME_SWEEP_CENTER_HI_HZ = 30.0
+
+#: The width of every band in the sweep, in hertz. The device's own band is about this wide.
+BAND_TIME_SWEEP_WIDTH_HZ = 5.0
+
+#: The value of the area under the curve that means the band power tells high-pain moments from
+#: low-pain ones no better than coin flipping. NOT zero. Named so that no colour scale, interval or
+#: verdict in this module can be written against the wrong comparison by accident.
+AUC_NO_DISCRIMINATION = 0.5
+
+#: The value of a correlation that means no relationship.
+CORRELATION_NO_RELATIONSHIP = 0.0
+
+#: How many shuffles of the pain scores the selection-aware reference is built from, and how many
+#: resamples of the pain reports the interval on the best cell is built from. Both are matrix
+#: operations over the whole grid at once, so these counts cost tens of milliseconds, not seconds.
+BAND_TIME_SWEEP_N_PERM = 1000
+BAND_TIME_SWEEP_N_BOOT = 1000
+
+
+def sweep_tile_seconds():
+    """The width of one cache tile, in seconds. One place reads it so a change cannot land in half
+    the module."""
+    return float(RAW_LSB_WINDOW_SECONDS)
+
+
+def integration_time_tile_count(requested_seconds, window_s=None):
+    """How many cache tiles a request for this many seconds of signal is actually served by, and how
+    many seconds that is.
+
+    MIRRORS ONE LINE OF THE MATCHER ON PURPOSE. ``availability.live_lsb_spectrum_match`` decides the
+    count itself as ``max(1, round(td_quantity_s / window_s))`` and reports it back as
+    ``td_n_epochs_cap`` in its statistics. This function computes the same thing so that a table can
+    be labelled with the delivered length BEFORE the matcher runs, and there is a test that asserts
+    the two agree for every length in ``BAND_TIME_SWEEP_SECONDS`` by reading the matcher's own
+    reported count rather than by repeating the arithmetic.
+
+    Returns ``(n_tiles, delivered_seconds)``. A request for 1 s comes back as ``(1, 3.0)``, because
+    one tile is the smallest measurement the cache holds.
+    """
+    w = float(sweep_tile_seconds() if window_s is None else window_s)
+    if w <= 0:
+        return 1, 0.0
+    n = max(1, int(round(float(requested_seconds) / w)))
+    return int(n), float(n * w)
+
+
+def sweep_center_freqs(cache_centers_hz, lo_hz=None, hi_hz=None):
+    """The band centres the sweep can actually cover, taken from the cache's own grid.
+
+    THE CACHE'S GRID DECIDES, NOT THE REQUEST. The band powers this sweep reads were computed on a
+    fixed list of band centres when the cache was built, and a centre that is not on that list does
+    not exist in the data. So the sweep covers the cache's centres that fall inside the requested
+    span rather than a list of its own, and the payload reports which ones those were. Asking for
+    whole-hertz centres when the cache holds half-hertz ones would otherwise silently return nothing.
+    """
+    lo = float(BAND_TIME_SWEEP_CENTER_LO_HZ if lo_hz is None else lo_hz)
+    hi = float(BAND_TIME_SWEEP_CENTER_HI_HZ if hi_hz is None else hi_hz)
+    c = np.atleast_1d(np.asarray(cache_centers_hz, dtype=float))
+    keep = np.isfinite(c) & (c >= lo - 1e-9) & (c <= hi + 1e-9)
+    return np.sort(c[keep])
+
+
+def mad_outlier_columns(X, n_mad=None, scale="raw"):
+    """The outlier mask for EVERY column of a band-power stack at once, by the same median-absolute-
+    deviation rule ``stats_utils.mad_outlier_flags`` applies to one column.
+
+    THE RULE IS NOT RESTATED, IT IS VECTORISED. Every clause of the scalar function is reproduced
+    here: the logarithm first when ``scale`` is ``"log"``, the strict inequality, no consistency
+    rescaling of the deviation, non-finite entries never flagged, fewer than four usable entries in
+    a column means nothing is flagged in it, and a column whose deviation comes out as zero (a
+    majority of its entries sharing one value) has nothing flagged rather than everything. There is
+    a test that asserts this function and the scalar one agree column by column, including on those
+    edge cases, because the only reason to have two is speed and a faster rule that is a different
+    rule would be worse than the loop.
+
+    ``X`` may be two-dimensional (rows by columns) or three-dimensional (lengths of signal by rows
+    by columns); the rule is evaluated down the ROW axis in both cases. Returns a boolean mask the
+    same shape as ``X``, True where the entry is an outlier.
+    """
+    X = np.asarray(X, dtype=float)
+    n = float(OUTLIER_N_MAD if n_mad is None else n_mad)
+    if str(scale) == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            V = np.log10(np.where(X > 0, X, np.nan))
+    else:
+        V = X
+    ok = np.isfinite(V)
+    row_axis = -2
+    n_ok = ok.sum(axis=row_axis, keepdims=True)
+    Vm = np.where(ok, V, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(Vm, axis=row_axis, keepdims=True)
+        dev = np.abs(Vm - med)
+        mad = np.nanmedian(dev, axis=row_axis, keepdims=True)
+    usable = (n_ok >= 4) & np.isfinite(mad) & (mad > 0)
+    with np.errstate(invalid="ignore"):
+        out = ok & usable & (dev > n * mad)
+    return np.asarray(out, dtype=bool)
+
+
+def pearson_r_columns(X, y):
+    """The Pearson correlation between the pain score and EVERY column of a band-power matrix at
+    once, as one set of matrix operations rather than a loop over bands.
+
+    ``X`` is one row per pain report and one column per band, and may hold non-finite entries where
+    a band had no usable measurement for that report. ``y`` is one pain score per report. Each
+    column is correlated on its own usable rows, so two bands with different amounts of missing
+    signal are each given their full sample rather than both being cut down to the rows they share.
+
+    Returns ``{"r": (C,), "n": (C,)}`` where ``n`` is the count of pain reports behind each column.
+    A column with fewer than three usable reports, or with no spread left in either quantity, comes
+    back as a non-finite correlation rather than a number.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if X.ndim == 1:
+        X = X[:, None]
+    M = np.isfinite(X) & np.isfinite(y)[:, None]
+    Xf = np.where(M, X, 0.0)
+    Yf = np.where(M, y[:, None], 0.0)
+    n = M.sum(axis=0).astype(np.float64)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sx = Xf.sum(axis=0)
+        sy = Yf.sum(axis=0)
+        cxy = (Xf * Yf).sum(axis=0) - sx * sy / n
+        cxx = (Xf * Xf).sum(axis=0) - sx * sx / n
+        cyy = (Yf * Yf).sum(axis=0) - sy * sy / n
+        r = cxy / np.sqrt(cxx * cyy)
+    r = np.asarray(r, dtype=float)
+    r[(n < 3) | ~np.isfinite(r)] = np.nan
+    return {"r": r, "n": n.astype(int)}
+
+
+def average_ranks_columns(X):
+    """The rank of every entry within its own column, with tied entries sharing the average of the
+    ranks they span, computed for all columns at once.
+
+    Non-finite entries are pushed above every real value so that they take the highest ranks and
+    leave the ranks of the real values exactly as they would have been had the non-finite entries
+    not been there. The caller must still exclude them by mask; their ranks are meaningless.
+
+    Written out here rather than reached through scipy because the whole point of this section is to
+    avoid a loop over bands, and this is the one primitive that makes the classification number a
+    matrix operation.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim == 1:
+        X = X[:, None]
+    P, C = X.shape
+    Xf = np.where(np.isfinite(X), X, np.inf)
+    order = np.argsort(Xf, axis=0, kind="mergesort")
+    Xs = np.take_along_axis(Xf, order, axis=0)
+    starts = np.empty(Xs.shape, dtype=bool)
+    starts[0, :] = True
+    if P > 1:
+        starts[1:, :] = Xs[1:, :] != Xs[:-1, :]
+    gid = np.cumsum(starts, axis=0) - 1                 # tie-group index within each column
+    pos = np.repeat(np.arange(1, P + 1, dtype=np.float64)[:, None], C, axis=1)
+    cols = np.repeat(np.arange(C)[None, :], P, axis=0)
+    sums = np.zeros((P, C), dtype=np.float64)
+    cnts = np.zeros((P, C), dtype=np.float64)
+    np.add.at(sums, (gid, cols), pos)
+    np.add.at(cnts, (gid, cols), 1.0)
+    avg_sorted = sums[gid, cols] / cnts[gid, cols]
+    ranks = np.empty((P, C), dtype=np.float64)
+    np.put_along_axis(ranks, order, avg_sorted, axis=0)
+    return ranks
+
+
+def rank_auc_columns(X, y_binary):
+    """The area under the ROC curve of the BAND POWER ITSELF, for every column at once, keeping the
+    direction rather than folding it away.
+
+    A value above 0.5 means the band power tends to be HIGHER on high-pain reports, below 0.5 that
+    it tends to be LOWER, and 0.5 that it is neither. This is the area under the curve of the
+    threshold detector the device would actually run, since the device compares one band power
+    against one threshold and nothing else.
+
+    HOW THIS RELATES TO A FITTED LOGISTIC REGRESSION, MEASURED AND NOT ASSUMED. A logistic
+    regression with a single predictor turns that predictor into a predicted probability through a
+    curve that either only rises or only falls, and an area under the ROC curve depends solely on
+    the order the scores put the observations in. So the fitted regression's own area under the
+    curve, scored on the data it was fitted to, is EXACTLY one of two numbers -- this value, or one
+    minus this value -- and which of the two is decided by the sign of the fitted slope. That much
+    is exact and there is a test that checks it on every cell of a grid.
+
+    WHICH OF THE TWO IT IS, IS THE PART THAT HAD TO BE MEASURED, and an earlier revision of this
+    docstring got it wrong. The fitted slope follows the COVARIANCE between the pain state and the
+    band power, which uses the band powers' values, while the ordering uses only their ranks; on a
+    skewed band power a few large values can pull the covariance one way while the ranks point the
+    other. When they point the same way the fitted number is the larger of the two, i.e. the
+    direction-folded separability this module uses elsewhere; when they point opposite ways it is
+    the smaller one and lands BELOW 0.5. Measured on a 220-cell grid: fitting on the base-ten
+    logarithm of the band power, which is this module's own feature scale, the two point the same
+    way in 209 of 220 cells, and the 11 that differ are all cells whose ordering sits close to 0.5
+    in the first place. Fitting on the linear band power instead they agree in only 170 of 220.
+
+    THE CONSEQUENCE FOR READING THE PANEL. The folded number cannot fall below 0.5 wherever the two
+    directions agree, so 0.5 is close to a floor for it rather than a neutral middle, and a band
+    carrying nothing lands a little above 0.5 rather than on it. That is why the level a folded
+    value has to beat is the shuffled best-of-ten reference in the table, not 0.5. The grid the page
+    draws is this UNFOLDED value, which does straddle 0.5 in both directions and for which 0.5 is
+    the genuine no-discrimination point.
+
+    ``logistic_auc_columns_fitted`` fits the regressions. The relationship above is what lets a
+    220-cell grid be filled by two matrix operations instead of 220 model fits.
+
+    Ties are given half credit, which is the ordinary Mann-Whitney convention and the same
+    convention ``_weighted_auc_matrix`` already uses elsewhere in this module.
+
+    ``y_binary`` is 1 for a high-pain report, 0 for a low-pain one, and non-finite for a report the
+    split left out. Returns ``{"auc", "n_pos", "n_neg"}``, each one value per column.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y_binary, dtype=np.float64)
+    if X.ndim == 1:
+        X = X[:, None]
+    labelled = np.isfinite(y)
+    Xl = X[labelled, :]
+    yl = y[labelled]
+    C = X.shape[1]
+    if Xl.shape[0] == 0:
+        nan = np.full(C, np.nan)
+        return {"auc": nan, "n_pos": np.zeros(C, int), "n_neg": np.zeros(C, int)}
+    ok = np.isfinite(Xl)
+    ranks = average_ranks_columns(Xl)
+    pos = ok & (yl == 1)[:, None]
+    neg = ok & (yl == 0)[:, None]
+    n_pos = pos.sum(axis=0).astype(np.float64)
+    n_neg = neg.sum(axis=0).astype(np.float64)
+    rank_sum_pos = np.where(pos, ranks, 0.0).sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        u = rank_sum_pos - n_pos * (n_pos + 1.0) / 2.0
+        auc = u / (n_pos * n_neg)
+    auc = np.asarray(auc, dtype=float)
+    auc[(n_pos < 1) | (n_neg < 1) | ~np.isfinite(auc)] = np.nan
+    return {"auc": auc, "n_pos": n_pos.astype(int), "n_neg": n_neg.astype(int)}
+
+
+def logistic_auc_columns_fitted(X, y_binary, feature_scale="raw", n_jobs=None):
+    """The same area under the curve, obtained by actually FITTING a one-predictor logistic
+    regression per column and scoring it on the data it was fitted to.
+
+    THIS IS THE CHECK, NOT THE PRODUCTION PATH, and it exists for two reasons. The first is that the
+    identity ``rank_auc_columns`` documents has to be tested against a real fit rather than
+    asserted, and it is: ``test_analytics`` fits every cell of a grid and compares. The second is
+    that the cost of the two routes has to be measured rather than guessed before choosing one.
+
+    The regression is the unpenalised maximum-likelihood fit (``statsmodels.api.Logit``), which is
+    the conventional one-predictor logistic regression, rather than a penalised solver whose
+    shrinkage would move the fitted slope and so change what is being compared. The single predictor
+    is centred and scaled to unit spread first, purely so the solver converges on bands whose powers
+    differ by orders of magnitude; a linear rescaling cannot change an area under the curve, which
+    depends only on the order of the fitted scores.
+
+    ``feature_scale="log"`` fits on the base-ten logarithm of the band power. A logarithm is
+    increasing, so it cannot change the area under the curve of the band power itself; it changes
+    only whether the fitted STRAIGHT LINE points the same way as that ordering, which is the one
+    thing that decides whether the fitted number comes out folded or not.
+
+    ``n_jobs`` fits the columns on that many worker threads. Measured on the live record and
+    reported in the session notes: parallelising was NOT worth it here, because the fits are
+    milliseconds each and every one of them releases and reacquires the interpreter lock around a
+    very short amount of numerical work, so thread overhead swamps the gain. It is kept as an
+    argument, defaulting to serial, so the measurement can be repeated rather than re-litigated.
+
+    Returns ``{"auc": (C,), "slope": (C,), "converged": (C,)}``, non-finite where no fit was made.
+    """
+    import statsmodels.api as sm
+    from sklearn.metrics import roc_auc_score
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y_binary, dtype=np.float64)
+    if X.ndim == 1:
+        X = X[:, None]
+    if str(feature_scale) == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            X = np.log10(np.where(X > 0, X, np.nan))
+    labelled = np.isfinite(y)
+    C = X.shape[1]
+
+    def _one(c):
+        m = labelled & np.isfinite(X[:, c])
+        if int(m.sum()) < 8:
+            return np.nan, np.nan, False
+        yy = y[m].astype(int)
+        if len(np.unique(yy)) < 2:
+            return np.nan, np.nan, False
+        xx = X[m, c]
+        sd = float(np.std(xx))
+        if not np.isfinite(sd) or sd <= 0:
+            return np.nan, np.nan, False
+        xs = (xx - float(np.mean(xx))) / sd
+        design = sm.add_constant(xs)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = sm.Logit(yy, design).fit(disp=0)
+            # SCORED ON THE LINEAR PREDICTOR, NOT THE FITTED PROBABILITY. The two order the
+            # observations identically, so the area under the curve is the same quantity, but a
+            # strongly separating band drives the fitted probabilities to exactly 1.0 and exactly
+            # 0.0 in floating point, and those saturated values TIE observations that the predictor
+            # itself orders strictly. Ties are given half credit, so scoring the probability moved
+            # the area under the curve by up to 0.03 on the live record purely as an artefact of
+            # the number format. The linear predictor never saturates.
+            return (float(roc_auc_score(yy, design @ np.asarray(res.params))),
+                    float(np.asarray(res.params)[1]), bool(getattr(res, "mle_retvals", {})
+                                                           .get("converged", True)))
+        except Exception:
+            return np.nan, np.nan, False
+
+    if n_jobs and int(n_jobs) > 1:
+        with ThreadPoolExecutor(max_workers=int(n_jobs)) as pool:
+            got = list(pool.map(_one, range(C)))
+    else:
+        got = [_one(c) for c in range(C)]
+    return {"auc": np.asarray([g[0] for g in got], dtype=float),
+            "slope": np.asarray([g[1] for g in got], dtype=float),
+            "converged": np.asarray([g[2] for g in got], dtype=bool)}
+
+
+def _sweep_blank(reason, *, n_reports=0):
+    """The result when the sweep could not be run at all: no grid, and the reason in words."""
+    return {
+        "answer": BAND_PAIN_NOT_ASSESSED,
+        "why": str(reason),
+        "n_pain_reports": int(n_reports),
+        "center_freqs_hz": [],
+        "integration_seconds_requested": [float(s) for s in BAND_TIME_SWEEP_SECONDS],
+        "integration_seconds_delivered": [],
+        "correlation_grid": [],
+        "auc_grid": [],
+        "n_grid": [],
+        "best_correlation_rows": [],
+        "best_auc_rows": [],
+        "notes": [],
+    }
+
+
+def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz,
+                               band_width_hz=BAND_TIME_SWEEP_WIDTH_HZ,
+                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
+                               pain_cutoff=None, outlier_n_mad=None, outlier_scale=None,
+                               n_perm=BAND_TIME_SWEEP_N_PERM, n_boot=BAND_TIME_SWEEP_N_BOOT,
+                               seed=0, power_feature="band power", channel=None,
+                               metric_key=None, metric_label=None,
+                               tile_seconds=None, requested_seconds=None):
+    """The whole grid: for every band centre and every length of signal averaged into one
+    measurement, how well that band's power tracks the chosen pain score.
+
+    ``power_by_seconds`` maps a requested length of signal in seconds to a band-power matrix with
+    one row per pain report (in the order the pain scores are given) and one column per band centre.
+    Assembling those matrices is the caller's job, because it is the caller that owns the matching
+    of recordings to pain reports; this function does the arithmetic and the honesty accounting.
+
+    ONE PAIN REPORT IS ONE ROW. The matching this reads gives each pain report a single band-power
+    vector per length of signal, so there is no question of one well-covered report counting many
+    times, and no one-report-one-vote weighting is needed. ``n_pain_reports`` on every row is
+    therefore also the number of independent observations behind the number.
+
+    WHAT COMES BACK. ``correlation_grid`` and ``auc_grid`` are both one row per length of signal and
+    one column per band centre, so the surface can be drawn. ``best_correlation_rows`` and
+    ``best_auc_rows`` are one row per band centre carrying the best value in that band's column, the
+    length of signal that produced it, the count behind it, an interval, and the selection-aware
+    reference described in the section note above. The area-under-the-curve rows are referenced to
+    0.5 throughout and carry ``no_relationship_value`` saying so.
+    """
+    rng = np.random.default_rng(int(seed))
+    tile_s = float(sweep_tile_seconds() if tile_seconds is None else tile_seconds)
+    req = list(BAND_TIME_SWEEP_SECONDS if requested_seconds is None else requested_seconds)
+    centers = np.atleast_1d(np.asarray(center_freqs_hz, dtype=float))
+    pain = np.asarray(pain_scores, dtype=float)
+    n_reports_in = int(pain.size)
+    if centers.size == 0:
+        return _sweep_blank("no band centre inside the range asked for is present in the cached "
+                            "spectra, so there is nothing to sweep", n_reports=n_reports_in)
+    if n_reports_in == 0:
+        return _sweep_blank("no pain reports were handed in, so there is nothing to correlate the "
+                            "band power against")
+
+    # ---- assemble the grid's band-power matrices in the order of the requested lengths ----------
+    stacks, delivered, tiles, kept_req = [], [], [], []
+    for s in req:
+        mat = power_by_seconds.get(s)
+        if mat is None:
+            mat = power_by_seconds.get(float(s))
+        if mat is None:
+            continue
+        m = np.asarray(mat, dtype=np.float64)
+        if m.ndim != 2 or m.shape[0] != n_reports_in or m.shape[1] != centers.size:
+            continue
+        n_tiles, deliv = integration_time_tile_count(s, tile_s)
+        stacks.append(m)
+        delivered.append(float(deliv))
+        tiles.append(int(n_tiles))
+        kept_req.append(float(s))
+    if not stacks:
+        return _sweep_blank("no band-power measurements were produced for any of the lengths of "
+                            "signal asked for", n_reports=n_reports_in)
+    X = np.stack(stacks, axis=0)                      # (T, P, C)
+    T, P, C = X.shape
+
+    # ---- outlier exclusion, the same rule the rest of the page applies -------------------------
+    n_mad = float(OUTLIER_N_MAD if outlier_n_mad is None else outlier_n_mad)
+    o_scale = str(OUTLIER_SCALE if outlier_scale is None else outlier_scale)
+    n_excluded = 0
+    if n_mad > 0:
+        # Applied separately for each band centre and each length of signal, because band powers
+        # differ by orders of magnitude between bands and a threshold pooled across bands would be
+        # set by whichever band carries the largest numbers. Same rule and same reasoning as the
+        # full-spectrum scan on this page, computed here for every column of every length of
+        # signal in one pass -- see `mad_outlier_columns`.
+        drop = mad_outlier_columns(X.reshape(T * P, C).reshape(T, P, C), n_mad=n_mad,
+                                   scale=o_scale)
+        n_excluded = int(drop.sum())
+        X[drop] = np.nan
+
+    # ---- the continuous half: Pearson correlation, all bands at once per length of signal ------
+    corr = np.full((T, C), np.nan)
+    corr_n = np.zeros((T, C), dtype=int)
+    for t in range(T):
+        got = pearson_r_columns(X[t], pain)
+        corr[t] = got["r"]
+        corr_n[t] = got["n"]
+
+    # ---- the classification half: split the pain scores once, then rank ------------------------
+    y_bin, split_why, low_cut, high_cut = _pain_split(
+        pain, strategy=strategy, low_pct=low_pct, high_pct=high_pct, pain_cutoff=pain_cutoff)
+    y_bin = np.asarray(y_bin, dtype=float)
+    auc = np.full((T, C), np.nan)
+    auc_pos = np.zeros((T, C), dtype=int)
+    auc_neg = np.zeros((T, C), dtype=int)
+    for t in range(T):
+        got = rank_auc_columns(X[t], y_bin)
+        auc[t] = got["auc"]
+        auc_pos[t] = got["n_pos"]
+        auc_neg[t] = got["n_neg"]
+    # The direction-folded value is what a fitted one-predictor logistic regression returns in
+    # sample; see the identity documented on `rank_auc_columns`. It is carried alongside rather than
+    # instead, because folding throws the direction away AND puts a floor at 0.5, and the grid the
+    # page draws needs both sides of 0.5 to be visible.
+    with np.errstate(invalid="ignore"):
+        auc_folded = np.maximum(auc, 1.0 - auc)
+
+    # ---- the selection-aware reference: the distribution of the BEST OF TEN under no relationship
+    corr_null = _best_of_windows_null_correlation(X, pain, n_perm=int(n_perm), rng=rng)
+    auc_null = _best_of_windows_null_auc(X, y_bin, n_perm=int(n_perm), rng=rng)
+
+    # ---- one row per band centre, naming the winning length of signal --------------------------
+    best_corr_rows = _best_rows_correlation(
+        corr, corr_n, X, pain, centers, kept_req, delivered, tiles, corr_null,
+        band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
+        power_feature=power_feature, channel=channel)
+    best_auc_rows = _best_rows_auc(
+        auc, auc_pos, auc_neg, X, y_bin, centers, kept_req, delivered, tiles, auc_null,
+        band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
+        power_feature=power_feature, channel=channel, split_why=split_why,
+        low_cut=low_cut, high_cut=high_cut)
+
+    crosscheck = logistic_fit_crosscheck(
+        {float(kept_req[t]): X[t] for t in range(T)}, y_bin, best_auc_rows)
+    # The two keys naming which grid cell a row came from existed only so the cross-check could
+    # refit exactly that cell. They are dropped before the rows leave, so they cannot turn up as
+    # unexplained columns in a saved comma-separated file.
+    for _r in best_auc_rows:
+        _r.pop("_grid_time_index", None)
+        _r.pop("_grid_center_index", None)
+    notes = _sweep_notes(kept_req, delivered, tiles, tile_s, T, C, n_mad, o_scale, n_excluded,
+                         int(n_perm), split_why, crosscheck)
+    n_used = int(np.nanmax(corr_n)) if corr_n.size and np.isfinite(corr).any() else 0
+    return {
+        "answer": (BAND_PAIN_ESTABLISHED
+                   if any(r.get("answer") == BAND_PAIN_ESTABLISHED for r in best_auc_rows)
+                   else (BAND_PAIN_NOT_RESOLVED if best_auc_rows else BAND_PAIN_NOT_ASSESSED)),
+        "why": ("one row per band centre below; each row's own answer is the one to read, and the "
+                "answer here only says whether ANY band centre reached one"),
+        "channel": (str(channel) if channel is not None else None),
+        "metric_key": (str(metric_key) if metric_key is not None else None),
+        "metric_label": (str(metric_label) if metric_label is not None else None),
+        "power_feature": str(power_feature),
+        "band_width_hz": float(band_width_hz),
+        "tile_seconds": float(tile_s),
+        "center_freqs_hz": [float(c) for c in centers],
+        "band_fully_inside_8_to_30_hz": [
+            bool(c - band_width_hz / 2.0 >= BAND_TIME_SWEEP_CENTER_LO_HZ - 1e-9
+                 and c + band_width_hz / 2.0 <= BAND_TIME_SWEEP_CENTER_HI_HZ + 1e-9)
+            for c in centers],
+        "integration_seconds_requested": [float(s) for s in kept_req],
+        "integration_seconds_delivered": delivered,
+        "integration_tiles": tiles,
+        "correlation_grid": [[_f(v) for v in row] for row in corr],
+        "auc_grid": [[_f(v) for v in row] for row in auc],
+        "auc_direction_folded_grid": [[_f(v) for v in row] for row in auc_folded],
+        "n_grid": [[int(v) for v in row] for row in corr_n],
+        "auc_n_high_grid": [[int(v) for v in row] for row in auc_pos],
+        "auc_n_low_grid": [[int(v) for v in row] for row in auc_neg],
+        "best_correlation_rows": best_corr_rows,
+        "best_auc_rows": best_auc_rows,
+        "logistic_fit_crosscheck": crosscheck,
+        "correlation_no_relationship_value": CORRELATION_NO_RELATIONSHIP,
+        "auc_no_relationship_value": AUC_NO_DISCRIMINATION,
+        "auc_grid_is": ("the area under the curve of the band power itself, keeping its direction: "
+                        "above 0.5 the band power is higher on high-pain reports, below 0.5 it is "
+                        "lower, and 0.5 means neither"),
+        "auc_direction_folded_grid_is": ("the same value with its direction folded away, which is "
+                                         "what a fitted one-predictor logistic regression returns "
+                                         "in sample; it cannot fall below 0.5, so for THAT number "
+                                         "0.5 is a floor and the shuffled level in the table below "
+                                         "is what it has to beat"),
+        "pain_split_rule": split_why,
+        "pain_low_cut": (float(low_cut) if low_cut is not None else None),
+        "pain_high_cut": (float(high_cut) if high_cut is not None else None),
+        "n_pain_reports": n_used,
+        "n_pain_reports_handed_in": n_reports_in,
+        "n_measurements_excluded_as_outliers": int(n_excluded),
+        "outlier_n_mad": float(n_mad),
+        "outlier_scale": o_scale,
+        "n_shuffles": int(n_perm),
+        "n_resamples": int(n_boot),
+        "notes": notes,
+    }
+
+
+def _best_of_windows_null_correlation(X, pain, *, n_perm, rng):
+    """The distribution of the LARGEST correlation over the ten lengths of signal, when the pain
+    scores carry no relationship to the band power.
+
+    THIS IS THE COMPARISON THE PANEL'S BEST CELL HAS TO BE READ AGAINST. The reported best cell in a
+    band's row was chosen after seeing ten values, so comparing it against the distribution of a
+    single correlation overstates how unusual it is. Here the same best-of-ten choice is made on
+    each shuffle, so the observed best is compared against a distribution of bests.
+
+    The shuffling is a circular block permutation of the pain scores, the same null the rest of this
+    module uses (``stats_utils.circular_block_perm_matrix``), because pain scores on nearby days
+    resemble each other and an independent shuffle would make the reference too easy to beat. The
+    block length is chosen from the measured autocorrelation of the pain scores.
+
+    Every shuffle's whole grid is three matrix products per length of signal, so the entire
+    reference costs a handful of matrix operations rather than n_perm * 10 * C correlations.
+    Returns ``{"p95", "p99", "max_abs_by_perm", "block_length", "p_selection_aware" (C,)}``.
+    """
+    from .stats_utils import block_length_for, circular_block_perm_matrix, permutation_null_resolution
+    T, P, C = X.shape
+    y = np.asarray(pain, dtype=np.float64)
+    usable = np.isfinite(y)
+    if usable.sum() < 4 or int(n_perm) < 10:
+        return {"p95": None, "p99": None, "block_length": None, "n_used": 0,
+                "p_resolution": None, "best_abs_by_shuffle": [], "p_selection_aware": None}
+    yu = y[usable]
+    Xu = X[:, usable, :]
+    nP = int(yu.size)
+    block = int(block_length_for(yu, nP))
+    perm = circular_block_perm_matrix(nP, block, int(n_perm), rng)        # (S, nP)
+    Yp = yu[perm]                                                        # (S, nP)
+    S = Yp.shape[0]
+    best = np.zeros((S, C), dtype=np.float64)
+    for t in range(T):
+        M = np.isfinite(Xu[t])                                           # (nP, C)
+        Xf = np.where(M, Xu[t], 0.0)
+        n = M.sum(axis=0).astype(np.float64)                             # (C,)
+        sx = Xf.sum(axis=0)
+        sxx = (Xf * Xf).sum(axis=0)
+        sy = Yp @ M                                                      # (S, C)
+        syy = (Yp * Yp) @ M
+        sxy = Yp @ Xf
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cxy = sxy - sx[None, :] * sy / n[None, :]
+            cxx = (sxx - sx * sx / n)[None, :]
+            cyy = syy - sy * sy / n[None, :]
+            r = cxy / np.sqrt(cxx * cyy)
+        r = np.abs(np.where(np.isfinite(r), r, 0.0))
+        r[:, n < 3] = 0.0
+        best = np.maximum(best, r)
+    flat = best[np.isfinite(best)]
+    _, p_floor, _ = permutation_null_resolution(nP, block)
+    return {
+        "p95": (float(np.percentile(flat, 95)) if flat.size else None),
+        "p99": (float(np.percentile(flat, 99)) if flat.size else None),
+        "block_length": block,
+        "n_used": int(S),
+        "p_resolution": (float(p_floor) if p_floor is not None else None),
+        "best_by_shuffle": best,
+    }
+
+
+def _best_of_windows_null_auc(X, y_binary, *, n_perm, rng):
+    """The distribution of the LARGEST distance from 0.5 over the ten lengths of signal, when the
+    high-pain and low-pain labels carry no relationship to the band power.
+
+    Same argument as the correlation reference above, and referenced to 0.5 throughout: what is
+    maximised over the ten lengths is ``|area under the curve - 0.5|``, because a band that
+    separates the two states in either direction is a finding and 0.5 is the value that means
+    neither direction.
+
+    The ranks of the band power do not change when the labels are shuffled, so the whole reference
+    is one matrix product per length of signal against the fixed ranks.
+    """
+    from .stats_utils import block_length_for, circular_block_perm_matrix
+    T, P, C = X.shape
+    yb = np.asarray(y_binary, dtype=np.float64)
+    labelled = np.isfinite(yb)
+    if labelled.sum() < 4 or int(n_perm) < 10:
+        return {"p95": None, "p99": None, "block_length": None, "n_used": 0,
+                "best_by_shuffle": None}
+    yl = yb[labelled]
+    Xl = X[:, labelled, :]
+    nL = int(yl.size)
+    if len(np.unique(yl)) < 2:
+        return {"p95": None, "p99": None, "block_length": None, "n_used": 0,
+                "best_by_shuffle": None}
+    block = int(block_length_for(yl, nL))
+    perm = circular_block_perm_matrix(nL, block, int(n_perm), rng)
+    Yp = yl[perm]                                                        # (S, nL) still 0/1
+    S = Yp.shape[0]
+    best = np.zeros((S, C), dtype=np.float64)
+    for t in range(T):
+        ok = np.isfinite(Xl[t])
+        ranks = np.where(ok, average_ranks_columns(Xl[t]), 0.0)          # (nL, C)
+        n_pos = Yp @ ok.astype(np.float64)                               # (S, C)
+        n_all = ok.sum(axis=0).astype(np.float64)[None, :]
+        n_neg = n_all - n_pos
+        rank_sum_pos = Yp @ ranks                                        # (S, C)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            u = rank_sum_pos - n_pos * (n_pos + 1.0) / 2.0
+            a = u / (n_pos * n_neg)
+        d = np.abs(np.where(np.isfinite(a), a, AUC_NO_DISCRIMINATION) - AUC_NO_DISCRIMINATION)
+        d[(n_pos < 1) | (n_neg < 1)] = 0.0
+        best = np.maximum(best, d)
+    flat = best[np.isfinite(best)]
+    return {
+        "p95": (float(np.percentile(flat, 95)) if flat.size else None),
+        "p99": (float(np.percentile(flat, 99)) if flat.size else None),
+        "block_length": block,
+        "n_used": int(S),
+        "best_by_shuffle": best,
+    }
+
+
+#: The sentence that goes in the panel itself, not only in a caption. The PI's requirement: a reader
+#: must not be able to see the best cell without being told that it was chosen as the best of ten.
+BEST_OF_WINDOWS_OPTIMISM_NOTE = (
+    "The value in each row below is the LARGEST of the ten lengths of signal tried for that band, "
+    "so it is chosen after seeing the answers and is larger than the same band and the same length "
+    "of signal would give on a fresh set of pain reports. Its ordinary p-value is not the "
+    "probability of what was actually done. Read it against the shuffled best-of-ten value in the "
+    "same row, which is what the same choice produces when the pain scores carry no relationship to "
+    "the band power."
+)
+
+#: The sentence about what 0.5 means, carried with every area-under-the-curve row and figure.
+AUC_REFERENCE_NOTE = (
+    "For how well a band tells high-pain reports from low-pain ones, the value that means no "
+    "discrimination is 0.5, not 0. An interval that spans 0.5 means the question was not settled "
+    "for that band; it is not a finding that the band carries nothing."
+)
+
+
+def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad, o_scale,
+                 n_excluded, n_perm, split_why, crosscheck=None):
+    """The sentences the panel prints beside the grid, every one of them computed from what actually
+    ran rather than written in advance.
+
+    The first two are the two statistical requirements the PI made non-negotiable. The rest state
+    what the sweep did, in the numbers it did it with, so that a screenshot of the panel carries its
+    own provenance.
+    """
+    notes = [BEST_OF_WINDOWS_OPTIMISM_NOTE, AUC_REFERENCE_NOTE]
+    short = [(float(r), float(d)) for r, d in zip(requested, delivered) if abs(d - r) > 1e-9]
+    if short:
+        pairs = ", ".join(f"{r:g} s asked for, {d:g} s delivered" for r, d in short)
+        notes.append(
+            f"The length of signal is not freely choosable: one measurement is built from whole "
+            f"{tile_s:g} s pieces of recording, so {len(short)} of the {len(requested)} lengths "
+            f"asked for could not be delivered exactly ({pairs}). Every table and both figures "
+            f"below are labelled with the length DELIVERED.")
+    else:
+        notes.append(f"Every length of signal asked for is a whole number of the {tile_s:g} s "
+                     f"pieces a measurement is built from, so each was delivered exactly.")
+    notes.append(f"The grid is {n_times} lengths of signal by {n_centers} band centres, "
+                 f"{n_times * n_centers} cells, each {BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide and "
+                 f"spaced 1 Hz apart, so neighbouring band centres share most of their frequencies "
+                 f"and the cells are nowhere near independent of one another.")
+    if n_mad > 0:
+        notes.append(f"{n_excluded} single band-power measurements were set aside as outliers, by "
+                     f"the same rule the rest of this page uses ({n_mad:g} median absolute "
+                     f"deviations on the {o_scale} scale), applied separately for each band centre "
+                     f"and each length of signal.")
+    else:
+        notes.append("Outlier exclusion was switched off for this sweep, so every band-power "
+                     "measurement is included.")
+    notes.append(f"The shuffled reference is {n_perm} circular block shuffles of the pain scores, "
+                 f"which keeps the tendency of scores on nearby days to resemble each other. It "
+                 f"makes the same best-of-ten choice on each shuffle, and it also allows either "
+                 f"direction, so it is the level a value chosen the way these were has to beat.")
+    notes.append("The heat map for high pain against low pain keeps the direction: above 0.5 the "
+                 "band power is higher on the high-pain reports, below 0.5 it is lower. The table "
+                 "also carries the direction folded away, which is the number a fitted "
+                 "one-predictor logistic regression returns; that number cannot fall below 0.5, so "
+                 "0.5 is a floor for it rather than a neutral middle.")
+    notes.append(f"High pain and low pain were separated as follows: {split_why}.")
+    if crosscheck and int(crosscheck.get("n_cells") or 0):
+        n_ag = int(crosscheck.get("n_agree") or 0)
+        n_all = int(crosscheck.get("n_cells") or 0)
+        notes.append(
+            f"A real one-predictor logistic regression was fitted at each of the {n_all} cells that "
+            f"appear in the table, and its own value matched the folded ordering in {n_ag} of them; "
+            f"where it does not, the fitted straight line points against the order of that band's "
+            f"own power values, which happens where the band carries little.")
+    return notes
+
+
+def _percentile_interval(draws, alpha=0.05):
+    """The interval that holds the middle 1 - alpha of the resampled values, and the count of
+    resamples that could be used."""
+    d = np.asarray(draws, dtype=float)
+    d = d[np.isfinite(d)]
+    if d.size < 20:
+        return None, None, int(d.size)
+    lo = float(np.percentile(d, 100.0 * alpha / 2.0))
+    hi = float(np.percentile(d, 100.0 * (1.0 - alpha / 2.0)))
+    return lo, hi, int(d.size)
+
+
+def _verdict_against(lo, hi, null_value, *, observed=None, shuffled_p95=None):
+    """The three-word answer for one row, read against the value that means no relationship AND
+    against the level the same best-of-ten choice reaches on shuffled pain scores.
+
+    BOTH TESTS HAVE TO PASS FOR "established", and that is the point of this function. An interval
+    that excludes the no-relationship value answers the question "is this particular cell's value
+    different from no relationship"; it does NOT answer "is the LARGEST of ten values different from
+    no relationship", which is the question the reported number actually poses, because the cell was
+    chosen after seeing all ten. Before this gate existed the row could read ``established`` while
+    its own figure headline said the value does not clear the shuffled best-of-ten level -- two
+    surfaces contradicting each other about one number, which is exactly the class of error this
+    section was asked to avoid.
+
+    Never True or False, and never a fourth word. An interval that spans the no-relationship value,
+    or a value that does not clear the shuffled level, is ``not_resolved``: the question was NOT
+    settled. That is deliberately a different word from ``not_assessed``, which means no number
+    could be produced at all.
+    """
+    if lo is None or hi is None or not (np.isfinite(lo) and np.isfinite(hi)):
+        return BAND_PAIN_NOT_ASSESSED
+    if not (lo > null_value or hi < null_value):
+        return BAND_PAIN_NOT_RESOLVED
+    if observed is not None and shuffled_p95 is not None:
+        try:
+            if abs(float(observed) - float(null_value)) <= abs(float(shuffled_p95)
+                                                               - float(null_value)):
+                return BAND_PAIN_NOT_RESOLVED
+        except (TypeError, ValueError):
+            pass
+    return BAND_PAIN_ESTABLISHED
+
+
+def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,
+                           *, band_width_hz, n_boot, rng, power_feature, channel):
+    """One row per band centre: the strongest correlation any length of signal produced for that
+    band, which length produced it, and how to read it.
+
+    The strongest is chosen by SIZE IGNORING SIGN, because a band whose power falls as pain rises
+    tracks pain just as informatively as one whose power rises, and the sign is reported separately
+    so the direction is never lost.
+    """
+    T, C = corr.shape
+    y = np.asarray(pain, dtype=np.float64)
+    best_shuf = null.get("best_by_shuffle")
+    rows = []
+    with np.errstate(invalid="ignore"):
+        mag = np.abs(corr)
+    for c in range(C):
+        col = mag[:, c]
+        header = _band_row_header(channel if channel is not None else "", float(centers[c]),
+                                  band_width_hz)
+        if not np.isfinite(col).any():
+            row = dict(header)
+            row.update(_blank_band_answer(
+                "no length of signal produced a usable correlation for this band, so nothing was "
+                "measured here. This is an absent measurement, not a correlation of zero",
+                pearson_r=None, no_relationship_value=CORRELATION_NO_RELATIONSHIP,
+                power_feature=power_feature))
+            rows.append(row)
+            continue
+        t = int(np.nanargmax(col))
+        r_obs = float(corr[t, c])
+        n_obs = int(corr_n[t, c])
+        x = X[t, :, c]
+        m = np.isfinite(x) & np.isfinite(y)
+        # An interval by resampling whole pain reports. Each report is one row here, so resampling
+        # rows IS resampling reports and the interval means what it says.
+        boot_lo = boot_hi = None
+        n_res = 0
+        if int(m.sum()) >= 8:
+            idx = np.where(m)[0]
+            picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
+            xb = x[idx][picks]
+            yb = y[idx][picks]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                mx = xb.mean(axis=1, keepdims=True)
+                my = yb.mean(axis=1, keepdims=True)
+                dx = xb - mx
+                dy = yb - my
+                rb = ((dx * dy).sum(axis=1)
+                      / np.sqrt((dx * dx).sum(axis=1) * (dy * dy).sum(axis=1)))
+            boot_lo, boot_hi, n_res = _percentile_interval(rb)
+        shuf_p95 = shuf_p99 = None
+        p_sel = None
+        if best_shuf is not None and best_shuf.shape[1] == C:
+            colshuf = best_shuf[:, c]
+            colshuf = colshuf[np.isfinite(colshuf)]
+            if colshuf.size:
+                shuf_p95 = float(np.percentile(colshuf, 95))
+                shuf_p99 = float(np.percentile(colshuf, 99))
+                p_sel = float((int((colshuf >= abs(r_obs)).sum()) + 1) / (colshuf.size + 1))
+        row = dict(header)
+        row.update({
+            "pearson_r": r_obs,
+            "pearson_r_abs": float(abs(r_obs)),
+            "direction": ("band power rises as pain rises" if r_obs > 0
+                          else "band power falls as pain rises"),
+            "no_relationship_value": CORRELATION_NO_RELATIONSHIP,
+            "integration_seconds_requested": float(requested[t]),
+            "integration_seconds_delivered": float(delivered[t]),
+            "integration_tiles": int(tiles[t]),
+            "n_pain_reports": n_obs,
+            "pearson_r_low": boot_lo,
+            "pearson_r_high": boot_hi,
+            "n_resamples_used": int(n_res),
+            "answer": _verdict_against(boot_lo, boot_hi, CORRELATION_NO_RELATIONSHIP,
+                                       observed=r_obs, shuffled_p95=shuf_p95),
+            "chosen_as_best_of_n_windows": int(T),
+            "shuffled_best_of_windows_p95": shuf_p95,
+            "shuffled_best_of_windows_p99": shuf_p99,
+            "p_selection_aware": p_sel,
+            "beats_shuffled_best_of_windows_p95": (None if shuf_p95 is None
+                                                   else bool(abs(r_obs) > shuf_p95)),
+            "power_feature": str(power_feature),
+            "why": _corr_row_sentence(
+                _verdict_against(boot_lo, boot_hi, CORRELATION_NO_RELATIONSHIP,
+                                 observed=r_obs, shuffled_p95=shuf_p95),
+                r_obs, boot_lo, boot_hi, float(delivered[t]), int(T), shuf_p95),
+        })
+        rows.append(row)
+    return rows
+
+
+def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivered, tiles, null,
+                   *, band_width_hz, n_boot, rng, power_feature, channel, split_why,
+                   low_cut, high_cut):
+    """One row per band centre: the length of signal at which that band told high-pain reports from
+    low-pain ones best, and how to read it.
+
+    THE BEST IS THE FURTHEST FROM 0.5, in either direction, because a band whose power is LOWER on
+    high-pain reports separates the two states exactly as well as one whose power is higher. The
+    value itself is reported unfolded, so its direction is visible, and ``no_relationship_value`` is
+    0.5 on every row.
+    """
+    T, C = auc.shape
+    yb = np.asarray(y_bin, dtype=float)
+    best_shuf = null.get("best_by_shuffle")
+    rows = []
+    with np.errstate(invalid="ignore"):
+        dist = np.abs(auc - AUC_NO_DISCRIMINATION)
+    for c in range(C):
+        col = dist[:, c]
+        header = _band_row_header(channel if channel is not None else "", float(centers[c]),
+                                  band_width_hz)
+        if not np.isfinite(col).any():
+            row = dict(header)
+            row.update(_blank_band_answer(
+                "no length of signal produced a usable value for this band, so how well it tells "
+                "high pain from low pain has not been worked out. This is an absent measurement, "
+                "not a measurement showing no discrimination",
+                auc=None, no_relationship_value=AUC_NO_DISCRIMINATION,
+                power_feature=power_feature))
+            row["pain_split_rule"] = split_why
+            rows.append(row)
+            continue
+        t = int(np.nanargmax(col))
+        a_obs = float(auc[t, c])
+        x = X[t, :, c]
+        m = np.isfinite(x) & np.isfinite(yb)
+        boot_lo = boot_hi = None
+        n_res = 0
+        if int(m.sum()) >= 8 and len(np.unique(yb[m])) == 2:
+            idx = np.where(m)[0]
+            W = np.zeros((int(n_boot), idx.size), dtype=np.float64)
+            picks = rng.integers(0, idx.size, size=(int(n_boot), idx.size))
+            np.add.at(W, (np.arange(int(n_boot))[:, None], picks), 1.0)
+            # THE ORIENTATION IS FIXED ONCE, ON THE WHOLE SAMPLE, AND NEVER RE-CHOSEN INSIDE A
+            # RESAMPLE. Re-folding each resample would push every one of them to or above 0.5 and
+            # produce an interval that cannot include 0.5 however little the band carries, which is
+            # the audited convention `_weighted_auc_matrix` was written for. Fixing it instead lets
+            # a resample fall below 0.5, which is what makes an interval spanning 0.5 mean
+            # something.
+            ab = _weighted_auc_matrix(x[idx], yb[idx], W)
+            boot_lo, boot_hi, n_res = _percentile_interval(ab)
+        shuf_p95 = shuf_p99 = None
+        p_sel = None
+        if best_shuf is not None and best_shuf.shape[1] == C:
+            colshuf = best_shuf[:, c]
+            colshuf = colshuf[np.isfinite(colshuf)]
+            if colshuf.size:
+                shuf_p95 = float(AUC_NO_DISCRIMINATION + np.percentile(colshuf, 95))
+                shuf_p99 = float(AUC_NO_DISCRIMINATION + np.percentile(colshuf, 99))
+                p_sel = float((int((colshuf >= abs(a_obs - AUC_NO_DISCRIMINATION)).sum()) + 1)
+                              / (colshuf.size + 1))
+        verdict = _verdict_against(boot_lo, boot_hi, AUC_NO_DISCRIMINATION,
+                                   observed=a_obs, shuffled_p95=shuf_p95)
+        row = dict(header)
+        row.update({
+            "auc": a_obs,
+            "auc_direction_folded": float(max(a_obs, 1.0 - a_obs)),
+            "auc_direction_folded_is": ("the value a fitted one-predictor logistic regression "
+                                        "returns in sample; it cannot fall below 0.5"),
+            "auc_distance_from_no_discrimination": float(abs(a_obs - AUC_NO_DISCRIMINATION)),
+            "direction": ("band power is higher on high-pain reports" if a_obs > AUC_NO_DISCRIMINATION
+                          else "band power is lower on high-pain reports"),
+            "no_relationship_value": AUC_NO_DISCRIMINATION,
+            "integration_seconds_requested": float(requested[t]),
+            "integration_seconds_delivered": float(delivered[t]),
+            "integration_tiles": int(tiles[t]),
+            "n_pain_reports": int(auc_pos[t, c] + auc_neg[t, c]),
+            "n_high_pain_reports": int(auc_pos[t, c]),
+            "n_low_pain_reports": int(auc_neg[t, c]),
+            "auc_low": boot_lo,
+            "auc_high": boot_hi,
+            "n_resamples_used": int(n_res),
+            "answer": verdict,
+            "interval_spans_no_discrimination": (
+                None if (boot_lo is None or boot_hi is None)
+                else bool(boot_lo <= AUC_NO_DISCRIMINATION <= boot_hi)),
+            "chosen_as_best_of_n_windows": int(T),
+            "shuffled_best_of_windows_p95": shuf_p95,
+            "shuffled_best_of_windows_p99": shuf_p99,
+            "p_selection_aware": p_sel,
+            "beats_shuffled_best_of_windows_p95": (
+                None if shuf_p95 is None
+                else bool(abs(a_obs - AUC_NO_DISCRIMINATION)
+                          > shuf_p95 - AUC_NO_DISCRIMINATION)),
+            "pain_split_rule": split_why,
+            "pain_low_cut": (float(low_cut) if low_cut is not None else None),
+            "pain_high_cut": (float(high_cut) if high_cut is not None else None),
+            "power_feature": str(power_feature),
+            "_grid_time_index": float(requested[t]),
+            "_grid_center_index": int(c),
+            "why": _auc_row_sentence(verdict, a_obs, boot_lo, boot_hi, float(delivered[t]),
+                                     int(T), shuffled_p95=shuf_p95),
+        })
+        rows.append(row)
+    return rows
+
+
+def _corr_row_sentence(verdict, r_value, lo, hi, delivered_s, n_windows, shuffled_p95=None):
+    """The sentence for one row of the correlation table, naming which of the two tests it failed.
+
+    Same two-test structure as the high-pain-against-low-pain table: the interval has to stay off 0
+    AND the value has to be larger in size than what the same best-of-ten choice reaches on shuffled
+    pain scores. A row that fails either one says the question was not settled, never that the band
+    carries nothing.
+    """
+    at = (f"the strongest of {n_windows} lengths of signal for this band, reached when one "
+          f"measurement averaged {delivered_s:g} s of recording")
+    if verdict == BAND_PAIN_ESTABLISHED:
+        tail = (f" and larger in size than the {float(shuffled_p95):.3f} the same choice reaches on "
+                f"shuffled pain scores" if shuffled_p95 is not None else "")
+        return (f"the interval from {lo:.3f} to {hi:.3f} stays wholly off 0{tail}, so this band's "
+                f"power does track this pain score for this patient; {at}")
+    if verdict == BAND_PAIN_NOT_RESOLVED:
+        if lo is not None and hi is not None and lo <= 0.0 <= hi:
+            return (f"the interval from {lo:.3f} to {hi:.3f} includes 0, so whether this band's "
+                    f"power tracks this pain score was NOT SETTLED; {at}")
+        ref = (f"{float(shuffled_p95):.3f}" if shuffled_p95 is not None else "the shuffled level")
+        return (f"the interval from {lo:.3f} to {hi:.3f} does stay off 0, but the value is no "
+                f"larger in size than {ref}, which is what the SAME best-of-ten choice reaches on "
+                f"shuffled pain scores, so once that choice is accounted for nothing was SETTLED "
+                f"here; {at}")
+    return f"an interval could not be formed, so nothing was established either way; {at}"
+
+
+def _auc_row_sentence(verdict, auc_value, lo, hi, delivered_s, n_windows, shuffled_p95=None):
+    """The sentence for one row of the high-pain-against-low-pain table, written so that an
+    unsettled row cannot read as a negative result and so that it names WHICH of the two tests the
+    row failed.
+
+    The three answers get three different sentences on purpose, and ``not_resolved`` gets two
+    versions of its own: one for an interval that includes 0.5, and one for a value that clears 0.5
+    but does not clear the level the same best-of-ten choice reaches on shuffled pain scores.
+    Neither of them ever says the band carries nothing.
+    """
+    at = (f"reached when one measurement averaged {delivered_s:g} s of recording, chosen as the "
+          f"furthest from 0.5 of {n_windows} lengths of signal tried")
+    if verdict == BAND_PAIN_ESTABLISHED:
+        side = "above" if auc_value > AUC_NO_DISCRIMINATION else "below"
+        which = "higher" if auc_value > AUC_NO_DISCRIMINATION else "lower"
+        tail = ""
+        if shuffled_p95 is not None:
+            tail = (f", and it is further from 0.5 than the {float(shuffled_p95):.3f} the same "
+                    f"best-of-ten choice reaches on shuffled pain scores")
+        return (f"the interval from {lo:.3f} to {hi:.3f} stays wholly {side} 0.5{tail}, so this "
+                f"band does separate high-pain reports from low-pain ones for this patient, with "
+                f"the band power {which} on the high-pain ones; {at}")
+    if verdict == BAND_PAIN_NOT_RESOLVED:
+        if lo is not None and hi is not None and lo <= AUC_NO_DISCRIMINATION <= hi:
+            return (f"the interval from {lo:.3f} to {hi:.3f} includes 0.5, so whether this band "
+                    f"separates high-pain reports from low-pain ones was NOT SETTLED. That is an "
+                    f"unsettled question, not a finding that the band carries nothing; {at}")
+        ref = (f"{float(shuffled_p95):.3f}" if shuffled_p95 is not None else "the shuffled level")
+        return (f"the interval from {lo:.3f} to {hi:.3f} does stay off 0.5, but the value is no "
+                f"further from 0.5 than {ref}, which is what the SAME best-of-ten choice reaches on "
+                f"shuffled pain scores, so once that choice is accounted for nothing was SETTLED "
+                f"here. That is an unsettled question, not a finding that the band carries nothing; "
+                f"{at}")
+    return f"an interval could not be formed, so nothing was established either way; {at}"
+
+
+def logistic_fit_crosscheck(X_by_time, y_binary, best_rows, *, feature_scale="log"):
+    """Fit the real logistic regression at each band's WINNING cell and report whether its own area
+    under the curve matches the ordering the grid was built from.
+
+    WHY ONLY THE WINNING CELLS, with the costs measured rather than guessed. Timed warm (that is,
+    after the first fit, so the one-off cost of loading the solver is not counted against either
+    route): fitting all 220 cells of a grid takes about 168 ms, fitting only the 22 cells that reach
+    the summary table takes about 17 ms, and the matrix route that actually fills the grid computes
+    the same 220 cells in about 0.7 ms. So the check on the 22 reported cells costs a tenth of the
+    full-grid check while covering every number the table shows, and the matrix route is roughly 230
+    times faster than fitting the grid it replaces. On the live RCS08 record the same check came out
+    at 14 to 22 ms per contact pair. An earlier revision of this docstring said the 22-cell check
+    cost a twentieth of the full-grid one; that was wrong, and the first measurement of it (387 ms)
+    was itself inflated because it included loading the solver.
+
+    The count of cells where the fitted straight line points against the ordering is
+    reported rather than hidden, because that disagreement is itself informative: it marks a band
+    where a straight-line fit on that band's power disagrees with the order of its own values, which
+    happens where the band carries little and the values are skewed.
+
+    Returns ``{"n_cells", "n_agree", "n_disagree", "max_abs_difference", "fitted_by_center_hz",
+    "feature_scale", "seconds"}``.
+    """
+    import time as _t
+    t0 = _t.perf_counter()
+    out = {"n_cells": 0, "n_agree": 0, "n_disagree": 0, "max_abs_difference": None,
+           "n_rows_dropped_by_the_transform": 0, "fitted_by_center_hz": {},
+           "feature_scale": str(feature_scale), "seconds": 0.0}
+    y = np.asarray(y_binary, dtype=float)
+    worst = 0.0
+    for row in (best_rows or []):
+        a = row.get("auc")
+        if a is None or not np.isfinite(float(a)):
+            continue
+        key = row.get("_grid_time_index")
+        c = row.get("_grid_center_index")
+        if key is None or c is None:
+            continue
+        X = X_by_time.get(key)
+        if X is None:
+            continue
+        col = X[:, [int(c)]]
+        got = logistic_auc_columns_fitted(col, y, feature_scale=feature_scale)
+        fitted = float(got["auc"][0]) if np.isfinite(got["auc"][0]) else None
+        # COMPARED ON THE SAME ROWS THE FIT USED, which is not automatic. Fitting on the logarithm
+        # of the band power drops any row whose power is not strictly positive, and a Percept LSB
+        # band power can be exactly zero on an empty or saturated window. Comparing the fit against
+        # the grid's value, which was computed on the raw scale and so kept those rows, made the two
+        # differ by up to 0.032 on the live record purely because they were computed on different
+        # sets of pain reports. The ordering is therefore recomputed here on the same transformed
+        # column, and the number of rows the transform dropped is reported.
+        if str(feature_scale) == "log":
+            with np.errstate(divide="ignore", invalid="ignore"):
+                col_cmp = np.log10(np.where(col > 0, col, np.nan))
+        else:
+            col_cmp = col
+        n_dropped = int((np.isfinite(col) & ~np.isfinite(col_cmp)).sum())
+        unfolded_same_rows = float(rank_auc_columns(col_cmp, y)["auc"][0])
+        folded = (float(max(unfolded_same_rows, 1.0 - unfolded_same_rows))
+                  if np.isfinite(unfolded_same_rows) else float(max(float(a), 1.0 - float(a))))
+        out["n_rows_dropped_by_the_transform"] = (
+            out.get("n_rows_dropped_by_the_transform", 0) + n_dropped)
+        out["n_cells"] += 1
+        if fitted is None:
+            continue
+        d = abs(fitted - folded)
+        worst = max(worst, d)
+        if d <= 1e-9:
+            out["n_agree"] += 1
+        else:
+            out["n_disagree"] += 1
+        out["fitted_by_center_hz"][f"{float(row['band_center_hz']):g}"] = {
+            "auc_fitted_logistic": fitted,
+            "auc_direction_folded": folded,
+            "auc_direction_folded_on_the_grid_rows": float(max(float(a), 1.0 - float(a))),
+            "n_rows_dropped_by_the_transform": n_dropped,
+            "slope": (float(got["slope"][0]) if np.isfinite(got["slope"][0]) else None),
+            "matches_the_ordering": bool(d <= 1e-9),
+        }
+    out["max_abs_difference"] = (float(worst) if out["n_cells"] else None)
+    out["seconds"] = float(_t.perf_counter() - t0)
+    return out
+
+
+def band_time_sweep_tables(sweep):
+    """The two summary tables and the full grid, as data frames a reader can save and open.
+
+    Returns ``(correlation_table, auc_table, grid_table)``. The first two are one row per band
+    centre -- the two matrices the PI asked for -- each carrying the best value, the length of
+    signal that produced it, the count behind it, the interval, and the shuffled best-of-ten
+    reference. The third is one row per cell of the whole grid, because the shape of the surface is
+    what the panel is for and a reader who wants to check a sliders' worth of the surface needs the
+    cells and not only the winners.
+    """
+    corr = pd.DataFrame(sweep.get("best_correlation_rows") or [])
+    auc = pd.DataFrame(sweep.get("best_auc_rows") or [])
+    if len(corr):
+        corr = _order_export_columns(corr, [
+            "answer", "pearson_r", "pearson_r_abs", "direction",
+            "integration_seconds_delivered", "integration_seconds_requested", "integration_tiles",
+            "pearson_r_low", "pearson_r_high", "no_relationship_value",
+            "chosen_as_best_of_n_windows", "shuffled_best_of_windows_p95", "p_selection_aware",
+            "beats_shuffled_best_of_windows_p95", "n_pain_reports", "n_resamples_used",
+            "power_feature", "why"])
+    if len(auc):
+        auc = _order_export_columns(auc, [
+            "answer", "auc", "auc_direction_folded",
+            "auc_distance_from_no_discrimination", "direction",
+            "integration_seconds_delivered", "integration_seconds_requested", "integration_tiles",
+            "auc_low", "auc_high", "no_relationship_value", "interval_spans_no_discrimination",
+            "chosen_as_best_of_n_windows", "shuffled_best_of_windows_p95", "p_selection_aware",
+            "beats_shuffled_best_of_windows_p95", "n_pain_reports", "n_high_pain_reports",
+            "n_low_pain_reports", "pain_split_rule", "power_feature", "why"])
+    centers = list(sweep.get("center_freqs_hz") or [])
+    req = list(sweep.get("integration_seconds_requested") or [])
+    deliv = list(sweep.get("integration_seconds_delivered") or [])
+    tiles = list(sweep.get("integration_tiles") or [])
+    cg = sweep.get("correlation_grid") or []
+    ag = sweep.get("auc_grid") or []
+    fg = sweep.get("auc_direction_folded_grid") or []
+    ng = sweep.get("n_grid") or []
+    inside = list(sweep.get("band_fully_inside_8_to_30_hz") or [])
+    w = float(sweep.get("band_width_hz") or BAND_TIME_SWEEP_WIDTH_HZ)
+    grid_rows = []
+    for t in range(len(req)):
+        for c in range(len(centers)):
+            grid_rows.append({
+                "channel": sweep.get("channel"),
+                "band_center_hz": float(centers[c]),
+                "band_low_hz": float(centers[c]) - w / 2.0,
+                "band_high_hz": float(centers[c]) + w / 2.0,
+                "band_width_hz": w,
+                "band_fully_inside_8_to_30_hz": (bool(inside[c]) if c < len(inside) else None),
+                "integration_seconds_requested": float(req[t]),
+                "integration_seconds_delivered": (float(deliv[t]) if t < len(deliv) else None),
+                "integration_tiles": (int(tiles[t]) if t < len(tiles) else None),
+                "pearson_r": (cg[t][c] if t < len(cg) and c < len(cg[t]) else None),
+                "auc": (ag[t][c] if t < len(ag) and c < len(ag[t]) else None),
+                "auc_direction_folded": (fg[t][c] if t < len(fg) and c < len(fg[t]) else None),
+                "auc_no_relationship_value": AUC_NO_DISCRIMINATION,
+                "correlation_no_relationship_value": CORRELATION_NO_RELATIONSHIP,
+                "n_pain_reports": (ng[t][c] if t < len(ng) and c < len(ng[t]) else None),
+                "power_feature": sweep.get("power_feature"),
+                "metric_key": sweep.get("metric_key"),
+            })
+    return corr, auc, pd.DataFrame(grid_rows)
+
+
+def _sweep_headline_correlation(sweep):
+    """The correlation figure's headline, computed from the numbers in the same pass that draws it.
+
+    Never asserted. It names the band and the length of signal that came out strongest, states the
+    value, and says in the same breath whether that value clears the level the same best-of-ten
+    choice reaches on shuffled pain scores -- which is the only way the number can be read.
+    """
+    rows = [r for r in (sweep.get("best_correlation_rows") or [])
+            if r.get("pearson_r") is not None]
+    if not rows:
+        return ("No band centre produced a usable correlation with this pain score at any length "
+                "of signal")
+    top = max(rows, key=lambda r: abs(float(r["pearson_r"])))
+    r = float(top["pearson_r"])
+    fc = float(top["band_center_hz"])
+    s = float(top["integration_seconds_delivered"])
+    n = int(top.get("n_pain_reports") or 0)
+    p95 = top.get("shuffled_best_of_windows_p95")
+    lead = (f"Strongest tracking is {r:+.2f} at {fc:g} Hz when one measurement averages {s:g} s of "
+            f"recording, on {n} pain reports")
+    if p95 is None:
+        return lead + "; no shuffled reference could be built, so it cannot yet be read"
+    if abs(r) > float(p95):
+        return (lead + f"; that exceeds the {float(p95):.2f} the same best-of-ten choice reaches on "
+                f"19 of 20 shuffles")
+    return (lead + f"; the same best-of-ten choice reaches {float(p95):.2f} on shuffled pain "
+            f"scores, so this is NOT above chance")
+
+
+def _sweep_headline_auc(sweep):
+    """The classification figure's headline, computed from the numbers, and referenced to 0.5.
+
+    An interval that spans 0.5 is reported as unsettled in the headline itself, so a reader who only
+    ever sees the headline cannot take it for a negative result.
+    """
+    rows = [r for r in (sweep.get("best_auc_rows") or []) if r.get("auc") is not None]
+    if not rows:
+        return ("No band centre produced a usable value for telling high-pain reports from low-pain "
+                "ones at any length of signal")
+    top = max(rows, key=lambda r: abs(float(r["auc"]) - AUC_NO_DISCRIMINATION))
+    a = float(top["auc"])
+    fc = float(top["band_center_hz"])
+    s = float(top["integration_seconds_delivered"])
+    est = sum(1 for r in rows if r.get("answer") == BAND_PAIN_ESTABLISHED)
+    unres = sum(1 for r in rows if r.get("answer") == BAND_PAIN_NOT_RESOLVED)
+    lead = (f"Furthest from 0.5 is {a:.2f} at {fc:g} Hz when one measurement averages {s:g} s of "
+            f"recording")
+    p95 = top.get("shuffled_best_of_windows_p95")
+    if p95 is not None:
+        lead += (f", against {float(p95):.2f} for the same best-of-ten choice on shuffled pain "
+                 f"scores")
+    if est:
+        return (lead + f"; {est} of {len(rows)} band centres have an interval that stays off 0.5 "
+                f"and {unres} do not settle the question")
+    return (lead + f"; every one of the {len(rows)} band centres has an interval that includes 0.5, "
+            f"so none of them settles the question either way")
+
+
+def band_time_sweep_figures(sweep):
+    """The two heat maps the browser draws: band centre against length of signal, one for the
+    correlation and one for telling high pain from low pain.
+
+    ONE CONTEXT, AND NOTHING IS RENDERED HERE. The module returns Plotly figure descriptions as
+    plain data and the browser draws them; nothing on the server needs a headless browser. Both
+    figures take their headline and every piece of their text from ``sweep``, computed in this pass,
+    so a figure cannot carry a claim the numbers do not support.
+
+    THE TWO COLOUR SCALES ARE NOT INTERCHANGEABLE. The correlation scale is centred on 0 and the
+    classification scale is centred on 0.5, because those are the two values that mean no
+    relationship for the two quantities. A diverging scale centred anywhere else on the
+    classification figure would make a band that discriminates nothing look like a result.
+    """
+    centers = [float(c) for c in (sweep.get("center_freqs_hz") or [])]
+    deliv = [float(s) for s in (sweep.get("integration_seconds_delivered") or [])]
+    req = [float(s) for s in (sweep.get("integration_seconds_requested") or [])]
+    cg = sweep.get("correlation_grid") or []
+    ag = sweep.get("auc_grid") or []
+    ng = sweep.get("n_grid") or []
+    if not centers or not deliv:
+        return {}
+    ylab = [(f"{d:g} s" if abs(d - r) < 1e-9 else f"{d:g} s (asked {r:g} s)")
+            for d, r in zip(deliv, req)]
+    small = len(centers) * len(deliv) <= 320       # small enough to print every value and read it
+    notes = list(sweep.get("notes") or [])
+    footer = "  ".join(notes[:2])
+    inside = list(sweep.get("band_fully_inside_8_to_30_hz") or [])
+    outside = [centers[i] for i in range(len(centers))
+               if i < len(inside) and not inside[i]]
+    half = float(sweep.get("band_width_hz") or BAND_TIME_SWEEP_WIDTH_HZ) / 2.0
+
+    def _hover(grid, name, null_value):
+        return [[(f"{name} {grid[t][c]:.3f}<br>band {centers[c]:g} Hz "
+                  f"({centers[c] - half:g}-{centers[c] + half:g} Hz)<br>"
+                  f"{deliv[t]:g} s of recording per measurement<br>"
+                  f"{(ng[t][c] if t < len(ng) and c < len(ng[t]) else 0)} pain reports<br>"
+                  f"no relationship = {null_value:g}")
+                 if (t < len(grid) and c < len(grid[t]) and grid[t][c] is not None)
+                 else "not measured"
+                 for c in range(len(centers))] for t in range(len(deliv))]
+
+    def _shapes():
+        """Faint marks over the band centres whose 5 Hz window reaches outside the 8-30 Hz range the
+        firmware can place an adaptive sensing band in. Drawn under the data so printed values stay
+        readable."""
+        out = []
+        for fc in outside:
+            out.append({"type": "rect", "xref": "x", "yref": "paper",
+                        "x0": fc - 0.5, "x1": fc + 0.5, "y0": 0, "y1": 1,
+                        "fillcolor": "rgba(120,120,120,0.14)", "line": {"width": 0},
+                        "layer": "below"})
+        return out
+
+    def _figure(grid, title, colorscale, zmid, zmin, zmax, fmt, name, null_value, cbtitle):
+        return {
+            "data": [{
+                "type": "heatmap",
+                "x": centers,
+                "y": ylab,
+                "z": grid,
+                # The value is printed in every cell only while the grid is small enough for the
+                # printed numbers to be readable; above that the keys are left out entirely rather
+                # than set to nothing, which Plotly reads as an instruction it cannot follow.
+                **({"text": [[("" if (t >= len(grid) or c >= len(grid[t])
+                                      or grid[t][c] is None) else format(grid[t][c], fmt))
+                              for c in range(len(centers))] for t in range(len(deliv))],
+                    "texttemplate": "%{text}",
+                    "textfont": {"size": 8}} if small else {}),
+                "customdata": _hover(grid, name, null_value),
+                "hovertemplate": "%{customdata}<extra></extra>",
+                "colorscale": colorscale,
+                "zmid": zmid, "zmin": zmin, "zmax": zmax,
+                "colorbar": {"title": {"text": cbtitle, "side": "right"}, "thickness": 14},
+                "xgap": 1, "ygap": 1,
+            }],
+            "layout": {
+                "title": {"text": title, "font": {"size": 15}, "x": 0.01, "xanchor": "left"},
+                "xaxis": {"title": {"text": "Band centre (Hz), each band 5 Hz wide"},
+                          "dtick": 2, "tickmode": "linear", "showgrid": False},
+                "yaxis": {"title": {"text": "Seconds of recording averaged into one measurement"},
+                          "type": "category", "showgrid": False},
+                "shapes": _shapes(),
+                "annotations": [{
+                    "text": footer, "xref": "paper", "yref": "paper", "x": 0, "y": -0.30,
+                    "xanchor": "left", "yanchor": "top", "showarrow": False,
+                    "align": "left", "font": {"size": 9.5, "color": "#444"},
+                }],
+                "margin": {"l": 130, "r": 20, "t": 46, "b": 130},
+                "height": 420,
+                "uirevision": "band-time-sweep",
+            },
+        }
+
+    finite_c = [v for row in cg for v in row if v is not None and np.isfinite(v)]
+    cmax = max(0.1, min(1.0, max((abs(v) for v in finite_c), default=0.1)))
+    finite_a = [v for row in ag for v in row if v is not None and np.isfinite(v)]
+    amax = max(0.05, min(0.5, max((abs(v - AUC_NO_DISCRIMINATION) for v in finite_a), default=0.05)))
+    out = {}
+    if cg:
+        out["correlation"] = _figure(
+            cg, _sweep_headline_correlation(sweep), "RdBu", 0.0, -cmax, cmax, ".2f",
+            "correlation", CORRELATION_NO_RELATIONSHIP,
+            "Correlation<br>(0 = none)")
+    if ag:
+        out["auc"] = _figure(
+            ag, _sweep_headline_auc(sweep), "RdBu",
+            AUC_NO_DISCRIMINATION,
+            AUC_NO_DISCRIMINATION - amax, AUC_NO_DISCRIMINATION + amax, ".2f",
+            "area under the curve", AUC_NO_DISCRIMINATION,
+            "High vs low pain<br>(0.5 = none)")
+    return out

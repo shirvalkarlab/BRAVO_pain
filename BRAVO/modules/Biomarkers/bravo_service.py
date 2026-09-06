@@ -18,6 +18,7 @@ import json
 import math
 import logging
 import threading
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -2873,6 +2874,21 @@ def run_for_participant(request_data):
     as a friendly state instead of erroring.
     """
     participant_uid = request_data["ParticipantId"]
+    # THE BAND-BY-LENGTH-OF-SIGNAL SWEEP RIDES THIS ENDPOINT AND RETURNS ALONE.
+    # The section at the bottom of the exploration page asks a different question from the panels
+    # above it and has its own pain-score choice, so it fetches on its own. It returns here before
+    # any of the heavy per-channel work below, because that work would add tens of seconds and
+    # roughly nineteen megabytes to a request whose answer does not use any of it. The route and its
+    # view are owned outside this work, which is why this is a flag on the existing endpoint rather
+    # than an endpoint of its own.
+    if _wants_band_time_sweep(request_data):
+        try:
+            return band_time_sweep_for_participant(request_data)
+        except Exception as e:
+            _log.warning("Biomarkers: band/length-of-signal sweep request failed (%s)", e,
+                         exc_info=True)
+            return {"band_time_sweep": {}, "available_metrics": BIOMARKER_METRICS,
+                    "message": f"The sweep could not be computed: {e}"}
     source = request_data.get("source", "both")
     # "powerdomain" is the canonical name for the band-power-over-time source (complementary to
     # "timedomain"). It merges the ~10-min Chronic timeline with the per-session Power-Domain band
@@ -5319,3 +5335,256 @@ def pain_scores_for_participant(request_data):
     return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
             "stages": stages,
             "message": "DEMO DATA — synthetic pain-score reports." if demo else ""}
+
+
+# =================================================================================================
+# HOW WELL EACH BAND TRACKS PAIN, AT EVERY LENGTH OF SIGNAL AVERAGED INTO ONE MEASUREMENT
+# =================================================================================================
+#
+# This serves the last section of the biomarker exploration page, above the device-scale calibration
+# panels. It rides the SAME endpoint as the rest of the page (`POST /api/queryBiomarkerAnalysis`)
+# with `BandTimeSweep` set, because the endpoint and its route are owned elsewhere and adding a
+# second one would have meant editing a file this work does not own. When that flag is set the
+# request returns the sweep ALONE and skips the whole per-channel decode the page's main panels
+# need, which is what makes the section usable interactively: the expensive part, slicing the
+# recording history into 3 s pieces and computing a spectrum for each, is the same memoized cache
+# the page's other panels already built.
+#
+# THE TOP-OF-PAGE SETTINGS GOVERN THIS SECTION. Every control that changes which recording is
+# matched to which pain report is read from the same request keys the main analysis reads, through
+# the same helper functions, so the sweep cannot be computed against a different match policy from
+# the panels above it: `MatchToleranceMin` (the eligibility radius), `AllowWindowReuse`,
+# `LabelStrategy` with `PercentileLow` / `PercentileHigh` (how high pain is separated from low),
+# `OutlierNMad` / `OutlierScale`, and `RedcapRecordId` / `ProcessedPRO` (which pain reports exist).
+# The ONE control the section overrides is which pain score to use, because the PI asked for that
+# to be chosen inside the section; it is sent as `SweepMetric` and falls back to the page's own
+# `LabelMetric` when absent.
+#
+# THE LENGTH OF SIGNAL IS THE ONE THING SWEPT. On the page above, how much of the nearest recording
+# goes into one band-power measurement is a single slider (`MatchExtentSec`). Here that quantity is
+# swept over `analytics.BAND_TIME_SWEEP_SECONDS` instead of taken from the slider, which is the
+# whole point of the section, so `MatchExtentSec` is deliberately NOT read.
+
+#: The request key that asks for the sweep alone.
+BAND_TIME_SWEEP_KEY = "BandTimeSweep"
+
+
+def _wants_band_time_sweep(request_data):
+    """Whether this request is asking for the band-by-length-of-signal sweep alone."""
+    return str(request_data.get(BAND_TIME_SWEEP_KEY, "")).lower() in ("1", "true", "yes", "on")
+
+
+def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
+                                      allow_window_reuse, seconds=None):
+    """One band-power matrix per length of signal, each with one row per pain report and one column
+    per band centre.
+
+    THE MATCHING IS THE MODULE'S OWN, CALLED ONCE PER LENGTH OF SIGNAL, NOT REIMPLEMENTED.
+    `availability.live_lsb_spectrum_match` is the function the page's full-spectrum scan already
+    uses to decide which pieces of recording serve which pain report; it takes the length of signal
+    as `td_quantity_s`, so sweeping that argument is exactly what this section needs and no new
+    matching rule is introduced. Calling it once per length is cheap because the expensive work --
+    slicing the recording history into 3 s pieces and computing a spectrum for each -- happened when
+    the cache was built and is not repeated.
+
+    THERE IS NO LOOP OVER BANDS ANYWHERE. Each call returns every band centre in the cache for every
+    pain report, so the band axis arrives as columns of a matrix and every statistic downstream is a
+    matrix operation across all bands at once.
+
+    Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index)`.
+    """
+    secs = list(analytics.BAND_TIME_SWEEP_SECONDS if seconds is None else seconds)
+    cache_centers = np.asarray(raw_cache.get("centers_hz") or [], dtype=float)
+    centers = (analytics.sweep_center_freqs(cache_centers) if center_hz is None
+               else np.atleast_1d(np.asarray(center_hz, dtype=float)))
+    if centers.size == 0 or cache_centers.size == 0:
+        return {}, {}, centers, np.asarray([], dtype=int)
+    # Column positions of the swept centres inside the cache's own centre list, so the matrix
+    # columns and the reported centres cannot drift apart.
+    col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
+    pt = np.asarray(pro_times, dtype=float)
+    power, stats = {}, {}
+    for s in secs:
+        recs, st = availability.live_lsb_spectrum_match(
+            pt, raw_cache, tol_s=tol_s, td_quantity_s=float(s),
+            allow_window_reuse=allow_window_reuse)
+        mat = np.full((pt.size, centers.size), np.nan, dtype=float)
+        for i, rec in enumerate(recs or []):
+            if i >= pt.size:
+                break
+            vec = rec.get("lsb")
+            if not vec:
+                continue
+            v = np.asarray([np.nan if x is None else float(x) for x in vec], dtype=float)
+            take = col[col < v.size]
+            mat[i, : take.size] = v[take]
+        power[float(s)] = mat
+        stats[float(s)] = st
+    return power, stats, centers, col
+
+
+def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
+                              pain_values, label_strategy, low_pct, high_pct,
+                              outlier_n_mad, outlier_scale, metric_key, metric_label,
+                              n_perm=None, n_boot=None, seed=0):
+    """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
+
+    ONE CONTACT PAIR IS ONE ANSWER, never pooled. A contact pair fixes which side of the brain and
+    which pair of electrode contacts the signal came from, and two pairs are two different
+    measurements of two different places; averaging their grids would invite a reader to read a
+    number that belongs to neither. Each pair therefore gets its own grid, its own two summary
+    tables and its own pair of figures, and the pair is named on every one of them.
+    """
+    out = {}
+    for raw_ch, raw_cache in (raw_by_channel or {}).items():
+        if not raw_cache:
+            continue
+        t0 = _time.perf_counter()
+        try:
+            power, stats, centers, _ = _band_time_sweep_power_by_seconds(
+                pro_times, raw_cache, None, tol_s=tol_s,
+                allow_window_reuse=allow_window_reuse)
+            match_s = _time.perf_counter() - t0
+            sweep = analytics.band_time_sweep_from_power(
+                power, pain_values, center_freqs_hz=centers,
+                strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+                outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
+                n_perm=(analytics.BAND_TIME_SWEEP_N_PERM if n_perm is None else n_perm),
+                n_boot=(analytics.BAND_TIME_SWEEP_N_BOOT if n_boot is None else n_boot),
+                seed=seed, channel=raw_ch, metric_key=metric_key, metric_label=metric_label,
+                power_feature=("band power in the device's own least-significant-bit units, "
+                               "reached from the 250 samples-per-second voltage trace by the "
+                               "validated transform, or from the device's own spectrum where no "
+                               "voltage trace was in range"))
+            sweep["matched_seconds"] = float(match_s)
+            sweep["total_seconds"] = float(_time.perf_counter() - t0)
+            sweep["match_stats_by_seconds"] = {
+                str(k): {kk: v[kk] for kk in ("n_pro", "n_pro_td", "n_pro_psd",
+                                              "n_pro_unmatched", "td_n_epochs_cap",
+                                              "n_td_assigned", "n_td_used")
+                         if kk in (v or {})}
+                for k, v in (stats or {}).items()}
+            sweep["figures"] = analytics.band_time_sweep_figures(sweep)
+            out[raw_ch] = sweep
+        except Exception as e:
+            _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
+                         raw_ch, e, exc_info=True)
+            out[raw_ch] = analytics._sweep_blank(
+                f"the sweep could not be completed for contact pair {raw_ch}: {e}")
+    return out
+
+
+def band_time_sweep_for_participant(request_data):
+    """The payload for the band-by-length-of-signal section at the bottom of the exploration page.
+
+    Loads only what the sweep needs, reuses the memoized 3 s-piece cache the page's other panels
+    already built, and returns one grid per sensing contact pair plus the two summary tables and the
+    two heat maps for each. Never raises: a missing input comes back as an empty payload with the
+    reason in `message`, which is what the panel renders as its empty state.
+    """
+    participant_uid = request_data["ParticipantId"]
+    Participant = models.Participant.find(uid=participant_uid)
+    blank = {"band_time_sweep": {}, "available_metrics": BIOMARKER_METRICS,
+             "integration_seconds": [float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS],
+             "tile_seconds": float(analytics.RAW_LSB_WINDOW_SECONDS)}
+
+    td = _load_recordings(participant_uid, TIMEDOMAIN_TYPES)
+    pro_df = _load_pros(request_data, Participant)
+    if pro_df is None or len(pro_df) == 0:
+        return dict(blank, message=("No patient-reported pain scores are available for this "
+                                    "participant, so there is nothing to track the band power "
+                                    "against."))
+    if not td:
+        return dict(blank, message=("No time-domain Percept recordings have been ingested for this "
+                                    "participant, so no band power can be computed at any length "
+                                    "of signal."))
+
+    # The section's OWN pain-score choice, sent as SweepMetric, falling back to the page's. Resolved
+    # through the SAME helper the main analysis uses, so a composite score is blended identically
+    # and an unknown choice falls back the same way rather than erroring.
+    sweep_request = dict(request_data)
+    chosen = request_data.get("SweepMetric")
+    if chosen:
+        sweep_request["LabelMetric"] = chosen
+    pro_df, label_metric, _ = _resolve_biomarker_metric(sweep_request, pro_df)
+    metric_label = next((m["label"] for m in BIOMARKER_METRICS if m["key"] == label_metric),
+                        label_metric)
+
+    # Every remaining setting comes from the top of the page, through the helpers the main analysis
+    # uses. See the section note above for why MatchExtentSec is the one that is deliberately not
+    # read here.
+    label_strategy, low_pct, high_pct = _label_strategy_params(request_data)
+    match_tol_min = _match_tolerance_param(request_data)
+    allow_window_reuse = str(request_data.get("AllowWindowReuse", "")).lower() in (
+        "1", "true", "yes", "on")
+    outlier_n_mad = _float_param(request_data, "OutlierNMad",
+                                 default=float(analytics.OUTLIER_N_MAD), lo=0.0, hi=50.0)
+    outlier_scale = str(request_data.get("OutlierScale") or analytics.OUTLIER_SCALE).lower()
+    if outlier_scale not in ("log", "raw"):
+        outlier_scale = analytics.OUTLIER_SCALE
+    # The eligibility radius, in seconds. The main slider can be switched off, in which case the
+    # longest length of signal in the sweep stands in for it so that a pain report is still matched
+    # against nearby recording rather than against the whole record.
+    tol_s = (float(match_tol_min) * 60.0 if match_tol_min
+             else float(max(analytics.BAND_TIME_SWEEP_SECONDS)))
+
+    pro_match = _pro_match_arrays(pro_df, label_metric)
+    if pro_match is None or pro_match[0] is None or np.asarray(pro_match[0]).size == 0:
+        return dict(blank, label_metric=label_metric, metric_label=metric_label,
+                    message=(f"No pain report carries a finite {metric_label} score, so there is "
+                             f"nothing to track the band power against for this choice of score."))
+    pro_times = np.asarray(pro_match[0], dtype=float)
+    pain_values = np.asarray(pro_match[1], dtype=float)
+
+    psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+    sensing_idx = _build_sensing_config_index(list(td or []))
+    event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
+    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+    chan_order = _derive_chan_order(td)
+    channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
+    if not channels:
+        return dict(blank, label_metric=label_metric, metric_label=metric_label,
+                    message="No sensing contact pair could be identified in the recordings.")
+    _stamp_td_product(list(td or []))
+    raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels,
+                                      list(td or []) + list(psd_list or []), event_blocks,
+                                      montage_psd_blocks=montage_blocks)
+
+    t0 = _time.perf_counter()
+    sweeps = _band_time_sweep_channels(
+        raw_by_ch, pro_times, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
+        pain_values=pain_values, label_strategy=label_strategy, low_pct=low_pct,
+        high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
+        metric_key=label_metric, metric_label=metric_label)
+    wall = float(_time.perf_counter() - t0)
+
+    return {
+        "band_time_sweep": sweeps,
+        "available_metrics": BIOMARKER_METRICS,
+        "label_metric": label_metric,
+        "metric_label": metric_label,
+        "integration_seconds": [float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS],
+        "integration_seconds_delivered": [
+            analytics.integration_time_tile_count(s)[1]
+            for s in analytics.BAND_TIME_SWEEP_SECONDS],
+        "tile_seconds": float(analytics.RAW_LSB_WINDOW_SECONDS),
+        "band_width_hz": float(analytics.BAND_TIME_SWEEP_WIDTH_HZ),
+        # Echoed so a saved response records the settings the sweep actually ran under, and so the
+        # panel can state them without the reader having to trust that they were passed through.
+        "settings_applied": {
+            "match_tolerance_min": match_tol_min,
+            "eligibility_radius_seconds": float(tol_s),
+            "allow_window_reuse": bool(allow_window_reuse),
+            "label_strategy": label_strategy,
+            "percentile_low": float(low_pct),
+            "percentile_high": float(high_pct),
+            "outlier_n_mad": float(outlier_n_mad),
+            "outlier_scale": outlier_scale,
+            "sweep_metric": label_metric,
+            "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
+                                         "one measurement is not read here, because that quantity "
+                                         "is the axis this section sweeps"),
+        },
+        "wall_seconds": wall,
+        "message": None,
+    }

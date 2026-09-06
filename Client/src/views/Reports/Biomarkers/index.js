@@ -21,6 +21,7 @@ import BiomarkerTimeline from "./BiomarkerTimeline";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+import BandTimeSweepPanel from "./BandTimeSweepPanel";
 import { computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
 
@@ -1054,6 +1055,28 @@ function Biomarkers() {
                 metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
                   .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
             ) : null}
+
+            {/* ── HOW WELL EACH BAND TRACKS PAIN, AT EVERY LENGTH OF SIGNAL AVERAGED INTO ONE
+                MEASUREMENT ────────────────────────────────────────────────────────────────────────
+                Placed here, as the last section of the exploration and immediately BEFORE the
+                device-scale calibration panels, because it is still an exploration question: which
+                band and how many seconds of it. The calibration panels below it answer a different
+                question, how to express a chosen band in the numbers the device is programmed with,
+                and that only arises once this one has been settled.
+
+                It reads the top-of-page settings through `requestParams`, the same object the main
+                analysis was computed from, so the grid cannot be built against a different matching
+                policy from the panels above. Its pain-score list is the page's own, so the two
+                selectors cannot offer different scores. It fetches on its own press because the
+                sweep is the most expensive thing on the page. */}
+            <Grid item xs={12}>
+              <BandTimeSweepPanel participantUid={participant_uid}
+                requestParams={requestParams}
+                availableMetrics={(data && data.available_metrics) || DEFAULT_METRIC_OPTIONS}
+                pageMetric={(data && data.label_metric) || metric}
+                metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+                  .find((m) => m.key === (data && data.label_metric)) || {}).label} />
+            </Grid>
 
             {/* ── DEVICE-SCALE CALIBRATION ──────────────────────────────────────────────────────
                 Two panels relocated here from the Closed-Loop Deployment page. They belong on this
