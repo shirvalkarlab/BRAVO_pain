@@ -1,7 +1,8 @@
 """Run portable tests against disposable SQLite/storage, with whole-tree coverage.
 
 The container must have networking disabled and only the source mount. Private
-appliance data/model acceptance is a separate gate; this never starts a server.
+appliance data/model acceptance is separate; tests never contact deployed services.
+Isolated loopback component fixtures publish no host ports.
 """
 import base64
 import json
