@@ -122,12 +122,12 @@ git log --oneline aditya..shirvalkar/PS_closedloop_deployment
 git cherry-pick <commit>
 ```
 
-For automatic integration, each source branch must
-remain unchanged for 48 hours before integration is eligible. A new source SHA
-resets that branch's timer; an explicit request for immediate integration may
-bypass the delay. Eligibility does not bypass review, conflict handling, tests
-or deployment verification. See [automatic updates](docs/automatic-updates.md)
-for the single maintenance owner, schedule and required execution order.
+Automatic maintenance reviews current Fixel updates first, then selectively adapts
+Prasad updates, without a 48-hour observation hold. Aditya's September 6 standing
+authorization covers routine execution at 03:00 without manual approval. Source
+review, conflict handling, exact-candidate tests/CI and deployed verification
+remain required. See [automatic updates](docs/automatic-updates.md) for ownership,
+schedule and execution order.
 
 ## Local Docker setup
 

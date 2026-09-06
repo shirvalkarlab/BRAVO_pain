@@ -218,6 +218,29 @@ def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataF
     return out
 
 
+# Required even for an empty supplied stream, as returned by settings_stream.
+_STREAM_REQUIRED_COLUMNS = ("t", "src", "hemi", "amp", "pw", "rate", "cathode", "schema")
+
+
+def _use_stream_or_build_one(participant, stream):
+    """Reuse a complete settings frame; omitted streams keep the canonical loader path.
+
+    Validate supplied frames before analysis so an incomplete frame cannot silently
+    look like absent evidence. Return the same object, preserving its provenance.
+    """
+    if stream is None:
+        return settings_stream(participant)
+    if not isinstance(stream, pd.DataFrame):
+        raise TypeError("the stream argument must be the pandas frame that "
+                        "StimOptimizer.adapter.settings_stream returns, or None to build one here; "
+                        f"got {type(stream).__name__}")
+    missing = [c for c in _STREAM_REQUIRED_COLUMNS if c not in stream.columns]
+    if missing:
+        raise KeyError("the stream handed in is missing the columns "
+                       f"{missing}, which the settings stream is defined to carry")
+    return stream
+
+
 def exposure_epochs(stream: pd.DataFrame) -> pd.DataFrame:
     """Collapse the settings stream into exposure epochs, opening a new one on ANY change.
 
@@ -351,7 +374,7 @@ def evidence_inputs(participant, *, force_refresh=None, sources=None, stream=Non
     from modules.Biomarkers import bravo_service as _bs      # local: avoids a module-level cycle
     from .routines import lfp_evidence as _ev
 
-    epochs = exposure_epochs(settings_stream(participant) if stream is None else stream)
+    epochs = exposure_epochs(_use_stream_or_build_one(participant, stream))
     mat = _bs._cached_psd_matrix(getattr(participant, "uid", participant),
                                  force_refresh=force_refresh)
     if not mat:
@@ -385,7 +408,7 @@ def build_design_matrix(participant, request_data=None, *, washin_min=1.0,
     """
     from modules.Biomarkers import bravo_service as _bs
 
-    stream = settings_stream(participant) if stream is None else stream
+    stream = _use_stream_or_build_one(participant, stream)
     if stream.empty:
         return pd.DataFrame()
     ep = exposure_epochs(stream)

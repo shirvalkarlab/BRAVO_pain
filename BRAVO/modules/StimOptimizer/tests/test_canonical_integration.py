@@ -91,7 +91,7 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(pd.isna(adapter._session_timestamp({})))
 
     def test_supplied_settings_produce_identical_design_without_reload(self):
-        stream = pd.DataFrame([dict(t=pd.Timestamp(t, tz="UTC"), hemi=h, amp=a, pw=90, rate=100, cathode="0")
+        stream = pd.DataFrame([dict(t=pd.Timestamp(t, tz="UTC"), src="history", schema="legacy", hemi=h, amp=a, pw=90, rate=100, cathode="0")
                                for t, a in [("2025-07-20", 1), ("2025-07-22", 2)] for h in ("Left", "Right")])
         pro = pd.DataFrame({"nrs": [0, 8], "_pro_time_utc": pd.to_datetime(["2025-07-21", "2025-07-23"])})
         bs = types.SimpleNamespace(_load_pros=lambda *a: pro, _pro_times_utc_series=lambda p: p._pro_time_utc)

@@ -243,9 +243,9 @@ alone does not identify it.
 The authoritative update policy and schedule are in
 [automatic updates](../automatic-updates.md). Keep one maintenance owner and the
 Fixel → Prasad → data synchronization → cache preparation order. Both source
-branches require independently observed 48-hour quiet periods; explicit immediate
-integration requests bypass only the requested delay. The timer never bypasses
-source review, conflict handling, this validation gate or deployed verification.
+branches are reviewed for immediate integration, without an observation-history
+wait, under Aditya's September 6 standing instruction. Removing the delay never
+bypasses source review, conflict handling, this validation gate or deployed verification.
 
 Do not add another updater, data-sync timer or cache timer beside the configured
 orchestrator. Keep manual sync requests functional. A failed candidate or deadline

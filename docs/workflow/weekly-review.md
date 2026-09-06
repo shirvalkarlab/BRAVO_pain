@@ -74,8 +74,8 @@ Keep private machine-readable ledgers under ignored `output/weekly-reviews/`:
   revision, Slack message ID/link, send completion. Inspect records and Slack
   history before retrying; do not duplicate a dated review message.
 
-Fixel development is reviewed/integrated before Prasad, retaining independent
-48-hour observed-head eligibility. Resolve questions independently when evidence
+Fixel development is reviewed/integrated before Prasad, with no 48-hour
+observation hold under Aditya's September 6 standing instruction. Resolve questions independently when evidence
 permits. Without explicit guidance, preserve validated behavior and hold the
 uncertain portion, rather than making a broad speculative integration. Do not
 discard unrelated validated work or revisit decisions already made by Aditya.
