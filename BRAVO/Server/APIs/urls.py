@@ -26,8 +26,17 @@ from . import FitbitDashboard, OuraRingDashboard, EmpaticaDashboard, GoogleHealt
 from . import DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis, AIModels
 from . import AsyncJobScheduling
 from . import DataFilter
+from . import RCS08Sync
+from . import PrasadAnalysis
+from . import OuraFreeReps
+from . import OuraTimeline
+from . import RedcapTimeline
+from . import HomeNeuralTimeline
 
 urlpatterns = [
+    *[path(endpoint, PrasadAnalysis.ResearchAnalysis.as_view(operation=endpoint))
+      for endpoint in PrasadAnalysis.OPERATIONS],
+    path('queryServerIdentity', PrasadAnalysis.QueryServerIdentity.as_view()),
     path('register', Auth.UserRegister.as_view()),
     path('login', Auth.UserLogin.as_view()),
     path('logout', Auth.UserLogout.as_view()),
@@ -38,11 +47,16 @@ urlpatterns = [
     path('requestGoogleHealthAuth', GoogleHealthDashboard.GoogleHealthAuthHandler.as_view()),
     path('queryGoogleHealthData', GoogleHealthDashboard.QueryGoogleHealthData.as_view()),
     path('requestOuraRingAuth', OuraRingDashboard.OuraRingAuthHandler.as_view()),
+    path('queryOuraFreeReps', OuraFreeReps.QueryOuraFreeReps.as_view()),
+    path('queryOuraTimeline', OuraTimeline.QueryOuraTimeline.as_view()),
+    path('queryRedcapTimeline', RedcapTimeline.QueryRedcapTimeline.as_view()),
+    path('queryHomeNeuralTimeline', HomeNeuralTimeline.QueryHomeNeuralTimeline.as_view()),
     path('queryOuraRingData', OuraRingDashboard.QueryOuraRingData.as_view()),
     path('queryEmpaticaData', EmpaticaDashboard.QueryEmpaticaData.as_view()),
 
     path('downloadData', DataHandler.DataDownloadHandler.as_view()),
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
+    path('syncRCS08', RCS08Sync.RCS08SyncHandler.as_view()),
     path('setRecordingTimeShift', DataHandler.RecordingTimeShiftHandler.as_view()),
     path('queryRawTimeseries', DataHandler.TimeSeriesRecordingHandler.as_view()),
 
@@ -50,6 +64,7 @@ urlpatterns = [
     path('queryImageSourceFiles', DataHandler.NeuroImageFileHandler.as_view()),
 
     path('querySurveyForms', EventAnnotationHandler.QuerySurveyForms.as_view()),
+    path('requestSurveyAccessCode', EventAnnotationHandler.SurveyAccessCodes.as_view()),
     path('deleteSurveyForms', EventAnnotationHandler.DeleteSurveyForms.as_view()),
     path('setSurveyForms', EventAnnotationHandler.SetSurveyForms.as_view()),
     path('queryParticipantSurveyRecords', EventAnnotationHandler.QueryParticipantSurveyRecords.as_view()),

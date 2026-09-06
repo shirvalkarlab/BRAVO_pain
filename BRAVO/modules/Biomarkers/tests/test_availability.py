@@ -1,0 +1,677 @@
+"""Tests for the data-availability timeline extractor (routines/availability.py).
+
+Django-free, runs on synthetic recording dicts shaped like the decoded Percept recordings the
+production loader yields. Validates lane (dtype) mapping, timestamp/duration extraction, sensing
+center-frequency attribution+snapping, the categorical legend bands, and the pain/stim series.
+"""
+import sys
+import pathlib
+import datetime
+
+import numpy as np
+import pandas as pd
+
+_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+if str(_BRAVO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BRAVO_ROOT))
+
+from modules.Biomarkers.routines import availability as av
+
+T0 = datetime.datetime(2025, 8, 29, 12, 0, 0).timestamp()
+
+
+def _recs():
+    """One recording per Percept product, in decoded-dict shapes (adapter contract)."""
+    return {
+        "MedtronicBrainSenseTimeDomain": [
+            {"ChannelNames": ["ZERO_THREE_LEFT"], "Data": np.zeros((16750, 1)),
+             "SamplingRate": 250, "StartTime": T0, "Duration": 67.0}],
+        "MedtronicIndefiniteStream": [
+            {"ChannelNames": ["ZERO_THREE_LEFT", "ONE_THREE_LEFT"], "Data": np.zeros((69413, 2)),
+             "SamplingRate": 250, "StartTime": T0}],
+        "MedtronicChronicBrainSense": [
+            {"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+             "Time": np.array([T0 + i * 600 for i in range(20)]),
+             "Data": np.column_stack([np.linspace(700, 900, 20), [1.5] * 20]),
+             "SamplingRate": -1,
+             "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+        "MedtronicBrainSensePowerDomain": [
+            {"ChannelNames": ["ZERO_THREE_RIGHT Power", "ZERO_THREE_RIGHT Stimulation"],
+             "Data": np.zeros((208, 2)), "SamplingRate": 2, "StartTime": T0 + 7200,
+             "Descriptor": {"Therapy": {"Right": {"SensingSetup": {"FrequencyInHertz": 13.66}}}}}],
+        "MedtronicBaselineMontages": [
+            {"ChannelNames": ["ZERO_THREE_LEFT"], "Data": np.zeros((250, 1)),
+             "SamplingRate": 250, "StartTime": T0 + 3600, "PeakFrequencyInHertz": 10.74}],
+    }
+
+
+def test_lane_mapping_and_products():
+    recs = av.extract_availability(_recs())
+    by_dtype = {}
+    for r in recs:
+        by_dtype.setdefault(r["dtype"], set()).add(r["product"])
+    # Indefinite + BrainSense TD land in the timedomain lane; a montage carrying real 2-D TD also
+    # emits a "montage_td" coverage twin into the timedomain lane (raw-coverage parity with
+    # streaming) while KEEPING its psd record. chronic+pd in bandpower.
+    assert by_dtype["timedomain"] == {"streaming_td", "indefinite", "montage_td"}
+    assert by_dtype["bandpower"] == {"timeline_lsb", "streaming_lsb"}
+    assert by_dtype["psd"] == {"montage_psd"}
+
+
+def test_montage_td_emits_coverage_twin_alongside_psd():
+    """A survey/montage record with real 2-D TD Data surfaces BOTH as a psd record (its tick +
+    modeled-LSB source) AND as a parallel timedomain coverage record on the SAME channel/time, so
+    montage TD draws the same raw-coverage block as indefinite streaming. A PSD-only montage (no
+    2-D Data) emits NO coverage twin."""
+    recs = av.extract_availability(_recs())
+    montage_psd = [r for r in recs if r["product"] == "montage_psd"][0]
+    twin = [r for r in recs if r["product"] == "montage_td"]
+    assert len(twin) == 1
+    tw = twin[0]
+    assert tw["dtype"] == "timedomain" and tw["channel"] == montage_psd["channel"]
+    assert abs(tw["t_start"] - montage_psd["t_start"]) < 1e-6
+    assert tw["meta"].get("from_product") == "montage_psd"
+    # PSD-only montage (no real TD array) -> no coverage twin
+    psd_only = {"MedtronicBaselineMontages": [
+        {"ChannelNames": ["ZERO_THREE_LEFT"], "SamplingRate": 250,
+         "StartTime": T0 + 3600, "PeakFrequencyInHertz": 10.74}]}   # no "Data"
+    recs2 = av.extract_availability(psd_only)
+    assert [r for r in recs2 if r["product"] == "montage_td"] == []
+    assert [r for r in recs2 if r["product"] == "montage_psd"]    # psd record still present
+
+
+def test_timestamp_and_duration():
+    recs = av.extract_availability(_recs())
+    td = [r for r in recs if r["product"] == "streaming_td"][0]
+    assert abs(td["t_start"] - T0) < 1.0
+    assert abs(td["dur_s"] - 67.0) < 0.01
+    # chronic duration derived from its Time array span (19 * 600 s)
+    chronic = [r for r in recs if r["product"] == "timeline_lsb"][0]
+    assert abs(chronic["dur_s"] - 19 * 600) < 1.0
+
+
+def test_center_freq_attribution_and_snap():
+    recs = av.extract_availability(_recs())
+    chronic = [r for r in recs if r["product"] == "timeline_lsb"][0]
+    streaming = [r for r in recs if r["product"] == "streaming_lsb"][0]
+    # chronic freq comes from the GROUP-level Therapy hemisphere fallback (12.7 exact bin)
+    assert chronic["meta"]["center_hz"] == 12.7
+    # power-domain 13.66 snaps to the 13.7 Percept FFT bin
+    assert streaming["meta"]["center_hz"] == 13.7
+    # montage peak snaps to 10.7
+    montage = [r for r in recs if r["product"] == "montage_psd"][0]
+    assert montage["meta"]["peak_hz"] == 10.7
+
+
+def test_present_freq_bands_matches_rendered_channels():
+    recs = av.extract_availability(_recs())
+    # Only the two bandpower channels carry a configured center freq -> legend has exactly those.
+    assert av.present_freq_bands(recs) == [12.7, 13.7]
+
+
+def test_snap_freq_edges():
+    assert av.snap_freq(None) is None
+    assert av.snap_freq(13.66) == 13.7
+    assert av.snap_freq(7.81) == 7.8
+    assert av.snap_freq(float("nan")) is None
+
+
+def test_pain_series_drops_nulls_and_sorts():
+    pro = pd.DataFrame({"date_time_s1_daily": ["2025-08-30 10:00", "2025-08-29 09:00", None],
+                        "nrs": [4, 7, 9]})
+    ps = av.pain_series(pro, "nrs")
+    assert ps["metric"] == "nrs"
+    assert len(ps["t"]) == 2                 # null-timestamp row dropped
+    assert ps["y"] == [7.0, 4.0]             # sorted by time (29th before 30th)
+    assert ps["t"][0] < ps["t"][1]
+
+
+def test_pain_series_missing_metric_column():
+    pro = pd.DataFrame({"date_time_s1_daily": ["2025-08-29 09:00"], "nrs": [7]})
+    assert av.pain_series(pro, "vas")["t"] == []   # metric absent -> empty, not error
+
+
+def test_stim_series_concatenates_and_filters():
+    chronic = [{"Time": np.array([T0 + i * 600 for i in range(5)]),
+                "Data": np.column_stack([np.zeros(5), [0, 1.5, 1.5, 2.0, np.nan]])}]
+    ss = av.stim_series(chronic)
+    assert ss["y"] == [0.0, 1.5, 1.5, 2.0]   # NaN amplitude dropped
+    assert len(ss["t"]) == 4
+
+
+def test_empty_inputs_are_safe():
+    assert av.extract_availability({}) == []
+    assert av.extract_availability(None) == []
+    assert av.pain_series(None, "nrs")["t"] == []
+    assert av.stim_series([])["t"] == []
+    assert av.present_freq_bands([]) == []
+    assert av.lsb_series(None, None) == {}
+    assert av.lsb_series([], []) == {}
+
+
+def test_lsb_series_streaming_real_values_and_sentinel_filter():
+    """Power-domain LSB: real per-sample values, sentinel/negative dropped, center freq tagged."""
+    sentinel = 2.0 ** 31 - 1
+    pd_rec = {
+        "ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+        "Data": np.array([[535.0, 0.0], [596.0, 0.0], [sentinel, 0.0], [-3.0, 0.0], [610.0, 1.5]]),
+        "SamplingRate": 2, "StartTime": T0,
+        "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}
+    out = av.lsb_series([], [pd_rec])
+    assert "ZERO_THREE_LEFT" in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["y"] == [535.0, 596.0, 610.0]            # sentinel and negative removed
+    assert set(s["center_hz"]) == {12.7}              # snapped sensing center
+    assert set(s["source"]) == {"streaming"}
+    assert s["t"][0] == T0 and s["t"][1] == T0 + 0.5  # 2 Hz spacing, absolute time
+
+
+def test_lsb_series_chronic_remaps_to_sensing_contact_and_pools():
+    """Chronic LFP (named by hemisphere) is remapped onto the configured sensing CONTACT for that
+    hemisphere, so streaming + chronic for the same physical channel pool into one lane."""
+    pd_rec = {
+        "ChannelNames": ["ZERO_THREE_LEFT Power"],
+        "Data": np.array([[500.0], [520.0]]), "SamplingRate": 2, "StartTime": T0,
+        "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}
+    chronic = [{"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+                "Time": np.array([T0 + 600, T0 + 1200]),
+                "Data": np.column_stack([[810.0, 830.0], [1.5, 1.5]]), "SamplingRate": -1,
+                "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}]
+    out = av.lsb_series(chronic, [pd_rec])
+    # chronic folded onto the streaming contact, not a separate 'LeftHemisphere LFP' lane
+    assert "ZERO_THREE_LEFT" in out
+    assert "LeftHemisphere LFP" not in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["streaming", "streaming", "chronic", "chronic"]   # time-sorted
+    assert s["y"] == [500.0, 520.0, 810.0, 830.0]
+
+
+def test_lsb_series_psd_modeled_tier_from_montage_td():
+    """Montage-survey TD with NO native LSB still gets a calibrated, FLAGGED modeled LSB point. The
+    tier now converts via the PRIMARY transform route (analytics.td_to_lsb = transform DSP x
+    k=LSB_PER_UV2_TRANSFORM=352.62; PI 2026-06-27, superseding welch256 x269). The emitted lsb must
+    EQUAL td_to_lsb on the same TD (single conversion path), and the sample must be tagged
+    source='psd_modeled' / modeled=True (the tier enum the native-preferred masking keys on), with the
+    DSP route recorded in `method`, so the frontend draws it distinctly."""
+    from modules.Biomarkers.routines import analytics
+    rng = np.random.default_rng(0)
+    fs, center = 250.0, 20.0
+    n = 250 * 30  # 30 s, like a montage sweep
+    tsec = np.arange(n) / fs
+    # a 20 Hz oscillation in µV + broadband noise -> real power in the 17.5-22.5 Hz band
+    sig = 8.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage = [{
+        "ChannelNames": ["ZERO_THREE_LEFT"],
+        "Data": sig.reshape(-1, 1), "SamplingRate": fs, "StartTime": T0,
+        "PeakFrequencyInHertz": center}]
+    out = av.lsb_series([], [], montage_td_recordings=montage,
+                        sensing_hz_by_channel={"ZERO_THREE_LEFT": center})
+    assert "ZERO_THREE_LEFT" in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["psd_modeled"] and s["modeled"] == [True]
+    assert s["method"][0].startswith("td_transform_x_k=")
+    assert "352.62" in s["method"][0]
+    # the lane's modeled LSB equals the shared PRIMARY helper applied to the same TD (whole-column,
+    # the display-tier extent — no PRO centering here)
+    expect = analytics.td_to_lsb(sig, fs, center)
+    assert abs(s["y"][0] - expect) < 1e-6, (s["y"][0], expect)
+    assert s["y"][0] > 0 and s["t"][0] == float(T0)
+
+
+def test_lsb_series_psd_modeled_canon_name_and_device_peak():
+    """Montage-survey records use ring/sweep names (ZERO_AND_THREE_LEFT_RING) and carry the device's
+    per-contact peak in Descriptor.MedtronicPSD. The tier must (a) canonicalize the name so the
+    modeled point lands on the SAME lane as native LSB, and (b) use the device peak as the center when
+    no configured sensing band is supplied for that contact."""
+    rng = np.random.default_rng(1)
+    fs, center = 250.0, 12.7
+    n = 250 * 25
+    tsec = np.arange(n) / fs
+    sig = 6.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage = [{
+        "ChannelNames": ["ZERO_AND_THREE_LEFT_RING"],
+        "Data": sig.reshape(-1, 1), "SamplingRate": fs, "StartTime": T0,
+        "Descriptor": {"MedtronicPSD": [{"PeakFrequencyInHertz": center}]}}]
+    out = av.lsb_series([], [], montage_td_recordings=montage)   # no sensing_hz -> uses device peak
+    assert "ZERO_THREE_LEFT" in out and "ZERO_AND_THREE_LEFT_RING" not in out
+    s = out["ZERO_THREE_LEFT"]
+    assert s["source"] == ["psd_modeled"] and s["center_hz"][0] == av.snap_freq(center)
+
+
+def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
+    """Modeled points must NOT fold into native streaming session blocks or the chronic line — they
+    ride a separate 'modeled' layer (hollow markers), and a modeled outlier must not rescale the
+    native y-window."""
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0, T0 + 4000],
+        "y": [500.0, 520.0, 510.0, 9000.0],                  # last is a big modeled outlier
+        "center_hz": [12.7, 12.7, 12.7, 19.5],               # 19.5 is an exact Percept FFT bin
+        "source": ["streaming", "streaming", "streaming", "psd_modeled"],
+        "modeled": [False, False, False, True],
+        "method": [None, None, None, "td_transform_x_k=352.62"]}}
+    ov = av.lsb_overview(lsb)
+    d = ov["ZERO_THREE_LEFT"]
+    # streaming session block holds ONLY the 3 native samples; the modeled point is excluded
+    assert len(d["sessions"]) == 1 and d["sessions"][0]["n"] == 3
+    # modeled layer carries the one hollow point, with its (FFT-bin-snapped) center and method tag
+    assert len(d["modeled"]) == 1
+    assert d["modeled"][0]["y"] == 9000.0 and d["modeled"][0]["center_hz"] == 19.5
+    assert d["modeled"][0]["method"] == "td_transform_x_k=352.62"
+    # the native y-window is set by sensed samples only — the 9000 outlier does NOT widen it
+    assert d["y_hi"] < 1000.0
+
+
+def test_lsb_overview_compacts_to_chronic_line_and_session_blocks():
+    """The overview collapses per-sample LSB into a chronic LINE + per-session BLOCKS, splitting
+    sessions on a time gap AND on a sensing-frequency change."""
+    # two streaming sessions (gap > 30 min) at the same freq, then one chronic run
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0,                      # session A (12.7 Hz)
+              T0 + 7200, T0 + 7200.5,                      # session B (after a 2 h gap)
+              T0 + 20000, T0 + 20600, T0 + 21200],         # chronic run
+        "y": [500.0, 520.0, 510.0, 900.0, 920.0, 810.0, 830.0, 820.0],
+        "center_hz": [12.7, 12.7, 12.7, 12.7, 12.7, 12.7, 12.7, 12.7],
+        "source": ["streaming", "streaming", "streaming", "streaming", "streaming",
+                   "chronic", "chronic", "chronic"]}}
+    ov = av.lsb_overview(lsb)
+    d = ov["ZERO_THREE_LEFT"]
+    assert d["chronic"] is not None and len(d["chronic"]["t"]) == 3   # chronic line present
+    assert len(d["sessions"]) == 2                                    # two streaming blocks
+    s0 = d["sessions"][0]
+    assert s0["t0"] == T0 and s0["n"] == 3 and s0["med"] == 510.0     # session summary stats
+    assert s0["center_hz"] == 12.7
+    assert d["y_lo"] <= 510.0 <= d["y_hi"]                            # robust window spans values
+
+
+def test_lsb_overview_splits_session_on_frequency_change():
+    """A sensing-frequency change starts a NEW session block even without a time gap."""
+    lsb = {"ZERO_THREE_RIGHT": {
+        "t": [T0, T0 + 0.5, T0 + 1.0, T0 + 1.5],
+        "y": [100.0, 110.0, 700.0, 720.0],
+        "center_hz": [8.78, 8.78, 26.37, 26.37],         # freq switches mid-stream
+        "source": ["streaming", "streaming", "streaming", "streaming"]}}
+    ov = av.lsb_overview(lsb)
+    sessions = ov["ZERO_THREE_RIGHT"]["sessions"]
+    assert len(sessions) == 2
+    assert [s["center_hz"] for s in sessions] == [8.8, 26.4]   # snapped to FFT bins
+
+
+def test_lsb_overview_chronic_line_carries_center_hz():
+    """The chronic 24/7 trend now carries a per-sample sensing center frequency (the band IS
+    reprogrammed over time), aligned with t/y through decimation so the frontend can colour it."""
+    lsb = {"ZERO_THREE_LEFT": {
+        "t": [T0 + i for i in range(8)],
+        "y": [800.0 + i for i in range(8)],
+        "center_hz": [9.8, 9.8, 9.8, 9.8, 12.7, 12.7, 12.7, 12.7],   # band switches mid-record
+        "source": ["chronic"] * 8}}
+    chronic = av.lsb_overview(lsb)["ZERO_THREE_LEFT"]["chronic"]
+    assert chronic is not None
+    assert "center_hz" in chronic
+    # same length as t/y, and both programmed bands are represented in order
+    assert len(chronic["center_hz"]) == len(chronic["t"]) == len(chronic["y"])
+    assert set(chronic["center_hz"]) == {9.8, 12.7}
+    assert chronic["center_hz"][0] == 9.8 and chronic["center_hz"][-1] == 12.7
+
+
+def test_event_markers_labels_patient_events():
+    """Patient-annotated events -> one labeled marker per press with the patient's label, the peak
+    frequency, hemisphere count, and a decimated PSD for the hover-overview."""
+    freq = np.arange(0, 100.5, 0.5)
+    # two hemispheres: a clear beta peak at 13.5 Hz above the 1/f floor (snaps to the 13.7 Hz bin)
+    floor = 1.0 / (freq + 1.0)
+    p1 = floor.copy(); p1[freq == 13.5] = 50.0
+    p2 = floor.copy(); p2[freq == 13.5] = 40.0
+    ev = [{"name": "Higher Pain", "t": T0 + 3600, "psds": [(freq, p1)]},
+          {"name": "Feeling Good", "t": T0, "psds": [(freq, p1), (freq, p2)]}]
+    out = av.event_markers(ev)
+    assert out["n"] == 2
+    assert out["labels"] == ["Feeling Good", "Higher Pain"]   # distinct labels, sorted
+    e0 = out["events"][0]                                      # sorted by time -> Feeling Good first
+    assert e0["t"] == T0 and e0["label"] == "Feeling Good" and e0["n_chan"] == 2
+    assert e0["peak_hz"] == 13.7                               # snapped beta peak, averaged
+    assert e0["peak_power"] is not None and e0["peak_power"] > 1.0
+    assert e0["psd"] is not None and len(e0["psd"]["freq"]) == len(e0["psd"]["mag"])
+    assert [e["t"] for e in out["events"]] == [T0, T0 + 3600]
+
+
+def test_event_markers_label_without_psd_is_kept():
+    """An event with a label but no usable spectrum still appears (peak_hz/psd null), so the press
+    is demarcated even when the snapshot PSD is absent."""
+    out = av.event_markers([{"name": "Medication", "t": T0, "psds": []}])
+    assert out["n"] == 1
+    e = out["events"][0]
+    assert e["label"] == "Medication" and e["peak_hz"] is None and e["psd"] is None
+
+
+def test_event_markers_handles_empty_and_malformed():
+    assert av.event_markers([])["n"] == 0
+    assert av.event_markers(None)["n"] == 0
+    assert av.event_markers([{"t": None}, {"no_time": 1}, 42])["n"] == 0
+
+
+def test_montage_event_dedup_against_psd_times():
+    """Montage-PSD snapshots that coincide (within tolerance) with an already-shown montage/survey
+    PSD recording are dropped; only the unmatched sweeps survive. (Mirrors the dedup in
+    bravo_service._load_montage_psd_events, exercised here on its core bisect logic.)"""
+    import bisect
+    dedup = sorted([T0, T0 + 1000.0, T0 + 5000.0])
+    tol = 5.0
+
+    def is_dup(t):
+        i = bisect.bisect_left(dedup, t)
+        return any(0 <= j < len(dedup) and abs(dedup[j] - t) <= tol for j in (i - 1, i))
+
+    snaps_t = [T0 + 2.0,      # within 5 s of T0           -> dup
+               T0 + 1004.0,   # within 5 s of T0+1000      -> dup
+               T0 + 2500.0,   # no match                   -> keep
+               T0 + 5000.0,   # exact match                -> dup
+               T0 + 9000.0]   # no match                   -> keep
+    kept = [t for t in snaps_t if not is_dup(t)]
+    assert kept == [T0 + 2500.0, T0 + 9000.0]
+
+
+# ── CS-2: PSD-source display categories on event markers ──────────────────────────────────────────
+def test_event_markers_threads_category_and_lists_categories():
+    """event_markers must carry each event's `category` through (Streaming vs labeled patient event vs
+    montage snapshot) and expose the distinct set in `categories`, so the frontend can draw the three
+    PSD-event sources on separate rows/glyphs instead of collapsing them under one label."""
+    freq = np.arange(0, 100.5, 0.5)
+    p = (1.0 / (freq + 1.0)); p[freq == 13.5] = 20.0
+    ev = [
+        {"name": "Streaming", "category": "Streaming event PSD", "t": T0,        "psds": [(freq, p)]},
+        {"name": "Higher Pain", "category": "Patient event",     "t": T0 + 100,  "psds": [(freq, p)]},
+        {"name": "Montage PSD", "category": "Montage PSD",        "t": T0 + 200,  "psds": [(freq, p)]},
+    ]
+    out = av.event_markers(ev)
+    assert out["n"] == 3
+    assert out["categories"] == ["Montage PSD", "Patient event", "Streaming event PSD"]  # sorted, distinct
+    by_t = {e["t"]: e for e in out["events"]}
+    assert by_t[T0]["category"] == "Streaming event PSD"
+    assert by_t[T0 + 100]["category"] == "Patient event"
+    assert by_t[T0 + 200]["category"] == "Montage PSD"
+
+
+def test_event_markers_category_defaults_to_label_when_untagged():
+    """A caller that didn't tag a category (older payloads) falls back to the event's own label, so
+    the category axis never produces a None/KeyError."""
+    out = av.event_markers([{"name": "Medication", "t": T0, "psds": []}])
+    e = out["events"][0]
+    assert e["category"] == "Medication" and out["categories"] == ["Medication"]
+
+
+def _td_rec(channel, center_hz, fs=250.0, secs=30, amp=8.0, noise=2.0, seed=0,
+            start=None, names=None, ncols=None):
+    """Synthetic raw-µV montage-TD record: a `center_hz` oscillation + broadband noise on `channel`.
+
+    `names`/`ncols` let a test force a column/name mismatch (malformed packet) to exercise the guard.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(fs * secs)
+    tsec = np.arange(n) / fs
+    sig = amp * np.sin(2 * np.pi * center_hz * tsec) + rng.normal(0, noise, n)
+    nm = names if names is not None else [channel]
+    cols = ncols if ncols is not None else len(nm)
+    data = np.zeros((n, cols), dtype=float)
+    for c in range(cols):
+        data[:, c] = sig if c == 0 else rng.normal(0, noise, n)
+    return {"ChannelNames": nm, "Data": data, "SamplingRate": fs,
+            "StartTime": (T0 if start is None else start), "PeakFrequencyInHertz": center_hz}
+
+
+def test_modeled_lsb_at_center_named_match_equals_td_to_lsb():
+    """A named TD column matching the requested channel yields exactly analytics.td_to_lsb on that
+    column at the requested center — the single conversion path, modeling at the ROC's OWN band."""
+    from modules.Biomarkers.routines import analytics
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=1)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec], half_hz=2.5)
+    assert out.size == 1
+    # The helper honors the ROC's chosen center EXACTLY (no snap-to-bin), so compare against td_to_lsb
+    # at the raw center.
+    expect = analytics.td_to_lsb(rec["Data"][:, 0], fs, center, half_hz=2.5)
+    assert abs(float(out[0]) - float(expect)) < 1e-9
+
+
+def test_modeled_lsb_at_center_excludes_foreign_channel():
+    """A record naming a DIFFERENT channel contributes nothing — no cross-channel contamination of the
+    deployable threshold."""
+    rec = _td_rec("ZERO_THREE_LEFT", 20.0, seed=2)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_power_domain_record_skipped():
+    """A power-domain/malformed-cadence record (SamplingRate <= 0, e.g. ChronicBrainSense) is NOT raw
+    TD and must never reach td_to_lsb, even if its name canonicalizes to the target."""
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0)
+    rec["SamplingRate"] = -1
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_malformed_extra_columns_no_leak():
+    """A malformed packet with MORE Data columns than ChannelNames must not convert the unnamed extra
+    columns as the target — only the single named matching column is used."""
+    # 1 name, 3 data columns: extras are foreign/unnamed and must be ignored.
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0, names=["ZERO_THREE_RIGHT"], ncols=3, seed=3)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 1                      # exactly the one named column, not 3
+
+
+def test_modeled_lsb_at_center_orientation_transpose():
+    """(n_channels, n_samples) orientation resolves the same as (n_samples, n_channels)."""
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=4)
+    flipped = {k: v for k, v in rec.items()}
+    flipped["Data"] = rec["Data"].T           # now (1, n_samples) — names length 1 == rows
+    a = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec])
+    b = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[flipped])
+    assert a.size == 1 and b.size == 1 and abs(float(a[0]) - float(b[0])) < 1e-9
+
+
+def test_modeled_lsb_at_center_short_column_skipped():
+    """A column shorter than the transform's one-window minimum is skipped (no spurious point)."""
+    from modules.Biomarkers.routines import analytics
+    fs = 250.0
+    rec = _td_rec("ZERO_THREE_RIGHT", 20.0, fs=fs, secs=30)
+    rec["Data"] = rec["Data"][: int(round(fs * analytics.TRANSFORM_WIN_SECONDS)) - 1, :]
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[rec])
+    assert out.size == 0
+
+
+def test_modeled_lsb_at_center_empty_is_fail_closed():
+    """No recordings -> empty array (caller reads < 8 points -> fail-closed, no modeled threshold)."""
+    assert av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=[]).size == 0
+    assert av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0, td_recordings=None).size == 0
+
+
+def test_modeled_lsb_at_center_psd_tier_band_gated_and_freq_first():
+    """The PSD-only tier converts the matching channel's spectrum via device_psd_to_lsb(freq, mag,...)
+    and is gated to the deployable band: an out-of-band center yields nothing from a PSD record."""
+    from modules.Biomarkers.routines import analytics
+    freqs = np.arange(0, 100, 0.5)
+    mag = np.full_like(freqs, 5.0)            # flat device PSD
+    psd_rec = {"ChannelNames": ["ZERO_THREE_RIGHT"], "PSD": mag.reshape(1, -1),
+               "Frequencies": freqs, "StartTime": T0}
+    inband = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 20.0,
+                                      psd_recordings=[psd_rec], half_hz=2.5)
+    assert inband.size == 1
+    expect = analytics.device_psd_to_lsb(freqs, mag, 20.0, half_hz=2.5)
+    assert abs(float(inband[0]) - float(expect)) < 1e-9
+    # 80 Hz is above LSB_DEPLOYABLE_HZ_HI -> bridge tier is gated off (PSD-only conversion is only
+    # validated inside the deployable band).
+    oob = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 80.0, psd_recordings=[psd_rec])
+    assert oob.size == 0
+
+
+def test_modeled_lsb_at_center_honors_high_gamma_center_no_snap():
+    """A high-gamma ROC band (55 Hz, above the 26.4 Hz top of the device sensing-bin table) must be
+    converted at the ACTUAL center via the TD transform, NOT silently clamped to a sensing bin. Guards
+    the deployment path against the snap_freq display-binning that would mis-band a high-gamma winner."""
+    from modules.Biomarkers.routines import analytics
+    fs = 250.0
+    rec = _td_rec("ZERO_THREE_RIGHT", 55.0, fs=fs, secs=30, seed=7)
+    out = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", 55.0, td_recordings=[rec], half_hz=2.5)
+    assert out.size == 1
+    expect = analytics.td_to_lsb(rec["Data"][:, 0], fs, 55.0, half_hz=2.5)   # raw center, no snap
+    assert abs(float(out[0]) - float(expect)) < 1e-9
+
+
+def test_modeled_lsb_at_center_pools_streaming_and_montage_td():
+    """Regression: the deployment modeled tier must pool EVERY raw-µV TD product for the channel —
+    BrainSense streaming TD + IndefiniteStream AND the montage/survey sweeps — not just the montage
+    list. Two same-channel TD records (one streaming-shaped, one montage-shaped, at distinct times)
+    contribute two points; the percentile anchor reads off the union. Guards against the deployment
+    endpoints feeding only psd_list (montage) and dropping streamed-only bands."""
+    fs, center = 250.0, 20.0
+    streaming = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=11, start=T0)
+    montage = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=22,
+                      start=T0 + 3600.0)
+    both = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center,
+                                    td_recordings=[streaming, montage], half_hz=2.5)
+    only_montage = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center,
+                                            td_recordings=[montage], half_hz=2.5)
+    assert both.size == 2 and only_montage.size == 1
+    # The streamed record's point is genuinely in the union (not a duplicate of the montage one).
+    assert set(np.round(both, 6)) >= set(np.round(only_montage, 6))
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 regression: active-sensing event-channel resolver
+# ---------------------------------------------------------------------------
+# Import the resolver functions directly from bravo_service (Django-free paths).
+import importlib, pathlib as _pl, sys as _sys
+
+def _import_service():
+    """Import bravo_service without Django, monkey-patching the ORM stubs it references at
+    module level.  We only need the pure-Python resolver helpers."""
+    _root = _pl.Path(__file__).resolve().parents[3]
+    if str(_root) not in _sys.path:
+        _sys.path.insert(0, str(_root))
+    # Provide minimal stubs so the top-level imports don't fail without Django.
+    import types, unittest.mock as _mock
+    # Stub 'models' and 'Database' referenced at import time
+    for mod in ("Server", "Server.models", "modules.Database"):
+        if mod not in _sys.modules:
+            _sys.modules[mod] = _mock.MagicMock()
+    # analytics and availability are real; stub pipeline/adapter/redcap
+    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter",
+                "modules.Biomarkers.routines.redcap_client"):
+        if mod not in _sys.modules:
+            _sys.modules[mod] = _mock.MagicMock()
+    import modules.Biomarkers.bravo_service as _bs
+    return _bs
+
+
+def _make_td_rec(channel, start, secs=30):
+    """Minimal decoded streaming-TD dict with a single channel."""
+    return {"ChannelNames": [channel], "StartTime": float(start),
+            "SamplingRate": 250, "Data": np.zeros((int(secs * 250), 1))}
+
+
+def _make_pd_rec(channel, start):
+    """Minimal decoded power-domain dict (single sensing channel, Power suffix)."""
+    return {"ChannelNames": [f"{channel} Power"], "StartTime": float(start),
+            "SamplingRate": 2, "Data": np.zeros((100, 1))}
+
+
+def test_resolver_returns_none_when_no_sense_id_and_no_index():
+    """Without a SenseID and without a sensing index, _resolve_event_channel returns None —
+    never the old static R0-3/L1-3 guess."""
+    bs = _import_service()
+    result = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                       t_event=T0, sensing_index=None)
+    assert result is None, f"Expected None for unresolvable block, got {result!r}"
+
+
+def test_resolver_uses_sense_id_when_present():
+    """SenseID takes priority over everything else — the device's own authoritative answer."""
+    bs = _import_service()
+    ch = bs._resolve_event_channel(
+        "HemisphereLocationDef.Right",
+        "SensingElectrodeConfigDef.ONE_AND_THREE",
+        t_event=T0, sensing_index=None)
+    assert ch == "ONE_THREE_RIGHT", f"Got {ch!r}"
+
+
+def test_resolver_picks_nearest_prior_config_from_index():
+    """When SenseID is absent, the resolver picks the most-recent config record BEFORE the event."""
+    bs = _import_service()
+    recs = [
+        _make_td_rec("ZERO_THREE_RIGHT", T0 - 3600),   # 1 h before event → should win
+        _make_td_rec("ONE_THREE_RIGHT",  T0 - 86400),  # 1 day before → older, lose
+    ]
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ZERO_THREE_RIGHT", f"Expected ZERO_THREE_RIGHT (most-recent prior), got {ch!r}"
+
+
+def test_resolver_falls_back_to_nearest_after_when_no_prior():
+    """When the event predates all session records, the resolver uses the nearest-after config."""
+    bs = _import_service()
+    recs = [_make_td_rec("ONE_THREE_RIGHT", T0 + 7200)]   # 2 h AFTER event
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ONE_THREE_RIGHT", f"Expected ONE_THREE_RIGHT (nearest-after fallback), got {ch!r}"
+
+
+def test_resolver_respects_window_and_returns_none_when_too_far():
+    """A config record beyond _SENSING_WINDOW_S (90 days) in either direction is ignored."""
+    bs = _import_service()
+    recs = [_make_td_rec("ZERO_THREE_RIGHT", T0 - (91 * 86400))]  # 91 days prior → outside window
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Right", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch is None, f"Expected None (config too old), got {ch!r}"
+
+
+def test_resolver_excludes_all_pair_sweeps_from_index():
+    """IndefiniteStream / montage records that sense ALL contacts simultaneously must be excluded
+    from the sensing index — they don't indicate which pair was *the* active sensing pair."""
+    bs = _import_service()
+    # IndefiniteStream: all 6 contacts in one record → excluded (len(chans) != 1 per hemi)
+    all_pairs = _make_td_rec("ZERO_THREE_RIGHT", T0 - 3600)
+    all_pairs["ChannelNames"] = [
+        "ZERO_THREE_RIGHT", "ONE_THREE_RIGHT", "ZERO_TWO_RIGHT",
+        "ZERO_THREE_LEFT",  "ONE_THREE_LEFT",  "ZERO_TWO_LEFT",
+    ]
+    all_pairs["Data"] = np.zeros((int(30 * 250), 6))
+    idx = bs._build_sensing_config_index([all_pairs])
+    assert idx["RIGHT"] == [] and idx["LEFT"] == [], \
+        f"All-pair sweeps must be excluded from the sensing index, got {idx}"
+
+
+def test_resolver_left_hemi_key():
+    """Hemisphere resolution from the Left key string."""
+    bs = _import_service()
+    recs = [_make_td_rec("ONE_THREE_LEFT", T0 - 1800)]
+    idx = bs._build_sensing_config_index(recs)
+    ch = bs._resolve_event_channel("HemisphereLocationDef.Left", None,
+                                   t_event=T0, sensing_index=idx)
+    assert ch == "ONE_THREE_LEFT", f"Got {ch!r}"
+
+
+def test_build_sensing_config_index_accepts_power_domain_records():
+    """Power-domain records (ChannelNames like 'ZERO_THREE_RIGHT Power') are valid single-channel
+    configs and must appear in the index after suffix-stripping."""
+    bs = _import_service()
+    recs = [_make_pd_rec("ZERO_TWO_RIGHT", T0 - 900)]
+    idx = bs._build_sensing_config_index(recs)
+    assert len(idx["RIGHT"]) == 1
+    assert idx["RIGHT"][0][1] == "ZERO_TWO_RIGHT"
+
+
+def test_build_sensing_config_index_from_rows_basic():
+    """_build_sensing_config_index_from_rows builds the index from flat Welch-row dicts
+    (the cached-assembly path where decoded dicts aren't available)."""
+    bs = _import_service()
+    rows = [
+        {"channel": "ZERO_THREE_RIGHT", "source": "TD streaming", "t": float(T0 - 600)},
+        {"channel": "ONE_THREE_LEFT",   "source": "TD streaming", "t": float(T0 - 300)},
+        {"channel": "ZERO_THREE_RIGHT", "source": "Montage/survey", "t": float(T0)},  # excluded
+    ]
+    idx = bs._build_sensing_config_index_from_rows(rows)
+    assert len(idx["RIGHT"]) == 1 and idx["RIGHT"][0][1] == "ZERO_THREE_RIGHT"
+    assert len(idx["LEFT"])  == 1 and idx["LEFT"][0][1] == "ONE_THREE_LEFT"

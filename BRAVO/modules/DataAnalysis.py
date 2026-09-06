@@ -19,6 +19,7 @@ Data Analysis Pipelines
 """
 
 import os, sys, pathlib
+import uuid
 import hashlib, hmac
 import shutil
 import json
@@ -46,11 +47,26 @@ from modules.OURA import DataManager as OuraDataManager
 from modules.Empatica import DataManager as EmpaticaDataManager
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation
 from modules.SurveyForms import RedcapForm
-#from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
-#from modules.AIModels.ContactSelection_VerWong2026.ContactSelection import ContactPredictor as ContactPredictor_VerWong2026
+from modules.AnalysisData import eligible_source_files
+try:
+    from modules.AIModels.ContactSelection.ContactSelection import ContactPredictor
+except ImportError:
+    ContactPredictor = None
+try:
+    from modules.AIModels.ContactSelection_VerWong2026.ContactSelection import ContactPredictor as ContactPredictor_VerWong2026
+except ImportError:
+    ContactPredictor_VerWong2026 = None
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
+
+def _analysis_recording(recording_uid):
+    """Block direct analysis requests for quarantined originals too."""
+    recording = models.Recording.find(uid=recording_uid)
+    if recording and (recording.source.metadata or {}).get("AnalysisExclusion"):
+        raise ValueError("This source is excluded from analysis; use original source inspection to review it.")
+    return recording
+
 
 def queryProcessingNodes(type=None):
     if not type:
@@ -78,7 +94,7 @@ def queryAllRecordings(participant_uid, request_type=None):
     Overview = {"Recordings": [], "Surveys": []}
     Participant = models.Participant.find(uid=participant_uid)
     if request_type == "Timeseries":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense", "MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile", "SynchronizedMDAT"])
         
@@ -178,7 +194,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
     Overview = {"Analyses": [], "Recordings": []}
     Participant = models.Participant.find(uid=participant_uid)
     if request_type == "TherapeuticAnalysis":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"])
         
@@ -252,7 +268,7 @@ def queryAvailableAnalyses(participant_uid, request_type):
                 Overview["Analyses"].append(AnalysisOverview)
         
     elif request_type == "TimeSeriesAnalysis":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["CustomizedStreamingData", 
                                                                                  "MedtronicElectrodeIdentifier", 
@@ -387,7 +403,7 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     Overview = {"Analysis": analysis.get_info(), "Configurations": {}, "Recordings": []}
     Participant = models.Participant.find(uid=participant_uid)
     
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicNeuralActivity", "MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX", "MATFile"])
     
@@ -434,10 +450,38 @@ def queryCustomizedAnalysis(participant_uid, analysis):
     Overview["Configurations"] = analysis.metadata
     return Overview
 
-def processCustomizedPipeline(analysis):
+def _custom_pipeline_policy_identity(participant):
+    from modules import ReportCache
+    from modules.RCS08DataPolicy import applies_to
+    # Policy changes must invalidate persisted inputs even without a database edit.
+    policy_files = [pathlib.Path(__file__).with_name("RCS08DataPolicy.py")]
+    if applies_to(participant):
+        rules = pathlib.Path(os.environ.get("RCS08_PROCESSING_RULES", "/run/secrets/rcs08_processing"))
+        policy_files.extend(rules / name for name in (
+            "rcs08_study_stages.csv", "rcs08_stim_testing_dates.csv",
+            "rcs08_stage1_daily_timestamp_corrections.csv",
+            "rcs08_stage1_daily_survey_value_corrections.csv", "rcs08_stage1_daily_survey_exclusions.csv"))
+        policy_files.append(pathlib.Path(__file__).resolve().parents[1] / "config" / "rcs08_oura_exclusion_windows.csv")
+    policy_identity = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "absent"
+                       for path in policy_files}
+    policy_identity["ReportVersion"] = ReportCache.VERSION
+    return policy_identity
+
+
+def _custom_annotation_identity(participant):
+    rows = Event.queryAnnotations(participant.uid, "RecordingCustomEvent")
+    encoded = sorted(json.dumps(row, sort_keys=True, default=str) for row in rows)
+    return hashlib.sha256(json.dumps(encoded).encode()).hexdigest()
+
+
+def processCustomizedPipeline(analysis, config=None):
+    from modules import ReportCache
     Participant = models.Participant.find(uid=analysis.metadata["ParticipantId"])
     if not Participant:
         raise Exception("Participant Not Found")
+    if config is None:
+        config, _ = Database.retrieveProcessingSettings({})
+    policy_identity = _custom_pipeline_policy_identity(Participant)
 
     source = models.SourceFile.find(name=analysis.uid, type="CustomizedPipelineSource", owner=Participant)
     if not source:
@@ -446,28 +490,56 @@ def processCustomizedPipeline(analysis):
     
     for i in range(len(analysis.metadata["Nodes"])):
         Input = analysis.metadata["Nodes"][i][0]
-        recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata={ "RecordingList": [input["Id"] for input in Input["data"]], }, source=source)
+        recordings = list(models.Recording.find_all(
+            uid__in=[item["Id"] for item in Input["data"]], source__owner=Participant))
+        by_id = {item.uid: item for item in recordings}
+        if set(by_id) != {item["Id"] for item in Input["data"]}:
+            raise ValueError("Every analysis input must belong to this participant and still exist")
+        if any(item.source.metadata.get("AnalysisExclusion") for item in recordings):
+            raise ValueError("An excluded source cannot be used as an analysis input")
+        fresh_chronic = None
+        neural_revision = None
+        if any(item.type == "MedtronicChronicNeuralActivity" for item in recordings):
+            neural_revision = ReportCache.revision("neural-revision")
+            devices = models.DBSDevice.find_all(owner=Participant)
+            fresh_chronic = cachedChronicActivity(Participant, devices, config)
+            if neural_revision != ReportCache.revision("neural-revision"):
+                raise StaleAnalysisError("Neural inputs changed during preparation. Please rerun the analysis.")
+            # Use the returned common payload, including when a concurrent update
+            # prevented the loader from persisting it under the old recording UID.
+            chronic_hash = hashlib.sha256(pickle.dumps(fresh_chronic)).hexdigest()
+        input_identity = []
+        for item in Input["data"]:
+            alignment = float(item["Alignment"])
+            if not np.isfinite(alignment):
+                raise ValueError("Analysis input alignment must be finite")
+            original = by_id[item["Id"]]
+            input_identity.append({"Id": original.uid, "Hash": chronic_hash if original.type == "MedtronicChronicNeuralActivity" else original.hashed,
+                                   "Alignment": alignment, "DerivedInput": original.metadata.get("DerivedInput")})
+        input_metadata = {"RecordingList": [item["Id"] for item in Input["data"]],
+                          "InputIdentity": input_identity, "PolicyIdentity": policy_identity,
+                          "NeuralRevision": neural_revision,
+                          "AnnotationIdentity": _custom_annotation_identity(Participant)
+                              if any(node.get("data", {}).get("Type") == "Epoch by Annotations"
+                                     for node in analysis.metadata["Nodes"][i][1:]) else None,
+                          "ProcessingConfiguration": {key: value for key, value in config.items() if key != "APIAccess"}}
+        recording = models.Recording.find(type="CustomAnalysis_"+Input["type"], metadata=input_metadata, source=source)
         if not recording:
             ProcessedData = []
-            recordings = models.Recording.find_all(uid__in=[input["Id"] for input in Input["data"]])
-            for recording in recordings:
-                Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-                if recording.type == "MedtronicChronicNeuralActivity":
+            for identity in input_identity:
+                original = by_id[identity["Id"]]
+                Data = copy.deepcopy(fresh_chronic if original.type == "MedtronicChronicNeuralActivity"
+                                     else Database.loadSourceFile(original.pointer, original.hashed))
+                if original.type == "MedtronicChronicNeuralActivity":
                     for j in range(len(Data)):
                         StructuredData = ChronicBrainSense.revertChronicActivityFormat(Data[j])
-                        for input in Input["data"]:
-                            if input["Id"] == recording.uid:
-                                StructuredData["StartTime"] += input["Alignment"]
+                        StructuredData["StartTime"] += identity["Alignment"]
                         ProcessedData.append(StructuredData)
                 else:
-                    for input in Input["data"]:
-                        if input["Id"] == recording.uid:
-                            Data["StartTime"] += input["Alignment"]
+                    Data["StartTime"] += identity["Alignment"]
                     ProcessedData.append(Data)
             
-            recording = models.Recording(name=Input["name"], type="CustomAnalysis_"+Input["type"], metadata={
-                "RecordingList": [input["Id"] for input in Input["data"]],
-            }, source=source)
+            recording = models.Recording(name=Input["name"], type="CustomAnalysis_"+Input["type"], metadata=input_metadata, source=source)
             filename = DATABASE_PATH + "recordings" + os.path.sep + source.owner.uid + os.path.sep + recording.uid + ".bdat"
             hashed = Database.saveSourceFile({
                 "DataType": "Original",
@@ -483,6 +555,10 @@ def processCustomizedPipeline(analysis):
         for j in range(1, len(analysis.metadata["Nodes"][i])):
             analysis.metadata["Nodes"][i][j] = handleProcessingNode(analysis.metadata["Nodes"][i][j], analysis.metadata["ParticipantId"], PreviousOutput)
             PreviousOutput = analysis.metadata["Nodes"][i][j]["result"]
+        if ((neural_revision is not None and neural_revision != ReportCache.revision("neural-revision")) or
+            (input_metadata["AnnotationIdentity"] is not None and
+             input_metadata["AnnotationIdentity"] != _custom_annotation_identity(Participant))):
+            raise StaleAnalysisError("Inputs changed during calculation. Please rerun the analysis.")
 
     analysis.save()
 
@@ -620,8 +696,51 @@ def handleProcessingNode(node, participant_uid, input_uid):
     node["result"] = processed.uid
     return node
 
+class StaleAnalysisError(ValueError):
+    """A persisted custom result must be recomputed against its current inputs."""
+
+
+def require_current_analysis_output(result):
+    from modules import ReportCache
+    message = "The saved analysis inputs have changed or lack verified provenance. Please rerun the analysis."
+    if result is None:
+        raise StaleAnalysisError(message)
+    source = result.source
+    if (source.metadata or {}).get("AnalysisExclusion"):
+        raise StaleAnalysisError(message)
+    root = result
+    seen = set()
+    while root.original_id:
+        if root.uid in seen:
+            raise StaleAnalysisError(message)
+        seen.add(root.uid)
+        root = root.original
+        if root is None or root.source_id != result.source_id:
+            raise StaleAnalysisError(message)
+    expected = root.metadata.get("InputIdentity")
+    if not expected or root.metadata.get("PolicyIdentity") != _custom_pipeline_policy_identity(source.owner):
+        raise StaleAnalysisError(message)
+    if (root.metadata.get("AnnotationIdentity") is not None and
+        root.metadata["AnnotationIdentity"] != _custom_annotation_identity(source.owner)):
+        raise StaleAnalysisError(message)
+    inputs = models.Recording.find_all(uid__in=[item["Id"] for item in expected], source__owner=source.owner)
+    by_id = {item.uid: item for item in inputs}
+    if set(by_id) != {item["Id"] for item in expected}:
+        raise StaleAnalysisError(message)
+    for identity in expected:
+        original = by_id[identity["Id"]]
+        if (original.source.metadata or {}).get("AnalysisExclusion"):
+            raise StaleAnalysisError(message)
+        if original.type == "MedtronicChronicNeuralActivity":
+            if root.metadata.get("NeuralRevision") != ReportCache.revision("neural-revision"):
+                raise StaleAnalysisError(message)
+        elif identity["Hash"] != original.hashed:
+            raise StaleAnalysisError(message)
+
+
 def extractAnalysisOutput(node):
     result =  models.Recording.find(uid=node["result"])
+    require_current_analysis_output(result)
     Data = Database.loadSourceFile(result.pointer, result.hashed)
 
     def CleanupSignalSeries(a):
@@ -1319,7 +1438,7 @@ def processTimeseriesAnalysisRaw(data, config):
     return AnalysisStruct
 
 def retrieveTimeseriesData(participant_uid, recording_uid, config):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
 
@@ -1378,7 +1497,7 @@ def retrieveTimeseriesData(participant_uid, recording_uid, config):
     raise Exception(f"Unsupported recording type {recording.type} for timeseries data retrieval.")
 
 def retrieveSpectrogramData(participant_uid, recording_uid, config):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
 
@@ -1516,7 +1635,7 @@ def computeTherapeuticEffects(AnalysisStruct):
     return AnalysisStruct
 
 def getTimeseriesData(participant_uid, recording_uid, config):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
     
@@ -1579,7 +1698,7 @@ def getTimeseriesData(participant_uid, recording_uid, config):
     return Data, Metadata
 
 def processTimeseriesAnalysis(participant_uid, recording_uid, config):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
 
     if not recording.source.owner.pk == participant_uid:
@@ -1717,7 +1836,7 @@ def processTimeseriesAnalysis(participant_uid, recording_uid, config):
 def downloadNeuralActivitySnapshot(participant_uid, config):
     AllSnapshots = []
     Participant = models.Participant.find(uid=participant_uid)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
     DBSDeviceDictionary = {}
     for i in range(len(DBSDevices)):
@@ -1768,7 +1887,7 @@ def downloadNeuralActivitySnapshot(participant_uid, config):
     return AllSnapshots
         
 def downloadRawRecordings(participant_uid, recording_uid, channel, config):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     if not recording.source.owner.pk == participant_uid:
         raise Exception("Permission Denied. Accessing Denied Recordings")
     
@@ -1815,23 +1934,25 @@ def downloadTimeseriesAnalysis(participant_uid, recording_uid, config):
 def downloadChronicNeuralActivity(participant_uid, config):
     Analysis = queryChronicNeuralActivity(participant_uid, config)
     
-    Data = {"Time": [], "Power": [], "Amplitude": [], "ChannelName": [], "TherapyConfig": [], "RecordingConfig": []}
-    for i in range(len(Analysis["ChronicNeuralActivity"])):
-        Data["Time"].extend(Analysis["ChronicNeuralActivity"][i]["Time"])
-        ChannelName = Analysis["ChronicNeuralActivity"][i]["Device"]["Heritage"] + ": " + Analysis["ChronicNeuralActivity"][i]["ChannelNames"][0]
-        for j in range(len(Analysis["ChronicNeuralActivity"][i]["ChannelNames"])):
-            if Analysis["ChronicNeuralActivity"][i]["ChannelNames"][j].endswith("Amplitude"):
-                Data["Amplitude"].extend(Analysis["ChronicNeuralActivity"][i]["Data"][j])
-            else:
-                Data["Power"].extend(Analysis["ChronicNeuralActivity"][i]["Data"][j])
-        Data["ChannelName"].extend([ChannelName for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
-        Data["TherapyConfig"].extend([Analysis["ChronicNeuralActivity"][i]["TherapyString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
-        Data["RecordingConfig"].extend([Analysis["ChronicNeuralActivity"][i]["RecordingString"] for k in range(len(Analysis["ChronicNeuralActivity"][i]["Data"][j]))])
-
-    df = pd.DataFrame(Data)
-    if "Time" in df.columns:
-        df["Time"] = df["Time"].astype(np.float64)
-    return df
+    columns = ["Time", "Power", "Amplitude", "ChannelName", "TherapyConfig", "RecordingConfig"]
+    frames = []
+    for segment in Analysis["ChronicNeuralActivity"]:
+        names = segment["ChannelNames"]
+        count = len(segment["Time"])
+        for channel, name in enumerate(names):
+            if not name.endswith("LFP"):
+                continue
+            amplitude_name = name[:-3] + "Amplitude"
+            amplitude = segment["Data"][names.index(amplitude_name)] if amplitude_name in names else [None] * count
+            frames.append(pd.DataFrame({
+                "Time": segment["Time"], "Power": segment["Data"][channel], "Amplitude": amplitude,
+                "ChannelName": [segment["Device"]["Heritage"] + ": " + name] * count,
+                "TherapyConfig": [segment["TherapyString"]] * count,
+                "RecordingConfig": [segment["RecordingString"]] * count,
+            }))
+    result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
+    result["Time"] = result["Time"].astype(np.float64)
+    return result
 
 def getTherapyChanges(Analysis, key):
     TherapySeries = {}
@@ -2225,7 +2346,7 @@ def handleTimeFrequencyAnalysis(data, config, recording=None):
     return data
 
 def processBurstAnalysis(participant_uid, recording_uid, config, centerFreq=22):
-    recording = models.Recording.find(uid=recording_uid)
+    recording = _analysis_recording(recording_uid)
     AnalysisStruct = {"Signal": [], "Annotations": []}
 
     if not recording.source.owner.pk == participant_uid:
@@ -2436,7 +2557,7 @@ def queryNeuralActivitySnapshot(participant_uid, config):
     NeuralActivitySnapshot = {"AnalysisType": "NeuralActivitySnapshot", "Recordings": []}
 
     Participant = models.Participant.find(uid=participant_uid)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages", "MedtronicElectrodeIdentifier"])
 
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
@@ -2446,8 +2567,7 @@ def queryNeuralActivitySnapshot(participant_uid, config):
 
     for recording in Recordings:
         Description = recording.get_info()
-        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-        Data = processNeuralActivitySnapshot(recording, Data, config)
+        Data = processNeuralActivitySnapshot(recording, None, config)
         
         if recording.source.metadata["Device"] in DBSDeviceDictionary.keys():
             DBSDevice = DBSDeviceDictionary[recording.source.metadata["Device"]]
@@ -2488,8 +2608,7 @@ def queryNeuralActivitySnapshot(participant_uid, config):
     for i in range(len(Recordings)):
         recording = Recordings[i]
         Description = recording.get_info()
-        Data = Database.loadSourceFile(recording.pointer, recording.hashed)
-        Data = processNeuralActivitySnapshot(recording, Data, config)
+        Data = processNeuralActivitySnapshot(recording, None, config)
 
         NeuralActivitySnapshot["Recordings"].append({**Description, **{
             "Type": recording.type,
@@ -2505,6 +2624,9 @@ def processNeuralActivitySnapshot(recording, data, config):
     if ProcessedData:
         return Database.loadSourceFile(ProcessedData.pointer, ProcessedData.hashed)
     
+    if data is None:
+        data = Database.loadSourceFile(recording.pointer, recording.hashed)
+
     if len(data["Data"].shape) == 1:
         data["Data"] = data["Data"].reshape(-1,1)
 
@@ -2544,7 +2666,7 @@ def processNeuralActivitySnapshot(recording, data, config):
 def queryChronicTimeline(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
 
     ChronicTimeline = []
     TimelineAnnotation = []
@@ -2573,20 +2695,8 @@ def queryChronicTimeline(participant_uid, config):
             ChronicTimeline.append(Activity)
 
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
-        Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
-        if not Recording:
-            Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
-            Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
-            Activity = uniqueListOfDicts(Activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
-            source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
-            source.save()
-            Recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
-            Recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + Recording.source.owner.uid + os.path.sep + Recording.uid + ".bdat"
-            Recording.hashed = Database.saveSourceFile(Activity, Recording.pointer)
-            Recording.save()
-        
-        if Recording:
-            ChronicNeuralActivity = Database.loadSourceFile(Recording.pointer, Recording.hashed)
+        ChronicNeuralActivity = cachedChronicActivity(Participant, DBSDevices, config)
+        if ChronicNeuralActivity:
 
             # Rename Channels
             for i in range(len(ChronicNeuralActivity)):
@@ -2601,6 +2711,7 @@ def queryChronicTimeline(participant_uid, config):
                 Activity = {
                     "AnalysisType": "CustomizedTimelineData",
                     "Time": ChronicNeuralActivity[i]["Time"],
+                    "SourceType": "neural",
                     "Duration": np.diff(ChronicNeuralActivity[i]["Time"]),
                     "ChannelNames": ChronicNeuralActivity[i]["ChannelNames"],
                     "ChannelUnits": ["" for name in ChronicNeuralActivity[i]["ChannelNames"]],
@@ -2719,107 +2830,8 @@ def queryChronicTimeline(participant_uid, config):
             ChronicTimeline.append(Activity)
 
     if models.SourceFile.include(owner=Participant, type="OuraRingAPISource"):
-        Data = OuraDataManager.loadOuraRingData(Participant)
-        for key in Data.keys():
-            SingleTimePoint = False
-            for i in range(len(Data[key])):
-                if len(Data[key][i]["Data"]) == 0:
-                    SingleTimePoint = True
-                    break
-
-            if SingleTimePoint:
-                Activity = {
-                    "AnalysisType": "CustomizedTimelineData",
-                    "Time": [],
-                    "Duration": [],
-                    "ChannelNames": [],
-                    "ChannelUnits": [],
-                    "Data": [],
-                }
-
-                for i in range(len(Data[key])):
-                    for descriptor in Data[key][i]["Descriptor"].keys():
-                        if type(Data[key][i]["Descriptor"][descriptor]) == float or type(Data[key][i]["Descriptor"][descriptor]) == int:
-                            if descriptor not in Activity["ChannelNames"]:
-                                Activity["ChannelNames"].append(descriptor)
-                                Activity["ChannelUnits"].append("")
-                
-                for i in range(len(Data[key])):
-                    Activity["Time"].append(Data[key][i]["StartTime"])
-                    Activity["Duration"].append(3600*24)
-
-                    ChanData = []
-                    for chan in Activity["ChannelNames"]:
-                        ChanData.append(Data[key][i]["Descriptor"][chan])
-                    Activity["Data"].append(ChanData)
-                
-                for i in range(len(Activity["ChannelNames"])):
-                    Activity["ChannelNames"][i] = "[OURA] " + key + " " + Activity["ChannelNames"][i]
-                
-                Activity["Data"] = np.array(Activity["Data"]).T.tolist()
-                ChronicTimeline.append(Activity)
-
-            else:
-                DescriptorActivity = {
-                    "AnalysisType": "CustomizedTimelineData",
-                    "Time": [],
-                    "Duration": [],
-                    "ChannelNames": [],
-                    "ChannelUnits": [],
-                    "Data": [],
-                }
-
-                for i in range(len(Data[key])):
-                    for descriptor in Data[key][i]["Descriptor"].keys():
-                        if type(Data[key][i]["Descriptor"][descriptor]) == float or type(Data[key][i]["Descriptor"][descriptor]) == int:
-                            if descriptor not in DescriptorActivity["ChannelNames"]:
-                                DescriptorActivity["ChannelNames"].append(descriptor)
-                                DescriptorActivity["ChannelUnits"].append("")
-
-                    if len(Data[key][i]["Data"]) > 0:
-                        if not "Time" in Data[key][i].keys():
-                            Data[key][i]["Time"] = [Data[key][i]["StartTime"] + j/Data[key][i]["SamplingRate"] for j in range(len(Data[key][i]["Data"]))]
-
-                        Activity = {
-                            "AnalysisType": "CustomizedTimelineData",
-                            "Time": Data[key][i]["Time"],
-                            "Duration": np.diff(Data[key][i]["Time"]),
-                            "ChannelNames": ["[OURA] " + key + " " + name for name in Data[key][i]["ChannelNames"]],
-                            "ChannelUnits": ["" for name in Data[key][i]["ChannelNames"]],
-                            "Data": np.array(Data[key][i]["Data"]).T.tolist(),
-                        }
-
-                        for j in range(len(Activity["ChannelNames"])):
-                            if Activity["ChannelNames"][j] in ["[OURA] Sleep Sleep Phase"]:
-                                SleepStages = {
-                                    "deep": 1,
-                                    "light": 2,
-                                    "rem": 3, 
-                                    "awake": 4
-                                }
-                                Activity["ChannelUnits"][j] = "Category"
-                                Activity["Data"][j] = []
-                                for k in range(len(Data[key][i]["Data"])):
-                                    for subkey in SleepStages.keys():
-                                        if SleepStages[subkey] == int(Data[key][i]["Data"][k,j]):
-                                            Activity["Data"][j].append(subkey)
-                                
-                        ChronicTimeline.append(Activity)
-
-                for i in range(len(Data[key])):
-                    DescriptorActivity["Time"].append(Data[key][i]["StartTime"])
-                    DescriptorActivity["Duration"].append(3600*24)
-
-                    ChanData = []
-                    for chan in DescriptorActivity["ChannelNames"]:
-                        ChanData.append(Data[key][i]["Descriptor"][chan])
-                    DescriptorActivity["Data"].append(ChanData)
-
-                for i in range(len(DescriptorActivity["ChannelNames"])):
-                    DescriptorActivity["ChannelNames"][i] = "[OURA] " + key + " " + DescriptorActivity["ChannelNames"][i]
-
-                DescriptorActivity["Data"] = np.array(DescriptorActivity["Data"]).T.tolist()
-                ChronicTimeline.append(DescriptorActivity)
+        from modules.OURA.QualityControl import timeline_series
+        ChronicTimeline.extend(timeline_series(OuraDataManager.loadOuraRingData(Participant)))
 
     if models.Recording.include(source__in=SourceFiles, type__in=["CustomizedStreamingData"], metadata__DataType="Scheduled Streams"):
         Recording = models.Recording.find(type="ProcessedCustomizedStreamingData", source__owner=Participant)
@@ -2886,7 +2898,13 @@ def queryChronicTimeline(participant_uid, config):
         }
 
         if form.record_type == "Redcap Linked Survey":
-            AllRecords = RedcapForm.queryRedcapFormRecords(Participant, form, recordId=link.link_code)
+            try:
+                AllRecords = RedcapForm.queryRedcapFormRecords(Participant, form, recordId=link.link_code)
+            except RedcapForm.ReviewRequiredError as exc:
+                Activity.update({"Status": "review_required", "Message": str(exc),
+                                 "SourceType": "redcap", "FormId": form.uid, "FormName": form.name})
+                ChronicTimeline.append(Activity)
+                continue
             for pageId in range(len(form.record["FieldMapping"])):
                 for questionId in range(len(form.record["FieldMapping"][pageId]["questions"])):
                     if form.record["FieldMapping"][pageId]["questions"][questionId]["text"] == "Time":
@@ -2903,14 +2921,41 @@ def queryChronicTimeline(participant_uid, config):
             AllRecords = models.ScaleRecord.find_all(source=form, participant=Participant)
             AllRecords = [i.get_info() for i in AllRecords]
             AllRecords.sort(key=lambda x: x["Date"])
+            Activity = storedSurveyTimeline(form, AllRecords)
         
         ChronicTimeline.append(Activity)
         
     return ChronicTimeline, TimelineAnnotation
 
+def storedSurveyTimeline(form, records):
+    """Expose stored score questions using their recorded UTC timestamps."""
+    activity = {"AnalysisType": "CustomizedSurveyData", "Time": [row["Date"] for row in records],
+                "ChannelNames": [], "ChannelUnits": [], "Data": []}
+    mapping = form.record if isinstance(form.record, list) else []
+    prefix = "[REDCap]" if form.record_type == "REDCap API Sync" else "[Survey]"
+    for page_index, page in enumerate(mapping):
+        for question_index, question in enumerate(page.get("questions", [])):
+            if question.get("type") != "score" or not question.get("show", True):
+                continue
+            activity["ChannelNames"].append(f"{prefix} {form.name} - {question['text']}")
+            activity["ChannelUnits"].append("")
+            values = []
+            for record in records:
+                result = record.get("Result")
+                value = None
+                if isinstance(result, list) and page_index < len(result):
+                    page_values = result[page_index]
+                    if isinstance(page_values, list) and question_index < len(page_values):
+                        value = page_values[question_index]
+                # Missing responses stay missing, rather than becoming zeros.
+                values.append(value)
+            activity["Data"].append(values)
+    return activity
+
+
 def queryChronicTimelineData(participant_uid, data_ids, channel, config):
     Participant = models.Participant.find(uid=participant_uid)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
 
     Result = []
     if models.Recording.include(uid__in=data_ids, source__owner=Participant, type="EmpaticaData"):
@@ -2929,10 +2974,40 @@ def queryChronicTimelineData(participant_uid, data_ids, channel, config):
                     
     return Result
 
+def cachedChronicActivity(participant, devices, config):
+    """Persist common neural derivation across workers and application restarts."""
+    from filelock import FileLock
+    from modules import ReportCache
+    revision = ReportCache.revision("neural-revision")
+    stamp = {"Version": "channel-therapy-3-eligible-sources", "InputRevision": revision, "Config": {key: value for key, value in config.items() if key != "APIAccess"}}
+    lock = ReportCache.directory() / ("chronic-" + participant.uid + ".lock")
+    with FileLock(str(lock), timeout=120):
+        recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__in=eligible_source_files(participant))
+        if recording and recording.metadata.get("DerivedInput") == stamp:
+            return Database.loadSourceFile(recording.pointer, recording.hashed)
+        recordings = models.Recording.find_all(source__in=eligible_source_files(participant), type="MedtronicChronicBrainSense")
+        activity = ChronicBrainSense.extractChronicNeuralActivity(participant, devices, recordings, config)
+        activity = uniqueListOfDicts(activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
+        if ReportCache.revision("neural-revision") != revision:
+            return activity  # Never persist a derivation spanning an input update.
+        if not recording:
+            source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=participant)
+            source.save()
+            recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
+        # Publish a new derived file; readers using the old pointer stay safe.
+        pointer = DATABASE_PATH + "recordings" + os.path.sep + participant.uid + os.path.sep + uuid.uuid4().hex + ".bdat"
+        recording.hashed = Database.saveSourceFile(activity, pointer)
+        recording.pointer = pointer
+        recording.metadata = {**recording.metadata, "DerivedInput": stamp}
+        recording.save()
+        return activity
+
+
 def queryChronicNeuralActivity(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
-    DBSDevices = models.DBSDevice.find_all(owner=Participant)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    DBSDevices = models.DBSDevice.find_all(owner=Participant).prefetch_related("electrodes")
+    device_info = {device.uid: device.get_info() for device in DBSDevices}
+    SourceFiles = eligible_source_files(Participant)
 
     ChronicNeuralActivity = {"AnalysisType": "", "ChronicNeuralActivity": [], "Annotations": []}
 
@@ -2948,26 +3023,12 @@ def queryChronicNeuralActivity(participant_uid, config):
     
     if models.Recording.include(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"]):
         ChronicNeuralActivity["AnalysisType"] = "MedtronicChronicBrainSense"
-        Recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=Participant)
-        if not Recording:
-            Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicChronicBrainSense"])
-            Activity = ChronicBrainSense.extractChronicNeuralActivity(Participant, DBSDevices, Recordings, config)
-            Activity = uniqueListOfDicts(Activity, ["Device", "TherapyStartTime", "ChannelNames", "Time"])
-            ChronicNeuralActivity["ChronicNeuralActivity"] = Activity
-
-            source = models.SourceFile(name="ChronicNeuralActivitySource", type="ChronicNeuralActivitySource", owner=Participant)
-            source.save()
-            recording = models.Recording(name="ChronicNeuralActivity", type="MedtronicChronicNeuralActivity", source=source)
-            recording.pointer = DATABASE_PATH + "recordings" + os.path.sep + recording.source.owner.uid + os.path.sep + recording.uid + ".bdat"
-            recording.hashed = Database.saveSourceFile(Activity, recording.pointer)
-            recording.save()
-        else:
-            ChronicNeuralActivity["ChronicNeuralActivity"] = Database.loadSourceFile(Recording.pointer, Recording.hashed)
+        ChronicNeuralActivity["ChronicNeuralActivity"] = cachedChronicActivity(Participant, DBSDevices, config)
 
         # Rename Channels
         for i in range(len(ChronicNeuralActivity["ChronicNeuralActivity"])):
             ChronicNeuralActivity["ChronicNeuralActivity"][i]["AnalysisType"] = "MedtronicChronicBrainSense"
-            ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"] = DBSDevices.filter(uid=ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"]).first().get_info()
+            ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"] = copy.deepcopy(device_info[ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"]])
             for j in range(len(ChronicNeuralActivity["ChronicNeuralActivity"][i]["ChannelNames"])):
                 for k in range(len(ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"]["Electrodes"])):
                     if ChronicNeuralActivity["ChronicNeuralActivity"][i]["ChannelNames"][j].startswith(ChronicNeuralActivity["ChronicNeuralActivity"][i]["Device"]["Electrodes"][k]["Target"].split(" ")[0]):
@@ -3006,7 +3067,7 @@ def handleSurveybasedWongAIContactSelection(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
 
     if config["RequestType"] == "RequestQualifyRecordings":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         DBSDevices = models.DBSDevice.find_all(owner=Participant)
@@ -3037,7 +3098,7 @@ def handleSurveybasedWongAIContactSelection(participant_uid, config):
         return RecordingList
 
     elif config["RequestType"] == "RequestAIResult":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         recording = models.Recording.find(uid=config["RecordingId"], source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         if not recording:
@@ -3081,7 +3142,7 @@ def handleSurveybasedAIContactSelection(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
 
     if config["RequestType"] == "RequestQualifyRecordings":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         DBSDevices = models.DBSDevice.find_all(owner=Participant)
@@ -3112,7 +3173,7 @@ def handleSurveybasedAIContactSelection(participant_uid, config):
         return RecordingList
 
     elif config["RequestType"] == "RequestAIResult":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         recording = models.Recording.find(uid=config["RecordingId"], source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         if not recording:
@@ -3156,7 +3217,7 @@ def handleSurveybasedContactSelection(participant_uid, config):
     Participant = models.Participant.find(uid=participant_uid)
 
     if config["RequestType"] == "RequestQualifyRecordings":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         DBSDevices = models.DBSDevice.find_all(owner=Participant)
@@ -3187,7 +3248,7 @@ def handleSurveybasedContactSelection(participant_uid, config):
         return RecordingList
 
     elif config["RequestType"] == "RequestAIResult":
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
         recording = models.Recording.find(uid=config["RecordingId"], source__in=SourceFiles, type__in=["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages"])
 
         if not recording:
@@ -3289,30 +3350,48 @@ def handleAutomatedBetaDetection(participant_uid, config):
 
         return Results
 
-def extractMachineLearningModels(participant_uid, model_key=None, config={}):
-    models = {
+class ModelUnavailable(Exception):
+    pass
+
+
+def machineLearningAvailability():
+    return {
+        "Survey-based Contact Selection (Lavu et. al., 2025)": ContactPredictor is not None,
+        "Peak Beta Power in Survey": True,
+        "Survey-based Contact Selection (Wong et. al., 2026)": ContactPredictor_VerWong2026 is not None,
+        "Automated Beta Detection (BRAVO)": True,
+    }
+
+
+def extractMachineLearningModels(participant_uid, model_key=None, config=None):
+    config = config or {}
+    handlers = {
         "Survey-based Contact Selection (Lavu et. al., 2025)": handleSurveybasedAIContactSelection,
         "Peak Beta Power in Survey": handleSurveybasedContactSelection,
         "Survey-based Contact Selection (Wong et. al., 2026)": handleSurveybasedWongAIContactSelection,
         "Automated Beta Detection (BRAVO)": handleAutomatedBetaDetection,
     }
-
-    if model_key and model_key in models.keys():
-        return models[model_key](participant_uid, config=config)
-
-    return models.keys()
+    available = machineLearningAvailability()
+    if model_key is None:
+        return [name for name in handlers if available[name]]
+    if model_key not in handlers:
+        raise ValueError("Unknown analysis model")
+    # Eligibility uses existing recordings and does not need prediction assets.
+    if not available[model_key] and config.get("RequestType") != "RequestQualifyRecordings":
+        raise ModelUnavailable("This prediction is unavailable because its model implementation/assets are not installed.")
+    return handlers[model_key](participant_uid, config=config)
 
 def extractMedtronicPowerBands(participant_uid, recording_type, recording_uids=None):
     Participant = models.Participant.find(uid=participant_uid)
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
-    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    SourceFiles = eligible_source_files(Participant)
 
     if recording_type == "MedicationCycle":
         Recordings = []
         PowerBands_Threshold = {}
         
         if not recording_uids:
-            AllRecordings = models.Recording.find_all(type="MedtronicBrainSensePowerDomain", source__owner=Participant, 
+            AllRecordings = models.Recording.find_all(type="MedtronicBrainSensePowerDomain", source__in=SourceFiles, 
                                                 name__in=["MEDOFF_DBSOFF_UPDRS", "MEDOFF_THRESHOLD", "MEDOFF_DBSON_UPDRS",
                                                         "MEDON_DBSOFF_UPDRS", "MEDON_THRESHOLD", "MEDON_DBSON_UPDRS"])
             for recording in AllRecordings:
@@ -3321,7 +3400,7 @@ def extractMedtronicPowerBands(participant_uid, recording_type, recording_uids=N
                 Recordings.append(RecordingInfo)
 
         else:
-            AllRecordings = models.Recording.find_all(uid__in=recording_uids, type="MedtronicBrainSensePowerDomain", source__owner=Participant, 
+            AllRecordings = models.Recording.find_all(uid__in=recording_uids, type="MedtronicBrainSensePowerDomain", source__in=SourceFiles, 
                                                 name__in=["MEDOFF_DBSOFF_UPDRS", "MEDOFF_THRESHOLD", "MEDOFF_DBSON_UPDRS",
                                                         "MEDON_DBSOFF_UPDRS", "MEDON_THRESHOLD", "MEDON_DBSON_UPDRS"])
 

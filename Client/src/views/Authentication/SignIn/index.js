@@ -14,13 +14,12 @@
 import { useEffect, useState } from "react";
 
 // react-router-dom components
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 // @mui material components
 import Card from "@mui/material/Card";
 import Switch from "@mui/material/Switch";
 import Grid from "@mui/material/Grid";
-import MuiLink from "@mui/material/Link";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -88,8 +87,8 @@ export default function SignIn() {
         <MDBox pt={4} pb={3} px={3}>
           <MDBox component="form" role="form">
             <MDBox mb={2}>
-              <MDInput type="email" id="email" label={dictionary.Login.Email[language]} value={authInfo.email} 
-                onChange={(event) => setAuthInfo({...authInfo, email: event.currentTarget.value})} autoComplete="off" fullWidth/>
+              <MDInput type="text" id="username" label={dictionary.Login.Email[language]} value={authInfo.email}
+                onChange={(event) => setAuthInfo({...authInfo, email: event.currentTarget.value})} autoComplete="username" fullWidth/>
             </MDBox>
             <MDBox mb={2}>
               <MDInput type="password" id="password" label={dictionary.Login.Password[language]} onKeyPress={handlePasswordKeyPress} value={authInfo.password} onChange={(event) => setAuthInfo({...authInfo, password: event.currentTarget.value})} autoComplete="off" fullWidth/>
@@ -110,21 +109,6 @@ export default function SignIn() {
               <MDButton variant="gradient" color="info" onClick={handleAuthentication} fullWidth>
                 {dictionary.Login.Login[language]}
               </MDButton>
-            </MDBox>
-            <MDBox mt={3} mb={1} textAlign="center">
-              <MDTypography variant="button" color="text">
-                {dictionary.Login.NoAccount[language]}{" "}
-                <MDTypography
-                  component={Link}
-                  to="/register"
-                  variant="button"
-                  color="info"
-                  fontWeight="medium"
-                  textGradient
-                >
-                  {dictionary.Login.CreateAccount[language]}
-                </MDTypography>
-              </MDTypography>
             </MDBox>
           </MDBox>
         </MDBox>

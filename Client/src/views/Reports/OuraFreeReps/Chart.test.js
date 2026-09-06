@@ -1,0 +1,44 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {act} from 'react-dom/test-utils';
+import Plotly from 'plotly.js-dist';
+import Chart from './Chart';
+jest.mock('plotly.js-dist',()=>({react:jest.fn(),purge:jest.fn(),Plots:{resize:jest.fn()}}));
+let root,element;
+beforeEach(()=>{global.IS_REACT_ACT_ENVIRONMENT=true;Plotly.react.mockClear();Plotly.purge.mockClear();element=document.createElement('div');root=createRoot(element);});
+afterEach(()=>act(()=>root.unmount()));
+test('plots the exact supplied traces, updates in place and purges the captured element only at unmount',()=>{
+  const traces=[{x:['2026-05-01','2026-05-02','2026-05-04'],y:[1,null,3],connectgaps:false}];
+  act(()=>root.render(<Chart traces={traces} yTitle="Readiness (score)"/>));
+  const node=element.querySelector('[role="img"]');
+  expect(Plotly.react).toHaveBeenLastCalledWith(node,traces,expect.objectContaining({height:290,xaxis:{title:'Oura day',automargin:true,nticks:6},showlegend:false}),{responsive:true,displaylogo:false});
+  const updated=[{x:[1],y:[2]},{x:[1],y:[3]}];
+  act(()=>root.render(<Chart traces={updated} yTitle="Sleep HR" xTitle="Hours since session start" height={420}/>));
+  expect(Plotly.react).toHaveBeenCalledTimes(2);
+  expect(Plotly.react).toHaveBeenLastCalledWith(node,updated,expect.objectContaining({height:420,xaxis:{title:'Hours since session start',automargin:true,nticks:6},showlegend:true}),expect.any(Object));
+  expect(Plotly.purge).not.toHaveBeenCalled();
+  act(()=>root.unmount());expect(Plotly.purge).toHaveBeenCalledTimes(1);expect(Plotly.purge).toHaveBeenCalledWith(node);
+  root=createRoot(element);
+});
+
+test('container resize removes width floors and redraws only layout while retaining exact traces',()=>{
+  const originalObserver=global.ResizeObserver, originalFrame=global.requestAnimationFrame, originalCancel=global.cancelAnimationFrame;
+  let notify;
+  global.ResizeObserver=class {constructor(callback){notify=callback;}observe(){}disconnect(){}};
+  global.requestAnimationFrame=callback=>{callback();return 1;};
+  global.cancelAnimationFrame=()=>{};
+  const traces=[{x:[1,2,3],y:[2,null,4]},{x:[1,2,3],y:[3,4,5]}];
+  act(()=>root.render(<Chart traces={traces} yTitle="Score"/>));
+  const node=element.querySelector('[role="img"]');
+  node.getBoundingClientRect=()=>({width:390});
+  node._fullLayout={};
+  act(()=>notify());
+  expect(Plotly.react.mock.calls.at(-1)[1]).toBe(traces);
+  expect(Plotly.react.mock.calls.at(-1)[2]).toMatchObject({xaxis:{nticks:4},legend:{orientation:'v'}});
+  expect(node.style.minWidth).toBe('0');
+  expect(node.parentElement.style.overflowX).toBe('');
+  node.getBoundingClientRect=()=>({width:1100});
+  act(()=>notify());
+  expect(Plotly.react.mock.calls.at(-1)[2].legend.orientation).toBe('h');
+  global.ResizeObserver=originalObserver;global.requestAnimationFrame=originalFrame;global.cancelAnimationFrame=originalCancel;
+});

@@ -127,12 +127,35 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     rawBytes = loadCacheFile(source_file)
     JSON = json.loads(rawBytes)
+    reviewed_participant = person or (device.owner if device else None) or source_file.owner
+    from modules import RCS08DataPolicy
+    reviewed_policy = RCS08DataPolicy.applies_to(reviewed_participant)
+    if reviewed_policy:
+        from modules.PerceptPresentationPrivacy import deidentify_stored_source
+        sanitized, _ = deidentify_stored_source(source_file, "RCS08")
+        JSON = json.loads(sanitized)
+        reason = RCS08DataPolicy.source_exclusion(JSON)
+        if reason:
+            source_file.owner = reviewed_participant
+            source_file.metadata["AnalysisExclusion"] = reason
+            source_file.metadata["Timezone"] = ""
+            source_file.metadata["Device"] = ""
+            source_file.save()
+            return True
+        # A redacted serial number must not create another implant record.
+        canonical = models.DBSDevice.find(owner=reviewed_participant, name=RCS08DataPolicy.CANONICAL_NAME)
+        if canonical:
+            device = canonical
     if source_file.metadata["automatic_concatenation"]:
         JSON["AutomaticStreamingFix"] = True
     else:
         JSON["AutomaticStreamingFix"] = False
     
     DatabaseEntries = decodeMedtronicJSON(JSON)
+    if reviewed_policy:
+        removed = RCS08DataPolicy.filter_decoded_entries(DatabaseEntries)
+        if removed:
+            source_file.metadata["PreimplantExclusions"] = removed
     
     if source_file.metadata["automatic_deidentification"]:
         DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()

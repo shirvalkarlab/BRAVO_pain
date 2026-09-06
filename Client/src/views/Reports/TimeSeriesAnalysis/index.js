@@ -30,13 +30,11 @@ import {
   Slider
 } from "@mui/material"
 
-import { 
-  ChevronRight as ChevronRightIcon,
-  Settings as SettingsIcon,
-  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon,
-  Cached as CachedIcon
-} from "@mui/icons-material";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import SettingsIcon from "@mui/icons-material/Settings";
+import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
+import DashboardIcon from "@mui/icons-material/Dashboard";
+import CachedIcon from "@mui/icons-material/Cached";
 
 // core components
 import MDBox from "components/MDBox";
@@ -524,7 +522,7 @@ function TimeSeriesAnalysis() {
           </Grid>
           
           <Dialog open={timeseriesPlayback.playing} onClose={() => setTimeseriesPlayback({...timeseriesPlayback, playing: false})} 
-            PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
+            PaperProps={{ sx: {minWidth: 0, width: 1000, maxWidth: "calc(100vw - 32px)"} }}
           >
             <TimeseriesPlayback dataToRender={timeseriesPlayback.data} />
           </Dialog>

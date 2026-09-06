@@ -31,7 +31,8 @@ import {
   ListItemIcon
 } from "@mui/material";
 
-import { ViewInAr, Timeline } from "@mui/icons-material";
+import ViewInAr from "@mui/icons-material/ViewInAr";
+import Timeline from "@mui/icons-material/Timeline";
 import { FaEye, FaXmark } from "react-icons/fa6";
 
 import React from "react";

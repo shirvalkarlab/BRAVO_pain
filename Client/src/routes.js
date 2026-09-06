@@ -46,7 +46,10 @@ import AssessmentIcon from '@mui/icons-material/Assessment';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import PersonIcon from '@mui/icons-material/Person';
 import BiotechIcon from '@mui/icons-material/Biotech';
-import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
+import AccessAlarm from "@mui/icons-material/AccessAlarm";
+import People from "@mui/icons-material/People";
+import Article from "@mui/icons-material/Article";
+import IosShare from "@mui/icons-material/IosShare";
 
 import { experimentalRoutes } from "views/Experimental/plugins";
 
@@ -62,9 +65,15 @@ const FormList = lazy(() => import('views/Survey/FormList'));
 const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
+const PainScores = lazy(() => import('views/Reports/PainScores'));
+const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
+const ClosedLoopSim = lazy(() => import('views/Reports/ClosedLoopSim'));
+const StimOptimizer = lazy(() => import('views/Reports/StimOptimizer'));
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const GoogleHealthDashboard = lazy(() => import('views/ExternalSensors/GoogleHealth'));
+const OuraFreeReps = lazy(() => import('views/Reports/OuraFreeReps'));
+const RedcapTimeline = lazy(() => import('views/Reports/RedcapTimeline'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
@@ -297,6 +306,13 @@ const routes = {
         icon: <FaClipboardList />,
         route: "/form-records/:participant_uid",
         component: <ParticipantSurveyRecords />,
+      },
+      {
+        key: "PainScores",
+        name: "Pain Score Visualization",
+        icon: <TimelineIcon />,
+        route: "/pain-scores/:participant_uid",
+        component: <PainScores />,
       }
     ]
   },
@@ -405,6 +421,41 @@ const routes = {
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,
+      },
+      {
+        key: "ouraFreeReps",
+        name: "Oura – FreeReps",
+        icon: <FaRing />,
+        route: "/reports/oura-freereps/:participant_uid",
+        component: <OuraFreeReps />,
+      },
+      {
+        key: "redcapTimeline",
+        name: "Aditya - All Data Streams",
+        icon: <TimelineIcon />,
+        route: "/reports/redcap-pretrial/:participant_uid",
+        component: <RedcapTimeline />,
+      },
+      {
+        key: "biomarkers",
+        name: "Biomarker Exploration",
+        icon: <TimelineIcon />,
+        route: "/reports/biomarkers/:participant_uid",
+        component: <Biomarkers />,
+      },
+      {
+        key: "stimOptimizer",
+        name: "Open-Loop Stim Optimizer",
+        icon: <TimelineIcon />,
+        route: "/reports/stim-optimizer/:participant_uid",
+        component: <StimOptimizer />,
+      },
+      {
+        key: "closedLoopSim",
+        name: "Closed-Loop Research Review",
+        icon: <MdBuildCircle />,
+        route: "/reports/closed-loop/:participant_uid",
+        component: <ClosedLoopSim />,
       },
       {
         key: "AIHealthcare",

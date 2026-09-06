@@ -4,7 +4,7 @@
 =========================================================
 
 * Copyright 2025 by Jackson Cagle, Fixel Institute
-* The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/) 
+* The source code is made available under a Creative Common NonCommercial ShareAlike License (CC BY-NC-SA 4.0) (https://creativecommons.org/licenses/by-nc-sa/4.0/)
 
  =========================================================
 
@@ -13,7 +13,6 @@
 
 import { useCallback, useEffect, useState, useMemo } from "react";
 import { useResizeDetector } from 'react-resize-detector';
-import * as Math from "mathjs";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -26,27 +25,162 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { TimePicker } from "@mui/x-date-pickers";
 
 import colormap from "colormap";
-import { TwitterPicker, BlockPicker } from "react-color";
 
-import { Card, Menu, MenuItem, Dialog, DialogContent, Grid, IconButton, Popover, TextField, DialogActions } from "@mui/material";
-import { createFilterOptions } from "@mui/material/Autocomplete";
+import { Menu, MenuItem, Dialog, DialogContent, Grid, TextField, DialogActions } from "@mui/material";
 
-import { dictionary, dictionaryLookup } from "assets/translation";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
+import { categoricalIntervals, categoricalSegments } from "graphing-utility/categoricalIntervals";
+import { mergeDenseLineSeries, mergeAnnotationSeries } from "graphing-utility/denseTimeline";
+import { isObservedValue } from "graphing-utility/observedValues";
 import { usePlatformContext } from "context";
 
-const filter = createFilterOptions();
+// Prepare only selected channels. Changing overlays does not recreate neural arrays.
+export function prepareTimelineData(data, activeChannels) {
+  const active = new Set(activeChannels);
+  let lineSeries = [];
+  let barSeries = [];
 
-export default function GenericTimeline({data, availableChannels, annotations, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
+  for (let i in data) {
+    if (!data[i].ChannelNames.some(channel => active.has(channel))) continue;
+    if (data[i].AnalysisType === "CustomizedTimelineData") {
+      let xData = [];
+      for (let t in data[i].Time) {
+        xData.push(new Date(data[i].Time[t]*1000));
+        if (typeof data[i].Duration === "number") {
+          xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration*1000));
+        } else {
+          xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration[t]*1000));
+        }
+      }
+
+      for (let j in data[i].ChannelNames) {
+        if (!active.has(data[i].ChannelNames[j])) continue;
+        if (data[i].ChannelUnits[j] === "Category") {
+          barSeries.push({
+            type: "bar",
+            ...categoricalIntervals(data[i].Time, data[i].Duration, data[i].Data[j]),
+            options: {
+              id: data[i].ChannelNames[j],
+              linewidth: 2,
+              line: {shape: "hvh"},
+              color: "#000000",
+              showlegend: false,
+              orientation: "h",
+              hovertemplate: "%{y}<extra></extra>"
+            },
+            axName: data[i].ChannelNames[j]
+          });
+        } else {
+          const yData = [];
+          for (let t in data[i].Time) {
+            yData.push(data[i]["Data"][j][t]);
+            yData.push(data[i]["Data"][j][t]);
+          }
+          if (!yData.some(isObservedValue)) continue;
+
+          lineSeries.push({
+            type: "lineseries",
+            x: xData, y: yData.map(value => isObservedValue(value) ? value : null),
+            options: {
+              id: data[i].ChannelNames[j],
+              linewidth: 2,
+              connectgaps: false,
+              color: "#000000",
+              hovertemplate: "%{y}<extra></extra>"
+            },
+            axName: data[i].ChannelNames[j]
+          });
+        }
+      }
+    } else if (data[i].AnalysisType === "CustomizedSurveyData") {
+      let xData = [];
+      for (let t in data[i].Time) {
+        xData.push(new Date(data[i].Time[t]*1000));
+      }
+
+      for (let j in data[i].ChannelNames) {
+        if (!active.has(data[i].ChannelNames[j])) continue;
+        const yData = [];
+        for (let t in data[i].Time) {
+          yData.push(data[i]["Data"][j][t]);
+        }
+        if (!yData.some(isObservedValue)) continue;
+
+        lineSeries.push({
+          type: "scatter",
+          x: xData.filter((a,i) => isObservedValue(yData[i])), y: yData.filter(isObservedValue),
+          options: {
+            id: data[i].ChannelNames[j],
+            color: "#000000",
+            hovertemplate: "%{y}<extra></extra>"
+          },
+          axName: data[i].ChannelNames[j]
+        });
+      }
+
+    } else if (data[i].AnalysisType === "ChronicSpectrum") {
+      for (let j in data[i].ChannelNames) {
+        if (!active.has(data[i].ChannelNames[j])) continue;
+        lineSeries.push({
+          type: "surf",
+          x: data[i].Time[j].map((a) => new Date(a*1000)), y: data[i].Frequency[j], z: data[i].Data[j],
+          options: {
+            zlim: data[i].CLim[j],
+            hovertemplate: `  %{y:.2f} ${"Hz"}<br>  %{x} <br>  %{z:.2f} ${"dB"} <extra></extra>`,
+          },
+          axName: data[i].ChannelNames[j]
+        });
+      }
+    }
+  }
+
+  if (barSeries.length > 0) {
+    let allAx = barSeries.map((a) => a.axName);
+    allAx = [...new Set(allAx)];
+
+    for (let n in allAx) {
+      let xaxis = [];
+      let yaxis = [];
+      let base = [];
+      let options = {};
+      for (let i in barSeries) {
+        if (barSeries[i].axName !== allAx[n]) continue;
+
+        options = barSeries[i].options;
+        xaxis.push(...barSeries[i].x);
+        yaxis.push(...barSeries[i].y);
+        base.push(...barSeries[i].base);
+      }
+
+      lineSeries.push({
+        type: "bar",
+        x: xaxis, y: yaxis, base: base,
+        options: options,
+        axName: allAx[n]
+      });
+    }
+  }
+
+  return mergeDenseLineSeries(lineSeries).map(series => {
+    if (!["lineseries", "scatter"].includes(series.type)) return series;
+    let min = Infinity, max = -Infinity;
+    for (const value of series.y) {
+      if (value === null) continue;
+      if (value < min) min = Number(value);
+      if (value > max) max = Number(value);
+    }
+    return {...series, range: [min, max]};
+  });
+}
+
+export default function GenericTimeline({data, availableChannels, annotations, showEventOverlays = true, handleAddEvent, handleDeleteEvent, updateColor, figureTitle}) {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
 
   const [contextMenu, setContextMenu] = useState(null);
   const [eventInfo, setEventInfo] = useState({ name: "", time: 0, enddate: null, endtime: null, show: false });
-  const [popup, setPopupState] = useState({item: ""});
 
   const [fig, setFig] = useState(null);
-  const [renderData, setRenderData] = useState(null);
   const [annotationState, setAnnotationState] = useState({});
 
   useEffect(() => {
@@ -56,7 +190,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
 
   useEffect(() => {
     if (!fig) return;
-    
+
     if (!fig.fresh) {
       fig.clearData();
     }
@@ -69,155 +203,29 @@ export default function GenericTimeline({data, availableChannels, annotations, h
       fig.setSubtitle(`${availableChannels.active[i]}`,ax[i]);
     }
     fig.setSubplotId(subplotIds);
-    
+
     fig.setLegend({ tracegroupgap: 5, xanchor: "left", y: 0.5, });
     fig.setLayoutProps({ barmode: "group", hovermode: "x", hoverdistance: 1 });
 
-    if (!fig.fresh) {
-      setRenderData([...renderData]);
-    }
+  }, [fig, availableChannels.active]);
 
-  }, [fig, availableChannels]);
-
-  useEffect(() => {
-    if (!fig) return;
-
-    let lineSeries = [];
-    let barSeries = [];
-    
-    for (let i in data) {
-      if (data[i].AnalysisType === "CustomizedTimelineData") {
-        let xData = [];
-        for (let t in data[i].Time) {
-          xData.push(new Date(data[i].Time[t]*1000));
-          if (typeof data[i].Duration === "number") {
-            xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration*1000));
-          } else {
-            xData.push(new Date(data[i].Time[t]*1000 + data[i].Duration[t]*1000));
-          }
-        }
-
-        for (let j in data[i].ChannelNames) {
-          if (data[i].ChannelUnits[j] === "Category") {
-            const yData = [];
-            for (let t in data[i].Time) {
-              yData.push(data[i]["Data"][j][t]);
-            }
-
-            barSeries.push({
-              type: "bar",
-              x: data[i]["Duration"].map((a,t) => new Date(a)*1000), y: data[i]["Data"][j], base: data[i].Time.map((a) => new Date(a*1000)),
-              options: {
-                id: data[i].ChannelNames[j],
-                linewidth: 2,
-                line: {shape: "hvh"},
-                color: "#000000",
-                showlegend: false,
-                orientation: "h",
-                hovertemplate: "%{y}<extra></extra>"
-              }, 
-              axName: data[i].ChannelNames[j]
-            });
-          } else {
-            const yData = [];
-            for (let t in data[i].Time) {
-              yData.push(data[i]["Data"][j][t]);
-              yData.push(data[i]["Data"][j][t]);
-            }
-            if ( yData.filter((a,i) => yData[i]).length === 0 ) continue;
-
-            lineSeries.push({
-              type: "lineseries",
-              x: xData.filter((a,i) => yData[i]), y: yData.filter((a,i) => yData[i]),
-              options: {
-                id: data[i].ChannelNames[j],
-                linewidth: 2,
-                color: "#000000",
-                hovertemplate: "%{y}<extra></extra>"
-              }, 
-              axName: data[i].ChannelNames[j]
-            });
-          }
-        }
-      } else if (data[i].AnalysisType === "CustomizedSurveyData") {
-        let xData = [];
-        for (let t in data[i].Time) {
-          xData.push(new Date(data[i].Time[t]*1000));
-        }
-
-        for (let j in data[i].ChannelNames) {
-          const yData = [];
-          for (let t in data[i].Time) {
-            yData.push(data[i]["Data"][j][t]);
-          }
-          if ( yData.filter((a,i) => yData[i]).length === 0 ) continue;
-
-          lineSeries.push({
-            type: "scatter",
-            x: xData.filter((a,i) => yData[i]), y: yData.filter((a,i) => yData[i]),
-            options: {
-              id: data[i].ChannelNames[j],
-              color: "#000000",
-              hovertemplate: "%{y}<extra></extra>"
-            }, 
-            axName: data[i].ChannelNames[j]
-          });
-        }
-
-      } else if (data[i].AnalysisType === "ChronicSpectrum") {
-        for (let j in data[i].ChannelNames) {
-          lineSeries.push({
-            type: "surf",
-            x: data[i].Time[j].map((a) => new Date(a*1000)), y: data[i].Frequency[j], z: data[i].Data[j],
-            options: {
-              zlim: data[i].CLim[j],
-              hovertemplate: `  %{y:.2f} ${"Hz"}<br>  %{x} <br>  %{z:.2f} ${"dB"} <extra></extra>`,
-            }, 
-            axName: data[i].ChannelNames[j]
-          });
-        }
-      }
-    }
-
-    if (barSeries.length > 0) {
-      let allAx = barSeries.map((a) => a.axName);
-      allAx = [...new Set(allAx)];
-
-      for (let n in allAx) {
-        let xaxis = [];
-        let yaxis = [];
-        let base = [];
-        let options = {};
-        for (let i in barSeries) {
-          if (barSeries[i].axName !== allAx[n]) continue;
-          
-          options = barSeries[i].options;
-          xaxis.push(...barSeries[i].x);
-          yaxis.push(...barSeries[i].y);
-          base.push(...barSeries[i].base);
-        }
-
-        lineSeries.push({
-          type: "bar",
-          x: xaxis, y: yaxis, base: base,
-          options: options, 
-          axName: allAx[n]
-        });
-      }
-    }
-
+  const preparedData = useMemo(() => prepareTimelineData(data, availableChannels.active), [data, availableChannels.active]);
+  const renderData = useMemo(() => {
+    if (!showEventOverlays) return preparedData;
+    const lineSeries = [];
     for (let i in annotations) {
       if (!annotations[i].Duration) {
         lineSeries.push({
           type: "annotations",
-          x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000)], y: [-50000, 50000],
+          x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000)], y: [0, 1],
           options: {
             id: annotations[i].Id,
+            meta: {bravoPreserveLabel: true},
             name: annotations[i].Name,
             linewidth: 2,
             color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
             hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
-          }, 
+          },
           axName: "all"
         });
       } else {
@@ -229,20 +237,23 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           yDot: [0],
           options: {
             id: annotations[i].Id,
+            meta: {bravoPreserveLabel: true},
             name: annotations[i].Name,
             size: 10,
             color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
-            alpha: 0.3, 
+            alpha: 0.3,
             hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
-          }, 
+          },
           axName: "all"
         })
       }
     }
 
-    setRenderData(lineSeries);
-    
-  }, [fig, data, annotations]);
+    for (const series of lineSeries) {
+      series.options.hidden = annotationState[series.options.name] ? !annotationState[series.options.name].show : false;
+    }
+    return [...preparedData, ...mergeAnnotationSeries(lineSeries)];
+  }, [preparedData, annotations, annotationState, showEventOverlays]);
 
   useEffect(() => {
     setAnnotationState((annotationState) => {
@@ -263,20 +274,6 @@ export default function GenericTimeline({data, availableChannels, annotations, h
   }, [annotations]);
 
   useEffect(() => {
-    if (!fig) return;
-
-    setRenderData((renderData) => {
-      for (let i in renderData) {
-        if (renderData[i].type === "shading") {
-          renderData[i].options.color = annotationState[renderData[i].options.name] ? annotationState[renderData[i].options.name].color : "#00FF00";
-          renderData[i].options.hidden = annotationState[renderData[i].options.name] ? !annotationState[renderData[i].options.name].show : false;
-        }
-      }
-      return [...renderData];
-    })
-  }, [fig, annotationState]);
-
-  useEffect(() => {
     updateColor(annotationState);
   }, [annotationState]);
 
@@ -284,6 +281,15 @@ export default function GenericTimeline({data, availableChannels, annotations, h
     if (!fig || !renderData) return;
 
     fig.traces = [];
+    fig.layout.shapes = [];
+    fig.ax = fig.ax.filter(axis => {
+      if (!axis.annotationOverlay) return true;
+      delete fig.layout[axis.ylayout];
+      return false;
+    });
+    if (fig.gca?.annotationOverlay) fig.gca = fig.ax[0];
+    const primaryAxes = [...fig.ax];
+    const annotationAxes = new Map();
     let yLim = {};
     let clim = {};
 
@@ -305,11 +311,11 @@ export default function GenericTimeline({data, availableChannels, annotations, h
       if (renderData[i].type == "lineseries") {
         if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
         if (!renderData[i].options.hidden && ax) {
-          const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
+          const currentMax = renderData[i].range[1];
           if (currentMax > yLim[renderData[i].axName][1]) {
             yLim[renderData[i].axName][1] = currentMax*1.1;
           };
-          const currentMin = Math.min(renderData[i].y.filter((a) => a !== null));
+          const currentMin = renderData[i].range[0];
           if (currentMin < yLim[renderData[i].axName][0]) {
             yLim[renderData[i].axName][0] = currentMin*1.1;
           };
@@ -320,11 +326,11 @@ export default function GenericTimeline({data, availableChannels, annotations, h
       } else if (renderData[i].type === "scatter") {
         if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
         if (!renderData[i].options.hidden && ax) {
-          const currentMax = Math.max(renderData[i].y.filter((a) => a !== null));
+          const currentMax = renderData[i].range[1];
           if (currentMax > yLim[renderData[i].axName][1]) {
             yLim[renderData[i].axName][1] = currentMax*1.1;
           };
-          const currentMin = Math.min(renderData[i].y.filter((a) => a !== null));
+          const currentMin = renderData[i].range[0];
           if (currentMin < yLim[renderData[i].axName][0]) {
             yLim[renderData[i].axName][0] = currentMin*1.1;
           };
@@ -332,7 +338,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           fig.setScaleType("linear", "y", ax);
           fig.scatter(renderData[i].x, renderData[i].y, renderData[i].options, ax);
         }
-        
+
       } else if (renderData[i].type === "surf") {
         if (!renderData[i].options.hidden && ax) {
           fig.setScaleType("linear", "y", ax);
@@ -348,20 +354,48 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           fig.setScaleType("date", "x", ax);
           fig.setAxisProps({
             categoryorder: "array",
-            categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"] 
+            categoryarray: ["deep", "light", "rem", "wake", "awake", "asleep"]
           }, "y", ax);
-          fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, ax);
+          if (renderData[i].x.length > 2000) {
+            // One accelerated trace avoids thousands of individual SVG bars.
+            const segments = categoricalSegments(renderData[i]);
+            fig.plot(segments.x, segments.y, {
+              id: renderData[i].options.id, type: "scattergl", linewidth: 8,
+              color: "#000000", showlegend: false, connectgaps: false,
+              hovertemplate: "%{y}<extra></extra>"
+            }, ax);
+          } else {
+            fig.bar(renderData[i].x, renderData[i].y, renderData[i].base, renderData[i].options, ax);
+          }
         }
       }
     }
 
     for (let i in renderData) {
-      if (renderData[i].axName == "all") { 
-        if (renderData[i].type === "shading" && !renderData[i].options.hidden) {
-          const ax = fig.getAxes();
+      if (showEventOverlays && renderData[i].axName == "all") {
+        if (["shading", "annotations"].includes(renderData[i].type) && !renderData[i].options.hidden) {
+          const ax = primaryAxes;
           for (let j in ax) {
-            fig.addShadedArea(renderData[i].x, yLim[ax[j].id], {...renderData[i].options, hovertemplate: "<extra></extra>"}, ax[j]);
-            fig.scatter(renderData[i].xDot, renderData[i].yDot, renderData[i].options, ax[j]);
+            const point = renderData[i].type === "annotations";
+            if (point) {
+              if (!annotationAxes.has(ax[j])) {
+                const overlay = fig.addDualYAxis(ax[j]);
+                overlay.annotationOverlay = true;
+                overlay.id = ax[j].id + " annotations";
+                fig.setAxisProps({range: [0, 1], fixedrange: true, visible: false, showgrid: false, zeroline: false}, "y", overlay);
+                annotationAxes.set(ax[j], overlay);
+              }
+              fig.plot(renderData[i].x, renderData[i].y, {...renderData[i].options, showlegend: false}, annotationAxes.get(ax[j]));
+              continue;
+            }
+            // Axis-domain coordinates cover numeric and categorical panels without changing their ranges.
+            fig.layout.shapes.push({
+              type: "rect", xref: ax[j].xaxis, yref: ax[j].yaxis + " domain",
+              x0: renderData[i].x[0], x1: renderData[i].x[1], y0: 0, y1: 1,
+              line: {color: renderData[i].options.color, width: 0},
+              fillcolor: renderData[i].options.color, opacity: 0.3,
+              layer: "above", name: renderData[i].options.name,
+            });
           }
         }
       }
@@ -383,7 +417,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
         document.removeEventListener("PlotlyRelayout", plotly_onZoom);
       }
     };
-  }, [fig, renderData]);
+  }, [fig, renderData, showEventOverlays]);
 
   const plotly_onClick = (evt) => {
     setEventInfo((eventInfo) => {
@@ -396,7 +430,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
   }
 
   const plotly_onZoom = (evt) => {
-    
+
   }
 
   const onResize = useCallback(() => {
@@ -439,20 +473,20 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           </Menu>
 
           <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
-            <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+            <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
               <MDTypography variant="h5">
-                {"New Custom Event"} 
+                {"New Custom Event"}
               </MDTypography>
               <MDTypography variant="h6">
                 {"Time: "}{new Date(eventInfo.time).toLocaleString("en-US", {
-                  year: "numeric", 
+                  year: "numeric",
                   month: "long",
                   day: "2-digit",
                   hour: "2-digit",
                   minute: "2-digit",
                   second: "2-digit",
                   timeZoneName: "longGeneric"
-                })} 
+                })}
               </MDTypography>
             </MDBox>
             <DialogContent>
@@ -503,7 +537,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
               }}>Add</MDButton>
             </DialogActions>
           </Dialog>
-          
+
         </MDBox>
       </Grid>
     </Grid>

@@ -260,7 +260,7 @@ function TimeDomainFigure({dataToRender, analysisId, resultId, figureTitle}) {
       </Menu>
       
       <Dialog open={smoothingFactor.show} onClose={() => setSmoothingFactor({...smoothingFactor, show: false})}>
-        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
           <MDTypography variant="h5">
             {"Set Smoothing Factor (View Only)"} 
           </MDTypography>

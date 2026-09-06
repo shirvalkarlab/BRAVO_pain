@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Local-only validation. Never mounts appliance secrets, data, or service ports.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+MODE="${1:-check}"
+RESULTS="$ROOT/reports/validation"
+PYTHON_IMAGE="bravo-local:validation-tests"
+CLIENT_IMAGE="bravo-local:validation-client"
+mkdir -p "$RESULTS"
+
+assert_image_file() {
+  local expected_digest actual_digest
+  expected_digest="$(shasum -a 256 "$2" | awk '{print $1}')"
+  actual_digest="$(docker run --rm --network none --entrypoint sha256sum "$1" "$3" | awk '{print $1}')"
+  if [[ "$expected_digest" != "$actual_digest" ]]; then
+    printf '%s\n' "Validation dependencies changed ($2); run scripts/bravo-validate prepare again." >&2
+    return 1
+  fi
+}
+
+case "$MODE" in
+  prepare)
+    docker build --target server-deps -t bravo-local:validation-deps .
+    docker build -t "$PYTHON_IMAGE" - <<'DOCKERFILE'
+FROM bravo-local:validation-deps
+RUN python3 -m pip install --break-system-packages pytest==8.3.5 pytest-cov==6.0.0 coverage==7.6.12
+DOCKERFILE
+    docker build -t "$CLIENT_IMAGE" -f - . <<'DOCKERFILE'
+FROM node:22-bookworm
+WORKDIR /usr/src/Client
+COPY Client/package.json Client/package-lock.json ./
+RUN npm ci
+DOCKERFILE
+    ;;
+  backend)
+    docker image inspect "$PYTHON_IMAGE" >/dev/null
+    assert_image_file "$PYTHON_IMAGE" BRAVO/requirements.txt /usr/src/BRAVO/requirements.txt
+    rm -f "$RESULTS/python.json" "$RESULTS/backend-status.json"
+    # Legacy checkouts may contain a mysql.config; never expose its contents to tests.
+    : > "$RESULTS/empty-mysql.config"
+    docker run --rm --network none \
+      -v "$ROOT/BRAVO:/workspace/BRAVO:ro" \
+      -v "$RESULTS/empty-mysql.config:/workspace/BRAVO/mysql.config:ro" \
+      -v "$ROOT/Client/src:/workspace/Client/src:ro" \
+      -v "$ROOT/scripts/validation:/workspace/scripts/validation:ro" \
+      -v "$RESULTS:/results" -w /workspace/BRAVO \
+      -e PYTHONDONTWRITEBYTECODE=1 -e COVERAGE_FILE=/results/.coverage \
+      "$PYTHON_IMAGE" python3 /workspace/scripts/validation/backend.py
+    ;;
+  frontend)
+    rm -f "$RESULTS/coverage-final.json" "$RESULTS/frontend-status.json"
+    python3 "$ROOT/scripts/validation/coverage_gate.py" --start-frontend
+    docker image inspect "$CLIENT_IMAGE" >/dev/null
+    assert_image_file "$CLIENT_IMAGE" Client/package.json /usr/src/Client/package.json
+    assert_image_file "$CLIENT_IMAGE" Client/package-lock.json /usr/src/Client/package-lock.json
+    docker run --rm --network none -e CI=true \
+      -v "$ROOT/Client/src:/usr/src/Client/src:ro" \
+      -v "$ROOT/Client/package.json:/usr/src/Client/package.json:ro" \
+      -v "$ROOT/Client/jsconfig.json:/usr/src/Client/jsconfig.json:ro" \
+      -v "$RESULTS:/results" "$CLIENT_IMAGE" \
+      npm test -- --watchAll=false --runInBand --coverage \
+      '--collectCoverageFrom=src/**/*.{js,jsx}' \
+      '--collectCoverageFrom=!src/**/*.test.{js,jsx}' \
+      '--collectCoverageFrom=!src/**/*.spec.{js,jsx}' \
+      --coverageReporters=json --coverageReporters=text-summary \
+      --coverageDirectory=/results
+    python3 "$ROOT/scripts/validation/coverage_gate.py" --record-frontend
+    ;;
+  coverage)
+    python3 scripts/validation/coverage_gate.py
+    ;;
+  build)
+    docker build -t bravo-local:validation-candidate .
+    ;;
+  live)
+    scripts/bravo-appliance check
+    printf '%s\n' 'Server check only. Verify the actual Chrome URL, Aditya build and applicable UI journeys separately.'
+    ;;
+  check)
+    python3 -m unittest discover -s scripts/validation -p 'test_*.py'
+    "$0" backend
+    "$0" frontend
+    "$0" coverage
+    "$0" build
+    printf '%s\n' 'Portable local gate passed. Private-data, Chrome and deployed acceptance remain separate.'
+    ;;
+  *)
+    printf '%s\n' 'Usage: scripts/bravo-validate {prepare|backend|frontend|coverage|build|check|live}' >&2
+    exit 2
+    ;;
+esac

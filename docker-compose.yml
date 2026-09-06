@@ -1,69 +1,154 @@
-version: "3.9"
 services:
   mysql:
     image: mysql:8.0
-    restart: always
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "ROOTPASSWORD"
-      MYSQL_DATABASE: "BRAVOServer"
-      MYSQL_USER: "BRAVOAdmin"
-      MYSQL_PASSWORD: "AdminPassword"
-    ports:
-      - '3306:3306'
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?run scripts/bravo-appliance init first}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-BRAVOServer}"
+      MYSQL_USER: "${MYSQL_USER:-BRAVOAdmin}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?run scripts/bravo-appliance init first}"
     volumes:
       - SQLDatabase:/var/lib/mysql
     networks:
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
   
   bravo-server:
-    image: jcagle95/bravo-server:3.0.1
-    restart: always
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: bravo-local:aditya
+    restart: unless-stopped
     environment:
-      BRAVO_DATABASE: "BRAVOServer"
-      BRAVO_DATABASE_USER: "BRAVOAdmin"
-      BRAVO_DATABASE_PASSWORD: "AdminPassword"
+      BRAVO_DATABASE: "${MYSQL_DATABASE:-BRAVOServer}"
+      BRAVO_DATABASE_USER: "${MYSQL_USER:-BRAVOAdmin}"
+      BRAVO_DATABASE_PASSWORD: "${MYSQL_PASSWORD:?run scripts/bravo-appliance init first}"
       BRAVO_DATABASE_HOST: "mysql"
       BRAVO_DATABASE_PORT: "3306"
 
       REDIS_HOST: "redis"
-      DATASERVER_ENCRYPTION: "O6sHoRxTt3dYohP0kndr6rvFl8ebxZbELT9wKI2FICk="
-      DATASERVER_HASHKEY: "BRAVOServerHashkey="
-      DJANGO_SECRET_KEY: "django-insecure-v#aagfodpaihopfda#$$%()I*()RETGEDRF*()a+"
-      SERVER_ADDRESS: "http://localhost:27286"
-      SERVER_HOST: "localhost"
-      DJANGO_MODE: "DEBUG"
+      DATASERVER_ENCRYPTION: "${DATASERVER_ENCRYPTION:?run scripts/bravo-appliance init first}"
+      DATASERVER_HASHKEY: "${DATASERVER_HASHKEY:?run scripts/bravo-appliance init first}"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?run scripts/bravo-appliance init first}"
+      SERVER_ADDRESS: "http://localhost:${BRAVO_HTTP_PORT:-8080},http://127.0.0.1:${BRAVO_HTTP_PORT:-8080},${BRAVO_PUBLIC_ORIGIN:-}"
+      SERVER_HOST: "localhost,127.0.0.1,${BRAVO_PUBLIC_HOST:-}"
+      DJANGO_MODE: "PRODUCTION"
+      ALLOW_SELF_REGISTRATION: "false"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
 
       FIBIT_CLIENT_SECRET: ""
       FIBIT_CLIENT_ID: ""
+      GoogleHealth_CLIENT_ID: ""
+      GoogleHealth_CLIENT_SECRET: ""
+      GoogleHealth_CLIENT_REDIRECT_URI: ""
+      OURA_CLIENT_ID: ""
+      OURA_CLIENT_SECRET: ""
+      OURA_CLIENT_REDIRECT_URI: ""
       
     stdin_open: true
     tty: true
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - backend
     volumes:
       - BRAVOStorage:/usr/src/BRAVO/BRAVOStorage
+      - ./secrets/runtime_assets/config:/usr/src/BRAVO/config:ro
+      - ./secrets/runtime_assets/psd_lsb_models:/usr/src/BRAVO/modules/Biomarkers/data/psd_lsb_models:ro
     ports:
-      - '80:80'
-      - '443:443'
-      - '27286:27286'
+      - '127.0.0.1:${BRAVO_HTTP_PORT:-8080}:80'
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=5).read()"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 120s
     command: >
-      bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate && python3 manage.py runserver 0:27286"
+      bash -c "service nginx start && python3 manage.py migrate --noinput && exec python3 -m uvicorn BRAVO.asgi:application --host 127.0.0.1 --port 27286 --workers ${BRAVO_WEB_WORKERS:-4} --proxy-headers --forwarded-allow-ips=127.0.0.1"
+
+  bravo-sync:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: bravo-local:aditya
+    restart: unless-stopped
+    environment:
+      BRAVO_DATABASE: "${MYSQL_DATABASE:-BRAVOServer}"
+      BRAVO_DATABASE_USER: "${MYSQL_USER:-BRAVOAdmin}"
+      BRAVO_DATABASE_PASSWORD: "${MYSQL_PASSWORD:?run scripts/bravo-appliance init first}"
+      BRAVO_DATABASE_HOST: "mysql"
+      BRAVO_DATABASE_PORT: "3306"
+      REDIS_HOST: "redis"
+      DATASERVER_ENCRYPTION: "${DATASERVER_ENCRYPTION:?run scripts/bravo-appliance init first}"
+      DATASERVER_HASHKEY: "${DATASERVER_HASHKEY:?run scripts/bravo-appliance init first}"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?run scripts/bravo-appliance init first}"
+      SERVER_ADDRESS: "http://localhost:${BRAVO_HTTP_PORT:-8080},http://127.0.0.1:${BRAVO_HTTP_PORT:-8080},${BRAVO_PUBLIC_ORIGIN:-}"
+      SERVER_HOST: "localhost,127.0.0.1,${BRAVO_PUBLIC_HOST:-}"
+      DJANGO_MODE: "PRODUCTION"
+      ALLOW_SELF_REGISTRATION: "false"
+      RCS08_NEURAL_FOLDER: "/data/rcs08-neural"
+      RCS08_EXPORT_DIRECTORY: "/data/rcs08-exports"
+      RCS08_COMPARISON_SOURCE_DIR: "/run/secrets/rcs08_comparisons"
+      RCS08_REDCAP_CREDENTIALS_FILE: "/run/secrets/rcs08_redcap.json"
+      RCS08_OURA_CREDENTIALS_FILE: "/run/secrets/rcs08_oura.json"
+      RCS08_OURA_START_DATE: "${RCS08_OURA_START_DATE:-2025-01-01}"
+      RCS08_TIMEZONE: "America/Los_Angeles"
+      TZ: "America/Los_Angeles"
+      PYTHONUNBUFFERED: "1"
+      FIBIT_CLIENT_SECRET: ""
+      FIBIT_CLIENT_ID: ""
+      GoogleHealth_CLIENT_ID: ""
+      GoogleHealth_CLIENT_SECRET: ""
+      GoogleHealth_CLIENT_REDIRECT_URI: ""
+      OURA_CLIENT_ID: ""
+      OURA_CLIENT_SECRET: ""
+      OURA_CLIENT_REDIRECT_URI: ""
+    depends_on:
+      bravo-server:
+        condition: service_healthy
+    networks:
+      - backend
+    volumes:
+      - BRAVOStorage:/usr/src/BRAVO/BRAVOStorage
+      - ./secrets/runtime_assets/config:/usr/src/BRAVO/config:ro
+      - ./secrets/runtime_assets/psd_lsb_models:/usr/src/BRAVO/modules/Biomarkers/data/psd_lsb_models:ro
+      - "${RCS08_NEURAL_SOURCE:?set RCS08_NEURAL_SOURCE in .env.appliance}:/data/rcs08-neural:ro"
+      - type: bind
+        source: "${RCS08_EXPORT_SOURCE:-./output/rcs08-exports}"
+        target: /data/rcs08-exports
+        bind:
+          create_host_path: false
+      - ./secrets/rcs08_processing:/run/secrets/rcs08_processing:ro
+      - "${RCS08_COMPARISON_SOURCE:-./secrets/rcs08_comparisons}:/run/secrets/rcs08_comparisons:ro"
+      - ./secrets/rcs08_redcap.json:/run/secrets/rcs08_redcap.json:ro
+      - ./secrets/rcs08_oura.json:/run/secrets/rcs08_oura.json:ro
+    command: python3 manage.py run_rcs08_scheduler --external-maintenance
   
   redis:
     image: redis:5
-    restart: always
-    ports:
-      - '6379:6379'
+    restart: unless-stopped
     networks:
       - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 networks:
   backend:
 
 volumes:
   SQLDatabase:
-    name: sqldata
-  BRAVOStorage: 
+    name: bravo_platform_sqldata
+  BRAVOStorage:
+    name: bravo_platform_storage

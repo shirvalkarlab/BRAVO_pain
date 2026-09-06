@@ -95,6 +95,9 @@ export default styled(Drawer)(({ theme, ownerState }) => {
     "& .MuiDrawer-paper": {
       boxShadow: xxl,
       border: "none",
+      maxWidth: "calc(100vw - 32px)",
+      overflowX: "hidden",
+      overflowY: "auto",
 
       ...(hideSidenav ? drawerHideStyles() : (miniSidenav && !showSidenav ? drawerCloseStyles() : drawerOpenStyles())),
     },

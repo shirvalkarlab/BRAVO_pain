@@ -11,8 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { currentTarget } from "utils/participantTargets";
 import React from "react"
-import { useHistory } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -207,7 +207,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                   const [side, target] = channel.Hemisphere.split(" ");
                   leftHemisphere.push(<MDBox key={channelName}>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                      {channel.CustomName!=channel.Hemisphere ? channel.CustomName : dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language)}
+                      {currentTarget(channel.Hemisphere, channel.CustomName!=channel.Hemisphere ? channel.CustomName : dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language))}
                     </MDTypography>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
                       {channelName} {recording.Therapy ? ("@ " + recording.Therapy.Left.RateInHertz + " Hz " + recording.Therapy.Left.PulseWidthInMicroSecond + " μS") : ""}
@@ -217,7 +217,7 @@ function BrainSenseStreamingTable({data, getRecordingData, handleMerge, toggle, 
                   const [side, target] = channel.Hemisphere.split(" ");
                   rightHemisphere.push(<MDBox key={channelName}>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                      {channel.CustomName!=channel.Hemisphere ? channel.CustomName : dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language)}
+                      {currentTarget(channel.Hemisphere, channel.CustomName!=channel.Hemisphere ? channel.CustomName : dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language))}
                     </MDTypography>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
                       {channelName} {recording.Therapy ? ("@ " + recording.Therapy.Right.RateInHertz + " Hz " + recording.Therapy.Right.PulseWidthInMicroSecond + " μS") : ""}

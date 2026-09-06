@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_dir="$(cd "$script_dir/.." && pwd)"
+env_file="$repo_dir/.env.appliance"
+
+die() {
+  printf 'BRAVO appliance: ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+note() {
+  printf 'BRAVO appliance: %s\n' "$*"
+}
+
+require_env() {
+  [[ -f "$env_file" ]] || die "missing $env_file; run '$0 init' first"
+}
+
+env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$env_file" | tail -n 1
+}
+
+compose() {
+  docker compose --project-directory "$repo_dir" --env-file "$env_file" "$@"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/bravo-appliance <command>
+
+Commands:
+  init [rcs08-neural-folder]
+                         Generate ignored appliance secrets once.
+  sync-source <folder>   Update only the read-only RCS08 Dropbox source path.
+  up                     Build and start the localhost Docker stack.
+  check                  Verify containers, localhost access, and app settings.
+  status                 Show Compose status and the localhost URL.
+  backup [directory]     Create a portable, sensitive backup bundle.
+  restore-check <bundle> Test a backup in disposable storage.
+  restore <bundle> --replace-existing-data
+                         Replace the appliance data from a verified bundle.
+  down                   Stop containers without deleting volumes.
+EOF
+}
+
+command_name="${1:-}"
+case "$command_name" in
+  init)
+    default_neural_source="/Users/$(id -un)/UCSF DBS for Pain Dropbox/Aditya Behal/RCS08/Stage 1"
+    neural_source="${2:-${RCS08_NEURAL_SOURCE:-$default_neural_source}}"
+    [[ -d "$neural_source" ]] || die "RCS08 neural folder not found; pass its path after init"
+    python3 "$script_dir/generate_appliance_env.py" --output "$env_file" \
+      --rcs08-neural-source "$neural_source"
+    mkdir -p "$repo_dir/output/rcs08-exports"
+    mysql_container="$(compose ps --quiet mysql 2>/dev/null || true)"
+    if [[ -n "$mysql_container" ]] && [[ "$(docker inspect --format '{{.State.Running}}' "$mysql_container")" == "true" ]]; then
+      "$script_dir/rotate-existing-database-credentials" "$mysql_container" "$env_file"
+      note "existing MySQL credentials rotated; run '$0 up' to recreate services with the new environment"
+    fi
+    ;;
+  sync-source)
+    require_env
+    [[ -n "${2:-}" ]] || die "sync-source requires the RCS08 Dropbox folder"
+    python3 "$script_dir/update_rcs08_source.py" --source "$2" --env-file "$env_file"
+    note "run '$0 up' to recreate the sync container with the new read-only mount"
+    ;;
+  up)
+    require_env
+    python3 "$script_dir/prepare_private_runtime.py"
+    compose config --quiet
+    compose up --build --detach --wait --wait-timeout 180
+    "$0" check
+    compose ps
+    ;;
+  check)
+    require_env
+    port="$(env_value BRAVO_HTTP_PORT)"
+    published="$(compose port bravo-server 80)"
+    [[ "$published" == "127.0.0.1:${port}" ]] || die "unexpected published address: $published"
+    curl --fail --silent --show-error --connect-timeout 5 --max-time 30 "http://127.0.0.1:${port}/healthz"
+    printf '\n'
+    response="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --output /dev/null --write-out '%{http_code}' "http://localhost:${port}/")"
+    [[ "$response" == "200" ]] || die "localhost page returned HTTP $response"
+    page="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 "http://127.0.0.1:${port}/index")"
+    [[ "$page" == *"<title>UF BRAVO Platform</title>"* ]] || die "localhost did not return the BRAVO application"
+    note "BRAVO application verified at http://127.0.0.1:${port}/index"
+    compose exec -T bravo-server python3 manage.py check
+    compose ps
+    note "localhost checks passed: http://127.0.0.1:${port}/index"
+    ;;
+  status)
+    require_env
+    compose ps
+    note "open http://localhost:$(env_value BRAVO_HTTP_PORT)"
+    ;;
+  backup)
+    require_env
+    "$script_dir/bravo-backup" "${2:-$repo_dir/backups}"
+    ;;
+  restore-check)
+    [[ -n "${2:-}" ]] || die "restore-check requires a backup bundle"
+    "$script_dir/bravo-restore-check" "$2"
+    ;;
+  restore)
+    [[ -n "${2:-}" ]] || die "restore requires a backup bundle"
+    [[ "${3:-}" == "--replace-existing-data" ]] || die "restore requires --replace-existing-data"
+    "$script_dir/bravo-restore" "$2" "$3"
+    ;;
+  down)
+    require_env
+    compose down
+    ;;
+  help|-h|--help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    die "unknown command '$command_name'"
+    ;;
+esac

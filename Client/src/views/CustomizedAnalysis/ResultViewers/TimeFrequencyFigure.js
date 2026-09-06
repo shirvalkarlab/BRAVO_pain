@@ -218,7 +218,7 @@ function TimeFrequencyFigure({dataToRender, analysisId, resultId, figureTitle}) 
       </Menu>
       
       <Dialog open={coloraxis.show} onClose={() => setColorAxis({...coloraxis, show: false})}>
-        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
           <MDTypography variant="h5">
             {"Set Colorbar Axis Range (View Only)"} 
           </MDTypography>

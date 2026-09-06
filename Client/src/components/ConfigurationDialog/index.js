@@ -68,7 +68,7 @@ function ConfigurationDialog({show, setShow, setAlert}) {
 
   return useMemo(() => (
     <Dialog open={show} onClose={() => setShow(false)} 
-      PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }, maxHeight: "100vh"} }}
+      PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)", maxHeight: "100vh"} }}
     >
       <DialogContent>
         <MDBox px={2} pt={2}>

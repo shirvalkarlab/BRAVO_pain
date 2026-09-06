@@ -35,6 +35,14 @@ import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
 import ParticipantTablePagination from "./ParticipantTablePagination";
 
+const deviceLabel = ({ GenericName, Type }) => {
+  const name = (GenericName || "").trim();
+  const type = (Type || "").trim();
+  const words = (value) => value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(" ");
+  const modelInName = type && (` ${words(name)} `).includes(` ${words(type)} `);
+  return [name, modelInName ? "" : type].filter(Boolean).join(" ");
+};
+
 const ParticipantTable = ({data}) => {
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
@@ -155,7 +163,7 @@ const ParticipantTable = ({data}) => {
                     {participant.DBSDevices.map((a) => {
                       return <MDBox key={a.Id}>
                         <MDTypography variant="p" fontSize={12} style={{marginBottom: 0}}>
-                          {a.GenericName}{" "}{a.Type}
+                          {deviceLabel(a)}
                         </MDTypography>
                       </MDBox>
                     })}

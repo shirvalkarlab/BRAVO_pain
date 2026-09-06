@@ -11,6 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { currentTargetText } from "utils/participantTargets";
 import { useEffect, useState, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -29,13 +30,11 @@ import {
   Slider
 } from "@mui/material"
 
-import { 
-  ChevronRight as ChevronRightIcon,
-  Settings as SettingsIcon,
-  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon,
-  Cached as CachedIcon
-} from "@mui/icons-material";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import SettingsIcon from "@mui/icons-material/Settings";
+import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
+import DashboardIcon from "@mui/icons-material/Dashboard";
+import CachedIcon from "@mui/icons-material/Cached";
 
 // core components
 import MDBox from "components/MDBox";
@@ -248,6 +247,7 @@ function NeuralActivitySnapshot() {
                     <MDBox pb={2} px={2} lineHeight={1}>
                       <Autocomplete
                         value={viewSnapshot}
+                        getOptionLabel={currentTargetText}
                         options={availableSnapshots.Analyses.map((a) => a.Date + " | " + " (" + getRecordingType(a.Type) + ") " + a.Overview)}
                         onChange={(event, value) => {
                           setViewSnapshot(value)
@@ -297,11 +297,12 @@ function NeuralActivitySnapshot() {
                         <Autocomplete
                           value={viewChronicChannel.active}
                           options={viewChronicChannel.options}
+                          getOptionLabel={currentTargetText}
                           onChange={(event, value) => setViewChronicChannel({...viewChronicChannel, active: value})}
                           renderInput={(params) => (
                             <FormField
                               {...params}
-                              label={"Select Channel Name to View Snapshot Across Time"}
+                              label="Channel for snapshot history"
                               InputLabelProps={{ shrink: true }}
                             />
                           )}

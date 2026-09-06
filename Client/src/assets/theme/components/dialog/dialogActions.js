@@ -20,6 +20,9 @@ const dialogActions = {
   styleOverrides: {
     root: {
       padding: pxToRem(16),
+      flexWrap: "wrap",
+      gap: pxToRem(8),
+      "& > div": { display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: pxToRem(8) },
     },
   },
 };

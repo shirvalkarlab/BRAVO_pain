@@ -40,7 +40,6 @@ import MuiLink from "@mui/material/Link";
 
 import ChangeCircleIcon from '@mui/icons-material/ChangeCircle';
 import LoginIcon from '@mui/icons-material/Login';
-import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import NoteAltIcon from "@mui/icons-material/NoteAlt";
 
 import MDBox from "components/MDBox";
@@ -191,12 +190,6 @@ function DefaultNavbar({ transparent, light, action }) {
             icon={<LoginIcon/>}
             name={dictionary.SimplifiedNavbar.Login[language]}
             route="/login"
-            light={light}
-          />
-          <DefaultNavbarLink
-            icon={<GroupAddIcon/>}
-            name={dictionary.SimplifiedNavbar.Register[language]}
-            route="/register"
             light={light}
           />
           {renderLanguageSelectionMenu()}

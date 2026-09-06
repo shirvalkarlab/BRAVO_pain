@@ -124,7 +124,10 @@ class ScaleForms(models.Model):
         return ScaleForms.objects.select_related("institute").filter(**kwargs).exists()
 
     def find(*args, **kwargs):
-        return ScaleForms.objects.select_related("institute").order_by("-record_version").filter(**kwargs).first()
+        # Sort only the identifier/version, not a potentially large survey JSON.
+        # MySQL otherwise puts the entire JSON row into its bounded sort buffer.
+        uid = ScaleForms.objects.filter(**kwargs).order_by("-record_version").values_list("uid", flat=True).first()
+        return ScaleForms.objects.select_related("institute").filter(uid=uid).first() if uid is not None else None
     
     def find_all(*args, **kwargs):
         return ScaleForms.objects.select_related("institute").order_by("-record_version").filter(**kwargs).all()

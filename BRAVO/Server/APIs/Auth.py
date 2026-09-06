@@ -40,6 +40,9 @@ class UserRegister(RestViews.APIView):
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
+        if not settings.ALLOW_SELF_REGISTRATION:
+            return Response(status=403, data={"message": "Account registration is disabled."})
+
         if not get_or_none(sanitize_input)(request.data, required_keys=["Email", "Password", "UserName", "Institute"]):
             return Response(status=400, data={"message": "Malformed Input"})
         
@@ -184,4 +187,3 @@ class UserLogout(RestViews.APIView):
     def post(self, request):
         logout(request)
         return Response(status=204)
-    

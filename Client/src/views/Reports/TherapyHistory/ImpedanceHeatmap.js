@@ -11,7 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import {impedanceLayout} from "./plotLayout";
 import { useResizeDetector } from 'react-resize-detector';
 
 import MDBox from "components/MDBox";
@@ -26,15 +27,16 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
   const { language } = controller;
 
   const [show, setShow] = React.useState(false);
-  const fig = new PlotlyRenderManager(figureTitle, language);
+  const fig = useMemo(()=>new PlotlyRenderManager(figureTitle, language),[figureTitle,language]);
+  const [plotWidth,setPlotWidth] = useState(0);
+  const geometry = impedanceLayout(plotWidth,height);
 
   const handleGraphing = (data) => {
     fig.clearData();
+    [...fig.getColorAxis()].forEach(axis=>fig.setColorAxis(null,axis));
 
-    if (fig.fresh) {
-      fig.subplots(1, 2, {sharey: false, sharex: false, colSpacing: 0.05});
-    }
-
+    fig.subplots(geometry.rows,geometry.columns,{...geometry.spacing});
+    fig.setLayoutProps(geometry.layout);
     let ax = fig.getAxes();
     if (data.Recording[0].Metadata && data.Recording[0].Metadata.Left) {
       if (logType == "Bipolar") {
@@ -50,16 +52,16 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
             showscale: false
           }),
         }, ax[0]);
-        fig.setSubtitle(`Left Hemisphere ${logType} Impedance Map`, ax[0]);
+        fig.setSubtitle(`Left Hemisphere<br>${logType} Impedance Map`, ax[0]);
         
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayX,
           ticktext: contactArrayX.length == 4 ? contactArrayX : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
         }, "x", ax[0]);
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayY,
           ticktext: contactArrayY.length == 4 ? contactArrayY : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
@@ -77,7 +79,7 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
             showscale: false
           }),
         }, ax[0]);
-        fig.setSubtitle(`Left Hemisphere ${logType} Impedance Map`, ax[0]);
+        fig.setSubtitle(`Left Hemisphere<br>${logType} Impedance Map`, ax[0]);
         
         
         fig.setAxisProps({
@@ -85,7 +87,7 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
           showticklabels: false
         }, "x", ax[0]);
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayY,
           ticktext: contactArrayY.length == 4 ? contactArrayY : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
@@ -107,16 +109,16 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
             showscale: false
           }),
         }, ax[1]);
-        fig.setSubtitle(`Right Hemisphere ${logType} Impedance Map`, ax[1]);
+        fig.setSubtitle(`Right Hemisphere<br>${logType} Impedance Map`, ax[1]);
         
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayX,
           ticktext: contactArrayX.length == 4 ? contactArrayX : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
         }, "x", ax[1]);
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayY,
           ticktext: contactArrayY.length == 4 ? contactArrayY : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
@@ -134,20 +136,26 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
             showscale: false
           }),
         }, ax[1]);
-        fig.setSubtitle(`Right Hemisphere ${logType} Impedance Map`, ax[1]);
+        fig.setSubtitle(`Right Hemisphere<br>${logType} Impedance Map`, ax[1]);
 
         fig.setAxisProps({
           ticks: "",
           showticklabels: false
         }, "x", ax[1]);
         fig.setAxisProps({
-          ticksmode: "array",
+          tickmode: "array",
           tickvals: contactArrayY,
           ticktext: contactArrayY.length == 4 ? contactArrayY : ["0","1A","1B","1C","2A","2B","2C","3"],
           showticklabels: true
         }, "y", ax[1]);
       }
     }
+
+    for(const axis of ax){
+      fig.setAxisProps(geometry.ticks,"x",axis);
+      fig.setAxisProps(geometry.ticks,"y",axis);
+    }
+    fig.setLayoutProps({annotations:fig.layout.annotations.map(annotation=>({...annotation,font:{size:14}}))});
 
     if (!data) {
       fig.purge();
@@ -165,11 +173,12 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
       fig.purge();
       setShow(false);
     }
-  }, [dataToRender, logType, language]);
+  }, [dataToRender, logType, fig, plotWidth,height]);
 
-  const onResize = useCallback(() => {
+  const onResize = useCallback((width) => {
+    setPlotWidth(width || 0);
     fig.refresh();
-  }, []);
+  }, [fig]);
 
   const {ref} = useResizeDetector({
     onResize: onResize,
@@ -194,13 +203,17 @@ function ImpedanceHeatmap({dataToRender, onContactSelect, logType, height, figur
   };
 
   React.useEffect(() => {
-    if (ref.current.on) {
-      ref.current.on("plotly_click", plotly_onClick);
+    const node=ref.current;
+    if (node && node.on) {
+      node.on("plotly_click", plotly_onClick);
+      return ()=>{if(node.removeListener)node.removeListener("plotly_click",plotly_onClick);};
     }
-  }, [ref.current, dataToRender]);
+  }, [ref, dataToRender,onContactSelect]);
 
   return (
-    <MDBox ref={ref} id={figureTitle} style={{height: height, width: "100%", display: show ? "" : "none"}}/>
+    <MDBox style={{width: "100%", minWidth: 0, display: show ? "" : "none"}}>
+      <MDBox ref={ref} id={figureTitle} style={{height: geometry.layout.height, width: "100%", minWidth: 0}}/>
+    </MDBox>
   );
 }
 

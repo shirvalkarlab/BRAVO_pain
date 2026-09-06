@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+bundle="${1:-}"
+[[ -f "$bundle" ]] || { printf 'Backup bundle not found: %s\n' "$bundle" >&2; exit 1; }
+bundle="$(cd "$(dirname "$bundle")" && pwd)/$(basename "$bundle")"
+
+temporary="$(mktemp -d)"
+container="bravo-restore-check-$$"
+
+cleanup() {
+  docker rm --force "$container" >/dev/null 2>&1 || true
+  rm -rf "$temporary"
+}
+trap cleanup EXIT INT TERM
+
+python3 - "$bundle" <<'PY'
+import sys
+import tarfile
+
+required = {"database.sql", "storage.tar.gz", "appliance.env", "MANIFEST", "SHA256SUMS"}
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    names = set()
+    for member in archive.getmembers():
+        parts = member.name.split("/")
+        if member.name.startswith("/") or ".." in parts:
+            raise SystemExit(f"unsafe archive member: {member.name}")
+        names.add(member.name)
+missing = required - names
+if missing:
+    raise SystemExit(f"backup is missing: {', '.join(sorted(missing))}")
+PY
+
+tar -xzf "$bundle" -C "$temporary"
+(
+  cd "$temporary"
+  shasum -a 256 -c SHA256SUMS
+)
+
+if [[ -f "$temporary/sync-secrets.tar.gz" ]]; then
+  python3 - "$temporary/sync-secrets.tar.gz" <<'PY'
+import json
+import sys
+import tarfile
+
+required = {"secrets/rcs08_redcap.json", "secrets/rcs08_oura.json"}
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    names = set()
+    for member in archive.getmembers():
+        parts = member.name.split("/")
+        if member.name.startswith("/") or ".." in parts:
+            raise SystemExit(f"unsafe sync-secret archive member: {member.name}")
+        names.add(member.name)
+    missing = required - names
+    if missing:
+        raise SystemExit(f"sync-secret archive is missing: {', '.join(sorted(missing))}")
+    redcap = json.load(archive.extractfile("secrets/rcs08_redcap.json"))
+    oura = json.load(archive.extractfile("secrets/rcs08_oura.json"))
+    if not redcap.get("api_url") or not redcap.get("api_key"):
+        raise SystemExit("REDCap sync credential file is incomplete")
+    if not oura.get("access_token"):
+        raise SystemExit("Oura sync credential file is incomplete")
+PY
+fi
+
+python3 - "$temporary/appliance.env" <<'PY'
+import base64
+import sys
+
+required = {
+    "BRAVO_HTTP_PORT",
+    "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD",
+    "DATASERVER_ENCRYPTION", "DATASERVER_HASHKEY", "DJANGO_SECRET_KEY",
+}
+values = {}
+with open(sys.argv[1], encoding="utf-8") as source:
+    for line in source:
+        key, separator, value = line.rstrip("\n").partition("=")
+        if separator:
+            values[key] = value
+missing = required - values.keys()
+if missing:
+    raise SystemExit(f"appliance.env is missing: {', '.join(sorted(missing))}")
+if len(base64.urlsafe_b64decode(values["DATASERVER_ENCRYPTION"])) != 32:
+    raise SystemExit("DATASERVER_ENCRYPTION is not a valid 32-byte Fernet key")
+PY
+
+database_name="$(sed -n 's/^MYSQL_DATABASE=//p' "$temporary/appliance.env" | tail -n 1)"
+[[ "$database_name" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'Unsafe database name in backup\n' >&2; exit 1; }
+
+check_password="restore-check-only-$$"
+docker run --detach --rm --name "$container" \
+  --env "MYSQL_ROOT_PASSWORD=$check_password" mysql:8.0 >/dev/null
+
+ready=0
+for _ in $(seq 1 30); do
+  if docker exec "$container" mysql -N -uroot -p"$check_password" -e 'SELECT 1' >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[[ "$ready" -eq 1 ]] || { printf 'Disposable MySQL restore target did not become ready\n' >&2; exit 1; }
+
+docker exec -i "$container" mysql -uroot -p"$check_password" < "$temporary/database.sql"
+table_count="$(docker exec "$container" mysql -N -uroot -p"$check_password" -e \
+  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$database_name'")"
+[[ "$table_count" -gt 0 ]] || { printf 'Database restore produced no tables\n' >&2; exit 1; }
+
+mkdir -p "$temporary/restored-storage"
+tar -xzf "$temporary/storage.tar.gz" -C "$temporary/restored-storage"
+storage_entries="$(find "$temporary/restored-storage" -mindepth 1 | wc -l | tr -d ' ')"
+
+printf 'Restore check passed: %s database tables; %s storage entries.\n' "$table_count" "$storage_entries"

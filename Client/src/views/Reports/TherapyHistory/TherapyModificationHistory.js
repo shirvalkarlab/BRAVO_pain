@@ -11,6 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { currentTarget } from "utils/participantTargets";
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -297,32 +298,32 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
       return (
         <MDBox sx={{ display: "flex", flexDirection: "column", width: "100%", mt: 2 }}>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="error" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="error" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Recording Configuration:"}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"LFP Sense:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {recordingConfiguration.Config.SensingSetup.FrequencyInHertz}{" Hz"} ({(recordingConfiguration.Config.SensingSetup.AveragingDurationInMilliSeconds / 1000).toFixed(1)}{" sec"})
             </MDTypography>
           </MDBox>
           {getLFPThresholds(recordingConfiguration.Config.Thresholds.LFPThresholds) && (
             <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-              <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+              <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                 {"LFP Threshold:"}
               </MDTypography>
-              <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+              <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {getLFPThresholds(recordingConfiguration.Config.Thresholds.LFPThresholds)}
             </MDTypography>
           </MDBox>)}
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Amplitude Range:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {recordingConfiguration.Config.Thresholds.AmplitudeThreshold[0]} - {recordingConfiguration.Config.Thresholds.AmplitudeThreshold[1]}{" mA"}
             </MDTypography>
           </MDBox>
@@ -340,47 +341,47 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
       return (
         <MDBox sx={{ display: "flex", flexDirection: "column", width: "100%", mt: 2 }}>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="error" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="error" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Adaptive Configuration:"}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Mode:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {adaptiveConfiguration.Config.Mode.split(".")[1].split("_").map((a) => a.charAt(0).toUpperCase() + a.slice(1).toLowerCase()).join(" ")}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Ramp Up Onset Duration:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {(adaptiveConfiguration.Config.UpperThresholdOnsetInMilliSeconds / 1000).toFixed(1)}{" sec"}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Ramp Up Time:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {(adaptiveConfiguration.Config.RampUpTime / 1000).toFixed(1)}{" sec"}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Ramp Down Onset Duration:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {(adaptiveConfiguration.Config.LowerThresholdOnsetInMilliSeconds / 1000).toFixed(1)}{" sec"}
             </MDTypography>
           </MDBox>
           <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+            <MDTypography variant="caption" color="black" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
               {"Ramp Down Time:"}
             </MDTypography>
-            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+            <MDTypography variant="caption" color="text" sx={{ fontSize: "12px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
               {(adaptiveConfiguration.Config.RampDownTime / 1000).toFixed(1)}{" sec"}
             </MDTypography>
           </MDBox>
@@ -400,25 +401,25 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
       return (
         <Grid item xs={12} sm={12} lg={6} key={setting.Electrode.CustomName + group.Id + " " + index}>
           <MDBox sx={{ display: "flex", flexDirection: "row", alignItems: "start", justifyContent: "start", mt: 1, width: "100%" }}>
-            <MDBox sx={{ width: "75%", display: "flex", flexDirection: "column", alignItems: "start", justifyContent: "start", mr: 2 }}>
+            <MDBox sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "start", justifyContent: "start", mr: 2 }}>
               <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                   {"Target: "}
                 </MDTypography>
-                <MDTypography variant="caption" color="info" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
-                  {setting.Electrode.CustomName}
+                <MDTypography variant="caption" color="info" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                  {currentTarget(setting.Electrode.Hemisphere || setting.Electrode.Target || setting.Electrode.CustomName, setting.Electrode.CustomName)}
                 </MDTypography>
               </MDBox>
               <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                   {"Therapy Type:"}
                 </MDTypography>
-                <MDTypography variant="caption" color="text" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap" }}>
+                <MDTypography variant="caption" color="text" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere" }}>
                   {setting.StimulationType}
                 </MDTypography>
               </MDBox>
               <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                   {"Frequency:"}
                 </MDTypography>
                 <MDTypography variant="caption" color="text" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "100%", display: "block" }}>
@@ -426,7 +427,7 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
                 </MDTypography>
               </MDBox>
               <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                   {"Pulsewidth:"}
                 </MDTypography>
                 <MDTypography variant="caption" color="text" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "100%", display: "block" }}>
@@ -434,7 +435,7 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
                 </MDTypography>
               </MDBox>
               <MDBox sx={{ display: "flex", flexDirection: "row"}}>
-                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "nowrap", mr: 1 }}>
+                <MDTypography variant="caption" color="black" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "auto", whiteSpace: "normal", overflowWrap: "anywhere", mr: 1 }}>
                   {"Amplitude:"}
                 </MDTypography>
                 <MDTypography variant="caption" color="text" sx={{ fontSize: "15px", fontWeight: 800, textAlign: "start", width: "100%", display: "block" }}>
@@ -446,7 +447,7 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
               {getAdaptiveConfigurationCard(setting.StimulationConfiguration)}
 
             </MDBox>
-            <MDBox id={"electrode_contact"} sx={{ height: "100%", width: "15%" }}>
+            <MDBox id={"electrode_contact"} sx={{ height: "100%", width: 80, flexShrink: 0 }}>
               <LeadComponentSvg components={fractionalAmplitudes} />
             </MDBox>
           </MDBox>

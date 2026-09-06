@@ -10,7 +10,42 @@ import numpy as np
 def listSort(oldList, newIndexes):
     return [oldList[i] for i in newIndexes]
 
+def _deduplication_key(value):
+    if isinstance(value, list):
+        return (list, tuple(_deduplication_key(item) for item in value))
+    if isinstance(value, tuple):
+        return (tuple, tuple(_deduplication_key(item) for item in value))
+    if isinstance(value, dict):
+        return (dict, frozenset((key, _deduplication_key(item)) for key, item in value.items()))
+    # NaN is not equal to itself; do not let set identity shortcuts merge it.
+    if value != value:
+        raise ValueError("Non-reflexive equality")
+    hash(value)
+    return value
+
+
 def uniqueListOfDicts(listOfDicts, keys):
+    """Keep the first equal record without repeatedly scanning prior records."""
+    unique = []
+    seen = set()
+    for item in listOfDicts:
+        if any(key not in item for key in keys):
+            unique.append(item)
+            continue
+        try:
+            key = tuple(_deduplication_key(item[field]) for field in keys)
+        except (TypeError, ValueError):
+            # Retain historical comparison for uncommon unhashable values.
+            if len(_uniqueListOfDictsByComparison(unique + [item], keys)) > len(unique):
+                unique.append(item)
+            continue
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+def _uniqueListOfDictsByComparison(listOfDicts, keys):
     uniqueDicts = []
     for dictItem in listOfDicts:
         found = False

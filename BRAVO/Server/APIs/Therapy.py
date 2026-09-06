@@ -1,3 +1,4 @@
+from modules.ReportCache import cached_report
 """"""
 """
 =========================================================
@@ -47,6 +48,7 @@ class QueryTherapyHistory(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -83,12 +85,14 @@ class AssignTherapyLabel(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
          
+        from modules.ReportCache import invalidate
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         if "SelectiveIds" in request.data.keys() and len(request.data["SelectiveIds"]) > 0:
             AllTherapies = request.data["SelectiveIds"]
             ToBeUpdated = models.ElectricalTherapy.objects.filter(therapy__uid__in=AllTherapies, therapy__source__owner=Participant)
             ToBeUpdated.update(label="")
             models.ElectricalTherapy.objects.filter(therapy__uid__in=request.data["TherapyIds"], therapy__source__owner=Participant).update(label=request.data["TherapyLabel"])
+            invalidate()
             return Response(status=200)
 
         TherapyHistory = Therapy.queryTherapyHistory(Participant)
@@ -110,4 +114,5 @@ class AssignTherapyLabel(RestViews.APIView):
         ToBeUpdated = models.ElectricalTherapy.objects.filter(therapy__uid__in=AllTherapies)
         ToBeUpdated.update(label="")
         models.ElectricalTherapy.objects.filter(therapy__uid__in=request.data["TherapyIds"]).update(label=request.data["TherapyLabel"])
+        invalidate()
         return Response(status=200)

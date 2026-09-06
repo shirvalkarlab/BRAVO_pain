@@ -12,7 +12,6 @@
 */
 
 import React, { useMemo } from "react"
-import { useHistory } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -336,7 +335,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
               })}
             </TableBody>
           </Table>
-          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {width: 600, minWidth: 0, maxWidth: "calc(100vw - 32px)"}}}>
             <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
               <MDTypography variant="h5">
                 {"Edit Recording Information"}
@@ -418,7 +417,7 @@ function TherapeuticAnalysisTable({data, recordings, getRecordingData, updateRec
         </MDButton>
       </MDBox>
 
-      <Dialog open={newGroupView.show} onClose={() => setNewGroupView({...newGroupView, show: false})} PaperProps={{sx: {minWidth: 900}}}>
+      <Dialog open={newGroupView.show} onClose={() => setNewGroupView({...newGroupView, show: false})} PaperProps={{sx: {width: 900, minWidth: 0, maxWidth: "calc(100vw - 32px)"}}}>
         <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
           <MDTypography variant="h5">
             {"New Therapeutic Analysis"}

@@ -203,7 +203,6 @@ function UploadDeidentifiedDataView() {
     SessionController.query("/api/createParticipantInformation", {
       Name: participantInformation.name,
       Sex: participantInformation.sex,
-      DOB: participantInformation.dob ? (participantInformation.dob.toDate().getTime() / 1000) : 0,
       Diagnosis: participantInformation.diagnosis,
       DiseaseStartTime: participantInformation.disease_start_time ? (participantInformation.disease_start_time.toDate().getTime() / 1000) : 0
     }).then((response) => {
@@ -240,7 +239,7 @@ function UploadDeidentifiedDataView() {
                   onChange={(event, newValue) => {
                     if (newValue.value == "create") {
                       setParticipantInformation({
-                        name: "", diagnosis: "", sex: "", dob: null,
+                        name: "", diagnosis: "", sex: "",
                         disease_start_time: null
                       })
                     }
@@ -303,19 +302,6 @@ function UploadDeidentifiedDataView() {
                         options={["Male", "Female", "Other"]}
                         onChange={(event, newValue) => setParticipantInformation({...participantInformation, sex: newValue})}
                       />
-                    </Grid>
-                    <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
-                      <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
-                        <DatePicker
-                          id="study-participant-dob"
-                          label="Date of Birth (Optional)"
-                          value={participantInformation.dob}
-                          onChange={(newDate) => {
-                            setParticipantInformation({...participantInformation, dob: newDate});
-                          }}
-                          renderInput={(params) => <TextField {...params} fullWidth/>}
-                        />
-                      </LocalizationProvider>
                     </Grid>
                     <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
                       <Autocomplete selectOnFocus freeSolo

@@ -1,0 +1,410 @@
+import { currentTarget } from "utils/participantTargets";
+import ResearchEvidencePanel from "./ResearchEvidencePanel";
+import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
+/**
+ * Closed-Loop Simulation / threshold-deployment view (DESIGN_biomarker_pipeline_v2 §8b — "Option 3").
+ *
+ * Consumes ONE validated BandCandidate (the §6 contract emitted by the discovery/Biomarkers view)
+ * and walks it toward a device-implementable Percept RC controller spec. This Phase-A scaffold
+ * revalidates the chosen candidate (from this tab or an uploaded JSON), renders an identity header
+ * + the key mixed-effects evidence + a raw-schema inspector, and stands up placeholders for the
+ * panels that later phases fill: ROC + cut-point (B), LSB conversion + power (C), per-era
+ * cross-validation (D), and the Deploy-to-Percept sign-off card (E).
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+
+import { Card, Chip, Grid } from "@mui/material";
+
+import MDBox from "components/MDBox";
+import MDTypography from "components/MDTypography";
+import MDButton from "components/MDButton";
+
+import DatabaseLayout from "layouts/DatabaseLayout";
+import { usePlatformContext, setContextState } from "context.js";
+import { candidateRequestParams } from "./candidateRequest";
+
+import {
+  loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
+} from "./bandCandidateStore";
+import DeploymentRocPanel from "./DeploymentRocPanel";
+import LsbPowerPanel from "./LsbPowerPanel";
+import EraRefitPanel from "./EraRefitPanel";
+import PsdLsbPanel from "./PsdLsbPanel";
+import ConversionModelPanel from "./ConversionModelPanel";
+import DeploySignoffCard from "./DeploySignoffCard";
+import RecomputeBar from "views/Reports/RecomputeBar";
+import useDeploymentSummary from "./useDeploymentSummary";
+import PAL from "./palette";
+import "./deployPrint.css";
+
+const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "—"
+  : Number(p) < 0.001 ? Number(p).toExponential(1) : Number(p).toFixed(3));
+
+// Verdict badge color, mirrors the discovery view's ValidationReadout palette (now via the shared
+// colorblind-safe roles: stim-stable = pass, stim-dependent = warn, failed = fail).
+function verdictColor(verdict) {
+  const v = verdict || "";
+  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.pass;
+  if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
+  if (/failed/.test(v)) return PAL.fail;
+  return PAL.neutral;
+}
+
+// Audit C6: white text on the warn fill (#E69F00) is 2.25:1 — below WCAG. The badge text color must
+// adapt to its fill: near-black on the orange stim-dependent badge (7.7:1), white on pass/fail/
+// neutral (all ≥ 3.4:1 with white). Keyed on the same role the fill uses so the two never disagree.
+function verdictTextColor(verdict) {
+  return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
+}
+
+// A labeled key/value row used across the identity + evidence blocks.
+function KV({ label, children }) {
+  return (
+    <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1} mb={0.4}>
+      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", minWidth: 150,
+        color: "#555" }}>{label}</MDTypography>
+      <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>{children}</MDTypography>
+    </MDBox>
+  );
+}
+
+function BandCandidateIdentity({ bc, envelope }) {
+  const ev = bc.evidence || {};
+  const lbl = bc.label || {};
+  const prov = bc.provenance || {};
+  return (
+    <Card sx={{ width: "100%" }}>
+      <MDBox p={2}>
+        <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
+          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
+            color: verdictTextColor(bc.verdict),
+            borderRadius: "10px", fontSize: 11, fontWeight: "bold" }}>
+            {bc.verdict || "—"}
+          </MDBox>
+          <MDTypography variant="h6" sx={{ fontSize: 16 }}>
+            {`${bc.contact_label || bc.contact || "band"} @ ${fmt(bc.center_freq_hz, 1)} Hz`}
+          </MDTypography>
+          <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
+            sx={{ height: 20, fontSize: 11 }} />
+          {bc.adaptive_valid
+            ? <Chip size="small" label="adaptive-valid (8–30 Hz)"
+                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.pass, color: "white" }} />
+            : <Chip size="small" label="off adaptive band"
+                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.warn, color: PAL.onWarn }} />}
+        </MDBox>
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={6}>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
+              letterSpacing: 0.4, color: "#999" }}>DEVICE IDENTITY</MDTypography>
+            <MDBox mt={0.6}>
+              <KV label="Hemisphere">{currentTarget(bc.hemisphere, bc.hemisphere || "—")}</KV>
+              <KV label="Contact (sensing)">{bc.contact || "—"}</KV>
+              <KV label="Band">{`${fmt(bc.band_lo_hz, 1)} – ${fmt(bc.band_hi_hz, 1)} Hz (${fmt(bc.bandwidth_hz, 1)} Hz wide)`}</KV>
+              <KV label="Center → FFT-snap">{`${fmt(bc.center_freq_hz, 2)} → ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}</KV>
+              <KV label="Polarity">{bc.polarity || "—"}</KV>
+              <KV label="Suggested mode">
+                {bc.suggested_mode || <span style={{ color: PAL.warnText }}>none — see note</span>}
+              </KV>
+            </MDBox>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
+              letterSpacing: 0.4, color: "#999" }}>MIXED-EFFECTS EVIDENCE</MDTypography>
+            <MDBox mt={0.6}>
+              <KV label="Odds ratio (per 1 SD)">
+                {`${fmt(ev.odds_ratio)} `}
+                {ev.or_lo != null && ev.or_hi != null ? `(95% CI ${fmt(ev.or_lo)}–${fmt(ev.or_hi)})` : ""}
+                {ev.credible_ci === false
+                  ? <span style={{ color: PAL.fail }}
+                      title="Credible-CI rule: OR-space 95% CI width > 0.10. This CI is narrower than that (saturated-random-effect Wald interval, not trustworthy) — re-validated by cluster bootstrap in Phase B."> · narrow CI — re-bootstrap (Phase B)</span>
+                  : ev.credible_ci === true
+                    ? <span style={{ color: PAL.pass }}
+                        title="Credible-CI rule: OR-space 95% CI width > 0.10 (not 'excludes 1'). Same flag gates the PE 'credible CI' deployment gate."> · credible</span> : null}
+              </KV>
+              <KV label="p (glmer)">{fmtP(ev.p_glmer)}</KV>
+              <KV label="Samples / eras">{`${ev.n_matched_samples ?? "—"} samples · ${ev.n_clusters ?? "—"} weekly eras`}</KV>
+              <KV label="Stim stability">
+                {ev.stim_stable == null ? "—" : ev.stim_stable ? "stim-stable" : "stim-dependent"}
+                {ev.stim_lrt_p != null ? ` (LRT p = ${fmtP(ev.stim_lrt_p)})` : ""}
+              </KV>
+              <KV label="Per-era OR">
+                {ev.or_by_era
+                  ? ["OFF", "LOW", "HIGH"].map((t) => `${t}: ${fmt(ev.or_by_era[t])}`).join("  ·  ")
+                  : "—"}
+              </KV>
+              <KV label="Label / join">{`${lbl.pro_metric || "—"} · ${(lbl.binarization && lbl.binarization.strategy) || "—"} · ${lbl.join || "—"} · n+ ${lbl.n_pos_days ?? "—"} / n− ${lbl.n_neg_days ?? "—"}`}</KV>
+            </MDBox>
+          </Grid>
+        </Grid>
+
+        {/* Adaptive-mode caveat for off-band / negative-direction candidates. */}
+        {(!bc.adaptive_valid || bc.suggested_mode == null) && bc.suggested_mode_reason ? (
+          <MDBox mt={1} p={1} sx={{ backgroundColor: "#fff6e6", borderRadius: "6px" }}>
+            <MDTypography variant="caption" sx={{ fontSize: 10.8, color: "#7a5200" }}>
+              {`Deployment note: ${bc.suggested_mode_reason}.`}
+              {bc.adaptive_valid_reason ? ` ${bc.adaptive_valid_reason}.` : ""}
+            </MDTypography>
+          </MDBox>
+        ) : null}
+
+        {/* Pool-bias honesty + committed-at provenance. */}
+        <MDBox mt={1}>
+          <MDTypography variant="caption" color="text" sx={{ fontSize: 10.3, fontStyle: "italic" }}>
+            {prov.selection_biased ? "Selection-biased pool — " : ""}
+            {prov.selection_note || ""}
+            {envelope && envelope.committed_at ? ` · committed ${new Date(envelope.committed_at).toLocaleString()}` : ""}
+          </MDTypography>
+        </MDBox>
+      </MDBox>
+    </Card>
+  );
+}
+
+function ClosedLoopSim() {
+  const queryAnalysis = useAnalysisQuery();
+  const navigate = useNavigate();
+  const { participant_uid } = useParams();
+  const fileRef = useRef(null);
+  const [, dispatch] = usePlatformContext();
+  const [selection, setSelection] = useState(null);
+  const [candidateStatus, setCandidateStatus] = useState("");
+  const [revalidate, setRevalidate] = useState(0);
+
+  const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
+  const [showJson, setShowJson] = useState(false);
+  const [cutpoint, setCutpoint] = useState(null);   // chosen operating point, lifted from Phase B
+  // Audit [42]: the resolved device-LSB threshold, lifted from Phase C (LsbPowerPanel) so Phase B's
+  // feature histogram can annotate its cut line with the SAME LSB the clinician will program.
+  const [lsbThreshold, setLsbThreshold] = useState(null);   // {upperLsb, estimated} | null
+
+  useEffect(() => {
+    if (!participant_uid) { navigate("/database", { replace: false }); return; }
+    setContextState(dispatch, "report", "CustomizedAnalysis");
+    setEnvelope(null);
+    setRevalidate(0);
+    setSelection(loadBandCandidate(participant_uid));
+  }, [participant_uid, navigate]);
+
+  useEffect(() => {
+    setEnvelope(null);
+    setCutpoint(null);
+    setLsbThreshold(null);
+    if (!selection || selection.participant_uid !== participant_uid || !selection.band_candidate) { setCandidateStatus(""); return undefined; }
+    if (!revalidate) { setCandidateStatus("Revalidate the selected band to review it against current approved data."); return undefined; }
+    let cancelled = false;
+    const candidate = selection.band_candidate;
+    const controls = candidateRequestParams(candidate, selection.request_params);
+    setCandidateStatus("Revalidating this band against the current cleaned dataset…");
+    queryAnalysis("/api/emitBandCandidate", {
+      ParticipantId: participant_uid,
+      Channel: candidate.contact,
+      CenterHz: Number(candidate.center_freq_hz),
+      BandWidthHz: candidate.bandwidth_hz || 5,
+      ...controls,
+    }).then(({ data }) => {
+      if (cancelled) return;
+      if (!data || !data.available || !data.band_candidate) {
+        setCandidateStatus((data && (data.reason || data.message)) || "This band is unavailable on the current dataset.");
+        return;
+      }
+      const fresh = commitBandCandidate(participant_uid, data.band_candidate,
+        { InputManifest: data.InputManifest, requestParams: controls });
+      setEnvelope(fresh);
+      setCandidateStatus("Band revalidated against the current cleaned dataset.");
+    }).catch(() => {
+      if (!cancelled) setCandidateStatus("Band revalidation failed. Select it again or reload to retry.");
+    });
+    return () => { cancelled = true; queryAnalysis.cancel("/api/emitBandCandidate"); };
+  }, [participant_uid, selection, revalidate]);
+
+  // Tag <body> while this view is mounted so the print stylesheet (deployPrint.css) can scope its
+  // "hide everything except the sign-off record" rules to this page only, and clean the class up on
+  // unmount so printing any OTHER view is unaffected.
+  useEffect(() => {
+    document.body.classList.add("cl-deploy-root");
+    return () => document.body.classList.remove("cl-deploy-root");
+  }, []);
+
+  const bc = envelope && envelope.band_candidate;
+
+  // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
+  // produced a fresh object identity on every parent re-render, which is listed in every panel's
+  // fetch-effect deps — so any child state change (e.g. the ROC cost slider lifting a new cut-point)
+  // re-created requestParams and re-fired EVERY panel's fetch, collapsing all figures into their
+  // loading state at once. Memoizing on the candidate's stable identity keeps the reference stable
+  // so panels only refetch when their own inputs actually change.
+  const requestParams = useMemo(() => candidateRequestParams(bc, envelope && envelope.request_params), [bc, envelope]);
+
+  // ONE deployment-summary fetch for the whole page. Both the top verdict strip and the bottom
+  // sign-off card need this payload; fetching it once here (instead of once per component) halves the
+  // load on /queryDeploymentSummary — each call runs glmer through rpy2's embedded R, which is
+  // single-threaded per worker, so duplicate concurrent calls were starving the worker pool and
+  // dropping sibling requests (the intermittent "ROC request failed"). Shared result, identical
+  // numbers in both places by construction.
+  const cutThr = cutpoint ? cutpoint.threshold : null;
+  const matchDir = cutpoint ? cutpoint.matchDir : (requestParams.MatchDirection || "prior");
+  const summary = useDeploymentSummary({
+    participantUid: participant_uid,
+    channel: bc && bc.contact,
+    centerHz: bc && bc.center_freq_hz,
+    bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
+    matchDir, cutThr, requestParams, inputIdentity: envelope && envelope.InputManifest,
+  });
+
+  const onUpload = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const parsed = parseUploadedCandidate(String(reader.result), participant_uid);
+      if (parsed && parsed.band_candidate) {
+        setEnvelope(null);
+        setRevalidate(0);
+        setSelection(parsed);
+      } else {
+        setCandidateStatus("Choose a valid candidate export for this participant. Unidentified or other-participant files cannot be used.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";   // allow re-upload of the same file
+  };
+
+  return (
+    <DatabaseLayout>
+      <MDBox pt={3}>
+        <Grid container spacing={2}>
+          <Grid item xs={12}>
+            <Card sx={{ width: "100%" }}>
+              <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between"
+                alignItems="center" flexWrap="wrap" gap={1}>
+                <MDBox>
+                  <MDTypography variant="h6" fontSize={22}>Closed-Loop Research Review</MDTypography>
+                  <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5 }}>
+                    Research preparation from one candidate band. Review and export only; this page does not program the device.
+                  </MDTypography>
+                </MDBox>
+                <MDBox display="flex" gap={1} alignItems="center">
+                  <input ref={fileRef} type="file" accept="application/json,.json"
+                    style={{ display: "none" }} onChange={onUpload} />
+                  <MDButton size="small" variant="outlined" color="info"
+                    onClick={() => fileRef.current && fileRef.current.click()}>
+                    Load BandCandidate JSON
+                  </MDButton>
+                  {bc ? (
+                    <MDButton size="small" variant="text" color="secondary"
+                      onClick={() => { clearBandCandidate(participant_uid); setSelection(null); setEnvelope(null); }}>
+                      Clear
+                    </MDButton>
+                  ) : null}
+                </MDBox>
+              </MDBox>
+            </Card>
+          </Grid>
+
+          {candidateStatus ? (
+            <Grid item xs={12}>
+              <MDTypography variant="body2" role="status">{candidateStatus}</MDTypography>
+              {selection && !envelope && <MDButton onClick={() => setRevalidate((value) => value + 1)}
+                size="small" color="info" variant="outlined" disabled={candidateStatus.startsWith("Revalidating")} sx={{ mt: 1 }}>Revalidate selected band</MDButton>}
+            </Grid>
+          ) : null}
+
+          <Grid item xs={12}>
+            <ResearchEvidencePanel participantUid={participant_uid} bandCandidate={bc} requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
+          </Grid>
+
+          {!bc ? (
+            <Grid item xs={12}>
+              <Card sx={{ width: "100%" }}>
+                <MDBox p={3} textAlign="center">
+                  <MDTypography variant="h6" sx={{ fontSize: 15, color: "#777" }}>
+                    No band committed yet
+                  </MDTypography>
+                  <MDTypography variant="caption" color="text" display="block" mt={1} sx={{ fontSize: 12 }}>
+                    Open the Biomarker Exploration view, click a VALIDATED band, and press
+                    “Commit this band →”. It will appear here. Or load a previously downloaded
+                    BandCandidate JSON for this participant; its evidence will be recomputed.
+                  </MDTypography>
+                  <MDBox mt={2}>
+                    <MDButton size="small" color="info" variant="gradient"
+                      onClick={() => navigate(`/reports/biomarkers/${participant_uid}`)}>
+                      Go to Biomarker Exploration
+                    </MDButton>
+                  </MDBox>
+                </MDBox>
+              </Card>
+            </Grid>
+          ) : (
+            <>
+              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
+                  Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
+              <Grid item xs={12}>
+                <RecomputeBar {...summary} onRecompute={summary.recompute} title="Research summary" />
+              </Grid>
+
+              <Grid item xs={12}>
+                <BandCandidateIdentity bc={bc} envelope={envelope} />
+              </Grid>
+
+              <Grid item xs={12} md={6} id="cl-roc">
+                <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} onCutpoint={setCutpoint}
+                  lsbThreshold={lsbThreshold} />
+              </Grid>
+              <Grid item xs={12} md={6} id="cl-lsb">
+                <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} cutpoint={cutpoint}
+                  onLsbThreshold={setLsbThreshold} />
+              </Grid>
+              <Grid item xs={12} md={6} id="cl-era">
+                <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <PsdLsbPanel participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
+              </Grid>
+              <Grid item xs={12}>
+                <ConversionModelPanel participantUid={participant_uid} inputIdentity={envelope && envelope.InputManifest} />
+              </Grid>
+              <Grid item xs={12} id="cl-signoff">
+                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
+                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} cutpoint={cutpoint} summary={summary} />
+              </Grid>
+
+              <Grid item xs={12}>
+                <Card sx={{ width: "100%" }}>
+                  <MDBox p={2}>
+                    <MDBox display="flex" justifyContent="space-between" alignItems="center">
+                      <MDTypography variant="h6" sx={{ fontSize: 13, color: "#777" }}>
+                        BandCandidate schema (§6 contract)
+                      </MDTypography>
+                      <MDButton size="small" variant="text" color="info"
+                        onClick={() => setShowJson((s) => !s)}>
+                        {showJson ? "Hide JSON" : "Show JSON"}
+                      </MDButton>
+                    </MDBox>
+                    {showJson ? (
+                      <MDBox mt={1} p={1} sx={{ backgroundColor: "#1e1e1e", borderRadius: "6px",
+                        maxHeight: 360, overflow: "auto" }}>
+                        <pre style={{ margin: 0, color: "#d4d4d4", fontSize: 10.5,
+                          fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(bc, null, 2)}
+                        </pre>
+                      </MDBox>
+                    ) : null}
+                  </MDBox>
+                </Card>
+              </Grid>
+            </>
+          )}
+        </Grid>
+      </MDBox>
+    </DatabaseLayout>
+  );
+}
+
+export default ClosedLoopSim;

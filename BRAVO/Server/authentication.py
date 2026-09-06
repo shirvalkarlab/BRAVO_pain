@@ -1,5 +1,22 @@
-from rest_framework.authentication import BaseAuthentication
+from rest_framework.authentication import BaseAuthentication, BasicAuthentication
+from rest_framework.exceptions import PermissionDenied
+from .Middlewares.ReadOnlyAccount import is_read_only_user, viewer_request_allowed
 from . import models
+
+def enforce_viewer_access(user, request):
+    # Token/basic authentication runs after Django middleware. Apply the same
+    # viewer policy here so changing authentication cannot grant write/export rights.
+    if is_read_only_user(user) and not viewer_request_allowed(request):
+        raise PermissionDenied("This account has view-only access.")
+
+
+class ReadOnlyBasicAuthentication(BasicAuthentication):
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result:
+            enforce_viewer_access(result[0], request)
+        return result
+
 
 class BRAVOAPIAuthentication(BaseAuthentication):
     def authenticate(self, request):
@@ -9,6 +26,7 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             if not user:
                 return None
             
+            enforce_viewer_access(user, request)
             request.csrf_processing_done = True
             user.api_access = True
             return (user, None)
@@ -23,6 +41,7 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             if not user:
                 return None
             
+            enforce_viewer_access(user, request)
             request.csrf_processing_done = True
             user.api_access = True
             return (user, None)

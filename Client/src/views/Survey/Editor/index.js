@@ -37,10 +37,8 @@ import {
   Button
 } from "@mui/material";
 
-import { 
-  Remove as RemoveIcon,
-  Add as AddIcon
-} from "@mui/icons-material";
+import RemoveIcon from "@mui/icons-material/Remove";
+import AddIcon from "@mui/icons-material/Add";
 
 import { FaPen, FaXmark } from "react-icons/fa6";
 
@@ -359,16 +357,16 @@ export default function FormEditor({match}) {
             <Card sx={{marginTop: 0}}>
               <MDBox p={2}>
                 <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6} >
+                  <Grid item xs={12} lg={6} >
                     <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-start", alignItem: "center"}}>
                       <MDTypography variant="h3">
                         {contents.Name ? contents.Name : ""}
                       </MDTypography>
                     </MDBox>
                   </Grid>
-                  <Grid item xs={12} sm={6} >
-                    <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-end", alignItem: "center"}}>
-                      <MDButton variant={"contained"} color={"info"} onClick={() => inputFile.current.click()} sx={{marginRight: 3}}>
+                  <Grid item xs={12} lg={6} >
+                    <MDBox sx={{display: "flex", flexDirection: "row", justifyContent: "flex-end", alignItems: "center", flexWrap: "wrap", gap: 2}}>
+                      <MDButton variant={"contained"} color={"info"} onClick={() => inputFile.current.click()} sx={{maxWidth: "100%"}}>
                         <MDTypography variant="p" color={"white"}>
                           {"Populate with Redcap Instrument"}
                         </MDTypography>

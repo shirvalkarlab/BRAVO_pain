@@ -7,9 +7,15 @@ from Server import models
 import subprocess
 import psutil
 import time
+import shlex
+import hashlib
+import json
+from filelock import FileLock
+from pathlib import Path
 
 USE_SLURM = os.environ.get('USE_SLURM', 'FALSE') == 'TRUE'
-SLURM_JOB_PATH = os.path.join(BRAVO_Path, "modules", "AsyncJobScheduler")
+SLURM_JOB_PATH = os.path.join(os.environ.get("DATASERVER_PATH", BRAVO_Path), "jobs")
+TEMPLATE_PATH = os.path.join(BRAVO_Path, "modules", "AsyncJobScheduler", "sjob.sh")
 
 AsyncJobScripts = {
     "BurstAnalysis": "/modules/AnalysisPipelineScripts/AnalysisPipeline.py BurstAnalysis ${JOB_ARGS}",
@@ -20,11 +26,21 @@ AsyncJobScripts = {
 }
 
 def ScheduleSlurmJob(requester, recording_uid, script_name, config, refresh=False):
+    Path(SLURM_JOB_PATH).mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(json.dumps([str(requester.pk), recording_uid, script_name, config], sort_keys=True).encode()).hexdigest()
+    with FileLock(os.path.join(SLURM_JOB_PATH, key + ".lock"), timeout=30):
+        return _schedule_job(requester, recording_uid, script_name, config, refresh)
+
+
+def _schedule_job(requester, recording_uid, script_name, config, refresh=False):
+    Path(SLURM_JOB_PATH).mkdir(parents=True, exist_ok=True)
+    if script_name not in AsyncJobScripts:
+        raise ValueError("Unknown background analysis")
     existing_job = models.AsyncJob.find(recording_uid=recording_uid, requester=requester, metadata__script_name=script_name, metadata__config=config)
     if existing_job:
         if refresh:
             state = CheckJobStatus(existing_job)
-            if not state["State"] == "Completed":
+            if state["State"] not in {"Completed", "Failed"}:
                 return existing_job
         else:
             return existing_job
@@ -37,18 +53,21 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config, refresh=Fals
         requester=requester,
         metadata={
             "script_name": script_name,
-            "config": config
+            "config": config,
+            "job_directory": SLURM_JOB_PATH,
         }
     )
 
-    with open(os.path.join(SLURM_JOB_PATH, "sjob.sh"), 'r') as f:
+    with open(TEMPLATE_PATH, 'r') as f:
         sbatch_script = f.read()
     
     sbatch_script = sbatch_script.replace("${SLURM_JOB_NAME}", job.uid)
     sbatch_script = sbatch_script.replace("${SLURM_WORKING_DIR}", SLURM_JOB_PATH)
-    sbatch_script = sbatch_script.replace("${PYTHON_ENV}", os.path.dirname(BRAVO_Path) + "/.venv/bin/activate")
-    sbatch_script = sbatch_script.replace("${SLURM_JOB_SCRIPT}", BRAVO_Path + AsyncJobScripts[script_name])
-    sbatch_script = sbatch_script.replace("${JOB_ARGS}", job.uid)
+    arguments = shlex.split(AsyncJobScripts[script_name].replace("${JOB_ARGS}", job.uid))
+    arguments[0] = BRAVO_Path + arguments[0]
+    command = [os.environ.get("BRAVO_JOB_PYTHON", sys.executable), *arguments]
+    sbatch_script = sbatch_script.replace("${JOB_COMMAND}", shlex.join(command))
+    sbatch_script = sbatch_script.replace("${EXIT_FILE}", shlex.quote(os.path.join(SLURM_JOB_PATH, job.uid + ".exit")))
 
     with open(os.path.join(SLURM_JOB_PATH, job.uid + ".sh"), 'w+') as f:
         f.write(sbatch_script)
@@ -58,48 +77,45 @@ def ScheduleSlurmJob(requester, recording_uid, script_name, config, refresh=Fals
         job.metadata["slurm_job_id"] = result.stdout.strip().split(" ")[-1]
         job.save()
     else:
-        process = subprocess.Popen(["bash", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")])
+        with open(os.path.join(SLURM_JOB_PATH, job.uid + ".out"), "ab") as out, open(os.path.join(SLURM_JOB_PATH, job.uid + ".err"), "ab") as err:
+            process = subprocess.Popen(["bash", os.path.join(SLURM_JOB_PATH, job.uid + ".sh")],
+                                       stdout=out, stderr=err, start_new_session=True)
         job.metadata["pid"] = process.pid
-        while True:
-            try:
-                ps_proc = psutil.Process(job.metadata["pid"])
-                # PIDs get recycled by the OS - record the process's actual
-                # start time alongside it so a later liveness check
-                # (CheckJobStatus) can tell "still this job" apart from "some
-                # unrelated process now sitting at the same PID", instead of
-                # trusting the bare PID number forever.
-                job.metadata["pid_create_time"] = ps_proc.create_time()
-                job.state = "Running"
-                job.save()
-                break
-            except psutil.Error:
-                job.state = "Pending"
-                job.save()
-            time.sleep(1)
-            
+        try:
+            job.metadata["pid_create_time"] = psutil.Process(process.pid).create_time()
+        except psutil.Error:
+            pass
+        # A fast worker may have already saved its terminal state.
+        job.save(update_fields=["metadata"])
+        CheckJobStatus(job)
+
     return job
 
 def CheckJobStatus(job):
+    job.refresh_from_db()
     if job.type == "LOCAL":
-        try:
-            ps_proc = psutil.Process(job.metadata["pid"])
-            # A PID alone isn't proof this job's process is still running -
-            # the OS recycles PIDs, so a long-finished job's PID can later
-            # get reassigned to some unrelated process that's simply alive
-            # at the moment of this check. Confirming create_time() matches
-            # what was recorded when this job was actually launched is what
-            # tells the two apart - found via a real stuck "Running" BIDS
-            # export job whose PID had been reused, which meant
-            # ScheduleSlurmJob's refresh=True re-export never actually
-            # re-ran (it kept handing back the same stale job instead).
-            if ps_proc.create_time() != job.metadata.get("pid_create_time"):
-                raise psutil.NoSuchProcess(job.metadata["pid"])
-            job.state = "Running"
-            job.save()
-
-        except psutil.Error:
-            job.state = "Completed"
-            job.save()
+        if job.state in {"Completed", "Failed"}:
+            return job.get_info()
+        directory = job.metadata.get("job_directory", SLURM_JOB_PATH)
+        exit_file = Path(directory) / (job.uid + ".exit")
+        if exit_file.is_file():
+            try:
+                code = int(exit_file.read_text().strip())
+                job.state = "Completed" if code == 0 else "Failed"
+                job.result_message = "" if code == 0 else f"Background analysis exited with code {code}."
+            except (OSError, ValueError):
+                job.state = "Failed"
+                job.result_message = "Background analysis produced an invalid completion status."
+        else:
+            try:
+                ps_proc = psutil.Process(job.metadata["pid"])
+                if ps_proc.create_time() != job.metadata.get("pid_create_time") or ps_proc.status() == psutil.STATUS_ZOMBIE:
+                    raise psutil.NoSuchProcess(job.metadata["pid"])
+                job.state = "Running"
+            except (psutil.Error, KeyError):
+                job.state = "Failed"
+                job.result_message = "Background analysis stopped without reporting successful completion. Retry the analysis."
+        job.save()
 
     elif job.type == "SLURM":
         format_str = "\"%.18i|%.9P|%.20j|%.8u|%.2t|%.10M|%.6D|%.30R\""

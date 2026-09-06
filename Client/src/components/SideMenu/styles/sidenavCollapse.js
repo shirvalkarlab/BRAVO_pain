@@ -43,13 +43,14 @@ function collapseItem(theme, ownerState) {
         : white.main,
     display: "flex",
     alignItems: "center",
-    width: "100%",
+    width: "calc(100% - 32px)",
+    minWidth: 0,
     padding: `${pxToRem(8)} ${pxToRem(10)}`,
     margin: `${pxToRem(1.5)} ${pxToRem(16)}`,
     borderRadius: borderRadius.md,
     cursor: "pointer",
     userSelect: "none",
-    whiteSpace: "nowrap",
+    whiteSpace: "normal",
     boxShadow: active && !whiteSidenav && !darkMode && !transparentSidenav ? md : "none",
     [breakpoints.up("xl")]: {
       transition: transitions.create(["box-shadow", "background-color"], {
@@ -85,6 +86,7 @@ function collapseIconBox(theme, ownerState) {
 
   return {
     minWidth: pxToRem(32),
+    flexShrink: 0,
     minHeight: pxToRem(32),
     color:
       (transparentSidenav && !darkMode && !active) || (whiteSidenav && !active)
@@ -117,10 +119,14 @@ function collapseText(theme, ownerState) {
 
   return {
     marginLeft: pxToRem(10),
+    minWidth: 0,
+    overflowWrap: "anywhere",
 
     [breakpoints.up("xl")]: {
       opacity: miniSidenav || (miniSidenav && transparentSidenav) ? 0 : 1,
       maxWidth: miniSidenav || (miniSidenav && transparentSidenav) ? 0 : "100%",
+      maxHeight: miniSidenav ? 0 : "none",
+      overflow: miniSidenav ? "hidden" : "visible",
       marginLeft: miniSidenav || (miniSidenav && transparentSidenav) ? 0 : pxToRem(10),
       transition: transitions.create(["opacity", "margin"], {
         easing: transitions.easing.easeInOut,
@@ -131,7 +137,7 @@ function collapseText(theme, ownerState) {
     "& span": {
       fontWeight: active ? fontWeightRegular : fontWeightLight,
       fontSize: size.sm,
-      lineHeight: 0,
+      lineHeight: 1.4,
     },
   };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // react-router-dom components
-import { useLocation, NavLink } from "react-router-dom";
+import { useLocation, NavLink, matchPath } from "react-router-dom";
 
 // prop-types is a library for typechecking of props.
 import PropTypes from "prop-types";
@@ -11,6 +11,8 @@ import List from "@mui/material/List";
 import Divider from "@mui/material/Divider";
 import Link from "@mui/material/Link";
 import Icon from "@mui/material/Icon";
+import Tooltip from "@mui/material/Tooltip";
+import { featureAvailability, loadFeatureInformation, publishFeatureInformation } from "views/Dashboard/ParticipantOverview/featureAvailability";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -35,6 +37,25 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
 
   const location = useLocation();
   const { pathname } = location;
+  const pathParticipant = Object.values(routes).flatMap((group) => group.children || [])
+    .map((item) => item.route && matchPath(item.route, pathname))
+    .find((match) => match && match.params.participant_uid);
+  const availabilityUid = pathParticipant ? pathParticipant.params.participant_uid : participant_uid;
+
+  useEffect(() => {
+    if (!availabilityUid || pathname === "/database" || pathname.startsWith("/group-analysis")) return undefined;
+    let cancelled = false;
+    const refresh = () => loadFeatureInformation(availabilityUid).then(({ data }) => {
+      if (!cancelled) publishFeatureInformation(dispatch, availabilityUid, data);
+    }).catch(() => {
+      if (!cancelled) dispatch({ name: "participantFeatureAvailability", value: {
+        participantUid: availabilityUid, features: {}, error: "Availability could not be checked",
+      } });
+    });
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { cancelled = true; window.removeEventListener("focus", refresh); };
+  }, [availabilityUid, pathname, dispatch]);
   const collapseName = pathname.split("/").slice(1)[0];
   const items = pathname.split("/").slice(1);
   const itemParentName = items[1];
@@ -128,7 +149,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
     if (type === "collapse") {
       if (noCollapse && route) {
         returnValue = (
-          <NavLink to={route.replace(":participant_uid",participant_uid)} key={key}>
+          <NavLink to={route.replace(":participant_uid",availabilityUid)} key={key}>
             <SidenavCollapse
               name={nameString}
               icon={icon}
@@ -166,6 +187,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           mt={2}
           mb={1}
           ml={1}
+          sx={{display: {xs: "block", xl: miniSidenav && !showSidenav ? "none" : "block"}, whiteSpace: "normal", overflowWrap: "anywhere", pr: 2}}
         >
           {nameString}
         </MDTypography>
@@ -198,7 +220,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
       variant="permanent"
       ownerState={{ transparentSidenav, whiteSidenav, miniSidenav, hideSidenav, showSidenav, darkMode }}
     >
-      <MDBox pt={3} pb={1} px={4} textAlign="center">
+      <MDBox pt={3} pb={1} px={3} textAlign="center" sx={{ flexShrink: 0 }}>
         <MDBox
           display={{ xs: "block", xl: "none" }}
           position="absolute"
@@ -212,11 +234,10 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
             <Icon sx={{ fontWeight: "bold" }}>close</Icon>
           </MDTypography>
         </MDBox>
-        <MDBox component={NavLink} to="/" display="flex" alignItems="center">
-          {brand && <MDBox component="img" src={brand} alt="Brand" width="2rem" />}
+        <MDBox component={NavLink} to="/" aria-label={brandName || "BRAVO home"} display="flex" alignItems="center" sx={{width: "100%", minWidth: 0}}>
+          {brand && <MDBox component="img" src={brand} alt="Brand" width="2rem" sx={{ flexShrink: 0 }} />}
           <MDBox
-            width={!brandName && "100%"}
-            sx={(theme) => sidenavLogoLabel(theme, { miniSidenav })}
+            sx={(theme) => sidenavLogoLabel(theme, { miniSidenav: miniSidenav && !showSidenav })}
           >
             <MDTypography component="h6" variant="button" fontWeight="medium" color={textColor}>
               {brandName}
@@ -259,6 +280,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
                 mt={2}
                 mb={1}
                 ml={1}
+                sx={{display: {xs: "block", xl: miniSidenav && !showSidenav ? "none" : "block"}, whiteSpace: "normal", overflowWrap: "anywhere", pr: 2}}
               >
                 {nameString}
               </MDTypography>
@@ -266,8 +288,16 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
           }
 
           if (!route) return null;
+          const availability = featureAvailability(key, controller.participantFeatureAvailability, availabilityUid);
+          if (!availability.available) return (
+            <Tooltip title={availability.reason} placement="right" key={`${reportName}-${key}`}>
+              <MDBox role="link" aria-disabled="true" tabIndex={0} sx={{ opacity: 0.5, cursor: "not-allowed" }}>
+                <SidenavCollapse name={`${nameString} — ${availability.reason}`} icon={icon} active={false} />
+              </MDBox>
+            </Tooltip>
+          );
 
-          return <NavLink to={route.replace(":participant_uid",participant_uid)} key={`${reportName}-${key}`}>
+          return <NavLink to={route.replace(":participant_uid",availabilityUid)} key={`${reportName}-${key}`}>
             <SidenavCollapse
               name={nameString}
               icon={icon}

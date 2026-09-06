@@ -199,6 +199,7 @@ function BurstDynamics({dataToRender, participant_uid, annotations, figureTitle}
                 x: cacheData[channel][annotation].freq, y: math.mean(cacheData[channel][annotation].power, 1)._data, error_y: math.std(cacheData[channel][annotation].power, 1)._data.map((a) => a/math.sqrt(cacheData[channel][annotation].power._size[1])),
                 ylim: ylim,
                   line_options: {
+                  meta: {bravoPreserveLabel: true},
                   name: annotation,
                   legendgroup: annotation,
                   color: colorMapper(counter),

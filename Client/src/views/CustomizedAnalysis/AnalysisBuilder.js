@@ -331,7 +331,7 @@ function AnalysisBuilder({analysisId}) {
       </MDBox>
       
       <Dialog open={showRecordingList.show} onClose={() => setShowRecordingList({current: [], show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingSelect recordings={availableRecordings} existingGroups={nodes.map((a) => a[0])} name={showRecordingList.name} currentSelect={showRecordingList.current} onSelectRecording={(recordings, name) => {
           const selectedRecording = availableRecordings.filter((a) => recordings.includes(a.Id));
@@ -367,7 +367,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editRecording.show} onClose={() => setEditRecording({...editRecording, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingEdit editNode={editRecording.node} onSetRecordingNode={(node) => {
           setNodes((nodes) => {
@@ -383,7 +383,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={showProcessingList.show} onClose={() => setShowProcessingList({id: "", show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <ProcessingSelect processingNodes={availableProcessingNodes} onSetProcessingNode={(node) => {
           setNodes((nodes) => {
@@ -404,7 +404,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editProcessing.show} onClose={() => setEditProcessing({...editProcessing, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <ProcessingEdit editNode={editProcessing.node} onSetProcessingNode={(node) => {
           setNodes((nodes) => {
@@ -426,13 +426,13 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editAlignment.show} onClose={() => setEditAlignment({...editAlignment, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingAlignmentView nodes={editAlignment.nodes} />
       </Dialog>
 
       <Dialog open={resultDialog.show} onClose={() => {}} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 1000, maxWidth: "calc(100vw - 32px)"} }}
       >
         <ResultViewer analysisId={analysisId} participant_uid={participant_uid} node={resultDialog.node} onClose={() => setResultDialog({...resultDialog, show: false})} />
       </Dialog>

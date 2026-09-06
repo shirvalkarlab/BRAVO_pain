@@ -11,8 +11,13 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { reportDisplayTraces, rawTraceName } from "graphing-utility/participantTraceDisplay";
+import { currentTargetText } from "utils/participantTargets";
 import Plotly from 'plotly.js-dist';
 import { zhCN } from "assets/plotly-locales/zh-cn";
+
+// One observer per graph element, even when a component recreates its manager.
+const plotResizeStates = new WeakMap();
 
 const defaultLineOptions = {
   type: "scattergl",
@@ -75,6 +80,10 @@ const defaultHeatmapOptions = {
 }
 
 const defaultLayoutOptions = {
+  font: {family: "Roboto, sans-serif", size: 14, color: "#344767"},
+  paper_bgcolor: "transparent",
+  plot_bgcolor: "transparent",
+  hoverlabel: {font: {family: "Roboto, sans-serif", size: 14}},
   title: {
     text: ""
   },
@@ -90,10 +99,11 @@ const defaultLayoutOptions = {
   yaxis: {
     type: "linear",
     showgrid: true,
-    gridcolor: "#DDDDDD",
+    gridcolor: "#edf0f4",
     showline: true,
-    linecolor: "#000000",
+    linecolor: "#A7B4C2",
     showticklabels: true,
+    automargin: true,
 
     ticks: "outside",
     fixedrange: false,
@@ -102,10 +112,11 @@ const defaultLayoutOptions = {
   },
   xaxis: {
     showgrid: true,
-    gridcolor: "#DDDDDD",
+    gridcolor: "#edf0f4",
     showline: true,
-    linecolor: "#000000",
+    linecolor: "#A7B4C2",
     showticklabels: true,
+    automargin: true,
 
     ticks: "outside",
     fixedrange: false,
@@ -970,7 +981,7 @@ class PlotlyRenderManager {
    * 
    */
   setTitle(title) {
-    this.layout.title.text = title;
+    this.layout.title.text = currentTargetText(title);
   }
 
   /**
@@ -987,7 +998,7 @@ class PlotlyRenderManager {
       const xLocation = (ax.xdomain[0] + ax.xdomain[1]) * 0.5;
       const yLocation = ax.ydomain[1];
       const annotation = {
-        text: subtitle, 
+        text: currentTargetText(subtitle), 
         font: {size: 20}, 
         showarrow: false, 
         x: xLocation, 
@@ -1337,9 +1348,10 @@ class PlotlyRenderManager {
           },click: function(gd) {
             var csvData = "x, y, name\n";
             for (let i in gd.data) {
-              if (["scatter","box"].includes(gd.data[i].type)) {
+              if (["scatter","scattergl","box"].includes(gd.data[i].type)) {
                 for (let j in gd.data[i].x) {
-                  csvData += gd.data[i].x[j] + "," + gd.data[i].y[j] + "," + (gd.data[i].name || " ") + "\n";
+                  if (gd.data[i].x[j] === null && gd.data[i].y[j] === null) continue;
+                  csvData += gd.data[i].x[j] + "," + gd.data[i].y[j] + "," + (rawTraceName(gd.data[i]) || " ") + "\n";
                 }
               }
             }
@@ -1356,6 +1368,21 @@ class PlotlyRenderManager {
 
     const ref = document.getElementById(this.divName);
     if (ref) {
+      if (typeof ResizeObserver !== "undefined" && !plotResizeStates.has(ref)) {
+        const state = {observer: null, frame: null, resizing: false};
+        state.observer = new ResizeObserver(() => {
+          cancelAnimationFrame(state.frame);
+          state.frame = requestAnimationFrame(() => {
+            state.frame = null;
+            if (!ref.isConnected) {
+              state.observer.disconnect();
+              plotResizeStates.delete(ref);
+            } else this.refresh();
+          });
+        });
+        plotResizeStates.set(ref, state);
+        state.observer.observe(ref);
+      }
       this.onClick = async (evt) => {
         const bb = evt.target.getBoundingClientRect();
         let gca = this.ax[0];
@@ -1378,7 +1405,9 @@ class PlotlyRenderManager {
       }
 
       if (this.fresh) {
-        Plotly.newPlot(this.divName, this.traces, this.layout, config).then(() => {
+        Plotly.newPlot(this.divName, reportDisplayTraces(this.traces), this.layout, config).then(() => {
+          if (document.getElementById(this.divName) !== ref || !ref._fullLayout) return;
+          this.refresh();
           ref.on("plotly_relayout", (evt) => {
             const event = new CustomEvent("PlotlyRelayout", {detail: { 
               ...evt, 
@@ -1389,7 +1418,9 @@ class PlotlyRenderManager {
         });
         this.fresh = false;
       } else {
-        Plotly.react(this.divName, this.traces, this.layout, config);
+        Promise.resolve(Plotly.react(this.divName, reportDisplayTraces(this.traces), this.layout, config)).then(() => {
+          if (document.getElementById(this.divName) === ref) this.refresh();
+        });
       }
     }
   }
@@ -1416,6 +1447,13 @@ class PlotlyRenderManager {
    * Call to clear figure
    */
   purge() {
+    const element = document.getElementById(this.divName);
+    const state = element && plotResizeStates.get(element);
+    if (state) {
+      state.observer.disconnect();
+      cancelAnimationFrame(state.frame);
+      plotResizeStates.delete(element);
+    }
     Plotly.purge(this.divName);
     this.fresh = true;
   }
@@ -1425,7 +1463,20 @@ class PlotlyRenderManager {
    */
   refresh() {
     try {
-      Plotly.relayout(this.divName, {});
+      const element = document.getElementById(this.divName);
+      if (!element || !element._fullLayout || element.clientWidth <= 0 || element.clientHeight <= 0) return;
+      const width = element.clientWidth, height = element.clientHeight;
+      if (Math.abs(element._fullLayout.width - width) <= 1 && Math.abs(element._fullLayout.height - height) <= 1) return;
+      const state = plotResizeStates.get(element);
+      if (state && state.resizing) return;
+      if (state) state.resizing = true;
+      return Promise.resolve().then(() => Plotly.Plots.resize(element)).catch(() => {}).finally(() => {
+        if (state) state.resizing = false;
+        // A second resize is needed only if the container moved again while the
+        // first one was pending. Equal dimensions cannot trigger a redraw loop.
+        if (document.getElementById(this.divName) === element &&
+            (element.clientWidth !== width || element.clientHeight !== height)) this.refresh();
+      });
     } catch (error) {
       return;
     }

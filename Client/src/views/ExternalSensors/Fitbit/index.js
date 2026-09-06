@@ -280,7 +280,7 @@ export default function FitbitDashboard() {
 
                 {OAuthURL ? (
                 <Grid item xs={12} sx={{lineHeight: 1}}>
-                  <MDBox display={"flex"} flexDirection={"row"}>
+                  <MDBox display="flex" flexDirection={{xs: "column", sm: "row"}} gap={2}>
                     <TextField
                       variant="standard"
                       margin="dense" id="fitbit_oauth_redirect"
@@ -288,7 +288,7 @@ export default function FitbitDashboard() {
                       onChange={(event) => setFitbitTokenURL(event.target.value)}
                       fullWidth
                     />
-                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
+                    <MDButton variant="contained" color="info" sx={{minWidth: {xs: 0, sm: 200}}} onClick={() => {
                       setAlert(<LoadingProgress />)
                       SessionController.query("/api/requestFitbitAuth", {
                         RequestType: "VerifyToken",

@@ -30,11 +30,7 @@ import {
   CircularProgress
 } from "@mui/material";
 
-import {
-  Translate,
-  ChangeCircle,
-  PublishedWithChanges
-} from '@mui/icons-material';
+import ChangeCircle from "@mui/icons-material/ChangeCircle";
 
 import { FaArrowRightFromBracket, FaUser } from "react-icons/fa6";
 
@@ -130,7 +126,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const renderProfileMenu = () => (
     <Menu
       anchorEl={openMenu}
-      anchorReference={null}
+      anchorReference="anchorEl"
       disableScrollLock
       anchorOrigin={{
         vertical: "bottom",
@@ -170,7 +166,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const renderLanguageSelectionMenu = () => (
     <Menu
       anchorEl={openMenu}
-      anchorReference={null}
+      anchorReference="anchorEl"
       anchorOrigin={{
         vertical: "bottom",
         horizontal: "left",
@@ -244,7 +240,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       <Toolbar sx={(theme) => navbarContainer(theme)}>
         <MDBox color="inherit" mb={{ xs: 1, md: 0 }} sx={(theme) => navbarRow(theme, { isMini })}>
           <Breadcrumbs icon="home" title={route[route.length - 1]} route={route} light={light} />
-          <IconButton sx={{display: {xs: "none", xl: "block"}}} onClick={handleMiniSidenav} size="small" disableRipple>
+          <IconButton aria-label="Toggle compact navigation" sx={{display: {xs: "none", xl: "block"}, flexShrink: 0}} onClick={handleMiniSidenav} size="small" disableRipple>
             <Icon fontSize="medium" sx={iconsStyle}>
               {!miniSidenav ? "menu_open" : "menu"}
             </Icon>
@@ -253,6 +249,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
             size="small"
             disableRipple
             color="inherit"
+            aria-label="Toggle navigation"
             sx={navbarMobileMenu}
             onClick={handleHideSidenav}
           >
@@ -270,6 +267,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
                 disableRipple
                 color="inherit"
                 sx={navbarIconButton}
+                aria-label="Account menu"
                 aria-controls="notification-menu"
                 aria-haspopup="true"
                 variant="contained"

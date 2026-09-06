@@ -85,9 +85,12 @@ class PlatformUser(AbstractBaseUser):
     
     def get_info(self):
         Studies = [study.get_info(self) for study in Study.find_all(members=self)]
+        institute_rel = InstituteRel.find(member=self, institute=self.institute) if self.institute else None
+        role = institute_rel.permission.get("Position", "Member") if institute_rel else "Independent"
         info = {"Email": self.email, "Name": self.user_name, 
                 "Institute": self.institute.name if self.institute else "", "InstituteId": self.institute.uid if self.institute else "", 
-                "Studies": Studies, "StudyName": "Disabled", "StudyId": ""}
+                "Studies": Studies, "StudyName": "Disabled", "StudyId": "",
+                "Role": role, "ReadOnly": bool(self.configuration.get("ReadOnly", False))}
         
         if "ActiveStudy" in self.configuration.keys():
             study = Study.find(uid=self.configuration["ActiveStudy"], members=self)

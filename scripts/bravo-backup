@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_dir="$(cd "$script_dir/.." && pwd)"
+env_file="$repo_dir/.env.appliance"
+sync_secret_dir="$repo_dir/secrets"
+output_dir="${1:-$repo_dir/backups}"
+
+[[ -f "$env_file" ]] || { printf 'Missing %s\n' "$env_file" >&2; exit 1; }
+for secret in rcs08_redcap.json rcs08_oura.json; do
+  [[ -f "$sync_secret_dir/$secret" ]] || { printf 'Missing %s\n' "$sync_secret_dir/$secret" >&2; exit 1; }
+done
+mkdir -p "$output_dir"
+output_dir="$(cd "$output_dir" && pwd)"
+
+compose() {
+  docker compose --project-directory "$repo_dir" --env-file "$env_file" "$@"
+}
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+archive="$output_dir/bravo-appliance-$timestamp.tar.gz"
+temporary="$(mktemp -d)"
+server_was_running=0
+sync_was_running=0
+
+cleanup() {
+  if [[ "$server_was_running" -eq 1 ]]; then
+    compose start bravo-server >/dev/null 2>&1 || true
+  fi
+  if [[ "$sync_was_running" -eq 1 ]]; then
+    compose start bravo-sync >/dev/null 2>&1 || true
+  fi
+  rm -rf "$temporary"
+}
+trap cleanup EXIT INT TERM
+
+if [[ -n "$(compose ps --status running --quiet bravo-sync)" ]]; then
+  sync_was_running=1
+  compose stop bravo-sync >/dev/null
+fi
+
+if [[ -n "$(compose ps --status running --quiet bravo-server)" ]]; then
+  server_was_running=1
+  compose stop bravo-server >/dev/null
+fi
+
+compose exec -T mysql sh -c \
+  'exec mysqldump --single-transaction --routines --triggers --add-drop-database --databases "$MYSQL_DATABASE" -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  > "$temporary/database.sql"
+
+compose run --rm --no-deps -T bravo-server \
+  sh -c 'exec tar -C "$DATASERVER_PATH" -czf - .' \
+  > "$temporary/storage.tar.gz"
+
+cp "$env_file" "$temporary/appliance.env"
+chmod 600 "$temporary/appliance.env"
+tar -C "$repo_dir" -czf "$temporary/sync-secrets.tar.gz" \
+  secrets
+chmod 600 "$temporary/sync-secrets.tar.gz"
+
+{
+  printf 'created_utc=%s\n' "$timestamp"
+  printf 'git_commit=%s\n' "$(git -C "$repo_dir" rev-parse HEAD)"
+  printf 'source_host=%s\n' "$(hostname)"
+  printf 'format=bravo-appliance-backup-v2\n'
+} > "$temporary/MANIFEST"
+
+(
+  cd "$temporary"
+  shasum -a 256 database.sql storage.tar.gz appliance.env sync-secrets.tar.gz MANIFEST > SHA256SUMS
+  tar -czf "$archive.partial" database.sql storage.tar.gz appliance.env sync-secrets.tar.gz MANIFEST SHA256SUMS
+)
+mv "$archive.partial" "$archive"
+chmod 600 "$archive"
+
+printf 'Created sensitive BRAVO backup: %s\n' "$archive"
+printf 'The bundle contains database data, stored files, and appliance secrets; protect it accordingly.\n'

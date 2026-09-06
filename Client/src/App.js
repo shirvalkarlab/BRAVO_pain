@@ -21,7 +21,6 @@ import LoadingProgress from "components/LoadingProgress";
 // Platform Components
 import HomePage from "views/HomePage.js";
 import SignIn from "views/Authentication/SignIn";
-import Register from "views/Authentication/Register";
 import SurveyEditor from "views/Survey/Editor";
 import SurveyViewer from "views/Survey/Viewer";
 import OfflineClinicalReport from "views/Offline_ClinicalReport";
@@ -94,7 +93,7 @@ export default function App() {
         <SideMenu
           color={sidenavColor}
           brand={Logo}
-          brandName="UF BRAVO Platform"
+          brandName="UF BRAVO Platform · Aditya"
           routes={routes}
           onMouseEnter={handleOnMouseEnter}
           onMouseLeave={handleOnMouseLeave}
@@ -105,7 +104,6 @@ export default function App() {
       <Routes>
         <Route path="/index" element={<HomePage />} />
         <Route path="/login" element={<SignIn />} />
-        <Route path="/register" element={<Register />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/offline-report" element={<OfflineClinicalReport />} />
         {getRoutes(routes)}

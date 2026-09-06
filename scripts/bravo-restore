@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_dir="$(cd "$script_dir/.." && pwd)"
+env_file="$repo_dir/.env.appliance"
+bundle="${1:-}"
+confirmation="${2:-}"
+
+[[ -f "$bundle" ]] || { printf 'Backup bundle not found: %s\n' "$bundle" >&2; exit 1; }
+[[ "$confirmation" == "--replace-existing-data" ]] || {
+  printf 'Refusing destructive restore without --replace-existing-data\n' >&2
+  exit 1
+}
+
+"$script_dir/bravo-restore-check" "$bundle"
+
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT INT TERM
+tar -xzf "$bundle" -C "$temporary"
+
+if [[ -f "$env_file" ]]; then
+  cmp -s "$env_file" "$temporary/appliance.env" || {
+    printf 'Current appliance secrets differ from the backup; refusing to make existing encrypted data unreadable.\n' >&2
+    exit 1
+  }
+else
+  cp "$temporary/appliance.env" "$env_file"
+  chmod 600 "$env_file"
+fi
+
+compose() {
+  docker compose --project-directory "$repo_dir" --env-file "$env_file" "$@"
+}
+
+compose stop bravo-sync bravo-server >/dev/null 2>&1 || true
+
+if [[ -f "$temporary/sync-secrets.tar.gz" ]]; then
+  tar -xzf "$temporary/sync-secrets.tar.gz" -C "$repo_dir"
+  chmod 600 "$repo_dir/secrets/rcs08_redcap.json" "$repo_dir/secrets/rcs08_oura.json"
+fi
+
+compose up --detach --wait mysql redis
+
+compose exec -T mysql sh -c \
+  'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' < "$temporary/database.sql"
+
+compose run --rm --no-deps -T bravo-server \
+  sh -c 'find "$DATASERVER_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
+compose run --rm --no-deps -T bravo-server \
+  sh -c 'exec tar -C "$DATASERVER_PATH" -xzf -' < "$temporary/storage.tar.gz"
+
+python3 "$repo_dir/scripts/prepare_private_runtime.py"
+compose up --build --detach --wait
+printf 'BRAVO restore completed from %s\n' "$bundle"

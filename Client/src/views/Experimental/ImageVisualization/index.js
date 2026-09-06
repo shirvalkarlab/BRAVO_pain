@@ -29,7 +29,8 @@ import {
   IconButton,
 } from "@mui/material";
 
-import { ViewInAr, Timeline } from "@mui/icons-material";
+import ViewInAr from "@mui/icons-material/ViewInAr";
+import Timeline from "@mui/icons-material/Timeline";
 import { TwitterPicker, BlockPicker } from "react-color";
 
 import React from "react";

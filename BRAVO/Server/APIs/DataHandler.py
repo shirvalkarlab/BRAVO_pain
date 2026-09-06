@@ -42,7 +42,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
-from modules.HelperFunctions import sanitize_input, get_or_none, current_time
+from modules.HelperFunctions import sanitize_input, get_or_none, current_time, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis, ImageDatabase, Therapy
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -512,6 +512,25 @@ class DataDownloadHandler(RestViews.APIView):
                 return Response(status=403)
 
         
+        elif CacheType == "queryChronicTimeline":
+            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
+            timelines, annotations = DataAnalysis.queryChronicTimeline(ParticipantId, userConfig)
+            complete = []
+            for timeline in timelines:
+                if timeline.get("DataId") and not timeline.get("Data"):
+                    for channel in timeline["ChannelNames"]:
+                        entries = DataAnalysis.queryChronicTimelineData(ParticipantId, timeline["DataId"], channel, userConfig)
+                        complete.extend({**timeline, **entry, "DataId": None, "ChannelNames": [channel],
+                                         "ChannelUnits": [timeline["ChannelUnits"][timeline["ChannelNames"].index(channel)]]}
+                                        for entry in entries)
+                else:
+                    complete.append(timeline)
+            payload = json_compliant_handler({"Timelines": complete, "Annotations": annotations,
+                                               "ProcessingConfiguration": userConfig})
+            response = HttpResponse(json.dumps(payload, allow_nan=False), content_type="application/json")
+            response["Content-Disposition"] = "attachment; filename=MultimodalTimeline_" + ParticipantId + ".json"
+            return response
+
         elif CacheType == "queryChronicNeuralActivity":
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
             userConfig["APIAccess"] = hasattr(request.user, "api_access")
@@ -709,7 +728,9 @@ class DataSourceFileHandler(RestViews.APIView):
         if not source:
             return Response(status=400, data={"message": "Source File not found."})
         
-        if not source.metadata["Uploader"] == request.user.pk:
+        # Original sources require management access; shared/deidentified views
+        # must not expose raw files. Older managed imports store an institute ID.
+        if source.metadata.get("Uploader") != request.user.pk and not Database.checkManagePermission(request.user, ParticipantId, "Edit"):
             return Response(status=403)
         
         file_data = DataCurator.loadCacheFile(source)
@@ -820,4 +841,3 @@ class NeuroImageFileHandler(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
-        

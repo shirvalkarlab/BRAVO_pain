@@ -189,22 +189,25 @@ def queryTherapyGroups(Participant):
         SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__Device=device.uid)
         if len(SourceFiles) > 0:
             TherapyGroup = [{**i.get_info(), **{"Device": device.uid}} for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)]
-            TherapySources = np.unique([group["SourceId"] for group in TherapyGroup])
-            TherapyGroupDates = np.unique([group["Date"] for group in TherapyGroup])
-            TherapyGroupIds = np.unique([group["GroupId"] for group in TherapyGroup])
-            TherapyTypes = ["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"]
-            for SourceId in TherapySources:
-                for GroupDate in TherapyGroupDates:
-                    for GroupId in TherapyGroupIds:
-                        for GroupType in TherapyTypes:
-                            TherapyGroupSubset = sorted([group for group in TherapyGroup if group["GroupId"] == GroupId and group["Date"] == GroupDate and group["Type"] == GroupType and group["SourceId"] == SourceId], key=lambda x: x["Date"])
-                            if len(TherapyGroupSubset) > 0:
-                                if len(TherapyGroupSubset) > 1:
-                                    for i in range(1, len(TherapyGroupSubset)):
-                                        TherapyGroupSubset[0]["StimulationSettings"].extend(TherapyGroupSubset[i]["StimulationSettings"])
-                                        TherapyGroupSubset[0]["AdaptiveSettings"].extend(TherapyGroupSubset[i]["AdaptiveSettings"])
-                                TherapyGroups.append(TherapyGroupSubset[0])
+            TherapyGroups.extend(groupTherapySettings(TherapyGroup))
     return TherapyGroups
+
+
+def groupTherapySettings(therapies):
+    """Combine matching settings once, preserving the historical output order."""
+    types = {name: index for index, name in enumerate(
+        ("Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"))}
+    grouped = {}
+    for therapy in therapies:
+        if therapy["Type"] not in types:
+            continue
+        key = (therapy["SourceId"], therapy["Date"], therapy["GroupId"], types[therapy["Type"]])
+        if key not in grouped:
+            grouped[key] = copy.deepcopy(therapy)
+        else:
+            grouped[key]["StimulationSettings"].extend(copy.deepcopy(therapy["StimulationSettings"]))
+            grouped[key]["AdaptiveSettings"].extend(copy.deepcopy(therapy["AdaptiveSettings"]))
+    return [grouped[key] for key in sorted(grouped)]
 
 def createAgenticAIOverview(PreGroup, PostGroup):
     with open(os.path.join(os.path.dirname(__file__), "AgenticAI", "TherapyGroupComparison.md"), "r") as f:
@@ -261,6 +264,24 @@ def createAgenticAIOverview(PreGroup, PostGroup):
     else:
         return cache.response if cache else "Error: No cache found and Gemini API is not available."
 
+def electrodeHemisphere(electrode):
+    """Use explicit laterality, or the side recorded in the target name."""
+    for field in ("Hemisphere", "Target"):
+        value = str(electrode.get(field, "")).lower()
+        for side in ("left", "right"):
+            if value.startswith(side):
+                return side
+    return None
+
+
+def sameElectrodeSide(first, second):
+    side = electrodeHemisphere(first)
+    other = electrodeHemisphere(second)
+    if side and other:
+        return side == other
+    return bool(first.get("Id")) and first.get("Id") == second.get("Id")
+
+
 def createTherapyTimeline(TherapyHistory):
     AllSessionDates = []
     AllTherapyGroups = []
@@ -276,6 +297,8 @@ def createTherapyTimeline(TherapyHistory):
     AllTherapyGroups = np.unique(AllTherapyGroups)
     AllTherapyGroups.sort()
 
+    if not len(AllSessionDates):
+        return []
     SessionDates = [AllSessionDates[0]]
     for i in range(1, len(AllSessionDates)):
         if AllSessionDates[i] - SessionDates[-1] > 3600*12:
@@ -336,7 +359,7 @@ def createTherapyTimeline(TherapyHistory):
                                 KnownSettings = []
                                 for therapy in UniqueSettings:
                                     for j in range(len(therapy["StimulationSettings"])):
-                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
+                                        if sameElectrodeSide(therapy["StimulationSettings"][j]["Electrode"], electrode):
                                             KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
                                 DefinedTherapy["Stimulation"].append(KnownSettings)
                                 DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
@@ -347,7 +370,7 @@ def createTherapyTimeline(TherapyHistory):
                                 KnownSettings = []
                                 for therapy in UniqueSettings:
                                     for j in range(len(therapy["StimulationSettings"])):
-                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
+                                        if sameElectrodeSide(therapy["StimulationSettings"][j]["Electrode"], electrode):
                                             DefinedTherapy["GroupType"] = therapy["GroupType"]
                                             KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
                                 DefinedTherapy["Adaptive"].append(KnownSettings)
@@ -523,8 +546,10 @@ def findClosestTherapy(timestamp, hemisphere, group, TherapyHistories):
     return ClosestTherapy
 
 def queryElectrodeImpedances(participant):
+    from django.db.models import Prefetch
     SourceFiles = models.SourceFile.find_all(owner=participant)
-    ImpedanceRecordss = models.DBSEvent.find_all(type__endswith="Impedance", source__in=SourceFiles)
+    ImpedanceRecordss = models.DBSEvent.find_all(type__endswith="Impedance", source__in=SourceFiles).prefetch_related(
+        Prefetch("data", queryset=models.Recording.objects.select_related("source")))
     ElectrodeImpedances = []
     for impedance in ImpedanceRecordss:
         Descriptor = impedance.get_info(data=True)
@@ -585,4 +610,3 @@ def checkDuplicate(device, electrode, therapy):
             return True
         
     return False
-                

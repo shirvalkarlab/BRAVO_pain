@@ -291,7 +291,10 @@ export const SessionController = (function () {
   };
 
   const setSession = (type, value, update) => {
-    if (update) query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
+    // The server only persists these preferences. Layout/report state is local.
+    if (update && ["language", "miniSidenav", "darkMode"].includes(type) && session[type] !== value) {
+      query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
+    }
     session[type] = value;
     session["lastActive"] = new Date().getTime();
     localStorage.setItem("sessionContext", JSON.stringify(session));

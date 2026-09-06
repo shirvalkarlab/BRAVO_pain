@@ -153,7 +153,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                           }}/>
                           
                           <Dialog open={resultDialog.show} onClose={() => setResultDialog({...resultDialog, show: false})} 
-                            PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
+                            PaperProps={{ sx: {minWidth: 0, width: 1000, maxWidth: "calc(100vw - 32px)"} }}
                           >
                             <SpectralFeatureViewer figureTitle={"SpectralFeatureViewer"} participant_uid={resultDialog.participant_uid} recordings={resultDialog.recordings} onClose={() => setResultDialog({...resultDialog, show: false})} />
                           </Dialog>

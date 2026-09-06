@@ -1,3 +1,20 @@
 BRAVO/.env
 BRAVO/db.sqlite3
 BRAVO/mysql.config
+Client/node_modules
+Client/build
+.git
+.env.appliance
+secrets
+backups
+
+/tmp
+/outputs
+/reports
+
+# Local review artifacts are not source inputs.
+/output
+
+# Participant-specific runtime assets are transferred privately, never published.
+/BRAVO/config/*.csv
+/BRAVO/modules/Biomarkers/data/psd_lsb_models/*.json

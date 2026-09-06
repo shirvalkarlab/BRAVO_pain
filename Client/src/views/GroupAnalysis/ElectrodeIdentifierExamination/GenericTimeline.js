@@ -351,7 +351,7 @@ export default function GenericTimeline({data, availableChannels, annotations, h
           </Menu>
 
           <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
-            <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+            <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
               <MDTypography variant="h5">
                 {"New Custom Event"} 
               </MDTypography>

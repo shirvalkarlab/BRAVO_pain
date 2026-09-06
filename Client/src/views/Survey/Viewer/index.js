@@ -31,10 +31,8 @@ import {
   Radio
 } from "@mui/material";
 
-import { 
-  Remove as RemoveIcon,
-  Add as AddIcon
-} from "@mui/icons-material";
+import RemoveIcon from "@mui/icons-material/Remove";
+import AddIcon from "@mui/icons-material/Add";
 
 import MuiAlertDialog from "components/MuiAlertDialog";
 import MDBox from "components/MDBox";

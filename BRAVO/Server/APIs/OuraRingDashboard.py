@@ -70,7 +70,8 @@ class OuraRingAuthHandler(RestViews.APIView):
 
         if request.data["RequestType"] == "RequestURL":
             if len(device.auth.keys()) > 0:
-                return Response(status=200, data=device.date_periods)
+                return Response(status=200, data=device.date_periods, headers={
+                    "X-BRAVO-Managed-Sync": "true" if device.auth.get("managed_sync") else "false"})
             
         if request.data["RequestType"] == "RequestURL":
             if len(device.auth.keys()) > 0:
@@ -172,10 +173,23 @@ class QueryOuraRingData(RestViews.APIView):
         if len(device.auth.keys()) == 0:
             return Response(status=400, data={"message": "Verification Failed"})
 
-        if request.data["RequestType"] == "RequestOverview":
+        if request.data["RequestType"] == "RequestSummary":
+            return Response(status=200, data=OuraDataManager.storedDataSummary(Participant))
+        elif request.data["RequestType"] == "RequestOverview":
             Data = OuraDataManager.loadOuraRingData(Participant)
             return Response(status=200, data=Data)
         elif request.data["RequestType"] == "RefreshOuraRingData":
+            if not Participant.institute.has_permission(request.user, "Upload"):
+                return Response(status=403)
+            if device.auth.get("managed_sync"):
+                from modules import RCS08ManualSync, RCS08Sync
+                if Participant.name != RCS08Sync.PARTICIPANT_NAME:
+                    return Response(status=400, data={"message": "No managed sync is configured for this participant."})
+                try:
+                    state = RCS08ManualSync.queue_request(str(request.user.uid))
+                except RCS08ManualSync.ManualSyncAlreadyActive as exc:
+                    return Response(status=409, data={"message": str(exc), **exc.state})
+                return Response(status=202, data=state)
             OuraDataManager.refreshOuraRingData(device)
             return Response(status=200)
 

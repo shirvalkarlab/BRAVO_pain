@@ -32,6 +32,9 @@ import { Card, Menu, MenuItem, Dialog, DialogContent, Grid, IconButton, Popover,
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
 import { dictionary, dictionaryLookup } from "assets/translation";
+import { mergeAnnotationSeries } from "graphing-utility/denseTimeline";
+import { adaptiveParameters, amplitudeRangePercent } from "graphing-utility/adaptiveTimeline";
+import { surveyOverlaySeries, clearSurveyOverlayAxes } from "graphing-utility/surveyOverlay";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { usePlatformContext } from "context";
 
@@ -55,69 +58,28 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
   }, [figureTitle]);
 
   const renderSurveyReports = () => {
-    let dualAxis = [];
-    const ax = fig.getAxes();
-    for (let k in availableChannels.active) { 
-      const dualY = fig.addDualYAxis(ax[k*2]);
-      fig.setAxisProps({
-        title: {
-          font: {
-            color: "#FF0000"
-          }
-        },
-        tickcolor:  "#FF0000",
-        tickfont: {
-          color: "#FF0000"
-        },
-        showgrid: false
-      }, "y", dualY);
-      dualAxis.push(dualY);
-    }
-
-    let nResults = 0;
-    for (let i in surveyResults.form) {
-      for (let j in surveyResults.form[i].questions) {
-        if (surveyResults.form[i].questions[j].type === "redcapForm") {
-          if (surveyResults.form[i].questions[j].text === "Time") continue;
-          nResults += 1;
-        }
-      }
-    }
-
-    const cmap = colormap({
-      colormap: 'jet',
-      nshades: nResults < 10 ? 10 : nResults,
-      format: 'hex',
-      alpha: 1,
+    clearSurveyOverlayAxes(fig);
+    const series = surveyOverlaySeries(surveyResults);
+    if (!series.length) return;
+    const axes = fig.getAxes().slice();
+    const dualAxis = availableChannels.active.map((_, index) => {
+      const dualY = fig.addDualYAxis(axes[index * 2]);
+      dualY.surveyOverlay = true;
+      fig.setAxisProps({title: {text: "Survey score", font: {color: "#B71C1C"}},
+        tickcolor: "#B71C1C", tickfont: {color: "#B71C1C"}, showgrid: false}, "y", dualY);
+      return dualY;
     });
-
-    nResults = 0;
-    for (let i in surveyResults.form) {
-      for (let j in surveyResults.form[i].questions) {
-        if (surveyResults.form[i].questions[j].type === "redcapForm") {
-          if (surveyResults.form[i].questions[j].text === "Time") continue;
-          let scores = [];
-          let times = surveyResults.records.map((a) => new Date(a.Date*1000));
-          for (let k in surveyResults.records) {
-            const result = parseFloat(surveyResults.records[k].Result[i][j]) || null;
-            scores.push(result);
-          }
-          
-          for (let k in dualAxis) { 
-            fig.scatter(times, scores, {
-              color: cmap[nResults],
-              size: 5,
-              visible: "legendonly",
-              name: surveyResults.form[i].questions[j].text,
-              showlegend: k == 0,
-              legendgroup: surveyResults.form[i].questions[j].text,
-              hovertemplate: "  %{x} <br>  " + (surveyResults.form[i].questions[j].text) + "<extra></extra>"
-            }, dualAxis[k]);
-          }
-          nResults += 1;
-        }
-      }
-    }
+    const colors = colormap({colormap: 'jet', nshades: Math.max(series.length, 10), format: 'hex', alpha: 1});
+    series.forEach((score, index) => {
+      dualAxis.forEach((axis, axisIndex) => {
+        fig.scatter(score.x, score.y, {
+          color: colors[index], size: 5, visible: true, type: "scattergl",
+          name: score.name, showlegend: axisIndex === 0,
+          legendgroup: "survey:" + score.key,
+          hovertemplate: "  %{x}<br>" + score.name + ": %{y}<extra></extra>"
+        }, axis);
+      });
+    });
   }
 
   useEffect(() => {
@@ -137,14 +99,14 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
       subplotIds.push(`${availableChannels.active[i]}`);
       subplotIds.push(`${availableChannels.active[i]} Stimulation`);
       fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)}`, {fontSize: 15}, ax[i*2]);
-      fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)}`, {fontSize: 15}, ax[i*2+1]);
+      fig.setYlabel(showAdaptiveMode ? "Amplitude range (%)" : `${dictionaryLookup(dictionary.FigureStandardText, "Amplitude", language)}`, {fontSize: 15}, ax[i*2+1]);
       fig.setYlim(showAdaptiveMode ? [0, 100] : [0, 5], ax[i*2+1]);
       fig.setSubtitle(`${availableChannels.active[i]}`,ax[i*2]);
       fig.setSubtitle(`${availableChannels.active[i]} Stimulation`,ax[i*2+1]);
     }
     fig.setSubplotId(subplotIds);
     
-    fig.setLegend({ tracegroupgap: 5, xanchor: "left", y: 0.5, });
+    fig.setLegend({tracegroupgap: 5, orientation: "h", x: 0, xanchor: "left", y: -0.01, yanchor: "top", font: {size: 12}});
     fig.setLayoutProps({ hovermode: "x", hoverdistance: 1,
       xaxis: {
         type: "date",
@@ -177,7 +139,7 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
       fig.render();
     }
 
-  }, [fig, availableChannels]);
+  }, [fig, availableChannels, showAdaptiveMode]);
 
   const getMax = (list) => {
     let max = -Infinity;
@@ -189,31 +151,6 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
     return max;
   }
 
-  const getAdaptiveParameters = (therapyNote, channelName) => {
-    if (!therapyNote) return { "Mode": "Unknown" };
-    if (!therapyNote.Adaptive) return { "Mode": "Unknown" };
-
-    let Parameters = {"Mode": "Adaptive"};
-    if (therapyNote.Adaptive.RecordingConfiguration) {
-      const Recordings = therapyNote.Adaptive.RecordingConfiguration.Config;
-      if (Recordings.Thresholds) {
-        if (typeof Recordings.Thresholds.LFPThresholds[0] === "object") {
-          Recordings.Thresholds.LFPThresholds = Recordings.Thresholds.LFPThresholds[0].Value;
-        }
-        if (Recordings.Thresholds.LFPThresholds[0] !== 20 && Recordings.Thresholds.LFPThresholds[1] !== 30) {
-          Parameters["LFPThresholds"] = Recordings.Thresholds.LFPThresholds;
-          if (Parameters["LFPThresholds"][0] == Parameters["LFPThresholds"][1]) {
-            Parameters["LFPThresholds"] = [Parameters["LFPThresholds"][0]];
-          }
-        }
-      }
-      if (therapyNote.Adaptive.StimulationConfiguration.Type == "Medtronic Adaptive") {
-        Parameters["StimulationLimits"] = Recordings.Thresholds.AmplitudeThreshold;
-      }
-    }
-    return Parameters;
-  }
-
   useEffect(() => {
     if (!fig) return;
 
@@ -223,32 +160,16 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
       for (let j in data[i].ChannelNames) {
         const channelName = (data[i].ChannelNames[j].endsWith("Amplitude") ? data[i].ChannelNames[j].replace(" Amplitude", " Stimulation") : data[i].ChannelNames[j].replace(" LFP", ""));
         if (!data[i].Description[j].Bypass || channelName.endsWith("Stimulation")) {
-          const AdaptiveParameters = getAdaptiveParameters(data[i].TherapyNote[j], data[i]["ChannelNames"][j]);
+          const AdaptiveParameters = adaptiveParameters(data[i].TherapyNote[j]);
           if (channelName.endsWith("Stimulation")) {
-            if (AdaptiveParameters.StimulationLimits && showAdaptiveMode) {
-              if (AdaptiveParameters.StimulationLimits[1] !== 0) {
-                lineSeries.push({
-                  type: "lineseries",
-                  x: timeArray, y: data[i]["Data"][j].map((a) => 100 * (a - AdaptiveParameters.StimulationLimits[0]) / (AdaptiveParameters.StimulationLimits[1] - AdaptiveParameters.StimulationLimits[0]) ),
-                  options: {
-                    id: channelName,
-                    linewidth: 1,
-                    color: "#FF0000",
-                    hovertemplate: "  %{x} <br>  " + data[i].Description[j].Stimulation + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}% [" + AdaptiveParameters.StimulationLimits[0].toFixed(1) + " - " + AdaptiveParameters.StimulationLimits[1].toFixed(1) + "] <extra></extra>"
-                  }, 
-                  axName: channelName
-                });
-                continue
-              }
-            }
             lineSeries.push({
               type: "lineseries",
-              x: timeArray, y: showAdaptiveMode ? data[i]["Data"][j].map((a) => a > 0 ? 100: 0) : data[i]["Data"][j],
+              x: timeArray, y: showAdaptiveMode ? data[i]["Data"][j].map((a) => amplitudeRangePercent(a, AdaptiveParameters.StimulationLimits)) : data[i]["Data"][j],
               options: {
                 id: channelName,
                 linewidth: 1,
                 color: "#FF0000",
-                hovertemplate: showAdaptiveMode ? ("  %{x} <br>  " + data[i].Description[j].Stimulation + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f}% <extra></extra>") :
+                hovertemplate: showAdaptiveMode ? ("  %{x} <br>  " + data[i].Description[j].Stimulation + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  Amplitude range: %{y:.2f}% <extra></extra>") :
                 ("  %{x} <br>  " + data[i].Description[j].Stimulation + (channelName.endsWith("Stimulation") ? "" : ("<br>  Recording: " + data[i].RecordingString)) + "<br>  %{y:.2f} " + data[i].ChannelUnits[j] + " <extra></extra>")
               }, 
               axName: channelName
@@ -296,7 +217,8 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
             x: [new Date(annotations[i].Date*1000), new Date(annotations[i].Date*1000)], y: [0, 50000],
             options: {
               id: annotations[i].Id,
-              name: annotations[i].Name,
+              meta: {bravoPreserveLabel: true},
+            name: annotations[i].Name,
               linewidth: 2,
               color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
               hovertemplate: "  %{x} <br>  " + annotations[i].Name + " <extra></extra>"
@@ -312,7 +234,8 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
             yDot: [0],
             options: {
               id: annotations[i].Id,
-              name: annotations[i].Name,
+              meta: {bravoPreserveLabel: true},
+            name: annotations[i].Name,
               size: 10,
               color: annotationState[annotations[i].Name] ? annotationState[annotations[i].Name].color : "#00FF00",
               alpha: 0.3, 
@@ -323,8 +246,8 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
         }
       }
     }
-    setRenderData(lineSeries);
-  }, [fig, data, showAdaptiveMode, annotations]);
+    setRenderData(mergeAnnotationSeries(lineSeries));
+  }, [fig, data, showAdaptiveMode, annotations, availableChannels]);
 
   useEffect(() => {
     setAnnotationState((annotationState) => {
@@ -365,13 +288,15 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
   useEffect(() => {
     if (!fig || !renderData) return;
 
+    clearSurveyOverlayAxes(fig);
     fig.traces = [];
     let yLim = {};
     for (let i in renderData) {
       const ax = fig.getAxes(renderData[i].axName);
+      if (!ax) continue;
       if (renderData[i].type == "lineseries") {
         if (!yLim[renderData[i].axName]) yLim[renderData[i].axName] = [0,1];
-        if (getMax(renderData[i].y) > yLim[renderData[i].axName][1]) {
+        if (!(showAdaptiveMode && renderData[i].axName.endsWith("Stimulation")) && getMax(renderData[i].y) > yLim[renderData[i].axName][1]) {
           yLim[renderData[i].axName][1] = getMax(renderData[i].y)*1.1;
           fig.setYlim(yLim[renderData[i].axName], ax);
         };
@@ -398,7 +323,7 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
       return () => {
         ref.removeEventListener("contextmenu", fig.onClick);
         document.removeEventListener("PlotlyClick", plotly_onClick);
-        document.addEventListener("PlotlyRelayout", plotly_onZoom);
+        document.removeEventListener("PlotlyRelayout", plotly_onZoom);
       }
     };
   }, [fig, renderData, surveyResults]);
@@ -420,11 +345,18 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
     }
   }
 
-  const onResize = useCallback(() => {
+  const onResize = useCallback((width) => {
     if (!fig) return;
 
-    fig.refresh();
-  }, [fig]);
+    const compact = width < 600;
+    fig.setLayoutProps({margin: {l: compact ? 54 : 70, r: compact ? 52 : 80, t: 60, b: compact ? 80 + surveyOverlaySeries(surveyResults).length * 35 : 100}});
+    fig.setLegend({orientation: "h", x: 0, xanchor: "left", y: -0.01, yanchor: "top", font: {size: 12}});
+    fig.getAxes().forEach((axis) => {
+      fig.setAxisProps({nticks: compact ? 3 : 7, automargin: true, tickfont: {size: 11}}, "x", axis);
+      fig.setAxisProps({automargin: true, tickfont: {size: 11}, title: {font: {size: 12}, standoff: 8}}, "y", axis);
+    });
+    fig.render();
+  }, [fig, surveyResults]);
 
   const {ref} = useResizeDetector({
     onResize: onResize,
@@ -440,7 +372,7 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
 
   return (
     <Grid container spacing={2} sx={{marginTop: 0}}>
-      <Grid item xs={12} sx={{marginLeft: 5, marginRight: 5}}>
+      <Grid item xs={12} sx={{mx: {xs: 0, md: 3}, minWidth: 0}}>
         <Grid container spacing={2}>
           {Object.keys(annotationState).map((name) => {
             if (!name) return null
@@ -488,8 +420,9 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
           })}
         </Grid>
       </Grid>
-      <Grid item xs={12}>
-        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 400*availableChannels.active.length+100, width: "100%", display: availableChannels.active.length == 0 ? "none" : ""}}>
+      <Grid item xs={12} sx={{minWidth: 0}}>
+        <MDBox role="region" aria-label="Chronic neural activity chart" tabIndex={0} sx={{width: "100%", minWidth: 0}}>
+        <MDBox ref={ref} onContextMenu={onContextMenu} id={figureTitle} style={{marginBottom: 10, height: 400*availableChannels.active.length+100, width: "100%", minWidth: 0, display: availableChannels.active.length == 0 ? "none" : ""}}>
           <Menu
             open={contextMenu !== null}
             onClose={() => setContextMenu(null)}
@@ -511,7 +444,7 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
           </Menu>
 
           <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
-            <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+            <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
               <MDTypography variant="h5">
                 {"New Chronic Event Marking"} 
               </MDTypography>
@@ -582,6 +515,7 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
             </DialogActions>
           </Dialog>
           
+        </MDBox>
         </MDBox>
       </Grid>
     </Grid>

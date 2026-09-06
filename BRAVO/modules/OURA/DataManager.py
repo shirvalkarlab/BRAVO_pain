@@ -1,6 +1,7 @@
 import requests
 import os, sys
 import datetime
+import time
 import numpy as np
 
 from Server import models
@@ -16,23 +17,51 @@ class OuraRingAPI:
         self.attempts = 0
 
     def query(self, endpoint, params):
-        response = requests.get(f"{self.server}/{endpoint}",
-                                headers={"Authorization": f"Bearer {self.token}"},
-                                params=params)
-        if self.attempts > 3:
-            raise Exception("Too many failed attempts to query Oura API. Please check your token.")
-        
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 401:
-            print("Token expired or invalid. Attempting to refresh token...")
-            self.refreshToken(refresh_token=self.refresh_token)
-            self.attempts += 1
-            return self.query(endpoint, params)
-        
-        self.attempts = 0
-        print(response.status_code)
-        raise Exception(response.text)
+        base_params = dict(params)
+        page_params = dict(base_params)
+        combined = None
+        combined_data = []
+
+        while True:
+            response = None
+            for attempt in range(1, 5):
+                response = requests.get(
+                    f"{self.server}/{endpoint}",
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    params=page_params,
+                    timeout=60,
+                )
+                if response.status_code == 401 and self.refresh_token:
+                    if not self.refreshToken(refresh_token=self.refresh_token):
+                        break
+                    continue
+                if response.status_code in {429, 500, 502, 503, 504} and attempt < 4:
+                    retry_after = response.headers.get("Retry-After", "")
+                    delay = int(retry_after) if retry_after.isdigit() else 2 ** attempt
+                    time.sleep(delay)
+                    continue
+                break
+
+            if response is None or response.status_code != 200:
+                status = response.status_code if response is not None else "no response"
+                raise Exception(f"Oura API request failed with status {status}")
+
+            payload = response.json()
+            if combined is None:
+                combined = dict(payload)
+            data = payload.get("data")
+            if isinstance(data, list):
+                combined_data.extend(data)
+            elif isinstance(data, dict):
+                combined_data.append(data)
+
+            next_token = payload.get("next_token")
+            if not next_token:
+                if combined_data:
+                    combined["data"] = combined_data
+                return combined
+            page_params = dict(base_params)
+            page_params["next_token"] = next_token
     
     def refreshToken(self, auth_code="", refresh_token=""):
         token_url = "https://api.ouraring.com/oauth/token"
@@ -416,17 +445,13 @@ class OuraRingAPI:
             Recording["ChannelNames"] = ["Heart Rate", "Heart Rate Variability", "Sleep Phase", "Average Movement"]
             Recording["Data"] = np.zeros((len(item["heart_rate"]["items"]), 4))
             for i in range(len(item["heart_rate"]["items"])):
-                Recording["Data"][i, 0] = item["heart_rate"]["items"][i] if item["heart_rate"]["items"][i] else -1
-                Recording["Data"][i, 1] = item["hrv"]["items"][i] if item["hrv"]["items"][i] else -1
-                Recording["Data"][i, 2] = int(item["sleep_phase_5_min"][i]) if i < len(item["sleep_phase_5_min"])-1 else -1
+                Recording["Data"][i, 0] = item["heart_rate"]["items"][i] if item["heart_rate"]["items"][i] is not None else -1
+                hrv = item["hrv"]["items"]
+                Recording["Data"][i, 1] = hrv[i] if i < len(hrv) and hrv[i] is not None else -1
+                Recording["Data"][i, 2] = int(item["sleep_phase_5_min"][i]) if i < len(item["sleep_phase_5_min"]) else -1
                 Recording["Data"][i, 3] = np.mean(item["movement_30_sec"][i*10:i*10+10]) if i*10+10 < len(item["movement_30_sec"]) else np.mean(item["movement_30_sec"][i*10:])
 
-            Recording["Missing"] = np.zeros(Recording["Data"].shape)
-            for i in range(Recording["Data"].shape[0]):
-                if Recording["Data"][i, 0] < 0:
-                    Recording["Missing"][i, 0] = 1
-                if Recording["Data"][i, 1] < 0:
-                    Recording["Missing"][i, 1] = 1
+            Recording["Missing"] = ((Recording["Data"] < 0) | ~np.isfinite(Recording["Data"])).astype(float)
 
             Recording["StartTime"] = DateTimeObj.timestamp()
             Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
@@ -452,11 +477,15 @@ class OuraRingAPI:
         # Not getting this data from testing user. Currently not implemented
         return self.query("v2/usercollection/vO2_max", params)
 
-def loadOuraRingData(Participant):
+def loadOuraRingData(Participant, *, raw=False):
+    from modules.RCS08DataPolicy import applies_to
     Data = {}
     source = models.SourceFile.find(owner=Participant, type="OuraRingAPISource")
     if source:
         Data = Database.loadSourceFile(source.pointer, source.hashed)
+    if not raw and applies_to(Participant):
+        from modules.OURA.QualityControl import apply_quality_control
+        Data, _ = apply_quality_control(Data)
     return Data
 
 def saveOuraRingData(Participant, data):
@@ -483,7 +512,7 @@ def deleteOuraRingData(Participant):
 
 def refreshOuraRingData(device):
     Participant = device.owner
-    Data = loadOuraRingData(Participant)
+    Data = loadOuraRingData(Participant, raw=True)
 
     requester = OuraRingAPI(device.auth["token"], device.auth["refresh_token"])
     try:
@@ -514,3 +543,37 @@ def refreshOuraRingData(device):
         device.auth["refresh_token"] = requester.refresh_token
         device.save()
     saveOuraRingData(Participant, Data)
+
+
+def storedDataSummary(participant):
+    """Compact inventory of existing local data; never calls the Oura service."""
+    from modules.RCS08DataPolicy import applies_to
+    data = loadOuraRingData(participant, raw=True)
+    from modules.OURA.QualityControl import apply_quality_control, day_label, VERSION
+    audit = apply_quality_control(data)[1] if applies_to(participant) else []
+    summary = []
+    for name, records in data.items():
+        decisions = [row for row in audit if row['stream'] == name]
+        days = sorted(day_label(row) for row in records if day_label(row))
+        starts = [float(row["StartTime"]) for row in records if row.get("StartTime") is not None]
+        if name == 'HeartRate':
+            # Its DayLabel describes a fetch chunk, not actual observed coverage.
+            from modules.OURA.QualityControl import sample_times, PACIFIC
+            bounds = []
+            for row in records:
+                times = sample_times(row)
+                times = times[np.isfinite(times)]
+                if len(times):
+                    bounds.extend([float(times.min()), float(times.max())])
+            days = sorted(datetime.datetime.fromtimestamp(t, PACIFIC).date().isoformat() for t in bounds)
+            starts = bounds
+        summary.append({"name": name, "records": len(records),
+                        "first": min(starts) if starts else None,
+                        "last": max(starts) if starts else None,
+                        "first_day": days[0] if days else None, "last_day": days[-1] if days else None,
+                        "qc_version": VERSION if decisions else None,
+                        "summary_included": sum(row['summary_included'] for row in decisions),
+                        "summary_excluded": sum(row['summary_applicable'] and not row['summary_included'] for row in decisions),
+                        "samples_excluded": sum(row['window_excluded_samples'] + row['invalid_time_samples'] for row in decisions),
+                        "samples_included": sum(row['eligible_time_samples'] for row in decisions)})
+    return summary

@@ -11,8 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { currentTarget } from "utils/participantTargets";
 import React from "react"
-import { useHistory } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -267,7 +267,7 @@ function TherapeuticPredictionTable({data, getRecordingData, children}) {
                             {dictionaryLookup(dictionary.TherapeuticPrediction.Table, type, language)} 
                           </MDTypography>
                           <MDTypography variant={"h5"} fontSize={18}>
-                            {dictionaryLookup(dictionary.FigureStandardText, side, language)} {dictionaryLookup(dictionary.BrainRegions, target, language)}
+                            {currentTarget(side, dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language))}
                           </MDTypography>
                           
                           <MDTypography variant={"h6"} fontSize={20} color={"error"}>
@@ -333,7 +333,7 @@ function TherapeuticPredictionTable({data, getRecordingData, children}) {
                   const [side, target] = recording.Channels[i].Hemisphere.split(" ");
                   recordingDetails = <>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
-                      {dictionaryLookup(dictionary.FigureStandardText, side, language)} {dictionaryLookup(dictionary.BrainRegions, target, language)}
+                      {currentTarget(side, dictionaryLookup(dictionary.FigureStandardText, side, language) + " " + dictionaryLookup(dictionary.BrainRegions, target, language))}
                     </MDTypography>
                     <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
                       {formatSegmentString(recording.Channels[i].Contacts)}

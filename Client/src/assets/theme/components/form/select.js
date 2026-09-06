@@ -24,7 +24,11 @@ const { transparent } = colors;
 const select = {
   styleOverrides: {
     select: {
-      display: "grid",
+      display: "block",
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
+      height: "auto",
+      minHeight: "1.5em",
       alignItems: "center",
       padding: `0 ${pxToRem(12)} !important`,
 

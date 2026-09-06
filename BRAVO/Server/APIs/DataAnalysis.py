@@ -1,3 +1,4 @@
+from modules.ReportCache import cached_report
 """"""
 """
 =========================================================
@@ -584,6 +585,7 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -833,6 +835,7 @@ class QueryChronicTimeline(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -965,6 +968,7 @@ class QueryChronicNeuralActivity(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -1065,7 +1069,7 @@ class QueryCustomizedAnalysis(RestViews.APIView):
 
             try:
                 if request.data["StartProcessing"]:
-                    DataAnalysis.processCustomizedPipeline(analysis)
+                    DataAnalysis.processCustomizedPipeline(analysis, Database.retrieveProcessingSettings(request.user.configuration)[0])
                     analysis.metadata["results"] = True
                 else:
                     # Reset Results
@@ -1121,7 +1125,10 @@ class QueryCustomizedAnalysis(RestViews.APIView):
                 for node in group:
                     if "result" in node.keys():
                         if node["result"] == request.data["ResultId"]:
-                            result = DataAnalysis.extractAnalysisOutput(node)
+                            try:
+                                result = DataAnalysis.extractAnalysisOutput(node)
+                            except DataAnalysis.StaleAnalysisError as exc:
+                                return Response(status=409, data={"status": "stale", "message": str(exc)})
                             result = DataAnalysis.selectRecordingChannel(result, request.data["ActiveChannels"] if "ActiveChannels" in request.data.keys() else [])
             #Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
             result = json_compliant_handler(result)
@@ -1151,9 +1158,16 @@ class QueryAIModels(RestViews.APIView):
             models = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"])
             return Response(status=200, data=models)
 
+        elif request.data["RequestType"] == "RequestAvailability":
+            return Response(status=200, data=DataAnalysis.machineLearningAvailability())
         else:
-            result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
-            return Response(status=200, data=result)
+            try:
+                result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
+                return Response(status=200, data=result)
+            except DataAnalysis.ModelUnavailable as error:
+                return Response(status=503, data={"message": str(error)})
+            except (KeyError, ValueError) as error:
+                return Response(status=400, data={"message": str(error)})
 
         return Response(status=400, data={"message": "Malformed Input"})
     

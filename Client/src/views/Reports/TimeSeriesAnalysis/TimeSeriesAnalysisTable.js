@@ -11,8 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { currentTargetText } from "utils/participantTargets";
 import React, { useMemo } from "react"
-import { useHistory } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -288,7 +288,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                     <MDBox style={{display: "flex", flexDirection: "column"}}>
                       {analysis.Metadata.ChannelNames.filter((a,i) => i < 6).map((a) => (
                         <MDTypography key={a} variant="h6" fontSize={12} style={{marginBottom: 0}}>
-                          {a}
+                          {currentTargetText(a)}
                         </MDTypography>
                       ))} 
                       {analysis.Metadata.ChannelNames.length > 6 ? (
@@ -303,7 +303,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                     {analysis.Therapy ? analysis.Therapy.map((a, i) => (
                       <MDBox key={i} style={{display: "flex", flexDirection: "column", marginTop: i == 0 ? 0 : 10}}>
                       <MDTypography variant="subtitle" fontSize={12} style={{marginBottom: 0}}>
-                        {a.Contact}{" "}{a.SegmentMode}{": "}
+                        {currentTargetText(a.Contact)}{" "}{a.SegmentMode}{": "}
                       </MDTypography>
                       <MDTypography variant="h6" fontSize={15} style={{marginBottom: 0}}>
                         {a.Frequency.toFixed(1)}{" Hz "}{a.Pulsewidth.toFixed(1)}{" μSec"}
@@ -347,7 +347,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
               })}
             </TableBody>
           </Table>
-          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {minWidth: 600}}}>
+          <Dialog open={editRecordingName.show} onClose={() => setEditRecordingName({...editRecordingName, show: false})} PaperProps={{sx: {width: 600, minWidth: 0, maxWidth: "calc(100vw - 32px)"}}}>
             <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
               <MDTypography variant="h5">
                 {"Edit Recording Information"}

@@ -79,6 +79,6 @@ class AsyncJob(models.Model):
     
 @receiver(pre_delete, sender=AsyncJob)
 def on_asyncjob_delete(sender, instance, **kwargs):
-    get_or_none(os.remove)(os.path.join(SLURM_JOB_PATH, instance.uid + ".sh"))
-    get_or_none(os.remove)(os.path.join(SLURM_JOB_PATH, instance.uid + ".out"))
-    get_or_none(os.remove)(os.path.join(SLURM_JOB_PATH, instance.uid + ".err"))
+    directory = instance.metadata.get("job_directory", SLURM_JOB_PATH)
+    for suffix in (".sh", ".out", ".err", ".exit", ".exit.tmp"):
+        get_or_none(os.remove)(os.path.join(directory, instance.uid + suffix))

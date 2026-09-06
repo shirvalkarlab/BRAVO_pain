@@ -44,7 +44,7 @@ function Breadcrumbs({ icon, title, route, light }) {
   if (isUUID(route[route.length-1])) {
     participant_uid = route[route.length-1]
     return (
-      <MDBox mr={{ xs: 0, xl: 8 }}>
+      <MDBox sx={{ minWidth: 0, overflowWrap: "anywhere", mr: 2 }}>
         <MuiBreadcrumbs
           sx={{
             "& .MuiBreadcrumbs-separator": {
@@ -58,7 +58,7 @@ function Breadcrumbs({ icon, title, route, light }) {
               variant="body2"
               color={light ? "white" : "dark"}
               opacity={light ? 0.8 : 0.5}
-              sx={{ lineHeight: 0 }}
+              sx={{ lineHeight: 1.5 }}
             >
               <Icon>{icon}</Icon>
             </MDTypography>
@@ -72,7 +72,7 @@ function Breadcrumbs({ icon, title, route, light }) {
                 textTransform="capitalize"
                 color={light ? "white" : "dark"}
                 opacity={light ? 0.8 : 0.5}
-                sx={{ lineHeight: 0 }}
+                sx={{ lineHeight: 1.5 }}
               >
                 {dictionary.Breadcrumbs[el] ? dictionary.Breadcrumbs[el][language] : el}
               </MDTypography>
@@ -83,7 +83,7 @@ function Breadcrumbs({ icon, title, route, light }) {
             fontWeight="regular"
             textTransform="capitalize"
             color={light ? "white" : "dark"}
-            sx={{ lineHeight: 0 }}
+            sx={{ lineHeight: 1.5 }}
           >
             {dictionaryLookup(dictionary.Breadcrumbs, route[route.length-2], language)}
           </MDTypography>
@@ -93,7 +93,7 @@ function Breadcrumbs({ icon, title, route, light }) {
           textTransform="capitalize"
           variant="h6"
           color={light ? "white" : "dark"}
-          noWrap
+          sx={{ whiteSpace: "normal", lineHeight: 1.4 }}
         >
           {dictionaryLookup(dictionary.Breadcrumbs, route[route.length-2], language)}
         </MDTypography>
@@ -101,7 +101,7 @@ function Breadcrumbs({ icon, title, route, light }) {
     );
   } else {
     return (
-      <MDBox mr={{ xs: 0, xl: 8 }}>
+      <MDBox sx={{ minWidth: 0, overflowWrap: "anywhere", mr: 2 }}>
         <MuiBreadcrumbs
           sx={{
             "& .MuiBreadcrumbs-separator": {
@@ -115,7 +115,7 @@ function Breadcrumbs({ icon, title, route, light }) {
               variant="body2"
               color={light ? "white" : "dark"}
               opacity={light ? 0.8 : 0.5}
-              sx={{ lineHeight: 0 }}
+              sx={{ lineHeight: 1.5 }}
             >
               <Icon>{icon}</Icon>
             </MDTypography>
@@ -129,7 +129,7 @@ function Breadcrumbs({ icon, title, route, light }) {
                 textTransform="capitalize"
                 color={light ? "white" : "dark"}
                 opacity={light ? 0.8 : 0.5}
-                sx={{ lineHeight: 0 }}
+                sx={{ lineHeight: 1.5 }}
               >
                 {dictionary.Breadcrumbs[el] ? dictionary.Breadcrumbs[el][language] : el}
               </MDTypography>
@@ -140,7 +140,7 @@ function Breadcrumbs({ icon, title, route, light }) {
             fontWeight="regular"
             textTransform="capitalize"
             color={light ? "white" : "dark"}
-            sx={{ lineHeight: 0 }}
+            sx={{ lineHeight: 1.5 }}
           >
             {dictionaryLookup(dictionary.Breadcrumbs, title, language)}
           </MDTypography>
@@ -150,7 +150,7 @@ function Breadcrumbs({ icon, title, route, light }) {
           textTransform="capitalize"
           variant="h6"
           color={light ? "white" : "dark"}
-          noWrap
+          sx={{ whiteSpace: "normal", lineHeight: 1.4 }}
         >
           {dictionaryLookup(dictionary.Breadcrumbs, title, language)}
         </MDTypography>

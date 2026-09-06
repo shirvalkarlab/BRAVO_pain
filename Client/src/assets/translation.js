@@ -118,8 +118,8 @@ export const dictionary = {
       zh: "账号登陆"
     },
     Email: {
-      en: "Email",
-      zh: "邮箱"
+      en: "Username",
+      zh: "用户名"
     },
     Password: {
       en: "Password",
@@ -791,6 +791,7 @@ export const dictionary = {
     },
   },
   Breadcrumbs: {
+    "redcap-pretrial": {en: "Aditya - All Data Streams", zh: "Aditya - All Data Streams"},
     dashboard: {
       en: "Dashboard",
       zh: "主平台"

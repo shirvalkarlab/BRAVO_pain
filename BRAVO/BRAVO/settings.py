@@ -27,6 +27,8 @@ if os.path.exists(os.path.join(BASE_DIR, '.env')):
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise RuntimeError("DJANGO_SECRET_KEY must be set")
 
 # Hard-drive Database Initiation
 DATASERVER_PATH = os.environ.get('DATASERVER_PATH')
@@ -42,15 +44,36 @@ os.makedirs(DATASERVER_PATH + "visualization", exist_ok=True)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = not (os.environ.get('DJANGO_MODE') == "PRODUCTION")
+ALLOW_SELF_REGISTRATION = os.environ.get("ALLOW_SELF_REGISTRATION", "false").lower() in {
+    "1", "true", "yes"
+}
 
-CSRF_TRUSTED_ORIGINS = ["http://localhost:27286", os.environ.get('SERVER_ADDRESS')]
+
+def environment_list(name):
+    return [value.strip() for value in os.environ.get(name, "").split(",") if value.strip()]
+
+
+SERVER_HOSTS = environment_list("SERVER_HOST")
+SERVER_ORIGINS = environment_list("SERVER_ADDRESS")
+CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://127.0.0.1"] + SERVER_ORIGINS
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
-#SESSION_COOKIE_HTTPONLY = True
-#SESSION_COOKIE_SECURE = True
-#CSRF_COOKIIE_HTTPONLY = True
+SESSION_COOKIE_HTTPONLY = True
+# Browsers treat loopback as trustworthy; shared-host cookies always require HTTPS.
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_AGE = 3600*1  # 1 hour
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", os.environ.get('SERVER_HOST')]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"] + SERVER_HOSTS
+# Only the loopback-bound nginx proxy can reach this ASGI server.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = True
+SECURE_HSTS_SECONDS = 86400
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
+
+if not DEBUG:
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "same-origin"
 
 # Application definition
 
@@ -68,12 +91,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
-    'django.middleware.security.SecurityMiddleware',
+    'Server.Middlewares.LoopbackSecurity.LoopbackSecurityMiddleware',
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    'Server.Middlewares.TransportCookies.TransportCookiesMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'Server.Middlewares.ReadOnlyAccount.ReadOnlyAccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     "Server.Middlewares.ErrorHandler.ErrorHandlingMiddleware",
@@ -113,7 +138,7 @@ TEMPLATES = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'Server.authentication.BRAVOAPIAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
+        'Server.authentication.ReadOnlyBasicAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ]
 }
@@ -191,7 +216,7 @@ LOGGING = {
     },
     "loggers": {
         "": {
-            "level": "DEBUG",
+            "level": "DEBUG" if DEBUG else "INFO",
             "handlers": ["file"],
         },
     },
@@ -239,4 +264,3 @@ for name, config in settings.DATABASES.items():
             self.connect()
 
     module.DatabaseWrapper.ensure_connection = ensure_connection
-    

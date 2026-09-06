@@ -38,7 +38,8 @@ function DashboardLayout({ children }) {
   return (
     <MDBox
       sx={({ breakpoints, transitions, functions: { pxToRem } }) => ({
-        p: 3,
+        p: { xs: 2, sm: 3 },
+        minWidth: 0,
         position: "relative",
         minHeight: "calc(100vh - 80px)",
 

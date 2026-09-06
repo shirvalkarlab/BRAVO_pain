@@ -15,8 +15,7 @@ import React from "react";
 
 import { useThree } from '@react-three/fiber'
 
-import { ArcballControls } from "three/examples/jsm/controls/ArcballControls"
-import { TrackballControls, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 
 /**
  * Wrapping Camera Controller from React-three/drei library. The default 

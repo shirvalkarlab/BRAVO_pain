@@ -12,7 +12,6 @@
 */
 
 import React, { useMemo } from "react"
-import { useHistory } from "react-router-dom";
 
 import {
   Autocomplete,
@@ -91,7 +90,7 @@ function MedtronicSourceFileTable({data, deleteData, downloadData, children}) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {data.sort((a,b) => a.Date - b.Date).map((source) => {
+          {[...data].sort((a,b) => a.DateOfRecording - b.DateOfRecording).map((source) => {
             return <TableRow key={source.Id}>
               <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                 <MDTypography variant="h5" fontSize={15} style={{marginBottom: 0}}>
@@ -103,8 +102,11 @@ function MedtronicSourceFileTable({data, deleteData, downloadData, children}) {
                   })}
                 </MDTypography>
                 <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
-                  {source.Device.GenericName}
+                  {source.Device?.GenericName || "Original imported report"}
                 </MDTypography>
+                {source.AnalysisExclusion && <MDTypography variant="body2" fontSize={12} color="warning">
+                  {"Excluded from analysis: " + source.AnalysisExclusion}
+                </MDTypography>}
               </TableCell>
               <TableCell style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                 <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>

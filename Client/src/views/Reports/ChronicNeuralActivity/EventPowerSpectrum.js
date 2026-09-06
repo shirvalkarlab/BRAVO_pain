@@ -86,6 +86,7 @@ function EventPowerSpectrum({dataToRender, activeChannel, figureTitle}) {
         type: "line", x: events[key].Frequency, y: math.mean(events[key].Power,0)._data, error_y: math.std(events[key].Power,0)._data,
         line_options: {
           linewidth: 2,
+          meta: {bravoPreserveLabel: true},
           name: key + " (n=" + events[key].Power._size[0].toFixed(0) + ")",
           legendgroup: key,
           color: colors[count],

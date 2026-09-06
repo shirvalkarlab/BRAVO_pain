@@ -29,12 +29,10 @@ import {
   Slider
 } from "@mui/material"
 
-import { 
-  ChevronRight as ChevronRightIcon,
-  Settings as SettingsIcon,
-  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
-  Dashboard as DashboardIcon
-} from "@mui/icons-material";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import SettingsIcon from "@mui/icons-material/Settings";
+import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
+import DashboardIcon from "@mui/icons-material/Dashboard";
 
 // core components
 import MDBox from "components/MDBox";

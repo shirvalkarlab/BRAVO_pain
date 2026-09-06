@@ -51,10 +51,11 @@ def queryAnnotations(participant_uid, type=None, start_time=0, duration=0):
         QueryDict["date__lte"] = start_time+duration
     return [i.get_info() for i in models.Annotation.find_all(**QueryDict)]
 
-def queryDBSEvents(participant_uid, type=None, source_files=[], start_time=0, duration=0, data=False):
-    if len(source_files) == 0:
+def queryDBSEvents(participant_uid, type=None, source_files=None, start_time=0, duration=0, data=False):
+    if source_files is None:
+        from modules.AnalysisData import eligible_source_files
         Participant = models.Participant.find(uid=participant_uid)
-        SourceFiles = models.SourceFile.find_all(owner=Participant)
+        SourceFiles = eligible_source_files(Participant)
     else:
         SourceFiles = source_files
 
@@ -65,7 +66,11 @@ def queryDBSEvents(participant_uid, type=None, source_files=[], start_time=0, du
         QueryDict["date__gte"] = start_time
         QueryDict["date__lte"] = start_time+duration
     
-    return [i.get_info(data=data) for i in models.DBSEvent.find_all(**QueryDict)]
+    events = models.DBSEvent.find_all(**QueryDict)
+    if data:
+        from django.db.models import Prefetch
+        events = events.prefetch_related(Prefetch("data", queryset=models.Recording.objects.select_related("source")))
+    return [i.get_info(data=data) for i in events]
         
 def addAnnotation(participant_uid, type, name, date, duration=0):
     if not type in ["RecordingCustomEvent", "ChronicCustomEvent"]:

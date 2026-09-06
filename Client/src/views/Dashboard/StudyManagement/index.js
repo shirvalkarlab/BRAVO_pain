@@ -191,7 +191,7 @@ export default function StudyManagement() {
                   </MDButton>
                 </MDBox>
               </Grid>
-              <Grid item sm={12}>
+              <Grid item xs={12}>
                 <Autocomplete 
                   disableClearable
                   options={[{value: "create", label: "Create New Study"},
@@ -235,7 +235,7 @@ export default function StudyManagement() {
                 />
               </Grid>
               {activeStudy.value == "create" ? (
-                <Grid item sm={12}>
+                <Grid item xs={12}>
                   <Divider variant="insert" />
                   <MDTypography variant="h5">
                     {"Create New Study"}
@@ -258,9 +258,9 @@ export default function StudyManagement() {
                   </Grid>
                 </Grid>
               ) : (
-                <Grid item sm={12}>
+                <Grid item xs={12}>
                   <Grid container spacing={2}>
-                    <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+                    <Grid item xs={12} md={12} style={{display: "flex", flexDirection: "row"}}>
                       <TextField
                         variant="standard"
                         value={activeStudy.InviteCode}
@@ -290,12 +290,12 @@ export default function StudyManagement() {
                       }} style={{marginLeft: 15}}>{"Refresh Invite Code"}</MDButton>
                     </Grid>
 
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       <MDTypography variant="h5">
                         {"Current Study Members"}
                       </MDTypography>
                     </Grid>
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       {activeStudy.Members.map((a, i) => {
                         return <MDBox key={a.Email} display={"flex"} flexDirection={"row"}>
                           <IconButton size="small" aria-label="close" color="inherit" onClick={() => {
@@ -303,7 +303,7 @@ export default function StudyManagement() {
                           }}>
                             <FaCircleInfo />
                           </IconButton>
-                          <MDTypography variant="h5">
+                          <MDTypography variant="h5" sx={{minWidth: 0, overflowWrap: "anywhere"}}>
                             {a.Name}{" ("}{a.Email}{")"}
                           </MDTypography>
                           <IconButton size="small" aria-label="close" color="error" onClick={() => {
@@ -333,15 +333,15 @@ export default function StudyManagement() {
                         </MDBox>
                       })}
                     </Grid>
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       <Divider variant="middle" />
                     </Grid>
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       <MDTypography variant="h5">
                         {"Current Study Participant"}
                       </MDTypography>
                     </Grid>
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       <Autocomplete 
                         disableClearable
                         options={availableParticipants.map((participant) => ({...participant, value: participant.Id, label: participant.Name})).sort((a,b) => a.label.localeCompare(b.label))} 
@@ -386,7 +386,7 @@ export default function StudyManagement() {
                         )}
                       />
                     </Grid>
-                    <Grid item sm={12}>
+                    <Grid item xs={12}>
                       {activeStudy.Participants.map((a, i) => {
                         return <MDBox key={a.Id} display={"flex"} flexDirection={"row"}>
                           <IconButton size="small" aria-label="close" color="inherit" onClick={() => {
@@ -397,7 +397,7 @@ export default function StudyManagement() {
                           }}>
                             <FaCircleInfo />
                           </IconButton>
-                          <MDTypography variant="h5">
+                          <MDTypography variant="h5" sx={{minWidth: 0, overflowWrap: "anywhere"}}>
                             {a.Name}
                           </MDTypography>
                           <IconButton size="small" aria-label="close" color="error" onClick={() => {
@@ -441,8 +441,8 @@ export default function StudyManagement() {
               </Grid>
               {routes["StudyGroupAnalysis"].children.map((subreport) => {
                 if (subreport.hide) return;
-                return <Grid key={subreport.route} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
-                  <Card sx={{width: "100%"}}>
+                return <Grid key={subreport.route} item xs={12} sm={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                  <Card sx={{width: "100%", minWidth: 0, display: "flex", flexDirection: "column"}}>
                     <MDBox p={2} mx={3} display="flex" justifyContent="center">
                       <MDBox
                         display="grid" justifyContent="center" alignItems="center"
@@ -454,12 +454,12 @@ export default function StudyManagement() {
                         </Icon>
                       </MDBox>
                     </MDBox>
-                    <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
+                    <MDBox pb={2} px={2} textAlign="center" lineHeight={1.25}>
                       <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" mb={2}>
                         {subreport.name}
                       </MDTypography>
                     </MDBox>
-                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
+                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{mt: "auto", width: "100%"}}>
                       <MDButton variant={"contained"} color={"info"} fullWidth onClick={() => {
                         navigate(subreport.route.replace(":study_uid", activeStudy.value), {replace: false});
                       }}>
@@ -475,7 +475,7 @@ export default function StudyManagement() {
       </MDBox>
       
       <Dialog open={participantInformation.show} onClose={() => setParticipantInformation({...participantInformation, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1200 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 1200, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingSelect participant={participantInformation.Participant} onSelectRecording={(recordings) => {
           setAlert(<LoadingProgress />)
@@ -509,7 +509,7 @@ export default function StudyManagement() {
       </Dialog>
 
       <Dialog open={addStudyInterface} onClose={() => setAddStudyInterface(false)} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 600 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 600, maxWidth: "calc(100vw - 32px)"} }}
       >
         <AddStudy onAddStudy={(code) => {
           SessionController.query("/api/manageStudyInformation", {

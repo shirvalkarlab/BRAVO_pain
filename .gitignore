@@ -218,6 +218,8 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+.env.appliance
+secrets/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -324,3 +326,22 @@ handoff.md
 update.html
 bravo_filter_results.csv
 BRAVOStorage/
+backups/
+
+# Local participant QC artifacts (keep source, rules and builders versionable)
+/reports/
+/outputs/
+/tmp/oura-qc/
+/outputs/01a065ca-efeb-7041-a5ca-edd51e369b54/
+/reports/oura-qc-2026-09-03/audit.json
+/reports/oura-qc-2026-09-03/excluded_sample_times.csv
+/reports/oura-qc-2026-09-03/preview-*.png
+/reports/oura-qc-2026-09-03/node_modules
+
+# Private local CSV snapshots; never stage patient exports.
+/output/rcs08-export-initialize/
+/output/rcs08-exports/
+
+# Participant-specific runtime assets are transferred privately, never published.
+/BRAVO/config/*.csv
+/BRAVO/modules/Biomarkers/data/psd_lsb_models/*.json

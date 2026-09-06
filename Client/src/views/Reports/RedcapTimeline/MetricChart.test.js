@@ -1,0 +1,95 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {act} from 'react-dom/test-utils';
+import Plotly from 'plotly.js-dist';
+import MetricChart from './MetricChart';
+jest.mock('plotly.js-dist',()=>({react:jest.fn(),purge:jest.fn()}));
+let root,element;
+beforeEach(()=>{global.IS_REACT_ACT_ENVIRONMENT=true;Plotly.react.mockReset();Plotly.purge.mockClear();element=document.createElement('div');root=createRoot(element);});
+afterEach(()=>act(()=>root.unmount()));
+test('renders real observations and notebook median with readable axes, keeps zoom when toggled, and purges only at unmount',()=>{
+  const metric={key:'nrs_intensity',label:'Overall NRS',range:[0,10],points:[{time:1735758000,value:0,phase:'pre',source:'Reviewed',record:'one'},{time:1736017200,value:8,phase:'pre',source:'Reviewed',record:'two'}]};
+  const phases=[{key:'pre',label:'Pre-trial',color:'#111111',start:1735758000}];
+  const range={start:'2025-01-01',end:'2026-09-03'};
+  act(()=>root.render(<MetricChart metric={metric} phases={phases} range={range} smooth={true}/>));
+  const node=element.querySelector('[role="img"]');
+  expect(node.getAttribute('aria-label')).toBe('Overall NRS interactive timeline');
+  const first=Plotly.react.mock.calls[0];
+  expect(first[0]).toBe(node);
+  expect(first[1][0]).toMatchObject({mode:'markers',y:[0,8]});
+  expect(first[1][1]).toMatchObject({mode:'lines',y:[4,4],connectgaps:true});
+  expect(first[2]).toMatchObject({height:420,font:{size:16},hoverlabel:{font:{size:16}},showlegend:true,xaxis:{type:'date',range:['2025-01-01 00:00:00','2026-09-03 23:59:59']},yaxis:{title:{text:'Score (0–10)'}}});
+  expect(first[3]).toMatchObject({responsive:true,displaylogo:false,scrollZoom:false});
+  act(()=>root.render(<MetricChart metric={metric} phases={phases} range={range} smooth={false}/>));
+  expect(Plotly.react.mock.calls[1][1]).toHaveLength(1);expect(Plotly.react.mock.calls[1][2].showlegend).toBe(false);
+  expect(Plotly.react.mock.calls[1][2].uirevision).toBe(first[2].uirevision);
+  const revised={start:'2025-01-03',end:'2025-01-05'};
+  act(()=>root.render(<MetricChart metric={metric} phases={phases} range={revised} smooth={false}/>));
+  expect(Plotly.react.mock.calls[2][1][0].y).toEqual([8]);
+  expect(Plotly.react.mock.calls[2][2].uirevision).not.toBe(first[2].uirevision);
+  expect(Plotly.purge).not.toHaveBeenCalled();act(()=>root.unmount());
+  expect(Plotly.purge).toHaveBeenCalledTimes(1);expect(Plotly.purge).toHaveBeenCalledWith(node);root=createRoot(element);
+});
+
+test('transition annotations are selectable, red lines coexist with phases and listeners are replaced safely',()=>{
+  const handlers={};const on=jest.fn((name,handler)=>{handlers[name]=handler;});const removeListener=jest.fn();
+  Plotly.react.mockImplementation(node=>{node.on=on;node.removeListener=removeListener;});
+  const metric={key:'nrs',label:'NRS',range:[0,10],points:[]};
+  const range={start:'2025-01-01',end:'2025-12-31'};
+  const transitions=[{id:'snapshot',number:1,time:1735758000,label:'Group B',evidence:'Observed snapshot'}];
+  const visits=[{time:1735758000,value:7,source:'Visit',record:'one'}];
+  const callback=jest.fn();
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={false} visits={visits} transitions={transitions} onTransition={callback}/>));
+  const first=Plotly.react.mock.calls[0];
+  expect(first[1]).toHaveLength(2);expect(first[1][1].marker.symbol).toBe('x');
+  expect(first[2]).toMatchObject({height:505,margin:{t:100},showlegend:true});
+  expect(first[2].annotations[0].name).toBe('snapshot');expect(first[2].shapes[0].line).toMatchObject({color:'#C62828',dash:'dash'});
+  const previous=handlers.plotly_clickannotation;previous({annotation:{name:'snapshot'}});expect(callback).toHaveBeenCalledWith('snapshot');
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={false} transitions={transitions}/>));
+  expect(removeListener).toHaveBeenCalledWith('plotly_clickannotation',previous);
+  expect(()=>handlers.plotly_clickannotation({annotation:{name:'snapshot'}})).not.toThrow();
+  act(()=>root.unmount());expect(removeListener).toHaveBeenCalledTimes(2);root=createRoot(element);
+});
+
+test('28-day ticks and home tooltips remain stable when visible context and visit markers are hidden',()=>{
+  const metric={key:'nrs',label:'NRS',range:[0,10],points:[{time:Date.parse('2026-08-10T19:00:00Z')/1000,value:2}]};
+  const visits=[{time:Date.parse('2026-08-11T19:00:00Z')/1000,value:8}];
+  const homeTransitions=[{time:Date.parse('2025-07-16T19:00:00Z')/1000,settings:{group:[{label:'Group',value:'Group A'}]}}];
+  const range={start:'2026-08-07',end:'2026-09-03'};
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={true} visits={visits} homeTransitions={homeTransitions}/>));
+  const first=Plotly.react.mock.calls[0];expect(first[2].xaxis.ticktext).toHaveLength(28);expect(first[2].xaxis.ticktext[0]).toBe('8/7');expect(first[2].xaxis.ticktext[27]).toBe('9/3');
+  expect(first[1][1].y).toEqual([5,5]);expect(first[1][0].customdata[0]).toContain('Group: Group A');
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={true} visits={visits} homeTransitions={homeTransitions} showVisits={false}/>));
+  const hidden=Plotly.react.mock.calls[1];expect(hidden[1]).toHaveLength(2);expect(hidden[1][1]).toEqual(first[1][1]);
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={false} visits={visits} homeTransitions={homeTransitions} showVisits={false}/>));
+  expect(Plotly.react.mock.calls[2][2].showlegend).toBe(false);
+  act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={true} visits={visits} homeTransitions={homeTransitions} showVisits={false}
+    unknownIntervals={[{start:metric.points[0].time,end:null,reason:'No confirming home snapshot'}]}/>));
+  expect(Plotly.react.mock.calls[3][1][0].customdata[0]).toContain('Home settings not established for this interval');
+  expect(Plotly.react.mock.calls[3][1][0].customdata[0]).not.toContain('Group: Group A');
+  expect(Plotly.react.mock.calls[3][1][1].y).toEqual([5,5]);
+});
+
+test('390px charts thin only calendar labels, retain endpoints and all observations, and restore daily ticks on desktop',()=>{
+  const originals={resize:global.ResizeObserver,request:global.requestAnimationFrame,cancel:global.cancelAnimationFrame};
+  let notify,frame,width=390;
+  const geometry=jest.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(()=>({width}));
+  const observer={observe:jest.fn(),disconnect:jest.fn()};
+  global.ResizeObserver=jest.fn(callback=>{notify=callback;return observer;});
+  global.requestAnimationFrame=jest.fn(callback=>{frame=callback;return 5;});global.cancelAnimationFrame=jest.fn();Plotly.Plots={resize:jest.fn()};
+  const metric={key:'nrs',label:'NRS',range:[0,10],points:Array.from({length:28},(_,i)=>({time:Date.parse('2026-08-07T19:00:00Z')/1000+i*86400,value:i%11}))};
+  const props={metric,phases:[],range:{start:'2026-08-07',end:'2026-09-03'},smooth:false};
+  act(()=>root.render(<MetricChart {...props}/>));
+  const mobile=Plotly.react.mock.calls.at(-1),node=element.querySelector('[role="img"]');
+  expect(mobile[1][0].y).toHaveLength(28);expect(mobile[2].xaxis.ticktext.length).toBeLessThanOrEqual(7);
+  expect(mobile[2].xaxis.ticktext[0]).toBe('8/7');expect(mobile[2].xaxis.ticktext.at(-1)).toBe('9/3');
+  expect(mobile[2].margin.l).toBe(50);expect(node.style.minWidth).toBe('0');expect(node.parentElement.style.overflowX).not.toBe('auto');
+  width=1500;act(()=>{notify();frame();});
+  const desktop=Plotly.react.mock.calls.at(-1);expect(desktop[2].xaxis.ticktext).toHaveLength(28);expect(desktop[1]).toEqual(mobile[1]);
+  expect(Plotly.Plots.resize).not.toHaveBeenCalled();node._fullLayout={};
+  width=390;act(()=>{notify();notify();frame();});expect(Plotly.Plots.resize).toHaveBeenCalledWith(node);
+  act(()=>root.render(<MetricChart {...props} range={{start:'2025-01-01',end:'2026-09-03'}}/>));
+  expect(Plotly.react.mock.calls.at(-1)[2].xaxis).toMatchObject({nticks:4});expect(Plotly.react.mock.calls.at(-1)[2].xaxis.tickvals).toBeUndefined();
+  act(()=>root.unmount());expect(observer.disconnect).toHaveBeenCalledTimes(1);root=createRoot(element);
+  geometry.mockRestore();Object.assign(global,{ResizeObserver:originals.resize,requestAnimationFrame:originals.request,cancelAnimationFrame:originals.cancel});
+});

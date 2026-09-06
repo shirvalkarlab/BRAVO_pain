@@ -61,6 +61,7 @@ const outlined = {
   },
 
   primary: {
+    color: info.main,
     backgroundColor: transparent.main,
     borderColor: info.main,
 
@@ -70,6 +71,7 @@ const outlined = {
   },
 
   secondary: {
+    color: secondary.main,
     backgroundColor: transparent.main,
     borderColor: secondary.main,
 

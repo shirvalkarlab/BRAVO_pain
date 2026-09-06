@@ -150,23 +150,25 @@ function ParticipantSurveyRecords() {
 
   useEffect(() => {
     if (!availableForms.active.Id) return;
-
+    let cancelled = false;
+    setData(false);
     SessionController.query("/api/queryParticipantSurveyRecords", {
       RequestType: "RequestRecords",
       ParticipantId: participant_uid,
       FormId: availableForms.active.Id
     }).then((response) => {
-      setData(response.data);
+      if (!cancelled) setData(response.data);
     }).catch((error) => {
-      SessionController.displayError(error, setAlert);
+      if (!cancelled) SessionController.displayError(error, setAlert);
     });
-  }, [availableForms.active])
+    return () => { cancelled = true; };
+  }, [availableForms.active, participant_uid])
 
   return (
     <DatabaseLayout>
     {alert}
       <MDBox pt={3}>
-        <MDBox display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
+        <MDBox display="flex" flexDirection={{xs: "column", sm: "row"}} justifyContent="space-between" gap={2}>
           <Autocomplete
             value={availableForms.active}
             options={availableForms.options}
@@ -189,7 +191,7 @@ function ParticipantSurveyRecords() {
             renderInput={(params) => (
               <FormField
                 {...params}
-                label={"Choose Available Form for View"}
+                label="Survey form"
                 InputLabelProps={{ shrink: true }}
               />
             )}
@@ -204,7 +206,7 @@ function ParticipantSurveyRecords() {
         </MDBox>
 
         <Dialog open={newLinkDialog.show} onClose={() => setNewLinkDialog({...newLinkDialog, show: false})}>
-          <MDBox px={2} pt={2} style={{minWidth: 500}}>
+          <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
             <MDTypography variant="h5">
               {"Add New Link"} 
             </MDTypography>
@@ -290,7 +292,7 @@ function ParticipantSurveyRecords() {
                           {"Remove Link"} 
                         </MDButton>
                       ) : null}
-                      {availableForms.active.LinkCode ? (
+                      {availableForms.active.LinkCode && availableForms.active.Type !== "REDCap API Sync" ? (
                         <MDButton variant="contained" color="success" style={{minWidth: 200}} onClick={() => setNewRecordDialog((newRecordDialog) => {
                           return {...newRecordDialog, show: true}
                         })}>
@@ -299,6 +301,15 @@ function ParticipantSurveyRecords() {
                       ) : null}
                     </MDBox>
                   </Grid>
+                  {availableForms.active.Record?.[0]?.processing && <Grid item xs={12}>
+                    <MDBox px={2} pb={2}>
+                      <MDTypography variant="body2" role="status">
+                        {availableForms.active.Record[0].processing.pipeline === "percept_analysis daily survey rules"
+                          ? `${availableForms.active.Record[0].processing.included} surveys included; ${availableForms.active.Record[0].processing.excluded} excluded by the reviewed Percept rules. Timestamp corrections, reviewed survey exclusions and stimulation-testing dates are applied. Original responses and exclusion reasons are retained.`
+                          : "Imported from the existing Percept historical table. Instruments keep their own completion status and timestamps; stored scores retain their original units."}
+                      </MDTypography>
+                    </MDBox>
+                  </Grid>}
                   {data.length > 0 ? (
                     <Grid item xs={12}>
                       <RecordScoreTimeline dataToRender={data} form={availableForms.active.Record} figureTitle={"RecordScoreTimeline"}/>
@@ -319,7 +330,7 @@ function ParticipantSurveyRecords() {
         </MDBox>
 
         <Dialog open={newRecordDialog.show} onClose={() => setNewRecordDialog({...newRecordDialog, show: false})}>
-          <MDBox px={2} pt={2} style={{minWidth: 500}}>
+          <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
             <MDTypography variant="h5">
               {"Add New Record"} 
             </MDTypography>

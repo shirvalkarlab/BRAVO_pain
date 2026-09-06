@@ -46,7 +46,7 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary } from "assets/translation";
-import { AccessAlarm } from "@mui/icons-material";
+import AccessAlarm from "@mui/icons-material/AccessAlarm";
 import DeidentificationTable from "components/Tables/DeidentificationTable";
 import LoadingProgress from "components/LoadingProgress";
 
@@ -85,18 +85,18 @@ export default function Profile() {
           <Card>
           <MDBox p={2}>
             <Grid container spacing={2}>
-              <Grid item sm={12} md={12}>
+              <Grid item xs={12}>
                 <MDTypography variant="h3">
                   {"Profile for "}{user.Name}
                 </MDTypography>
               </Grid>
-              <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+              <Grid item xs={12} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, gap: 2, minWidth: 0}}>
                 <Autocomplete selectOnFocus clearOnBlur fullWidth
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       variant="standard"
-                      label={"Select Active Institute for Data Viewing"}
+                      label="Active institute"
                       placeholder={"Select Active Institute for Data Viewing"}
                     />
                   )}
@@ -130,13 +130,13 @@ export default function Profile() {
                   }}
                 />
               </Grid>
-              <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+              <Grid item xs={12} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, gap: 2, minWidth: 0}}>
                 <Autocomplete selectOnFocus clearOnBlur fullWidth
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       variant="standard"
-                      label={"Select Active Study for Data Viewing"}
+                      label="Active study"
                       placeholder={"Select Active Study for Data Viewing"}
                     />
                   )}
@@ -181,11 +181,11 @@ export default function Profile() {
                   }}
                 />
               </Grid>
-              <Grid item sm={12} md={12} style={{display: "flex", flexDirection: "row"}}>
+              <Grid item xs={12} sx={{display: "flex", flexDirection: {xs: "column", sm: "row"}, gap: 2, minWidth: 0}}>
                 <TextField
                   variant="standard"
                   value={profile.APIKey}
-                  label={"Rest API Secure Key (Individually Linked. DO NOT SHARE)"} type="text"
+                  label="REST API key" helperText="Individually linked. Do not share." type="text"
                   fullWidth disabled
                 />
                 <MDButton color={"info"} onClick={() => {
@@ -197,7 +197,7 @@ export default function Profile() {
                   }).catch((error) => {
                     SessionController.displayError(error, setAlert);
                   });
-                }} style={{marginLeft: 15}}>{"Refresh API Token"}</MDButton>
+                }} sx={{flexShrink: 0}}>{"Refresh API Token"}</MDButton>
               </Grid>
             </Grid>
           </MDBox>

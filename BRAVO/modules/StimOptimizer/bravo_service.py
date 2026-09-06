@@ -1,0 +1,476 @@
+"""Service layer: the single entry point the BRAVO API calls for StimOptimizer.
+
+Mirrors the shape of ``modules/Biomarkers/bravo_service.run_for_participant`` — takes the request
+dict, pulls what it needs from the platform database, runs the module, and returns a JSON-able dict.
+No Django imports at module scope beyond the models the adapter needs, no template rendering, and no
+kaleido: figures are returned as Plotly figure JSON for the browser to draw, never rendered to PNG
+server-side.
+
+HONESTY CONTRACT
+----------------
+This module's whole point is that it must be able to say "the data do not support a
+recommendation". ``run_for_participant`` therefore always returns:
+
+* ``recommendation_supported`` — False unless at least one arm resolves its optimum against its own
+  posterior uncertainty. As of 2026-08-30 no RCS08 arm does.
+* ``arms[].optimum_resolved`` — per-arm version of the same test.
+* ``blockers`` — the reasons a recommendation is withheld, in plain language, so the UI shows them
+  next to the figures instead of the reader having to infer it from a chart.
+
+A caller that ignores those fields and reads ``opt_freq_hz``/``opt_amp_mA`` as a recommendation is
+misusing the module.
+"""
+from __future__ import annotations
+
+import logging
+
+import numpy as np
+import pandas as pd
+
+from . import adapter
+from . import pipeline
+from .routines import plots as PLT
+
+_log = logging.getLogger(__name__)
+
+DEFAULT_SITES = ("left_leg", "back")
+DEFAULT_HEMISPHERES = ("Left", "Right")
+
+
+def _jsonable(v):
+    """numpy/pandas -> plain Python, so DRF's stdlib encoder can serialize without default=str."""
+    if v is None:
+        return None
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        f = float(v)
+        return None if not np.isfinite(f) else f
+    if isinstance(v, float):
+        return None if not np.isfinite(v) else v
+    if isinstance(v, (pd.Timestamp,)):
+        return v.isoformat()
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple, np.ndarray, pd.Series)):
+        return [_jsonable(x) for x in list(v)]
+    return v
+
+
+def _frame_records(df, cols=None, limit=None):
+    if df is None or len(df) == 0:
+        return []
+    d = df if cols is None else df[[c for c in cols if c in df.columns]]
+    if limit:
+        d = d.head(int(limit))
+    return [_jsonable(r) for r in d.to_dict("records")]
+
+
+def design_matrix_summary(es: pd.DataFrame) -> dict:
+    """What the warm start actually contains — shown above the figures so the reader sees the
+    evidence base before any surface. Counts, not adjectives."""
+    if es is None or len(es) == 0:
+        return {"available": False, "reason": "no exposure epochs with pain reports"}
+    out = {
+        "available": True,
+        "n_epochs": int(len(es)),
+        "n_reports": int(pd.to_numeric(es.get("n"), errors="coerce").fillna(0).sum()),
+        "t_first": _jsonable(pd.to_datetime(es["t0"]).min()) if "t0" in es.columns else None,
+        "t_last": _jsonable(pd.to_datetime(es["t0"]).max()) if "t0" in es.columns else None,
+        "states": {str(k): int(v) for k, v in es["state"].value_counts().items()}
+                  if "state" in es.columns else {},
+    }
+    for c in ("amp_mA_Left", "amp_mA_Right", "freq_hz", "pw_us_Left"):
+        if c in es.columns:
+            s = pd.to_numeric(es[c], errors="coerce").dropna()
+            if len(s):
+                out[f"{c}_range"] = [_jsonable(s.min()), _jsonable(s.max())]
+                out[f"{c}_levels"] = int(s.nunique())
+    for site in ("left_leg_vas", "back_vas"):
+        if site in es.columns:
+            out[f"{site}_epochs"] = int(pd.to_numeric(es[site], errors="coerce").notna().sum())
+    return out
+
+
+def run_for_participant(request_data: dict) -> dict:
+    """Build the design matrix from platform data, fit every arm, return a JSON-able payload.
+
+    Request keys (all optional except ParticipantId):
+      ParticipantId  participant uid
+      Sites          list of pain-site metric names (default left_leg + back)
+      Hemispheres    list of "Left"/"Right" (default both)
+      WashinMin      wash-in exclusion in MINUTES (default 1.0 — PI-declared for a rapid responder)
+      Backend        "plotly" (default, returns figure JSON) or "none" (tables only, fast)
+      NBatches, Q    forward-simulation depth for the trajectory panel
+    """
+    from Server import models
+
+    uid = (request_data or {}).get("ParticipantId")
+    if not uid:
+        return {"available": False, "reason": "ParticipantId is required"}
+    participant = models.Participant.find(uid=uid)
+    if participant is None:
+        return {"available": False, "reason": f"participant {uid} not found"}
+
+    washin_min = float((request_data or {}).get("WashinMin", 1.0))
+    sites = tuple((request_data or {}).get("Sites") or DEFAULT_SITES)
+    hemis = tuple((request_data or {}).get("Hemispheres") or DEFAULT_HEMISPHERES)
+    backend = str((request_data or {}).get("Backend", "plotly")).lower()
+
+    try:
+        _census = adapter.settings_stream(participant)
+        es = adapter.build_design_matrix(participant, request_data, washin_min=washin_min, stream=_census)
+    except Exception as e:
+        _log.exception("StimOptimizer: design matrix build failed for %s", uid)
+        raise RuntimeError("The design matrix could not be computed; retry the analysis.") from e
+    if es is None or len(es) == 0:
+        return {"available": False,
+                "reason": "no exposure epochs carry usable pain reports for this participant",
+                "washin_min": washin_min}
+
+    # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
+    # setting began, which understates the span by however long that setting has been in force —
+    # here it read 2026-08-12 while settings ran to 08-28 and reports to 08-29. Use the latest
+    # evidence actually incorporated: the end of the last epoch, and the last report attached.
+    horizon = "settings and pain reports as ingested at request time"
+    if "t0" in es.columns:
+        ends = [pd.to_datetime(es["t0"]).max()]
+        if "t_end" in es.columns:
+            ends.append(pd.to_datetime(es["t_end"]).max())
+        last = max(e for e in ends if pd.notna(e))
+        horizon = (f"epochs {pd.to_datetime(es['t0']).min():%Y-%m-%d} to "
+                   f"{last:%Y-%m-%d} ({int(len(es))} epochs, "
+                   f"{int(pd.to_numeric(es.get('n'), errors='coerce').fillna(0).sum())} reports)")
+
+    try:
+        # Both objective epochs and delivered-queue eligibility use the same snapshot.
+        # Re-decoding the source JSON here would double cold latency and risk mixed inputs.
+        rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
+                           outdir=None, render_figures=False,
+                           data_horizon=horizon, washin_min=washin_min,
+                           n_batches=int((request_data or {}).get("NBatches", 3)),
+                           q=int((request_data or {}).get("Q", 4)))
+    except Exception as e:
+        _log.exception("StimOptimizer: pipeline failed for %s", uid)
+        raise RuntimeError("The optimizer could not be computed; retry the analysis.") from e
+
+    arms = {}
+    for label, arm in (rep.arms or {}).items():
+        ctx = arm.ctx
+        m = dict(ctx.meta)
+        entry = {
+            "site": arm.site, "hemisphere": arm.hemisphere,
+            "n_epochs_fitted": _jsonable(m.get("n_epochs_fitted") or m.get("n_epochs")),
+            "incumbent_epoch": _jsonable(m.get("incumbent_epoch")),
+            "incumbent_xy": _jsonable(m.get("incumbent_xy")),
+            "incumbent_mu": _jsonable(m.get("incumbent_mu")),
+            # the incumbent's OWN uncertainty — the resolution gate compares the DIFFERENCE, so the
+            # UI must be able to show both sides of it rather than a band on the candidate alone
+            "incumbent_sd": _jsonable(m.get("incumbent_sd")),
+            "optimum": {"freq_hz": _jsonable(m.get("x_star", [None, None])[0]),
+                        "amp_mA": _jsonable(m.get("x_star", [None, None])[1]),
+                        "posterior_mean": _jsonable(m.get("mu_star")),
+                        "posterior_sd": _jsonable(m.get("sd_star"))},
+            "optimum_resolved": _jsonable(arm.surface_can_resolve_its_optimum())
+                                if hasattr(arm, "surface_can_resolve_its_optimum") else None,
+            "comparison": _arm_comparison(arm),
+            "kernel": _jsonable(m.get("kernel")),
+            # Use the canonical boolean. `safe_contiguous_ceiling` is a float (NaN when there is no
+            # ceiling), never None, so testing it against None was constant True and silently
+            # disabled the non-contiguous-safe-set blocker for every arm.
+            "safe_contiguous": _jsonable(m.get("safe_is_contiguous")),
+            "safe_contiguous_ceiling": _jsonable(m.get("safe_contiguous_ceiling")),
+            "queue": _frame_records(arm.queue, limit=25),
+            "batch": _frame_records(arm.batch),
+            "provenance": {"data_horizon": _jsonable(m.get("data_horizon")),
+                           "washin_min": _jsonable(m.get("washin_min")),
+                           "amp_col": _jsonable(m.get("amp_col"))},
+        }
+        if backend == "plotly":
+            try:
+                _fig = _plotly_figures(ctx)
+                entry["figures"] = _fig["figures"]
+                # Per-figure failures, keyed by the same name the page uses to look the figure up,
+                # so a panel can render the reason in place of the figure it expected. Distinct
+                # from `figures_error`, which means the whole attempt failed and there is nothing
+                # at all to draw — most often because plotly is missing from the image.
+                entry["figure_errors"] = _fig["figure_errors"]
+            except Exception as e:
+                entry["figures"] = {}
+                entry["figure_errors"] = {}
+                entry["figures_error"] = "Figures could not be prepared. Retry the analysis; diagnostic details are available in the server log."
+                _log.exception("StimOptimizer: figure preparation failed")
+        arms[label] = entry
+
+    supported = bool(rep.recommendation_is_supported()) if hasattr(rep, "recommendation_is_supported") else False
+    # Amplitude actually DELIVERED per hemisphere, so a blocker can tell a prediction inside the
+    # model's support from one beyond it.
+    observed_amp_range = {}
+    for hemi in ("Left", "Right"):
+        col = f"amp_mA_{hemi}"
+        if col in es.columns:
+            s = pd.to_numeric(es[col], errors="coerce").dropna()
+            if len(s):
+                observed_amp_range[hemi] = (float(s.min()), float(s.max()))
+    blockers = _blockers(rep, arms, observed_amp_range)
+    return {
+        "available": True,
+        "participant": uid,
+        "design_matrix": design_matrix_summary(es),
+        "manifest": _jsonable(rep.manifest),
+        "summary": _frame_records(rep.summary),
+        "arms": arms,
+        "recommendation_supported": supported,
+        "blockers": blockers,
+        "washin_min": washin_min,
+        "closed_loop": closed_loop_readiness(participant, es, stream=_census,
+                                             include=bool((request_data or {})
+                                                          .get("ClosedLoop", True))),
+    }
+
+
+def closed_loop_readiness(participant, es, *, include=True, stream=None) -> dict:
+    """Whether the sensed LFP could drive Adaptive Therapy for this participant, and if not why.
+
+    This is a DIFFERENT question from the open-loop optimizer above it, and the payload keeps them
+    apart deliberately. The optimizer asks which stimulation setting relieves pain best; this asks
+    whether any sensed band moves with stimulation amplitude, which is the only lever Adaptive
+    Therapy has. A band can predict pain beautifully and still be useless as a control signal.
+
+    The screen is returned in full, not just the verdict. A refusal caused by absent data and one
+    caused by a real negative response are clinically different conclusions, and only the per-cell
+    blocking reasons distinguish them — so a UI can say WHICH it is rather than showing an
+    unexplained "not ready".
+
+    Never raises into the response: this is an adjunct panel, and a failure here must not take down
+    the open-loop optimizer, which is the primary content. Failure is reported as a reason string.
+    """
+    if not include:
+        return {"available": False, "reason": "not requested (ClosedLoop=false)"}
+    try:
+        import numpy as _np
+        from . import pipeline as _pl
+        from .routines import objective as _obj, percept_adaptive as _pa
+
+        lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+        bands = [(float(c), 5.0) for c in _np.arange(lo + 2.5, hi - 2.5 + 0.01, 1.0)]
+        le = _pl.live_evidence(participant, amp_ceiling=_obj.AMP_HARD_LIMIT_MA, bands=bands, stream=stream)
+        screen = le.screen if le.screen is not None else pd.DataFrame()
+        n_deployable = 0 if screen.empty else int(screen["deployable"].sum())
+        return {
+            "available": True,
+            "ready": bool(le.selected is not None),
+            "verdict": le.describe(),
+            "selected": ({"channel": le.selected_key[0], "hemisphere": le.selected_key[1],
+                          "rate_hz": float(le.selected_key[2])} if le.selected_key else None),
+            "n_cells_screened": int(len(screen)),
+            "n_cells_deployable": n_deployable,
+            "amp_hard_limit_mA": _jsonable(_obj.AMP_HARD_LIMIT_MA),
+            "adaptive_window_hz": list(_pa.ADAPTIVE_LFP_BAND_HZ),
+            "min_adaptive_rate_hz": _jsonable(_pa.MIN_ADAPTIVE_RATE_HZ),
+            # Only the cells that responded at all: the full 50-row screen is mostly cells with no
+            # response, which is not what a reader needs to see first.
+            "responding_cells": _frame_records(
+                screen[screen["n_responding"] > 0].sort_values("n_responding", ascending=False)
+                if not screen.empty else screen, limit=20),
+            "audit": _frame_records(le.audit, limit=100) if le.audit is not None else [],
+        }
+    except Exception as e:                                    # noqa: BLE001 — adjunct panel
+        _log.exception("StimOptimizer: closed-loop readiness failed")
+        return {"available": False,
+                "reason": f"closed-loop readiness could not be evaluated: {e}"}
+
+
+def _blockers(rep, arms, observed_amp_range=None) -> list:
+    """Plain-language reasons a parameter recommendation is withheld."""
+    observed_amp_range = observed_amp_range or {}
+    out = []
+    # THREE STATES, counted separately. A bare truthiness test read `None` as a negative, so once
+    # the pipeline stopped collapsing the tri-state an arm whose difference could not be FORMED
+    # would still have counted towards "every arm was measured and none resolved" — a positive
+    # claim about an arm on which nothing was measured.
+    _resolved = [k for k, a in arms.items() if a.get("optimum_resolved") is True]
+    _too_small = [k for k, a in arms.items() if a.get("optimum_resolved") is False]
+    _unformed = [k for k, a in arms.items() if a.get("optimum_resolved") is None]
+    if not _resolved:
+        msg = ("No arm can distinguish its own best setting from the setting currently in force. "
+               "The surfaces show where to look next, not what to program.")
+        if _too_small:
+            msg += (f" For {len(_too_small)} arm(s) the predicted gain over the setting in force is "
+                    f"smaller than the uncertainty of that difference, which more exposure at those "
+                    f"cells could change.")
+        if _unformed:
+            msg += (f" For {len(_unformed)} arm(s) the difference could not be formed at all because "
+                    f"a posterior was degenerate, so those arms were NOT compared rather than "
+                    f"compared and found wanting; that needs the fit repaired, not more exposure.")
+        out.append(msg)
+    for label, a in arms.items():
+        if a.get("safe_contiguous") is False:
+            out.append(f"{label}: the safe set is not contiguous in amplitude, so the safety model "
+                       f"permits isolated cells rather than a single ceiling — the seed needs "
+                       f"prospective side-effect data before it can bound a ramp.")
+    # The optimum can be inside the safe SET while lying above the contiguous safe CEILING, i.e. in
+    # a disconnected safe island. That matters clinically rather than cosmetically: a monotone
+    # amplitude ramp from the setting in force to that cell would pass through amplitudes the safety
+    # model rejects, so the cell is not reachable by the procedure a clinician would actually use.
+    unreachable = []
+    for label, a in arms.items():
+        amp = (a.get("optimum") or {}).get("amp_mA")
+        ceil = a.get("safe_contiguous_ceiling")
+        try:
+            if amp is not None and ceil is not None and np.isfinite(float(ceil)) \
+                    and float(amp) > float(ceil):
+                unreachable.append(f"{label} (optimum {float(amp):g} mA vs reachable ceiling "
+                                   f"{float(ceil):g} mA)")
+        except (TypeError, ValueError):
+            continue
+    if unreachable:
+        out.append("Proposed optimum lies ABOVE the contiguous safe ceiling for: "
+                   + ", ".join(unreachable) +
+                   ". The cell is inside the safe set but in a disconnected island, so a monotone "
+                   "amplitude ramp toward it would cross amplitudes the safety model rejects. This "
+                   "is a consequence of the two-anchor safety seed, which has no prospective "
+                   "side-effect data to shape it, and must be resolved before any ramp is planned.")
+
+    # Two distinct things get conflated here, so both are checked separately.
+    #
+    # (a) Optimum at the EDGE of the search GRID. That is the surface saying "keep going", which is
+    #     what a monotone trend looks like at a boundary. Rare in practice — the grid runs past the
+    #     delivered range — so this usually emits nothing, which is the correct outcome, not a bug.
+    # (b) Optimum beyond the amplitude ever actually DELIVERED on that hemisphere. This is the one
+    #     that fires on real data and is the more meaningful warning: the surrogate is predicting
+    #     outside its own support, where the posterior mean is driven by the prior mean function and
+    #     the fitted trend rather than by any observation.
+    edge, extrap = [], []
+    try:
+        grid_hi, grid_lo = float(max(PLT.AMP_GRID)), float(min(PLT.AMP_GRID))
+    except Exception:
+        grid_hi = grid_lo = None
+    for label, a in arms.items():
+        amp = (a.get("optimum") or {}).get("amp_mA")
+        if amp is None:
+            continue
+        amp = float(amp)
+        if grid_hi is not None and (amp >= grid_hi - 1e-9 or amp <= grid_lo + 1e-9):
+            edge.append(f"{label} (at {amp:g} mA)")
+        rng = observed_amp_range.get(a.get("hemisphere"))
+        if rng and np.isfinite(rng[1]) and amp > float(rng[1]) + 1e-9:
+            extrap.append(f"{label} (optimum {amp:g} mA vs {float(rng[1]):g} mA ever delivered on "
+                          f"the {a.get('hemisphere')} side)")
+    if edge:
+        out.append("Optimum sits at the EDGE of the amplitude grid for: " + ", ".join(edge) +
+                   ". An edge optimum is the surface extrapolating to its boundary rather than "
+                   "locating an interior optimum; widening the grid would move the edge, not "
+                   "resolve the underlying confound.")
+    if extrap:
+        out.append("Optimum lies ABOVE the highest amplitude ever delivered for: "
+                   + ", ".join(extrap) +
+                   ". Outside its own support the posterior mean is carried by the prior mean "
+                   "function and the fitted amplitude trend, not by data, and that trend is "
+                   "confounded with time in this record. Treat such a cell as a hypothesis to test, "
+                   "never as a setting to program.")
+
+    skipped = (rep.manifest or {}).get("skipped") or {}
+    for label, why in skipped.items():
+        out.append(f"{label}: not fitted — {why}")
+    out.append("Settings were historically confounded with time (amplitude rose over the record), and "
+               "within-visit testing ramped amplitude monotonically, so neither the chronic nor the "
+               "acute record can separate a parameter effect from a time effect. Randomising the "
+               "order of settings within a visit is the prerequisite for any recommendation.")
+    return out
+
+
+PLOTLY_FIGURES = (
+    ("posterior_surface", "fig1_posterior_surface"),
+    ("acquisition", "fig2_acquisition_decomposition"),
+    ("trajectory", "fig3_search_trajectory"),
+    ("dual_model", "fig4_dual_model"),
+    ("coverage", "fig5_coverage_map"),
+)
+
+
+def _plotly_figures(ctx) -> dict:
+    """Plotly figure JSON for the browser. Never renders images server-side (no kaleido).
+
+    RETURNS BOTH the figures and a per-figure error map, because the previous shape could lose a
+    figure without saying so. This function used to catch each figure's exception and log it at
+    DEBUG level, so a single broken figure simply did not appear in the returned dict; the caller
+    sets `figures_error` only when the WHOLE call raises, and the page had nothing to render and
+    nothing to report. That is the same failure class as the missing plotly dependency, which cost
+    this page all five figures while looking like an interface that had never been wired for them.
+
+    A figure that fails now names itself, its exception type and its message, so the panel can say
+    which one is missing and why instead of rendering an empty box.
+    """
+    import json as _json
+    import traceback as _tb
+
+    import plotly.io as pio
+    out = {}
+    errors = {}
+    for name, fn in PLOTLY_FIGURES:
+        f = getattr(PLT, fn, None)
+        if f is None:
+            # A builder that is not present at all is a different fault from one that raised: it
+            # means this service and plots.py have drifted apart, which a deployment can cause and
+            # which no amount of data will fix.
+            errors[name] = {"builder": fn, "error_type": "MissingBuilder",
+                            "message": (f"plots.{fn} does not exist in this build, so the figure "
+                                        f"could not be attempted. The service and plots.py have "
+                                        f"drifted apart.")}
+            continue
+        try:
+            figure = _json.loads(pio.to_json(f(ctx)))
+            if not isinstance(figure, dict) or not figure.get("data"):
+                raise ValueError("The figure builder returned no traces.")
+            out[name] = figure
+        except Exception as e:
+            errors[name] = {"builder": fn, "error_type": type(e).__name__,
+                            "message": "This figure could not be prepared. Retry the analysis; diagnostic details are available in the server log."}
+            # Kept at debug for the traceback, which is too long for a payload, while the summary
+            # above travels to the browser.
+            _log.debug("StimOptimizer: figure %s failed: %s", fn, _tb.format_exc())
+    return {"figures": out, "figure_errors": errors}
+
+
+def _arm_comparison(arm):
+    """The candidate-versus-incumbent difference and its uncertainty, as the resolution rule sees it.
+
+    Serialised so the interface never reconstructs it. The resolution verdict is a statement about
+    `gain` against `k * sd_of_difference`, and a table that prints two posterior means and two
+    separate standard deviations asks the reader to combine four numbers in their head to see the
+    quantity the verdict is actually about.
+
+    `sd_of_difference` is sqrt(var1 + var2) without the joint covariance term, which the pipeline
+    documents: because nearby cells on a smooth kernel are positively correlated, dropping
+    `-2*cov` OVERSTATES the variance, so the rule is conservative — it can withhold a
+    recommendation it might have supported, but it cannot manufacture one.
+    """
+    import math
+
+    from modules.StimOptimizer.routines import resolution as _RES
+
+    m = getattr(arm, "meta", None) or {}
+    try:
+        gain = float(m.get("incumbent_mu")) - float(m.get("mu_star"))
+    except (TypeError, ValueError):
+        gain = None
+    # The same propagation the gate and the figure headline use, so the three cannot disagree.
+    sd_d = _RES.sd_of_difference(m.get("sd_star"), m.get("incumbent_sd"))
+    if not math.isfinite(sd_d) or sd_d <= 0:
+        sd_d = None
+    k = _RES.RESOLUTION_K
+    return {
+        "gain": _jsonable(gain),
+        "sd_of_difference": _jsonable(sd_d),
+        "k": k,
+        "margin": _jsonable(k * sd_d) if sd_d is not None else None,
+        "sign_convention": ("the objective is a pain score, so LOWER is better and a POSITIVE gain "
+                            "favours the candidate over the setting currently in force"),
+        "note": ("sd_of_difference is sqrt(sd_candidate^2 + sd_incumbent^2). The joint covariance "
+                 "term is omitted because the two cells are not predicted jointly; since nearby "
+                 "cells on a smooth kernel are positively correlated, omitting it overstates the "
+                 "variance and makes the resolution rule conservative rather than permissive."),
+    }

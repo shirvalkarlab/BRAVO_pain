@@ -111,6 +111,7 @@ function MedtronicEventRelatedPower({dataToRender, annotations, activeChannel, a
       graphSeries.push({
         type: "line", x: TimeWindow.map((a) => a/60), y: math.mean(matrix,0)._data, error_y: math.std(matrix,0)._data.map((a) => a/math.sqrt(matrix._size[0])),
         line_options: {
+          meta: {bravoPreserveLabel: true},
           name: key + " (n=" + matrix._size[0].toFixed(0) + ")",
           legendgroup: key,
           linewidth: 2,

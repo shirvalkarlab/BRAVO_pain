@@ -282,7 +282,7 @@ function AnalysisBuilder({analysisId}) {
       </MDBox>
       
       <Dialog open={showRecordingList} onClose={() => setShowRecordingList(false)} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingSelect recordings={availableRecordings} onSelectRecording={(recordings) => {
           
@@ -324,7 +324,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editRecording.show} onClose={() => setEditRecording({...editRecording, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingEdit editNode={editRecording.node} onSetRecordingNode={(node) => {
           setNodes((nds) => {
@@ -340,7 +340,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={showProcessingList} onClose={() => setShowProcessingList(false)} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <ProcessingSelect processingNodes={availableProcessingNodes} onSetProcessingNode={(node) => {
           setNodes((nds) => {
@@ -356,7 +356,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editProcessing.show} onClose={() => setEditProcessing({...editProcessing, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <ProcessingEdit editNode={editProcessing.node} onSetProcessingNode={(node) => {
           setNodes((nds) => {
@@ -367,7 +367,7 @@ function AnalysisBuilder({analysisId}) {
       </Dialog>
 
       <Dialog open={editAlignment.show} onClose={() => setEditAlignment({...editAlignment, show: false})} 
-        PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
+        PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
       >
         <RecordingAlignmentView nodes={editAlignment.nodes} />
       </Dialog>

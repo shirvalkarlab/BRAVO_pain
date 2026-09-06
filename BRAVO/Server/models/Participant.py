@@ -80,7 +80,7 @@ class Participant(models.Model):
         return {
             "Id": self.uid,
             "Name": self.name,
-            "DOB": self.date_of_birth,
+            "DOB": 0,  # Birthdates remain stored but are never sent to presentation clients.
             "Sex": self.sex,
             "MRN": self.mrn,
             "Diagnosis": self.diagnosis,

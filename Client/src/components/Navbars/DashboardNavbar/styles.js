@@ -92,15 +92,17 @@ const navbarRow = ({ breakpoints }, { isMini }) => ({
   alignItems: "center",
   justifyContent: "space-between",
   width: "100%",
+  minWidth: 0,
+  gap: 1,
 
   [breakpoints.up("md")]: {
     justifyContent: isMini ? "space-between" : "stretch",
-    width: isMini ? "100%" : "max-content",
+    width: isMini ? "100%" : "auto",
   },
 
   [breakpoints.up("xl")]: {
     justifyContent: "stretch !important",
-    width: "max-content !important",
+    width: "auto",
   },
 });
 

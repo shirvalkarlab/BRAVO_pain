@@ -31,6 +31,8 @@ const menuItem = {
     root: {
       minWidth: pxToRem(160),
       minHeight: "unset",
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
       padding: `${pxToRem(4.8)} ${pxToRem(16)}`,
       borderRadius: borderRadius.md,
       fontSize: size.sm,

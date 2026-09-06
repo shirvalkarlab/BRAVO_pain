@@ -20,7 +20,14 @@ export default function sidenavLogoLabel(theme, ownerState) {
   const { fontWeightMedium } = typography;
 
   return {
-    ml: 0.5,
+    ml: 1,
+    flex: "1 1 auto",
+    width: "auto",
+    display: "block",
+    minWidth: 0,
+    whiteSpace: "normal",
+    overflowWrap: "normal",
+    lineHeight: 1.4,
     fontWeight: fontWeightMedium,
     wordSpacing: pxToRem(-1),
     transition: transitions.create("opacity", {
@@ -29,6 +36,7 @@ export default function sidenavLogoLabel(theme, ownerState) {
     }),
 
     [breakpoints.up("xl")]: {
+      display: miniSidenav ? "none" : "block",
       opacity: miniSidenav ? 0 : 1,
     },
   };

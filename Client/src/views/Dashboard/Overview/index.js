@@ -35,12 +35,15 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import FormField from "components/MDInput/FormField.js";
 import SessionPasswordView from "./SessionPasswordView";
 import ParticipantTable from "./ParticipantTable";
+import useRCS08Sync from "./useRCS08Sync";
+import DataFreshness from "./DataFreshness";
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
 import LoadingProgress from "components/LoadingProgress";
+import MuiAlertDialog from "components/MuiAlertDialog";
 
 import BRAVOExportUploader from "../UploadDataView/BRAVOExportUploader";
 import NeuroPacePersystDatUploader from "../UploadDataView/NeuroPacePersystDatUploader";
@@ -98,8 +101,9 @@ export default function DashboardOverview() {
   const [participantInformation, setParticipantInformation] = useState({});
   const [filteredParticipants, setFilteredParticipants] = useState([]);
   const [filterOptions, setFilterOptions] = useState({});
-  const [availableParticipants, setAvailableParticipants] = useState(false);
+  const [availableParticipants, setAvailableParticipants] = useState([]);
   const [uploadInterface, setUploadInterface] = useState({ show: false, uploadDataType: "Medtronic JSON Files" });
+  const sync = useRCS08Sync(user.Role === "Admin" && !user.ReadOnly);
 
   const [showDecryptionPassword, setShowDecryptionPassword] = useState(false);
 
@@ -112,7 +116,6 @@ export default function DashboardOverview() {
     SessionController.query("/api/createParticipantInformation", {
       Name: participantInformation.name,
       Sex: participantInformation.sex,
-      DOB: participantInformation.dob ? (participantInformation.dob.toDate().getTime() / 1000) : 0,
       Diagnosis: participantInformation.diagnosis,
       DiseaseStartTime: participantInformation.disease_start_time ? (participantInformation.disease_start_time.toDate().getTime() / 1000) : 0
     }).then((response) => {
@@ -122,6 +125,7 @@ export default function DashboardOverview() {
       SessionController.displayError(error, setAlert);
     });
   };
+
 
   useEffect(() => {
     SessionController.query("/api/queryParticipants", {
@@ -190,16 +194,44 @@ export default function DashboardOverview() {
               </Grid>
               <Grid item xs={12} md={4}>
                 <MDBox display="flex" flexDirection="column">
-                  <MDButton variant="gradient" color="info" style={{margin: 2}} onClick={() => setUploadInterface({show: true, uploadDataType: "Medtronic JSON Files"})}>
-                    <MDTypography variant="h5" color="white">
-                      {"Upload Data"}
-                    </MDTypography>
-                  </MDButton>
-                  <MDButton variant="gradient" color="success" style={{margin: 2}} onClick={() => setNewParticipantEditor(true)}>
-                    <MDTypography variant="h5" color="white">
-                      {"Add New Participant"}
-                    </MDTypography>
-                  </MDButton>
+                  {!user.ReadOnly ? (
+                    <>
+                      <MDButton variant="gradient" color="info" style={{margin: 2}} onClick={() => setUploadInterface({show: true, uploadDataType: "Medtronic JSON Files"})}>
+                        <MDTypography variant="h5" color="white">
+                          {"Upload Data"}
+                        </MDTypography>
+                      </MDButton>
+                      <MDButton variant="gradient" color="success" style={{margin: 2}} onClick={() => setNewParticipantEditor(true)}>
+                        <MDTypography variant="h5" color="white">
+                          {"Add New Participant"}
+                        </MDTypography>
+                      </MDButton>
+                    </>
+                  ) : null}
+                  {user.Role === "Admin" && !user.ReadOnly ? (
+                    <>
+                      <MDButton
+                        variant="gradient"
+                        color="error"
+                        style={{margin: 2}}
+                        disabled={sync.disabled}
+                        onClick={sync.start}
+                      >
+                        <MDTypography variant="h6" color="white">
+                          {sync.checking ? "CHECKING SYNC…" : sync.state?.status === "queued" ? "SYNC QUEUED…" : sync.state?.status === "running" ? "SYNCING…" : "SYNC DATA FROM REDCAP, DROPBOX, AND OURA"}
+                        </MDTypography>
+                      </MDButton>
+                      <DataFreshness data={sync.state?.data_freshness} checking={sync.checking}/>
+                      <MDTypography variant="caption" role="status" aria-live="polite" sx={{margin: 1}}>
+                        {sync.message || (
+                          sync.state?.status === "queued" ? "Waiting for the sync service. You can leave this page; the request is saved." :
+                          sync.state?.status === "running" ? "Sync is running. You can leave this page and return to check its status." :
+                          sync.state?.status === "failed" ? `Last sync did not fully complete: ${sync.state.error || "Please retry."}` :
+                          sync.state?.status === "completed" ? `BRAVO import job completed ${new Date(sync.state.finished_at_utc).toLocaleString()}. REDCap: ${sync.state.results?.redcap?.records ?? 0} records. Dropbox: ${sync.state.results?.neural?.ingested ?? 0} new files.` : ""
+                        )}
+                      </MDTypography>
+                    </>
+                  ) : null}
                 </MDBox>
               </Grid>
               {availableParticipants ? (
@@ -211,7 +243,7 @@ export default function DashboardOverview() {
           </MDBox>
         </Card>
 
-        <Dialog open={uploadInterface.show} onClose={() => setUploadInterface({show: false, uploadDataType: "Medtronic JSON Files"})} maxWidth="md" fullWidth>
+        <Dialog open={!user.ReadOnly && uploadInterface.show} onClose={() => setUploadInterface({show: false, uploadDataType: "Medtronic JSON Files"})} maxWidth="md" fullWidth>
           <Grid container spacing={2} p={3}>
             <Grid item xs={12}>
               <MDTypography variant="h3">
@@ -256,7 +288,7 @@ export default function DashboardOverview() {
           </Grid>
         </Dialog>
 
-        <Dialog open={newParticipantEditor} onClose={() => setNewParticipantEditor(false)} maxWidth="md" fullWidth>
+        <Dialog open={!user.ReadOnly && newParticipantEditor} onClose={() => setNewParticipantEditor(false)} maxWidth="md" fullWidth>
           <MDBox p={3}>
             <MDTypography variant="h5">
               {"New Participant Information"}
@@ -267,12 +299,12 @@ export default function DashboardOverview() {
                   variant="standard" margin="dense" id="study-participant-name"
                   value={participantInformation.name}
                   onChange={(event) => setParticipantInformation({...participantInformation, name: event.target.value})}
-                  label={"Study Participant Name (Required)"} type="text"
+                  label="Participant name (required)" type="text"
                   fullWidth
                   autoComplete="off"
                 />
               </Grid>
-              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+              <Grid item xs={12} md={6} style={{marginTop: "auto"}}>
                 <Autocomplete selectOnFocus clearOnBlur
                   renderInput={(params) => (
                     <TextField {...params} variant="standard" placeholder={"Select Sex/Gender (Optional)"} autoComplete="off" />
@@ -286,20 +318,7 @@ export default function DashboardOverview() {
                   onChange={(event, newValue) => setParticipantInformation({...participantInformation, sex: newValue})}
                 />
               </Grid>
-              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
-                <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
-                  <DatePicker
-                    id="study-participant-dob"
-                    label="Date of Birth (Optional)"
-                    value={participantInformation.dob}
-                    onChange={(newDate) => {
-                      setParticipantInformation({...participantInformation, dob: newDate});
-                    }}
-                    renderInput={(params) => <TextField {...params} fullWidth autoComplete="off"/>}
-                  />
-                </LocalizationProvider>
-              </Grid>
-              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+              <Grid item xs={12} md={6} style={{marginTop: "auto"}}>
                 <Autocomplete selectOnFocus freeSolo
                   renderInput={(params) => (
                     <TextField
@@ -318,7 +337,7 @@ export default function DashboardOverview() {
                   onChange={(event, newValue) => setParticipantInformation({...participantInformation, diagnosis: newValue})}
                 />
               </Grid>
-              <Grid item xs={12} md={3} style={{marginTop: "auto"}}>
+              <Grid item xs={12} md={6} style={{marginTop: "auto"}}>
                 <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
                   <DatePicker
                     id="study-participant-dod"
@@ -343,4 +362,3 @@ export default function DashboardOverview() {
     </DatabaseLayout>
   );
 };
-

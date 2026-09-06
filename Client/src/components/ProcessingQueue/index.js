@@ -36,7 +36,9 @@ import MDButton from "components/MDButton";
 import { usePlatformContext } from "context";
 import { dictionary } from "assets/translation";
 import { SessionController } from "database/session-control";
-import { TaskAlt, PendingOutlined, Error } from "@mui/icons-material";
+import TaskAlt from "@mui/icons-material/TaskAlt";
+import PendingOutlined from "@mui/icons-material/PendingOutlined";
+import Error from "@mui/icons-material/Error";
 
 
 export default function ProcessingQueue({queues, clearQueue}) {

@@ -35,7 +35,8 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
-from modules.HelperFunctions import sanitize_input, get_or_none
+from modules.HelperFunctions import sanitize_input, get_or_none, get_token
+from django.db import transaction
 from modules import Database, Event
 from modules.SurveyForms import RedcapForm
 
@@ -107,6 +108,8 @@ class QuerySurveyForms(RestViews.APIView):
                 form = models.ScaleForms.find(short_link=rel.record.short_link, uid=request.data["FormId"])
                 if not form:
                     raise Exception("Unknown Survey Form ID")
+                if form.record_type in {"REDCap API Sync", "Redcap Linked Survey"}:
+                    return Response(status=400, data={"message": "This form is managed by REDCap. Update its source and sync instead."})
                 record = models.ScaleRecord.create(rel.participant, form, result, date=request.data["Date"])
             except Exception as e:
                 print(traceback.format_exc())
@@ -115,6 +118,42 @@ class QuerySurveyForms(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
+
+class SurveyAccessCodes(RestViews.APIView):
+    """Manage existing participant-specific submission links, not a global token."""
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        form = models.ScaleForms.find(uid=request.data.get("id"))
+        if not form or not form.institute.has_permission(request.user, "Edit"):
+            return Response(status=403)
+        action = request.data.get("tokenModification")
+        if action not in {"view", "new"}:
+            return Response(status=400, data={"message": "Unknown access-link action."})
+        if form.record_type in {"Redcap Linked Survey", "REDCap API Sync"}:
+            return Response(status=400 if action == "new" else 200, data={
+                "links": [], "message": "This form uses REDCap-managed records, not BRAVO submission links."})
+        links = models.ParticipantLinkRel.objects.filter(
+            record__short_link=form.short_link, record__institute=form.institute)
+        if action == "new":
+            with transaction.atomic():
+                link = links.select_for_update().filter(link_code=request.data.get("LinkCode")).first()
+                if not link:
+                    return Response(status=404, data={"message": "Participant link not found."})
+                code = get_token(64)
+                while models.ParticipantLinkRel.include(link_code=code):
+                    code = get_token(64)
+                link.link_code = code
+                link.save(update_fields=["link_code"])
+        return Response(data={"links": [{
+            "Participant": link.participant.name,
+            "Token": link.link_code,
+            "URL": f"/survey/{link.record.short_link}?__passcode={link.link_code}",
+        } for link in links.select_related("participant", "record")],
+            "message": "Link this form to a participant from Form Records to create a submission link."})
+
 
 class SetSurveyForms(RestViews.APIView):
 
@@ -165,6 +204,9 @@ class SetSurveyForms(RestViews.APIView):
                 return Response(status=403)
             if not form.institute.has_permission(request.user, "Edit"):
                 return Response(status=403)
+
+            if form.record_type == "REDCap API Sync":
+                return Response(status=400, data={"message": "This form's definition is managed by the reviewed REDCap import. Update its source configuration and sync instead."})
 
             try:
                 Record = json.loads(json.dumps(request.data["FormContent"]))
@@ -303,6 +345,8 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
                     AllRecords = [i.get_info() for i in AllRecords]
                     AllRecords.sort(key=lambda x: x["Date"])
 
+            except RedcapForm.ReviewRequiredError as e:
+                return Response(status=409, data={"status": "review_required", "message": str(e)})
             except Exception as e:
                 print(traceback.format_exc())
                 return Response(status=400, data={"message": str(e)})

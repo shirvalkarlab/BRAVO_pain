@@ -87,7 +87,7 @@ class QueryParticipants(RestViews.APIView):
                     "Id": AllParticipants[i].uid,
                     "Name": AllParticipants[i].name,
                     "MRN": AllParticipants[i].mrn,
-                    "DateOfBirth": AllParticipants[i].date_of_birth * 1000 if AllParticipants[i].date_of_birth else 0,
+                    "DateOfBirth": 0,  # Do not disclose stored birthdates to clients.
                     "Diagnosis": AllParticipants[i].diagnosis,
                     "Gender": AllParticipants[i].sex,
                     "Notes": "",

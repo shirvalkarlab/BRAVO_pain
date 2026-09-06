@@ -21,6 +21,18 @@ Survey Form Handling for REDCap Integration
 import datetime
 import requests 
 
+
+class ReviewRequiredError(ValueError):
+    """A linked raw survey is not an approved input for this participant."""
+
+
+def require_approved_link(Participant, form):
+    from modules.RCS08DataPolicy import applies_to
+    if form.record_type == "Redcap Linked Survey" and applies_to(Participant):
+        raise ReviewRequiredError(
+            "This legacy REDCap link has not passed the reviewed RCS08 processing. "
+            "Use the managed REDCap forms; review and import this link before analyzing it.")
+
 def validateRedcapAPI(url, token):
     try:
         response = requests.post(url=url, data={
@@ -38,6 +50,7 @@ def validateRedcapAPI(url, token):
         return False
 
 def queryRedcapFormRecords(Participant, form, recordId=None):
+    require_approved_link(Participant, form)
     try:
         fields = []
         for page in form.record["FieldMapping"]:

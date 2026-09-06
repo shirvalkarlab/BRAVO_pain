@@ -42,7 +42,6 @@ import MuiLink from "@mui/material/Link";
 
 // MUI Icons
 import LoginIcon from '@mui/icons-material/Login';
-import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import ChangeCircleIcon from '@mui/icons-material/ChangeCircle';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -58,7 +57,6 @@ import DefaultNavbarLink from "./DefaultNavbarLink";
 import { SessionController } from 'database/session-control';
 import { usePlatformContext, setContextState } from "context";
 import { dictionary } from "assets/translation.js";
-import { IMPORT } from "stylis";
 
 function DefaultNavbarMobile({ open, close }) {
   const { width } = open && open.getBoundingClientRect();
@@ -173,15 +171,10 @@ function DefaultNavbarMobile({ open, close }) {
           name={dictionary.SimplifiedNavbar.Login[language]}
           route="/login"
         />
-        <DefaultNavbarLink
-          icon={<GroupAddIcon/>}
-          name={dictionary.SimplifiedNavbar.Register[language]}
-          route="/register"
-        />
       </MDBox>
 
       <Dialog open={customServer.show} onClose={() => setCustomServer({...customServer, show: false})}>
-        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
+        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
           <MDTypography variant="h5">
             {"Set Custom Server Address"}
           </MDTypography>

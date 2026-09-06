@@ -64,7 +64,7 @@ function UploadDataView({show, participant_uid, onCancel}) {
   }, [])
 
   return useMemo(() => (
-    <Dialog open={show} PaperProps={{sx: {minWidth: 600}}}>
+    <Dialog open={show} PaperProps={{sx: {width: 600, minWidth: 0, maxWidth: "calc(100vw - 32px)"}}}>
       <MDBox px={2} pt={2} display={"flex"} flexDirection={"row"} justifyContent={"center"} alignItems={"center"}>
         <MDTypography variant="h5">
           {"Upload Participant Data"}

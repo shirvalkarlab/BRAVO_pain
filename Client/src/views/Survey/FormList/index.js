@@ -177,12 +177,10 @@ export default function FormList() {
     }
   };
 
-  useEffect(() => {
-    const filterTimer = setTimeout(() => {
-      
-    }, 200);
-    return () => clearTimeout(filterTimer);
-  }, [filterOptions, surveys]);
+  const searchText = (filterOptions.value || "").trim().toLowerCase();
+  const visibleSurveys = surveys.filter((form) =>
+    !searchText || `${form.Name} ${form.ShortLink}`.toLowerCase().includes(searchText)
+  );
 
   return (
     <DatabaseLayout>
@@ -191,24 +189,24 @@ export default function FormList() {
         <Card sx={{marginTop: 5}}>
           <MDBox p={2}>
             <Grid container spacing={2}>
-              <Grid item sm={12} md={6}>
+              <Grid item xs={12} md={6}>
                 <MDTypography variant="h3">
                   {"Available Surveys or Questionnaires"}
                 </MDTypography>
               </Grid>
-              <Grid item sm={12} md={6} display="flex" sx={{
+              <Grid item xs={12} md={6} display="flex" sx={{ flexWrap: "wrap", gap: 2,
                 justifyContent: {
                   sm: "space-between",
                   md: "end"
                 }
               }}>
-                <MDInput label={dictionary.Surveys.SearchSurvey[language]} value={filterOptions.text} onChange={(value) => handlePatientFilter(value)} sx={{paddingRight: 2}}/>
+                <MDInput label={dictionary.Surveys.SearchSurvey[language]} value={filterOptions.value || ""} onChange={(value) => handlePatientFilter(value)} sx={{flex: "1 1 220px", minWidth: 0}}/>
                 <MDButton variant="contained" color="info" onClick={() => setNewSurveyDialog({surveyName: "", surveyType: "", state: true})}>
                   {"Add New"} 
                 </MDButton>
               </Grid>
               <Grid item xs={12} sx={{marginTop: 2}}>
-                <FormTable data={surveys} onDelete={deleteSurvey} />
+                <FormTable data={visibleSurveys} onDelete={deleteSurvey} />
               </Grid>
             </Grid>
           </MDBox>
@@ -216,7 +214,7 @@ export default function FormList() {
       </MDBox>
       
       <Dialog open={newSurveyDialog.state} onClose={() => setNewSurveyDialog({surveyName: "", surveyType: "", state: false})}>
-        <MDBox px={2} pt={2} style={{minWidth: 500}}>
+        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
           <MDTypography variant="h5">
             {dictionary.Surveys.AddNewSurvey[language]} 
           </MDTypography>
@@ -297,4 +295,3 @@ export default function FormList() {
     </DatabaseLayout>
   );
 };
-

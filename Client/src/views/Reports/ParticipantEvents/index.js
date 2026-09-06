@@ -120,7 +120,7 @@ function ParticipantEvents() {
                     </MDBox>
                   </Grid>
                   <Grid item xs={12}>
-                    <MDBox p={2} display={"flex"} flexDirection={"row"}>
+                    <MDBox p={2} display="flex" flexDirection={{xs: "column", sm: "row"}} gap={2}>
                       <MDTypography variant={"h6"} fontSize={24} pr={2}>
                         {"From"}
                       </MDTypography>

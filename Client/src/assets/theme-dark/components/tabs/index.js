@@ -26,6 +26,7 @@ const { borderRadius } = borders;
 const { md } = boxShadows;
 
 const tabs = {
+  defaultProps: { variant: "scrollable", scrollButtons: "auto", allowScrollButtonsMobile: true },
   styleOverrides: {
     root: {
       position: "relative",
@@ -42,8 +43,7 @@ const tabs = {
     },
 
     fixed: {
-      overflow: "unset !important",
-      overflowX: "unset !important",
+      overflowX: "auto !important",
     },
 
     vertical: {

@@ -36,7 +36,7 @@ import {
   InputLabel,
   Input,
 } from "@mui/material"
-import { Edit as EditIcon } from "@mui/icons-material"
+import EditIcon from "@mui/icons-material/Edit";
 
 import { FixedSizeList } from 'react-window';
 import MDBox from "components/MDBox";
