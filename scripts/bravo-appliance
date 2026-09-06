@@ -87,6 +87,7 @@ case "$command_name" in
     [[ "$response" == "200" ]] || die "localhost page returned HTTP $response"
     page="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 "http://127.0.0.1:${port}/index")"
     [[ "$page" == *"<title>UF BRAVO Platform</title>"* ]] || die "localhost did not return the BRAVO application"
+    [[ "$page" == *'<div id="root">'* && "$page" == *'/static/js/'* ]] || die "localhost did not return the BRAVO client bundle"
     note "BRAVO application verified at http://127.0.0.1:${port}/index"
     compose exec -T bravo-server python3 manage.py check
     compose ps

@@ -35,12 +35,9 @@ from Server import models
 ConsecutiveError = {}
 
 def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARD_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
+    # Uvicorn resolves the trusted proxy chain. Never accept a client-supplied
+    # alternate header here; the historical X-Forward-For spelling is spoofable.
+    return request.META.get('REMOTE_ADDR')
 
 class StaticProxy(RestViews.APIView):
     def get(self, request):

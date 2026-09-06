@@ -147,6 +147,9 @@
         "_lsb_none_lists",
         "live_lsb_spectrum_match",
         "_live_lsb_spectrum_match_vectorized"
+      ],
+      "BRAVO/Server/views.py": [
+        "get_client_ip"
       ]
     }
   },
@@ -383,6 +386,15 @@
       "alternative_evidence": "Full availability regressions, independent scalar matching oracle and strict branch coverage for every changed helper/matcher.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Extend strict scope whenever remaining availability helpers change."
+    },
+    {
+      "path": "BRAVO/Server/views.py",
+      "source_revision": "127c4fd1c84436b0c19c3b569a586dd5bbbcc52e",
+      "reason": "The repaired client-identity helper is strict; inherited homepage rendering and request-rate logic remain unchanged and measured.",
+      "risk": "The legacy anonymous GET limiter can still ban a single actual origin after repeated requests; this fix prevents proxy-wide misattribution and makes no whole-file branch coverage claim.",
+      "alternative_evidence": "Real Nginx-to-Uvicorn origin-forwarding component tests, spoofed-header/manual-ban regressions, normal authenticated public viewer checks.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Expand strict scope before changing remaining homepage/rate-limit behavior."
     }
   ]
 }

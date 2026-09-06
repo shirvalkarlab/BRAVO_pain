@@ -24,8 +24,9 @@ The frontend test image uses Node 22 and npm 10, with `npm ci` from the existing
 lockfile; no host Node installation is required for this gate. `prepare` builds a
 local backend test image from
 the same `server-deps` stage as the application, adding pinned pytest 8.3.5,
-pytest-cov 6.0.0 and coverage.py 7.6.12. Backend execution has no network, service
-ports, deployment environment, secrets or appliance-volume mounts. It uses an
+pytest-cov 6.0.0 and coverage.py 7.6.12. Backend execution has no external network, published service
+ports, deployment environment, secrets or appliance-volume mounts. Isolated
+Nginx/Uvicorn component fixtures use only that container's loopback interfaces. It uses an
 in-memory SQLite database and disposable filesystem. A backend `.env` is refused.
 Preparation needs network access to install declared dependencies;
 tests do not fetch source participant data. Synthetic policy/model fixtures and the
