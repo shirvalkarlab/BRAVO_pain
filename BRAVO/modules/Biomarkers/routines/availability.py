@@ -20,6 +20,8 @@ from the JSON `FirstPacketDateTime`, so there is NO timestamp bug in the product
 was only in the agent's raw-JSON probe, which filtered montage channels by the wrong label).
 """
 import datetime
+import warnings
+
 import numpy as np
 
 from . import analytics
@@ -1318,6 +1320,181 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             "n_td_windows": len(td_out["t"]), "n_psd_windows": len(psd_out["t"])}
 
 
+#: Key under which a window family's converted float matrix is parked inside the family dict itself
+#: (see `_lsb_rows_to_mat`). Private to this module; nothing reads the cache by key set, and the
+#: cache never leaves the server, so an extra private key is invisible to every consumer.
+_LSB_MAT_MEMO_KEY = "_lsb_mat_memo"
+
+
+def _lsb_family_mat(family, nC):
+    """The float [W x C] matrix for one window family of a raw cache, converted AT MOST ONCE.
+
+    The conversion depends only on the cache, never on the match settings, but the band-by-length
+    sweep calls the matcher TEN times per sensing contact pair with the same cache, so converting
+    every time was the single largest remaining cost (measured: 1.19 s of 1.53 s per pair). The
+    matrix is therefore parked back inside the family dict.
+
+    The memo holds a REFERENCE to the exact row list it was built from and is only accepted when
+    that identical object comes back (`is`, not equality), so replacing the list invalidates the
+    memo and holding the reference stops the row list's identity from ever being recycled under it.
+    Rows are never edited in place after `raw_lsb_spectrum_cache` returns; the matrix is marked
+    non-writeable so an accidental attempt to edit it fails loudly rather than silently corrupting
+    a cache other panels share.
+    """
+    rows = family.get("lsb") or []
+    memo = family.get(_LSB_MAT_MEMO_KEY)
+    if memo is not None and memo[0] is rows and memo[1] == nC:
+        return memo[2]
+    mat = _lsb_rows_to_mat(rows, nC)
+    mat.flags.writeable = False
+    try:
+        family[_LSB_MAT_MEMO_KEY] = (rows, nC, mat)
+    except Exception:                                   # a read-only mapping: convert every time
+        pass
+    return mat
+
+
+def _lsb_rows_to_mat(rows, nC):
+    """[W][C] list-of-lists-with-None -> float [W x C] with NaN; empty -> (0, nC).
+
+    FAST PATH: `raw_lsb_spectrum_cache` always emits each window as a list of exactly nC entries
+    holding a float or None, and numpy coerces None to NaN under a float dtype, so a whole window
+    family converts in ONE C-level call instead of W x C Python assignments. Anything ragged, short
+    or None-valued falls back to the explicit element-by-element fill, which is what the
+    pre-vectorised code did unconditionally, so the result is identical either way.
+    """
+    if not rows:
+        return np.empty((0, nC), dtype=float)
+    if all(type(r) is list and len(r) == nC for r in rows):
+        try:
+            return np.asarray(rows, dtype=float)
+        except (TypeError, ValueError):
+            pass
+    m = np.full((len(rows), nC), np.nan, dtype=float)
+    for i, row in enumerate(rows):
+        if row is None:
+            continue
+        for j, v in enumerate(row[:nC]):
+            if v is not None:
+                m[i, j] = v
+    return m
+
+
+def _pad_owned_windows(owners, nP):
+    """STRICT match: per-window owner rating index (-1 = unowned) -> ONE padded index matrix.
+
+    Returns (idx_pad, counts). `idx_pad` is (nP, max_count) int64 with -1 in every padding slot;
+    row p lists the ORIGINAL window indices owned by rating p in ASCENDING WINDOW ORDER -- exactly
+    the array `np.where(owners == p)[0]` returned for that rating one at a time. `counts[p]` is how
+    many of row p's entries are real.
+    """
+    counts = np.zeros(nP, dtype=np.int64)
+    empty = np.empty((nP, 0), dtype=np.int64)
+    if nP == 0 or owners.size == 0:
+        return empty, counts
+    keep = np.where(owners >= 0)[0]                     # ascending original window index
+    if keep.size == 0:
+        return empty, counts
+    own = owners[keep]
+    counts = np.bincount(own, minlength=nP).astype(np.int64)
+    srt = np.argsort(own, kind="stable")                # group by owner, keep ascending within group
+    flat = keep[srt]
+    rows = np.repeat(np.arange(nP, dtype=np.int64), counts)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    cols = np.arange(flat.size, dtype=np.int64) - np.repeat(starts, counts)
+    idx_pad = np.full((nP, int(counts.max())), -1, dtype=np.int64)
+    idx_pad[rows, cols] = flat
+    return idx_pad, counts
+
+
+def _pad_windows_in_extent(win_t, valid_mask, pro, tol, nP):
+    """REUSE match: every eligible window within +/-tol of each rating -> ONE padded index matrix.
+
+    Identical searchsorted-bounds logic to the per-rating list-of-arrays version it replaces
+    (O(W log W + total matches), never the P x W outer product) -- it writes each rating's
+    contiguous slice straight into a padded matrix instead of into its own array. Row p lists the
+    ORIGINAL window indices in ASCENDING WINDOW TIME, which is the order the slice `vi_sorted[a:b]`
+    carried, so the stable tie-breaking in the nearest-N cap below sees the same ordering.
+    """
+    counts = np.zeros(nP, dtype=np.int64)
+    empty = np.empty((nP, 0), dtype=np.int64)
+    if nP == 0 or win_t.size == 0:
+        return empty, counts
+    vi = np.where(valid_mask)[0]                        # original indices that are valid
+    if vi.size == 0:
+        return empty, counts
+    wt = win_t[vi]
+    wo = np.argsort(wt, kind="stable")
+    wt_sorted = wt[wo]
+    vi_sorted = vi[wo]
+    lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
+    hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
+    counts = np.maximum(hi_idx - lo_idx, 0).astype(np.int64)
+    total = int(counts.sum())
+    if total == 0:
+        return empty, counts
+    rows = np.repeat(np.arange(nP, dtype=np.int64), counts)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    cols = np.arange(total, dtype=np.int64) - np.repeat(starts, counts)
+    idx_pad = np.full((nP, int(counts.max())), -1, dtype=np.int64)
+    idx_pad[rows, cols] = vi_sorted[np.repeat(lo_idx, counts) + cols]
+    return idx_pad, counts
+
+
+def _cap_nearest_windows(idx_pad, win_t, pro, cap):
+    """Keep only the `cap` windows closest in time to each rating, for all ratings at once.
+
+    Reproduces the old per-rating branch exactly. That branch, for a rating owning MORE than `cap`
+    windows, did `keep = np.argsort(|win_t[sel] - pro_t|, kind="stable")[:cap]` then
+    `sel = sel[np.sort(keep)]` so the surviving windows stayed in their original order for a stable
+    median. Here the same STABLE argsort runs along axis 1 for every rating simultaneously. Padding
+    slots are handed an INFINITE distance so they always sort last, which means a row holding <=cap
+    real windows keeps every one of them and merely carries padding forward -- the identical set the
+    old code left untouched when it skipped the branch.
+    """
+    if idx_pad.shape[1] <= cap:
+        return idx_pad
+    safe = np.maximum(idx_pad, 0)
+    dist = np.where(idx_pad >= 0, np.abs(win_t[safe] - pro[:, None]), np.inf)
+    rank = np.argsort(dist, axis=1, kind="stable")[:, :cap]
+    rank.sort(axis=1)                                   # back to ascending row position
+    return np.take_along_axis(idx_pad, rank, axis=1)
+
+
+def _padded_nanmedian(mat, idx_pad):
+    """Per-rating nan-median over each rating's selected windows as ONE numpy reduction.
+
+    `idx_pad` is (nR, K) with -1 padding. The gather writes NaN into every padding slot, so
+    `np.nanmedian(..., axis=1)` over the resulting (nR, K, nC) block equals the old per-rating
+    `np.nanmedian(mat[sel], axis=0)` row by row: NaN skips padding exactly as the shorter selection
+    simply had nothing there. A row that is entirely NaN yields NaN and a RuntimeWarning, which the
+    old per-rating call did too, so the warning is silenced instead of being left to flood the log.
+    """
+    nR, K = idx_pad.shape
+    nC = mat.shape[1]
+    if nR == 0 or K == 0 or mat.shape[0] == 0:
+        return np.full((nR, nC), np.nan, dtype=float)
+    safe = np.maximum(idx_pad, 0)
+    block = np.where((idx_pad >= 0)[:, :, None], mat[safe], np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmedian(block, axis=1)
+
+
+def _lsb_none_lists(med):
+    """(nR, nC) float -> (list-of-lists with None where non-finite, list-of-lists of finite flags).
+
+    Replaces the per-rating per-band comprehensions `[float(v) if np.isfinite(v) else None ...]` and
+    `[bool(np.isfinite(v)) ...]`. `astype(object)` yields real Python floats, so the emitted values
+    are the same objects `float(v)` produced, and `.tolist()` on the boolean mask yields real Python
+    bools.
+    """
+    finite = np.isfinite(med)
+    obj = med.astype(object)
+    obj[~finite] = None
+    return obj.tolist(), finite
+
+
 def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=None,
                             allow_window_reuse=False, extent_s=None, psd_tol_s=None):
     """LIVE per-PRO LSB spectrum by matching PROs against the match-AGNOSTIC raw cache.
@@ -1363,6 +1540,12 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
                  "td_n_epochs_cap","extent_s","psd_tol_s","allow_window_reuse"}.
                 — n_td_assigned (eligible TD tiles owned within ±tol_s) minus n_td_used (after the
                 nearest-N quantity cap) is the count of eligible TD tiles dropped by the slider cap.
+
+    VECTORISED 2026-09-06: the two per-rating Python loops (one nan-median per rating per
+    modality, plus per-band list comprehensions) were replaced by a padded
+    (n_ratings x max_windows x n_bands) gather collapsed with a SINGLE np.nanmedian per
+    modality. The eligibility test and the nearest-rating assignment are untouched. Output
+    values are unchanged; see tests/test_live_match_vectorised.py.
     """
     # Back-compat: the old API passed extent_s (a ±half-window) and psd_tol_s. The new API passes
     # tol_s (main eligibility) + td_quantity_s (TD quantity). If only the legacy args arrived, map
@@ -1393,8 +1576,9 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
     pro_sorted = pro[order]
 
     none_vec = [None] * nC
+    center_vec = [float(c) for c in centers]
     recs = [{"t": float(tp), "tier": None, "lsb": list(none_vec),
-             "calibrated": [False] * nC, "center_hz": [float(c) for c in centers],
+             "calibrated": [False] * nC, "center_hz": list(center_vec),
              "used_s": 0.0, "saturated": False, "reason": "", "n_td_used": 0, "n_psd_used": 0}
             for tp in pro]
 
@@ -1414,128 +1598,98 @@ def live_lsb_spectrum_match(pro_times, raw_cache, *, tol_s=None, td_quantity_s=N
         nn[dist > tol] = -1
         return nn
 
-    def _windows_in_extent(win_t, valid_mask, tol):
-        """REUSE mode: per-PRO list of window indices whose |t - pro_t| <= tol (a window may appear
-        under several PROs). Vectorized via searchsorted bounds on the sorted window times — O(W log W
-        + total matches), not the O(P·W) full outer product. Returns a list-of-arrays indexed by ORIG
-        PRO order, each holding ORIG window indices."""
-        out = [np.empty(0, dtype=int) for _ in range(nP)]
-        if nP == 0 or win_t.size == 0:
-            return out
-        vi = np.where(valid_mask)[0]                  # orig window indices that are valid
-        if vi.size == 0:
-            return out
-        wt = win_t[vi]
-        wo = np.argsort(wt, kind="stable")
-        wt_sorted = wt[wo]
-        vi_sorted = vi[wo]
-        lo_idx = np.searchsorted(wt_sorted, pro - tol, side="left")
-        hi_idx = np.searchsorted(wt_sorted, pro + tol, side="right")
-        for p in range(nP):
-            a, b = int(lo_idx[p]), int(hi_idx[p])
-            if b > a:
-                out[p] = vi_sorted[a:b]
-        return out
-
-    def _to_mat(rows):
-        """[W][C] list-with-None -> float [W×C] with NaN; empty -> (0,nC)."""
-        if not rows:
-            return np.empty((0, nC), dtype=float)
-        m = np.full((len(rows), nC), np.nan, dtype=float)
-        for i, row in enumerate(rows):
-            if row is None:
-                continue
-            for j, v in enumerate(row[:nC]):
-                if v is not None:
-                    m[i, j] = v
-        return m
-
     # ---- TD assignment ---------------------------------------------------------------------------
     td = raw_cache.get("td") or {}
     td_t = np.atleast_1d(np.asarray(td.get("t") or [], dtype=float))
     td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
-    td_mat = _to_mat(td.get("lsb") or [])
+    td_mat = _lsb_family_mat(td, nC)
     n_td_windows = int(td_t.size)
     td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
     # TD ELIGIBILITY uses tol_s (the main slider), NOT the quantity slider. STRICT: each eligible tile
     # -> its single nearest PRO within +/-tol_s (nn_td). REUSE: each PRO -> every eligible tile within
-    # +/-tol_s (td_sel_by_pro); a tile may then appear under multiple PROs. The QUANTITY cap
-    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied per-PRO below, AFTER eligibility.
+    # +/-tol_s; a tile may then appear under multiple PROs. The QUANTITY cap
+    # (td_n_epochs_cap = nearest-N tiles by |dt|) is applied below, AFTER eligibility, for all PROs at
+    # once. Both branches now hand back ONE padded (nP x max_tiles) index matrix plus a per-PRO real
+    # count, so the collapse below is a single reduction rather than nP small ones.
     if allow_window_reuse:
-        td_sel_by_pro = _windows_in_extent(td_t, td_valid, tol_s)
-        n_td_assigned = int(sum(s.size for s in td_sel_by_pro))
+        td_idx, td_cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP)
     else:
         nn_td = np.full(td_t.size, -1, dtype=int)
         if td_valid.any():
             nn_td[td_valid] = _nearest_pro(td_t[td_valid], tol_s)
-        n_td_assigned = int((nn_td >= 0).sum())
+        td_idx, td_cnt = _pad_owned_windows(nn_td, nP)
+    n_td_assigned = int(td_cnt.sum())
 
-    n_td_used = 0
-    td_tier_pro = np.zeros(nP, dtype=bool)
-    for p in range(nP):
-        sel = td_sel_by_pro[p] if allow_window_reuse else np.where(nn_td == p)[0]
-        if sel.size == 0:
-            continue
-        # QUANTITY CAP: of this PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the
-        # rating (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use"
-        # slider: 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to
-        # the earlier tile (stable argsort) so the choice is deterministic.
-        if sel.size > td_n_epochs_cap:
-            dt = np.abs(td_t[sel] - pro[p])
-            keep = np.argsort(dt, kind="stable")[:td_n_epochs_cap]
-            sel = sel[np.sort(keep)]                  # keep original tile order for a stable median
-        med = np.nanmedian(td_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_TD
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v)) for v in med]   # TD k is band-agnostic-calibrated
-        rec["n_td_used"] = int(sel.size)
-        rec["used_s"] = float(sel.size * window_s)
-        rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) "
-                         "(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
-                         % (sel.size, (td_sel_by_pro[p].size if allow_window_reuse
-                                       else int((nn_td == p).sum())),
-                            td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
-        td_tier_pro[p] = True
-        n_td_used += int(sel.size)
+    # QUANTITY CAP: of each PRO's eligible tiles, keep only the td_n_epochs_cap CLOSEST to the rating
+    # (by |tile_t - pro_t|, before/after agnostic). This is the "how much TD signal to use" slider:
+    # 30 s -> nearest 10 non-overlapping 3 s tiles -> their median. Ties on |dt| break to the earlier
+    # tile (stable argsort) so the choice is deterministic.
+    td_idx = _cap_nearest_windows(td_idx, td_t, pro, td_n_epochs_cap)
+    td_use = np.minimum(td_cnt, td_n_epochs_cap)
+    td_tier_pro = td_cnt > 0
+    n_td_used = int(td_use[td_tier_pro].sum())
+
+    if td_tier_pro.any():
+        td_rows = np.where(td_tier_pro)[0]
+        td_med = _padded_nanmedian(td_mat, td_idx[td_rows])
+        td_lsb, td_fin = _lsb_none_lists(td_med)
+        td_cal = td_fin.tolist()                       # TD k is band-agnostic-calibrated
+        td_used_s = (td_use[td_rows] * window_s).astype(float).tolist()
+        td_use_l = td_use[td_rows].tolist()
+        td_cnt_l = td_cnt[td_rows].tolist()
+        td_reason_tail = ("(<=%.0fs signal within +/-%.0fs tol, k=%.2f)"
+                          % (td_quantity_s, tol_s, analytics.LSB_PER_UV2_TRANSFORM))
+        for i, p in enumerate(td_rows.tolist()):
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_TD
+            rec["lsb"] = td_lsb[i]
+            rec["calibrated"] = td_cal[i]
+            rec["n_td_used"] = int(td_use_l[i])
+            rec["used_s"] = td_used_s[i]
+            rec["reason"] = ("live TD->LSB median over nearest %d of %d eligible tile(s) %s"
+                             % (td_use_l[i], td_cnt_l[i], td_reason_tail))
 
     # ---- PSD assignment (only PROs with no TD become psd_bridge) ----------------------------------
     psd = raw_cache.get("psd") or {}
     psd_t = np.atleast_1d(np.asarray(psd.get("t") or [], dtype=float))
-    psd_mat = _to_mat(psd.get("lsb") or [])
+    psd_mat = _lsb_family_mat(psd, nC)
     n_psd_windows = int(psd_t.size)
     psd_valid = np.isfinite(psd_t)
     # PSD ELIGIBILITY also uses tol_s (the main slider) — the ONLY PSD control. No quantity cap: a
     # PRO's PSD-bridge LSB is the nan-median over EVERY eligible PSD event within +/-tol_s.
     if allow_window_reuse:
-        psd_sel_by_pro = _windows_in_extent(psd_t, psd_valid, tol_s)
-        n_psd_assigned = int(sum(s.size for s in psd_sel_by_pro))
+        psd_idx, psd_cnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP)
     else:
         nn_psd = np.full(psd_t.size, -1, dtype=int)
         if psd_valid.any():
             nn_psd[psd_valid] = _nearest_pro(psd_t[psd_valid], tol_s)
-        n_psd_assigned = int((nn_psd >= 0).sum())
+        psd_idx, psd_cnt = _pad_owned_windows(nn_psd, nP)
+    n_psd_assigned = int(psd_cnt.sum())
 
-    n_psd_used = 0
-    for p in range(nP):
-        if td_tier_pro[p]:
-            continue                                  # TD preferred — PSD here stays unused
-        sel = psd_sel_by_pro[p] if allow_window_reuse else np.where(nn_psd == p)[0]
-        if sel.size == 0:
-            continue
-        med = np.nanmedian(psd_mat[sel], axis=0)
-        rec = recs[p]
-        rec["tier"] = PRO_LSB_TIER_BRIDGE
-        rec["lsb"] = [float(v) if np.isfinite(v) else None for v in med]
-        rec["calibrated"] = [bool(np.isfinite(v) and cal_band[i]) for i, v in enumerate(med)]
-        rec["n_psd_used"] = int(sel.size)
-        rec["reason"] = ("live PSD->LSB median over %d event(s) within +/-%.0fs (k=%.2f); "
-                         "calibrated only in [%.1f,%.1f] Hz"
-                         % (sel.size, tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
-        n_psd_used += int(sel.size)
+    # TD is PREFERRED: a PSD event whose nearest PRO turned out TD-tier is left unused (reported).
+    psd_take = (~td_tier_pro) & (psd_cnt > 0)
+    n_psd_used = int(psd_cnt[psd_take].sum())
+
+    if psd_take.any():
+        psd_rows = np.where(psd_take)[0]
+        keep_cols = int(psd_cnt[psd_rows].max())
+        psd_med = _padded_nanmedian(psd_mat, psd_idx[psd_rows][:, :keep_cols])
+        psd_lsb, psd_fin = _lsb_none_lists(psd_med)
+        psd_cal = (psd_fin & cal_band[None, :]).tolist()
+        psd_cnt_l = psd_cnt[psd_rows].tolist()
+        psd_reason_tail = ("within +/-%.0fs (k=%.2f); calibrated only in [%.1f,%.1f] Hz"
+                           % (tol_s, analytics.LSB_PER_DEVICE_PSD, lo_hz, hi_hz))
+        for i, p in enumerate(psd_rows.tolist()):
+            rec = recs[p]
+            rec["tier"] = PRO_LSB_TIER_BRIDGE
+            rec["lsb"] = psd_lsb[i]
+            rec["calibrated"] = psd_cal[i]
+            rec["n_psd_used"] = int(psd_cnt_l[i])
+            rec["reason"] = ("live PSD->LSB median over %d event(s) %s"
+                             % (psd_cnt_l[i], psd_reason_tail))
 
     n_pro_td = int(td_tier_pro.sum())
-    n_pro_psd = int(sum(1 for r in recs if r["tier"] == PRO_LSB_TIER_BRIDGE))
+    n_pro_psd = int(psd_take.sum())
     stats = {"n_pro": int(nP), "n_pro_td": n_pro_td, "n_pro_psd": n_pro_psd,
              "n_pro_unmatched": int(nP - n_pro_td - n_pro_psd),
              "n_td_windows": n_td_windows, "n_psd_windows": n_psd_windows,
