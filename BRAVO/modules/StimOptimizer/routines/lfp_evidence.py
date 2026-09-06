@@ -446,8 +446,36 @@ def frame_from_lsb_cache(cache, *, centers_hz=None, sources=None, channels=None)
         raise ValueError("no band centre survived the requested restriction")
 
     def _matrix(rows, n_cols):
-        """The cache's list-of-lists (with None for a missing value) -> a float matrix."""
-        if not rows:
+        """The cache's spectra -> a float matrix, whether they arrive as lists or as one array.
+
+        TWO SHAPES REACH HERE AND BOTH ARE LEGITIMATE. A family built fresh by
+        ``Biomarkers.routines.availability.raw_lsb_spectrum_cache`` holds its spectra as a list of
+        lists with ``None`` for a missing value. A family restored from the shared tile-cache file
+        holds them as ONE float array with ``nan`` for a missing value, because that file stores the
+        spectra as an array -- its read is eleven times faster than rebuilding 29 million separate
+        Python numbers.
+
+        ``if not rows`` stood here and broke on 2026-09-06 the moment that file began serving
+        arrays: asking a two-dimensional array whether it is truthy raises
+        ``ValueError("The truth value of an array with more than one element is ambiguous")``. The
+        effect was that this whole function raised for any participant whose tiles came back from
+        the file rather than from a fresh build -- which is now the ordinary case -- so the
+        calibrated band-power route failed while the endpoint still returned arms from the other
+        route, i.e. it failed QUIETLY and produced a thinner answer rather than an error.
+
+        No test caught it because every fixture in this suite builds its families as lists. The
+        array case is now covered explicitly.
+        """
+        if rows is None:
+            return np.zeros((0, n_cols), float)
+        if isinstance(rows, np.ndarray):
+            # Already numeric, already nan for missing. Only the emptiness test differs, and a
+            # zero-row array must still come back with the requested width so the column
+            # restriction below can be applied to it.
+            if rows.size == 0:
+                return np.zeros((0, n_cols), float)
+            return np.asarray(rows, float)
+        if len(rows) == 0:
             return np.zeros((0, n_cols), float)
         return np.asarray([[np.nan if v is None else float(v) for v in row] for row in rows],
                           float)
@@ -457,8 +485,23 @@ def frame_from_lsb_cache(cache, *, centers_hz=None, sources=None, channels=None)
         td, psd = e.get("td") or {}, e.get("psd") or {}
         n_td, n_psd = len(td.get("t") or []), len(psd.get("t") or [])
 
-        v_td = _matrix(td.get("lsb") or [], all_centers.size)[:, keep_c]
-        v_psd = _matrix(psd.get("lsb") or [], all_centers.size)[:, keep_c]
+        # TAKE THE VALUE AND REPLACE ONLY A MISSING ONE. `td.get("lsb") or []` stood here and broke
+        # on 2026-09-06 the moment the Biomarkers tile cache began storing each window family's
+        # spectra as one float array instead of a list of lists: asking a two-dimensional array
+        # whether it is truthy raises ValueError("The truth value of an array with more than one
+        # element is ambiguous") rather than answering. That made this function raise for any
+        # participant whose tiles came back from the shared file rather than from a fresh build --
+        # which is now the common case, and it is why the calibrated band-power route failed while
+        # the endpoint still returned arms from the other route.
+        #
+        # `_RAW_LSB_MATRICES = ("lsb",)` in Biomarkers.bravo_service is the list of keys that become
+        # arrays, and `lsb` is the only one, so the sibling `t`, `ok`, `saturated` and `source`
+        # lookups below are still lists and are left exactly as they were. If that tuple ever grows,
+        # every `or []` on the new key has to be changed the same way.
+        rows_td = td.get("lsb")
+        rows_psd = psd.get("lsb")
+        v_td = _matrix([] if rows_td is None else rows_td, all_centers.size)[:, keep_c]
+        v_psd = _matrix([] if rows_psd is None else rows_psd, all_centers.size)[:, keep_c]
         # The device family's calibrated mask is indexed by BOTH reading and band centre. A value
         # the lab does not mark calibrated is not used to set a number, so the mask is carried
         # through rather than being collapsed to one flag per reading.

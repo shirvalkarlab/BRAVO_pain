@@ -119,8 +119,29 @@ def run_for_participant(request_data: dict) -> dict:
     hemis = tuple((request_data or {}).get("Hemispheres") or DEFAULT_HEMISPHERES)
     backend = str((request_data or {}).get("Backend", "plotly")).lower()
 
+    # READ, DECRYPT AND PARSE THE STORED PERCEPT FILES ONCE PER REQUEST, NOT TWICE.
+    #
+    # This endpoint needed the same dated settings stream in two places and built it separately in
+    # each: once inside `build_design_matrix` below, and once as the delivered-settings census
+    # further down. One pass opens 568 stored files for RCS08, so doing it twice was 1,136 file
+    # reads where 568 would do, for no new information. `ClosedLoopDeployment.adapter`
+    # already builds it once and passes it to both of its consumers; this is the same fix on the
+    # other endpoint, using the `stream` argument both functions have carried all along -- their
+    # docstrings say what it is for and nothing was passing it.
+    #
+    # THE DEGRADATION BEHAVIOUR OF BOTH CONSUMERS IS PRESERVED EXACTLY. `stream=None` means "build
+    # your own", which is what every caller written before that argument existed does, so if this
+    # build fails, `build_design_matrix` behaves precisely as it did before and the census is
+    # omitted rather than the request failing -- which is what the census's own try/except did.
     try:
-        es = adapter.build_design_matrix(participant, request_data, washin_min=washin_min)
+        _stream = adapter.settings_stream(participant)
+    except Exception:                                     # noqa: BLE001 — falls back to per-consumer builds
+        _log.exception("StimOptimizer: settings stream unavailable; each consumer will build its own")
+        _stream = None
+
+    try:
+        es = adapter.build_design_matrix(participant, request_data, washin_min=washin_min,
+                                         stream=_stream)
     except Exception as e:
         _log.exception("StimOptimizer: design matrix build failed for %s", uid)
         return {"available": False, "reason": f"could not build the design matrix: {e}"}
@@ -149,11 +170,12 @@ def run_for_participant(request_data: dict) -> dict:
         # received from one that has never been delivered, which is precisely the contradiction
         # between this queue and the in-clinic schedule that the panel now explains. Failure to
         # build it must not take down the optimizer, so it degrades to no annotation.
-        try:
-            _census = adapter.settings_stream(participant)
-        except Exception:                                     # noqa: BLE001 — annotation only
-            _log.exception("StimOptimizer: settings census unavailable; queue eligibility omitted")
-            _census = None
+        # The census IS the stream built at the top of this function -- the same frame, built with
+        # `settings_stream(participant)` and no filtering, which is exactly what this line used to
+        # build for itself. Reusing it is what removes the second pass over the stored files. When
+        # the build at the top failed, this is None and the queue omits its eligibility annotation,
+        # which is the same degradation this line's own try/except gave.
+        _census = _stream
         rep = pipeline.run(es, sites=sites, hemispheres=hemis, delivered_census=_census,
                            outdir=None, render_figures=False,
                            data_horizon=horizon, washin_min=washin_min,

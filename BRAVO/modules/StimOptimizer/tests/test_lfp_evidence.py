@@ -604,3 +604,55 @@ def test_a_source_label_from_the_other_frame_raises_instead_of_filtering_everyth
 # withdrawn on purpose. The replacement is to source band power from the calibrated route
 # (Biomarkers.routines.analytics.td_to_lsb), which is a change of DSP and not a change of constant,
 # and it needs its own tests when it lands.
+
+
+# --- the shared tile-cache file serves ARRAYS, not lists (regression, 2026-09-06) --------------
+def test_frame_from_lsb_cache_accepts_a_family_whose_spectra_are_one_array():
+    """A family restored from the Biomarkers shared tile-cache file holds its spectra as ONE float
+    array rather than a list of lists, because that file stores them that way -- its read is eleven
+    times faster than rebuilding 29 million separate Python numbers.
+
+    `if not rows` inside `_matrix` raised ValueError("The truth value of an array with more than one
+    element is ambiguous") on such a family, so `frame_from_lsb_cache` failed for any participant
+    whose tiles came from the file rather than from a fresh build. It failed QUIETLY: the calibrated
+    band-power route came back empty while the endpoint still returned arms from the other route, so
+    the page looked normal and carried a thinner answer. Live confirmation after the fix:
+    evidence_inputs on the calibrated route returned 304,478 rows where it had raised.
+
+    Built from `_plain_cache()` so the shape is the module's own known-good one, and asserts the
+    array form gives the IDENTICAL frame to the list form -- a faster path that changes a number is
+    a defect, not a speedup.
+    """
+    import copy as _copy
+
+    as_lists = _plain_cache()
+    as_array = _copy.deepcopy(as_lists)
+    # Convert ONLY the voltage-trace spectra, which is what the shared file turns into an array
+    # (`_RAW_LSB_MATRICES = ("lsb",)` in Biomarkers.bravo_service). The device-spectrum family is
+    # left as the list it already is, because a mixed family is exactly what a restored entry looks
+    # like when one route has readings and the other has none.
+    as_array[CHANNEL]["td"]["lsb"] = np.asarray(as_array[CHANNEL]["td"]["lsb"], float)
+    assert isinstance(as_array[CHANNEL]["td"]["lsb"], np.ndarray)
+    assert as_array[CHANNEL]["td"]["lsb"].ndim == 2
+
+    got_array = EV.frame_from_lsb_cache(as_array)
+    got_lists = EV.frame_from_lsb_cache(as_lists)
+    assert len(got_array) > 0, "the array-backed family produced no rows"
+    assert got_array.equals(got_lists), "the array form and the list form disagree"
+
+    # A family with NOTHING in it must yield an empty result rather than raising. Note what is NOT
+    # asserted here and why: dropping `lsb` while leaving 20 timestamps in place raises
+    # ValueError("All arrays must be of the same length"), and that is CORRECT -- such a family is
+    # internally inconsistent and pandas is right to refuse it. Only a consistently empty family is
+    # a real case.
+    empty = _copy.deepcopy(as_array)
+    for fam in ("td", "psd"):
+        empty[CHANNEL][fam].update({"t": [], "ok": [], "saturated": [], "source": [],
+                                    "lsb": None})
+    empty[CHANNEL]["psd"]["calibrated"] = []
+    EV.frame_from_lsb_cache(empty)           # must not raise
+
+    holed = _copy.deepcopy(as_array)
+    holed[CHANNEL]["td"]["lsb"][0, 0] = np.nan
+    g = EV.frame_from_lsb_cache(holed)
+    assert g["band_power"].isna().any(), "a missing value became a number"
