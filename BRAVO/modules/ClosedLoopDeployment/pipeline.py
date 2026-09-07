@@ -107,7 +107,16 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
-    T = adapter.joined_table_cached(psd_frame, epochs, pro_frame=pro_frame)
+    # The candidate's own centre joins the default grid, so a committed band outside 10.5 to
+    # 27.5 Hz (the sweep offers 8.5 to 29.5) is evaluated rather than silently matching no rows.
+    cen = set(float(c) for c in adapter.DEFAULT_BAND_CENTERS_HZ)
+    for cd in (candidates or ()):
+        try:
+            cen.add(float(cd.get("center_hz")))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    T = adapter.joined_table_cached(psd_frame, epochs, pro_frame=pro_frame,
+                                    centers=tuple(sorted(cen)))
     rep.manifest = {
         "n_psd_rows": 0 if psd_frame is None else int(len(psd_frame)),
         "n_epochs": 0 if epochs is None else int(len(epochs)),

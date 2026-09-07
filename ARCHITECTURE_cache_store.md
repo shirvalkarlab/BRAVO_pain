@@ -41,6 +41,7 @@ size.
 | `store.py` | 600 | the one store: directory resolution, format choice, read, write, stamp, sweep, statistics, the off switch |
 | `provenance.py` | 173 | the chain carried by every written-back product, and the refusal that uses it |
 | `ledger.py` | 221 | the append-only record in the database of what wrote each product and from which inputs |
+| `locks.py` | — | the short-lived Redis build lock (Track F step 2): one worker builds, the others read the file when it appears, and Redis being unreachable means building as before |
 | `tests/test_store.py` | 342 | round trips, the key-decides rule, the stamp, the sweep, the limit, backward compatibility |
 | `tests/test_provenance_cycle.py` | 227 | **the constructed-cycle proof** and its controls |
 | `tests/test_one_store.py` | 199 | fails if a second store implementation comes back |
@@ -215,12 +216,12 @@ Two runners, two commands, and **a green run of one is not a green run of the pl
 # container — Biomarkers (22 files) + CacheStore (4 files) + DecodeCommon (1); no pytest in there
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
-#   PASS=529 FAIL=0   (2026-09-07, after Track B step 4)
+#   PASS=536 FAIL=0   (2026-09-07, after Track G step 1 and Track F step 2)
 
 # host — ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4) + DecodeCommon (1); these use pytest
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
   ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
-#   907 passed, 41 skipped   (2026-09-07, after Track B step 4, both orders)
+#   921 passed, 41 skipped   (2026-09-07, after Track G step 1 and Track F step 2, both orders)
 ```
 
 Both figures were obtained twice, independently, and agreed. **Do not carry either number

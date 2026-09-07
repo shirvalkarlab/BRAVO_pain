@@ -26,6 +26,7 @@ import hashlib as _hashlib
 import logging as _logging
 import os as _os
 import pickle as _pickle
+import re as _re
 import threading as _threading
 
 import numpy as np
@@ -293,11 +294,45 @@ def _bytes_hash_of_array_column(arr):
         return h.hexdigest()
 
 
+#: The calibrated frame names each band's power column by its centre: ``band_lsb_26.5`` is the
+#: five-hertz band centred on 26.5 Hz, already on the device's own scale. Same rule as
+#: ``lfp_evidence.CAL_LSB_PREFIX``; spelled here rather than imported so this module keeps its
+#: one-way dependency on the Stim Optimizer routines to call time.
+_CAL_LSB_PREFIX = "band_lsb_"
+_CAL_NATIVE_PREFIX = "band_native_"
+_CAL_CENTER_RE = _re.compile(r"^" + _CAL_LSB_PREFIX + r"(-?\d+(?:\.\d+)?)$")
+
+
+def calibrated_centres(psd_frame):
+    """The band centres a calibrated frame carries, read from its own column names.
+
+    An empty tuple means the frame is the older kind, one whole spectrum per row in ``log_psd``
+    and ``freqs``. Since 2026-09-05 (`90eb109`) ``evidence_inputs`` returns the calibrated kind
+    by default, and until this function existed the join and its fingerprint still assumed the
+    older one, so the deployment report raised on every candidate and the page showed "the three
+    edges have not been estimated". Track G step 1.
+    """
+    out = []
+    for c in getattr(psd_frame, "columns", ()):
+        m = _CAL_CENTER_RE.match(str(c))
+        if m:
+            out.append(float(m.group(1)))
+    return tuple(sorted(out))
+
+
 def _joined_signature(psd_frame, epochs, centers, width):
     # These are the columns lfp_evidence.frame_from_matrix actually emits, and the epoch columns
     # exposure_epochs emits. Both are now required rather than optional, so a rename upstream
-    # breaks this loudly instead of narrowing the key to whatever still happens to match.
-    return (_frame_fingerprint(psd_frame, ("t", "channel", "source", "log_psd", "freqs")),
+    # breaks this loudly instead of narrowing the key to whatever still happens to match. A
+    # calibrated frame is hashed over every band column it carries and its tile-quality flags.
+    cal = calibrated_centres(psd_frame)
+    if cal:
+        power_cols = tuple(f"{_CAL_LSB_PREFIX}{c:g}" for c in cal)
+        psd_fp = _frame_fingerprint(psd_frame, ("t", "channel", "source", "band_half_hz") + power_cols,
+                                    also=("tile_ok", "tile_saturated", "tile_window_s"))
+    else:
+        psd_fp = _frame_fingerprint(psd_frame, ("t", "channel", "source", "log_psd", "freqs"))
+    return (psd_fp,
             _frame_fingerprint(epochs, ("t_start", "t_end", "freq_hz"),
                                at_least_one=(("amp_mA_Left", "amp_Left",
                                               "amp_mA_Right", "amp_Right"),),
@@ -824,6 +859,8 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     """
     if psd_frame is None or len(psd_frame) == 0:
         return pd.DataFrame()
+    if calibrated_centres(psd_frame):
+        return _joined_table_calibrated(psd_frame, epochs, centers=centers, pro_frame=pro_frame)
     ep_idx = _assign_epoch(psd_frame["t"].to_numpy(), epochs)
 
     rows = []
@@ -866,6 +903,96 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
         keep = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
         T = T.merge(pro_frame[keep].rename(columns={"epoch": "setting_epoch"}),
                     on="setting_epoch", how="left")
+    return T
+
+
+def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None):
+    """``joined_table`` for the calibrated frame: one row per (tile, band), power read from the
+    band's own column rather than integrated from a spectrum.
+
+    THE THREE POWER SCALES. ``power_linear`` is the stored value itself, already the device's
+    linear band power (the quantity a switching value is typed in). ``power_log_of_linear`` is its
+    decibel expression. ``power_mean_of_log`` is NOT available from this frame: it is the mean of
+    the per-bin log spectrum inside the band, and the calibrated frame holds no per-bin spectrum,
+    so the column is present and empty rather than filled with a look-alike.
+
+    THE TILE-QUALITY GATE. A tile the cache marked not usable, or railed, is left out, which is the
+    same gate the other deployment panels apply to this frame before they read it.
+
+    THE BAND WIDTH is the frame's own (twice ``band_half_hz``); a ``centers`` entry the frame does
+    not carry yields no rows for that centre, never a neighbour's value.
+    """
+    f = psd_frame
+    keep = np.ones(len(f), dtype=bool)
+    if "tile_ok" in f.columns:
+        keep &= f["tile_ok"].to_numpy(dtype=bool)
+    if "tile_saturated" in f.columns:
+        keep &= ~f["tile_saturated"].to_numpy(dtype=bool)
+    f = f.loc[keep].reset_index(drop=True)
+    n_dropped = int((~keep).sum())
+    if len(f) == 0:
+        T = pd.DataFrame()
+        T.attrs["rows_dropped_by_tile_gate"] = n_dropped
+        return T
+    width = 2.0 * float(pd.to_numeric(f["band_half_hz"], errors="coerce").iloc[0])
+    ep_idx = _assign_epoch(f["t"].to_numpy(dtype=float), epochs)
+    have_epochs = epochs is not None and len(epochs) > 0
+
+    # the epoch context, once per tile, by fancy indexing rather than one row lookup per tile
+    ctx_cols = {}
+    if have_epochs:
+        safe = np.where(ep_idx >= 0, ep_idx, 0)
+        for c in ("freq_hz", "cathode_Left", "cathode_Right", "t_start", "t_end", "dur_h",
+                  "epoch", "open_ended"):
+            if c in epochs.columns:
+                vals = epochs[c].to_numpy()[safe]
+                ctx_cols[c] = np.where(ep_idx >= 0, vals, None) if vals.dtype == object \
+                    else pd.Series(vals).where(ep_idx >= 0).to_numpy()
+        for h in ("Left", "Right"):
+            ac = resolve_setting_column(epochs.columns, "amp", h)
+            pc = resolve_setting_column(epochs.columns, "pw", h)
+            if ac:
+                ctx_cols[canonical_amp_col(h)] = pd.Series(
+                    pd.to_numeric(epochs[ac], errors="coerce").to_numpy()[safe]).where(ep_idx >= 0).to_numpy()
+            if pc:
+                ctx_cols[f"pw_us_{h}"] = pd.Series(
+                    pd.to_numeric(epochs[pc], errors="coerce").to_numpy()[safe]).where(ep_idx >= 0).to_numpy()
+
+    blocks = []
+    t = f["t"].to_numpy(dtype=float)
+    chan = f["channel"].to_numpy()
+    src = f["source"].to_numpy() if "source" in f.columns else np.array([None] * len(f), dtype=object)
+    for c in centers:
+        col = f"{_CAL_LSB_PREFIX}{float(c):g}"
+        if col not in f.columns:
+            continue
+        lin = pd.to_numeric(f[col], errors="coerce").to_numpy(dtype=float)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            logl = np.where(lin > 0, 10.0 * np.log10(np.where(lin > 0, lin, 1.0)), np.nan)
+        block = {"t": t, "channel": chan, "source": src, "setting_epoch": ep_idx,
+                 "center_hz": np.full(len(f), float(c)), "band_width_hz": np.full(len(f), width),
+                 "power_linear": lin, "power_log_of_linear": logl,
+                 "power_mean_of_log": np.full(len(f), np.nan)}
+        nat = f"{_CAL_NATIVE_PREFIX}{float(c):g}"
+        if nat in f.columns:
+            block["device_native"] = f[nat].to_numpy(dtype=bool)
+        block.update(ctx_cols)
+        blocks.append(pd.DataFrame(block))
+    if not blocks:
+        T = pd.DataFrame()
+        T.attrs["rows_dropped_by_tile_gate"] = n_dropped
+        return T
+    T = pd.concat(blocks, ignore_index=True)
+    for h in ("Left", "Right"):
+        c = canonical_amp_col(h)
+        if c in T.columns:
+            T[f"era_{h}"] = [_era(x) for x in pd.to_numeric(T[c], errors="coerce")]
+    if pro_frame is not None and len(pro_frame) and "epoch" in pro_frame.columns:
+        keep_cols = [c for c in ("epoch", "report_id", "nrs", "vas") if c in pro_frame.columns]
+        T = T.merge(pro_frame[keep_cols].rename(columns={"epoch": "setting_epoch"}),
+                    on="setting_epoch", how="left")
+    T.attrs["rows_dropped_by_tile_gate"] = n_dropped
+    T.attrs["band_power_source"] = "calibrated"
     return T
 
 

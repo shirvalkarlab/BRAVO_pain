@@ -958,8 +958,10 @@ _RAW_LSB_RULE_VERSION = "v1_tiles"
 # `CacheStore`. A single spelling breaks one of the two runners at import time, which is how this
 # was found.
 try:
+    from modules.CacheStore import locks as _locks
     from modules.CacheStore import store as _cache_store
 except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import locks as _locks
     from CacheStore import store as _cache_store
 
 #: Tests point this at a directory of their own. It is passed THROUGH to the shared store rather
@@ -1288,6 +1290,49 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
                 with _SHARED_CACHE_LOCK:
                     _SHARED_CACHE_EVENTS["wrong_channels"] += 1
 
+    # ONE BUILD ACROSS THE FOUR WORKERS (Track F step 2). The first worker to miss the shared file
+    # takes a short-lived Redis lock keyed on the file's own key and builds; the others wait for the
+    # file to appear and read it. A waiter that runs out of patience builds anyway, and Redis being
+    # unreachable means building as before, so the page never fails on the lock. With no shared
+    # file to share there is nothing to lock.
+    if shared_sig is None:
+        return _build_raw_lsb_cache(participant_uid, channels, td_recordings, event_psd_blocks,
+                                    montage_psd_blocks, centers, sig, shared_sig)
+    lock_name = "cachestore:build:%s:%s:%s" % (_RAW_LSB_SHARED_KIND, participant_uid,
+                                                _cache_store.signature_key(shared_sig))
+
+    def _ready():
+        return _cache_store.read_stamp(_RAW_LSB_SHARED_KIND, participant_uid, shared_sig) is not None
+
+    with _locks.build_lock(lock_name, ttl_s=RAW_LSB_BUILD_LOCK_TTL_S,
+                           wait_s=RAW_LSB_BUILD_LOCK_WAIT_S, ready=_ready) as lk:
+        if lk.role == "served":
+            stored = _shared_load(_RAW_LSB_SHARED_KIND, participant_uid, shared_sig)
+            loaded = None
+            if stored is not None:
+                try:
+                    loaded = _raw_lsb_unpack(stored)
+                except Exception as exc:
+                    _log.warning("Biomarkers: could not read back the tiles another worker built "
+                                 "(%r); building", exc)
+            if loaded is not None and all(ch in loaded for ch in channels):
+                _log.info("Biomarkers: tiles for %s built by another worker; read after %.1f s",
+                          participant_uid, lk.waited_s)
+                return _remember_raw_lsb_cache(sig, loaded)
+        return _build_raw_lsb_cache(participant_uid, channels, td_recordings, event_psd_blocks,
+                                    montage_psd_blocks, centers, sig, shared_sig)
+
+
+#: The build lock's lifetime and a waiter's patience, in seconds. The build measured 36 to 39 s
+#: on RCS08 (Track B step 4), so both are set well above it; the lock expiring early would let a
+#: second build start, the wait expiring early would do the same, and neither is an error.
+RAW_LSB_BUILD_LOCK_TTL_S = 300.0
+RAW_LSB_BUILD_LOCK_WAIT_S = 150.0
+
+
+def _build_raw_lsb_cache(participant_uid, channels, td_recordings, event_psd_blocks,
+                         montage_psd_blocks, centers, sig, shared_sig):
+    """Build the tiles for every channel, remember them, and share them when there is a file."""
     cen = np.asarray(centers, dtype=float)
     out = {}
     # ONE preparation of every voltage trace for all channels (Track B step 4), instead of

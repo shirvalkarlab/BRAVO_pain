@@ -439,3 +439,26 @@ comparisons (49,720 calls, 3.4 s), 37,404 database queries (2.5 s), and `align_p
 cumulative over 10 calls). **Track D's "three spectrum builders" and Track E's gated "connect the
 live path to the spectrum cache" meet at `welch_psd_for_instance`**; the 6,309-file spectrum
 directory is that cache. Track D must not connect it without the second sign-off.
+
+### 6k. Track G step 1 and Track D, 2026-09-07
+
+- The evidence triangle was not a missed rebuild this time. The deployment report raised on
+  every candidate because two changes made on 2026-09-05 met: `90eb109` moved the report's input
+  frame to the calibrated one (a column per band), and `8e31342` made the join's fingerprint
+  refuse a missing column instead of skipping it. Neither commit's tests fed the other's frame
+  into the join, and the web handler turns any raise into an `available: false` answer that the
+  page renders as a normal empty state. The combination produced no error anywhere a person
+  would look.
+- With the calibrated join, the report on RCS08 returns three edges for every candidate. The
+  amplitude-to-pain edge (E3) does not depend on the band and resolves at −0.159 pain points per
+  mA over 90 clusters. Amplitude-to-power (E1) resolves on the left 1-3 contact at 12.5 Hz, in the
+  rising direction; power-to-pain (E2) resolves on none of the four. Rule D26 blocks the left 0-2
+  contact at 26.5 Hz (switching values 0.02 within-state standard deviations apart) and the right
+  0-3 contact at 8.5 Hz (power moves against the control law's assumption).
+- Both closed-loop and Stim Optimizer requests are now served from the store in about a second
+  warm and build no settings stream; open item 8 (the 65.71 s consumer) is resolved by Track A
+  step 5, and open item 9 (the triangle) by this step.
+- Four builds at once are not four times one build. With the lock off, four concurrent cold
+  requests each took about 367 s where one build takes about 37 s: the four contend for the
+  same cores and memory and all finish last. The lock's saving is therefore not "three builds"
+  but the difference between 41 s and 368 s for every waiting page.

@@ -3,12 +3,13 @@
 `store`      — read and write cached products; one implementation for all three modules.
 `provenance` — the chain carried by every written-back product, and the refusal that uses it.
 `ledger`     — the append-only record in the database of what wrote each product and from what.
+`locks`      — the short-lived Redis build lock, so four workers do not build one product at once.
 """
 import sys as _sys
 
-from . import ledger, provenance, store            # noqa: F401  (re-exported for callers)
+from . import ledger, locks, provenance, store     # noqa: F401  (re-exported for callers)
 
-__all__ = ["store", "provenance", "ledger"]
+__all__ = ["store", "provenance", "ledger", "locks"]
 
 # ONE MODULE OBJECT UNDER BOTH SPELLINGS. The container imports this package as
 # `modules.CacheStore` and the host test suite as `CacheStore`; once both roots are on the path in
@@ -19,5 +20,5 @@ __all__ = ["store", "provenance", "ledger"]
 # store off under one spelling while the adapter under review held the other.
 _OTHER = "CacheStore" if __name__ == "modules.CacheStore" else "modules.CacheStore"
 for _name, _mod in (("", _sys.modules[__name__]), (".store", store),
-                    (".provenance", provenance), (".ledger", ledger)):
+                    (".provenance", provenance), (".ledger", ledger), (".locks", locks)):
     _sys.modules.setdefault(_OTHER + _name, _mod)

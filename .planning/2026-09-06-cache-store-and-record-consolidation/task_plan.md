@@ -30,18 +30,19 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Track B is complete. Next is Track D, "Readers". Before touching a reader, decide from the
-profile of 2026-09-07 (findings §6j) which of its four steps is worth its proof: the page's
-time is in the analytics pipeline (35 s of 85 s under the profiler) and in the spectra built
-from raw traces on every request (`welch_psd_for_instance`, 381 calls, 10.3 s), and the latter
-is the site Track E's gated sign-off covers, so Track D step 2 must not wire it silently.**
+**Track F step 3, "Move the freshness key and last-updated date into Redis": mirror each store
+entry's sidecar stamp (written time, key) in Redis so a page can show the last cache update
+without opening the file, falling back to the sidecar when the mirror is missing or stale, never
+to a wrong date; then step 4, Django's cache to Redis; then Track G step 2, the ground-truth
+write-back. Track D steps 1 and 2 stay open behind Track E's gate.**
 
 ## Current Phase
 
 Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
-Track B is complete: step 1 `7e57ce03`, steps 2, 3 and 5 `a86e9c09`, step 4 the commit carrying
-this edit. Track F step 1 was done in `b7036bf`.
+Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`). Track D steps 3 and 4 were resolved
+by measurement, Track G step 1 fixed, and Track F step 2 built, all in the commit carrying this
+edit; Track F step 1 was `b7036bf`.
 The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
@@ -176,20 +177,36 @@ and the two closed-loop fixes. Track D needs Track B's form.
 
 - [ ] 1. Point the Biomarker reading sites at the form
 - [ ] 2. Reduce the three spectrum builders
-- [ ] 3. Point the Stim Optimizer and closed-loop reads at the form
-- [ ] 4. Confirm both endpoints unchanged and faster
+- [x] 3. Point the Stim Optimizer and closed-loop reads at the form — resolved by measurement on
+  2026-09-07, no code change: the 65.71 s settings-stream consumer this step names was removed
+  by Track A step 5 (the stream is read from the store); the closed-loop report costs 4.77 s
+  cold and 0.38 s warm, the Stim Optimizer request 1.37 and 1.27 s served from the store, and
+  neither builds the stream (0 builds counted in two runs each)
+- [x] 4. Confirm both endpoints unchanged and faster — the same measurement; "unchanged" was
+  proven when each endpoint's store path landed (Track A steps 5 and 8)
 
 **Track F — "Redis wins"**
 
 - [x] 1. Fix the Redis memory limit and eviction policy first — `b7036bf`, authorised out of order
   as a live hazard
-- [ ] 2. Add a build lock so four workers cannot duplicate a build
+- [x] 2. Add a build lock so four workers cannot duplicate a build — 2026-09-07:
+  `CacheStore/locks.py`, a Redis lock keyed on the tile file's own key, held during the build,
+  expiring on its own; a waiter reads the file when it appears, builds anyway after its patience
+  runs out, and Redis being unreachable means building as before. Proven on RCS08: four
+  concurrent cold requests ran one build and served three, wall 40.85 s; with the lock off, four
+  builds, wall 368.03 s
 - [ ] 3. Move the freshness key and last-updated date into Redis
 - [ ] 4. Point Django's cache at Redis instead of per-process memory
 
 **Track G — "Closed-loop fixes"**
 
-- [ ] 1. Find out why the evidence triangle stopped displaying
+- [x] 1. Find out why the evidence triangle stopped displaying — found and fixed 2026-09-07: the
+  literal was in the served bundle, so it was not a missed rebuild this time; the deployment
+  report raised on every candidate because `evidence_inputs` has returned the calibrated frame
+  (one row per tile, one column per band) since `90eb109`, while the join and its fingerprint
+  still required the older one-spectrum-per-row columns, and the web handler turned the raise
+  into "the three edges have not been estimated". The join and the fingerprint now accept the
+  calibrated frame (decision 17); on RCS08 all four candidates tried return three edges
 - [ ] 2. Agree a ground-truth rule for the three-source comparison, then write it back — the rule
   is agreed (decision 33 in `DECISIONS_and_open_items.md`); the write-back remains
 
@@ -246,6 +263,8 @@ store.
 | 14 | **Track B step 1: the decoded form's start-time parser mirrors the platform's exactly, including the rule that a start time written without a timezone is read in the process's local zone.** The disagreement is recorded here and in `findings.md` rather than corrected in the form alone. | The form exists to give the same answer as `availability.per_pro_lsb`, and step 5 proves that field for field on the live record; a form that silently "fixed" the zone would fail that proof, or worse, pass it in the container (which runs in universal time) and disagree on any other machine. The prototype's version read a naive string as universal time; the two agreed in the container and differed by eight hours on the analysis host, which is where the test first ran under pytest. Whether the platform's own rule should change is a separate question and is logged as an open item. | 2026-09-07 |
 | 15 | **Track B steps 2, 3 and 5: `availability.per_pro_lsb` and `per_pro_lsb_spectrum` read from the canonical decoded form, built once per request by `availability.channel_index` and passed in by the service; the two original scans stay as `_per_pro_lsb_scan` and `_per_pro_lsb_spectrum_scan`, the reference implementations, behind the module switch `USE_CHANNEL_INDEX`.** The switch off runs the scans with no deployment. | The scans are the specification the indexed readers are proven equal to on constructed recordings (DecodeCommon/tests, 40 tests on both runners), and flipping the switch inside one process is what makes the alternating rounds of the live proof honest: on, off, on, off, 8,087,210 values against the page captured before the change, 0 differences each round, 54 s against 65 s, 5 thousand canonicalisations against 72 million. Deleting the scans would delete the reference and the off switch together. | 2026-09-07 |
 | 16 | **Track B step 4: the tile-cache builder reads the form's prepared traces, in the recording list's own order, and the service prepares every trace once for all channels; the per-recording preparation stays as the path without a form.** The form's traces carry `seq` and `product` for it (form version 2). | Proven equal on RCS08, 31,868,643 values and 0 differences in each of four alternating rounds. The saving is under a second of a 37 s cold build (38.59 and 35.67 s against 39.22 and 36.27 s), so this is recorded as the completion of the form's adoption and not as a speed-up; the build's cost is the band-power arithmetic on 304,309 tiles. | 2026-09-07 |
+| 17 | **Track G step 1: the deployment report's joined table and its content fingerprint accept the calibrated frame — one row per three-second tile, one `band_lsb_<centre>` column per band, already on the device's scale — reading each band's linear power from its own column, its decibel expression from that, and leaving the mean-of-log scale empty because no per-bin spectrum exists to take it from; tiles the cache marked unusable or railed are left out; the fingerprint hashes every band column and the tile flags; the pipeline adds the candidate's own centre to the join's grid.** | Since `90eb109` (2026-09-05) the frame the report is built on has been the calibrated one, and since `8e31342` the fingerprint raises on a missing column rather than skipping it; between them the report raised on every candidate and the page's evidence triangle read "not estimated". The fix follows decision 33: the device's own scale is the one a switching value is typed in, so the join reads it rather than falling back to the uncalibrated spectrum. The tile gate is the same one the other panels apply. On RCS08 with the left 0-2 contact at 26.5 Hz the table has 5,427,936 rows from 304,309 tiles and the report returns in 19.2 s cold, 7.2 s warm; the amplitude-to-pain edge resolves (estimate −0.159 pain points per mA, interval −0.275 to −0.042, 90 clusters) and the other two do not at that band. | 2026-09-07 |
+| 18 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis being unreachable, the client absent or the lock switched off all mean building as before with no error.** Redis is reached with protocol version 2. | Four workers missing the same file used to start four builds. Proven on RCS08 through the bridge with four concurrent cold requests in one process: one build, three served, every request answered in 40.4 to 40.8 s; the control with the lock off ran four builds contending for the machine and every request took 367 to 368 s. Seven tests on a stand-in for Redis pin the three requirements and that eight concurrent callers yield exactly one builder. | 2026-09-07 |
 
 ## Errors Encountered
 

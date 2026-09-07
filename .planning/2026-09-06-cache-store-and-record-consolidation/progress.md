@@ -517,3 +517,62 @@ this machine (pyenv 3.12.9) has no pytest.
   arithmetic.
 - Host suite after step 4: 907 passed, 41 skipped, both orders. Container after step 4:
   PASS=529 FAIL=0.
+
+### Track D — assessed by measurement, 2026-09-07
+
+- Closed-loop report on RCS08 through the bridge: 4.77 s cold, 0.38 s warm; Stim Optimizer
+  request 1.37 and 1.27 s, served from the store. Settings-stream builds from the stored files:
+  0 in every run (`_build_settings_stream` counted). The 65.71 s consumer named in step 3 was
+  removed by Track A step 5. Steps 3 and 4 are ticked on that measurement with no code change.
+- A warm Biomarker page profiled at 85.06 s under the profiler (findings §6j). Its time is in the
+  analytics pipeline (34.6 s) and in `welch_psd_for_instance` (10.3 s, 381 calls), which is the
+  spectrum built from every time-domain recording on every request. That is the site Track E's
+  gated step names, so Track D steps 1 and 2 are left open rather than wired around the gate.
+
+### Track G step 1 — "Find out why the evidence triangle stopped displaying" — found and fixed
+
+- **Status:** complete, committed with this entry and pushed.
+- The lead in the plan (a component in source and in no served bundle) was checked first: the
+  panel's own literal "Evidence triangle" is in one served chunk, so the bundle was current.
+- The cause: calling the deployment report with any candidate raised
+  `MissingFingerprintColumn("cannot fingerprint on ['log_psd', 'freqs']: not on this frame, which
+  has ['band_half_hz', 'band_lsb_10.5', ...]")`. The web handler catches every exception and
+  returns `available: false` with the message, which the panel renders as "the three edges have
+  not been estimated for this configuration". `evidence_inputs` has returned the calibrated frame
+  since `90eb109` (2026-09-05); the join read `log_psd` and `freqs` per row and its fingerprint,
+  made strict in `8e31342`, raised before the join could.
+- Files changed: `ClosedLoopDeployment/adapter.py` (`calibrated_centres`, the calibrated branch
+  of `joined_table`, the fingerprint over the band columns and tile flags),
+  `ClosedLoopDeployment/pipeline.py` (the candidate's centre joins the grid), new
+  `ClosedLoopDeployment/tests/test_calibrated_join.py` (7).
+- Live, RCS08 through the bridge (`_agent_bridge/_trackG_triangle.py`, disposable), four
+  candidates: left 0-2 at 26.5 Hz, 19.20 s, blocked by rule D26 (switching values 0.02 standard
+  deviations apart); left 1-3 at 26.5 Hz, 7.18 s; right 0-3 at 8.5 Hz, 17.69 s, blocked by D26
+  (power moves against the control law's assumption); left 1-3 at 12.5 Hz, 7.27 s. Every one
+  returns three edges; the amplitude-to-pain edge resolves on all four (−0.159 pain points per
+  mA, interval −0.275 to −0.042, 90 clusters); amplitude-to-power resolves on left 1-3 at 12.5 Hz
+  only (28.2 device units per mA, interval 10.2 to 46.1, 66 clusters); coherence is not
+  computed because not all three resolve. Joined table 5,427,936 rows from 304,309 tiles.
+- Host suite after the fix: 914 passed, 41 skipped, both orders. Container: PASS=529 FAIL=0.
+
+### Track F step 2 — "Add a build lock so four workers cannot duplicate a build" — built
+
+- **Status:** complete, committed with this entry and pushed.
+- Files: new `CacheStore/locks.py` (`build_lock`, an `Outcome` of builder, served or fallback;
+  `ENABLED`; a client factory hook; event counters), new `CacheStore/tests/test_locks.py` (7,
+  pytest-free, on a stand-in for Redis), `CacheStore/__init__.py` (registered under both
+  spellings), `Biomarkers/bravo_service.py` (the tile build under the lock, the build itself
+  moved to `_build_raw_lsb_cache`, the two timing constants).
+- Live proof (`_agent_bridge/_trackF_lock_live.py`, disposable), RCS08 through the bridge, the
+  shared tile entry cleared first, four threads calling the tile cache at once with the
+  in-process memo cleared: **builds run 1**, lock events builder 1 and served 3, requests answered
+  in 40.81, 40.37, 40.43 and 40.81 s, wall 40.85 s, the shared entry present afterwards. Control
+  with the lock switched off, the entry cleared again: **builds run 4**, requests 368.03, 367.68,
+  366.90 and 367.30 s, wall 368.03 s. The redis client in the container is 8.1.0; the host is
+  `redis`, protocol version 2.
+
+| Run | Runner | Result |
+|---|---|---|
+| Track G step 1 and Track F step 2 | container, `run_tests.py` via the bridge | PASS=536 FAIL=0 |
+| Track G step 1 and Track F step 2 | host, documented order | 921 passed, 41 skipped |
+| Track G step 1 and Track F step 2 | host, reverse order | 921 passed, 41 skipped |
