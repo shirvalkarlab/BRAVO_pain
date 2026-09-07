@@ -47,13 +47,61 @@ is a real if small difference, not a rounding artefact.
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
 import json
 import logging
 
 import numpy as np
 import pandas as pd
 
+# THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried. The container
+# puts `/usr/src/BRAVO` on the path, which makes the package `modules.CacheStore`; the host suite
+# runs from `BRAVO/modules` with that directory as the root, which makes it `CacheStore`.
+try:
+    from modules.CacheStore import provenance as _provenance
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import provenance as _provenance
+    from CacheStore import store as _cache_store
+
 _log = logging.getLogger(__name__)
+
+#: Tests point this at a directory of their own. It is passed THROUGH to the shared store rather
+#: than resolved here, so there is still only one resolver.
+_SHARED_CACHE_DIR_OVERRIDE = None
+
+#: The two products this module writes to the one store (Track A step 5 of the approved plan,
+#: "Write the therapy and pain matched table into the store").
+#:
+#: `therapy_settings` is the dated per-hemisphere settings stream read from the participant's stored
+#: Percept files. It is a RAW input in the provenance sense: it records what the device was
+#: programmed to deliver, and no module's analysis choice produced it. Building it opens, decrypts
+#: and parses every stored file, which is the single most expensive thing this module does, so a
+#: stored copy is what turns a request that used to pay that cost every time into one that reads a
+#: small table.
+#:
+#: `therapy_pain_matched` is the epoch-level design matrix: the settings epochs with the pain
+#: reports aggregated onto them. Its key carries the settings key AND the pain-report snapshot key,
+#: so a newly filed report changes the key and a stale rating can never be served from it. It is
+#: registered as raw-derived in `CacheStore/provenance.py` because it is a deterministic join of two
+#: raw inputs and embodies no module's choice.
+THERAPY_SETTINGS_KIND = "therapy_settings"
+THERAPY_PAIN_MATCHED_KIND = "therapy_pain_matched"
+
+#: Bumped when the RULE that produces either table changes: the group parser, the epoch keys, the
+#: aggregation. The constants that shape a table are in its key already.
+_THERAPY_SETTINGS_RULE_VERSION = "v1_active_groups"
+_THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means"
+
+#: The frame attribute under which a table carries the key of the store entry it came from, so a
+#: product derived from it can cite it. The same name the Biomarkers module uses for the pain-report
+#: snapshot, on purpose: one name, whichever module handed the frame over.
+STORE_KEY_ATTR = "bravo_store_key"
+
+#: The frame attribute the builder sets to say how many stored files it could not read. A stream
+#: built with unreadable files is returned but NOT stored, because the file set that keys it has not
+#: changed and the stored copy would carry the gap until it did.
+UNREADABLE_ATTR = "n_unreadable_source_files"
 
 # Percept session-report SourceFile types that carry Groups/GroupHistory.
 _JSON_SOURCE_TYPES = ("MedtronicJSON", "DefaultType")
@@ -115,13 +163,81 @@ def group_settings(g):
     return out
 
 
+def _participant_uid(participant):
+    return str(getattr(participant, "uid", participant))
+
+
+def source_file_signature(participant, *, source_types=_JSON_SOURCE_TYPES):
+    """Identity of the stored files the settings stream reads, FROM THE DATABASE ROWS ALONE.
+
+    Decision 24 in `DECISIONS_and_open_items.md`: a stored product must be findable before anything
+    is decoded, so the key is built from the rows and never from the decoded content. Each file
+    contributes its uid, its content hash and its type; the file NAME is deliberately left out,
+    because the export file names on this platform can carry a patient's name and nothing derived
+    from them belongs in a key that is written to disk. A re-upload that replaces a file in place
+    changes its content hash; an added or removed file changes the count and the digest.
+
+    Returns a tuple, or raises when there is no database to ask (library mode), in which case the
+    caller builds the stream without the store.
+    """
+    from Server import models
+
+    rows = []
+    for sf in models.SourceFile.objects.filter(owner=participant):
+        if source_types and getattr(sf, "type", None) not in source_types:
+            continue
+        rows.append((str(getattr(sf, "uid", "")), str(getattr(sf, "hashed", "")),
+                     str(getattr(sf, "type", ""))))
+    rows.sort()
+    blob = "|".join("~".join(r) for r in rows).encode("utf8")
+    return (THERAPY_SETTINGS_KIND, _THERAPY_SETTINGS_RULE_VERSION, _participant_uid(participant),
+            tuple(source_types) if source_types else None, len(rows),
+            _hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+
 def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataFrame:
     """Every dated ACTIVE-group setting for a participant, one row per (timestamp, hemisphere).
 
+    THE STORE ANSWERS FIRST. The key is the identity of the participant's stored files (see
+    `source_file_signature`), so the same file set is parsed once and then read back as a small
+    Parquet table by every worker; a new upload changes the key and the stream is rebuilt. The
+    returned frame carries its store key under `STORE_KEY_ATTR` so the matched table built from it
+    can cite it. A stream with unreadable files, or an empty one, is returned but not stored.
+
+    With no database to ask, or with the store turned off, this builds exactly as it always did.
     Reads both the end-of-session state (``Groups.Final``) and the dated between-session snapshots
     (``GroupHistory``). The snapshots matter: a session-only reconstruction loses the resolution that
     makes short exposures visible at all.
     """
+    try:
+        sig = source_file_signature(participant, source_types=source_types)
+    except Exception as exc:                   # noqa: BLE001 — no database: build, do not store
+        _log.debug("StimOptimizer: no source-file signature, building the stream unstored (%r)", exc)
+        return _build_settings_stream(participant, source_types=source_types)
+    uid = _participant_uid(participant)
+    not_stored = []
+
+    def build():
+        out = _build_settings_stream(participant, source_types=source_types)
+        if len(out) == 0 or out.attrs.get(UNREADABLE_ATTR, 0):
+            not_stored.append(out)
+            return None
+        return out
+
+    got, _wrote = _cache_store.store_if_absent(
+        THERAPY_SETTINGS_KIND, uid, sig, build,
+        writer="stim_optimizer", trigger="settings_stream", provenance=[],
+        n_recordings=sig[4], extra={"source_types": list(source_types or ())},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    if got is None:
+        return not_stored[0] if not_stored else _build_settings_stream(
+            participant, source_types=source_types)
+    got.attrs[STORE_KEY_ATTR] = _cache_store.product_key(THERAPY_SETTINGS_KIND, uid, sig)
+    return got
+
+
+def _build_settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataFrame:
+    """Parse the stored Percept files into the settings stream. The store is not consulted here."""
     from Server import models
     from modules import DataCurator
 
@@ -153,10 +269,13 @@ def settings_stream(participant, *, source_types=_JSON_SOURCE_TYPES) -> pd.DataF
     if n_failed:
         _log.info("StimOptimizer: read %d source files, %d unreadable", n_read, n_failed)
     if not recs:
-        return pd.DataFrame(columns=["t", "src", "hemi", "amp", "pw", "rate", "upper",
-                                     "cathode", "schema"])
-    out = pd.DataFrame(recs).dropna(subset=["t", "amp", "rate"])
-    return out.sort_values("t").reset_index(drop=True)
+        out = pd.DataFrame(columns=["t", "src", "hemi", "amp", "pw", "rate", "upper",
+                                    "cathode", "schema"])
+    else:
+        out = pd.DataFrame(recs).dropna(subset=["t", "amp", "rate"])
+        out = out.sort_values("t").reset_index(drop=True)
+    out.attrs[UNREADABLE_ATTR] = int(n_failed)
+    return out
 
 
 #: The columns that every settings stream must carry. ``settings_stream`` always returns a frame
@@ -490,4 +609,40 @@ def build_design_matrix(participant, request_data=None, *, washin_min=1.0,
         return pd.DataFrame()
     pro_df = _bs._load_pros(request_data or {}, participant)
     times = _bs._pro_times_utc_series(pro_df)
-    return attach_pros(ep, pro_df, times, washin_min=washin_min, items=items)
+
+    # THE MATCHED TABLE IS STORED ONLY WHEN BOTH OF ITS INPUTS CAN BE NAMED. The settings key comes
+    # from the stream's store entry and the report key from the pain-report snapshot; a stream built
+    # without the store, or reports handed in through the request body, have no key, and a product
+    # whose inputs cannot be cited is computed and handed back but never written. Without the
+    # report key in particular there would be nothing to make a newly filed report change the key.
+    settings_key = getattr(stream, "attrs", {}).get(STORE_KEY_ATTR)
+    report_key = getattr(pro_df, "attrs", {}).get(STORE_KEY_ATTR) if pro_df is not None else None
+    if not settings_key or not report_key:
+        return attach_pros(ep, pro_df, times, washin_min=washin_min, items=items)
+
+    uid = _participant_uid(participant)
+    sig = (THERAPY_PAIN_MATCHED_KIND, _THERAPY_PAIN_MATCHED_RULE_VERSION, uid,
+           settings_key, report_key, float(washin_min), tuple(items))
+    not_stored = []
+
+    def build():
+        out = attach_pros(ep, pro_df, times, washin_min=washin_min, items=items)
+        if len(out) == 0:
+            not_stored.append(out)
+            return None
+        return out
+
+    got, _wrote = _cache_store.store_if_absent(
+        THERAPY_PAIN_MATCHED_KIND, uid, sig, build,
+        consumer="stim_optimizer",
+        writer="stim_optimizer", trigger="design_matrix",
+        provenance=_provenance.flatten([
+            _provenance.entry(settings_key, kind=THERAPY_SETTINGS_KIND, writer="stim_optimizer"),
+            _provenance.entry(report_key, kind="redcap_reports", writer="biomarkers"),
+        ]),
+        extra={"washin_min": float(washin_min), "items": list(items)},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    if got is None:
+        return not_stored[0] if not_stored else pd.DataFrame()
+    got.attrs[STORE_KEY_ATTR] = _cache_store.product_key(THERAPY_PAIN_MATCHED_KIND, uid, sig)
+    return got

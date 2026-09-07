@@ -49,7 +49,15 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: no module's choices produced them. A raw input can never close a cycle, so it is exempt.
 #: The tiles belong here — they are built from the recordings with no knowledge of any analysis
 #: choice, any pain rating or any exploration decision.
-RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings")
+#:
+#: `therapy_pain_matched` is here too, and the reason deserves a sentence. It is written by the
+#: Stim Optimizer module's code, but it is a deterministic join of two raw inputs — the settings the
+#: device was programmed with and the pain reports — under a fixed wash-in rule. It embodies no
+#: exploration decision, so a product derived from it is not "derived from Stim Optimizer's
+#: choices", and refusing it to Stim Optimizer would refuse the very table step 5 exists to give it.
+#: What Stim Optimizer CHOOSES — the ladder of settings it recommends exploring — is the
+#: `settings_stream` kind, which stays derived and is what the constructed-cycle test refuses.
+RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched")
 
 
 def module_of(key):
@@ -70,7 +78,8 @@ _WRITER_BY_KIND = {
     "raw_lsb_tiles": "biomarkers",
     "biomarker_band_results": "biomarkers",
     "redcap_reports": "biomarkers",
-    "therapy_pain_matched": "biomarkers",
+    "therapy_settings": "stim_optimizer",
+    "therapy_pain_matched": "stim_optimizer",
     "inputs": "closed_loop",
     "response": "closed_loop",
     "ground_truth_verdict": "closed_loop",

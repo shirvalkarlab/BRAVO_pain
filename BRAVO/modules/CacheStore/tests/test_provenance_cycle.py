@@ -225,3 +225,53 @@ def test_the_writers_of_a_chain_exclude_the_raw_inputs():
                    kind="settings_stream", writer="stim_optimizer"),
     ])
     assert prov.writers_in(chain) == {"stim_optimizer"}
+
+
+# --------------------------------------------------------------------------------------------
+# the matched table is raw-derived: written by Stim Optimizer's code, embodying no choice of its
+# --------------------------------------------------------------------------------------------
+
+def test_the_matched_table_is_released_to_every_module_while_the_chosen_ladder_is_still_refused():
+    """Track A step 5. `therapy_pain_matched` is a deterministic join of the programmed settings
+    and the pain reports; a product derived from it must reach Stim Optimizer, or the table step 5
+    exists to give it is refused to it. The CONTROL in the same test: a product derived from the
+    ladder Stim Optimizer CHOSE (`settings_stream`) is refused as before."""
+    with _Sandbox():
+        settings_key = st.product_key("therapy_settings", UID, ("files", 1))
+        report_key = st.product_key("redcap_reports", UID, ("reports", 1))
+        matched_sig = ("matched", 1)
+        st.store("therapy_pain_matched", UID, matched_sig, {"epoch": np.array([1.0, 2.0])},
+                 writer="stim_optimizer", trigger="design_matrix",
+                 provenance=prov.flatten([
+                     prov.entry(settings_key, kind="therapy_settings", writer="stim_optimizer"),
+                     prov.entry(report_key, kind="redcap_reports", writer="biomarkers")]))
+        matched_key = st.product_key("therapy_pain_matched", UID, matched_sig)
+        # the table itself, to its own writer
+        assert st.load("therapy_pain_matched", UID, matched_sig,
+                       consumer="stim_optimizer") is not None
+        # a biomarker result derived from it, back to Stim Optimizer
+        derived_sig = ("from_matched", 1)
+        st.store("biomarker_band_results", UID, derived_sig, {"center_hz": np.array([23.44])},
+                 writer="biomarkers", trigger="page_request",
+                 provenance=prov.flatten([prov.entry(
+                     matched_key, kind="therapy_pain_matched", writer="stim_optimizer",
+                     chain=st.read_stamp("therapy_pain_matched", UID, matched_sig)["provenance"])]))
+        assert st.load("biomarker_band_results", UID, derived_sig,
+                       consumer="stim_optimizer") is not None, \
+            "a result built from the matched table was refused to Stim Optimizer"
+        assert prov.writers_in(st.read_stamp("biomarker_band_results", UID,
+                                             derived_sig)["provenance"]) == set()
+
+        # THE CONTROL: the same shape of chain, but from the ladder Stim Optimizer chose.
+        ladder_key = st.product_key("settings_stream", UID, ("ladder", 1))
+        chosen_sig = ("from_ladder", 1)
+        st.store("biomarker_band_results", UID, chosen_sig, {"center_hz": np.array([23.44])},
+                 writer="biomarkers", trigger="page_request",
+                 provenance=prov.flatten([prov.entry(ladder_key, kind="settings_stream",
+                                                     writer="stim_optimizer")]))
+        raised = False
+        try:
+            st.load("biomarker_band_results", UID, chosen_sig, consumer="stim_optimizer")
+        except prov.SelfDerivedProduct:
+            raised = True
+        assert raised, "a result built from Stim Optimizer's own chosen ladder was released"

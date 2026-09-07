@@ -30,14 +30,14 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Commit Track A step 4 together with the planning-file and document updates of 2026-09-07's second
-session; then build Track A step 5, "Write the therapy and pain matched table into the store".**
+**Commit Track A step 5 once the container suite confirms it; then build Track A step 6, "Write
+the biomarker results back after computing them".**
 
 ## Current Phase
 
-Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`; step 4 is built, tested
-on both runners and checked on the live record, and is being committed. Tracks B through G are not
-started, except Track F step 1 (`b7036bf`).
+Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`, step 4 in `d47b9a7`;
+step 5 is built, tested on both runners and proved on the live record, and is being committed.
+Tracks B through G are not started, except Track F step 1 (`b7036bf`).
 
 ## Phases
 
@@ -100,7 +100,11 @@ policy becomes self-confirming and the record looks like converging evidence whe
   session): kind `redcap_reports`, Parquet, keyed on the table's own content, history kept rather
   than swept, read by no page; the fresh fetch on every request stays and a test proves a newly
   filed report reaches the next request
-- [ ] 5. Write the therapy and pain matched table into the store
+- [x] 5. Write the therapy and pain matched table into the store — built 2026-09-07 (second
+  session): the settings stream as `therapy_settings` keyed on the source-file rows, the matched
+  table as `therapy_pain_matched` keyed on the settings key and the pain-report snapshot key, both
+  keys in its provenance; on RCS08 the stored stream equals the fresh parse field for field and
+  reads in about 0.01 s against about 33 s to parse
 - [ ] 6. Write the biomarker results back after computing them
 - [ ] 7. Write the amplitude effect on each band where Stim Optimizer can read it
 - [ ] 8. Have Stim Optimizer read the store and write its outputs back
@@ -186,6 +190,7 @@ store.
 | 6 | **The pain-report snapshot is keyed on the content of the tidy table alone**, not on how it was requested, and the store keeps every superseded snapshot of that kind instead of sweeping it. | The same 760-row table requested with and without a record identifier is one report set; two entries for it tell an audit nothing. A swept snapshot would leave the ledger row and not the table, which is the one thing an audit needs. Each snapshot is about 28 KB and one is written per distinct report set, so growth is bounded by how often reports are filed. | 2026-09-07 |
 | 7 | **The snapshot is written after every fresh fetch and read by no page.** Decision 22 stands: the reports are fetched fresh on every request. | The stored copy buys reproducibility and a key for derived products, not speed. A test files a new report between two requests and requires the second request to return it while the earlier snapshot stays on disk. | 2026-09-07 |
 | 8 | **This plan is kept in the `planning-with-files` plugin's parseable shape** — three-hash phase headings, one literal status line per phase, `Next Step` rewritten on every status change — in legacy mode with structure-aware injection (`.mode` holds `inject-smart`) and **without attestation**. | The plugin's completion check and status command read nothing from the earlier heading shape. Attestation blocks context injection whenever the plan file changes until it is re-attested, and this file is edited after every phase; an auto-recorded digest is not proof of human review. Autonomous and gated modes are not used because the PI's go-ahead rule is a human gate, not a file gate. | 2026-09-07 |
+| 9 | **Track A step 5: the settings stream is stored as the raw kind `therapy_settings`, keyed on the participant's source-file rows — each file's uid, content hash and type, never its name — and the matched table as `therapy_pain_matched`, keyed on the settings key plus the pain-report snapshot key, the wash-in and the item list, with both keys in its provenance.** An empty stream, a stream with unreadable files, and a matched table whose inputs cannot both be named are handed back but never stored. `therapy_pain_matched` is registered as raw-derived. | The stream is the single most expensive thing the module does and the file rows identify it before anything is decoded (decision 24); a file name can carry a patient's name. An unreadable file leaves the key unchanged, so a stored copy would carry the gap until the next upload. The report key in the matched table's key is what makes a newly filed report a new entry, so a stale rating cannot be served. The matched table is a deterministic join of two raw inputs and embodies no exploration choice; refusing it to Stim Optimizer would refuse the table this step exists to give it, while the ladder it chooses stays a derived kind and is still refused — both pinned in `test_provenance_cycle.py`. | 2026-09-07 |
 
 ## Errors Encountered
 

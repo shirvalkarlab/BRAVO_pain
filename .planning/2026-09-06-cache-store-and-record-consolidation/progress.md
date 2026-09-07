@@ -239,3 +239,28 @@ this machine (pyenv 3.12.9) has no pytest.
 | What's the goal? | Correct stored numbers first; the store as the route between modules second |
 | What have I learned? | `findings.md` §6 |
 | What have I done? | This entry |
+
+### Track A step 5 — "Write the therapy and pain matched table into the store" — built
+
+- **Status:** complete in the working tree, committed with this entry.
+- Files changed: `BRAVO/modules/StimOptimizer/adapter.py` (`source_file_signature`,
+  `settings_stream` now store-backed with the parser moved to `_build_settings_stream`,
+  `build_design_matrix` stores the matched table when both inputs carry a key; `STORE_KEY_ATTR`,
+  `UNREADABLE_ATTR`), `BRAVO/modules/CacheStore/provenance.py` (`therapy_pain_matched` raw-derived;
+  both new kinds mapped to `stim_optimizer`), tests: `StimOptimizer/tests/test_settings_store.py`
+  (new, twelve tests), `CacheStore/tests/test_provenance_cycle.py` (one test: the matched table is
+  released to every module while the chosen ladder is still refused).
+- Live proof on RCS08 through the bridge (`_agent_bridge/_step5_live.py`, disposable), three
+  alternating rounds, each round a cold parse followed by a stored read:
+
+| Product | Fresh (s) | Stored (s) | Fields compared | Differences |
+|---|---|---|---|---|
+| settings stream, 6,629 rows, 46,530-byte Parquet | 33.61, 32.56, 32.89 | 0.013, 0.009, 0.009 | 59,661 each round | 0 each round |
+| matched table, 92 rows, stream given | 0.932, 0.027, 0.024 | 0.019, 0.012, 0.012 | 3,036 each round | 0 each round |
+| matched table from an unstored stream vs stored | — | — | 3,036 | 0 |
+
+  Column types and index equal in every comparison. The first matched-table round includes the
+  REDCap fetch. The stored stream's sidecar: writer `stim_optimizer`, no provenance (raw); the
+  matched table's: writer `stim_optimizer`, provenance `therapy_settings` and `redcap_reports`.
+- Not changed: the closed-loop module's `inputs` and `response` entries are still written with no
+  provenance; that is Track A step 8 and Track G work, recorded in `findings.md` §6.

@@ -308,3 +308,14 @@ are omitted on purpose; search for the name.**
 - The store's live root is `/usr/src/BRAVO/BRAVOStorage/cache` with `biomarker_psd` (98 files,
   506 MB), `biomarker_psd_rows` (6,309 files, 30 MB), `biomarker_shared` (one 245 MB tile entry),
   `closed_loop` (two `inputs` entries, 5 MB) and now `redcap_reports` (one entry, 28 KB).
+
+### 6d. Step 5 observations
+
+- The `inputs` and `response` kinds written by `ClosedLoopDeployment/adapter.py` pass no
+  provenance and no consumer; `evidence_inputs_cached` memoises the settings stream, the epochs and
+  the design matrix together under the recording-set signature, so with the stream now stored its
+  cold build drops from about 35 s to under a second, but its sidecar still cites nothing.
+- On the host, pandas 3 defaults `pd.Timestamp` to microsecond resolution while the container's
+  pandas 2.2.3 uses nanoseconds; the Parquet round trip keeps whichever the builder used, so a test
+  must assert the timezone and not the resolution.
+- The bridge runs one job at a time; its heartbeat age rises to the length of the running job.

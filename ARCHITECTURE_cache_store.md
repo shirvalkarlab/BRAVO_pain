@@ -225,8 +225,14 @@ refusal cannot work. Progress against them is in `task_plan.md`, not here.
    (`PRO_STORE_KEY_ATTR`) so a derived product can cite it. Measured twice on the live record: no
    freshness check is cheaper than the fetch itself, so the stored copy buys reproducibility and a
    key for derived products, not speed.
-2. **Step 5, "Write the therapy and pain matched table into the store"** — therapy settings
-   matched in time to pain scores; the timezone-aware timestamp is why this is Parquet.
+2. **Step 5, "Write the therapy and pain matched table into the store" — done 2026-09-07, second
+   session.** The settings stream read from the stored Percept files is kind `therapy_settings`,
+   raw, keyed on the participant's source-file rows (`source_file_signature` in
+   `StimOptimizer/adapter.py`); the epoch-level matched table is `therapy_pain_matched`, keyed on
+   the settings key and the pain-report snapshot key, with both in its provenance, and registered
+   as raw-derived because it is a deterministic join that embodies no exploration choice. The
+   timezone-aware timestamp is why both are Parquet. On RCS08 the stored stream reads in about
+   0.01 s against about 33 s to parse, equal field for field (decision 37).
 3. **Step 6, "Write the biomarker results back after computing them"** — per band centre and
    contact pair. All 22 centres, 8.5 to 29.5 Hz, read from the store's own centre list rather than
    a hardcoded range.
