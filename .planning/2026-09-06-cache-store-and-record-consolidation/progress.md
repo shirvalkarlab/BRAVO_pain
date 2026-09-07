@@ -665,3 +665,16 @@ this machine (pyenv 3.12.9) has no pytest.
   both orders), the bundle rebuilt and committed, the documents updated. The push question was
   answered by the PI on 2026-09-07 and every commit since is on `origin`. The commit identity
   question is still his (open item 1).
+
+### PI decisions received, 2026-09-07 — commit identity and the spectrum directories
+
+- Commit identity: his own name and his UCSF address, Prasad Shirvalkar,
+  `prasad.shirvalkar@ucsf.edu`. Recorded as decision 49; every commit from this one on carries it.
+  `CLAUDE.md`, `HOUSE_RULES_writing_and_claims.md` and `DECISIONS_and_open_items.md` updated;
+  the six earlier commits keep the machine identity they were made with.
+- Spectrum directories: move both into the one store as raw kinds; delete the per-recording
+  directory rather than migrate it. Recorded as decision 50. Closes open item 7, Track C step 1,
+  Track D steps 1 and 2, and Track E step 2 in one decision, per the recommendation in
+  `artifacts/adr_2026-09-07_track_e_spectrum_directories.md`. Implementation starting next.
+- Device ceiling constant (open item 20): he asked for a fuller explanation of the current rule
+  before choosing the multiplier or the rule's shape; explained in chat, not yet decided.

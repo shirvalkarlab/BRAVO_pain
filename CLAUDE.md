@@ -125,18 +125,21 @@ reader not to write a third copy would not have prevented the second one.**
 *Framework text: work on a branch, commit iteratively, push to remote — work isn't done until
 `git push` succeeds.*
 
-**THIS DOES NOT HOLD HERE, and acting on it would take a decision that is not yours.** Six commits
-sit on `PS_closedloop_deployment` and on no remote; `origin` is at `705bdb0`. **Whether to push is
-the principal investigator's call, and so is whose name goes on the commits** — that question has
-been asked three times and is still open, which is why the existing ones carry a machine identity.
-The git configuration file is not writable in the sandbox this work was done in, so identity is
-passed inline:
+**THIS DOES NOT HOLD HERE only in part.** Pushing without being asked was never the principal
+investigator's default, but he gave that go-ahead on 2026-09-07 for this branch's work
+("Push everything") and every commit since has gone to `origin`. **Whose name goes on the
+commits was asked three times and is now answered, on 2026-09-07: his own** — Prasad Shirvalkar,
+`prasad.shirvalkar@ucsf.edu`. The commits made before that date carry a machine identity and are
+not rewritten. The git configuration file is not writable in the sandbox this work was done in,
+so identity is still passed inline on every commit:
 
 ```bash
-git -c user.name="..." -c user.email="..." commit -m "..."
+git -c user.name="Prasad Shirvalkar" -c user.email="prasad.shirvalkar@ucsf.edu" commit -m "..."
 ```
 
-**Commit iteratively: yes. Push without being asked: no.**
+**Commit iteratively: yes. Push without being asked: no — but he has already said yes for this
+branch's ongoing work, so continue pushing what he already authorized rather than asking again
+each time.**
 
 ### 7. Leave a Trail
 Artifacts in a durable directory, work tracked, decisions in architecture decision records, clear
@@ -345,7 +348,11 @@ framework disagree, these win.**
    They are the principal investigator's, and two defects in them are open on him.
 8. **Plan approval is not execution authority.** He gives an explicit go-ahead before
    implementation. He gave it for the cache-store phases on 2026-09-07.
-9. **Do not push, and do not choose a commit identity.** See §2 principle 6.
+9. **Pushing and the commit identity are both answered, 2026-09-07.** Push: yes, for this
+   branch's ongoing work — see §2 principle 6. Identity: Prasad Shirvalkar,
+   `prasad.shirvalkar@ucsf.edu`, passed inline on every commit since the git configuration file
+   cannot be written in the sandbox. Commits made before this date keep the machine identity they
+   were made with.
 10. **Write in plain language with no jargon**, and **only make a claim about a result if the same
     reply contains the result.** The full rules, the replacement table, and the eight things that
     must never be claimed are in `HOUSE_RULES_writing_and_claims.md`. **Read it before writing any

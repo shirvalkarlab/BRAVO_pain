@@ -127,17 +127,18 @@ these rules.
 8. **A test whose name asserts something untrue is worse than no test.** When removing a
    calculation, split the test rather than relabelling its assertion.
 
-## 7. One open question, asked three times and still unanswered
+## 7. The commit identity, asked three times and answered 2026-09-07
 
-**Commit identity.** The project's session rules ask for commits under the principal investigator's
-name and email. They have been made as a machine identity instead, on the reasoning that
-attributing machine-written commits to a named researcher in the permanent record of a research
-repository is his decision and not the agent's. Nothing already pushed has been rewritten.
-**Ask once, then follow the answer consistently.**
+**Commit identity.** The question of whose name and email go on a machine-written commit in the
+permanent record of a research repository was his to decide, not the agent's, and it was asked
+three times before he answered it: his own name and his UCSF address, **Prasad Shirvalkar**,
+`prasad.shirvalkar@ucsf.edu`. Every commit from 2026-09-07 onward carries that identity. The
+commits made before that date carry a machine identity instead, and **nothing already pushed has
+been rewritten.**
 
-Note also that the git configuration file is not writable in the sandbox this work was done in, so
-identity has to be passed inline on each commit:
+The git configuration file is not writable in the sandbox this work is done in, so the identity is
+passed inline on each commit:
 
 ```
-git -c user.name="..." -c user.email="..." commit -m "..."
+git -c user.name="Prasad Shirvalkar" -c user.email="prasad.shirvalkar@ucsf.edu" commit -m "..."
 ```

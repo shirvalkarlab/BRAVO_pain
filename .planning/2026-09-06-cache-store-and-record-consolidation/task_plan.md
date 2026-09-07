@@ -30,10 +30,11 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Waiting on the PI. Everything that was not his to decide is built, proven and pushed. His
-decisions: the spectrum directories (`artifacts/adr_2026-09-07_track_e_spectrum_directories.md`,
-one decision covering Track C step 1, Track D steps 1 and 2 and Track E step 2), the device
-ceiling constant (open item 20), and the commit identity (open item 1). Nothing else is queued.**
+**Two of his three decisions landed 2026-09-07: the commit identity (his own name and UCSF
+address, decision 49), and the spectrum directories — move both into the store as raw kinds,
+delete the per-recording directory rather than migrate it (decision 50). Building decision 50 now.
+The device ceiling constant (open item 20) is still his: he asked for more explanation of the
+current rule and has not yet chosen the multiplier or the rule's shape.**
 
 ## Current Phase
 
@@ -271,8 +272,9 @@ store.
   files by no page request), the stored spectra against a fresh computation (547,118 values,
   0 differences), what connecting would save (about 2.5 s of a 52 s page, measured, smaller
   than the 4.05 s projected), and three options with a recommendation. Nothing changed
-- [ ] 2. Connect the live path to the spectrum cache that already exists — **the PI's sign-off**;
-  the measurement is in the record
+- [ ] 2. Connect the live path to the spectrum cache that already exists — **decided 2026-09-07
+  (decision 50): both directories become raw kinds in the one store; the per-recording directory
+  is deleted, not migrated.** In progress.
 
 ### Phase 5: Verify, rebuild, and close the record
 
