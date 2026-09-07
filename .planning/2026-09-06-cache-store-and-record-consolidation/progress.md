@@ -678,3 +678,35 @@ this machine (pyenv 3.12.9) has no pytest.
   `artifacts/adr_2026-09-07_track_e_spectrum_directories.md`. Implementation starting next.
 - Device ceiling constant (open item 20): he asked for a fuller explanation of the current rule
   before choosing the multiplier or the rule's shape; explained in chat, not yet decided.
+
+### Decision 51 — the per-recording directory stays, sped up in place; built and proven
+
+- Measured the real cost of removing the per-recording directory (not the earlier, misleading
+  full-participant comparison): with the directory present, one new recording costs 0.500-0.560 s;
+  with it absent, every call decodes the whole participant fresh, 2.825-3.069 s, alternating
+  rounds. The PI chose to keep it (revising decision 50) rather than accept that recurring cost.
+- Attempting to move it into the one store surfaced a second mismatch: the store keeps one current
+  snapshot per kind per participant, replaced whole on every write, which would force a full
+  rewrite on every new recording (the exact regression just avoided) or one database row and one
+  small file per recording, about 6,300 of them today. The PI chose to leave it as its own cache.
+- Built instead: a rows-set stamp (`_rows_set_signature`) that skips the whole per-recording loop
+  when the recording set has not moved since the last assembly, backed by a small rows-set cache
+  (`_load_rows_cache`/`_save_rows_cache`); and a per-recording manifest
+  (`_load_rows_manifest`/`_save_rows_manifest`) that replaces asking the file system about every
+  recording with one small saved list, read once, falling back to the original per-file check for
+  anything the manifest does not yet know about — never treating "not listed" as "missing".
+- A first draft treated "not in the manifest" as "missing" and would have redecoded a
+  participant's entire history the first time it ran, ignoring files already on disk. Caught before
+  shipping by a live run on RCS08 with an intentionally empty manifest; fixed to fall back to the
+  original file check for anything the manifest has not yet confirmed.
+- Regression test `Biomarkers/tests/test_psd_rows_manifest.py` (3 tests, container-style asserts):
+  the cold-manifest case above, a manifest-hit case, and `force_recompute` still ignoring and then
+  repairing both caches.
+- Proven on RCS08, live, via the bridge, all directories left untouched (measured in throwaway
+  copies): rows assembled through the per-recording loop against rows served from the rows-set
+  cache, 1,149,923 fields compared, 0 differences. Alternating rounds, cache hit against a full
+  recompute, twice each: 0.355 s / 0.351 s against 3.138 s / 2.909 s, all four producing the same
+  6,229 rows.
+- Container suite after the change: PASS=540 FAIL=0 (537 before, +3 new tests). Host suite
+  unaffected (Biomarkers is not part of it) — re-run in both orders as a whole-platform check:
+  934 passed, 41 skipped, both orders.

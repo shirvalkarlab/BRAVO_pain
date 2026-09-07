@@ -30,11 +30,12 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Two of his three decisions landed 2026-09-07: the commit identity (his own name and UCSF
-address, decision 49), and the spectrum directories — move both into the store as raw kinds,
-delete the per-recording directory rather than migrate it (decision 50). Building decision 50 now.
-The device ceiling constant (open item 20) is still his: he asked for more explanation of the
-current rule and has not yet chosen the multiplier or the rule's shape.**
+**Decision 50 was revised after measurement (decision 51): the per-recording directory stays in
+place rather than moving into the store, and instead gets a stamp-and-manifest speed-up in front of
+its per-recording loop, now built, regression-tested and proven on RCS08 with zero differences.
+Left from decision 50: the assembled matrix still needs to move into the one store as a raw kind —
+built nowhere yet. The device ceiling constant (open item 20) is still his: he asked for more
+explanation of the current rule and has not yet chosen the multiplier or the rule's shape.**
 
 ## Current Phase
 

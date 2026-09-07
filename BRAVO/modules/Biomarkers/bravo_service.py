@@ -16,6 +16,7 @@ import os
 import re
 import json
 import math
+import pickle
 import logging
 import threading
 import time as _time
@@ -1871,6 +1872,124 @@ def _psd_rows_cache_dir():
     return d
 
 
+def _psd_rows_index_dir():
+    """Directory for the two small files that let `_assemble_psd_rows_cached` skip most of its own
+    per-recording work: the manifest (which recordings this participant already has a valid
+    per-recording file for) and the rows cache (the fully assembled row list for one exact
+    recording set, so a request whose set has not moved skips the per-recording loop entirely).
+
+    Distinct from `_psd_rows_cache_dir` (the per-recording files themselves) and `_psd_cache_dir`
+    (the assembled matrix). Neither of these two files replaces the per-recording cache; they only
+    avoid re-deriving what it already tells us on every call.
+    """
+    base_dir = os.path.dirname(_psd_cache_dir())   # .../cache
+    d = os.path.join(base_dir, "biomarker_psd_rows_index")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _rows_set_signature(entries, key_fn):
+    """One short stamp for an entire recording set, from the per-recording cache key each entry
+    resolves to -- so it already carries the recording's identity and content hash, the Welch
+    window, the channel-canon and Missing-aware rule versions, and (for TD streaming) the PRO-set
+    signature, with no extra work: these are exactly the same inputs `key_fn` already folds in.
+    Order-independent, so the set is unchanged whether the ORM returns it in a different order.
+    """
+    import hashlib
+    parts = sorted(os.path.basename(key_fn(e)) for e in entries)
+    return hashlib.sha1("|".join(parts).encode("utf8")).hexdigest()[:16]
+
+
+def _rows_manifest_path(participant_uid):
+    return os.path.join(_psd_rows_index_dir(), f"manifest_{participant_uid}.json")
+
+
+def _load_rows_manifest(participant_uid):
+    """The per-recording cache keys already known to have a valid file on disk, or empty on a
+    cold start, a corrupt file, or any read error -- the safe default is to fall back to checking
+    every recording individually, exactly as before this manifest existed."""
+    try:
+        with open(_rows_manifest_path(participant_uid), "r", encoding="utf8") as fh:
+            return set(json.load(fh).get("known_good", []))
+    except Exception:
+        return set()
+
+
+def _save_rows_manifest(participant_uid, known_good):
+    """Best-effort, like every other cache write in this module: two requests updating this
+    participant's manifest at once can lose one's addition, but the per-recording file that
+    addition refers to is already safely on disk (its own write is atomic), so the only cost of
+    losing it is that one recording is checked again next time -- never a wrong answer."""
+    path = _rows_manifest_path(participant_uid)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf8") as fh:
+            json.dump({"known_good": sorted(known_good)}, fh)
+        os.replace(tmp, path)
+    except Exception as e:
+        _log.warning("Biomarkers: PSD rows manifest write failed (%s)", e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _rows_cache_path(participant_uid, rows_sig):
+    return os.path.join(_psd_rows_index_dir(), f"rows_{participant_uid}_{rows_sig}.pkl")
+
+
+def _load_rows_cache(participant_uid, rows_sig):
+    """The fully assembled per-recording rows for this exact recording set, or None on a miss or
+    any read error. Holds the rows BEFORE patient-event rows are appended: those are read fresh
+    from the ORM on every call regardless, exactly as they always have been, because a new patient
+    event is not a new recording and does not change `rows_sig`."""
+    path = _rows_cache_path(participant_uid, rows_sig)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    except Exception as e:
+        _log.warning("Biomarkers: PSD rows-set cache read failed (%s); recomputing", e)
+        return None
+
+
+def _save_rows_cache(participant_uid, rows_sig, rows):
+    path = _rows_cache_path(participant_uid, rows_sig)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            pickle.dump(rows, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, path)
+        _sweep_old_rows_cache(participant_uid, rows_sig)
+    except Exception as e:
+        _log.warning("Biomarkers: PSD rows-set cache write failed (%s)", e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _sweep_old_rows_cache(participant_uid, keep_sig):
+    """Remove this participant's other rows-set entries once the new one has landed. Every new
+    upload changes `rows_sig`, so without this the old entries would sit there forever -- the same
+    reason `CacheStore._sweep_superseded` exists, at the same modest per-write cost (one directory
+    listing, only on a write, never on a read)."""
+    d = _psd_rows_index_dir()
+    prefix = f"rows_{participant_uid}_"
+    keep = os.path.basename(_rows_cache_path(participant_uid, keep_sig))
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(prefix) and name != keep and not name.endswith(".tmp"):
+            try:
+                os.remove(os.path.join(d, name))
+            except OSError:
+                pass
+
+
 def _pro_set_signature(pro_times):
     """Short, order-independent signature of the PRO timestamp SET feeding rating-centered TD PSDs.
 
@@ -1995,6 +2114,23 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
     so a PRO change recomputes only the TD spectra. Montage/survey/event rows are PRO-independent and
     keep their stable cache entries.
 
+    TWO SHORTCUTS SIT IN FRONT OF THE PER-RECORDING LOOP, NEITHER OF WHICH CAN SERVE A WRONG ANSWER.
+
+    First, `_rows_set_signature` reduces this participant's whole recording set to one short stamp,
+    and `_load_rows_cache` looks for the fully assembled rows already stored under that exact stamp.
+    A hit means nothing about the recording set has moved since the last assembly, so the entire
+    per-recording loop below is skipped. A participant asked about repeatedly with no new upload in
+    between -- which is the common case for `band_psd_lsb_conversion`, a call site with no matrix-
+    level cache in front of it at all -- pays for the per-recording loop once and then not again.
+
+    Second, on a stamp miss, `_load_rows_manifest` reads one small saved list, once, naming which
+    recordings are already known to have a good file -- for those, the file is opened straight
+    away with no existence check first. A recording NOT on that list is not assumed missing: it is
+    checked the way every recording always was, and being found there repairs the list for next
+    time. So an empty or stale manifest, including the very first run after this manifest existed
+    at all, costs at most the existence check this function has always made -- never a redecode of
+    a recording whose file was already on disk, and never a wrong or missing recording.
+
     Returns (rows, n_cached, n_computed) — the row counts let callers log/verify the cache hit rate.
     """
     from .routines import streaming_psd as _sp
@@ -2011,62 +2147,95 @@ def _assemble_psd_rows_cached(participant_uid, pro_times=None, force_recompute=F
         sig = pro_sig if (pro_sig and e["source"] == "TD streaming") else ""
         return _recording_psd_cache_path(e["uid"], e["hash"], sig)
 
-    rows = []
-    n_cached = 0
-    missing = []   # entries needing a decode+Welch
-    for e in entries:
-        path = _key_for(e)
-        # force_recompute ignores the on-disk spectra so every recording is decoded and Welch'd
-        # again. The rebuilt rows are still written back, so this is a one-off cost.
-        cached = (None if force_recompute
-                  else (_load_recording_psd_rows(path) if os.path.exists(path) else None))
-        if cached is not None:
-            rows.extend(cached)
-            n_cached += 1
-        else:
-            missing.append(e)
+    rows_sig = _rows_set_signature(entries, _key_for)
+    rows = None if force_recompute else _load_rows_cache(participant_uid, rows_sig)
+    if rows is not None:
+        n_cached, n_computed = len(entries), 0
+    else:
+        known_good = set() if force_recompute else _load_rows_manifest(participant_uid)
+        manifest_changed = False
+        rows = []
+        n_cached = 0
+        missing = []   # entries needing a decode+Welch
+        for e in entries:
+            path = _key_for(e)
+            name = os.path.basename(path)
+            cached = None
+            # force_recompute ignores the on-disk spectra so every recording is decoded and Welch'd
+            # again. The rebuilt rows are still written back, so this is a one-off cost.
+            if not force_recompute:
+                if name in known_good:
+                    # The manifest says this file is good: skip the existence check and open it
+                    # directly. If the manifest was wrong, the load itself catches that below.
+                    cached = _load_recording_psd_rows(path)
+                    if cached is None:
+                        known_good.discard(name)
+                        manifest_changed = True
+                elif os.path.exists(path):
+                    # NOT IN THE MANIFEST IS NOT THE SAME AS MISSING. A file already on disk from
+                    # before this manifest existed, or from a manifest write that was lost to a
+                    # concurrent request, is still found here exactly as it always was; finding it
+                    # also repairs the manifest, so this fallback is paid at most once per file.
+                    cached = _load_recording_psd_rows(path)
+                    if cached is not None:
+                        known_good.add(name)
+                        manifest_changed = True
+            if cached is not None:
+                rows.extend(cached)
+                n_cached += 1
+            else:
+                missing.append(e)
 
-    n_computed = 0
-    if missing:
-        # Decode only the misses, concurrently (same threaded decode as _load_recordings), then
-        # Welch each recording's dict(s) in isolation and cache its rows keyed by that recording.
-        def _decode(e):
-            rec = e["rec"]
-            try:
-                data = Database.loadSourceFile(rec.pointer, rec.hashed)
-            except Exception:
-                _log.warning("Biomarkers: failed to decode recording %r for PSD cache; skipping",
-                             getattr(rec, "pointer", "?"), exc_info=True)
-                return e, None
-            dicts = [d for d in (data if isinstance(data, list) else [data]) if isinstance(d, dict)]
-            return e, dicts
-
-        workers = max(1, min(len(missing), _loader_threads()))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for e, dicts in pool.map(_decode, missing):
-                rec_rows = []
-                if dicts:
-                    # TD streaming gets rating-centered rows when pro_times is provided; other
-                    # sources ignore it (pass None so they keep the first-window behavior).
-                    _pt = pro_times if (pro_times is not None and e["source"] == "TD streaming") else None
-                    _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt)
-                rows.extend(rec_rows)
-                n_computed += 1
-                # Persist this recording's rows (even if empty) so it is never re-decoded.
+        n_computed = 0
+        if missing:
+            # Decode only the misses, concurrently (same threaded decode as _load_recordings), then
+            # Welch each recording's dict(s) in isolation and cache its rows keyed by that recording.
+            def _decode(e):
+                rec = e["rec"]
                 try:
-                    _save_recording_psd_rows(_key_for(e), rec_rows)
-                except Exception as ex:
-                    _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
+                    data = Database.loadSourceFile(rec.pointer, rec.hashed)
+                except Exception:
+                    _log.warning("Biomarkers: failed to decode recording %r for PSD cache; skipping",
+                                 getattr(rec, "pointer", "?"), exc_info=True)
+                    return e, None
+                dicts = [d for d in (data if isinstance(data, list) else [data])
+                         if isinstance(d, dict)]
+                return e, dicts
+
+            workers = max(1, min(len(missing), _loader_threads()))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for e, dicts in pool.map(_decode, missing):
+                    rec_rows = []
+                    if dicts:
+                        # TD streaming gets rating-centered rows when pro_times is provided; other
+                        # sources ignore it (pass None so they keep the first-window behavior).
+                        _pt = (pro_times if (pro_times is not None and e["source"] == "TD streaming")
+                               else None)
+                        _welch_rows_into(rec_rows, dicts, e["source"], _sp, pro_times=_pt)
+                    rows.extend(rec_rows)
+                    n_computed += 1
+                    # Persist this recording's rows (even if empty) so it is never re-decoded.
+                    try:
+                        _save_recording_psd_rows(_key_for(e), rec_rows)
+                        known_good.add(os.path.basename(_key_for(e)))
+                        manifest_changed = True
+                    except Exception as ex:
+                        _log.warning("Biomarkers: per-recording PSD cache write failed (%s)", ex)
+
+        if manifest_changed:
+            _save_rows_manifest(participant_uid, known_good)
+        _save_rows_cache(participant_uid, rows_sig, rows)
 
     # Patient-event PSDs (incl. Streaming markers): read off ORM metadata, no decode/Welch, so they
-    # need no per-recording cache. Appended on every assembly — newly-ingested files with event
-    # markers therefore enter the pool automatically (the matrix signature below tracks them).
+    # need no per-recording cache and are never part of the rows-set stamp above. Appended on every
+    # assembly, cache hit or miss alike — a new patient event is not a new recording, so it must be
+    # picked up even when the recording set (and therefore `rows_sig`) has not moved at all.
     # Build the sensing index from the already-computed TD rows so event blocks with no SenseID
     # get their contact pair from the actual per-timestamp sensing config.
     try:
         _ev_idx = _build_sensing_config_index_from_rows(rows)
         ev_rows = _event_psd_rows(participant_uid, sensing_index=_ev_idx)
-        rows.extend(ev_rows)
+        rows = rows + ev_rows
         if ev_rows:
             _log.info("Biomarkers: appended %d patient-event PSD rows for %s", len(ev_rows),
                       participant_uid)
