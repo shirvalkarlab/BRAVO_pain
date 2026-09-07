@@ -1098,6 +1098,113 @@ def report_to_dict(rep):
     }
 
 
+#: How many of the newest runs of rising current the deployment page DRAWS. The amplitude-effect
+#: table is built from every run the device's record holds, not only these, because Stim
+#: Optimizer's question is which bands are still unresolved anywhere in the record.
+THREE_SOURCE_RUNS_ON_PAGE = 4
+
+#: Every run, for the table. The comparison builder takes a count, so "all" is a count no record
+#: will reach.
+_ALL_RUNS = 10_000
+
+
+def amplitude_effect_signature(participant, *, tiles_key, min_settings=3):
+    """The key for the amplitude-effect table: the tile entry, the recording set that the ladders
+    are read from, and the settled-window rule. Nothing decoded enters it (decision 24)."""
+    from StimOptimizer.routines import within_visit as _wv
+    from . import amplitude_effect as _amp
+    return (_amp.KIND, _amp.RULE_VERSION, str(getattr(participant, "uid", participant)),
+            tiles_key, recording_set_signature(participant), "all_runs", int(min_settings),
+            float(_wv.PRE_CHANGE_WINDOW_S), int(_wv.MIN_CHUNKS_PRE_CHANGE),
+            int(_amp.MIN_POINTS_CURVATURE))
+
+
+def amplitude_effect_if_stored(participant, *, min_settings=3):
+    """The response summary for an amplitude-effect table already in the store, or None.
+
+    Asked BEFORE the comparison is built, so that a request whose table is already on disk builds
+    only the runs the page draws rather than every run in the record.
+    """
+    from . import amplitude_effect as _amp
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return None
+    uid = str(getattr(participant, "uid", participant))
+    sig = amplitude_effect_signature(participant, tiles_key=tiles_key, min_settings=min_settings)
+    stamp = _cache_store.read_stamp(_amp.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if not stamp:
+        return None
+    extra = stamp.get("extra") or {}
+    return {"written": True, "served_from_store": True,
+            "store_key": _cache_store.product_key(_amp.KIND, uid, sig),
+            "n_rows": extra.get("n_rows"), "n_runs": extra.get("n_runs"),
+            "n_bands": extra.get("n_bands"), "stored_utc": stamp.get("written_utc")}
+
+
+def _tiles_key_for(participant):
+    """The store key of the tile entry the comparison read, or None with no server to ask."""
+    try:
+        from modules.Biomarkers import bravo_service as _bsvc
+        uid = getattr(participant, "uid", participant)
+        sig = _bsvc._raw_lsb_shared_signature(uid, _bsvc._LSB_SPECTRUM_CENTERS)
+        if sig is None:
+            return None
+        return _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, sig)
+    except Exception:                                  # noqa: BLE001 — no server, no tile key
+        return None
+
+
+def write_amplitude_effect(participant, build, *, min_settings=3):
+    """Derive the per-band amplitude-effect table from the comparison and write it to the store.
+
+    `build` must hold EVERY run the record supports (built with `max_runs=_ALL_RUNS`), not only the
+    runs the page draws. Returns a small summary for the response: the store key, whether the
+    entry is on disk, the row and run counts, and the reason when nothing could be written. The
+    table is written only when the tile entry can be named, because a key that cannot change with
+    its inputs would serve a stale answer; without it the table is still derived and its counts
+    reported.
+    """
+    from . import amplitude_effect as _amp
+    from . import three_source_response as _3src
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+
+    if not build or not build.get("comparisons"):
+        return {"written": False, "n_rows": 0, "n_runs": 0,
+                "reason": (build or {}).get("absent_reason") or "no run of rising current"}
+    table = _amp.table_from_build(build, checked_lo_hz=_3src.CHECKED_LO_HZ,
+                                  checked_hi_hz=_3src.CHECKED_HI_HZ,
+                                  band_half_hz=_3src.BAND_HALF_HZ)
+    summary = {"written": False, "n_rows": int(len(table)),
+               "n_runs": int(table["run_label"].nunique()) if len(table) else 0,
+               "n_bands": int(table["band_center_hz"].nunique()) if len(table) else 0,
+               "store_key": None}
+    if not len(table):
+        summary["reason"] = "the voltage-trace route had nothing to show in any run"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so the table was derived but not stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = amplitude_effect_signature(participant, tiles_key=tiles_key, min_settings=min_settings)
+    prov = _prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")])
+    _cache_store.store_if_absent(_amp.KIND, uid, sig, lambda: table,
+                                 writer="closed_loop", trigger="deployment_report",
+                                 provenance=prov, n_recordings=None,
+                                 extra={"min_settings": int(min_settings),
+                                        "n_rows": summary["n_rows"], "n_runs": summary["n_runs"],
+                                        "n_bands": summary["n_bands"]},
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["served_from_store"] = False
+    summary["store_key"] = _cache_store.product_key(_amp.KIND, uid, sig)
+    summary["written"] = _cache_store.read_stamp(_amp.KIND, uid, sig,
+                                                 root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+    return summary
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -1230,11 +1337,22 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # behind the second route are where the conversion into device units was fitted in the first
     # place. Agreement across the three says the conversion is behaving. The payload carries that
     # sentence in `notes` and in the figure footer, so a panel cannot show the numbers without it.
+    _3build, _amp_stored = None, None
     try:
         from . import three_source_response as _3src
         from . import three_source_plots as _3plot
-        out["three_source_response"] = _3plot.report_payload(
-            _3src.build_for_participant(getattr(participant, "uid", participant)))
+        # The table (Track A step 7) needs every run; the page draws the newest few. When the
+        # table for this record is already stored, only the page's runs are built.
+        try:
+            _amp_stored = amplitude_effect_if_stored(participant)
+        except Exception:                               # noqa: BLE001 — the page comes first
+            _amp_stored = None
+        _3build = _3src.build_for_participant(
+            getattr(participant, "uid", participant),
+            max_runs=(THREE_SOURCE_RUNS_ON_PAGE if _amp_stored else _ALL_RUNS))
+        _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
+                     [:THREE_SOURCE_RUNS_ON_PAGE])
+        out["three_source_response"] = _3plot.report_payload(_page)
     except Exception as _exc:                          # never let this take down the whole report
         # Say WHY it is missing, for the same reason as the stability block above: an absent key
         # reads on the page as "does not apply", and this having failed is not that.
@@ -1243,4 +1361,17 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             "absent_reason": ("the three-way comparison of how current moves band power could not "
                               f"be assembled: {_exc!r}"),
         }
+
+    # TRACK A STEP 7: THE AMPLITUDE EFFECT ON EVERY BAND, WRITTEN WHERE STIM OPTIMIZER CAN READ IT.
+    # Derived from the comparison just built, so it costs no second pass over the recordings, and
+    # written through the one store with the tile entry in its provenance. A failure here is
+    # reported in the response rather than raised, like everything else on this page.
+    try:
+        out["amplitude_effect_by_band"] = (_amp_stored if _amp_stored is not None
+                                           else write_amplitude_effect(participant, _3build))
+    except Exception as _exc:                          # noqa: BLE001
+        out["amplitude_effect_by_band"] = {"written": False,
+                                           "reason": f"the amplitude-effect table could not be "
+                                                     f"written: {_exc!r}"}
+
     return out

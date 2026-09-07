@@ -114,7 +114,7 @@ newer result, and the resolution record is
 | Store the REDCap frame, and keep the freshness fetch anyway | **done, 2026-09-07 second session** — the pain-report table as `redcap_reports`, read by no page |
 | Write the therapy and pain matched table into the store | **done, 2026-09-07 second session** — `therapy_settings` and `therapy_pain_matched` |
 | Write the biomarker results back after computing them | **done, 2026-09-07 second session** — two tidy tables and the served response |
-| Write the amplitude effect on each band where Stim Optimizer can read it | not started |
+| Write the amplitude effect on each band where Stim Optimizer can read it | **done, 2026-09-07 second session** — `amplitude_effect_by_band`, one row per device-recorded run and band |
 | Have Stim Optimizer read the store and write its outputs back | not started |
 
 Tracks B through G — the canonical decoded form, the re-derivation speedups, the Redis build lock,

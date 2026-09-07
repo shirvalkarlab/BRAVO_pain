@@ -30,16 +30,16 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Commit Track A step 6 with the review fixes once the final container run and live proof
-confirm them; then build Track A step 7, "Write the amplitude effect on each band where Stim
-Optimizer can read it".**
+**Commit Track A step 7 once the host suite confirms both orders; then build Track A step 8,
+"Have Stim Optimizer read the store and write its outputs back": read the matched table and the
+amplitude-effect table as `stim_optimizer`, and write its own outputs back with provenance.**
 
 ## Current Phase
 
 Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`, step 4 in `d47b9a7`,
-step 5 in `7278f15c`; step 6 is built, reviewed, tested on both runners and proved on the live
-record, and is being committed. Tracks B through G are not started, except Track F step 1
-(`b7036bf`).
+step 5 in `7278f15c`, step 6 with the review fixes in `4e29af7b`; step 7 is built, tested on both
+runners and proved on the live record, and is being committed. Tracks B through G are not
+started, except Track F step 1 (`b7036bf`).
 
 ## Phases
 
@@ -116,7 +116,12 @@ policy becomes self-confirming and the record looks like converging evidence whe
   every setting; on RCS08 27,311 response values and 1,320 table values per statistic compared
   with 0 differences; served 2.5 to 3.8 s against 5.5 to 6.2 s fresh. Reviewed by six
   perspectives the same day (`artifacts/review_2026-09-07_PS_closedloop_deployment.md`)
-- [ ] 7. Write the amplitude effect on each band where Stim Optimizer can read it
+- [x] 7. Write the amplitude effect on each band where Stim Optimizer can read it — built
+  2026-09-07 (second session): `amplitude_effect_by_band`, one row per device-recorded run of
+  rising current and band centre, from every run in the record; on RCS08 1,078 rows for eleven
+  runs and 98 bands, 2,156 copied powers with 0 differences against the panels, 39,886 fields
+  with 0 differences across three round trips; curvature not assessable on this record's ladders
+  (open item 18)
 - [ ] 8. Have Stim Optimizer read the store and write its outputs back
 
 ### Phase 3: Canonical form, readers, Redis, and the closed-loop fixes — Tracks B, D, F, G
@@ -203,6 +208,7 @@ store.
 | 9 | **Track A step 5: the settings stream is stored as the raw kind `therapy_settings`, keyed on the participant's source-file rows — each file's uid, content hash and type, never its name — and the matched table as `therapy_pain_matched`, keyed on the settings key plus the pain-report snapshot key, the wash-in and the item list, with both keys in its provenance.** An empty stream, a stream with unreadable files, and a matched table whose inputs cannot both be named are handed back but never stored. `therapy_pain_matched` is registered as raw-derived. | The stream is the single most expensive thing the module does and the file rows identify it before anything is decoded (decision 24); a file name can carry a patient's name. An unreadable file leaves the key unchanged, so a stored copy would carry the gap until the next upload. The report key in the matched table's key is what makes a newly filed report a new entry, so a stale rating cannot be served. The matched table is a deterministic join of two raw inputs and embodies no exploration choice; refusing it to Stim Optimizer would refuse the table this step exists to give it, while the ladder it chooses (the `exploration_ladder` kind, renamed from `settings_stream` on review because that name collided with the function that reads the device's history) stays a derived kind and is still refused — both pinned in `test_provenance_cycle.py`. | 2026-09-07 |
 | 10 | **Track A step 6: the band-by-length sweep writes back two tidy tables — `biomarker_band_correlation` and `biomarker_band_discrimination`, one row per contact pair, band centre and length of signal, every value copied from the response and checkable against it, the best row per centre flagged with its interval, selection-aware p-value and verdict, the no-relationship reference on every row (0 for a correlation, 0.5 for an area under the curve) — plus the response itself as `biomarker_band_sweep`, all three under one key naming the tile entry, the pain-report snapshot, the pain score and every setting, with the tile and snapshot keys in their provenance. A request whose key matches is served from the store and marked `served_from_store`.** Reports handed in through the request body, or a participant with no tile key, are computed and never stored. | The approved plan asks for two tables per band centre and contact pair. Serving the response from the store follows decision 26, the key decides: the thousand shuffles and thousand resamples per cell are not paid again when nothing feeding them changed, and every input that could change the answer is in the key. The tables carry the reference value because an area under the curve is above chance by comparison with 0.5 and never with 0. | 2026-09-07 |
 | 11 | **The ledger records writes under the production root only.** A write under a caller's own root or the test override is not recorded, and the 218 rows the test suites had written into the live table (participants `test-participant` and `u`) were deleted on 2026-09-07. | The ledger carries no directory, so nothing else could tell a test write from a real one; 214 of its 227 rows were from the container's tile tests. Deleting rows from an append-only table is justified only because they were never part of the record of what the server holds. | 2026-09-07 |
+| 12 | **Track A step 7: the amplitude effect on every band is a table derived from the three-source comparison's voltage-trace panel, one row per run of rising current (visit, side turned up, sensing contact, stimulation rate) and band centre, with the number and range of currents actually tested, the pieces of recording behind them, the straight-line slope of log power on current with its standard error and p-value, the curvature test with the peak current, the fold change from lowest to highest current, and the harmonic-landing and checked-span flags.** It is built from every run the device's record holds, written by the closed-loop request as `amplitude_effect_by_band` with the tile entry in its provenance, and the page keeps drawing its four newest runs. A request whose table is already stored builds only those four. | The ladder of currents is read from the device's own record (constraint 4 of the three-source comparison), which the server holds, rather than the clinic sheet, which it does not. Every power value is copied from the panel, so the table is checkable against it. Rows are never pooled across visits, because a result established on one visit day must say so; the visit and run columns let Stim Optimizer pool with the visit as the blocking factor. The curvature floor of eight points is the routine's own and is not lowered to manufacture a verdict. | 2026-09-07 |
 
 ## Errors Encountered
 

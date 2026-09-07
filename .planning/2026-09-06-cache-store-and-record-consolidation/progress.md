@@ -320,3 +320,36 @@ this machine (pyenv 3.12.9) has no pytest.
   fresh 7.25, 5.90 and 8.16 s against served 2.71, 2.57 and 2.64 s; 27,314 response values
   compared each round (three more than before: the `store_written` flags), 0 differences each
   round; both tables 1,320 rows, 0 differences against the response grids.
+
+### Track A step 7 — "Write the amplitude effect on each band where Stim Optimizer can read it" — built
+
+- **Status:** complete in the working tree, committed with this entry.
+- Files changed: `BRAVO/modules/ClosedLoopDeployment/amplitude_effect.py` (new: the table, one
+  row per device-recorded run of rising current and band centre, and an exact-count checker),
+  `BRAVO/modules/ClosedLoopDeployment/adapter.py` (`amplitude_effect_signature`,
+  `amplitude_effect_if_stored`, `write_amplitude_effect`; the report builds every run for the
+  table when it is not yet stored and keeps drawing its four newest), `CacheStore/provenance.py`
+  (the kind's writer is the closed-loop module). Tests: new
+  `ClosedLoopDeployment/tests/test_amplitude_effect.py` (9).
+
+| Run | Runner | Result |
+|---|---|---|
+| Final step 7 code | container, `run_tests.py` via the bridge | PASS=485 FAIL=0 |
+| Final step 7 code | host, documented order | 848 passed, 41 skipped |
+| Final step 7 code | host, reverse order | 848 passed, 41 skipped |
+
+- Live proof on RCS08 through the bridge (`_agent_bridge/_step7_live.py`, disposable): the
+  device's current record holds eleven runs; the table has 1,078 rows (eleven runs, 98 bands).
+  Every copied power against the comparison panels: 2,156 fields, 0 differences. Three rounds of
+  derive, write, and read back as Stim Optimizer: 39,886 fields compared each round, 0
+  differences, same shape and column types; derive 0.16, 0.14 and 0.15 s; write 1.09, 1.09 and
+  1.16 s; read 8, 3 and 3 ms; payload 84,366 bytes; sidecar writer `closed_loop`, provenance the
+  tile entry. A later request finds the stored summary (1,078 rows, eleven runs, 98 bands) without
+  building every run again.
+- **What the table says on this record, stated plainly.** Settled settings per run under the
+  thirty-second window: 0 to 6. Curvature is assessed on 0 of 1,078 rows because no run reaches
+  the routine's floor of eight points. On the 2026-08-18 left run at 55 Hz, six currents from 1.0
+  to 3.5 mA, the straight-line slope across 22.5 to 28.5 Hz has p between 0.19 and 0.90 and the
+  fold change from lowest to highest current is between 0.92 and 1.07: no movement was detectable
+  across the currents the device recorded. The documented rise-then-fall at 25 to 28 Hz rests on
+  the clinic sheet's fifteen steps, which the server does not hold (open item 18).

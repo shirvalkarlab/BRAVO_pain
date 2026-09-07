@@ -88,7 +88,7 @@ _WRITER_BY_KIND = {
     "inputs": "closed_loop",
     "response": "closed_loop",
     "ground_truth_verdict": "closed_loop",
-    "amplitude_effect_by_band": "stim_optimizer",
+    "amplitude_effect_by_band": "closed_loop",
     "exploration_ladder": "stim_optimizer",
 }
 

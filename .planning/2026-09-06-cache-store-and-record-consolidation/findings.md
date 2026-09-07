@@ -343,3 +343,20 @@ changed code or the record:
 - The bridge job that ran the live proof saw one REDCap connection error ("remote end closed
   connection without response"); the narrowed request fell back to the full export as designed
   and the run completed. Transient, not reproduced.
+
+### 6f. Step 7 observations, read from the live record on 2026-09-07
+
+- The device's own current record on RCS08 holds eleven runs of rising current on one side; the
+  deployment page draws the four newest. Settled settings per run, under the thirty-second
+  pre-change window and its ten-piece minimum: 6 of 7 on the 2026-08-18 left run, 2 of 4 on the
+  2026-08-18 right run, 4 of 5 on 2025-10-21, 1 of 3 on 2025-10-02.
+- **The documented rise-then-fall at 25 to 28 Hz (curvature p 0.014 to 0.025, peak near 2.1 mA)
+  was established on the clinic sheet's fifteen steps of 2026-08-18, which the server does not
+  hold.** The device's own record of that run yields six settled settings from 1.0 to 3.5 mA, below
+  the curvature routine's floor of eight points, so the table reports the curvature as not
+  assessed there and the straight-line slope as no detectable movement (p 0.19 to 0.90 across 22.5
+  to 28.5 Hz, fold changes 0.92 to 1.07). This is a data-source limit, not a disagreement: the same
+  six settings cannot reproduce a finding that rested on fifteen. Recorded as open item 18.
+- Deriving the table from an already-built comparison costs 0.06 to 0.07 s; the write about 1 s;
+  a read back as Stim Optimizer 3 to 9 ms. Building every run's comparison rather than the page's
+  four is the real added cost on a first request; the store-first check removes it thereafter.

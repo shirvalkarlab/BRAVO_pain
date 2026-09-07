@@ -247,10 +247,17 @@ refusal cannot work. Progress against them is in `task_plan.md`, not here.
    length of signal, every value copied from the sweep response, and the response itself as
    `biomarker_band_sweep`, served back when the key matches. All 22 centres, 8.5 to 29.5 Hz, read
    from the tile store's own centre list rather than a hardcoded range (decision 38).
-4. **Step 7, "Write the amplitude effect on each band where Stim Optimizer can read it"** — with
-   slope, **curvature**, and the number and range of currents actually tested. Curvature is
+4. **Step 7, "Write the amplitude effect on each band where Stim Optimizer can read it" — done
+   2026-09-07, second session.** `ClosedLoopDeployment/amplitude_effect.py` derives one row per
+   device-recorded run of rising current and band centre from the three-source comparison's
+   voltage-trace panel: the number and range of currents tested, the slope of log power on current
+   with its standard error and p-value, the curvature test and peak current, the fold change, and
+   the harmonic-landing and checked-span flags; the closed-loop request writes it as
+   `amplitude_effect_by_band` with the tile entry in its provenance (decision 40). Curvature is
    required, not optional: a rise-then-fall response exists in this record and a straight-line fit
-   reads it as no response.
+   reads it as no response. **On this record the device ladders hold at most six settled settings
+   per run, below the curvature routine's floor of eight, so the table reports curvature as not
+   assessed everywhere; the documented finding rests on the clinic sheet (open item 18).**
 5. **Step 8, "Have Stim Optimizer read the store and write its outputs back"** — Stim Optimizer
    reads the matched table and the amplitude effects as `consumer="stim_optimizer"`, which is
    **the exact edge the refusal exists for**, and writes its own outputs back with provenance.
