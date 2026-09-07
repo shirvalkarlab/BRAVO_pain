@@ -353,3 +353,79 @@ this machine (pyenv 3.12.9) has no pytest.
   fold change from lowest to highest current is between 0.92 and 1.07: no movement was detectable
   across the currents the device recorded. The documented rise-then-fall at 25 to 28 Hz rests on
   the clinic sheet's fifteen steps, which the server does not hold (open item 18).
+
+### Track A step 8 — "Have Stim Optimizer read the store and write its outputs back" — built
+
+- **Status:** complete in the working tree, committed with this entry. Track A is finished.
+- Files changed: `BRAVO/modules/StimOptimizer/bravo_service.py` (the request reads the matched
+  table's key from the design matrix and the newest `amplitude_effect_by_band` as
+  `stim_optimizer`; a summary of that table inside the adaptive window; the response key; the
+  served path; the write-back of five products; a failed write-back reported in the response;
+  one container-only import made relative), `BRAVO/modules/CacheStore/store.py`
+  (`load_newest`, for a reader that does not know the writer's key),
+  `BRAVO/modules/CacheStore/provenance.py` (the five kinds registered to `stim_optimizer`).
+  Tests: new `StimOptimizer/tests/test_service_store.py` (8), one new test in
+  `CacheStore/tests/test_store.py`.
+
+| Run | Runner | Result |
+|---|---|---|
+| Step 8 before the `rank` fix | container, `run_tests.py` via the bridge | PASS=486 FAIL=0 |
+| Step 8 before the `rank` fix | host, both orders | 856 passed, 41 skipped |
+| Final step 8 code | container, `run_tests.py` via the bridge | PASS=486 FAIL=0 (the container runner does not discover `StimOptimizer/tests`, so its count does not move with this step) |
+| Final step 8 code | host, documented order | 857 passed, 41 skipped |
+| Final step 8 code | host, reverse order | 857 passed, 41 skipped |
+
+- **First live run, before the fix** (`_agent_bridge/_step8_live.py`, disposable): the
+  write-back failed with `cannot insert rank, already exists`, nothing was stored, and every
+  "served" round was another fresh fit. The control still held: two fresh fits compared over
+  20,640 values with 0 differences, 51.45 and 54.80 s. The tests had passed because the stubbed
+  queue had no `rank` column; the pipeline's does.
+- **Live proof after the fix, RCS08 through the bridge.** Control, fresh against fresh: 52.07 and
+  52.35 s, 20,640 values, 0 differences. Round 1: fresh 50.88 s, served 1.57 s, 20,640 values,
+  0 differences. Round 2: fresh 51.88 s, served 1.33 s, 20,640 values, 0 differences. All five
+  products written, writer `stim_optimizer`: summary Parquet 13,999 bytes, ladder Parquet 15,591,
+  batch Parquet 11,465, manifest pickle 3,729, response pickle 727,519; the chain on each names
+  `therapy_settings`, `redcap_reports`, `therapy_pain_matched`, `raw_lsb_tiles` and
+  `amplitude_effect_by_band`. Store events over the run: 0 refused as self-derived, 0 refused
+  for no writer, 0 written without a chain.
+- **The amplitude table as Stim Optimizer sees it:** 1,078 rows read, written by `closed_loop`
+  on 2026-09-07 for the tile entry that is current; 132 combinations of sensing contact, side
+  turned up, stimulation rate and band centre inside 8 to 30 Hz; in 118 of them no movement was
+  detectable at p < 0.05 across the currents the device recorded, which on this record is at
+  most six settled currents per run (open item 18). That is a statement about what the ladders
+  could detect, not about whether the bands respond.
+- Five-perspective adversarial review of the step 8 diff launched before the commit; its
+  outcome is recorded in `findings.md` §6g.
+- **Review before the commit.** Five perspectives on the step 8 diff, two refuters on each of
+  the six most severe findings: 6 confirmed, 0 refuted, 27 lower-severity findings read and
+  acted on directly. Fixes: a refused entry is replaced; the chain comes from the entry a key
+  names (`store.stamp_for_key`); a code digest is in the key; the four tables are keyed without
+  the figure backend; a response without the settings census is not stored; the tile-key helper
+  tries both spellings and reports why; the served copy's store block is rebuilt for the current
+  request; a summary failure or an unreadable amplitude entry is reported inside the block; the
+  amplitude summary distinguishes "not assessed" from "no movement detectable". Record:
+  `artifacts/review_2026-09-07_step8_stim_optimizer_store.md`. Tests and the live proof were
+  re-run after the fixes; the counts are below.
+
+| Run | Runner | Result |
+|---|---|---|
+| Final step 8 code, after the review fixes | container, `run_tests.py` via the bridge | PASS=488 FAIL=0 |
+| Final step 8 code, after the review fixes | host, documented order | 866 passed, 41 skipped |
+| Final step 8 code, after the review fixes | host, reverse order | 866 passed, 41 skipped |
+
+- **Live proof after the review fixes, RCS08 through the bridge** (`_agent_bridge/_step8_live.py`,
+  disposable). Control, fresh against fresh: 52.56 and 51.44 s, 21,381 values, 0 differences.
+  Round 1: fresh 50.04 s, served 1.37 s, 21,381 values, 0 differences. Round 2: fresh 50.47 s,
+  served 1.44 s, 21,381 values, 0 differences. All five products written; no refusal; the
+  amplitude table read is the one written by `closed_loop` for the current tile entry. The
+  response carries 741 more values than before the review because the summary now reports three
+  states and the current range on every flagged row.
+- **The amplitude table with three states** (`_agent_bridge/_step8_amp.py`, disposable): 1,078
+  rows read, 242 inside 8 to 30 Hz, 0 dropped by the grouping; 132 combinations of sensing
+  contact, side turned up, stimulation rate and band centre. 14 showed movement at p < 0.05 in at
+  least one run; 74 had a straight line fitted in at least one run and no movement detectable at
+  p < 0.05 across the currents the device recorded (on the left 1-3 contact at 55 Hz, six
+  currents from 1.0 to 3.5 mA, slope standard errors 0.10 to 0.14 in log power per mA); 44 could
+  not be assessed at all because the run held two settled currents. **The earlier figure of 118
+  "without detectable movement" had counted those 44 as if a line had been fitted**; the review
+  caught it (open item 18 stands).

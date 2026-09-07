@@ -23,6 +23,7 @@ misusing the module.
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 import pandas as pd
@@ -31,10 +32,283 @@ from . import adapter
 from . import pipeline
 from .routines import plots as PLT
 
+# THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried (see adapter).
+try:
+    from modules.CacheStore import provenance as _provenance
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import provenance as _provenance
+    from CacheStore import store as _cache_store
+
 _log = logging.getLogger(__name__)
 
 DEFAULT_SITES = ("left_leg", "back")
 DEFAULT_HEMISPHERES = ("Left", "Right")
+
+#: ==========================================================================================
+#: TRACK A STEP 8 — "Have Stim Optimizer read the store and write its outputs back".
+#:
+#: READS. The matched table comes through `adapter.build_design_matrix`, which asks the store as
+#: `stim_optimizer` (step 5). The amplitude effect on every band is read here as the NEWEST entry
+#: the closed-loop module wrote (step 7), again as `stim_optimizer`: that is the edge the
+#: provenance refusal exists for, and it is exercised on every request. The response says which
+#: tile entry that table describes and whether it is the current one, so a reader is never handed
+#: a verdict about an older recording set without being told.
+#:
+#: WRITES. Four products with the chain of everything they derived from: the summary per arm (an
+#: arm is one pain site on one brain side, fitted on its own), the
+#: exploration ladder (the queue), the batch, and the manifest with the blockers. And the response
+#: itself, served back when nothing feeding it has changed. A stored response whose chain contains
+#: this module's own ladder is REFUSED by the store; the refusal is reported in the response and
+#: the request computes fresh, because a page must not go blank over a loop in its inputs and a
+#: silent recompute would hide the loop.
+#:
+#: WHAT THE AMPLITUDE TABLE DOES NOT YET DO. It is read and reported. Feeding it into the
+#: exploration queue's arithmetic is a modelling decision (open item 3 in the decision log) and
+#: is not made here.
+#: ==========================================================================================
+RESPONSE_KIND = "stim_optimizer_response"
+SUMMARY_KIND = "stim_optimizer_summary"
+LADDER_KIND = "exploration_ladder"
+BATCH_KIND = "exploration_batch"
+MANIFEST_KIND = "stim_optimizer_manifest"
+AMPLITUDE_KIND = "amplitude_effect_by_band"
+_RULE_VERSION = "v1_four_outputs"
+
+#: Response fields that describe the run that produced the response, not its results.
+#: Tests point this at a directory of their own; passed through to the one store.
+_SHARED_CACHE_DIR_OVERRIDE = None
+
+
+def _tiles_key_for(participant):
+    """`(key, reason)`: the store key of the current tile entry, or None and why there is none."""
+    try:
+        try:
+            from modules.Biomarkers import bravo_service as _bsvc
+        except ImportError:
+            from Biomarkers import bravo_service as _bsvc
+        uid = getattr(participant, "uid", participant)
+        sig = _bsvc._raw_lsb_shared_signature(uid, _bsvc._LSB_SPECTRUM_CENTERS)
+        if sig is None:
+            return None, "the participant has no tile entry to key on (no recordings on the server)"
+        return _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, sig), None
+    except Exception as exc:                          # noqa: BLE001 — no server, no tile key
+        return None, f"the tile key could not be built: {exc!r}"
+
+
+def _code_digest():
+    """A digest of this module and its routines, so a change to the arithmetic changes the key.
+
+    The fitted surface depends on constants spread through `pipeline.py` and `routines/`; naming
+    each one in the key by hand is how a stale response gets served after someone edits a bound.
+    A deployment therefore invalidates every stored response, which decision 26 accepted for the
+    tile store for the same reason.
+    """
+    import glob
+    import hashlib
+    here = os.path.dirname(os.path.abspath(__file__))
+    files = sorted(glob.glob(os.path.join(here, "*.py"))
+                   + glob.glob(os.path.join(here, "routines", "*.py")))
+    h = hashlib.blake2b(digest_size=8)
+    for f in files:
+        h.update(os.path.relpath(f, here).encode())
+        with open(f, "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+_CODE_DIGEST = _code_digest()
+
+
+def summarise_amplitude_effect(table, *, lo_hz, hi_hz):
+    """Per contact, side, rate and band inside the adaptive window: how many runs, how many
+    currents at most and over what range, whether any run showed a straight-line movement at
+    p < 0.05, whether curvature could be assessed. Counts, not adjectives.
+
+    `any_detectable_movement` has three values: True, movement was detected in at least one run;
+    False, a line was fitted in at least one run and none reached p < 0.05 across the currents
+    tested; None, no line could be fitted at all. A False is listed with the number and range of
+    currents and the smallest standard error of the slope, because "no movement was detectable"
+    is a statement about what those currents could show and not about the band.
+    """
+    empty = {"rows": [], "n_rows_read": 0, "n_rows_in_window": 0, "n_rows_not_grouped": 0,
+             "combinations_with_no_detectable_movement": [], "combinations_not_assessed": []}
+    if table is None or len(table) == 0:
+        return empty
+    t = table[(table["band_center_hz"] >= float(lo_hz)) & (table["band_center_hz"] <= float(hi_hz))]
+    keys = ["sensing_contact", "ramped_side", "stimulation_rate_hz", "band_center_hz"]
+    rows, no_movement, not_assessed = [], [], []
+    grouped = 0
+    for k, g in t.groupby(keys, sort=True):
+        grouped += len(g)
+        p = pd.to_numeric(g["slope_p"], errors="coerce")
+        se = pd.to_numeric(g.get("slope_stderr"), errors="coerce") if "slope_stderr" in g else None
+        fitted = int(p.notna().sum())
+        detectable = True if bool((p < 0.05).any()) else (False if fitted else None)
+        curv = bool(pd.to_numeric(g["p_curvature"], errors="coerce").notna().any())
+        row = {"sensing_contact": k[0], "ramped_side": k[1],
+               "stimulation_rate_hz": _jsonable(k[2]), "band_center_hz": float(k[3]),
+               "n_runs": int(len(g)), "n_runs_with_a_fitted_line": fitted,
+               "max_currents_tested": int(pd.to_numeric(g["n_currents_tested"]).max()),
+               "current_min_mA": _jsonable(pd.to_numeric(g["current_min_mA"]).min()),
+               "current_max_mA": _jsonable(pd.to_numeric(g["current_max_mA"]).max()),
+               "best_slope_p": _jsonable(p.min()),
+               "min_slope_stderr": _jsonable(se.min()) if se is not None else None,
+               "any_detectable_movement": detectable,
+               "any_curvature_assessed": curv,
+               "fold_range": [_jsonable(pd.to_numeric(g["fold_max_over_min"]).min()),
+                              _jsonable(pd.to_numeric(g["fold_max_over_min"]).max())],
+               "visits": sorted(set(map(str, g["visit_date"])))}
+        rows.append(row)
+        flagged = {k2: row[k2] for k2 in ("sensing_contact", "ramped_side", "stimulation_rate_hz",
+                                          "band_center_hz", "n_runs", "max_currents_tested",
+                                          "current_min_mA", "current_max_mA", "min_slope_stderr")}
+        if detectable is False and not curv:
+            no_movement.append(flagged)
+        elif detectable is None:
+            not_assessed.append(flagged)
+    return {"rows": rows, "n_rows_read": int(len(table)), "n_rows_in_window": int(len(t)),
+            # rows the grouping dropped because one of its four keys was missing
+            "n_rows_not_grouped": int(len(t) - grouped),
+            "combinations_with_no_detectable_movement": no_movement,
+            "combinations_not_assessed": not_assessed}
+
+
+def amplitude_effect_block(participant, *, tiles_key_now):
+    """Read the newest amplitude-effect table as Stim Optimizer and report it."""
+    from .routines import percept_adaptive as _pa
+    uid = str(getattr(participant, "uid", participant))
+    block = {"available": False, "read_as": "stim_optimizer", "store_key": None}
+    try:
+        table, stamp = _cache_store.load_newest(AMPLITUDE_KIND, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        block["reason"] = f"refused by the store: {exc}"
+        block["refused"] = True
+        return block
+    except Exception as exc:                          # noqa: BLE001
+        block["reason"] = f"could not be read: {exc!r}"
+        return block
+    if table is None:
+        if stamp:
+            block["reason"] = (f"the newest amplitude-effect entry (written "
+                               f"{stamp.get('written_utc')}) could not be read and was discarded; "
+                               f"the closed-loop deployment page writes it again")
+        else:
+            block["reason"] = ("no amplitude-effect table has been written for this "
+                               "participant; the closed-loop deployment page writes it")
+        return block
+    chain = stamp.get("provenance") or []
+    tiles_in_chain = [c.get("key") for c in chain if c.get("kind") == "raw_lsb_tiles"]
+    lo, hi = _pa.ADAPTIVE_LFP_BAND_HZ
+    block.update({
+        "available": True,
+        "store_key": f"{AMPLITUDE_KIND}/{uid}/{stamp.get('signature_key')}",
+        "written_utc": stamp.get("written_utc"), "writer": stamp.get("writer"),
+        "provenance": chain,
+        "describes_current_recordings": (bool(tiles_key_now in tiles_in_chain)
+                                         if tiles_key_now and tiles_in_chain else None),
+        "adaptive_window_hz": [float(lo), float(hi)],
+        "summary": None,
+    })
+    try:
+        block["summary"] = summarise_amplitude_effect(table, lo_hz=lo, hi_hz=hi)
+    except Exception as exc:                          # noqa: BLE001
+        # The table is the closed-loop module's; a column it renamed must not take this request
+        # down, and must not be hidden either.
+        block["summary_error"] = f"the table could not be summarised: {exc!r}"
+    return block
+
+
+def _response_signature(uid, matched_key, tiles_key, amp_key, request_data, sites, hemis,
+                        washin_min, backend):
+    """The response key: every input and every setting the fitted result depends on, and the
+    figure backend last, so `_products_signature` can drop it."""
+    rd = request_data or {}
+    return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
+            tuple(sites), tuple(hemis), float(washin_min),
+            int(rd.get("NBatches", 3)), int(rd.get("Q", 4)), bool(rd.get("ClosedLoop", True)),
+            str(backend))
+
+
+def _products_signature(sig):
+    """The key of the four tables: the response key without the figure backend.
+
+    The backend changes only whether figure JSON is in the response. Keyed on it, a request
+    with figures and one without would sweep each other's tables on every write, since the store
+    keeps one entry per kind and participant.
+    """
+    return tuple(sig[:-1])
+
+
+def _write_outputs(uid, sig, prov, rep, out):
+    """The four products and the response, through the store. Records what is present after."""
+    common = dict(writer="stim_optimizer", trigger="stim_optimizer_request", provenance=prov,
+                  root=_SHARED_CACHE_DIR_OVERRIDE)
+    # A stored entry the store REFUSED is still on disk under this key. Writing "if absent" would
+    # find it, write nothing, and leave every later request to be refused and recomputed again;
+    # so after a refusal the fresh, clean products replace it.
+    replace = bool(out["store"].get("refusal"))
+    out["store"]["replaced_refused_entry"] = replace
+    table_sig = _products_signature(sig)
+    ladder, batch = [], []
+    for label, arm in (getattr(rep, "arms", None) or {}).items():
+        for name, frame, target in (("queue", getattr(arm, "queue", None), ladder),
+                                    ("batch", getattr(arm, "batch", None), batch)):
+            if frame is None or len(frame) == 0:
+                continue
+            f = frame.reset_index(drop=True).copy()
+            # The pipeline's queue already carries its own `rank` (1 is the best cell); keep it
+            # rather than write a second one. On the live record the first version of this
+            # inserted `rank` unconditionally, pandas refused the duplicate, and nothing was
+            # written back at all.
+            if "rank" not in f.columns:
+                f.insert(0, "rank", range(1, len(f) + 1))
+            for name, value in (("hemisphere", str(getattr(arm, "hemisphere", ""))),
+                                ("site", str(getattr(arm, "site", ""))),
+                                ("arm", str(label))):
+                if name not in f.columns:
+                    f.insert(0, name, value)
+            target.append(f)
+    products = [
+        (SUMMARY_KIND, (getattr(rep, "summary", None)
+                        if getattr(rep, "summary", None) is not None and len(rep.summary)
+                        else None), None),
+        (LADDER_KIND, (pd.concat(ladder, ignore_index=True) if ladder else None), None),
+        (BATCH_KIND, (pd.concat(batch, ignore_index=True) if batch else None), None),
+        (MANIFEST_KIND, {"manifest": out.get("manifest"), "blockers": out.get("blockers"),
+                         "recommendation_supported": out.get("recommendation_supported"),
+                         "design_matrix": out.get("design_matrix")}, "pickle"),
+    ]
+
+    def put(kind, key, payload, fmt):
+        if replace:
+            _cache_store.store(kind, uid, key, payload, fmt=fmt, **common)
+        else:
+            _cache_store.store_if_absent(kind, uid, key, lambda p=payload: p, fmt=fmt, **common)
+        return _cache_store.read_stamp(kind, uid, key, root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+
+    written = {}
+    for kind, payload, fmt in products:
+        if payload is None:
+            written[kind] = None
+            continue
+        try:
+            written[kind] = put(kind, table_sig, payload, fmt)
+        except Exception as exc:                      # noqa: BLE001
+            _log.warning("StimOptimizer: %s was not written back (%r)", kind, exc)
+            written[kind] = False
+    # `written` means present in the store under this request's key once the request is over.
+    # The response's own flag is set before the response is stored, because the stored copy
+    # cannot record the outcome of its own write; it is corrected in memory if the write fails.
+    written[RESPONSE_KIND] = True
+    out["store"]["written"] = dict(written)
+    try:
+        if not put(RESPONSE_KIND, sig, out, "pickle"):
+            out["store"]["written"][RESPONSE_KIND] = False
+    except Exception as exc:                          # noqa: BLE001
+        _log.warning("StimOptimizer: the response was not written back (%r)", exc)
+        out["store"]["written"][RESPONSE_KIND] = False
 
 
 def _jsonable(v):
@@ -150,6 +424,75 @@ def run_for_participant(request_data: dict) -> dict:
                 "reason": "no exposure epochs carry usable pain reports for this participant",
                 "washin_min": washin_min}
 
+    # TRACK A STEP 8: READ THE STORE AS STIM OPTIMIZER, AND SERVE THE RESPONSE WHEN NOTHING CHANGED.
+    matched_key = getattr(es, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+    tiles_key, tiles_reason = _tiles_key_for(participant)
+    stream_key = (getattr(_stream, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+                  if _stream is not None else None)
+    amp_block = amplitude_effect_block(participant, tiles_key_now=tiles_key)
+    store_block = {"response_key": None, "served_from_store": False, "written": None,
+                   "refusal": None, "reason": None,
+                   "inputs": {"matched_table": matched_key, "tiles": tiles_key,
+                              "amplitude_effect": amp_block.get("store_key")}}
+    sig = prov = None
+    matched_stamp = _cache_store.stamp_for_key(matched_key, root=_SHARED_CACHE_DIR_OVERRIDE) \
+        if matched_key else None
+    if not matched_key:
+        store_block["reason"] = "the matched table carries no store key, so nothing is stored"
+    elif matched_stamp is None:
+        store_block["reason"] = ("the matched table's own entry could not be found in the store, "
+                                 "so its chain cannot be cited and nothing is stored")
+    elif not tiles_key:
+        store_block["reason"] = f"no tile key, so nothing is stored: {tiles_reason}"
+    elif stream_key is None:
+        # The queue's eligibility columns come from the settings census, which is this stream.
+        # A response computed without it is a degraded one and must not be served to a request
+        # that would have had the census.
+        store_block["reason"] = ("the settings stream was unavailable, so this response was "
+                                 "computed without the delivered-settings census and is not stored")
+    else:
+        sig = _response_signature(uid, matched_key, tiles_key, amp_block.get("store_key"),
+                                  request_data, sites, hemis, washin_min, backend)
+        store_block["response_key"] = _cache_store.product_key(RESPONSE_KIND, uid, sig)
+        try:
+            served = _cache_store.load(RESPONSE_KIND, uid, sig, consumer="stim_optimizer",
+                                       root=_SHARED_CACHE_DIR_OVERRIDE)
+        except _provenance.SelfDerivedProduct as exc:
+            served = None
+            store_block["refusal"] = str(exc)
+            _log.warning("StimOptimizer: the stored response was refused (%s); computing", exc)
+        except Exception as exc:                      # noqa: BLE001
+            served = None
+            _log.info("StimOptimizer: the stored response could not be read (%r)", exc)
+        if isinstance(served, dict):
+            served = dict(served)
+            # The store block describes THIS request, not the one that wrote the entry: a
+            # refusal, a write error or a reason recorded then would otherwise come back with
+            # every served copy as if it had happened again.
+            stored = dict(served.get("store") or {})
+            written = dict(stored.get("written") or {})
+            written[RESPONSE_KIND] = True         # it was just read back, so it is present
+            served["store"] = dict(store_block, served_from_store=True,
+                                   response_key=store_block["response_key"], written=written,
+                                   refusal=None, reason=None, replaced_refused_entry=False,
+                                   stored_utc=(_cache_store.read_stamp(
+                                       RESPONSE_KIND, uid, sig,
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}).get("written_utc"))
+            served["amplitude_effect"] = amp_block
+            return served
+        # The chain of exactly the entries this request used: the matched table's own sidecar,
+        # found by the key the design matrix carries, and the amplitude table's sidecar as read
+        # above. Not "the newest of each kind", which is the same entry only until the next write.
+        entries = [_provenance.entry(matched_key, kind="therapy_pain_matched",
+                                     writer="stim_optimizer",
+                                     chain=matched_stamp.get("provenance") or []),
+                   _provenance.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]
+        if amp_block.get("available"):
+            entries.append(_provenance.entry(amp_block["store_key"], kind=AMPLITUDE_KIND,
+                                             writer="closed_loop",
+                                             chain=amp_block.get("provenance") or []))
+        prov = _provenance.flatten(entries)
+
     # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
     # setting began, which understates the span by however long that setting has been in force —
     # here it read 2026-08-12 while settings ran to 08-28 and reports to 08-29. Use the latest
@@ -252,7 +595,7 @@ def run_for_participant(request_data: dict) -> dict:
             if len(s):
                 observed_amp_range[hemi] = (float(s.min()), float(s.max()))
     blockers = _blockers(rep, arms, observed_amp_range)
-    return {
+    out = {
         "available": True,
         "participant": uid,
         "design_matrix": design_matrix_summary(es),
@@ -265,7 +608,18 @@ def run_for_participant(request_data: dict) -> dict:
         "closed_loop": closed_loop_readiness(participant, es,
                                              include=bool((request_data or {})
                                                           .get("ClosedLoop", True))),
+        "amplitude_effect": amp_block,
+        "store": store_block,
     }
+    if sig is not None:
+        try:
+            _write_outputs(str(uid), sig, prov, rep, out)
+        except Exception as exc:                      # noqa: BLE001
+            # Say so in the response rather than only in the log: a request that silently
+            # stores nothing looks, from the page, exactly like one that stored everything.
+            _log.warning("StimOptimizer: the outputs were not written back (%r)", exc)
+            store_block["write_error"] = repr(exc)
+    return out
 
 
 def closed_loop_readiness(participant, es, *, include=True) -> dict:
@@ -335,7 +689,7 @@ def _arm_comparison(arm):
     """
     import math
 
-    from modules.StimOptimizer.routines import resolution as _RES
+    from .routines import resolution as _RES
 
     m = getattr(arm, "meta", None) or {}
     try:

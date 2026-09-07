@@ -351,6 +351,33 @@ def test_a_mismatched_sidecar_is_a_miss_without_the_payload_being_opened():
             st._load_payload = real
 
 
+def test_the_newest_entry_can_be_read_by_name_with_its_stamp_and_still_refused_by_consumer():
+    """A reader that cannot rebuild the writer's key asks for the newest entry and gets the
+    sidecar with it. The refusal applies as it does to a keyed read."""
+    with _Sandbox():
+        assert st.load_newest("amplitude_effect_by_band", UID) == (None, None)
+        tiles = st.product_key("raw_lsb_tiles", UID, ("t", 1))
+        st.store("amplitude_effect_by_band", UID, ("older", 1), pd.DataFrame({"a": [1]}),
+                 writer="closed_loop", provenance=prov.flatten(
+                     [prov.entry(tiles, kind="raw_lsb_tiles", writer="biomarkers")]))
+        got, stamp = st.load_newest("amplitude_effect_by_band", UID, consumer="stim_optimizer")
+        assert got is not None and len(got) == 1
+        assert stamp["writer"] == "closed_loop" and stamp["provenance"][0]["key"] == tiles
+        # a chain that contains the reader's own choice is refused, by name as by key
+        ladder = st.product_key("exploration_ladder", UID, ("l", 1))
+        st.store("amplitude_effect_by_band", UID, ("newer", 2), pd.DataFrame({"a": [2]}),
+                 writer="closed_loop", provenance=prov.flatten(
+                     [prov.entry(ladder, kind="exploration_ladder", writer="stim_optimizer")]))
+        raised = False
+        try:
+            st.load_newest("amplitude_effect_by_band", UID, consumer="stim_optimizer")
+        except prov.SelfDerivedProduct:
+            raised = True
+        assert raised, "the newest entry derived from the reader's own ladder was released"
+        got, _ = st.load_newest("amplitude_effect_by_band", UID, consumer="closed_loop")
+        assert int(got["a"].iloc[0]) == 2, "the newest entry, not the first, is the one read"
+
+
 def test_an_entry_over_the_limit_is_refused_and_leaves_nothing_behind():
     with _Sandbox() as root:
         st.MAX_BYTES_BY_KIND["tiny_kind"] = 64
@@ -477,3 +504,31 @@ def test_a_product_key_names_the_kind_the_participant_and_the_signature():
     key = st.product_key("biomarker_band_results", UID, ("s", 1))
     assert key == f"biomarker_band_results/{UID}/{st.signature_key(('s', 1))}"
     assert prov.module_of(key) == "biomarkers"
+
+
+def test_stamp_for_key_finds_the_entry_named_and_not_the_newest():
+    """`redcap_reports` keeps its history, so two entries of one kind can coexist."""
+    with _Sandbox() as root:
+        a = st.store("redcap_reports", UID, ("set", 1), pd.DataFrame({"x": [1]}), root=root)
+        b = st.store("redcap_reports", UID, ("set", 2), pd.DataFrame({"x": [2]}), root=root)
+        key_a = st.product_key("redcap_reports", UID, ("set", 1))
+        got = st.stamp_for_key(key_a, root=root)
+        assert got and got["signature_key"] == key_a.split("/")[-1]
+        assert st.newest_stamp("redcap_reports", UID, root=root)["signature_key"] != got["signature_key"]
+        assert st.stamp_for_key("redcap_reports/%s/0000" % UID, root=root) is None
+        assert st.stamp_for_key("not-a-key", root=root) is None
+        del a, b
+
+
+def test_load_newest_reports_an_unreadable_entry_and_discards_it():
+    with _Sandbox() as root:
+        st.store("amplitude_effect_by_band", UID, ("amp", 9), pd.DataFrame({"x": [1.0]}),
+                 writer="closed_loop", provenance=[], root=root)
+        d = st.kind_dir("amplitude_effect_by_band", create=False, root=root)
+        payload = [f for f in os.listdir(d) if f.endswith(".parquet")][0]
+        with open(os.path.join(d, payload), "wb") as fh:
+            fh.write(b"garbage")
+        table, stamp = st.load_newest("amplitude_effect_by_band", UID, root=root)
+        assert table is None and stamp and stamp["writer"] == "closed_loop"
+        assert os.listdir(d) == [], "an unreadable entry is discarded, not offered again"
+        assert st.load_newest("amplitude_effect_by_band", UID, root=root) == (None, None)

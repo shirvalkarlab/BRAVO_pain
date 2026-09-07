@@ -102,9 +102,12 @@ document replaced each one. 30 contradictions across the source documents were r
 newer result, and the resolution record is
 `.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
-**Phase 2, Track A, the one store: the first three steps are complete and committed** — `fa14edd`
-(the store, the provenance chain, the ledger, both duplicates removed, the handover package) and
-`14ad802` (the decoded-form prototype tracked).
+**Phase 2, Track A, the one store: all eight steps are complete and committed.** Steps 1 to 3
+in `fa14edd` (the store, the provenance chain, the ledger, both duplicates removed) and `14ad802`
+(the decoded-form prototype tracked); step 4 in `d47b9a7`; step 5 in `7278f15c`; step 6 with the
+six-perspective review fixes in `4e29af7b`; step 7 in `0d619ca`; step 8 in the newest commit.
+Each of steps 4 to 8 was proved on the live record before it was committed, and the counts are in
+`.planning/2026-09-06-cache-store-and-record-consolidation/progress.md` beside the runs.
 
 | Step | State |
 |---|---|
@@ -115,7 +118,7 @@ newer result, and the resolution record is
 | Write the therapy and pain matched table into the store | **done, 2026-09-07 second session** — `therapy_settings` and `therapy_pain_matched` |
 | Write the biomarker results back after computing them | **done, 2026-09-07 second session** — two tidy tables and the served response |
 | Write the amplitude effect on each band where Stim Optimizer can read it | **done, 2026-09-07 second session** — `amplitude_effect_by_band`, one row per device-recorded run and band |
-| Have Stim Optimizer read the store and write its outputs back | not started |
+| Have Stim Optimizer read the store and write its outputs back | **done, 2026-09-07 second session** — the matched table and the amplitude table read as `stim_optimizer`; five products written back; the response served when the key matches |
 
 Tracks B through G — the canonical decoded form, the re-derivation speedups, the Redis build lock,
 moving the remaining caches into one location, the two closed-loop display fixes, the gated
@@ -127,8 +130,9 @@ MySQL", and "pain-report snapshot" for "REDCap frame" — and were restored on 2
 
 **Test state, each read from a run today, and each obtained twice with agreement:**
 
-- container, Biomarkers plus CacheStore: **PASS=455 FAIL=0**
-- host, ClosedLoopDeployment plus StimOptimizer plus CacheStore: **814 passed, 41 skipped**
+- container, Biomarkers plus CacheStore: **PASS=488 FAIL=0** (2026-09-07, after step 8 and its review)
+- host, ClosedLoopDeployment plus StimOptimizer plus CacheStore: **866 passed, 41 skipped**, in
+  both orders (2026-09-07, after step 8 and its review)
 
 **Re-run both before trusting either.** The commands are in `CLAUDE.md`.
 
@@ -163,9 +167,9 @@ old store internals returns most of its hits there.
 
 **1. `run_tests.py` now discovers two packages, and deliberately not the other two.** It imports
 each test module and calls every top-level `test_*` function itself, because there is no pytest in
-the container. `ClosedLoopDeployment` and `StimOptimizer` are excluded: all 28 of their files use
-pytest fixtures or `pytest.raises`, so importing them there raises and would report 28 spurious
-failures. The reasoning is written into the file.
+the container. `ClosedLoopDeployment` and `StimOptimizer` are excluded: their files (31 today) use
+pytest fixtures or `pytest.raises`, so importing them there raises and would report one spurious
+failure per file. The reasoning is written into the file.
 
 **2. The store import is spelled twice on purpose.** The container's path root makes the package
 `modules.CacheStore`; the host suite's root makes it `CacheStore`. A single spelling breaks one
@@ -268,6 +272,6 @@ Three bodies of knowledge existed only inside one tool's session state. Each is 
    **That failure produces no error and no visible symptom; it makes the record look like
    converging evidence when it is a loop.** Every write-back call site must pass `writer=` and
    `provenance=`, and `tests/test_provenance_cycle.py` is what proves the refusal still fires.
-2. **That a green container run is not a green platform.** The container runs 22 test files and the
-   host runs 31 others. Reporting one number as "the suite" is how a stale count reached a pushed
+2. **That a green container run is not a green platform.** The container runs 26 test files and the
+   host runs 35, of which 31 are its own. Reporting one number as "the suite" is how a stale count reached a pushed
    commit message in this project once already.

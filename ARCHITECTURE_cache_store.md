@@ -123,6 +123,22 @@ derived kind written with `provenance=None` is written but counted and logged. T
 only writes under the production root, never under a caller's own root or the test override. Both
 import spellings of the package resolve to one module object (`CacheStore/__init__.py`).
 
+### Reading without the writer's key, added for step 8
+
+`load_newest(kind, participant, consumer=...)` returns the newest entry of a kind for a
+participant, with its stamp, applying the same consumer refusal as `load`. It exists because Stim
+Optimizer cannot know the key the closed-loop module built its amplitude table under; it can only
+ask for the newest one and then report, from the stamp, which tile entry it describes. An entry
+whose payload is missing or unreadable is discarded and returned as `(None, stamp)`, so the
+caller can say an entry existed and could not be read. `stamp_for_key(key)` returns the sidecar
+of exactly the entry a product key names: a reader that cites an input by key must copy that
+entry's chain, not the newest entry's, because the two agree only until the next write.
+
+**A refused entry must be replaced, not skipped.** A stored product the store refuses to a
+consumer is still on disk under its key. A recompute that writes "if absent" finds it, writes
+nothing, and leaves every later request to be refused and recomputed again; the recompute
+therefore writes through the plain `store`, which replaces it. The step 8 review found this.
+
 ### The off switch
 
 `store.ENABLED = False` makes every read a miss and every write a no-op, deletes nothing, and
@@ -196,15 +212,15 @@ every instance. `ledger.ENABLED = False` turns it off.
 Two runners, two commands, and **a green run of one is not a green run of the platform.**
 
 ```
-# container — Biomarkers (19 files) + CacheStore (3 files); no pytest in there
+# container — Biomarkers (22 files) + CacheStore (4 files); no pytest in there
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
-#   PASS=455 FAIL=0
+#   PASS=488 FAIL=0   (2026-09-07, after Track A step 8 and its review)
 
-# host — ClosedLoopDeployment (10) + StimOptimizer (18) + CacheStore (3); these use pytest
+# host — ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4); these use pytest
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
   ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests -q -W ignore
-#   814 passed, 41 skipped
+#   866 passed, 41 skipped   (2026-09-07, after Track A step 8 and its review, both orders)
 ```
 
 Both figures were obtained twice, independently, and agreed. **Do not carry either number
@@ -213,8 +229,8 @@ one wrong count reached a pushed commit message that cannot be edited.
 
 `run_tests.py` was extended this session to discover `CacheStore/tests` as well as
 `Biomarkers/tests`. **`ClosedLoopDeployment` and `StimOptimizer` are deliberately excluded from
-it** — all 28 of their files use pytest fixtures or `pytest.raises`, so importing them in the
-container raises and would report 28 spurious failures.
+it** — their files (31 today) use pytest fixtures or `pytest.raises`, so importing them in the
+container raises and would report one spurious failure per file.
 
 ---
 
@@ -258,9 +274,23 @@ refusal cannot work. Progress against them is in `task_plan.md`, not here.
    reads it as no response. **On this record the device ladders hold at most six settled settings
    per run, below the curvature routine's floor of eight, so the table reports curvature as not
    assessed everywhere; the documented finding rests on the clinic sheet (open item 18).**
-5. **Step 8, "Have Stim Optimizer read the store and write its outputs back"** — Stim Optimizer
-   reads the matched table and the amplitude effects as `consumer="stim_optimizer"`, which is
-   **the exact edge the refusal exists for**, and writes its own outputs back with provenance.
+5. **Step 8, "Have Stim Optimizer read the store and write its outputs back" — done 2026-09-07,
+   second session.** `StimOptimizer/bravo_service.py` reads the matched table (through
+   `adapter.build_design_matrix`, step 5) and the newest `amplitude_effect_by_band` as
+   `consumer="stim_optimizer"`, **the exact edge the refusal exists for**, and reports which tile
+   entry that table describes and whether it is the current one. It writes back
+   `stim_optimizer_summary`, `exploration_ladder`, `exploration_batch`, `stim_optimizer_manifest`
+   and the whole response as `stim_optimizer_response`, under one key naming every input and every
+   setting, with each input's own chain flattened in (decision 41). A matching key is served from
+   the store; a refused entry is reported and recomputed; a failed write is reported in the
+   response. Proven on RCS08 after the review: 21,381 response values, 0 differences, in each of
+   two alternating rounds, fresh 50.04 and 50.47 s against served 1.37 and 1.44 s. **The first live run wrote
+   nothing back and every test passed** — the pipeline's queue carries a `rank` column the test
+   stub lacked — which is why the live proof is not optional. Reviewed by five perspectives
+   before the commit: a refused entry is now replaced rather than left to refuse every later
+   request, the chain is taken from the entry the key names (`store.stamp_for_key`), and a digest
+   of the module's own code is in the key
+   (`artifacts/review_2026-09-07_step8_stim_optimizer_store.md`). **Track A is complete.**
 
 **The ground-truth verdict is not a Track A step.** It is Track G step 2, "Agree a ground-truth
 rule for the three-source comparison, then write it back": the rule is decided

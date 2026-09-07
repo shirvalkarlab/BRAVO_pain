@@ -360,3 +360,42 @@ changed code or the record:
 - Deriving the table from an already-built comparison costs 0.06 to 0.07 s; the write about 1 s;
   a read back as Stim Optimizer 3 to 9 ms. Building every run's comparison rather than the page's
   four is the real added cost on a first request; the store-first check removes it thereafter.
+
+### 6g. Step 8 observations, 2026-09-07
+
+- **A test suite cannot see a column the real pipeline adds.** Step 8's first version inserted a
+  `rank` column into the chosen ladder; `pipeline.py` already builds the queue with `rank` as its
+  first column; pandas refused the duplicate; the whole write-back was skipped; eight tests
+  passed. Only the live run showed it. The equality proof on the live record is the check that
+  catches this class of defect, and it is why a step is not done until it has run.
+- `StimOptimizer/bravo_service.py` had one container-only import spelling inside
+  `_arm_comparison`. No host test had reached that function before step 8's tests called the
+  whole request, so it had never failed on the host.
+- The Stim Optimizer fit is repeatable on this record: two fresh runs agree on every one of
+  20,640 response values, so a served copy is the same answer and not an approximation of it.
+- A fresh Stim Optimizer request costs about 51 s on RCS08; the served copy about 1.3 to 1.6 s.
+  What the served request still pays is the participant lookup, the settings stream and matched
+  table reads from the store, the amplitude table read, and the closed-loop readiness block.
+- The amplitude table read as `stim_optimizer` on 2026-09-07 describes the current tile entry.
+  Inside 8 to 30 Hz it gives 132 combinations of contact, side, rate and band centre: 14 with
+  movement detected at p < 0.05 in at least one run, 74 with a line fitted and no movement
+  detectable across at most six settled currents, and 44 not assessable because the run held two
+  currents. The first summary reported 118 "without detectable movement", which counted the 44
+  unassessable ones as fitted; the review caught it. The summary carries the number and range of
+  currents and the smallest slope standard error on every flagged row so the limit travels with
+  the count.
+- The container suite prints the store's warnings from tests that corrupt entries on purpose.
+  Someone reading the filtered log stopped the bridge job mid-way; the suite had passed. The
+  `PASS=` line and the `.out` file in the outbox are the record, not the log.
+- **Three things the five-perspective review of step 8 found, all fixed before the commit.**
+  A refused stored entry stays on disk under its key, so a recompute that writes "if absent"
+  writes nothing and the refusal repeats forever; the chain cited for an input must come from the
+  entry the key names, because the store sweeps older entries of a kind and "newest" drifts; and
+  a key that names the fit's constants only through a version string bumped by hand is a stale
+  answer waiting for an edit, so a digest of the module's own code is in the key now. While
+  fixing the first, a fourth: the served copy carried the store block of the request that wrote
+  it, so that request's refusal text came back inside every served copy.
+- The amplitude summary now has three states per combination: movement detected at p < 0.05 in
+  at least one run; a line fitted in at least one run and none reaching p < 0.05; no line fitted
+  at all. Only the second is "no movement was detectable across the currents tested", and each
+  such row carries the number and range of currents and the smallest slope standard error.

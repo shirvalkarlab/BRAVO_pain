@@ -30,16 +30,17 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Commit Track A step 7 once the host suite confirms both orders; then build Track A step 8,
-"Have Stim Optimizer read the store and write its outputs back": read the matched table and the
-amplitude-effect table as `stim_optimizer`, and write its own outputs back with provenance.**
+**Track A is complete and committed. Report it to the PI. The next work is Phase 3, and the
+cadence he chose on 2026-09-07 ran through Track A only, so confirm with him before starting
+Track B step 1, "Promote the prototype to real code" (`BRAVO/modules/DecodeCommon/`, imported by
+nothing yet).**
 
 ## Current Phase
 
-Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`, step 4 in `d47b9a7`,
-step 5 in `7278f15c`, step 6 with the review fixes in `4e29af7b`; step 7 is built, tested on both
-runners and proved on the live record, and is being committed. Tracks B through G are not
-started, except Track F step 1 (`b7036bf`).
+Phase 2 — Track A, the one store — is complete. Steps 1 to 3 are committed in `fa14edd`, step 4 in
+`d47b9a7`, step 5 in `7278f15c`, step 6 with the review fixes in `4e29af7b`, step 7 in `0d619ca`,
+and step 8 in the commit that carries this edit. Phase 3 has not started, except Track F step 1
+(`b7036bf`), and waits on the PI's go-ahead for the next track.
 
 ## Phases
 
@@ -83,7 +84,7 @@ the licence.
 
 ### Phase 2: Provenance and the one store — Track A, "Two-way bus"
 
-**Status:** in_progress
+**Status:** complete
 
 The PI's standing rule is that a clicked plan approval unblocks the tooling only and code changes
 wait for a spoken go-ahead. **He gave that go-ahead for the cache-store phases on 2026-09-07.**
@@ -122,7 +123,17 @@ policy becomes self-confirming and the record looks like converging evidence whe
   runs and 98 bands, 2,156 copied powers with 0 differences against the panels, 39,886 fields
   with 0 differences across three round trips; curvature not assessable on this record's ladders
   (open item 18)
-- [ ] 8. Have Stim Optimizer read the store and write its outputs back
+- [x] 8. Have Stim Optimizer read the store and write its outputs back — built 2026-09-07
+  (second session): the matched table and the newest `amplitude_effect_by_band` are read as
+  `stim_optimizer`; the summary, the chosen ladder (`exploration_ladder`), the batch, the
+  manifest and the whole response (`stim_optimizer_response`) are written back with every
+  input's chain flattened in; a request whose key matches is served from the store. On RCS08
+  after the review fixes, two alternating rounds: 21,381 response values compared between the
+  fresh fit and the served copy, 0 differences each round; fresh 50.04 and 50.47 s against served
+  1.37 and 1.44 s; a fresh-against-fresh control also gave 0 differences in 21,381. **The first live run wrote
+  nothing back while every test passed** (a second `rank` column); fixed, pinned by test.
+  Reviewed by five perspectives before the commit, 6 findings confirmed and fixed
+  (`artifacts/review_2026-09-07_step8_stim_optimizer_store.md`)
 
 ### Phase 3: Canonical form, readers, Redis, and the closed-loop fixes — Tracks B, D, F, G
 
@@ -209,6 +220,7 @@ store.
 | 10 | **Track A step 6: the band-by-length sweep writes back two tidy tables — `biomarker_band_correlation` and `biomarker_band_discrimination`, one row per contact pair, band centre and length of signal, every value copied from the response and checkable against it, the best row per centre flagged with its interval, selection-aware p-value and verdict, the no-relationship reference on every row (0 for a correlation, 0.5 for an area under the curve) — plus the response itself as `biomarker_band_sweep`, all three under one key naming the tile entry, the pain-report snapshot, the pain score and every setting, with the tile and snapshot keys in their provenance. A request whose key matches is served from the store and marked `served_from_store`.** Reports handed in through the request body, or a participant with no tile key, are computed and never stored. | The approved plan asks for two tables per band centre and contact pair. Serving the response from the store follows decision 26, the key decides: the thousand shuffles and thousand resamples per cell are not paid again when nothing feeding them changed, and every input that could change the answer is in the key. The tables carry the reference value because an area under the curve is above chance by comparison with 0.5 and never with 0. | 2026-09-07 |
 | 11 | **The ledger records writes under the production root only.** A write under a caller's own root or the test override is not recorded, and the 218 rows the test suites had written into the live table (participants `test-participant` and `u`) were deleted on 2026-09-07. | The ledger carries no directory, so nothing else could tell a test write from a real one; 214 of its 227 rows were from the container's tile tests. Deleting rows from an append-only table is justified only because they were never part of the record of what the server holds. | 2026-09-07 |
 | 12 | **Track A step 7: the amplitude effect on every band is a table derived from the three-source comparison's voltage-trace panel, one row per run of rising current (visit, side turned up, sensing contact, stimulation rate) and band centre, with the number and range of currents actually tested, the pieces of recording behind them, the straight-line slope of log power on current with its standard error and p-value, the curvature test with the peak current, the fold change from lowest to highest current, and the harmonic-landing and checked-span flags.** It is built from every run the device's record holds, written by the closed-loop request as `amplitude_effect_by_band` with the tile entry in its provenance, and the page keeps drawing its four newest runs. A request whose table is already stored builds only those four. | The ladder of currents is read from the device's own record (constraint 4 of the three-source comparison), which the server holds, rather than the clinic sheet, which it does not. Every power value is copied from the panel, so the table is checkable against it. Rows are never pooled across visits, because a result established on one visit day must say so; the visit and run columns let Stim Optimizer pool with the visit as the blocking factor. The curvature floor of eight points is the routine's own and is not lowered to manufacture a verdict. | 2026-09-07 |
+| 13 | **Track A step 8: Stim Optimizer reads the therapy-and-pain matched table and the newest amplitude-effect table as `stim_optimizer`, reports which tile entry that table describes and whether it is the current one, and writes back `stim_optimizer_summary`, `exploration_ladder` (the pipeline's queue with its own `rank` kept), `exploration_batch`, `stim_optimizer_manifest` and the whole response as `stim_optimizer_response`, all under one key naming the matched table, the tile entry, the amplitude table, the sites, the brain sides, the wash-in, the backend and the batch settings, with every input's own chain flattened into theirs. A stored response whose key matches is served and marked; one the store refuses is reported, recomputed, and REPLACED; a write-back that fails is reported in the response. A digest of the module and its routines is in the key, the four tables are keyed without the figure backend, and a response computed without the delivered-settings census is not stored.** The amplitude summary counts — runs, currents tested, the smallest slope p-value, whether any run showed movement at p < 0.05 — inside the adaptive window, and does not judge. | Reading as `stim_optimizer` is the exact edge the refusal exists for: the ladder Stim Optimizer chooses decides which recordings come to exist, so a verdict derived from them must not come back to it as independent evidence, and the chain on every output is what lets the next reader see that. The pipeline's fitted surface is repeatable (fresh against fresh: 0 differences in 20,640 values), which is what makes the served response the same answer. The first version inserted a second `rank` column, pandas refused it, and nothing was written back on the live record while every test passed, because the stubbed queue had no `rank`; the stub now has one, and a failed write-back is reported in the response rather than only logged. | 2026-09-07 |
 
 ## Errors Encountered
 
@@ -224,3 +236,7 @@ store.
 | The sweep endpoint built its response as a `return {...}` statement, so the write-back lines added after it were unreachable and the only trace was an empty directory created by the miss path | 1 | Diagnosed by spying on the signature call inside the endpoint (it was fine) and then noticing the directory held no payload; the return became an assignment. The test now counts payload files, not directories. |
 | A step 6 test expected three sweep runs and got two: the stub reports had no `vas` column, so `SweepMetric="vas"` returned the endpoint's empty state before the sweep | 1 | Test data corrected; the code was right. |
 | The live ledger held 227 rows of which 218 were written by the test suites (214 from the container's tile tests for `test-participant`, 4 from the request-scope tests for `u`) | 1 | `store.store` now records only production-root writes, with a test; the 218 rows were deleted. |
+| The host suite reached `_arm_comparison` in `StimOptimizer/bravo_service.py` for the first time (step 8's tests call the whole request) and failed on `from modules.StimOptimizer.routines import resolution`, a container-only spelling | 1 | Changed to the relative import the rest of the file uses. |
+| The first live run of step 8 wrote nothing back: `ValueError('cannot insert rank, already exists')`. The pipeline's queue already carries a `rank` column and the test stub did not, so eight tests passed while the live write failed | 1 | The write keeps the pipeline's own `rank` and adds `arm`, `site` and `hemisphere` only when absent; the stub queue now carries `rank`; a failed write-back is reported in the response as `store.write_error` rather than only logged, with a test. Proof re-run: 0 differences in 20,640 values, all five products written. |
+| The five-perspective review found that after the store refused a stored response, the recompute wrote "if absent", found the refused entry, wrote nothing, reported it as written, and left every later request to be refused again; and that the response's chain came from the newest matched-table sidecar rather than the entry its key names | 1 | After a refusal the five products are written through the plain write and replace the entry; `store.stamp_for_key` finds the sidecar of exactly the entry a key names. Both pinned by tests. A third defect found while fixing: the served copy carried the store block of the request that wrote it, so a refusal recorded then came back with every served copy; the served block is now rebuilt for the current request. |
+| The bridge job running the container suite printed the store's own log lines from tests that corrupt an entry or close the ledger's database on purpose; they read as errors, and the job was stopped from outside before the live proof behind it had printed | 1 | The suite had passed (`PASS=486 FAIL=0`); the proof was re-run on its own. Judge a container run by its `PASS=` line, or by the `.out` file in `_agent_bridge/outbox`, never by the filtered log. |

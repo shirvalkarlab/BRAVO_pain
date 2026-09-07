@@ -90,6 +90,10 @@ _WRITER_BY_KIND = {
     "ground_truth_verdict": "closed_loop",
     "amplitude_effect_by_band": "closed_loop",
     "exploration_ladder": "stim_optimizer",
+    "exploration_batch": "stim_optimizer",
+    "stim_optimizer_summary": "stim_optimizer",
+    "stim_optimizer_manifest": "stim_optimizer",
+    "stim_optimizer_response": "stim_optimizer",
 }
 
 

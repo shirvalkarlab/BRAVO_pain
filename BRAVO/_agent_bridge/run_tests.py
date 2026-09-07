@@ -12,14 +12,14 @@ importlib.reload(analytics)
 # there is no pytest in this container. That works only for test files written against plain
 # `assert`.
 #
-#   Biomarkers  — 19 files, none of which import pytest. Runs here.
+#   Biomarkers  — 22 files on 2026-09-07, none of which import pytest. Runs here.
 #   CacheStore  — the one cache store, the provenance chain and the ledger. Written pytest-free on
 #                 purpose so the cycle-refusal proof runs in the SAME container as the code it
 #                 protects, rather than only on the analysis host.
 #
-# ClosedLoopDeployment (10 files) and StimOptimizer (18 files) are deliberately NOT run here:
+# ClosedLoopDeployment (11 files) and StimOptimizer (20 files, on 2026-09-07) are deliberately NOT run here:
 # every one of them uses pytest fixtures or `pytest.raises`, so importing them in this container
-# raises ImportError and would report 28 spurious failures. Those two suites run on the host:
+# raises ImportError and would report one spurious failure per file. Those two suites run on the host:
 #
 #   cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
 #       ClosedLoopDeployment/tests StimOptimizer/tests -q -W ignore

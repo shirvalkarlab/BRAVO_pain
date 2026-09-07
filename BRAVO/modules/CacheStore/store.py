@@ -313,6 +313,86 @@ def newest_stamp(kind, participant_uid, root=None):
     return best
 
 
+def stamp_for_key(key, root=None):
+    """The sidecar of the entry a product key names (`kind/participant/signature_key`), or None.
+
+    For a reader that holds a key handed to it by another module and needs the chain of exactly
+    that entry, not of whichever entry of the kind is newest. The store keeps one entry per kind
+    and participant and sweeps the rest, so "the newest" and "the one named" agree only until the
+    next write; a chain copied from the wrong entry would cite inputs the product never used.
+    """
+    try:
+        kind, uid, skey = str(key).split("/")
+    except ValueError:
+        return None
+    d = kind_dir(kind, create=False, root=root)
+    if d is None:
+        return None
+    meta = _read_meta_file(_meta_path(os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{skey}")))
+    if meta and meta.get("signature_key") == skey:
+        return meta
+    return None
+
+
+def _discard_entry(stem, why):
+    """Remove every file of an entry that cannot be used, so it is not offered again."""
+    for path in [stem + ext for ext in _EXT_FOR_FORMAT.values()] + [_meta_path(stem)]:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+    _log.warning("CacheStore: discarded an unusable entry %s (%s)", stem, why)
+
+
+def load_newest(kind, participant_uid, *, consumer=None, root=None):
+    """`(payload, stamp)` for the newest entry of this kind and participant, or `(None, None)`.
+
+    FOR A READER THAT CANNOT REBUILD THE WRITER'S KEY. The amplitude-effect table is keyed by the
+    closed-loop module on inputs Stim Optimizer does not hold, and Stim Optimizer must not import
+    that module (the dependency runs one way). So it asks for the newest entry by name and gets
+    the sidecar back with it, so it can say WHICH inputs the table describes and whether they are
+    the current ones. The sidecar names the payload file and its format; the consumer refusal
+    applies exactly as in `load`. An entry whose payload is missing or unreadable is discarded and
+    returned as `(None, stamp)`, so the caller can say that an entry existed and could not be
+    read, which is not the same as no entry having been written.
+    """
+    stamp = newest_stamp(kind, participant_uid, root=root)
+    if not stamp:
+        _bump("misses")
+        return None, None
+    d = kind_dir(kind, create=False, root=root)
+    key, fmt = stamp.get("signature_key"), stamp.get("format")
+    if d is None or not key or fmt not in _EXT_FOR_FORMAT:
+        _bump("misses")
+        return None, None
+    uid = participant_uid if participant_uid is not None else "shared"
+    stem = os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{key}")
+    path = stem + _EXT_FOR_FORMAT[fmt]
+    if not os.path.exists(path):
+        _bump("unreadable")
+        _discard_entry(stem, "its sidecar names a payload file that does not exist")
+        return None, stamp
+    if consumer is not None:
+        from . import provenance
+        verdict = provenance.refusal_for(consumer, stamp.get("provenance") or [])
+        if verdict is not None:
+            _bump("refused_self_derived")
+            _log.warning("CacheStore: %s refused the newest %s entry: %s", consumer, kind, verdict)
+            raise provenance.SelfDerivedProduct(verdict)
+    try:
+        payload = _load_payload(path, fmt)
+        if fmt == "pickle" and isinstance(payload, dict) \
+                and "signature" in payload and "payload" in payload:
+            payload = payload["payload"]
+    except Exception as exc:                                    # noqa: BLE001
+        _bump("unreadable")
+        _discard_entry(stem, repr(exc))
+        return None, stamp
+    _bump("hits")
+    return payload, stamp
+
+
 def _load_payload(path, fmt):
     if fmt == "parquet":
         import pandas as pd
