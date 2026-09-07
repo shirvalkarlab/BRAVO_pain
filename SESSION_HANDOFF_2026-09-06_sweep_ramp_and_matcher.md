@@ -639,3 +639,52 @@ Six more waste time without changing a number.
    days with the right stimulator at zero rather than from a lockstep visit. Offered, not yet built.
 4. `README_BIOMARKERS_AND_DEPLOYMENT.md` reconciliation — see
    `README_CORRECTIONS_RECONCILED_2026-09-06.md`.
+
+---
+
+## 5. Redis given a memory bound and a real eviction policy (config only, no application change)
+
+**Done at the PI's explicit instruction, out of the plan's order, because it is a live hazard rather
+than an optimisation.** Everything else in phase 2 remains untouched and blocked.
+
+**What was wrong.** The Redis the platform runs alongside MySQL was started as `image: redis:5` with
+no configuration at all, so it had the image defaults: `maxmemory=0` (unlimited) and
+`maxmemory-policy=noeviction`. That pair means Redis grows until the host fills and then **refuses
+new writes** rather than evicting anything — the opposite of cache behaviour — on a box it shares
+with MySQL and the four application workers.
+
+**What was changed.** `maxmemory 512mb` and `maxmemory-policy allkeys-lru`, in two places:
+
+1. **Live, by `CONFIG SET`**, verified in force by `CONFIG GET` and by a successful write
+   afterwards: `maxmemory=536870912`, `policy=allkeys-lru`.
+2. **Durably, as `command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru`** on the
+   redis service in BOTH `docker-compose.yml` and `Docker/docker-compose.yml`. Both were edited
+   because both define a redis service and which is deployed depends on how the stack was brought
+   up. Both files were re-parsed after editing and every other key on the service is preserved.
+
+`CONFIG REWRITE` was attempted and failed with "The server is running without a config file", which
+is correct for `image: redis:5` with no mounted config — hence the compose `command:` being the only
+durable route.
+
+**Why these two values.**
+
+* **512 MB** suits what this instance is for after the measurements: cross-worker build locks, cache
+  freshness keys, and Django's small cache values. It is about 1.2 percent of the 42 GB the box
+  reports. The large spectrum payloads deliberately stay as files — measured, the 245.90 MB tile
+  cache reads in 0.05 s from the filesystem against roughly 0.14 s through Redis, because the files
+  are already in the operating system's page cache and Redis adds a socket round trip and a byte
+  copy on top.
+* **`allkeys-lru`, not `volatile-lru`.** `volatile-lru` only evicts keys carrying an expiry, so one
+  key written without one could fill the instance and restore exactly the write-refusal wall this
+  change removes.
+
+**Why it was safe to do now.** Nothing uses this Redis yet. Django's cache backend is still
+per-process memory, the instance held **0 keys**, and the script refused to proceed if it had found
+any. Setting a limit before anything depends on it is strictly safer than after.
+
+**Not done, still blocked on the PI's go-ahead:** the build lock, the freshness key, and pointing
+Django's cache at Redis. Those are the three wins this fix was sequenced ahead of.
+
+**Integration detail worth carrying:** this Redis is **5.0.14**, older than version 6, so it rejects
+the RESP3 `HELLO` handshake that modern `redis-py` sends by default. Any client must be constructed
+with `protocol=2` or every call fails with "unknown command `HELLO`".

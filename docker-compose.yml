@@ -65,6 +65,23 @@ services:
   redis:
     image: redis:5
     restart: always
+    # BOUND THE MEMORY AND GIVE REDIS A REAL EVICTION POLICY. Added 2026-09-06 at the PI's
+    # instruction after probing the running instance, which had maxmemory=0 (unlimited) with
+    # maxmemory-policy=noeviction because redis:5 starts that way and nothing here configured it.
+    # That combination means that when the host fills, Redis REFUSES NEW WRITES rather than
+    # dropping old entries -- the opposite of what a cache should do -- on a machine it shares
+    # with MySQL and the four application workers.
+    #
+    # 512mb is generous for what this instance is actually for: cross-worker build locks, cache
+    # freshness keys, and Django's small cache values. The large spectrum payloads deliberately
+    # stay as files: measured 2026-09-06, reading the 245.90 MB tile cache from the filesystem
+    # took 0.05 s against about 0.14 s through Redis, because the files are already in the
+    # operating system's page cache and Redis adds a socket round trip and a copy on top.
+    #
+    # allkeys-lru, NOT volatile-lru. volatile-lru only evicts keys that carry an expiry, so a
+    # single key written without one could fill the instance and bring the write-refusal wall
+    # straight back. allkeys-lru can always free space.
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
       - '6379:6379'
     networks:
