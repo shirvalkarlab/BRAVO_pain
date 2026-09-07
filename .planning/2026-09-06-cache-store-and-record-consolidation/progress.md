@@ -576,3 +576,41 @@ this machine (pyenv 3.12.9) has no pytest.
 | Track G step 1 and Track F step 2 | container, `run_tests.py` via the bridge | PASS=536 FAIL=0 |
 | Track G step 1 and Track F step 2 | host, documented order | 921 passed, 41 skipped |
 | Track G step 1 and Track F step 2 | host, reverse order | 921 passed, 41 skipped |
+
+### Track F steps 3 and 4 — assessed by measurement, 2026-09-07
+
+- Step 3: through the bridge, the tile entry's sidecar (350 bytes) read 1,000 times per round
+  in three rounds alternating with a Redis read of the same value: sidecar 0.012, 0.013,
+  0.013 ms per call; Redis 0.017, 0.017, 0.017 ms per call. The sidecar already answers "when
+  was this last built" without opening the 245 MB file, which was the step's stated aim. Not
+  built; ticked as resolved with these numbers.
+- Step 4: no consumer. `django.core.cache` is imported nowhere under `BRAVO/` and `CACHES` is
+  not set in `BRAVO/BRAVO/settings.py`. Recorded as not done, with the reason, rather than as a
+  settings change nobody reads.
+
+### Track G step 2 — "Agree a ground-truth rule for the three-source comparison, then write it back" — built
+
+- **Status:** complete, committed with this entry and pushed.
+- Files: `ClosedLoopDeployment/three_source_response.py` (the device route's ceiling check:
+  `DEVICE_SPIKE_FOLD`, `n_spikes_excluded` and `ceiling_device_units` on every setting row, the
+  spike count in a refusal's reason), new `ClosedLoopDeployment/ground_truth.py` (the rule,
+  the device-band pairing, `table_from_build`, `count_matches`), `ClosedLoopDeployment/adapter.py`
+  (`ground_truth_signature`, `ground_truth_if_stored`, `write_ground_truth`, written by the
+  report beside the amplitude table), `StimOptimizer/bravo_service.py` (`ground_truth_block`,
+  the key and the chain), new `ClosedLoopDeployment/tests/test_ground_truth.py` (8), two tests
+  in `StimOptimizer/tests/test_service_store.py`.
+- Before the ceiling check, RCS08 through the bridge: 11 runs, 3,017 comparison rows, 31
+  device-route settled values, pickled. After: 3,017 rows, 12,068 values compared, **3
+  differences**, all from the ceiling: on 2026-08-18 13:00 at 7.81 Hz and 2.0 mA the device
+  window went from 33 to 27 pieces and its refusal now names the 6 spikes above a ceiling of
+  7,540 device units; on 2025-10-02 12:26 at 9.77 Hz and 0.0 mA from 60 to 54 pieces. No
+  settled power changed. 12 spikes excluded across all runs.
+- The verdict: 2,958 rows over 11 runs (2,881 voltage trace, 31 device, 46 none); 29 rows with
+  both device and voltage-trace values, fold device over voltage trace 0.807 to 1.785, median
+  0.987; 2,912 copied values against the comparison rows, 0 differences; written in 0.86 s;
+  the deployment report serves it from the store (18.83 s with a candidate); Stim Optimizer
+  reads it as itself, reports it, and is served in 1.41 s with the verdict in its chain.
+- The first version of the verdict never paired the device's band (programmed centre 7.81 Hz)
+  with the converted routes (nearest stored centre 8.5 Hz): 0 rows with both. The comparison
+  pairs them at the nearest stored centre, and the verdict now does the same; the device's own
+  centre is kept on the row. The rule version was bumped so no first-version entry can be served.

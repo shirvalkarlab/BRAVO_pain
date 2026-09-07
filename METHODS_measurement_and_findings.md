@@ -248,7 +248,8 @@ one.** Decided as follows. The precedence:
 **The four conditions, which the proposal lacked.**
 
 1. **The device's own reading counts as ground truth only after a per-channel saturation ceiling
-   check.** About 1 percent of simultaneous windows are device-side spikes where the reading jumps
+   check.** *Implemented 2026-09-07 as a fold of each settled window's own median
+   (`DEVICE_SPIKE_FOLD` in `three_source_response.py`, ten, provisional: open item 20).* About 1 percent of simultaneous windows are device-side spikes where the reading jumps
    to ten thousand or a hundred thousand while the simultaneous voltage trace stays flat. **A rule
    that adopts the unfiltered reading adopts those spikes as truth**, and they are exactly what a
    detector keyed on that stream would misfire on. Failing windows are excluded **and counted**, and

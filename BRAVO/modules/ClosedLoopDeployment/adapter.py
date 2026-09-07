@@ -1246,6 +1246,85 @@ def amplitude_effect_signature(participant, *, tiles_key, min_settings=3):
             int(_amp.MIN_POINTS_CURVATURE))
 
 
+def ground_truth_signature(participant, *, tiles_key, min_settings=3):
+    """The key for the ground-truth verdict table: the tile entry, the recording set the ladders
+    are read from, the settled-window rule and the device ceiling. Nothing decoded enters it."""
+    from StimOptimizer.routines import within_visit as _wv
+    from . import ground_truth as _gt
+    from . import three_source_response as _3src
+    return (_gt.KIND, _gt.RULE_VERSION, str(getattr(participant, "uid", participant)),
+            tiles_key, recording_set_signature(participant), "all_runs", int(min_settings),
+            float(_wv.PRE_CHANGE_WINDOW_S), int(_wv.MIN_CHUNKS_PRE_CHANGE),
+            float(_3src.DEVICE_SPIKE_FOLD), float(_3src.DEVICE_MIN_SAMPLE_FRACTION))
+
+
+def ground_truth_if_stored(participant, *, min_settings=3):
+    """The stored verdict's summary when the store already holds it under the current key."""
+    from . import ground_truth as _gt
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return None
+    uid = str(getattr(participant, "uid", participant))
+    sig = ground_truth_signature(participant, tiles_key=tiles_key, min_settings=min_settings)
+    stamp = _cache_store.read_stamp(_gt.KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if not stamp:
+        return None
+    extra = stamp.get("extra") or {}
+    return {"written": True, "served_from_store": True,
+            "store_key": _cache_store.product_key(_gt.KIND, uid, sig),
+            "n_rows": extra.get("n_rows"), "n_runs": extra.get("n_runs"),
+            "routes": extra.get("routes"), "stored_utc": stamp.get("written_utc")}
+
+
+def write_ground_truth(participant, build, *, min_settings=3):
+    """Apply the ground-truth rule (decision 33) to every run and write the verdict table where
+    Stim Optimizer reads it, with the tile entry in its provenance. Track G step 2.
+
+    Returns a summary for the response: the store key, whether the entry is on disk, the row and
+    run counts, how many rows each route won, and the reason when nothing could be written.
+    """
+    from . import ground_truth as _gt
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+    if not build or not build.get("comparisons"):
+        return {"written": False, "n_rows": 0, "n_runs": 0,
+                "reason": (build or {}).get("absent_reason") or "no run of rising current"}
+    table = _gt.table_from_build(build)
+    routes = ({str(k): int(v) for k, v in table["ground_truth_route"].value_counts().items()}
+              if len(table) else {})
+    summary = {"written": False, "n_rows": int(len(table)),
+               "n_runs": int(table["run_label"].nunique()) if len(table) else 0,
+               "routes": routes, "store_key": None,
+               "device_spikes_excluded": int(table["device_spikes_excluded"].sum()) if len(table) else 0}
+    from . import three_source_response as _3src
+    summary["device_spike_fold"] = float(_3src.DEVICE_SPIKE_FOLD)
+    if not len(table):
+        summary["reason"] = "no route had a settled value in any run"
+        return summary
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        summary["reason"] = "no tile entry key, so the table was derived but not stored"
+        return summary
+    uid = str(getattr(participant, "uid", participant))
+    sig = ground_truth_signature(participant, tiles_key=tiles_key, min_settings=min_settings)
+    prov = _prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")])
+    _cache_store.store_if_absent(_gt.KIND, uid, sig, lambda: table,
+                                 writer="closed_loop", trigger="deployment_report",
+                                 provenance=prov, n_recordings=None,
+                                 extra={"min_settings": int(min_settings),
+                                        "n_rows": summary["n_rows"], "n_runs": summary["n_runs"],
+                                        "routes": routes,
+                                        "device_spike_fold": float(_3src.DEVICE_SPIKE_FOLD)},
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+    summary["served_from_store"] = False
+    summary["store_key"] = _cache_store.product_key(_gt.KIND, uid, sig)
+    summary["written"] = _cache_store.read_stamp(_gt.KIND, uid, sig,
+                                                 root=_SHARED_CACHE_DIR_OVERRIDE) is not None
+    return summary
+
+
 def amplitude_effect_if_stored(participant, *, min_settings=3):
     """The response summary for an amplitude-effect table already in the store, or None.
 
@@ -1472,11 +1551,13 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         # table for this record is already stored, only the page's runs are built.
         try:
             _amp_stored = amplitude_effect_if_stored(participant)
+            _gt_stored = ground_truth_if_stored(participant)
         except Exception:                               # noqa: BLE001 — the page comes first
             _amp_stored = None
+            _gt_stored = None
         _3build = _3src.build_for_participant(
             getattr(participant, "uid", participant),
-            max_runs=(THREE_SOURCE_RUNS_ON_PAGE if _amp_stored else _ALL_RUNS))
+            max_runs=(THREE_SOURCE_RUNS_ON_PAGE if (_amp_stored and _gt_stored) else _ALL_RUNS))
         _page = dict(_3build, comparisons=list(_3build.get("comparisons", []))
                      [:THREE_SOURCE_RUNS_ON_PAGE])
         out["three_source_response"] = _3plot.report_payload(_page)
@@ -1496,6 +1577,13 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     try:
         out["amplitude_effect_by_band"] = (_amp_stored if _amp_stored is not None
                                            else write_amplitude_effect(participant, _3build))
+    except Exception as _exc:                          # noqa: BLE001
+        out["amplitude_effect_by_band"] = {"written": False,
+                                           "reason": f"could not be derived: {_exc!r}"}
+    # TRACK G STEP 2: THE GROUND-TRUTH VERDICT (decision 33), written where Stim Optimizer reads it.
+    try:
+        out["ground_truth_verdict"] = (_gt_stored if _gt_stored is not None
+                                       else write_ground_truth(participant, _3build))
     except Exception as _exc:                          # noqa: BLE001
         out["amplitude_effect_by_band"] = {"written": False,
                                            "reason": f"the amplitude-effect table could not be "

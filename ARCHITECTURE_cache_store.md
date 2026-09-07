@@ -216,12 +216,12 @@ Two runners, two commands, and **a green run of one is not a green run of the pl
 # container — Biomarkers (22 files) + CacheStore (4 files) + DecodeCommon (1); no pytest in there
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
-#   PASS=536 FAIL=0   (2026-09-07, after Track G step 1 and Track F step 2)
+#   PASS=536 FAIL=0   (2026-09-07, after Track G step 2)
 
 # host — ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4) + DecodeCommon (1); these use pytest
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
   ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
-#   921 passed, 41 skipped   (2026-09-07, after Track G step 1 and Track F step 2, both orders)
+#   929 passed, 41 skipped   (2026-09-07, after Track G step 2, both orders)
 ```
 
 Both figures were obtained twice, independently, and agreed. **Do not carry either number
@@ -293,10 +293,12 @@ refusal cannot work. Progress against them is in `task_plan.md`, not here.
    of the module's own code is in the key
    (`artifacts/review_2026-09-07_step8_stim_optimizer_store.md`). **Track A is complete.**
 
-**The ground-truth verdict is not a Track A step.** It is Track G step 2, "Agree a ground-truth
-rule for the three-source comparison, then write it back": the rule is decided
-(`METHODS_measurement_and_findings.md` §6, decision 33) and the write-back, which closed loop
-writes and Stim Optimizer reads, remains.
+**The ground-truth verdict is Track G step 2, done 2026-09-07.** The rule is decision 33
+(`METHODS_measurement_and_findings.md` §6); `ClosedLoopDeployment/ground_truth.py` applies it to
+every run, band and setting of the three-source comparison, the closed-loop request writes it as
+`ground_truth_verdict` with the tile entry in its provenance, and Stim Optimizer reads it as
+`stim_optimizer` (decision 47). The device route's saturation ceiling that the rule requires is
+a provisional constant, open item 20.
 
 Then the other tracks: the canonical decoded form, the re-derivation speedups, the Redis build
 lock, moving the remaining caches into the one location, and the statistics site that needs its own

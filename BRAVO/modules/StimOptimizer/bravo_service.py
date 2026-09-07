@@ -73,6 +73,7 @@ LADDER_KIND = "exploration_ladder"
 BATCH_KIND = "exploration_batch"
 MANIFEST_KIND = "stim_optimizer_manifest"
 AMPLITUDE_KIND = "amplitude_effect_by_band"
+GROUND_TRUTH_KIND = "ground_truth_verdict"
 _RULE_VERSION = "v1_four_outputs"
 
 #: Response fields that describe the run that produced the response, not its results.
@@ -220,13 +221,66 @@ def amplitude_effect_block(participant, *, tiles_key_now):
     return block
 
 
-def _response_signature(uid, matched_key, tiles_key, amp_key, request_data, sites, hemis,
+def ground_truth_block(participant, *, tiles_key_now):
+    """Read the newest ground-truth verdict (Track G step 2) as Stim Optimizer and report it.
+
+    This is the edge the provenance refusal was built for: the verdict is computed from
+    recordings whose settings Stim Optimizer's own ladder chose, so the store refuses a table
+    whose chain contains this module's output, and the refusal is reported rather than hidden.
+    The table is read and counted here; feeding it into the exploration arithmetic is a
+    modelling decision that is not made in this step.
+    """
+    uid = str(getattr(participant, "uid", participant))
+    block = {"available": False, "read_as": "stim_optimizer", "store_key": None}
+    try:
+        table, stamp = _cache_store.load_newest(GROUND_TRUTH_KIND, uid, consumer="stim_optimizer",
+                                                root=_SHARED_CACHE_DIR_OVERRIDE)
+    except _provenance.SelfDerivedProduct as exc:
+        block["reason"] = f"refused by the store: {exc}"
+        block["refused"] = True
+        return block
+    except Exception as exc:                          # noqa: BLE001
+        block["reason"] = f"could not be read: {exc!r}"
+        return block
+    if table is None:
+        block["reason"] = ("no ground-truth verdict has been written for this participant; the "
+                           "closed-loop deployment page writes it" if not stamp else
+                           "the newest ground-truth entry could not be read and was discarded")
+        return block
+    chain = stamp.get("provenance") or []
+    tiles_in_chain = [c.get("key") for c in chain if c.get("kind") == "raw_lsb_tiles"]
+    try:
+        routes = {str(k): int(v) for k, v in table["ground_truth_route"].value_counts().items()}
+        with_both = table.dropna(subset=["fold_device_over_voltage_trace"])
+        fold = with_both["fold_device_over_voltage_trace"].astype(float)
+        summary = {"n_rows": int(len(table)), "n_runs": int(table["run_label"].nunique()),
+                   "rows_by_route": routes,
+                   "device_spikes_excluded": int(table["device_spikes_excluded"].sum()),
+                   "rows_with_both_device_and_voltage_trace": int(len(with_both)),
+                   "fold_device_over_voltage_trace_min": _jsonable(fold.min()) if len(fold) else None,
+                   "fold_device_over_voltage_trace_max": _jsonable(fold.max()) if len(fold) else None}
+    except Exception as exc:                          # noqa: BLE001
+        summary = None
+        block["summary_error"] = f"the table could not be summarised: {exc!r}"
+    block.update({
+        "available": True,
+        "store_key": f"{GROUND_TRUTH_KIND}/{uid}/{stamp.get('signature_key')}",
+        "written_utc": stamp.get("written_utc"), "writer": stamp.get("writer"),
+        "provenance": chain,
+        "describes_current_recordings": (bool(tiles_key_now in tiles_in_chain)
+                                         if tiles_key_now and tiles_in_chain else None),
+        "summary": summary,
+    })
+    return block
+
+
+def _response_signature(uid, matched_key, tiles_key, amp_key, gt_key, request_data, sites, hemis,
                         washin_min, backend):
     """The response key: every input and every setting the fitted result depends on, and the
     figure backend last, so `_products_signature` can drop it."""
     rd = request_data or {}
     return (RESPONSE_KIND, _RULE_VERSION, _CODE_DIGEST, str(uid), matched_key, tiles_key, amp_key,
-            tuple(sites), tuple(hemis), float(washin_min),
+            gt_key, tuple(sites), tuple(hemis), float(washin_min),
             int(rd.get("NBatches", 3)), int(rd.get("Q", 4)), bool(rd.get("ClosedLoop", True)),
             str(backend))
 
@@ -430,10 +484,12 @@ def run_for_participant(request_data: dict) -> dict:
     stream_key = (getattr(_stream, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
                   if _stream is not None else None)
     amp_block = amplitude_effect_block(participant, tiles_key_now=tiles_key)
+    gt_block = ground_truth_block(participant, tiles_key_now=tiles_key)
     store_block = {"response_key": None, "served_from_store": False, "written": None,
                    "refusal": None, "reason": None,
                    "inputs": {"matched_table": matched_key, "tiles": tiles_key,
-                              "amplitude_effect": amp_block.get("store_key")}}
+                              "amplitude_effect": amp_block.get("store_key"),
+                              "ground_truth_verdict": gt_block.get("store_key")}}
     sig = prov = None
     matched_stamp = _cache_store.stamp_for_key(matched_key, root=_SHARED_CACHE_DIR_OVERRIDE) \
         if matched_key else None
@@ -452,7 +508,8 @@ def run_for_participant(request_data: dict) -> dict:
                                  "computed without the delivered-settings census and is not stored")
     else:
         sig = _response_signature(uid, matched_key, tiles_key, amp_block.get("store_key"),
-                                  request_data, sites, hemis, washin_min, backend)
+                                  gt_block.get("store_key"), request_data, sites, hemis,
+                                  washin_min, backend)
         store_block["response_key"] = _cache_store.product_key(RESPONSE_KIND, uid, sig)
         try:
             served = _cache_store.load(RESPONSE_KIND, uid, sig, consumer="stim_optimizer",
@@ -479,6 +536,7 @@ def run_for_participant(request_data: dict) -> dict:
                                        RESPONSE_KIND, uid, sig,
                                        root=_SHARED_CACHE_DIR_OVERRIDE) or {}).get("written_utc"))
             served["amplitude_effect"] = amp_block
+            served["ground_truth"] = gt_block
             return served
         # The chain of exactly the entries this request used: the matched table's own sidecar,
         # found by the key the design matrix carries, and the amplitude table's sidecar as read
@@ -491,6 +549,10 @@ def run_for_participant(request_data: dict) -> dict:
             entries.append(_provenance.entry(amp_block["store_key"], kind=AMPLITUDE_KIND,
                                              writer="closed_loop",
                                              chain=amp_block.get("provenance") or []))
+        if gt_block.get("available"):
+            entries.append(_provenance.entry(gt_block["store_key"], kind=GROUND_TRUTH_KIND,
+                                             writer="closed_loop",
+                                             chain=gt_block.get("provenance") or []))
         prov = _provenance.flatten(entries)
 
     # The horizon must describe the DATA SPAN, not the last epoch's start. `t0` is when the final
@@ -609,6 +671,7 @@ def run_for_participant(request_data: dict) -> dict:
                                              include=bool((request_data or {})
                                                           .get("ClosedLoop", True))),
         "amplitude_effect": amp_block,
+        "ground_truth": gt_block,
         "store": store_block,
     }
     if sig is not None:

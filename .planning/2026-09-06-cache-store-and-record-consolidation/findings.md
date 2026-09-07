@@ -462,3 +462,22 @@ directory is that cache. Track D must not connect it without the second sign-off
   requests each took about 367 s where one build takes about 37 s: the four contend for the
   same cores and memory and all finish last. The lock's saving is therefore not "three builds"
   but the difference between 41 s and 368 s for every waiting page.
+- The store's sidecar is the freshness key. It is 350 bytes, reads in 0.012 ms, and is written
+  after the payload as the commit marker, so it is never present without a complete entry. A
+  Redis mirror of it measured slower (0.017 ms) and would be a second place for a date to
+  drift. Django's own cache has no reader in this platform, so pointing it at Redis would be a
+  claim with no result behind it.
+
+### 6l. Track G step 2 observations, 2026-09-07
+
+- The device's ceiling check touches almost nothing on this record: 12 spikes in 11 runs,
+  changing 3 of 12,068 comparison values, none of them a settled power. The two windows it
+  touched were already refused for other reasons or unaffected in value.
+- Where the device's own reading and the calibrated voltage trace describe the same band and
+  setting (29 rows), the fold between them runs 0.807 to 1.785 with a median of 0.987. That is
+  the continuous check on the calibration decision 33 asks for; the methods document's earlier
+  figure of 1.10 and 1.39 fold came from two runs.
+- The device's band sits at its programmed centre and the converted routes on the stored grid;
+  the comparison meets them at the nearest stored centre and the verdict has to do the same, or
+  the fold is never written. Found on the live record, not by the constructed tests, which used
+  one centre for both.

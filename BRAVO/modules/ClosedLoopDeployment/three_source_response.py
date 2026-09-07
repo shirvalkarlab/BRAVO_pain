@@ -158,6 +158,16 @@ DEVICE_SETTLE_AFTER_CURRENT_STOPS_S = 5.0
 #: out-of-ten rule the other two routes use, written for a stream that samples fifteen times faster.
 DEVICE_MIN_SAMPLE_FRACTION = 2.0 / 3.0
 
+#: THE DEVICE ROUTE'S SATURATION CEILING (decision 33, condition 1). About 1 percent of the
+#: device's own band-power samples that sit alongside a voltage trace are spikes: the reading
+#: jumps to ten thousand or a hundred thousand while the simultaneous trace stays flat. A sample
+#: more than this many times the median of its own settled window is excluded from the average
+#: AND COUNTED, and a setting left with too few samples falls through to the voltage-trace route
+#: with that reason recorded. THE VALUE IS PROVISIONAL: the decision fixes the rule, not the
+#: number, and the number is here for the PI to confirm or change (open item 20). It is a fold
+#: against the window's own median so that no absolute level is written into the code.
+DEVICE_SPIKE_FOLD = 10.0
+
 
 # -------------------------------------------------------------------------------------------------
 # Reading the device's own band power (route 3) out of the stored streaming recordings
@@ -289,7 +299,8 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                               window_s=within_visit.PRE_CHANGE_WINDOW_S,
                               settle_s=DEVICE_SETTLE_AFTER_CURRENT_STOPS_S,
                               min_fraction=DEVICE_MIN_SAMPLE_FRACTION,
-                              block=None, require_rise_into_setting=True):
+                              block=None, require_rise_into_setting=True,
+                              spike_fold=DEVICE_SPIKE_FOLD):
     """The settled level of the device's own band power, one number per stimulation setting.
 
     This is the same rule the other two routes follow -- average the last ``window_s`` seconds before
@@ -306,6 +317,12 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
     Returns ``(power, table)``. ``power`` is one value per setting, missing where the setting was
     refused. ``table`` carries the current, the window used, the sample count, whether the setting
     was accepted and, when it was not, why not.
+
+    THE CEILING CHECK (decision 33). Inside each settled window, a sample above ``spike_fold``
+    times the window's own median is a device-side spike: excluded from the average, counted in
+    ``n_spikes_excluded``, and the ceiling itself is written in ``ceiling_device_units``. A window
+    left with fewer samples than the rule requires is refused with the spike count in its reason,
+    so the setting falls through to the voltage-trace route rather than resting on a spike.
     """
     t0 = np.asarray(step_t0, dtype=float)
     amp = np.asarray(current_mA, dtype=float)
@@ -348,6 +365,16 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
         need = max(1, int(np.ceil(float(min_fraction) * n_wanted))) if n_wanted else 1
 
         reason = ""
+        n_spikes = 0
+        ceiling = None
+        if n_found:
+            med = float(np.nanmedian(sp[sel]))
+            if np.isfinite(med) and med > 0 and spike_fold is not None:
+                ceiling = float(spike_fold) * med
+                spike = sel & (sp > ceiling)
+                n_spikes = int(spike.sum())
+                sel = sel & ~spike
+                n_found = int(sel.sum())
         if require_rise_into_setting and not up_from_previous[i]:
             reason = ("the current did not go up to reach this setting, so the thirty seconds "
                       "would mix this setting with the higher or equal current before it")
@@ -356,7 +383,10 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                       "thirty second window that is certain to sit inside this setting")
         elif n_found < need:
             reason = (f"the device reported only {n_found} samples of its own band power in the "
-                      f"{want:g} seconds before the next current change, and {need} are required")
+                      f"{want:g} seconds before the next current change, and {need} are required"
+                      + (f" ({n_spikes} excluded as spikes above the ceiling of {ceiling:.6g} "
+                         f"device units, {float(spike_fold):g} times the window's median)"
+                         if n_spikes else ""))
         else:
             held = sa[sel]
             if np.unique(held).size > 1:
@@ -373,6 +403,8 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                      "window_start_epoch_s": float(lo) if np.isfinite(lo) else None,
                      "window_end_epoch_s": float(t_end[i]) if np.isfinite(t_end[i]) else None,
                      "n_pieces_averaged": n_found,
+                     "n_spikes_excluded": n_spikes,
+                     "ceiling_device_units": ceiling,
                      "current_went_up_into_this_setting": bool(up_from_previous[i]),
                      "accepted": bool(np.isfinite(power[i])),
                      "why_not_used": reason})
@@ -999,12 +1031,14 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
                 + (f", each already an average over {avg:g} seconds of signal" if avg else ""))
             amps = steps["current_mA"].to_numpy(dtype=float)
             counts = table["n_pieces_averaged"].to_numpy()
+            spikes = table["n_spikes_excluded"].to_numpy()
             why = table["why_not_used"].tolist()
             for i in range(len(steps)):
                 v = power[i]
                 row = {"current_mA": float(amps[i]) if np.isfinite(amps[i]) else None,
                        "settled_power": float(v) if np.isfinite(v) else None,
                        "n_pieces": int(counts[i]),
+                       "n_spikes_excluded": int(spikes[i]),
                        "accepted": bool(np.isfinite(v)),
                        "why_not_used": (why[i] if not np.isfinite(v) else "")}
                 panel.settings.append(row)
@@ -1076,6 +1110,7 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
                          "current_mA": st["current_mA"],
                          "settled_band_power_device_units": st["settled_power"],
                          "n_pieces_averaged": st["n_pieces"],
+                         "n_spikes_excluded": int(st.get("n_spikes_excluded", 0) or 0),
                          "band_is_measuring_the_stimulator":
                              panel.band_is_measuring_the_stimulator,
                          "band_inside_checked_conversion_range":

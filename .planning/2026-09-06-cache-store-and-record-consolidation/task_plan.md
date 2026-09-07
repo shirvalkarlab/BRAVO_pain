@@ -30,19 +30,19 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Track F step 3, "Move the freshness key and last-updated date into Redis": mirror each store
-entry's sidecar stamp (written time, key) in Redis so a page can show the last cache update
-without opening the file, falling back to the sidecar when the mirror is missing or stale, never
-to a wrong date; then step 4, Django's cache to Redis; then Track G step 2, the ground-truth
-write-back. Track D steps 1 and 2 stay open behind Track E's gate.**
+**Phase 3 is done except Track D steps 1 and 2, which sit behind Track E's second sign-off
+(the spectrum rebuilt from raw traces on every request is the site Track E names). Report to the
+PI: the ceiling constant (open item 20) and Track E's sign-off are his; Phase 4, Tracks C and E,
+waits on them. Phase 5's closing checks can run any time.**
 
 ## Current Phase
 
 Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
-Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`). Track D steps 3 and 4 were resolved
-by measurement, Track G step 1 fixed, and Track F step 2 built, all in the commit carrying this
-edit; Track F step 1 was `b7036bf`.
+Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`); Track D steps 3 and 4, Track G step 1
+and Track F step 2 in `f01a0320`; Track F steps 3 and 4 assessed and Track G step 2 built in the
+commit carrying this edit; Track F step 1 was `b7036bf`. Track D steps 1 and 2 stay open behind
+Track E's gate.
 The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
@@ -195,8 +195,17 @@ and the two closed-loop fixes. Track D needs Track B's form.
   runs out, and Redis being unreachable means building as before. Proven on RCS08: four
   concurrent cold requests ran one build and served three, wall 40.85 s; with the lock off, four
   builds, wall 368.03 s
-- [ ] 3. Move the freshness key and last-updated date into Redis
-- [ ] 4. Point Django's cache at Redis instead of per-process memory
+- [x] 3. Move the freshness key and last-updated date into Redis — resolved by measurement on
+  2026-09-07, no code change: the step's premise, answering the last-update question without
+  opening the 245 MB file, is already met by the 350-byte sidecar the store writes beside every
+  entry. Reading it costs 0.012 to 0.013 ms per call against 0.017 ms for a Redis read of the
+  same value, in three alternating rounds of 1,000 calls; a Redis mirror would be slower and
+  would add a way for the date to be wrong
+- [x] 4. Point Django's cache at Redis instead of per-process memory — not done, and recorded as
+  such on 2026-09-07: no code in the platform reads Django's cache (no import of
+  `django.core.cache` anywhere under `BRAVO/`), and `CACHES` is not set, so the default
+  per-process memory cache holds nothing. A setting with no reader cannot be proven, and the
+  cold-worker penalty the step names is what the shared tile file and the build lock address
 
 **Track G — "Closed-loop fixes"**
 
@@ -207,8 +216,14 @@ and the two closed-loop fixes. Track D needs Track B's form.
   still required the older one-spectrum-per-row columns, and the web handler turned the raise
   into "the three edges have not been estimated". The join and the fingerprint now accept the
   calibrated frame (decision 17); on RCS08 all four candidates tried return three edges
-- [ ] 2. Agree a ground-truth rule for the three-source comparison, then write it back — the rule
-  is agreed (decision 33 in `DECISIONS_and_open_items.md`); the write-back remains
+- [x] 2. Agree a ground-truth rule for the three-source comparison, then write it back — the rule
+  is decision 33; written back 2026-09-07 as `ground_truth_verdict` by the closed-loop request,
+  one row per run, band and stimulation setting, with the device route's saturation ceiling
+  check added to the comparison (a provisional constant, open item 20), and read by Stim
+  Optimizer as itself. On RCS08: 2,958 rows over 11 runs, 31 on the device, 2,881 on the
+  voltage trace, 46 on nothing; 29 rows with both, fold 0.807 to 1.785, median 0.987; 12 device
+  spikes excluded; the ceiling changed 3 of 12,068 comparison values, all pieces counts or
+  reasons, no settled power
 
 ### Phase 4: The store as the single location, and the gated statistics site — Tracks C, E
 
@@ -265,6 +280,7 @@ store.
 | 16 | **Track B step 4: the tile-cache builder reads the form's prepared traces, in the recording list's own order, and the service prepares every trace once for all channels; the per-recording preparation stays as the path without a form.** The form's traces carry `seq` and `product` for it (form version 2). | Proven equal on RCS08, 31,868,643 values and 0 differences in each of four alternating rounds. The saving is under a second of a 37 s cold build (38.59 and 35.67 s against 39.22 and 36.27 s), so this is recorded as the completion of the form's adoption and not as a speed-up; the build's cost is the band-power arithmetic on 304,309 tiles. | 2026-09-07 |
 | 17 | **Track G step 1: the deployment report's joined table and its content fingerprint accept the calibrated frame — one row per three-second tile, one `band_lsb_<centre>` column per band, already on the device's scale — reading each band's linear power from its own column, its decibel expression from that, and leaving the mean-of-log scale empty because no per-bin spectrum exists to take it from; tiles the cache marked unusable or railed are left out; the fingerprint hashes every band column and the tile flags; the pipeline adds the candidate's own centre to the join's grid.** | Since `90eb109` (2026-09-05) the frame the report is built on has been the calibrated one, and since `8e31342` the fingerprint raises on a missing column rather than skipping it; between them the report raised on every candidate and the page's evidence triangle read "not estimated". The fix follows decision 33: the device's own scale is the one a switching value is typed in, so the join reads it rather than falling back to the uncalibrated spectrum. The tile gate is the same one the other panels apply. On RCS08 with the left 0-2 contact at 26.5 Hz the table has 5,427,936 rows from 304,309 tiles and the report returns in 19.2 s cold, 7.2 s warm; the amplitude-to-pain edge resolves (estimate −0.159 pain points per mA, interval −0.275 to −0.042, 90 clusters) and the other two do not at that band. | 2026-09-07 |
 | 18 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis being unreachable, the client absent or the lock switched off all mean building as before with no error.** Redis is reached with protocol version 2. | Four workers missing the same file used to start four builds. Proven on RCS08 through the bridge with four concurrent cold requests in one process: one build, three served, every request answered in 40.4 to 40.8 s; the control with the lock off ran four builds contending for the machine and every request took 367 to 368 s. Seven tests on a stand-in for Redis pin the three requirements and that eight concurrent callers yield exactly one builder. | 2026-09-07 |
+| 19 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling, a fold of the settled window's own median (`DEVICE_SPIKE_FOLD = 10`, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison itself uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads the newest verdict as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice the PI has not made, so it is one named constant with a fold against the window's own median rather than an absolute level. On RCS08 the ceiling changed 3 of 12,068 comparison values (two pieces counts, one reason), excluded 12 spikes, and no settled power moved. The verdict's first version keyed the device's band on the programmed centre and so never met the converted routes: 0 rows with both; pairing at the comparison's own nearest centre gives 29, fold 0.807 to 1.785, median 0.987. | 2026-09-07 |
 
 ## Errors Encountered
 

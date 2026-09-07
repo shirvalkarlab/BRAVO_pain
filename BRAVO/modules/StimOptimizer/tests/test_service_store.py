@@ -143,7 +143,7 @@ def test_the_request_writes_four_products_and_the_response_with_the_chain_of_its
     assert out["available"] and bench.runs.calls == 1
     assert out["store"]["served_from_store"] is False and out["store"]["refusal"] is None
     assert out["store"]["inputs"] == {"matched_table": MATCHED_KEY, "tiles": TILES_KEY,
-                                      "amplitude_effect": None}
+                                      "amplitude_effect": None, "ground_truth_verdict": None}
     written = out["store"]["written"]
     assert written == {BS.SUMMARY_KIND: True, BS.LADDER_KIND: True, BS.BATCH_KIND: True,
                        BS.MANIFEST_KIND: True, BS.RESPONSE_KIND: True}
@@ -356,3 +356,43 @@ def test_a_band_with_no_fitted_line_is_not_assessed_rather_than_without_movement
     t.loc[t["band_center_hz"] == 10.5, "stimulation_rate_hz"] = np.nan   # a key the grouping drops
     s = BS.summarise_amplitude_effect(t, lo_hz=8.0, hi_hz=30.0)
     assert s["n_rows_not_grouped"] == 1 and len(s["rows"]) == 2
+
+
+def _verdict_table():
+    return pd.DataFrame([{"run_label": "r1", "visit_date": "2026-08-18", "ramped_side": "Left",
+                          "sensing_contact": "ONE_THREE_LEFT", "stimulation_rate_hz": 55.0,
+                          "band_center_hz": 26.5, "current_mA": 1.0, "ground_truth_route": "device",
+                          "ground_truth_power": 500.0, "device_spikes_excluded": 1,
+                          "fold_device_over_voltage_trace": 1.25},
+                         {"run_label": "r1", "visit_date": "2026-08-18", "ramped_side": "Left",
+                          "sensing_contact": "ONE_THREE_LEFT", "stimulation_rate_hz": 55.0,
+                          "band_center_hz": 26.5, "current_mA": 2.0,
+                          "ground_truth_route": "voltage_trace_calibrated",
+                          "ground_truth_power": 420.0, "device_spikes_excluded": 3,
+                          "fold_device_over_voltage_trace": np.nan}])
+
+
+def test_the_ground_truth_verdict_is_read_as_stim_optimizer_keyed_and_cited(bench):
+    st.store(BS.GROUND_TRUTH_KIND, UID, ("gt", 1), _verdict_table(), writer="closed_loop",
+             provenance=prov.flatten([prov.entry(TILES_KEY, kind="raw_lsb_tiles",
+                                                 writer="biomarkers")]), root=bench.root)
+    out = BS.run_for_participant(dict(REQ))
+    g = out["ground_truth"]
+    assert g["available"] is True and g["read_as"] == "stim_optimizer" and g["writer"] == "closed_loop"
+    assert g["describes_current_recordings"] is True
+    assert g["summary"]["rows_by_route"] == {"device": 1, "voltage_trace_calibrated": 1}
+    assert g["summary"]["device_spikes_excluded"] == 4
+    assert g["summary"]["fold_device_over_voltage_trace_min"] == 1.25
+    assert out["store"]["inputs"]["ground_truth_verdict"] == g["store_key"]
+    keys = {c["kind"] for c in _sidecar(bench.root, BS.RESPONSE_KIND)["provenance"]}
+    assert BS.GROUND_TRUTH_KIND in keys
+
+
+def test_a_verdict_derived_from_the_ladder_is_refused_and_said_so(bench):
+    st.store(BS.GROUND_TRUTH_KIND, UID, ("gt", 2), _verdict_table(), writer="closed_loop",
+             provenance=prov.flatten([prov.entry("exploration_ladder/PARTICIPANT/l1",
+                                                 kind="exploration_ladder",
+                                                 writer="stim_optimizer")]), root=bench.root)
+    out = BS.run_for_participant(dict(REQ))
+    assert out["available"] and out["ground_truth"]["refused"] is True
+    assert "refused by the store" in out["ground_truth"]["reason"]
