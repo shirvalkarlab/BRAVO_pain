@@ -14,12 +14,21 @@ held in a cloud store, an attachment, or a conversation that you need and cannot
 **Confirm it in one command before doing anything else:**
 
 ```bash
-cd /Users/pshirvalkar/dev/BRAVO_pain && ls -la CLAUDE.md *.md && \
-  git ls-files | grep -cE '^(docs/|\.planning/|BRAVO/modules/CacheStore/)' && git log --oneline -3
+cd /Users/pshirvalkar/dev/BRAVO_pain
+ls *.md | wc -l                                    # expect 12
+git ls-files docs/archive/2026-09-07 docs/exported_artifacts \
+            .planning BRAVO/modules/CacheStore | wc -l   # expect 75
+git log --oneline -4                               # expect four commits dated 2026-09-07
 ```
 
-That should list twelve markdown files at the root, count 75 tracked files across the three
-directories, and show `14ad802`, `fa14edd`, `7f1882f` as the three newest commits.
+**Name those four directories explicitly rather than matching `docs/` as a whole** — `docs/` also
+holds 113 files that were already in this repository, including 77 images and the Sphinx
+documentation, and a pattern over the whole directory counts those too.
+
+The 75 breaks down as 52 files in the archive (51 superseded documents plus its index), 11 exported
+from the cloud store, 4 planning files, and 8 in the store itself. **Commit identifiers advance
+with every commit, so check the dates rather than matching the four short identifiers you see
+today.**
 
 **The twelve root markdown files, and what each is for:**
 
@@ -45,7 +54,7 @@ directories, and show `14ad802`, `fa14edd`, `7f1882f` as the three newest commit
 - **`.planning/2026-09-06-cache-store-and-record-consolidation/`** — `task_plan.md` (the 30 step
   titles, verbatim, so progress reports still line up), `findings.md` (**the 30 resolved
   contradictions, §1, and the machine-checked port, §5**), `progress.md`.
-- **`docs/archive/2026-09-07/`** — 52 superseded documents plus `INDEX.md` naming which document
+- **`docs/archive/2026-09-07/`** — 51 superseded documents plus `INDEX.md` naming which document
   replaced each one. **Everything in there is superseded and every code line number in it has
   moved.** `docs/exported_artifacts/` holds 11 files pulled out of a cloud store so they are on
   disk too: both cache inventory drawings, the architecture drawing in three formats, the four-lens
