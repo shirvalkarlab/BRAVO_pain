@@ -12,10 +12,16 @@ mistake has produced false figures in durable documents in this project more tha
 ## 0. READ THESE FIRST, IN THIS ORDER
 
 The PI's own words: *"There are too many Handoffs going on now."* **He is right, and it is worse than
-it sounds: the repository root holds 53 `.md` files** — 25 of them named `SESSION_HANDOFF_*` or
-`HANDOFF_*`, plus 7 `AUDIT_*` and 2 `VALIDATION_*`. So here is the reading order and which document
-wins when two disagree. **Read these seven and stop.** The other 46 are historical unless one of
-these seven points you at it.
+it sounds: the repository root holds 53 `.md` files, and 38 of them are handoffs, audits or
+validation reports** — 22 named `SESSION_HANDOFF_*`, 7 named `HANDOFF_*`, one bare `HANDOFF.md`,
+6 `AUDIT_*` and 2 `VALIDATION_*`. So here is the reading order and which document wins when two
+disagree. **Read these seven and stop.** The rest are historical unless one of these seven points
+you at it.
+
+> *An earlier version of this paragraph said "25 … plus 7 `AUDIT_*`". Those figures were wrong —
+> eyeballed from the listing rather than counted from it. The corrected breakdown above was computed
+> by prefix and sums to 53. The wrong figures also reached commit `98ba64a`'s message, which cannot
+> be edited once pushed; the counts here are the correct ones.*
 
 > **⚠ THE DESIGN LEDGER IS NOT A FILE IN THIS REPOSITORY.** `DESIGN_biomarker_pipeline_v2.md` exists
 > only in the **artifact store**, not on disk — confirmed by listing every root-level `.md` file,
