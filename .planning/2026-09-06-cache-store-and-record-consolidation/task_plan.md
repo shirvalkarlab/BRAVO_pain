@@ -30,18 +30,18 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Track B step 4, "Fix the repeated column resolution and float conversion": the remaining site
-is the tile-cache builder `availability.raw_lsb_spectrum_cache`, which resolves the channel
-column and converts every recording's samples to float once per channel on a cold build. Route
-it through the form's prepared per-channel column, then prove the 245 MB tile entry unchanged
-field for field on a cleared tile store and time the cold build in alternating rounds.**
+**Track B is complete. Next is Track D, "Readers". Before touching a reader, decide from the
+profile of 2026-09-07 (findings §6j) which of its four steps is worth its proof: the page's
+time is in the analytics pipeline (35 s of 85 s under the profiler) and in the spectra built
+from raw traces on every request (`welch_psd_for_instance`, 381 calls, 10.3 s), and the latter
+is the site Track E's gated sign-off covers, so Track D step 2 must not wire it silently.**
 
 ## Current Phase
 
 Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
-Track B steps 1 (`7e57ce03`), 2, 3 and 5 (the commit carrying this edit) are done; Track F
-step 1 was done in `b7036bf`.
+Track B is complete: step 1 `7e57ce03`, steps 2, 3 and 5 `a86e9c09`, step 4 the commit carrying
+this edit. Track F step 1 was done in `b7036bf`.
 The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
@@ -158,8 +158,13 @@ and the two closed-loop fixes. Track D needs Track B's form.
   through the new `per_pro_lsb_spectrum_indexed`. The plan's note that this scan is not
   exercised by the default page is stale: the page's spectral scan calls it 30 times on a cold
   memo, and the band-by-length sweep calls neither reader at all (0 calls, measured)
-- [ ] 4. Fix the repeated column resolution and float conversion — the remaining site is the
-  tile-cache builder, reached only on a cold build
+- [x] 4. Fix the repeated column resolution and float conversion — 2026-09-07: the tile-cache
+  builder `raw_lsb_spectrum_cache` takes the form's prepared traces (walked in the recording
+  list's own order, so the tile arrays keep their order) and the service prepares every trace
+  once for all channels; proven on RCS08 in four alternating rounds, 31,868,643 tile values
+  compared with the build without the form, 0 differences each round. **It buys little**: the
+  cold build is 38.59 and 35.67 s with the form against 39.22 and 36.27 s without, because the
+  band-power arithmetic, not the column resolution, is the build
 - [x] 5. Prove every number unchanged, then measure — 2026-09-07, RCS08 through the bridge, four
   alternating rounds with the switch on, off, on, off: 8,087,210 page values compared with the
   page captured before the change, 0 differences in every round; 54.11 and 53.47 s with the
@@ -240,6 +245,7 @@ store.
 | 13 | **Track A step 8: Stim Optimizer reads the therapy-and-pain matched table and the newest amplitude-effect table as `stim_optimizer`, reports which tile entry that table describes and whether it is the current one, and writes back `stim_optimizer_summary`, `exploration_ladder` (the pipeline's queue with its own `rank` kept), `exploration_batch`, `stim_optimizer_manifest` and the whole response as `stim_optimizer_response`, all under one key naming the matched table, the tile entry, the amplitude table, the sites, the brain sides, the wash-in, the backend and the batch settings, with every input's own chain flattened into theirs. A stored response whose key matches is served and marked; one the store refuses is reported, recomputed, and REPLACED; a write-back that fails is reported in the response. A digest of the module and its routines is in the key, the four tables are keyed without the figure backend, and a response computed without the delivered-settings census is not stored.** The amplitude summary counts — runs, currents tested, the smallest slope p-value, whether any run showed movement at p < 0.05 — inside the adaptive window, and does not judge. | Reading as `stim_optimizer` is the exact edge the refusal exists for: the ladder Stim Optimizer chooses decides which recordings come to exist, so a verdict derived from them must not come back to it as independent evidence, and the chain on every output is what lets the next reader see that. The pipeline's fitted surface is repeatable (fresh against fresh: 0 differences in 20,640 values), which is what makes the served response the same answer. The first version inserted a second `rank` column, pandas refused it, and nothing was written back on the live record while every test passed, because the stubbed queue had no `rank`; the stub now has one, and a failed write-back is reported in the response rather than only logged. | 2026-09-07 |
 | 14 | **Track B step 1: the decoded form's start-time parser mirrors the platform's exactly, including the rule that a start time written without a timezone is read in the process's local zone.** The disagreement is recorded here and in `findings.md` rather than corrected in the form alone. | The form exists to give the same answer as `availability.per_pro_lsb`, and step 5 proves that field for field on the live record; a form that silently "fixed" the zone would fail that proof, or worse, pass it in the container (which runs in universal time) and disagree on any other machine. The prototype's version read a naive string as universal time; the two agreed in the container and differed by eight hours on the analysis host, which is where the test first ran under pytest. Whether the platform's own rule should change is a separate question and is logged as an open item. | 2026-09-07 |
 | 15 | **Track B steps 2, 3 and 5: `availability.per_pro_lsb` and `per_pro_lsb_spectrum` read from the canonical decoded form, built once per request by `availability.channel_index` and passed in by the service; the two original scans stay as `_per_pro_lsb_scan` and `_per_pro_lsb_spectrum_scan`, the reference implementations, behind the module switch `USE_CHANNEL_INDEX`.** The switch off runs the scans with no deployment. | The scans are the specification the indexed readers are proven equal to on constructed recordings (DecodeCommon/tests, 40 tests on both runners), and flipping the switch inside one process is what makes the alternating rounds of the live proof honest: on, off, on, off, 8,087,210 values against the page captured before the change, 0 differences each round, 54 s against 65 s, 5 thousand canonicalisations against 72 million. Deleting the scans would delete the reference and the off switch together. | 2026-09-07 |
+| 16 | **Track B step 4: the tile-cache builder reads the form's prepared traces, in the recording list's own order, and the service prepares every trace once for all channels; the per-recording preparation stays as the path without a form.** The form's traces carry `seq` and `product` for it (form version 2). | Proven equal on RCS08, 31,868,643 values and 0 differences in each of four alternating rounds. The saving is under a second of a 37 s cold build (38.59 and 35.67 s against 39.22 and 36.27 s), so this is recorded as the completion of the form's adoption and not as a speed-up; the build's cost is the band-power arithmetic on 304,309 tiles. | 2026-09-07 |
 
 ## Errors Encountered
 

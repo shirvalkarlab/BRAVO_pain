@@ -426,3 +426,16 @@ changed code or the record:
   sweep's response holds 18 timing fields among 27,323 values. A comparison that skips only
   top-level timing keys misses nested ones, which is why the sweep control reported 18
   differences and each had to be read to see it was a timing.
+
+### 6j. Where a warm Biomarker page spends its time after Track B, profiled 2026-09-07
+
+Under the profiler (which slows everything) one warm page took 85.06 s. By cumulative time:
+the analytics pipeline `_compute_analytics` 34.6 s (sliding-window analytics 19.6 s, spectral
+feature importance 14.9 s, the chronic switching-value routine 13.9 s, cross-validated logistic
+area under the curve 13.0 s over 576 calls); `welch_psd_for_instance` 10.3 s over 381 calls,
+which is the spectrum built from every time-domain recording on every request; the programmed
+adaptive thresholds 10.2 s. By own time the top entries are numpy reductions, pandas datetime
+comparisons (49,720 calls, 3.4 s), 37,404 database queries (2.5 s), and `align_pros` (8.9 s
+cumulative over 10 calls). **Track D's "three spectrum builders" and Track E's gated "connect the
+live path to the spectrum cache" meet at `welch_psd_for_instance`**; the 6,309-file spectrum
+directory is that cache. Track D must not connect it without the second sign-off.

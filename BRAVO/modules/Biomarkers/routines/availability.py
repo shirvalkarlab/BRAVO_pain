@@ -1249,8 +1249,13 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
                            td_recordings=None, event_psd_recordings=None,
                            montage_psd_recordings=None,
                            window_s=None, max_missing_frac=0.10,
-                           saturation_uv=PRO_LSB_SATURATION_UV):
+                           saturation_uv=PRO_LSB_SATURATION_UV, index=None):
     """Match-AGNOSTIC raw LSB spectrum cache for ONE channel — the decoupled source of truth.
+
+    `index=` (Track B step 4): a `ChannelIndex` from `channel_index`, whose prepared traces replace
+    the per-channel re-resolution of the column and re-conversion of every recording's samples to
+    float. The traces are walked in the recording list's own order, so the tile arrays come out
+    in the same order as without the index. Without `index`, the recordings are prepared here.
 
     Tiles the ENTIRE recording history into fixed `window_s` (default RAW_LSB_WINDOW_SECONDS = 3 s)
     NON-OVERLAPPING windows and computes the full 0–100 Hz LSB vector for every window, INDEPENDENT of
@@ -1302,26 +1307,36 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
     psd_out = {"t": [], "lsb": [], "calibrated": [], "source": []}
 
     # ---- TD-derived tiles -------------------------------------------------------------------------
-    for r in (td_recordings or []):
-        if not isinstance(r, dict):
-            continue
-        names = list(r.get("ChannelNames") or [])
-        ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
-        if ci is None:
-            continue
-        data = np.asarray(r.get("Data"), dtype=float)
-        if data.ndim != 2:
-            continue
-        if data.shape[0] == len(names) and data.shape[1] != len(names):
-            data = data.T
-        fs = float(r.get("SamplingRate") or 250.0) or 250.0
-        t0 = _to_epoch(r.get("StartTime"))
-        if t0 is None or ci >= data.shape[1] or fs <= 0:
-            continue
-        col = data[:, ci]
+    def _prepared_traces():
+        """(col, miss, fs, t0, product) per recording carrying this channel, in list order."""
+        if index is not None:
+            for pr in sorted(index.td(channel)["traces"], key=lambda d: d["seq"]):
+                if pr["fs"] <= 0:
+                    continue
+                yield pr["col"], pr["miss"], pr["fs"], pr["t0"], pr.get("product")
+            return
+        for r in (td_recordings or []):
+            if not isinstance(r, dict):
+                continue
+            names = list(r.get("ChannelNames") or [])
+            ci = next((i for i, n in enumerate(names) if _canon_channel(n) == channel), None)
+            if ci is None:
+                continue
+            data = np.asarray(r.get("Data"), dtype=float)
+            if data.ndim != 2:
+                continue
+            if data.shape[0] == len(names) and data.shape[1] != len(names):
+                data = data.T
+            fs = float(r.get("SamplingRate") or 250.0) or 250.0
+            t0 = _to_epoch(r.get("StartTime"))
+            if t0 is None or ci >= data.shape[1] or fs <= 0:
+                continue
+            col = data[:, ci]
+            yield col, _missing_per_sample(r.get("Missing"), col.shape[0]), fs, t0, r.get("product")
+
+    for col, miss, fs, t0, product in _prepared_traces():
         nsamp = col.shape[0]
-        miss = _missing_per_sample(r.get("Missing"), nsamp)
-        src = TD_PRODUCT_SOURCE_LABEL.get(r.get("product"), r.get("product") or "time-domain")
+        src = TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain")
         win_tile = int(round(fs * window_s))
         step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))   # 50% overlap sub-window hop
         min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))  # ≥1 sub-window (1 s) to score

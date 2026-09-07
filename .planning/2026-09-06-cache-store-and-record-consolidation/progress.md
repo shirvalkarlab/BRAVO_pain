@@ -498,3 +498,22 @@ this machine (pyenv 3.12.9) has no pytest.
   pair); the 27,305 measured values, 0 differences.
 - What a page still pays with the form: about 54 s, of which the form itself is a small part;
   the rest is the pipeline behind the page (decision log, "resolved by this consolidation").
+
+### Track B step 4 — "Fix the repeated column resolution and float conversion" — built
+
+- **Status:** complete, committed with this entry and pushed. Track B is finished.
+- Files changed: `DecodeCommon/representation.py` (traces carry `seq`, the recording's position
+  in its list, and `product`; form version 2), `Biomarkers/routines/availability.py`
+  (`raw_lsb_spectrum_cache(..., index=)` walks the form's traces in list order; the
+  per-recording preparation stays as the path without a form), `Biomarkers/bravo_service.py`
+  (`_raw_lsb_cache_cached` prepares every trace once for all channels when the switch is on),
+  one new test in `DecodeCommon/tests`.
+- Live proof (`_agent_bridge/_trackB_step4_live.py`, disposable): 826 recordings (381
+  time-domain, 445 spectrum-bearing), 6 channels, 4,012 event blocks, 4,284 montage blocks,
+  304,309 tiles; four cold builds bypassing the shared file and the in-process memo, form on,
+  off, on, off: 38.59, 39.22, 35.67, 36.27 s; every round against the second: 31,868,643 values,
+  0 differences. Channel-name canonicalisations 49,788 with the form against 63,330 without.
+  **The saving is under a second**, and the record says so: the cold build is the band-power
+  arithmetic.
+- Host suite after step 4: 907 passed, 41 skipped, both orders. Container after step 4:
+  PASS=529 FAIL=0.

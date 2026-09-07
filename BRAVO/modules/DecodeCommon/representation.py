@@ -70,7 +70,7 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 1
+CHANNEL_INDEX_VERSION = 2      # 2: traces carry `seq` (recording order) and `product`
 
 
 def canon_channel(name):
@@ -243,6 +243,11 @@ def build_channel_index(td_recordings=None, psd_records=None, *, step_seconds):
                 "col": data[:, ci], "miss": miss, "step": step,
                 "raw_channel": str(raw_name),
                 "source": r.get("RecordingType") or r.get("Source") or "",
+                # the recording's position in the list it arrived in, so a reader that must
+                # keep the caller's order (the tile builder) can sort the bucket back
+                "seq": n_td - 1,
+                # the ingest product label the tile builder turns into a source label
+                "product": r.get("product"),
             })
 
     for ch, bucket in td_by_channel.items():

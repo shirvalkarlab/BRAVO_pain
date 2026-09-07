@@ -1290,12 +1290,16 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
 
     cen = np.asarray(centers, dtype=float)
     out = {}
+    # ONE preparation of every voltage trace for all channels (Track B step 4), instead of
+    # resolving the column and converting every recording to float once per channel.
+    index = (availability.channel_index(td_recordings, None)
+             if availability.USE_CHANNEL_INDEX else None)
     for raw_ch in channels:
         key = availability._canon_channel(raw_ch)
         try:
             out[raw_ch] = availability.raw_lsb_spectrum_cache(
                 key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
-                montage_psd_recordings=montage_psd_blocks)
+                montage_psd_recordings=montage_psd_blocks, index=index)
         except Exception as e:
             _log.warning("Biomarkers: raw LSB cache failed for %s (%s)", raw_ch, e)
     remembered = _remember_raw_lsb_cache(sig, out)

@@ -130,9 +130,9 @@ MySQL", and "pain-report snapshot" for "REDCap frame" — and were restored on 2
 
 **Test state, each read from a run today, and each obtained twice with agreement:**
 
-- container, Biomarkers plus CacheStore plus DecodeCommon: **PASS=528 FAIL=0** (2026-09-07, after Track B steps 2, 3 and 5)
-- host, ClosedLoopDeployment plus StimOptimizer plus CacheStore plus DecodeCommon: **906 passed,
-  41 skipped**, in both orders (2026-09-07, after Track B steps 2, 3 and 5)
+- container, Biomarkers plus CacheStore plus DecodeCommon: **PASS=529 FAIL=0** (2026-09-07, after Track B step 4)
+- host, ClosedLoopDeployment plus StimOptimizer plus CacheStore plus DecodeCommon: **907 passed,
+  41 skipped**, in both orders (2026-09-07, after Track B step 4)
 
 **Re-run both before trusting either.** The commands are in `CLAUDE.md`.
 

@@ -512,3 +512,39 @@ def test_the_platform_entry_points_give_the_scan_answer_under_both_switch_settin
             pro, "ZERO_THREE_LEFT", CENTERS, index=idx))
     finally:
         availability.USE_CHANNEL_INDEX = prev
+
+
+# ----------------------------------------------------------------------------------------
+# the tile-cache builder through the form (Track B step 4)
+# ----------------------------------------------------------------------------------------
+
+def _assert_tiles_identical(a, b):
+    assert set(a) == set(b), "top-level keys differ"
+    for fam in ("td", "psd"):
+        assert set(a[fam]) == set(b[fam]), fam
+        for k in a[fam]:
+            x, y = np.asarray(a[fam][k]), np.asarray(b[fam][k])
+            assert x.shape == y.shape, "%s/%s shape %s vs %s" % (fam, k, x.shape, y.shape)
+            if x.dtype.kind in "fc":
+                assert np.array_equal(x, y, equal_nan=True), "%s/%s values" % (fam, k)
+            else:
+                assert np.array_equal(x, y), "%s/%s values" % (fam, k)
+    for k in ("channel", "centers_hz", "window_s", "band_half_hz", "n_td_windows", "n_psd_windows"):
+        assert np.array_equal(np.asarray(a[k]), np.asarray(b[k])), k
+
+
+def test_tiles_identical_through_the_form_and_in_the_recording_lists_order():
+    # recordings deliberately NOT in start-time order, with a ring-named one and a railed one
+    td = [_td_recording(["ZERO_THREE_LEFT", "ONE_THREE_LEFT"], t0=T0 + 900, n=int(FS * 30), seed=1),
+          _td_recording(["ZERO_AND_THREE_LEFT_RING"], t0=T0, n=int(FS * 45), seed=2),
+          _td_recording(["ZERO_THREE_LEFT"], t0=T0 + 300, n=int(FS * 20), amp=5000.0, seed=3)]
+    for i, r in enumerate(td):
+        r["product"] = ("streaming_td", "montage_td", "indefinite")[i]
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 100 + 50 * i, peak_hz=10.0 + i, seed=i) for i in range(4)]
+    a = availability.raw_lsb_spectrum_cache("ZERO_THREE_LEFT", CENTERS, td_recordings=td,
+                                            event_psd_recordings=psd)
+    b = availability.raw_lsb_spectrum_cache("ZERO_THREE_LEFT", CENTERS, td_recordings=td,
+                                            event_psd_recordings=psd, index=_index(td, []))
+    _assert_tiles_identical(a, b)
+    assert a["n_td_windows"] > 0 and a["n_psd_windows"] == 4
+    assert {"BrainSense streaming", "Montage", "Indefinite stream"} <= set(a["td"]["source"])
