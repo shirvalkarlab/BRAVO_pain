@@ -532,3 +532,15 @@ def test_load_newest_reports_an_unreadable_entry_and_discards_it():
         assert table is None and stamp and stamp["writer"] == "closed_loop"
         assert os.listdir(d) == [], "an unreadable entry is discarded, not offered again"
         assert st.load_newest("amplitude_effect_by_band", UID, root=root) == (None, None)
+
+
+def test_the_page_status_reads_the_sidecar_and_says_when_there_is_nothing_yet():
+    with _Sandbox() as root:
+        none = st.status_for_page("stim_optimizer_response", UID, ("s", 1), what_it_means="m", root=root)
+        assert none["exists"] is False and none["last_built_utc"] is None and "no stored entry" in none["note"]
+        st.store("stim_optimizer_response", UID, ("s", 1), {"a": 1}, writer="stim_optimizer",
+                 provenance=[], trigger="stim_optimizer_request", n_recordings=7, root=root)
+        got = st.status_for_page("stim_optimizer_response", UID, ("s", 1), what_it_means="m", root=root)
+        assert got["exists"] is True and got["last_built_utc"] and got["trigger"] == "stim_optimizer_request"
+        assert got["n_recordings"] == 7 and got["writer"] == "stim_optimizer" and got["what_it_means"] == "m"
+        assert st.status_for_page("stim_optimizer_response", UID, None, what_it_means="m", root=root)["exists"] is False

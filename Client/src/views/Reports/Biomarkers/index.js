@@ -47,6 +47,7 @@ import { useCachedResult } from "database/useCachedResult";
 import { usePlatformContext, setContextState } from "context.js";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { markClosedLoopFamilyStale, recomputeSlots } from "views/Reports/moduleCacheKeys";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
@@ -486,6 +487,7 @@ function Biomarkers() {
                 notKept={cached.notKept}
                 onRecompute={compute}
               />
+              <CacheStatusLine status={data ? data.cache_status : null} />
             </Grid>
             <Grid item xs={12}>
               <Card sx={{ width: "100%" }}>

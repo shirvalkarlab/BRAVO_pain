@@ -1374,6 +1374,25 @@ def _remember_raw_lsb_cache(sig, out):
         return out
 
 
+def cache_status_for_page(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
+    """The tile entry's last build date for the page, or the plain fact that there is none yet.
+
+    The key is built from database rows alone (decision 24), so this costs no decoding; a
+    failure to build it is reported in the block rather than raised, because a page must never
+    fail over its own status line.
+    """
+    meaning = ("the date the three-second band-power tiles for this participant's recordings were "
+               "last built; every biomarker number on this page derives from them, and a newer "
+               "upload rebuilds them under a new key")
+    try:
+        sig = _raw_lsb_shared_signature(participant_uid, centers)
+    except Exception as exc:                          # noqa: BLE001
+        return {"kind": _RAW_LSB_SHARED_KIND, "exists": False, "last_built_utc": None,
+                "what_it_means": meaning, "note": f"the tile key could not be built: {exc!r}"}
+    return _cache_store.status_for_page(_RAW_LSB_SHARED_KIND, participant_uid, sig,
+                                        what_it_means=meaning)
+
+
 def warm_shared_raw_cache(participant_uid, *, centers=_LSB_SPECTRUM_CENTERS):
     """Build the shared tile-cache file for this participant if it is not already there.
 
@@ -3896,6 +3915,8 @@ def run_for_participant(request_data):
     # Right medial thalamus) and/or the raw 10-min Chronic vs per-session Power-Domain scales,
     # a single pooled threshold mixes physiologically distinct signals — surface that to the user.
     distinct_regions = sorted({(p.get("region") or "").strip() for p in recorded_powers if p.get("region")})
+    # TRACK C STEP 4: when the tiles every number on this page derives from were last built.
+    out["cache_status"] = cache_status_for_page(participant_uid)
     out["powerdomain_pooled_warning"] = (
         f"Power-domain biomarker pools {len(distinct_regions)} targets/hemispheres "
         f"({', '.join(distinct_regions)}) into one threshold at raw (un-normalized) scale; "

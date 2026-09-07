@@ -52,6 +52,7 @@ import MDButton from "components/MDButton";
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
 
 import {
@@ -512,6 +513,7 @@ function ClosedLoopSim() {
                   notKept={deploymentReport.notKept || summary.notKept}
                   onRecompute={onRecomputePage}
                 />
+                <CacheStatusLine status={deploymentReport.data ? deploymentReport.data.cache_status : null} />
                 <DeploymentDecisionHeader bandCandidate={bc} summary={summary}
                   deploymentReport={deploymentReport} />
               </Grid>

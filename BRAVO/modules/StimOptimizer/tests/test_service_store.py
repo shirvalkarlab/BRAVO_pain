@@ -396,3 +396,13 @@ def test_a_verdict_derived_from_the_ladder_is_refused_and_said_so(bench):
     out = BS.run_for_participant(dict(REQ))
     assert out["available"] and out["ground_truth"]["refused"] is True
     assert "refused by the store" in out["ground_truth"]["reason"]
+
+
+def test_the_response_carries_its_own_store_date_for_the_page(bench):
+    first = BS.run_for_participant(dict(REQ))
+    assert first["cache_status"]["exists"] is True and first["cache_status"]["last_built_utc"]
+    assert first["cache_status"]["kind"] == BS.RESPONSE_KIND
+    second = BS.run_for_participant(dict(REQ))
+    assert second["cache_status"]["last_built_utc"] == first["cache_status"]["last_built_utc"]
+    BS_none = BS.run_for_participant(dict(REQ, Sites=["left_leg"]))
+    assert BS_none["cache_status"]["exists"] is True, "a fresh compute stores and reports its own date"

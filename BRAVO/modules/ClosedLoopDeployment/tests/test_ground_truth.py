@@ -182,3 +182,12 @@ def test_the_verdict_is_written_once_with_the_tile_entry_in_its_provenance_and_r
     table, got = st.load_newest(GT.KIND, "PARTICIPANT", consumer="stim_optimizer", root=sandbox)
     assert len(table) == first["n_rows"] and got["signature_key"] == stamp["signature_key"]
     assert AD.ground_truth_if_stored("PARTICIPANT")["served_from_store"] is True
+
+
+def test_the_report_page_status_names_the_inputs_entry_or_its_absence(sandbox):
+    none = AD.cache_status_for_page("PARTICIPANT")
+    assert none["exists"] is False and none["kind"] == "inputs" and "no stored entry" in none["note"]
+    st.store("inputs", None, ("PARTICIPANT", 1, 2, "rs1"), {"x": 1}, writer="closed_loop",
+             provenance=[], trigger="inputs_build", root=sandbox)
+    got = AD.cache_status_for_page("PARTICIPANT")
+    assert got["exists"] is True and got["trigger"] == "inputs_build" and got["last_built_utc"]

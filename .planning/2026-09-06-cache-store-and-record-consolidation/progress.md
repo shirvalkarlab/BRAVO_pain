@@ -626,3 +626,27 @@ this machine (pyenv 3.12.9) has no pytest.
   pairing tests had been added after the earlier count). The two documents carrying the number
   are corrected here; the commit message cannot be. This is the mistake `CLAUDE.md` section 10
   rule 3 exists for, and it happened again by writing the number before reading the run.
+
+### Track C — steps 2, 3 and 5 ticked by reference; step 4 built; step 1 the PI's
+
+- Steps 2, 3 and 5 were delivered inside Track A and Track B and are ticked against the tests
+  and the live proofs that delivered them (the plan lists each). Step 1 is open item 7, joint
+  with Track E.
+- Step 4, "Show the last cache update on all three module pages", committed with this entry
+  and pushed. Files: `CacheStore/store.py` (`status_for_page`), `Biomarkers/bravo_service.py`
+  (`cache_status_for_page`, on the page payload), `ClosedLoopDeployment/adapter.py`
+  (`cache_status_for_page`, on the report), `StimOptimizer/bravo_service.py` (`_cache_status`
+  on every response, served or fresh), tests in all three packages; new
+  `Client/src/views/Reports/CacheStatusLine.js` and one line in each of the three page files
+  under the recompute control; the served bundle rebuilt (`Client/build`, committed), and the
+  literal "Stored results last built" found in exactly one served chunk.
+- Live on RCS08 through the bridge: biomarker status in 0.480 s (tiles built
+  2026-09-07T07:01:10Z, trigger `tile_build`), closed-loop status in 0.399 s (inputs assembled
+  2026-09-07T06:43:55Z), optimizer status on a served response (stored 2026-09-07T07:22:30Z);
+  the biomarker page with the block, 54.44 s.
+
+| Run | Runner | Result |
+|---|---|---|
+| Track C step 4 | container, `run_tests.py` via the bridge | PASS=537 FAIL=0 |
+| Track C step 4 | host, documented order | 934 passed, 41 skipped |
+| Track C step 4 | host, reverse order | 934 passed, 41 skipped |

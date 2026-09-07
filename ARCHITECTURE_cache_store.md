@@ -216,12 +216,12 @@ Two runners, two commands, and **a green run of one is not a green run of the pl
 # container — Biomarkers (22 files) + CacheStore (4 files) + DecodeCommon (1); no pytest in there
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
-#   PASS=536 FAIL=0   (2026-09-07, after Track G step 2)
+#   PASS=537 FAIL=0   (2026-09-07, after Track C step 4)
 
 # host — ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4) + DecodeCommon (1); these use pytest
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
   ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
-#   931 passed, 41 skipped   (2026-09-07, after Track G step 2, both orders)
+#   934 passed, 41 skipped   (2026-09-07, after Track C step 4, both orders)
 ```
 
 Both figures were obtained twice, independently, and agreed. **Do not carry either number

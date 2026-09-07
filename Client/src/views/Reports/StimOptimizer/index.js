@@ -42,6 +42,7 @@ import { MODULES } from "database/resultCache";
 import { useCachedResult } from "database/useCachedResult";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots } from "views/Reports/moduleCacheKeys";
 // Semantic colour roles live in one place for the whole closed-loop family of pages, so a verdict
 // that means the same thing on the deployment page and here is drawn in the same ink. The roles
@@ -411,6 +412,7 @@ export default function StimOptimizer() {
               notKept={cached.notKept}
               onRecompute={() => recomputeSlots(participant_uid, [MODULES.stimOptimizer])}
             />
+            <CacheStatusLine status={data ? data.cache_status : null} />
           </Grid>
 
           {/* ---------- verdict first, before any figure ---------- */}

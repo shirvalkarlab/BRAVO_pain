@@ -345,6 +345,26 @@ def _discard_entry(stem, why):
     _log.warning("CacheStore: discarded an unusable entry %s (%s)", stem, why)
 
 
+def status_for_page(kind, participant_uid, signature, *, what_it_means, root=None):
+    """What a page shows about its cache: whether an entry exists under the current key, when it
+    was last built, what triggered it, and a plain sentence saying what the date means.
+
+    The date is read from the entry's own sidecar, never from a file timestamp a copy or a backup
+    would falsify, and "no entry yet" is a state the page must show rather than a blank: a page
+    computed from the recordings just now and a page served from a file built last month have to
+    be distinguishable at a glance (Track C step 4).
+    """
+    stamp = read_stamp(kind, participant_uid, signature, root=root) if signature is not None else None
+    if not stamp:
+        return {"kind": kind, "exists": False, "last_built_utc": None, "trigger": None,
+                "n_recordings": None, "what_it_means": what_it_means,
+                "note": "no stored entry under the current key: this page was computed from the "
+                        "recordings for this request, and the result is stored now for the next one"}
+    return {"kind": kind, "exists": True, "last_built_utc": stamp.get("written_utc"),
+            "trigger": stamp.get("trigger"), "n_recordings": stamp.get("n_recordings"),
+            "writer": stamp.get("writer"), "what_it_means": what_it_means, "note": None}
+
+
 def load_newest(kind, participant_uid, *, consumer=None, root=None):
     """`(payload, stamp)` for the newest entry of this kind and participant, or `(None, None)`.
 

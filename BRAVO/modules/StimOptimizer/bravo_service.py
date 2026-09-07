@@ -537,6 +537,7 @@ def run_for_participant(request_data: dict) -> dict:
                                        root=_SHARED_CACHE_DIR_OVERRIDE) or {}).get("written_utc"))
             served["amplitude_effect"] = amp_block
             served["ground_truth"] = gt_block
+            served["cache_status"] = _cache_status(uid, sig)
             return served
         # The chain of exactly the entries this request used: the matched table's own sidecar,
         # found by the key the design matrix carries, and the amplitude table's sidecar as read
@@ -682,7 +683,23 @@ def run_for_participant(request_data: dict) -> dict:
             # stores nothing looks, from the page, exactly like one that stored everything.
             _log.warning("StimOptimizer: the outputs were not written back (%r)", exc)
             store_block["write_error"] = repr(exc)
+    out["cache_status"] = _cache_status(uid, sig)             # Track C step 4
     return out
+
+
+_CACHE_STATUS_MEANING = ("the date this optimizer response was last computed and stored; a "
+                         "request with the same recordings, settings, pain reports and controls "
+                         "is served from it, and any change to those computes and stores it again")
+
+
+def _cache_status(uid, sig):
+    if sig is None:
+        return {"kind": RESPONSE_KIND, "exists": False, "last_built_utc": None,
+                "what_it_means": _CACHE_STATUS_MEANING,
+                "note": "this response is not stored (the store block says why)"}
+    return _cache_store.status_for_page(RESPONSE_KIND, str(uid), sig,
+                                        what_it_means=_CACHE_STATUS_MEANING,
+                                        root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
 def closed_loop_readiness(participant, es, *, include=True) -> dict:

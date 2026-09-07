@@ -1411,6 +1411,20 @@ def write_amplitude_effect(participant, build, *, min_settings=3):
     return summary
 
 
+def cache_status_for_page(participant):
+    """When the decoded recordings and settings this report reads were last assembled."""
+    meaning = ("the date the decoded recordings, the therapy settings and the matched pain reports "
+               "this report reads were last assembled and stored; a newer upload assembles them "
+               "again under a new key")
+    try:
+        sig = recording_set_signature(participant)
+    except Exception as exc:                          # noqa: BLE001
+        return {"kind": "inputs", "exists": False, "last_built_utc": None,
+                "what_it_means": meaning, "note": f"the recording-set key could not be built: {exc!r}"}
+    return _cache_store.status_for_page("inputs", None, sig, what_it_means=meaning,
+                                        root=_SHARED_CACHE_DIR_OVERRIDE)
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -1589,4 +1603,5 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                                            "reason": f"the amplitude-effect table could not be "
                                                      f"written: {_exc!r}"}
 
+    out["cache_status"] = cache_status_for_page(participant)   # Track C step 4
     return out

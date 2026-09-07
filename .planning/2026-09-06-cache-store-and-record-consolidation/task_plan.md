@@ -30,10 +30,10 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Phase 3 is done except Track D steps 1 and 2, which sit behind Track E's second sign-off
-(the spectrum rebuilt from raw traces on every request is the site Track E names). Report to the
-PI: the ceiling constant (open item 20) and Track E's sign-off are his; Phase 4, Tracks C and E,
-waits on them. Phase 5's closing checks can run any time.**
+**Everything not gated on the PI is built. Left for him: Track C step 1 with Track E (open item 7,
+the two spectrum directories, one decision), Track D steps 1 and 2 behind the same gate, Track E's
+second sign-off, and the ceiling constant (open item 20). Phase 5's closing checks run next:
+both suites from their own runners, the bundle check, and the written record closed.**
 
 ## Current Phase
 
@@ -227,7 +227,7 @@ and the two closed-loop fixes. Track D needs Track B's form.
 
 ### Phase 4: The store as the single location, and the gated statistics site — Tracks C, E
 
-**Status:** pending
+**Status:** in_progress
 
 The statistics site needs a second sign-off from the PI before anything changes there, and its
 two steps concern the same 6,309 files as the deletion step in Track A step 1, so the two must be
@@ -236,11 +236,31 @@ store.
 
 **Track C — "Cache and dates"**
 
-- [ ] 1. Move every cache to the single approved location
-- [ ] 2. Implement the approved writing policy
-- [ ] 3. Stamp every cache with when and why it was written
-- [ ] 4. Show the last cache update on all three module pages
-- [ ] 5. Verify the pain reports stay out of the cached form and its key
+- [ ] 1. Move every cache to the single approved location — **the PI's decision, jointly with
+  Track E** (open item 7): the two directories still outside the store are `biomarker_psd`
+  (97 files, 500 MB) and `biomarker_psd_rows` (6,309 files, zero live reads), and one plan
+  deletes what the other would connect. `test_one_store.py` grandfathers exactly those two
+  constructs and fails when they go
+- [x] 2. Implement the approved writing policy — delivered by Track A step 1 (`fa14edd`): the
+  key decides (`store_if_absent`), reads are read-only by construction, and
+  `test_a_matching_key_leaves_the_directory_byte_identical` proves a page whose key matches
+  leaves the directory byte for byte unchanged
+- [x] 3. Stamp every cache with when and why it was written — delivered by Track A step 1: the
+  `.meta.json` sidecar beside every entry carries the write time, the trigger, the writer, the
+  recording count and the flattened provenance, is moved into place last as the commit marker,
+  and is what a page reads (Track F step 3's measurement: 0.012 ms)
+- [x] 4. Show the last cache update on all three module pages — 2026-09-07: every module's
+  response carries `cache_status` (`store.status_for_page`: whether an entry exists under the
+  current key, its build date from the entry's own sidecar, the trigger, and a sentence saying
+  what the date means on that page, or the plain fact that there is none yet), and one
+  `CacheStatusLine` component under each page's recompute control shows it; bundle rebuilt and
+  the line's literal found in one served chunk. On RCS08: tiles built 07:01, the closed-loop
+  inputs assembled 06:43, the optimizer response stored 07:22 (all 2026-09-07 universal time)
+- [x] 5. Verify the pain reports stay out of the cached form and its key — delivered by Track A
+  (decision 23, proven both ways on the live record: changing the report set changes 19,464 of
+  27,305 answer values and causes zero writes; `CacheStore/tests` pins it) and by the decoded
+  form (Track B), which holds no pain report or REDCap column by construction and whose test
+  file says so
 
 **Track E — "Statistics site" — gated on a second sign-off from the PI**
 
@@ -281,6 +301,7 @@ store.
 | 17 | **Track G step 1: the deployment report's joined table and its content fingerprint accept the calibrated frame — one row per three-second tile, one `band_lsb_<centre>` column per band, already on the device's scale — reading each band's linear power from its own column, its decibel expression from that, and leaving the mean-of-log scale empty because no per-bin spectrum exists to take it from; tiles the cache marked unusable or railed are left out; the fingerprint hashes every band column and the tile flags; the pipeline adds the candidate's own centre to the join's grid.** | Since `90eb109` (2026-09-05) the frame the report is built on has been the calibrated one, and since `8e31342` the fingerprint raises on a missing column rather than skipping it; between them the report raised on every candidate and the page's evidence triangle read "not estimated". The fix follows decision 33: the device's own scale is the one a switching value is typed in, so the join reads it rather than falling back to the uncalibrated spectrum. The tile gate is the same one the other panels apply. On RCS08 with the left 0-2 contact at 26.5 Hz the table has 5,427,936 rows from 304,309 tiles and the report returns in 19.2 s cold, 7.2 s warm; the amplitude-to-pain edge resolves (estimate −0.159 pain points per mA, interval −0.275 to −0.042, 90 clusters) and the other two do not at that band. | 2026-09-07 |
 | 18 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis being unreachable, the client absent or the lock switched off all mean building as before with no error.** Redis is reached with protocol version 2. | Four workers missing the same file used to start four builds. Proven on RCS08 through the bridge with four concurrent cold requests in one process: one build, three served, every request answered in 40.4 to 40.8 s; the control with the lock off ran four builds contending for the machine and every request took 367 to 368 s. Seven tests on a stand-in for Redis pin the three requirements and that eight concurrent callers yield exactly one builder. | 2026-09-07 |
 | 19 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling, a fold of the settled window's own median (`DEVICE_SPIKE_FOLD = 10`, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison itself uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads the newest verdict as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice the PI has not made, so it is one named constant with a fold against the window's own median rather than an absolute level. On RCS08 the ceiling changed 3 of 12,068 comparison values (two pieces counts, one reason), excluded 12 spikes, and no settled power moved. The verdict's first version keyed the device's band on the programmed centre and so never met the converted routes: 0 rows with both; pairing at the comparison's own nearest centre gives 29, fold 0.807 to 1.785, median 0.987. | 2026-09-07 |
+| 20 | **Track C step 4: every module response carries `cache_status` — whether a stored entry exists under the request's current key, its build date read from the entry's own sidecar, the trigger, and a plain sentence saying what the date means on that page — and one shared line component under each page's recompute control shows it, including "no stored results yet".** The biomarker page names its tile entry, the closed-loop page its assembled inputs, the optimizer page its stored response. | The plan asks for the date on all three pages including the no-cache case, worded so a stale page is distinguishable from a current one at a glance; three pages mean three different dates, so the sentence beside each says which. The date comes from the sidecar (Track F step 3), never a file timestamp. On RCS08 all three answer, the biomarker status costs 0.48 s (the key from database rows) and the closed-loop one 0.40 s. | 2026-09-07 |
 
 ## Errors Encountered
 
