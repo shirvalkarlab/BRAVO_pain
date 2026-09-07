@@ -21,17 +21,18 @@ Two goals, in this order, and the second is subordinate to the first.
 ## Next Step
 
 **The work moves to another tool at the PI's decision, 2026-09-07.** Read
-`HANDOFF_2026-09-07_cache_store_to_claude_code.md` §4: re-run both suites, commit the working tree
-after asking whose name goes on the commit, then the five remaining Track A steps.
+`HANDOFF_2026-09-07_cache_store_to_claude_code.md` §4: re-run both suites, decide whether to push
+the six local commits, then the five remaining Track A steps.
 
 ## Current Phase
 
 Phase 1 — consolidate the written record. **Complete**, commit `7f1882f`.
 
-Phase 2, Track A — the one store. **Three of eight steps complete and uncommitted:** the single
-store implementation with both duplicates removed, the provenance chain with its refusal proved by
-constructing a real cycle, and the append-only ledger in the database. Tracks B through G not
-started.
+Phase 2, Track A — the one store. **Three of eight steps complete and committed** in `fa14edd`:
+the single store implementation with both duplicates removed, the provenance chain with its refusal
+proved by constructing a real cycle, and the append-only ledger in the database. Tracks B through G
+not started. **Six commits sit on this branch and on no remote — `origin` is at `705bdb0`, and
+pushing is the PI's call.**
 
 **Measured today, each twice with agreement:** container PASS=455 FAIL=0; host 814 passed, 41
 skipped. **Re-run rather than carrying these.**

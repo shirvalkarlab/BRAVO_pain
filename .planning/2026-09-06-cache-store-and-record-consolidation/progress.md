@@ -100,7 +100,8 @@ the five replacements.
 ### Phase 2, Track A — three steps built, and the work then moved tools
 
 **The PI gave the go-ahead on 2026-09-07** and later decided to continue the mechanical half in
-another tool. Built before that decision, all of it on disk and none of it committed:
+another tool. Built before that decision and committed as `fa14edd`, with the decoded-form
+prototype tracked in `14ad802`:
 
 - **One cache store**, `BRAVO/modules/CacheStore/`, 1,771 lines in 8 files. Both duplicate
   implementations are gone; the two modules keep their function names as delegations of a few lines

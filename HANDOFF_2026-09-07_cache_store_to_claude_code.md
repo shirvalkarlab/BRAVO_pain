@@ -68,9 +68,17 @@ today.**
 
 **Two facts about git state you need before your first commit.**
 
-1. **The three newest commits are LOCAL ONLY.** `origin/PS_closedloop_deployment` is still at
-   `705bdb0`. Nothing above is on GitHub, so looking there will not show it. Pushing is the
-   principal investigator's call.
+1. **THIS BRANCH IS AHEAD OF EVERY REMOTE AND NOTHING HERE IS ON GITHUB.**
+   `origin/PS_closedloop_deployment` is at `705bdb0`; everything described in this document was
+   committed after it. **Count it rather than trusting a number in a document** — an earlier
+   version of this line said "three" and was already stale by the time it was committed:
+
+   ```bash
+   git rev-list --count origin/PS_closedloop_deployment..HEAD
+   git log --oneline origin/PS_closedloop_deployment..HEAD
+   ```
+
+   **Pushing is the principal investigator's call, and so is whose name goes on the commits.**
 2. **`.gitignore` contained blanket rules `HANDOFF_*.md` and `AUDIT_TRIAGE_*.md`**, written when
    the root was filling up with per-session handoffs. They were excluding the opposite of what was
    intended — this file, and three archived audits. Negations were appended to restore them.
@@ -91,7 +99,9 @@ document replaced each one. 30 contradictions across the source documents were r
 newer result, and the resolution record is
 `.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
-**Phase 2, Track A, the one store: the first two steps are complete and uncommitted.**
+**Phase 2, Track A, the one store: the first three steps are complete and committed** — `fa14edd`
+(the store, the provenance chain, the ledger, both duplicates removed, the handover package) and
+`14ad802` (the decoded-form prototype tracked).
 
 | Step | State |
 |---|---|
@@ -119,21 +129,21 @@ reports against them still line up.
 
 ---
 
-## 2. What is on disk but NOT yet committed
+## 2. What landed, and in which commit
 
-**This is the first thing to deal with.** `7f1882f` is the last commit; everything below is working
-tree only.
+**The working tree is clean for all real source.** Nothing described here is waiting to be
+committed.
 
-```
-?? BRAVO/modules/CacheStore/            1,771 lines, 8 files — UNTRACKED, the whole store
-?? BRAVO/modules/DecodeCommon/          the canonical decoded form prototype, from an earlier
-                                        session; 32 tests, imported by nothing
- M BRAVO/modules/Biomarkers/bravo_service.py                 271 lines changed
- M BRAVO/modules/ClosedLoopDeployment/adapter.py             210 lines changed
- M BRAVO/modules/Biomarkers/tests/test_shared_raw_lsb_cache.py  45 lines changed
- M BRAVO/_agent_bridge/run_tests.py                          32 lines changed
- M BRAVO/requirements.txt                                     9 lines added (pyarrow)
-```
+| Change | Commit |
+|---|---|
+| `BRAVO/modules/CacheStore/` — the store, 8 files, 1,771 lines | `fa14edd` |
+| `Biomarkers/bravo_service.py` — store block replaced by delegations, 271 lines changed | `fa14edd` |
+| `ClosedLoopDeployment/adapter.py` — same, 210 lines changed | `fa14edd` |
+| `Biomarkers/tests/test_shared_raw_lsb_cache.py` — three tests updated, 45 lines | `fa14edd` |
+| `_agent_bridge/run_tests.py` — discovers `CacheStore` too, 32 lines | `fa14edd` |
+| `requirements.txt` — `pyarrow` pinned with its reasoning, 9 lines | `fa14edd` |
+| `BRAVO/modules/DecodeCommon/` — the decoded-form prototype, 823 lines, **imported by nothing** | `14ad802` |
+| `.gitignore` negations, and this section 0 | `bdfed97`, `0f8cb79`, `57400a8` |
 
 Net on the two module files: **225 lines added, 342 removed.** The store is a superset of what was
 deleted, so the modules got shorter.
@@ -182,9 +192,10 @@ actually discriminates between the two limits, are in `ARCHITECTURE_cache_store.
 
 1. **Re-run both suites** and confirm the two counts above. Nothing else should be trusted until
    they agree.
-2. **Commit the working tree.** It is a coherent unit: one store, the duplicates removed, three
-   tests updated, the runner extended, one dependency pinned. **Ask whose name goes on the commit
-   before making it** — see `HOUSE_RULES_writing_and_claims.md` §7.
+2. **Decide whether to push.** This branch is ahead of every remote; `origin` is at `705bdb0`.
+   **Count the commits with the command in §0 rather than reading a number here.** **That is the principal investigator's call, and so is whose name goes on future
+   commits** — see `HOUSE_RULES_writing_and_claims.md` §7. The six already made carry a machine
+   identity because the git configuration file is not writable in the sandbox they were made in.
 3. **Then the five remaining Track A steps**, in the order in §6 of
    `ARCHITECTURE_cache_store.md`. Each one writes a new table and each **must** pass `writer=` and
    `provenance=`; without them the self-derived refusal cannot fire.
