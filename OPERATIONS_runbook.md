@@ -59,7 +59,7 @@ path (pyenv 3.12) has no pytest and fails with `No module named pytest`:
 
 ```
 cd BRAVO/modules && PYTHONPATH=. ~/.claude-science/conda/envs/bravo_app/bin/python -B -m pytest \
-  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests -q -W ignore
+  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
 ```
 
 **Read the pass-and-fail line from the run. Do not carry a number from any document, including

@@ -90,9 +90,16 @@ def canon_channel(name):
 def to_epoch(value):
     """A recording start time as Unix epoch seconds, or None.
 
-    Mirrors `availability._to_epoch`: an epoch number is taken as-is once it is past 1e9
-    (which rejects a session-relative offset that would otherwise read as 1970), and a string
-    is parsed as ISO 8601 with a trailing Z accepted.
+    Mirrors `availability._to_epoch` exactly: an epoch number is taken as-is once it is past 1e9
+    (which rejects a session-relative offset that would otherwise read as 1970); a string is
+    parsed as ISO 8601 with a trailing Z accepted; a datetime is taken as-is.
+
+    ONE RULE IS MIRRORED KNOWINGLY RATHER THAN CORRECTED. A string with no timezone is read in
+    the process's LOCAL zone, because that is what the platform does. The first version of this
+    function read it as universal time instead; the two agreed in the container, which runs in
+    universal time, and disagreed by eight hours on the analysis host. The form exists to give
+    the same answer as the platform, so it follows the platform here and the disagreement is
+    recorded as a finding rather than fixed in one place only.
     """
     import datetime
     if value is None:
@@ -101,18 +108,13 @@ def to_epoch(value):
         v = float(value)
         return v if v >= 1e9 else None
     if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return None
         try:
-            if s.endswith("Z"):
-                s = s[:-1] + "+00:00"
-            dt = datetime.datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
             return dt.timestamp()
         except ValueError:
             return None
+    if isinstance(value, datetime.datetime):
+        return value.timestamp()
     return None
 
 

@@ -399,3 +399,13 @@ changed code or the record:
   at least one run; a line fitted in at least one run and none reaching p < 0.05; no line fitted
   at all. Only the second is "no movement was detectable across the currents tested", and each
   such row carries the number and range of currents and the smallest slope standard error.
+
+### 6h. Track B step 1 observations, 2026-09-07
+
+- The decoded-form package was tracked in `14ad802` and its 32 tests had never run anywhere:
+  `run_tests.py` did not list the package, and the tests imported the container-only spelling so
+  the host could not collect them. "Imported by nothing" was true of the tests as well.
+- Its start-time parser and the platform's disagreed on a string with no timezone: the form read
+  it as universal time, the platform as the process's local time. Equal in the container (whose
+  zone is universal time, checked: `TZ=UTC`, offset 0), eight hours apart on this machine. The form
+  now follows the platform (decision 42); the platform's rule is open item 19.

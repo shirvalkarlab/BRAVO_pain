@@ -25,13 +25,14 @@ user-scope install and not part of this tree — see §4.
 # --- the two test suites. THEY RUN IN DIFFERENT PLACES AND A GREEN RUN OF ONE IS NOT A GREEN
 # --- RUN OF THE PLATFORM. Never quote a count without a run behind it.
 
-# container: Biomarkers (22 files) + CacheStore (4). No pytest in there, so tests use plain assert.
+# container: Biomarkers (22 files) + CacheStore (4) + DecodeCommon (1). No pytest in there, so tests use plain assert.
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 --wait 900 \
   "python3 _agent_bridge/run_tests.py"
 
-# host: ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4). These use pytest.
+# host: ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4) + DecodeCommon (1). These use pytest;
+# CacheStore and DecodeCommon run on BOTH runners on purpose, so their tests take no arguments.
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
-  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests -q -W ignore
+  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
 
 # --- run anything inside the live server container
 python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout N --wait M "<cmd>"

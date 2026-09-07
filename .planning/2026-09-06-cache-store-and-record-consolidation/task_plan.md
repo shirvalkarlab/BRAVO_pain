@@ -30,17 +30,18 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Track A is complete and committed. Report it to the PI. The next work is Phase 3, and the
-cadence he chose on 2026-09-07 ran through Track A only, so confirm with him before starting
-Track B step 1, "Promote the prototype to real code" (`BRAVO/modules/DecodeCommon/`, imported by
-nothing yet).**
+**Phase 3, Track B step 2, "Adopt it at the 72-million-call site": replace the spectrum-record
+scan inside `availability.per_pro_lsb` with the prepared `ChannelIndex` built once per request,
+then step 3 for `per_pro_lsb_spectrum`, then the field-for-field proof and alternating timings
+(step 5). The PI authorised Phase 3 and pushing on 2026-09-07 ("Push everything, and then
+proceed to phase three").**
 
 ## Current Phase
 
-Phase 2 — Track A, the one store — is complete. Steps 1 to 3 are committed in `fa14edd`, step 4 in
-`d47b9a7`, step 5 in `7278f15c`, step 6 with the review fixes in `4e29af7b`, step 7 in `0d619ca`,
-and step 8 in the commit that carries this edit. Phase 3 has not started, except Track F step 1
-(`b7036bf`), and waits on the PI's go-ahead for the next track.
+Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
+`fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
+Track B step 1 is built and committed with this edit; Track F step 1 was done in `b7036bf`.
+The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
 
@@ -137,14 +138,18 @@ policy becomes self-confirming and the record looks like converging evidence whe
 
 ### Phase 3: Canonical form, readers, Redis, and the closed-loop fixes — Tracks B, D, F, G
 
-**Status:** pending
+**Status:** in_progress
 
 Independent tracks: the canonical decoded form and its readers, the three remaining Redis wins,
 and the two closed-loop fixes. Track D needs Track B's form.
 
 **Track B — "Canonical form"**
 
-- [ ] 1. Promote the prototype to real code
+- [x] 1. Promote the prototype to real code — 2026-09-07 (second session): the package was
+  tracked but its 32 tests ran on neither runner (container-only import spelling; not in the
+  container runner's package list). Both spellings now resolve to one module object, the
+  container runner discovers it, the host command names it, and the no-constant test stays.
+  One real disagreement found and settled: see decision 14
 - [ ] 2. Adopt it at the 72-million-call site
 - [ ] 3. Adopt it at the identical sibling scan
 - [ ] 4. Fix the repeated column resolution and float conversion
@@ -221,6 +226,7 @@ store.
 | 11 | **The ledger records writes under the production root only.** A write under a caller's own root or the test override is not recorded, and the 218 rows the test suites had written into the live table (participants `test-participant` and `u`) were deleted on 2026-09-07. | The ledger carries no directory, so nothing else could tell a test write from a real one; 214 of its 227 rows were from the container's tile tests. Deleting rows from an append-only table is justified only because they were never part of the record of what the server holds. | 2026-09-07 |
 | 12 | **Track A step 7: the amplitude effect on every band is a table derived from the three-source comparison's voltage-trace panel, one row per run of rising current (visit, side turned up, sensing contact, stimulation rate) and band centre, with the number and range of currents actually tested, the pieces of recording behind them, the straight-line slope of log power on current with its standard error and p-value, the curvature test with the peak current, the fold change from lowest to highest current, and the harmonic-landing and checked-span flags.** It is built from every run the device's record holds, written by the closed-loop request as `amplitude_effect_by_band` with the tile entry in its provenance, and the page keeps drawing its four newest runs. A request whose table is already stored builds only those four. | The ladder of currents is read from the device's own record (constraint 4 of the three-source comparison), which the server holds, rather than the clinic sheet, which it does not. Every power value is copied from the panel, so the table is checkable against it. Rows are never pooled across visits, because a result established on one visit day must say so; the visit and run columns let Stim Optimizer pool with the visit as the blocking factor. The curvature floor of eight points is the routine's own and is not lowered to manufacture a verdict. | 2026-09-07 |
 | 13 | **Track A step 8: Stim Optimizer reads the therapy-and-pain matched table and the newest amplitude-effect table as `stim_optimizer`, reports which tile entry that table describes and whether it is the current one, and writes back `stim_optimizer_summary`, `exploration_ladder` (the pipeline's queue with its own `rank` kept), `exploration_batch`, `stim_optimizer_manifest` and the whole response as `stim_optimizer_response`, all under one key naming the matched table, the tile entry, the amplitude table, the sites, the brain sides, the wash-in, the backend and the batch settings, with every input's own chain flattened into theirs. A stored response whose key matches is served and marked; one the store refuses is reported, recomputed, and REPLACED; a write-back that fails is reported in the response. A digest of the module and its routines is in the key, the four tables are keyed without the figure backend, and a response computed without the delivered-settings census is not stored.** The amplitude summary counts — runs, currents tested, the smallest slope p-value, whether any run showed movement at p < 0.05 — inside the adaptive window, and does not judge. | Reading as `stim_optimizer` is the exact edge the refusal exists for: the ladder Stim Optimizer chooses decides which recordings come to exist, so a verdict derived from them must not come back to it as independent evidence, and the chain on every output is what lets the next reader see that. The pipeline's fitted surface is repeatable (fresh against fresh: 0 differences in 20,640 values), which is what makes the served response the same answer. The first version inserted a second `rank` column, pandas refused it, and nothing was written back on the live record while every test passed, because the stubbed queue had no `rank`; the stub now has one, and a failed write-back is reported in the response rather than only logged. | 2026-09-07 |
+| 14 | **Track B step 1: the decoded form's start-time parser mirrors the platform's exactly, including the rule that a start time written without a timezone is read in the process's local zone.** The disagreement is recorded here and in `findings.md` rather than corrected in the form alone. | The form exists to give the same answer as `availability.per_pro_lsb`, and step 5 proves that field for field on the live record; a form that silently "fixed" the zone would fail that proof, or worse, pass it in the container (which runs in universal time) and disagree on any other machine. The prototype's version read a naive string as universal time; the two agreed in the container and differed by eight hours on the analysis host, which is where the test first ran under pytest. Whether the platform's own rule should change is a separate question and is logged as an open item. | 2026-09-07 |
 
 ## Errors Encountered
 
@@ -239,4 +245,5 @@ store.
 | The host suite reached `_arm_comparison` in `StimOptimizer/bravo_service.py` for the first time (step 8's tests call the whole request) and failed on `from modules.StimOptimizer.routines import resolution`, a container-only spelling | 1 | Changed to the relative import the rest of the file uses. |
 | The first live run of step 8 wrote nothing back: `ValueError('cannot insert rank, already exists')`. The pipeline's queue already carries a `rank` column and the test stub did not, so eight tests passed while the live write failed | 1 | The write keeps the pipeline's own `rank` and adds `arm`, `site` and `hemisphere` only when absent; the stub queue now carries `rank`; a failed write-back is reported in the response as `store.write_error` rather than only logged, with a test. Proof re-run: 0 differences in 20,640 values, all five products written. |
 | The five-perspective review found that after the store refused a stored response, the recompute wrote "if absent", found the refused entry, wrote nothing, reported it as written, and left every later request to be refused again; and that the response's chain came from the newest matched-table sidecar rather than the entry its key names | 1 | After a refusal the five products are written through the plain write and replace the entry; `store.stamp_for_key` finds the sidecar of exactly the entry a key names. Both pinned by tests. A third defect found while fixing: the served copy carried the store block of the request that wrote it, so a refusal recorded then came back with every served copy; the served block is now rebuilt for the current request. |
+| The decoded form's tests failed on the host on `test_start_time_matches_the_platform_rule`: a start time with no timezone parsed as universal time in the form and as local time in the platform, eight hours apart on this machine, equal in the container | 1 | The form now mirrors the platform's rule exactly (decision 14); the disagreement is an open item on the platform's own parser, not hidden. |
 | The bridge job running the container suite printed the store's own log lines from tests that corrupt an entry or close the ledger's database on purpose; they read as errors, and the job was stopped from outside before the live proof behind it had printed | 1 | The suite had passed (`PASS=486 FAIL=0`); the proof was re-run on its own. Judge a container run by its `PASS=` line, or by the `.out` file in `_agent_bridge/outbox`, never by the filtered log. |

@@ -11,12 +11,22 @@ there.
 """
 import numpy as np
 
-from modules.DecodeCommon import build_channel_index, per_pro_lsb_indexed
-from modules.DecodeCommon.representation import (
-    CHANNEL_INDEX_VERSION, canon_channel, missing_per_sample, to_epoch,
-)
-from modules.Biomarkers.routines import availability
-from modules.Biomarkers.routines import analytics
+# Both spellings on purpose: the container's path root makes these packages `modules.X`, the
+# host suite's root makes them `X`. See `CacheStore/__init__.py`.
+try:
+    from modules.DecodeCommon import build_channel_index, per_pro_lsb_indexed
+    from modules.DecodeCommon.representation import (
+        CHANNEL_INDEX_VERSION, canon_channel, missing_per_sample, to_epoch,
+    )
+    from modules.Biomarkers.routines import availability
+    from modules.Biomarkers.routines import analytics
+except ImportError:
+    from DecodeCommon import build_channel_index, per_pro_lsb_indexed
+    from DecodeCommon.representation import (
+        CHANNEL_INDEX_VERSION, canon_channel, missing_per_sample, to_epoch,
+    )
+    from Biomarkers.routines import availability
+    from Biomarkers.routines import analytics
 
 # Every test below takes no arguments, so the container's own runner
 # (`_agent_bridge/run_tests.py`, which calls each `test_*` with nothing) can execute this

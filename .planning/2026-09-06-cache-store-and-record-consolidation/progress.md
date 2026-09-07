@@ -429,3 +429,30 @@ this machine (pyenv 3.12.9) has no pytest.
   not be assessed at all because the run held two settled currents. **The earlier figure of 118
   "without detectable movement" had counted those 44 as if a line had been fitted**; the review
   caught it (open item 18 stands).
+
+## Phase 3 — begun 2026-09-07 (second session) on the PI's instruction "Push everything, and then proceed to phase three"
+
+- Pushed: `origin/PS_closedloop_deployment` moved from `705bdb04` to `9a6e0926` (thirteen commits).
+
+### Track B step 1 — "Promote the prototype to real code" — built
+
+- **Status:** complete, committed with this entry and pushed.
+- What was wrong: `BRAVO/modules/DecodeCommon/` was tracked (`14ad802`) but its 32 tests ran on
+  neither runner. Files changed: `DecodeCommon/__init__.py` (both import spellings resolve to one
+  module object, as in `CacheStore`), `DecodeCommon/tests/test_decode_common.py` (two-spelling
+  imports), `DecodeCommon/representation.py` (`to_epoch` mirrors the platform's rule exactly,
+  decision 14 / decision 42 in the decision log), `_agent_bridge/run_tests.py` (discovers the
+  package), and the test commands in `CLAUDE.md`, `ARCHITECTURE_cache_store.md` and
+  `OPERATIONS_runbook.md`.
+
+| Run | Runner | Result |
+|---|---|---|
+| Track B step 1 | container, `run_tests.py` via the bridge (Biomarkers + CacheStore + DecodeCommon) | PASS=520 FAIL=0 |
+| Track B step 1 | host, documented order, four packages | 898 passed, 41 skipped |
+| Track B step 1 | host, reverse order | 898 passed, 41 skipped |
+
+- No live proof for this step: nothing in the running server calls the package yet; that is
+  step 2, and step 5 carries the field-for-field proof.
+- Container timezone checked through the bridge: `TZ=UTC`, offset 0 s. Whether the live record
+  holds a start time with no timezone (open item 19) is still to be measured; the first probe
+  called the recording loader with the wrong arguments.

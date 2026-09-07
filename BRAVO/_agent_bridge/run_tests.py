@@ -16,6 +16,8 @@ importlib.reload(analytics)
 #   CacheStore  — the one cache store, the provenance chain and the ledger. Written pytest-free on
 #                 purpose so the cycle-refusal proof runs in the SAME container as the code it
 #                 protects, rather than only on the analysis host.
+#   DecodeCommon — the canonical decoded form (Track B). Its tests take no arguments on purpose
+#                 so they run here, where the recordings are, as well as under pytest on the host.
 #
 # ClosedLoopDeployment (11 files) and StimOptimizer (20 files, on 2026-09-07) are deliberately NOT run here:
 # every one of them uses pytest fixtures or `pytest.raises`, so importing them in this container
@@ -26,7 +28,7 @@ importlib.reload(analytics)
 #
 # So a green run here is NOT a green run of the whole platform. Report both counts, each from its
 # own command, and never carry either number from a document.
-PACKAGES = ["Biomarkers", "CacheStore"]
+PACKAGES = ["Biomarkers", "CacheStore", "DecodeCommon"]
 
 files=[]
 for _pkg in PACKAGES:
