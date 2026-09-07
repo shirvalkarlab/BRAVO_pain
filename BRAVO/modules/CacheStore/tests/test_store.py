@@ -107,7 +107,7 @@ def test_anything_else_falls_back_to_pickle():
         payload = {"verdict": "device_native", "n_windows": 6, "ratio": 1.10,
                    "rows": [{"center_hz": 23.44, "route": "device_native"}]}
         assert st.choose_format(payload) == "pickle"
-        assert st.store("ground_truth_verdict", UID, ("gt", 1), payload) is True
+        assert st.store("ground_truth_verdict", UID, ("gt", 1), payload, writer="biomarkers", provenance=[]) is True
         assert st.load("ground_truth_verdict", UID, ("gt", 1)) == payload
 
 
@@ -121,13 +121,15 @@ def test_a_matching_key_leaves_the_directory_byte_identical():
         df = pd.DataFrame({"a": [1, 2, 3]})
         built = []
         got, wrote = st.store_if_absent("biomarker_band_results", UID, ("k", 1),
-                                        lambda: (built.append(1), df)[1])
+                                        lambda: (built.append(1), df)[1],
+                                        writer="biomarkers", provenance=[])
         assert wrote is True and len(built) == 1 and got is not None
         before = _tree(root)
         assert before, "the first write should have produced files"
 
         got2, wrote2 = st.store_if_absent("biomarker_band_results", UID, ("k", 1),
-                                          lambda: (built.append(1), df)[1])
+                                          lambda: (built.append(1), df)[1],
+                                          writer="biomarkers", provenance=[])
         assert wrote2 is False, "a matching key must not write"
         assert len(built) == 1, "a matching key must not even rebuild the payload"
         assert got2 is not None and len(got2) == 3
@@ -136,7 +138,7 @@ def test_a_matching_key_leaves_the_directory_byte_identical():
 
 def test_a_different_signature_is_a_miss_and_not_a_wrong_answer():
     with _Sandbox():
-        st.store("biomarker_band_results", UID, ("k", 1), pd.DataFrame({"a": [1]}))
+        st.store("biomarker_band_results", UID, ("k", 1), pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
         assert st.load("biomarker_band_results", UID, ("k", 2)) is None
 
 
@@ -164,7 +166,7 @@ def test_a_payload_with_no_sidecar_in_a_checkable_format_is_refused():
     """
     with _Sandbox():
         sig = ("k", 9)
-        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}))
+        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
         stem = st._stem("biomarker_band_results", UID, sig)
         os.remove(stem + ".meta.json")
         assert st.load("biomarker_band_results", UID, sig) is None
@@ -196,8 +198,8 @@ def test_the_stamp_is_readable_without_opening_the_payload():
 def test_the_newest_stamp_is_found_without_knowing_todays_signature():
     """A page says "last updated" before it knows whether today's key matches."""
     with _Sandbox():
-        st.store("inputs", UID, ("s", 1), {"a": 1}, trigger="first")
-        st.store("inputs", UID, ("s", 2), {"a": 2}, trigger="second")
+        st.store("inputs", UID, ("s", 1), {"a": 1}, trigger="first", writer="biomarkers", provenance=[])
+        st.store("inputs", UID, ("s", 2), {"a": 2}, trigger="second", writer="biomarkers", provenance=[])
         newest = st.newest_stamp("inputs", UID)
         assert newest is not None and newest["trigger"] == "second"
 
@@ -206,7 +208,7 @@ def test_the_sidecar_is_the_commit_marker_so_a_half_written_entry_is_invisible()
     """Simulates a writer that died between the payload and the sidecar."""
     with _Sandbox():
         sig = ("k", 11)
-        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}))
+        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
         stem = st._stem("biomarker_band_results", UID, sig)
         os.rename(stem + ".meta.json", stem + ".meta.json.7.tmp")
         assert st.load("biomarker_band_results", UID, sig) is None
@@ -244,8 +246,8 @@ def test_a_history_kind_keeps_its_superseded_entries_and_every_other_kind_still_
             "the earlier report set was swept, so a result citing it can no longer be reproduced"
         assert len(st.load("redcap_reports", UID, ("r", 2))) == 3
         # the control: a kind not in the set still sweeps, so the tile behaviour is unchanged
-        st.store("biomarker_band_results", UID, ("k", 1), a)
-        st.store("biomarker_band_results", UID, ("k", 2), b)
+        st.store("biomarker_band_results", UID, ("k", 1), a, writer="biomarkers", provenance=[])
+        st.store("biomarker_band_results", UID, ("k", 2), b, writer="biomarkers", provenance=[])
         assert st.load("biomarker_band_results", UID, ("k", 1)) is None
 
 
@@ -256,10 +258,12 @@ def test_store_if_absent_reads_from_the_root_it_writes_to():
         other = tempfile.mkdtemp(prefix="bravo_store_root_")
         try:
             df = pd.DataFrame({"a": [1]})
-            st.store_if_absent("biomarker_band_results", UID, ("k", 1), lambda: df, root=other)
+            st.store_if_absent("biomarker_band_results", UID, ("k", 1), lambda: df, root=other,
+                               writer="biomarkers", provenance=[])
             before = _tree(other)
             _got, wrote = st.store_if_absent("biomarker_band_results", UID, ("k", 1),
-                                             lambda: df, root=other)
+                                             lambda: df, root=other,
+                                             writer="biomarkers", provenance=[])
             assert wrote is False, "the second call wrote again under an explicit root"
             assert _tree(other) == before
             assert _tree(sandbox_root) == {}, "nothing should have landed in the default root"
@@ -267,12 +271,92 @@ def test_store_if_absent_reads_from_the_root_it_writes_to():
             shutil.rmtree(other, ignore_errors=True)
 
 
+def test_the_ledger_records_production_writes_and_not_writes_under_an_override():
+    """Found in the live ledger: 214 rows for "test-participant" from the container's tile tests.
+    The ledger carries no directory, so only the store can keep test writes out of it."""
+    from modules.CacheStore import ledger
+    recorded = []
+    prev_record, prev_enabled = ledger.record, ledger.ENABLED
+    ledger.record, ledger.ENABLED = (lambda meta: recorded.append(meta)), True
+    try:
+        with _Sandbox():                                   # DIR_OVERRIDE set: a test root
+            st.store("biomarker_band_results", UID, ("k", 1), pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
+            assert recorded == [], "a write under the test override reached the ledger"
+        other = tempfile.mkdtemp(prefix="bravo_store_root_")
+        try:
+            st.store("biomarker_band_results", UID, ("k", 2), pd.DataFrame({"a": [1]}),
+                     root=other, writer="biomarkers", provenance=[])                           # an explicit caller root
+            assert recorded == [], "a write under a caller's own root reached the ledger"
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+        prod = tempfile.mkdtemp(prefix="bravo_store_prod_")
+        prev_dir, prev_env = st.DIR_OVERRIDE, os.environ.get("DATASERVER_PATH")
+        st.DIR_OVERRIDE = None
+        os.environ["DATASERVER_PATH"] = prod
+        try:
+            if st.root_dir() == os.path.join(prod, "cache"):   # no Django settings in the way
+                st.store("biomarker_band_results", UID, ("k", 3), pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
+                assert len(recorded) == 1 and recorded[0]["kind"] == "biomarker_band_results"
+        finally:
+            st.DIR_OVERRIDE = prev_dir
+            if prev_env is None:
+                os.environ.pop("DATASERVER_PATH", None)
+            else:
+                os.environ["DATASERVER_PATH"] = prev_env
+            shutil.rmtree(prod, ignore_errors=True)
+    finally:
+        ledger.record, ledger.ENABLED = prev_record, prev_enabled
+
+
+def test_a_derived_kind_with_no_writer_is_refused_and_a_raw_kind_is_not():
+    """A sidecar with no writer and no provenance looks like a raw input to anything that later
+    cites it. The store refuses the write so a call site that forgot is found at write time."""
+    with _Sandbox() as root:
+        assert st.store("biomarker_band_results", UID, ("k", 1), pd.DataFrame({"a": [1]})) is False
+        assert _tree(root) == {}, "a refused write left a file behind"
+        assert st._EVENTS["refused_no_writer"] >= 1
+        # the raw kinds carry no writer requirement: the tiles are written by the tile builder
+        assert st.store("raw_lsb_tiles", UID, ("t", 1), {"a": np.zeros(2)}) is True
+        # a derived kind with a writer but no chain is written, counted, and carries an empty chain
+        before = st._EVENTS["written_without_provenance"]
+        assert st.store("biomarker_band_results", UID, ("k", 2), pd.DataFrame({"a": [1]}),
+                        writer="biomarkers") is True
+        assert st._EVENTS["written_without_provenance"] == before + 1
+        assert st.read_stamp("biomarker_band_results", UID, ("k", 2))["provenance"] == []
+
+
+def test_a_mismatched_sidecar_is_a_miss_without_the_payload_being_opened():
+    """A caller that only wants to know whether to write must not pay for reading a payload."""
+    with _Sandbox():
+        st.store("biomarker_band_results", UID, ("k", 1), pd.DataFrame({"a": [1]}),
+                 writer="biomarkers", provenance=[])
+        stem = st._stem("biomarker_band_results", UID, ("k", 1))
+        opened = []
+        real = st._load_payload
+
+        def spy(path, fmt):
+            opened.append(path)
+            return real(path, fmt)
+        st._load_payload = spy
+        try:
+            # same file name would need the same signature; forge a sidecar mismatch instead
+            with open(st._meta_path(stem)) as fh:
+                meta = json.load(fh)
+            meta["signature_key"] = "0" * 40
+            with open(st._meta_path(stem), "w") as fh:
+                json.dump(meta, fh)
+            assert st.load("biomarker_band_results", UID, ("k", 1)) is None
+            assert opened == [], "the payload was opened although the sidecar already said no"
+        finally:
+            st._load_payload = real
+
+
 def test_an_entry_over_the_limit_is_refused_and_leaves_nothing_behind():
     with _Sandbox() as root:
         st.MAX_BYTES_BY_KIND["tiny_kind"] = 64
         try:
             payload = {"a": np.arange(10_000, dtype=float)}
-            assert st.store("tiny_kind", UID, ("s", 1), payload) is False
+            assert st.store("tiny_kind", UID, ("s", 1), payload, writer="biomarkers", provenance=[]) is False
             assert st.load("tiny_kind", UID, ("s", 1)) is None
             leftover = [p for p in _tree(root) if "tiny_kind" in p]
             assert leftover == [], f"the refused write left files behind: {leftover}"
@@ -305,7 +389,7 @@ def test_the_store_turned_off_is_a_miss_and_never_an_exception():
 def test_the_off_switch_does_not_delete_anything():
     """Turning the store off must be reversible: the files are still there when it comes back."""
     with _Sandbox() as root:
-        st.store("inputs", UID, ("s", 1), {"a": 1})
+        st.store("inputs", UID, ("s", 1), {"a": 1}, writer="biomarkers", provenance=[])
         before = _tree(root)
         assert before
         st.ENABLED = False
@@ -343,7 +427,7 @@ def test_the_two_predecessors_mismatched_limits_are_gone_and_the_larger_one_won(
 
 def test_stats_reports_what_is_on_disk_and_what_the_store_has_done():
     with _Sandbox():
-        st.store("inputs", UID, ("s", 1), {"a": 1})
+        st.store("inputs", UID, ("s", 1), {"a": 1}, writer="biomarkers", provenance=[])
         st.load("inputs", UID, ("s", 1))
         st.load("inputs", UID, ("s", 999))
         s = st.stats("inputs")

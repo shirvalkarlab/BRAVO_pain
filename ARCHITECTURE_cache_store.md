@@ -115,6 +115,14 @@ moved into place after the payload and is the commit marker**, so a reader sees 
 no entry. It exists so a page can show the date of the last cache update without opening a 245 MB
 file, and so a shared-memory freshness key has something authoritative to mirror.
 
+### What the store refuses at write time, added on review 2026-09-07
+
+A derived kind (anything not in `provenance.RAW_KINDS`) written with no `writer=` is refused and
+counted, because its sidecar would look like a raw input to anything that later cited it. A
+derived kind written with `provenance=None` is written but counted and logged. The ledger records
+only writes under the production root, never under a caller's own root or the test override. Both
+import spellings of the package resolve to one module object (`CacheStore/__init__.py`).
+
 ### The off switch
 
 `store.ENABLED = False` makes every read a miss and every write a no-op, deletes nothing, and
@@ -233,9 +241,12 @@ refusal cannot work. Progress against them is in `task_plan.md`, not here.
    as raw-derived because it is a deterministic join that embodies no exploration choice. The
    timezone-aware timestamp is why both are Parquet. On RCS08 the stored stream reads in about
    0.01 s against about 33 s to parse, equal field for field (decision 37).
-3. **Step 6, "Write the biomarker results back after computing them"** — per band centre and
-   contact pair. All 22 centres, 8.5 to 29.5 Hz, read from the store's own centre list rather than
-   a hardcoded range.
+3. **Step 6, "Write the biomarker results back after computing them" — done 2026-09-07, second
+   session.** Two tidy tables, `biomarker_band_correlation` and `biomarker_band_discrimination`
+   (`Biomarkers/routines/band_results_tables.py`), one row per contact pair, band centre and
+   length of signal, every value copied from the sweep response, and the response itself as
+   `biomarker_band_sweep`, served back when the key matches. All 22 centres, 8.5 to 29.5 Hz, read
+   from the tile store's own centre list rather than a hardcoded range (decision 38).
 4. **Step 7, "Write the amplitude effect on each band where Stim Optimizer can read it"** — with
    slope, **curvature**, and the number and range of currents actually tested. Curvature is
    required, not optional: a rise-then-fall response exists in this record and a straight-line fit

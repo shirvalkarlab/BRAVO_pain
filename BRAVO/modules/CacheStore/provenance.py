@@ -56,7 +56,9 @@ MODULES = ("biomarkers", "closed_loop", "stim_optimizer")
 #: exploration decision, so a product derived from it is not "derived from Stim Optimizer's
 #: choices", and refusing it to Stim Optimizer would refuse the very table step 5 exists to give it.
 #: What Stim Optimizer CHOOSES — the ladder of settings it recommends exploring — is the
-#: `settings_stream` kind, which stays derived and is what the constructed-cycle test refuses.
+#: `exploration_ladder` kind, which stays derived and is what the constructed-cycle test refuses.
+#: (It was called `settings_stream` until 2026-09-07; that name collided with the function that
+#: reads the device's programmed history, a different and raw thing.)
 RAW_KINDS = ("raw_lsb_tiles", "redcap_reports", "therapy_settings", "therapy_pain_matched")
 
 
@@ -77,6 +79,9 @@ def module_of(key):
 _WRITER_BY_KIND = {
     "raw_lsb_tiles": "biomarkers",
     "biomarker_band_results": "biomarkers",
+    "biomarker_band_correlation": "biomarkers",
+    "biomarker_band_discrimination": "biomarkers",
+    "biomarker_band_sweep": "biomarkers",
     "redcap_reports": "biomarkers",
     "therapy_settings": "stim_optimizer",
     "therapy_pain_matched": "stim_optimizer",
@@ -84,7 +89,7 @@ _WRITER_BY_KIND = {
     "response": "closed_loop",
     "ground_truth_verdict": "closed_loop",
     "amplitude_effect_by_band": "stim_optimizer",
-    "settings_stream": "stim_optimizer",
+    "exploration_ladder": "stim_optimizer",
 }
 
 
@@ -173,10 +178,3 @@ def refusal_for(consumer, chain):
                 f"{consumer}'s choices confirm themselves")
     return None
 
-
-def check(consumer, chain):
-    """Raise if this consumer must not have this product. Returns None when it may."""
-    reason = refusal_for(consumer, chain)
-    if reason is not None:
-        raise SelfDerivedProduct(reason)
-    return None

@@ -35,6 +35,7 @@ from . import adapter
 from .routines import redcap_client
 from .routines import analytics
 from .routines import availability
+from .routines import band_results_tables
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -1228,7 +1229,7 @@ def _raw_lsb_unpack(stored):
 
 def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_blocks,
                           *, montage_psd_blocks=None, centers=_LSB_SPECTRUM_CENTERS,
-                          use_shared_cache=True):
+                          use_shared_cache=True, shared_sig=None):
     """Memoized per-channel match-AGNOSTIC raw LSB cache. The signature deliberately OMITS any PRO set
     (the cache does not depend on ratings) — only participant + recording identities + centers. Returns
     { raw_channel: availability.raw_lsb_spectrum_cache(...) }. montage_psd_blocks (the montage/survey
@@ -1253,8 +1254,11 @@ def _raw_lsb_cache_cached(participant_uid, channels, td_recordings, event_psd_bl
     if cached is not None:
         return cached
 
-    shared_sig = None
-    if use_shared_cache and shared_cache_dir() is not None:
+    # `shared_sig` lets a caller that has already built the tile key (the sweep does, for its
+    # own key) hand it in rather than have the recording rows enumerated and hashed a second time.
+    if not (use_shared_cache and shared_cache_dir() is not None):
+        shared_sig = None
+    elif shared_sig is None:
         try:
             shared_sig = _raw_lsb_shared_signature(participant_uid, centers)
         except Exception as exc:
@@ -2615,7 +2619,7 @@ _REDCAP_SNAPSHOT_RULE_VERSION = "v1_tidy_utc"
 #: The name under which a frame carries the key of the entry it was snapshotted as. `DataFrame`
 #: attributes survive `copy()`, column selection and the within-request copy above, so a consumer
 #: holding any descendant of the fetched table can still cite it.
-PRO_STORE_KEY_ATTR = "bravo_store_key"
+PRO_STORE_KEY_ATTR = _cache_store.STORE_KEY_ATTR
 
 
 def _pro_table_digest(df):
@@ -6228,6 +6232,26 @@ def band_time_sweep_for_participant(request_data):
     pro_times = np.asarray(pro_match[0], dtype=float)
     pain_values = np.asarray(pro_match[1], dtype=float)
 
+    # TRACK A STEP 6: THE RESULTS ARE WRITTEN BACK, AND THE KEY DECIDES WHETHER TO RECOMPUTE.
+    # The key names the tile entry, the pain-report snapshot, the pain score, and every setting
+    # the sweep ran under. A newly filed report changes the snapshot key, a new upload changes the
+    # tile key, and a moved slider changes a setting, so nothing stale can be served; and when
+    # nothing changed, the thousand shuffles and thousand resamples per cell are not paid again.
+    # THE STORE IS ASKED BEFORE THE SPECTRA, THE EVENT BLOCKS AND THE TILE CACHE ARE LOADED: the
+    # key needs only the database rows and the reports already fetched, and on the live record
+    # those loads were most of what a served request still paid.
+    sweep_settings = {
+        "eligibility_radius_seconds": float(tol_s), "allow_window_reuse": bool(allow_window_reuse),
+        "label_strategy": label_strategy, "percentile_low": float(low_pct),
+        "percentile_high": float(high_pct), "outlier_n_mad": float(outlier_n_mad),
+        "outlier_scale": outlier_scale}
+    sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
+                                                             label_metric, sweep_settings)
+    if sweep_sig is not None:
+        stored = _load_stored_sweep(participant_uid, sweep_sig)
+        if stored is not None:
+            return stored
+
     psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
     sensing_idx = _build_sensing_config_index(list(td or []))
     event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
@@ -6240,7 +6264,7 @@ def band_time_sweep_for_participant(request_data):
     _stamp_td_product(list(td or []))
     raw_by_ch = _raw_lsb_cache_cached(participant_uid, channels,
                                       list(td or []) + list(psd_list or []), event_blocks,
-                                      montage_psd_blocks=montage_blocks)
+                                      montage_psd_blocks=montage_blocks, shared_sig=tiles_sig)
 
     t0 = _time.perf_counter()
     sweeps = _band_time_sweep_channels(
@@ -6250,7 +6274,7 @@ def band_time_sweep_for_participant(request_data):
         metric_key=label_metric, metric_label=metric_label)
     wall = float(_time.perf_counter() - t0)
 
-    return {
+    out = {
         "band_time_sweep": sweeps,
         "available_metrics": BIOMARKER_METRICS,
         "label_metric": label_metric,
@@ -6279,4 +6303,138 @@ def band_time_sweep_for_participant(request_data):
         },
         "wall_seconds": wall,
         "message": None,
+        "served_from_store": False,
+        "store_keys": None,
     }
+    if sweep_sig is not None:
+        _store_sweep_results(participant_uid, sweep_sig, sweep_prov, out,
+                             n_recordings=len(td or []))
+    return out
+
+
+#: ==========================================================================================
+#: TRACK A STEP 6 — "Write the biomarker results back after computing them".
+#:
+#: Three products leave the sweep. Two are the tidy tables the approved plan asks for, one row per
+#: contact pair, band centre and length of signal: the correlation results and the discrimination
+#: results, every value copied from the response and checkable against it
+#: (`routines/band_results_tables.py`). The third is the response itself, so the page is served
+#: from the store when nothing that feeds it has changed. All three carry the same key and the
+#: same provenance: the tile entry and the pain-report snapshot, both raw inputs, so any module
+#: may read them. `consumer="biomarkers"` is passed on the read anyway, because the refusal must
+#: be exercised on every live read path or it protects nothing.
+#: ==========================================================================================
+_BAND_SWEEP_RESPONSE_KIND = "biomarker_band_sweep"
+_BAND_SWEEP_RULE_VERSION = "v1_sweep"
+
+#: Response fields that are timings of the run that produced them, not results. They are not
+#: compared when a stored response is checked against a fresh one, and a served response keeps the
+#: timings of the run that built it, which is what they describe.
+BAND_SWEEP_TIMING_FIELDS = ("wall_seconds", "matched_seconds", "total_seconds")
+
+
+def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
+    """`(signature, provenance, tile_signature)` for the sweep's three products, or three Nones
+    when an input cannot be named: no tile entry key (no recordings identity) or no pain-report
+    snapshot key (reports handed in through the request body). Without a name for both inputs the
+    products are computed and returned but never written, because a key that cannot change with
+    its inputs would serve a stale answer. The tile signature is returned so the tile cache lookup
+    can reuse it instead of enumerating the recording rows again."""
+    try:
+        tiles_sig = _raw_lsb_shared_signature(participant_uid, _LSB_SPECTRUM_CENTERS)
+    except Exception as exc:                                    # noqa: BLE001
+        _log.info("Biomarkers: no tile key for the sweep (%r); results not stored", exc)
+        tiles_sig = None
+    report_key = getattr(pro_df, "attrs", {}).get(PRO_STORE_KEY_ATTR) if pro_df is not None else None
+    if tiles_sig is None or not report_key:
+        return None, None, tiles_sig
+    tiles_key = _cache_store.product_key(_RAW_LSB_SHARED_KIND, participant_uid, tiles_sig)
+    sig = (_BAND_SWEEP_RESPONSE_KIND, _BAND_SWEEP_RULE_VERSION, band_results_tables.RULE_VERSION,
+           str(participant_uid), tiles_key, report_key, str(label_metric),
+           tuple(sorted((k, v) for k, v in settings.items())),
+           tuple(float(s) for s in analytics.BAND_TIME_SWEEP_SECONDS),
+           float(analytics.BAND_TIME_SWEEP_WIDTH_HZ),
+           float(analytics.BAND_TIME_SWEEP_CENTER_LO_HZ), float(analytics.BAND_TIME_SWEEP_CENTER_HI_HZ),
+           int(analytics.BAND_TIME_SWEEP_N_PERM), int(analytics.BAND_TIME_SWEEP_N_BOOT), 0)
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                         # pragma: no cover
+        from CacheStore import provenance as _prov
+    prov = _prov.flatten([
+        _prov.entry(tiles_key, kind=_RAW_LSB_SHARED_KIND, writer="biomarkers"),
+        _prov.entry(report_key, kind="redcap_reports", writer="biomarkers")])
+    return sig, prov, tiles_sig
+
+
+def _sweep_store_keys(participant_uid, sig):
+    return {
+        "response": _cache_store.product_key(_BAND_SWEEP_RESPONSE_KIND, participant_uid, sig),
+        "correlation": _cache_store.product_key(band_results_tables.CORRELATION_KIND,
+                                                participant_uid, sig),
+        "discrimination": _cache_store.product_key(band_results_tables.DISCRIMINATION_KIND,
+                                                   participant_uid, sig),
+    }
+
+
+def _load_stored_sweep(participant_uid, sig):
+    """The stored response for this key, marked as served from the store, or None."""
+    try:
+        got = _cache_store.load(_BAND_SWEEP_RESPONSE_KIND, participant_uid, sig,
+                                consumer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+    except Exception as exc:              # a refusal is impossible on a raw chain; log if it fires
+        _log.warning("Biomarkers: the stored sweep was not released (%r); recomputing", exc)
+        return None
+    if not isinstance(got, dict):
+        return None
+    out = dict(got)
+    out["served_from_store"] = True
+    out["store_keys"] = _sweep_store_keys(participant_uid, sig)
+    out["store_written"] = dict(got.get("store_written") or {}, response=True)
+    stamp = _cache_store.read_stamp(_BAND_SWEEP_RESPONSE_KIND, participant_uid, sig,
+                                    root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+    out["stored_utc"] = stamp.get("written_utc")
+    return out
+
+
+def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=None):
+    """Write the two tables and the response. Returns the three keys. Never raises."""
+    keys = _sweep_store_keys(participant_uid, sig)
+    # The keys go INTO the response before it is written, so the stored copy names its own
+    # tables and a served copy does not depend on being patched after the read. `store_keys` is
+    # the ADDRESS of each product; `store_written` says whether each one actually landed, because
+    # a refused or failed write is logged and swallowed and a reader must not infer from an
+    # address that a file exists.
+    response["store_keys"] = keys
+    written = {"correlation": False, "discrimination": False, "response": None}
+    response["store_written"] = written
+    sweeps = response.get("band_time_sweep") or {}
+    metric = response.get("label_metric")
+    common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
+                  n_recordings=n_recordings, root=_SHARED_CACHE_DIR_OVERRIDE)
+    try:
+        corr = band_results_tables.correlation_table(sweeps, metric_key=metric)
+        disc = band_results_tables.discrimination_table(sweeps, metric_key=metric)
+        if len(corr):
+            got, _w = _cache_store.store_if_absent(band_results_tables.CORRELATION_KIND,
+                                                   participant_uid, sig, lambda: corr, **common)
+            written["correlation"] = got is not None and _landed(
+                band_results_tables.CORRELATION_KIND, participant_uid, sig)
+        if len(disc):
+            got, _w = _cache_store.store_if_absent(band_results_tables.DISCRIMINATION_KIND,
+                                                   participant_uid, sig, lambda: disc, **common)
+            written["discrimination"] = got is not None and _landed(
+                band_results_tables.DISCRIMINATION_KIND, participant_uid, sig)
+        # The response is written with `response` still None in its own copy; a served copy is
+        # by definition one that landed, and `_load_stored_sweep` says so on the way out.
+        _cache_store.store_if_absent(_BAND_SWEEP_RESPONSE_KIND, participant_uid, sig,
+                                     lambda: response, fmt="pickle", **common)
+        written["response"] = _landed(_BAND_SWEEP_RESPONSE_KIND, participant_uid, sig)
+    except Exception as exc:                                    # noqa: BLE001
+        _log.warning("Biomarkers: the sweep results were not written back (%r)", exc)
+    return keys
+
+
+def _landed(kind, participant_uid, sig):
+    """True when an entry for this key is on disk with its sidecar; opens no payload."""
+    return _cache_store.read_stamp(kind, participant_uid, sig,
+                                   root=_SHARED_CACHE_DIR_OVERRIDE) is not None

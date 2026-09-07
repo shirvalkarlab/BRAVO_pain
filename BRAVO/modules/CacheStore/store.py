@@ -22,7 +22,8 @@ WHAT IS DELIBERATELY NOT DONE HERE.
 * **The caller does not decide whether to write. The key does.** A page whose key already matches
   what is on disk writes nothing, and a test asserts the directory is byte-identical afterwards.
 
-THE FORMATS, and why each. Chosen from measurements on the real 6,629-row therapy table.
+THE FORMATS, and why each. Chosen from measurements on the real 6,629-row therapy table on
+2026-09-06; the sizes and timings below are from that day and the tile figures from 2026-09-06.
 
 * A table goes to **Parquet with zstd** — 0.027 MB against pickle's 0.451, and a stable published
   format rather than a version-fragile one that is unsafe to load. **Pickle writes twice as fast
@@ -104,6 +105,11 @@ KEEP_HISTORY_KINDS = {"redcap_reports"}
 #: Django, then the environment", which is the production path.
 DIR_OVERRIDE = None
 
+#: THE ONE NAME under which a frame carries the key of the store entry it came from, in
+#: `DataFrame.attrs`. Defined here and imported by every module, so the two modules that pass
+#: frames to each other cannot drift apart on the spelling and silently stop citing each other.
+STORE_KEY_ATTR = "bravo_store_key"
+
 #: THE OFF SWITCH. Set False and every read is a miss and every write is a no-op, with no
 #: exception raised anywhere. Two reasons it exists rather than relying on an unset storage path:
 #:
@@ -120,7 +126,8 @@ ENABLED = True
 #: are counted by the biomarker tile path and live here for the same reason.
 _EVENTS = {"hits": 0, "misses": 0, "writes": 0, "refused_too_big": 0, "unreadable": 0,
            "no_directory": 0, "swept": 0, "refused_self_derived": 0, "legacy_no_sidecar": 0,
-           "wrong_channels": 0, "unpackable": 0}
+           "wrong_channels": 0, "unpackable": 0, "refused_no_writer": 0,
+           "written_without_provenance": 0}
 _LOCK = threading.Lock()
 
 
@@ -345,8 +352,18 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
         return None
     fmt = _FORMAT_FOR_EXT[os.path.splitext(path)[1]]
     try:
-        raw = _load_payload(path, fmt)
+        # THE SIDECAR IS CHECKED BEFORE THE PAYLOAD IS OPENED. A sidecar whose signature is not
+        # the one asked for means the entry is a miss whatever the payload holds, and a caller
+        # that only wants to know whether to write should not pay for reading a payload to find
+        # out. Only a legacy pickle with no sidecar has to be opened to be checked.
         meta = _read_meta_file(_meta_path(stem))
+        if meta is not None and meta.get("signature_key") != signature_key(signature):
+            raise ValueError("the sidecar's signature is not the one being asked for")
+        if meta is not None and meta.get("format") not in (None, fmt):
+            # A payload in one format under a sidecar describing another means a format change
+            # without a FORMAT_VERSION bump left an older file behind. Rebuild rather than serve.
+            raise ValueError(f"the payload is {fmt} but the sidecar says {meta.get('format')}")
+        raw = _load_payload(path, fmt)
 
         if fmt == "pickle" and isinstance(raw, dict) \
                 and "signature" in raw and "payload" in raw:
@@ -385,7 +402,7 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
                 raise                       # a refusal is a decision and must not look like a miss
         except ImportError:
             pass
-        _log.info("CacheStore: discarding an unusable entry %s (%r)", path, exc)
+        _log.warning("CacheStore: discarding an unusable entry %s (%r)", path, exc)
         _bump("unreadable")
         for p in (path, _meta_path(stem)):
             try:
@@ -478,6 +495,20 @@ def store(kind, participant_uid, signature, payload, *, provenance=None, trigger
     stem = _stem(kind, participant_uid, signature, root=root)
     if stem is None:
         return False
+    # A DERIVED PRODUCT MUST NAME ITS WRITER. Without it the refusal in `load` has nothing to
+    # match, and a sidecar with no writer and no provenance is indistinguishable from a raw
+    # input to anything that later cites it. Refusing here makes a call site that forgot fail at
+    # write time, where it is found, rather than widen what looks safe to read. Missing
+    # provenance on a derived kind is counted and logged rather than refused, because an empty
+    # chain is sometimes true (nothing derived from another module's output yet).
+    from . import provenance as _prov
+    if kind not in _prov.RAW_KINDS and writer is None:
+        _bump("refused_no_writer")
+        _log.warning("CacheStore: refusing to write derived kind %r with no writer", kind)
+        return False
+    if kind not in _prov.RAW_KINDS and provenance is None:
+        _bump("written_without_provenance")
+        _log.warning("CacheStore: derived kind %r written with no provenance chain", kind)
     fmt = fmt or choose_format(payload)
     final = stem + _EXT_FOR_FORMAT[fmt]
     tmp = f"{final}.{os.getpid()}.tmp"
@@ -513,14 +544,19 @@ def store(kind, participant_uid, signature, payload, *, provenance=None, trigger
         _bump("writes")
         if kind not in KEEP_HISTORY_KINDS:
             _sweep_superseded(kind, participant_uid, stem, root=root)
-        try:
-            from . import ledger
-            ledger.record(meta)
-        except Exception as exc:                # a ledger outage must never fail a page
-            _log.info("CacheStore: could not record %s in the ledger (%r)", kind, exc)
+        # THE LEDGER RECORDS THE PRODUCTION STORE ONLY. A write under a caller's own root, or under
+        # the test override, is not part of the record of what the server holds: the container
+        # test suite had written 214 rows for a participant called "test-participant" into the
+        # live table, and the ledger carries no directory, so nothing could tell them apart.
+        if root is None and DIR_OVERRIDE is None:
+            try:
+                from . import ledger
+                ledger.record(meta)
+            except Exception as exc:            # a ledger outage must never fail a page
+                _log.info("CacheStore: could not record %s in the ledger (%r)", kind, exc)
         return True
     except Exception as exc:
-        _log.info("CacheStore: could not write %s (%r)", final, exc)
+        _log.warning("CacheStore: could not write %s (%r)", final, exc)
         for p in (tmp, tmp_meta):
             try:
                 os.remove(p)

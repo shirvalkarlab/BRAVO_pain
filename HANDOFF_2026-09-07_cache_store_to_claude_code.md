@@ -112,8 +112,8 @@ newer result, and the resolution record is
 | Give every written-back product a provenance chain, not just a version | **done, with the cycle proved by construction** |
 | Put the provenance and version ledger in MySQL | **done** — table created on first use, no migration to run |
 | Store the REDCap frame, and keep the freshness fetch anyway | **done, 2026-09-07 second session** — the pain-report table as `redcap_reports`, read by no page |
-| Write the therapy and pain matched table into the store | not started |
-| Write the biomarker results back after computing them | not started |
+| Write the therapy and pain matched table into the store | **done, 2026-09-07 second session** — `therapy_settings` and `therapy_pain_matched` |
+| Write the biomarker results back after computing them | **done, 2026-09-07 second session** — two tidy tables and the served response |
 | Write the amplitude effect on each band where Stim Optimizer can read it | not started |
 | Have Stim Optimizer read the store and write its outputs back | not started |
 

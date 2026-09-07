@@ -60,8 +60,8 @@ def _build_the_cycle():
     Step 3's product now transitively derives from step 1, which Stim Optimizer wrote.
     """
     settings_sig = ("settings", 1)
-    settings_key = st.product_key("settings_stream", UID, settings_sig)
-    st.store("settings_stream", UID, settings_sig,
+    settings_key = st.product_key("exploration_ladder", UID, settings_sig)
+    st.store("exploration_ladder", UID, settings_sig,
              {"amplitude_ma": np.array([1.0, 2.0, 3.0])},
              writer="stim_optimizer", trigger="exploration_policy",
              provenance=prov.flatten([prov.entry(st.product_key("raw_lsb_tiles", UID, ("t", 1)),
@@ -73,8 +73,8 @@ def _build_the_cycle():
              {"center_hz": np.array([23.44])},
              writer="biomarkers", trigger="page_request",
              provenance=prov.flatten([
-                 prov.entry(settings_key, kind="settings_stream", writer="stim_optimizer",
-                            chain=st.read_stamp("settings_stream", UID, settings_sig)["provenance"]),
+                 prov.entry(settings_key, kind="exploration_ladder", writer="stim_optimizer",
+                            chain=st.read_stamp("exploration_ladder", UID, settings_sig)["provenance"]),
              ]))
 
     verdict_sig = ("verdict", 1)
@@ -114,7 +114,7 @@ def test_stim_optimizer_is_refused_the_verdict_that_derives_from_its_own_ladder(
         # The reason names the module and the offending input, so whoever hits it can act.
         text = str(raised)
         assert "stim_optimizer" in text
-        assert "settings_stream" in text
+        assert "exploration_ladder" in text
 
 
 def test_the_refusal_survives_one_more_hop_of_indirection():
@@ -196,8 +196,8 @@ def test_a_module_may_always_read_its_own_raw_kinds_back():
 
 def test_an_unknown_consumer_name_is_refused_rather_than_waved_through():
     """A typo in a call site would otherwise exempt itself from every rule here."""
-    chain = prov.flatten([prov.entry(st.product_key("settings_stream", UID, ("s", 1)),
-                                     kind="settings_stream", writer="stim_optimizer")])
+    chain = prov.flatten([prov.entry(st.product_key("exploration_ladder", UID, ("s", 1)),
+                                     kind="exploration_ladder", writer="stim_optimizer")])
     assert prov.refusal_for("stimoptimizer", chain) is not None       # missing underscore
     assert prov.refusal_for("stim_optimizer", chain) is not None      # the real refusal
     assert prov.refusal_for("biomarkers", chain) is None
@@ -221,8 +221,8 @@ def test_the_writers_of_a_chain_exclude_the_raw_inputs():
     chain = prov.flatten([
         prov.entry(st.product_key("raw_lsb_tiles", UID, ("t", 1)),
                    kind="raw_lsb_tiles", writer="biomarkers"),
-        prov.entry(st.product_key("settings_stream", UID, ("s", 1)),
-                   kind="settings_stream", writer="stim_optimizer"),
+        prov.entry(st.product_key("exploration_ladder", UID, ("s", 1)),
+                   kind="exploration_ladder", writer="stim_optimizer"),
     ])
     assert prov.writers_in(chain) == {"stim_optimizer"}
 
@@ -235,7 +235,7 @@ def test_the_matched_table_is_released_to_every_module_while_the_chosen_ladder_i
     """Track A step 5. `therapy_pain_matched` is a deterministic join of the programmed settings
     and the pain reports; a product derived from it must reach Stim Optimizer, or the table step 5
     exists to give it is refused to it. The CONTROL in the same test: a product derived from the
-    ladder Stim Optimizer CHOSE (`settings_stream`) is refused as before."""
+    ladder Stim Optimizer CHOSE (`exploration_ladder`) is refused as before."""
     with _Sandbox():
         settings_key = st.product_key("therapy_settings", UID, ("files", 1))
         report_key = st.product_key("redcap_reports", UID, ("reports", 1))
@@ -263,11 +263,11 @@ def test_the_matched_table_is_released_to_every_module_while_the_chosen_ladder_i
                                              derived_sig)["provenance"]) == set()
 
         # THE CONTROL: the same shape of chain, but from the ladder Stim Optimizer chose.
-        ladder_key = st.product_key("settings_stream", UID, ("ladder", 1))
+        ladder_key = st.product_key("exploration_ladder", UID, ("ladder", 1))
         chosen_sig = ("from_ladder", 1)
         st.store("biomarker_band_results", UID, chosen_sig, {"center_hz": np.array([23.44])},
                  writer="biomarkers", trigger="page_request",
-                 provenance=prov.flatten([prov.entry(ladder_key, kind="settings_stream",
+                 provenance=prov.flatten([prov.entry(ladder_key, kind="exploration_ladder",
                                                      writer="stim_optimizer")]))
         raised = False
         try:

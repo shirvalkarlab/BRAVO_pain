@@ -85,8 +85,19 @@ _INSERT = f"""
 """
 
 
+#: A callable returning a connection-like object (`.vendor`, `.cursor()` as a context manager),
+#: for tests that must exercise the real statements against a database of their own. None means
+#: Django's default connection, which is the production path.
+CONNECTION_FACTORY = None
+
+
 def _connection():
     """Django's default connection, or None when there is no configured database."""
+    if CONNECTION_FACTORY is not None:
+        try:
+            return CONNECTION_FACTORY()
+        except Exception:
+            return None
     try:
         from django.db import connection
         # Touching the vendor forces the connection to be established, which is what makes a

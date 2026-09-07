@@ -96,7 +96,7 @@ _THERAPY_PAIN_MATCHED_RULE_VERSION = "v1_epoch_means"
 #: The frame attribute under which a table carries the key of the store entry it came from, so a
 #: product derived from it can cite it. The same name the Biomarkers module uses for the pain-report
 #: snapshot, on purpose: one name, whichever module handed the frame over.
-STORE_KEY_ATTR = "bravo_store_key"
+STORE_KEY_ATTR = _cache_store.STORE_KEY_ATTR
 
 #: The frame attribute the builder sets to say how many stored files it could not read. A stream
 #: built with unreadable files is returned but NOT stored, because the file set that keys it has not

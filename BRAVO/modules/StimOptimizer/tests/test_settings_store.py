@@ -24,9 +24,17 @@ import types
 import pandas as pd
 import pytest
 
-from CacheStore import ledger as _ledger
-from CacheStore import store as st
+import importlib
+
 from StimOptimizer import adapter as AD
+
+# THE SAME MODULE OBJECTS THE ADAPTER USES. The store can be imported under two names
+# (`modules.CacheStore.store` in the container, `CacheStore.store` on the host), and once the
+# CacheStore tests have put the BRAVO root on the path both spellings resolve in one process to
+# two different module objects. A sandbox applied to the copy this file imported would leave the
+# copy the adapter holds untouched, and the outcome would then depend on test order.
+st = AD._cache_store
+_ledger = importlib.import_module(st.__name__.rsplit(".", 1)[0] + ".ledger")
 
 UID = "PARTICIPANT"
 
@@ -285,3 +293,77 @@ def test_the_wash_in_and_the_items_are_part_of_the_key(sandbox, fake_biomarkers)
     a = AD.build_design_matrix(UID, stream=_stream_with_key(), washin_min=1.0)
     b = AD.build_design_matrix(UID, stream=_stream_with_key(), washin_min=30.0)
     assert a.attrs[AD.STORE_KEY_ATTR] != b.attrs[AD.STORE_KEY_ATTR]
+
+
+# ---------------------------------------------------------------------------------------------
+# the real parser's unreadable-file path, and the refusal propagating out of the matched table
+# ---------------------------------------------------------------------------------------------
+
+def test_the_real_parser_counts_an_unreadable_file_and_the_stream_is_then_not_stored(sandbox,
+                                                                                    monkeypatch):
+    """One stored file parses, one raises inside the loader: the stream carries the readable
+    file's rows and an unreadable count of one, and `settings_stream` hands it back unstored."""
+    import json as _json
+
+    class _SF:
+        def __init__(self, uid, ok):
+            self.uid, self.type, self.ok = uid, "MedtronicJSON", ok
+
+    good = {"SessionDate": "2026-01-01T00:00:00Z",
+            "Groups": {"Final": [{"ActiveGroup": True, "ProgramSettings": {
+                "RateInHertz": 150.0,
+                "LeftHemisphere": {"Programs": [{"AmplitudeInMilliAmps": 2.0,
+                                                "PulseWidthInMicroSecond": 60.0,
+                                                "ElectrodeState": []}]}}}]},
+            "GroupHistory": []}
+    rows = [_SF("a", True), _SF("b", False)]
+
+    class _Q:
+        def filter(self, owner=None):
+            return rows
+    models = types.ModuleType("Server.models")
+    models.SourceFile = types.SimpleNamespace(objects=_Q())
+    server = types.ModuleType("Server"); server.models = models
+    curator = types.ModuleType("modules.DataCurator")
+
+    def load(sf):
+        if not sf.ok:
+            raise OSError("cannot decrypt")
+        return _json.dumps(good)
+    curator.loadCacheFile = load
+    modules_pkg = sys.modules.get("modules") or types.ModuleType("modules")
+    modules_pkg.DataCurator = curator
+    monkeypatch.setitem(sys.modules, "Server", server)
+    monkeypatch.setitem(sys.modules, "Server.models", models)
+    monkeypatch.setitem(sys.modules, "modules", modules_pkg)
+    monkeypatch.setitem(sys.modules, "modules.DataCurator", curator)
+
+    out = AD._build_settings_stream(UID)
+    assert out.attrs[AD.UNREADABLE_ATTR] == 1
+    assert len(out) == 1 and out.loc[0, "hemi"] == "Left" and out.loc[0, "amp"] == 2.0
+
+    stream = AD.settings_stream(UID)               # through the store-backed entry point
+    assert len(stream) == 1
+    assert AD.STORE_KEY_ATTR not in stream.attrs
+    assert _payloads(sandbox, "therapy_settings") == []
+
+
+def test_a_tampered_matched_table_that_derives_from_the_ladder_is_refused_and_the_refusal_propagates(
+        sandbox, fake_biomarkers):
+    """The matched table's real chain is raw, so the refusal cannot fire on it honestly. If a
+    sidecar were edited to make the table derive from the ladder Stim Optimizer chose, the
+    store must refuse it to Stim Optimizer, and `build_design_matrix` lets that refusal out
+    rather than turning it into a silent recompute — a refusal is a decision, not a miss."""
+    prov = importlib.import_module(st.__name__.rsplit('.', 1)[0] + '.provenance')
+    first = AD.build_design_matrix(UID, stream=_stream_with_key())
+    kind, uid, _h = first.attrs[AD.STORE_KEY_ATTR].split("/")
+    d = os.path.join(sandbox, kind)
+    meta_path = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".meta.json")][0]
+    with open(meta_path) as fh:
+        meta = json.load(fh)
+    meta["provenance"].append({"key": "exploration_ladder/PARTICIPANT/x",
+                               "kind": "exploration_ladder", "writer": "stim_optimizer"})
+    with open(meta_path, "w") as fh:
+        json.dump(meta, fh)
+    with pytest.raises(prov.SelfDerivedProduct):
+        AD.build_design_matrix(UID, stream=_stream_with_key())

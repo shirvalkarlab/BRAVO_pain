@@ -264,3 +264,59 @@ this machine (pyenv 3.12.9) has no pytest.
   matched table's: writer `stim_optimizer`, provenance `therapy_settings` and `redcap_reports`.
 - Not changed: the closed-loop module's `inputs` and `response` entries are still written with no
   provenance; that is Track A step 8 and Track G work, recorded in `findings.md` §6.
+
+### Track A step 6 — "Write the biomarker results back after computing them" — built and reviewed
+
+- **Status:** complete in the working tree, committed with this entry together with the review
+  fixes.
+- Files changed: `BRAVO/modules/Biomarkers/routines/band_results_tables.py` (new: the two tidy
+  tables and the exact-count checker), `BRAVO/modules/Biomarkers/bravo_service.py` (the sweep
+  endpoint asks the store before loading spectra, event blocks and tiles; writes the two tables and
+  the response; `_band_sweep_signature`, `_load_stored_sweep`, `_store_sweep_results`,
+  `store_written`; the tile cache lookup accepts a precomputed tile signature),
+  `BRAVO/modules/CacheStore/provenance.py` (three kinds registered; `exploration_ladder` replaces
+  `settings_stream`; `check()` deleted), `BRAVO/modules/CacheStore/store.py` (`STORE_KEY_ATTR`;
+  refuses a derived kind with no writer; counts a derived kind with no chain; sidecar compared
+  before the payload is opened; a payload whose file type disagrees with its sidecar is unreadable;
+  ledger for production-root writes only; warning level on unexpected failures),
+  `BRAVO/modules/CacheStore/__init__.py` (both import spellings resolve to one module object),
+  `BRAVO/modules/CacheStore/ledger.py` (`CONNECTION_FACTORY` for tests),
+  `BRAVO/modules/ClosedLoopDeployment/adapter.py` (`inputs` cites its inputs; both reads pass a
+  consumer), `BRAVO/modules/StimOptimizer/adapter.py` (the shared attribute name). Tests: new
+  `Biomarkers/tests/test_band_results_tables.py` (5), `Biomarkers/tests/test_band_sweep_store.py`
+  (7), `CacheStore/tests/test_ledger.py` (4); added to `CacheStore/tests/test_store.py` (3),
+  `CacheStore/tests/test_one_store.py` (1), `StimOptimizer/tests/test_settings_store.py` (2).
+- Review: six perspectives in parallel, report at
+  `artifacts/review_2026-09-07_PS_closedloop_deployment.md`; sixteen findings fixed in this
+  session, four left open by decision (`DECISIONS_and_open_items.md` decisions 38 and 39, open
+  items 16 and 17).
+
+| Run | Runner | Result |
+|---|---|---|
+| Final step 6 code | container, `run_tests.py` via the bridge | PASS=485 FAIL=0 |
+| Final step 6 code | host, `bravo_app` pytest, documented order | 839 passed, 41 skipped |
+| Final step 6 code | host, the three suites in reverse order | 839 passed, 41 skipped |
+
+- Live proof on RCS08 through the bridge (`_agent_bridge/_step6_live.py`, disposable), after the
+  store check was moved ahead of the recording loads, three alternating rounds of a fresh sweep
+  followed by a served one:
+
+| Round | Fresh (s) | Served (s) | Response values compared | Differences |
+|---|---|---|---|---|
+| 1 | 6.17 (sweep itself 2.36) | 2.59 | 27,311 | 0 |
+| 2 | 5.65 (2.37) | 3.80 | 27,311 | 0 |
+| 3 | 5.52 (2.33) | 2.50 | 27,311 | 0 |
+
+  The two tables: 1,320 rows each (six contact pairs, 22 centres from 8.5 to 29.5 Hz, ten
+  lengths); the correlation column against the response grid 1,320 fields, 0 differences; the
+  area-under-curve column and its folded column likewise 1,320 and 0 each. Sidecars: writer
+  `biomarkers`, provenance the tile entry and the pain-report snapshot. What a served request
+  still pays is the report fetch and the time-domain recording load, about 2.5 s together.
+  Before the reorder the served path took 3.41 to 3.50 s against 5.76 to 6.81 s fresh (two
+  rounds, 27,311 values, 0 differences each).
+- A REDCap connection error appeared once during the proof ("remote end closed connection
+  without response"); the narrowed request fell back to the full export and the run completed.
+- The same proof re-run on the finished code (after the review fixes), three alternating rounds:
+  fresh 7.25, 5.90 and 8.16 s against served 2.71, 2.57 and 2.64 s; 27,314 response values
+  compared each round (three more than before: the `store_written` flags), 0 differences each
+  round; both tables 1,320 rows, 0 differences against the response grids.

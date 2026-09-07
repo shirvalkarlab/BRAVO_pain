@@ -198,3 +198,20 @@ def test_the_store_is_the_only_place_that_names_the_cache_subdirectories():
                     offenders.append(f"{name}:{n}: {line.strip()}")
     assert offenders == [], (
         "a directory name the store owns is written in a caller:\n  " + "\n  ".join(offenders))
+
+
+def test_both_import_spellings_are_one_module_object():
+    """The container spells the package `modules.CacheStore`, the host suite `CacheStore`. Once
+    both roots are on the path in one process the two spellings must resolve to the same objects,
+    or a sandbox applied under one leaves the copy a module holds under the other untouched."""
+    import importlib
+    import sys
+    a = importlib.import_module("modules.CacheStore.store")
+    try:
+        b = importlib.import_module("CacheStore.store")
+    except ImportError:
+        return                  # only one spelling is importable here, so there is nothing to alias
+    assert a is b, "two store module objects are live in one process"
+    assert sys.modules["CacheStore"] is sys.modules["modules.CacheStore"]
+    assert importlib.import_module("CacheStore.ledger") is \
+        importlib.import_module("modules.CacheStore.ledger")

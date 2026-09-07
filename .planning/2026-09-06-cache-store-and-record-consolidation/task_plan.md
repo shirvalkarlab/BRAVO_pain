@@ -30,14 +30,16 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Commit Track A step 5 once the container suite confirms it; then build Track A step 6, "Write
-the biomarker results back after computing them".**
+**Commit Track A step 6 with the review fixes once the final container run and live proof
+confirm them; then build Track A step 7, "Write the amplitude effect on each band where Stim
+Optimizer can read it".**
 
 ## Current Phase
 
-Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`, step 4 in `d47b9a7`;
-step 5 is built, tested on both runners and proved on the live record, and is being committed.
-Tracks B through G are not started, except Track F step 1 (`b7036bf`).
+Phase 2 — Track A, the one store. Steps 1 to 3 are committed in `fa14edd`, step 4 in `d47b9a7`,
+step 5 in `7278f15c`; step 6 is built, reviewed, tested on both runners and proved on the live
+record, and is being committed. Tracks B through G are not started, except Track F step 1
+(`b7036bf`).
 
 ## Phases
 
@@ -92,7 +94,10 @@ consume another's computed output, which means Stim Optimizer would read a groun
 computed from recordings Stim Optimizer itself chose to collect. Nothing crashes; the exploration
 policy becomes self-confirming and the record looks like converging evidence when it is a loop.
 
-- [x] 1. Build the one store implementation as a superset, and delete the duplicate — `fa14edd`
+- [x] 1. Build the one store implementation as a superset, and delete the duplicate — `fa14edd`.
+  **One sub-task of this step is deferred, not done:** the plan also said to delete the
+  6,309-file `biomarker_psd_rows` directory once its removal was shown to break nothing; that
+  is Track C step 1 and open item 7, and `test_one_store.py` grandfathers it until then
 - [x] 2. Give every written-back product a provenance chain, not just a version — `fa14edd`, the
   cycle proved by construction in `CacheStore/tests/test_provenance_cycle.py`
 - [x] 3. Put the provenance and version ledger in MySQL — `fa14edd`, table created on first use
@@ -105,7 +110,12 @@ policy becomes self-confirming and the record looks like converging evidence whe
   table as `therapy_pain_matched` keyed on the settings key and the pain-report snapshot key, both
   keys in its provenance; on RCS08 the stored stream equals the fresh parse field for field and
   reads in about 0.01 s against about 33 s to parse
-- [ ] 6. Write the biomarker results back after computing them
+- [x] 6. Write the biomarker results back after computing them — built 2026-09-07 (second
+  session): `biomarker_band_correlation`, `biomarker_band_discrimination` and the served
+  `biomarker_band_sweep`, keyed on the tile entry, the pain-report snapshot, the pain score and
+  every setting; on RCS08 27,311 response values and 1,320 table values per statistic compared
+  with 0 differences; served 2.5 to 3.8 s against 5.5 to 6.2 s fresh. Reviewed by six
+  perspectives the same day (`artifacts/review_2026-09-07_PS_closedloop_deployment.md`)
 - [ ] 7. Write the amplitude effect on each band where Stim Optimizer can read it
 - [ ] 8. Have Stim Optimizer read the store and write its outputs back
 
@@ -190,7 +200,9 @@ store.
 | 6 | **The pain-report snapshot is keyed on the content of the tidy table alone**, not on how it was requested, and the store keeps every superseded snapshot of that kind instead of sweeping it. | The same 760-row table requested with and without a record identifier is one report set; two entries for it tell an audit nothing. A swept snapshot would leave the ledger row and not the table, which is the one thing an audit needs. Each snapshot is about 28 KB and one is written per distinct report set, so growth is bounded by how often reports are filed. | 2026-09-07 |
 | 7 | **The snapshot is written after every fresh fetch and read by no page.** Decision 22 stands: the reports are fetched fresh on every request. | The stored copy buys reproducibility and a key for derived products, not speed. A test files a new report between two requests and requires the second request to return it while the earlier snapshot stays on disk. | 2026-09-07 |
 | 8 | **This plan is kept in the `planning-with-files` plugin's parseable shape** — three-hash phase headings, one literal status line per phase, `Next Step` rewritten on every status change — in legacy mode with structure-aware injection (`.mode` holds `inject-smart`) and **without attestation**. | The plugin's completion check and status command read nothing from the earlier heading shape. Attestation blocks context injection whenever the plan file changes until it is re-attested, and this file is edited after every phase; an auto-recorded digest is not proof of human review. Autonomous and gated modes are not used because the PI's go-ahead rule is a human gate, not a file gate. | 2026-09-07 |
-| 9 | **Track A step 5: the settings stream is stored as the raw kind `therapy_settings`, keyed on the participant's source-file rows — each file's uid, content hash and type, never its name — and the matched table as `therapy_pain_matched`, keyed on the settings key plus the pain-report snapshot key, the wash-in and the item list, with both keys in its provenance.** An empty stream, a stream with unreadable files, and a matched table whose inputs cannot both be named are handed back but never stored. `therapy_pain_matched` is registered as raw-derived. | The stream is the single most expensive thing the module does and the file rows identify it before anything is decoded (decision 24); a file name can carry a patient's name. An unreadable file leaves the key unchanged, so a stored copy would carry the gap until the next upload. The report key in the matched table's key is what makes a newly filed report a new entry, so a stale rating cannot be served. The matched table is a deterministic join of two raw inputs and embodies no exploration choice; refusing it to Stim Optimizer would refuse the table this step exists to give it, while the ladder it chooses stays a derived kind and is still refused — both pinned in `test_provenance_cycle.py`. | 2026-09-07 |
+| 9 | **Track A step 5: the settings stream is stored as the raw kind `therapy_settings`, keyed on the participant's source-file rows — each file's uid, content hash and type, never its name — and the matched table as `therapy_pain_matched`, keyed on the settings key plus the pain-report snapshot key, the wash-in and the item list, with both keys in its provenance.** An empty stream, a stream with unreadable files, and a matched table whose inputs cannot both be named are handed back but never stored. `therapy_pain_matched` is registered as raw-derived. | The stream is the single most expensive thing the module does and the file rows identify it before anything is decoded (decision 24); a file name can carry a patient's name. An unreadable file leaves the key unchanged, so a stored copy would carry the gap until the next upload. The report key in the matched table's key is what makes a newly filed report a new entry, so a stale rating cannot be served. The matched table is a deterministic join of two raw inputs and embodies no exploration choice; refusing it to Stim Optimizer would refuse the table this step exists to give it, while the ladder it chooses (the `exploration_ladder` kind, renamed from `settings_stream` on review because that name collided with the function that reads the device's history) stays a derived kind and is still refused — both pinned in `test_provenance_cycle.py`. | 2026-09-07 |
+| 10 | **Track A step 6: the band-by-length sweep writes back two tidy tables — `biomarker_band_correlation` and `biomarker_band_discrimination`, one row per contact pair, band centre and length of signal, every value copied from the response and checkable against it, the best row per centre flagged with its interval, selection-aware p-value and verdict, the no-relationship reference on every row (0 for a correlation, 0.5 for an area under the curve) — plus the response itself as `biomarker_band_sweep`, all three under one key naming the tile entry, the pain-report snapshot, the pain score and every setting, with the tile and snapshot keys in their provenance. A request whose key matches is served from the store and marked `served_from_store`.** Reports handed in through the request body, or a participant with no tile key, are computed and never stored. | The approved plan asks for two tables per band centre and contact pair. Serving the response from the store follows decision 26, the key decides: the thousand shuffles and thousand resamples per cell are not paid again when nothing feeding them changed, and every input that could change the answer is in the key. The tables carry the reference value because an area under the curve is above chance by comparison with 0.5 and never with 0. | 2026-09-07 |
+| 11 | **The ledger records writes under the production root only.** A write under a caller's own root or the test override is not recorded, and the 218 rows the test suites had written into the live table (participants `test-participant` and `u`) were deleted on 2026-09-07. | The ledger carries no directory, so nothing else could tell a test write from a real one; 214 of its 227 rows were from the container's tile tests. Deleting rows from an append-only table is justified only because they were never part of the record of what the server holds. | 2026-09-07 |
 
 ## Errors Encountered
 
@@ -203,3 +215,6 @@ store.
 | The container suite passed but the existing request-scope tests had written five fake pain-report tables into the server's real cache root | 1 | `_service_env()` in `test_redcap_request_scope.py` now points the store at a temporary directory; the five junk entries were removed; a full container run afterwards left only the real participant's entry. |
 | My own snapshot test read its sandbox directory after the context manager had deleted it, and reported "nothing written" | 1 | Assertions moved inside the sandbox block. The code was right; the test was wrong. |
 | `zsh` treats `echo =====` as a path expansion and prints `===== not found`, which broke several multi-command probes | 1 | Quote the separator string in shell one-liners. |
+| The sweep endpoint built its response as a `return {...}` statement, so the write-back lines added after it were unreachable and the only trace was an empty directory created by the miss path | 1 | Diagnosed by spying on the signature call inside the endpoint (it was fine) and then noticing the directory held no payload; the return became an assignment. The test now counts payload files, not directories. |
+| A step 6 test expected three sweep runs and got two: the stub reports had no `vas` column, so `SweepMetric="vas"` returned the endpoint's empty state before the sweep | 1 | Test data corrected; the code was right. |
+| The live ledger held 227 rows of which 218 were written by the test suites (214 from the container's tile tests for `test-participant`, 4 from the request-scope tests for `u`) | 1 | `store.store` now records only production-root writes, with a test; the 218 rows were deleted. |

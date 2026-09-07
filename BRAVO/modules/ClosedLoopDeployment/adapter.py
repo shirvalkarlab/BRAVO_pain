@@ -514,7 +514,7 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
         # Nothing in this process's memory, so ask whether another worker process already built
         # it. This is the step that makes the build happen once per participant rather than once
         # per worker per restart.
-        shared = _shared_load("inputs", sig)
+        shared = _shared_load("inputs", sig, consumer="closed_loop")
         if shared is not None:
             _remember_inputs(sig, shared)
             return shared
@@ -548,8 +548,46 @@ def evidence_inputs_cached(participant, *, force_refresh=False):
     dm = _sa.build_design_matrix(participant, stream=stream)
     out = (psd, eps, dm)
     _remember_inputs(sig, out)
-    _shared_store("inputs", sig, out)
+    _shared_store("inputs", sig, out, provenance=_inputs_provenance(participant, stream, dm))
     return out
+
+
+def _inputs_provenance(participant, stream, dm):
+    """The chain for the `inputs` bundle: the settings stream's entry, the matched table's entry
+    with its own chain (which names the pain-report snapshot), and the tile entry the sensed
+    frame was read from. Each is cited only when its key is known; a frame built without the
+    store has no key and is simply not cited, and the tile key is skipped when the recordings
+    identity cannot be built."""
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                   # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+    entries = []
+    stream_key = getattr(stream, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+    if stream_key:
+        entries.append(_prov.entry(stream_key, kind="therapy_settings", writer="stim_optimizer"))
+    dm_key = getattr(dm, "attrs", {}).get(_cache_store.STORE_KEY_ATTR)
+    if dm_key:
+        chain = []
+        try:
+            kind, uid, _hash = dm_key.split("/", 2)
+            stamp = _cache_store.newest_stamp(kind, uid, root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+            chain = stamp.get("provenance") or []
+        except Exception:                                 # noqa: BLE001 — the chain is optional
+            chain = []
+        entries.append(_prov.entry(dm_key, kind="therapy_pain_matched", writer="stim_optimizer",
+                                   chain=chain))
+    try:
+        from modules.Biomarkers import bravo_service as _bsvc
+        uid = getattr(participant, "uid", participant)
+        tiles_sig = _bsvc._raw_lsb_shared_signature(uid, _bsvc._LSB_SPECTRUM_CENTERS)
+        if tiles_sig is not None:
+            entries.append(_prov.entry(
+                _cache_store.product_key(_bsvc._RAW_LSB_SHARED_KIND, uid, tiles_sig),
+                kind=_bsvc._RAW_LSB_SHARED_KIND, writer="biomarkers"))
+    except Exception:                                     # noqa: BLE001 — no server, no tile key
+        pass
+    return _prov.flatten(entries)
 
 
 def _remember_inputs(sig, out):
@@ -696,7 +734,7 @@ def amplitude_response_cached(steps, tiles_by_channel, *, centers_hz,
             hit = _RESPONSE_MEMO.get(sig)
         if hit is not None:
             return hit
-        shared = _shared_load("response", sig)
+        shared = _shared_load("response", sig, consumer="closed_loop")
         if shared is not None:
             _remember_response(sig, shared)
             return shared

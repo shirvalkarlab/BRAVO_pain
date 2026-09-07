@@ -319,3 +319,27 @@ are omitted on purpose; search for the name.**
   pandas 2.2.3 uses nanoseconds; the Parquet round trip keeps whichever the builder used, so a test
   must assert the timezone and not the resolution.
 - The bridge runs one job at a time; its heartbeat age rises to the length of the running job.
+
+### 6e. The six-perspective review of the branch, 2026-09-07
+
+Full report: `artifacts/review_2026-09-07_PS_closedloop_deployment.md`. Observations that
+changed code or the record:
+
+- The store accepted a derived kind with no writer and no chain; the sidecar then looked raw to
+  anything citing it. The store now refuses the write.
+- The two import spellings of the store became two module objects in one process once the
+  store's tests had put the BRAVO root on the path; a test's outcome depended on the order of the
+  suites on the command line. The package now aliases itself under the other spelling.
+- The live ledger held 218 test-written rows out of 227. Deleted; the store now records only
+  production-root writes.
+- `load()` opened the payload before comparing the sidecar's signature; the sweep endpoint
+  enumerated the recording rows twice; the closed-loop `inputs` entry cited nothing; the kind
+  `settings_stream` collided with the function of that name; the attribute name for a store key
+  was typed in two modules; `provenance.check()` had no caller; `ledger.py` had no test.
+- A code-level provenance chain cannot see through a clinician programming what Stim Optimizer
+  recommended (open item 16).
+- The security findings were set aside on the PI's instruction because the data are
+  de-identified; the one that is input validation rather than identification is open item 17.
+- The bridge job that ran the live proof saw one REDCap connection error ("remote end closed
+  connection without response"); the narrowed request fell back to the full export as designed
+  and the run completed. Transient, not reproduced.
