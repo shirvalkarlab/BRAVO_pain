@@ -15,7 +15,7 @@ held in a cloud store, an attachment, or a conversation that you need and cannot
 
 ```bash
 cd /Users/pshirvalkar/dev/BRAVO_pain
-ls *.md | wc -l                                    # expect 12
+ls *.md | wc -l                                    # expect 13
 git ls-files docs/archive/2026-09-07 docs/exported_artifacts \
             .planning BRAVO/modules/CacheStore | wc -l   # expect 75
 git log --oneline -5                               # expect the five subjects listed below
@@ -40,7 +40,8 @@ today.**
 
 | File | Read it when |
 |---|---|
-| `CLAUDE.md` | **first, always** — it is read automatically at session start and imports the two must-reads below |
+| `CLAUDE.md` | **first, always** — read automatically at session start; merges the Claude Agentic Framework with this project's rules, and its §10 overrides everything else |
+| `AGENTS.md` | the framework's tool-agnostic instructions, **with an override box at the top** — its Mode B would have you push and target a `main` branch that does not exist |
 | `HOUSE_RULES_writing_and_claims.md` | before writing any reply, report, commit message or document |
 | **this file** | to know where the work stands and what to do next |
 | `ARCHITECTURE_cache_store.md` | touching anything under `BRAVO/modules/CacheStore/` or the cache |
