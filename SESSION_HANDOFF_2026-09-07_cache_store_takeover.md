@@ -11,12 +11,23 @@ mistake has produced false figures in durable documents in this project more tha
 
 ## 0. READ THESE FIRST, IN THIS ORDER
 
-The PI's own words: *"There are too many Handoffs going on now."* He is right, so here is the
-reading order and which document wins when two disagree.
+The PI's own words: *"There are too many Handoffs going on now."* **He is right, and it is worse than
+it sounds: the repository root holds 53 `.md` files** — 25 of them named `SESSION_HANDOFF_*` or
+`HANDOFF_*`, plus 7 `AUDIT_*` and 2 `VALIDATION_*`. So here is the reading order and which document
+wins when two disagree. **Read these seven and stop.** The other 46 are historical unless one of
+these seven points you at it.
+
+> **⚠ THE DESIGN LEDGER IS NOT A FILE IN THIS REPOSITORY.** `DESIGN_biomarker_pipeline_v2.md` exists
+> only in the **artifact store**, not on disk — confirmed by listing every root-level `.md` file,
+> where it does not appear. A new session that runs `cat DESIGN_biomarker_pipeline_v2.md`, or greps
+> the working tree for it, will find nothing and could wrongly conclude the ledger does not exist.
+> **Retrieve it with `host.artifacts(filename="biomarker_pipeline")` and open the path that
+> `host.artifact_path(<latest_version_id>)` returns.** It is 890 lines. The same applies to anything
+> else the project rules describe as "in artifacts".
 
 | # | Document | Why | Authority |
 |---|---|---|---|
-| 1 | `DESIGN_biomarker_pipeline_v2.md` | The design ledger. Device facts, the three power-domain streams, the BandCandidate contract. **Read end to end.** | **Highest for device and design facts — EXCEPT section 4, which is superseded by item 5** |
+| 1 | `DESIGN_biomarker_pipeline_v2.md` — **an ARTIFACT, not a repository file** (see the warning below) | The design ledger, 890 lines. Device facts, the three power-domain streams, the BandCandidate contract. **Read end to end.** | **Highest for device and design facts — EXCEPT section 4, which is superseded by item 5** |
 | 2 | `MEGA_HANDOFF.md` | Durable cross-session record. §4 is the source of record for open audit items. | Highest for open items |
 | 3 | `SESSION_HANDOFF_2026-09-06_sweep_ramp_and_matcher.md` | The immediately preceding session: the band-by-length sweep, the measured ramp, the 21x matcher, the shared cache, the Redis bound. | Highest for what changed most recently |
 | 4 | **This file** | The cache-store design, the format measurements, the last ten sub-agent lanes. | Highest for the cache work |
