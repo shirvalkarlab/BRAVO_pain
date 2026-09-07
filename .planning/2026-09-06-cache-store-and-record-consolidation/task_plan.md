@@ -20,12 +20,21 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Wait for the PI's explicit go-ahead before phase 2.** Phase 1 is delivered. Phase 2 changes code,
-and a clicked plan approval is not execution authority — his standing rule.
+**The work moves to another tool at the PI's decision, 2026-09-07.** Read
+`HANDOFF_2026-09-07_cache_store_to_claude_code.md` §4: re-run both suites, commit the working tree
+after asking whose name goes on the commit, then the five remaining Track A steps.
 
 ## Current Phase
 
-Phase 1 — consolidate the written record. **Complete.** Phase 2 — blocked on the go-ahead.
+Phase 1 — consolidate the written record. **Complete**, commit `7f1882f`.
+
+Phase 2, Track A — the one store. **Three of eight steps complete and uncommitted:** the single
+store implementation with both duplicates removed, the provenance chain with its refusal proved by
+constructing a real cycle, and the append-only ledger in the database. Tracks B through G not
+started.
+
+**Measured today, each twice with agreement:** container PASS=455 FAIL=0; host 814 passed, 41
+skipped. **Re-run rather than carrying these.**
 
 ---
 

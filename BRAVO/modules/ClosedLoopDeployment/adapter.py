@@ -354,139 +354,87 @@ _INPUTS_MEMO_MAX = 2
 #: does. There is also no attempt to share the joined table this way: it rebuilds in 2.66 s, which
 #: is 3.6% of a cold request, and putting a 112,068-row frame through a file for that saving is not
 #: worth the extra thing that can go wrong.
-_SHARED_CACHE_SUBDIR = "closed_loop"
+#: ===========================================================================================
+#: THE STORE ITSELF NOW LIVES IN ONE PLACE: `modules/CacheStore/store.py`.
+#:
+#: This module used to carry a full second copy of the mechanism that `Biomarkers/bravo_service.py`
+#: also carried — its own directory resolver, loader, writer, event counters and lock. The two
+#: shared a root by construction accident rather than by design, and the per-entry limits differed
+#: by exactly a factor of four: 268,435,456 bytes here against 1,073,741,824 there, for no stated
+#: reason. The shared store uses the LARGER — but for HEADROOM rather than refusal, and an earlier
+#: version of this note had the arithmetic wrong. 268,435,456 bytes is 256 MiB, so this module's
+#: cap would NOT have refused the 245.90 MB biomarker tile entry; it leaves 4 to 9 percent to
+#: spare. Single-digit headroom on the one entry the cache exists to hold is the reason to raise
+#: it, because crossing a limit is SILENT: the write is refused, the tiles stay in one worker's
+#: memory, and the page becomes slow again with nothing a reader would look at.
+#:
+#: What is left below is a thin delegation. The names are kept because this module's tests and two
+#: bridge scripts call them. The guard recorded in the old `shared_cache_stats` — skip a file that
+#: has gone rather than raising, because one of four workers can be clearing the directory while
+#: another is reporting on it — is kept, and now applies to every module rather than this one.
+#:
+#: THE TWO ENTRIES HERE REBUILD ONCE after this change, because their file naming moved. That
+#: costs about 0.4 s: this endpoint is served entirely from the biomarker tile file and makes zero
+#: decode calls. The tile entry itself was NOT re-homed, precisely because rebuilding it costs 37
+#: seconds and 245.90 MB of it is already on disk.
+#: ===========================================================================================
+# THE IMPORT ROOT DIFFERS BETWEEN THE TWO TEST RUNNERS, so both spellings are tried. The
+# container puts `/usr/src/BRAVO` on the path, which makes this package `modules.CacheStore`; the
+# host suite runs from `BRAVO/modules` with that directory as the root, which makes it
+# `CacheStore`. A single spelling breaks one of the two runners at import time, which is how this
+# was found.
+try:
+    from modules.CacheStore import store as _cache_store
+except ImportError:                                   # pragma: no cover - depends on the runner
+    from CacheStore import store as _cache_store
 
-#: Refuse to write an entry larger than this. A cache is a convenience and must never be the
-#: reason a disk fills up on a machine that is also holding the participant's recordings. The
-#: inputs measure 5.5 MB, so this is roughly fifty times the size of the thing it is sized for.
-_SHARED_CACHE_MAX_BYTES = 256 * 1024 * 1024
-
-#: Bumped whenever the shape of what gets stored changes. It is part of the file name, so an older
-#: file is never read by newer code; the old file is simply not looked for and gets swept by
-#: clear_shared_cache.
-_SHARED_CACHE_FORMAT = 1
-
-#: Tests and any caller who wants no file at all point this at a directory of their own or set it
-#: to None. None means "memory only" and is not an error.
+#: Tests point this at a directory of their own. It is passed THROUGH to the shared store rather
+#: than resolved here, so there is still only one resolver.
 _SHARED_CACHE_DIR_OVERRIDE = None
 
-_SHARED_CACHE_EVENTS = {"hits": 0, "misses": 0, "writes": 0, "refused_too_big": 0,
-                        "unreadable": 0, "no_directory": 0}
-_SHARED_CACHE_LOCK = _threading.Lock()
+#: Refuse to write an entry larger than this. Tests lower it to check the refusal.
+_SHARED_CACHE_MAX_BYTES = _cache_store.MAX_BYTES_DEFAULT
+
+#: Part of the file name, so an older file is never read by newer code.
+_SHARED_CACHE_FORMAT = _cache_store.FORMAT_VERSION
+
+#: THE SAME OBJECTS the shared store counts into and locks with, bound by reference rather than
+#: copied — so a count read here is the count the store actually made.
+_SHARED_CACHE_EVENTS = _cache_store._EVENTS
+_SHARED_CACHE_LOCK = _cache_store._LOCK
+
+#: Which kinds this module owns. Both live in the same directory under the one root.
+_SHARED_KINDS = ("inputs", "response")
 
 
 def shared_cache_dir():
-    """Where the shared files go, or None when there is nowhere to put them.
-
-    The platform already makes a cache directory next to the participant recordings and settings
-    creates it at import time, so this uses that rather than inventing a location. Returning None
-    when Django is not configured is what lets the unit tests run with no server and no disk
-    writing at all.
-    """
-    if _SHARED_CACHE_DIR_OVERRIDE is not None:
-        d = str(_SHARED_CACHE_DIR_OVERRIDE)
-    else:
-        try:
-            from django.conf import settings as _st
-            base = getattr(_st, "DATASERVER_PATH", None)
-            if not base:
-                return None
-            d = _os.path.join(str(base), "cache", _SHARED_CACHE_SUBDIR)
-        except Exception:
-            return None
-    try:
-        _os.makedirs(d, exist_ok=True)
-    except Exception:
-        return None
-    return d
+    """Where this module's shared files go, or None when there is nowhere to put them."""
+    return _cache_store.kind_dir("inputs", root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
 def _shared_path(kind, signature):
-    d = shared_cache_dir()
-    if d is None:
-        return None
-    key = _hashlib.blake2b(repr(signature).encode("utf8"), digest_size=20).hexdigest()
-    return _os.path.join(d, f"{kind}.v{_SHARED_CACHE_FORMAT}.{key}.pkl")
+    """The file this signature would be stored at, or None.
 
-
-def _shared_load(kind, signature):
-    """The stored result for this signature, or None.
-
-    THE STORED SIGNATURE IS CHECKED AGAINST THE REQUESTED ONE rather than trusted from the file
-    name. The name holds a hash, and a hash can in principle collide; more practically, a file
-    could be left behind by code that built its signature differently. Comparing the signature
-    itself means a mismatch is a miss and a rebuild, never a wrong answer.
-
-    Every failure here is a miss, never an exception. A half-written file, a payload written by a
-    different pandas version, a permissions change — none of those is a reason for a clinician's
-    page to return an error, because the correct answer is always still obtainable by rebuilding.
+    Two arguments rather than three because this module has always keyed on the signature alone —
+    the participant is already folded into the signature by `recording_set_signature`.
     """
-    p = _shared_path(kind, signature)
-    if p is None:
-        with _SHARED_CACHE_LOCK:
-            _SHARED_CACHE_EVENTS["no_directory"] += 1
-        return None
-    if not _os.path.exists(p):
-        with _SHARED_CACHE_LOCK:
-            _SHARED_CACHE_EVENTS["misses"] += 1
-        return None
-    try:
-        with open(p, "rb") as fh:
-            stored = _pickle.load(fh)
-        if not isinstance(stored, dict) or stored.get("signature") != signature:
-            raise ValueError("stored signature does not match the requested one")
-        with _SHARED_CACHE_LOCK:
-            _SHARED_CACHE_EVENTS["hits"] += 1
-        return stored["payload"]
-    except Exception as exc:
-        _log.info("ClosedLoopDeployment: discarding unreadable shared cache file %s (%r)", p, exc)
-        with _SHARED_CACHE_LOCK:
-            _SHARED_CACHE_EVENTS["unreadable"] += 1
-        try:
-            _os.remove(p)
-        except OSError:
-            pass
-        return None
+    stem = _cache_store._stem(kind, None, signature, root=_SHARED_CACHE_DIR_OVERRIDE)
+    return None if stem is None else stem + ".pkl"
 
 
-def _shared_store(kind, signature, payload):
-    """Write the result where the other worker processes can find it. Returns True if it landed.
+def _shared_load(kind, signature, *, consumer=None):
+    """The stored product for this signature, or None. Every failure is a miss, never an error."""
+    return _cache_store.load(kind, None, signature, consumer=consumer,
+                             root=_SHARED_CACHE_DIR_OVERRIDE)
 
-    WRITTEN TO A TEMPORARY NAME AND THEN MOVED INTO PLACE. Four workers can finish the same build
-    at the same moment, and a reader can arrive mid-write. Writing straight to the final name would
-    let a reader see a truncated file; ``os.replace`` is atomic within a directory, so a reader
-    sees either the old complete file or the new complete file and never a partial one. The
-    temporary name carries the process id so two writers cannot tread on each other's temporary
-    file either.
-    """
-    p = _shared_path(kind, signature)
-    if p is None:
-        return False
-    tmp = f"{p}.{_os.getpid()}.tmp"
-    try:
-        blob = _pickle.dumps({"signature": signature, "payload": payload,
-                              "written_utc": _dt.datetime.now(_dt.timezone.utc).isoformat()},
-                             protocol=5)
-        if len(blob) > _SHARED_CACHE_MAX_BYTES:
-            with _SHARED_CACHE_LOCK:
-                _SHARED_CACHE_EVENTS["refused_too_big"] += 1
-            _log.info("ClosedLoopDeployment: not sharing a %.1f MB %s entry through a file "
-                      "(limit %.0f MB); it stays in this process's memory only",
-                      len(blob) / 1e6, kind, _SHARED_CACHE_MAX_BYTES / 1e6)
-            return False
-        with open(tmp, "wb") as fh:
-            fh.write(blob)
-        _os.replace(tmp, p)
-        with _SHARED_CACHE_LOCK:
-            _SHARED_CACHE_EVENTS["writes"] += 1
-        return True
-    except Exception as exc:
-        _log.info("ClosedLoopDeployment: could not write shared cache file %s (%r)", p, exc)
-        try:
-            _os.remove(tmp)
-        except OSError:
-            pass
-        return False
+
+def _shared_store(kind, signature, payload, *, provenance=None, trigger=None):
+    """Write the product where the other worker processes can find it. True if it landed."""
+    return _cache_store.store(kind, None, signature, payload,
+                              writer="closed_loop", trigger=trigger or f"{kind}_build",
+                              provenance=provenance,
+                              root=_SHARED_CACHE_DIR_OVERRIDE,
+                              max_bytes=_SHARED_CACHE_MAX_BYTES)
 
 
 def shared_cache_stats():
@@ -495,20 +443,16 @@ def shared_cache_stats():
     files = []
     if d is not None:
         try:
-            files = sorted(f for f in _os.listdir(d) if f.endswith(".pkl"))
+            files = sorted(f for f in _os.listdir(d)
+                           if f.endswith((".pkl", ".parquet", ".npz")))
         except OSError:
             files = []
     with _SHARED_CACHE_LOCK:
         events = dict(_SHARED_CACHE_EVENTS)
-    # SKIP A FILE THAT HAS GONE RATHER THAN RAISING. Found 2026-09-06 by the agent that ported this
-    # mechanism to the Biomarkers module, which guarded it in its own copy and reported this one
-    # rather than editing another module's file.
-    #
-    # The `listdir` above is wrapped and this was not, so the two calls disagreed about how hostile
-    # the filesystem is. There are four worker processes: one can be inside `clear_shared_cache`
-    # while another is here, and then `getsize` raises FileNotFoundError straight out of a function
-    # whose entire job is to report a number for the interface. A statistics call must never be the
-    # thing that breaks a page.
+    # SKIP A FILE THAT HAS GONE RATHER THAN RAISING. There are four worker processes: one can be
+    # inside `clear_shared_cache` while another is here, and then asking a removed file for its
+    # size raises straight out of a function whose entire job is to report a number for the
+    # interface. A statistics call must never be the thing that breaks a page.
     total = 0
     for f in files:
         try:
@@ -521,21 +465,15 @@ def shared_cache_stats():
 
 
 def clear_shared_cache():
-    """Remove every shared file, including ones written by an older format version."""
-    d = shared_cache_dir()
+    """Remove every shared file of this module's kinds, including older format versions."""
     removed = 0
-    if d is not None:
-        for f in list(_os.listdir(d)) if _os.path.isdir(d) else []:
-            if f.endswith(".pkl") or f.endswith(".tmp"):
-                try:
-                    _os.remove(_os.path.join(d, f))
-                    removed += 1
-                except OSError:
-                    pass
+    for kind in _SHARED_KINDS:
+        removed += _cache_store.clear(kind, root=_SHARED_CACHE_DIR_OVERRIDE)
     with _SHARED_CACHE_LOCK:
         for k in _SHARED_CACHE_EVENTS:
             _SHARED_CACHE_EVENTS[k] = 0
     return removed
+
 
 
 def recording_set_signature(participant):

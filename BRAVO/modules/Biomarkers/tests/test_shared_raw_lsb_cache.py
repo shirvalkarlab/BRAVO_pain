@@ -161,7 +161,25 @@ class _Bench:
         return (str(participant_uid), 1, len(self.rows), h.hexdigest()[:20])
 
     def files(self):
-        return sorted(f for f in os.listdir(self.dir) if f.endswith(".pkl"))
+        # ASK THE STORE where it put things rather than assuming the override root is the
+        # directory. Since 2026-09-07 the one shared store keeps a subdirectory per kind, so the
+        # files are one level below the override; and each entry now has a `.meta.json` sidecar
+        # carrying its stamp and provenance, which is part of the entry rather than a second
+        # entry, so it is not counted here.
+        d = B.shared_cache_dir()
+        if d is None or not os.path.isdir(d):
+            return []
+        return sorted(f for f in os.listdir(d) if f.endswith((".pkl", ".parquet", ".npz")))
+
+    def file_path(self, name=None):
+        """The full path of one stored entry, asked of the store rather than assumed.
+
+        The three corruption tests below used to join a file name onto the override root. The one
+        shared store keeps a subdirectory per kind, so that join produced a path that does not
+        exist and the tests failed with a missing file instead of exercising the rebuild.
+        """
+        d = B.shared_cache_dir()
+        return os.path.join(d, name or self.files()[0])
 
     def build(self, td=None, events=None, *, fresh_process=False, use_shared_cache=True):
         """One call of the cached builder. `fresh_process` empties this process's memo first, which
@@ -386,7 +404,7 @@ def test_the_pain_reports_are_not_in_the_key_and_do_not_invalidate_the_tiles():
 def test_a_truncated_file_is_a_rebuild_not_an_error():
     with _Bench() as bench:
         bench.build()
-        path = os.path.join(bench.dir, bench.files()[0])
+        path = bench.file_path()
         with open(path, "r+b") as fh:
             fh.truncate(os.path.getsize(path) // 3)
         out = bench.build(fresh_process=True)
@@ -398,7 +416,7 @@ def test_a_truncated_file_is_a_rebuild_not_an_error():
 def test_a_file_full_of_nonsense_is_a_rebuild_not_an_error():
     with _Bench() as bench:
         bench.build()
-        path = os.path.join(bench.dir, bench.files()[0])
+        path = bench.file_path()
         with open(path, "wb") as fh:
             fh.write(b"this is not a pickle at all")
         out = bench.build(fresh_process=True)
@@ -410,7 +428,7 @@ def test_a_file_written_under_a_different_key_is_a_rebuild_not_a_wrong_answer():
     """The signature inside the file is checked, so a name collision cannot serve wrong tiles."""
     with _Bench() as bench:
         bench.build()
-        path = os.path.join(bench.dir, bench.files()[0])
+        path = bench.file_path()
         with open(path, "rb") as fh:
             stored = pickle.load(fh)
         stored["signature"] = ("something", "else")
@@ -423,12 +441,26 @@ def test_a_file_written_under_a_different_key_is_a_rebuild_not_a_wrong_answer():
 
 
 def test_no_directory_means_memory_only_and_is_not_an_error():
+    """The tiles are still built and returned when the store cannot give us a directory.
+
+    UPDATED 2026-09-07 with the move to one shared store. This used to break `_psd_cache_dir` to
+    create the condition, because the old resolver in this module derived its directory from it.
+    The delegation does not call that helper at all, so breaking it no longer disables anything
+    and the test would have passed while checking nothing. The shared store carries an explicit
+    off switch, which is what the condition is now expressed through — same intent, and it works
+    on a configured server where Django supplies the path.
+    """
+    from modules.CacheStore import store as _cs
     with _Bench() as bench:
         B._SHARED_CACHE_DIR_OVERRIDE = None
-        with mock.patch.object(B, "_psd_cache_dir", side_effect=RuntimeError("no Django here")):
+        _prev = _cs.ENABLED
+        try:
+            _cs.ENABLED = False
             assert B.shared_cache_dir() is None
             out = bench.build(fresh_process=True)
             assert out and "ZERO_THREE_LEFT" in out
+        finally:
+            _cs.ENABLED = _prev
 
 
 def test_two_builders_at_once_leave_one_whole_file():
@@ -458,7 +490,8 @@ def test_two_builders_at_once_leave_one_whole_file():
             t.join()
         assert not errors, errors
         assert len(bench.files()) == 1, bench.files()
-        assert not [f for f in os.listdir(bench.dir) if f.endswith(".tmp")], \
+        assert not [f for f in os.listdir(B.shared_cache_dir() or bench.dir)
+                    if f.endswith(".tmp")], \
             "no temporary file may be left behind"
         loaded = bench.build(fresh_process=True)
         bypassed = bench.build(fresh_process=True, use_shared_cache=False)

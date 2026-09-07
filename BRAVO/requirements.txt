@@ -41,3 +41,12 @@ PyCap==2.6.0  # REDCap PRO pull (modules/Biomarkers/routines/redcap_client.py)
 # installed, and the module had been producing good figures as saved PNGs all along — so the
 # natural conclusion was that the interface had never been wired for them, which was wrong.
 plotly==7.0.0
+
+# Parquet with zstd for every cached table. Chosen on measurements of the real
+# 6,629-row therapy table: 0.027 MB against pickle's 0.451, CSV's 0.492 and JSON's
+# 0.999. CSV and JSON are excluded on CORRECTNESS rather than size -- the table carries
+# a timezone-aware timestamp and neither round-trips it, and that timestamp is what
+# matches therapy settings to neural signal. Pickle writes twice as fast and reads are
+# tied, so this is a choice about size and durability, not speed.
+# modules/CacheStore/store.py imports it only when a table is written or read.
+pyarrow==17.0.0

@@ -97,6 +97,54 @@ covered by their own handoffs, and the narrative remains in the archive. A futur
 needs the reasoning behind an older change should open the dated handoff rather than expect it in
 the five replacements.
 
+### Phase 2, Track A — three steps built, and the work then moved tools
+
+**The PI gave the go-ahead on 2026-09-07** and later decided to continue the mechanical half in
+another tool. Built before that decision, all of it on disk and none of it committed:
+
+- **One cache store**, `BRAVO/modules/CacheStore/`, 1,771 lines in 8 files. Both duplicate
+  implementations are gone; the two modules keep their function names as delegations of a few lines
+  each, and their event counters are now bound by reference to the store's own, so a count read in
+  either module is the count the store actually made. Net on the two module files: 225 lines added,
+  342 removed.
+- **The provenance chain and its refusal**, with the cycle **proved by construction** — three real
+  products written through the real store to close a genuine loop, and each such test paired with a
+  control showing that a product built only from device recordings is released.
+- **The append-only ledger**, created on first use so there is no migration to run by hand, and
+  swallowing its own exceptions so bookkeeping can never be the reason an analysis is refused.
+- **A guard test**, `test_one_store.py`, which reads the other modules' source and fails on the
+  constructs that make a private store. It grandfathers exactly the two constructs belonging to the
+  per-recording spectrum directories, and **asserts the count is exactly one, so when that
+  migration lands the test fails and says to delete the exemption.**
+
+**Two defects of my own, found and fixed rather than left:**
+
+1. The container suite failed on my own "nowhere to write" test, because on a configured server
+   Django supplies the storage path and clearing an environment variable does not create the
+   condition. That exposed a real gap — there was no way to tell the store not to use a file at
+   all — so the store gained an explicit off switch, which is also an operational kill switch if a
+   stored product is ever suspected of being wrong.
+2. **My comments claimed the smaller of the two per-entry limits "would have refused" the 245.90 MB
+   tile entry. That was wrong arithmetic: 268,435,456 bytes is 256 MiB and the entry fits, with 4
+   to 9 percent to spare.** The defensible argument is headroom — single-digit headroom on the one
+   entry the cache exists to hold, where crossing a limit is silent. Corrected in five places, and
+   the test assertion was replaced with one that actually discriminates between the two limits.
+
+**Three existing tests were updated and none was weakened.** One of them had been creating its
+condition by breaking a helper the new code does not call, so it would have passed while checking
+nothing.
+
+### Written down for the move to another tool
+
+Three bodies of knowledge existed only in this tool's session state, and each is now a file in the
+repository: `ARCHITECTURE_cache_store.md` (the store had **no** documentation — the string
+"CacheStore" appeared in zero markdown files), `HOUSE_RULES_writing_and_claims.md` (the PI's
+language and claim rules, previously only in stored memory), and
+`DESIGN_biomarker_pipeline_v2.md` (which existed only as an artifact, so a session that searched
+the working tree for it found nothing). Eleven further artifacts were exported to
+`docs/exported_artifacts/`, and `CLAUDE.md` is the entry point with the commands and the
+non-negotiable rules.
+
 ### Not done, and why
 
 **No code has been changed and none will be until the PI gives an explicit go-ahead.** His
