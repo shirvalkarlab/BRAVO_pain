@@ -221,7 +221,7 @@ python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 
 # host — ClosedLoopDeployment (11) + StimOptimizer (20) + CacheStore (4) + DecodeCommon (1); these use pytest
 cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
   ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests -q -W ignore
-#   929 passed, 41 skipped   (2026-09-07, after Track G step 2, both orders)
+#   931 passed, 41 skipped   (2026-09-07, after Track G step 2, both orders)
 ```
 
 Both figures were obtained twice, independently, and agreed. **Do not carry either number

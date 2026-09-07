@@ -614,3 +614,15 @@ this machine (pyenv 3.12.9) has no pytest.
   with the converted routes (nearest stored centre 8.5 Hz): 0 rows with both. The comparison
   pairs them at the nearest stored centre, and the verdict now does the same; the device's own
   centre is kept on the row. The rule version was bumped so no first-version entry can be served.
+
+| Run | Runner | Result |
+|---|---|---|
+| Track G step 2, final code | container, `run_tests.py` via the bridge | PASS=536 FAIL=0 |
+| Track G step 2, final code | host, documented order | 931 passed, 41 skipped |
+| Track G step 2, final code | host, reverse order | 931 passed, 41 skipped |
+
+- **A count went into a commit message unverified and was wrong.** Commit `7aa161ad` says the
+  host suite passed 929; the run that finished while it was being written said 931 (the two
+  pairing tests had been added after the earlier count). The two documents carrying the number
+  are corrected here; the commit message cannot be. This is the mistake `CLAUDE.md` section 10
+  rule 3 exists for, and it happened again by writing the number before reading the run.
