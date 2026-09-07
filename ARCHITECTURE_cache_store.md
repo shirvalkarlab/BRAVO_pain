@@ -212,23 +212,36 @@ container raises and would report 28 spurious failures.
 
 ## 6. What is left to build, in the plan's order
 
-**Track A, the remaining five steps.** Each writes a new table through
+**Track A, steps 4 to 8, titled as in the approved plan.** Each writes a new table through
 `store.store(..., writer=..., provenance=...)` and each must pass its provenance chain, or the
-refusal cannot work:
+refusal cannot work. Progress against them is in `task_plan.md`, not here.
 
-1. **The REDCap pain-report snapshot** — and **keep the fresh fetch anyway.** Measured twice on the
-   live record: no freshness check is cheaper than the fetch itself, so the stored copy buys
-   reproducibility, not speed.
-2. **Therapy settings matched in time to pain scores** — the timezone-aware timestamp is why this
-   is Parquet.
-3. **Biomarker results per band centre and contact pair.** All 22 centres, 8.5 to 29.5 Hz, read
-   from the store's own centre list rather than a hardcoded range.
-4. **The amplitude effect on each band**, with slope, **curvature**, and the number and range of
-   currents actually tested. Curvature is required, not optional: a rise-then-fall response exists
-   in this record and a straight-line fit reads it as no response.
-5. **The ground-truth verdict**, which closed-loop writes and Stim Optimizer reads — **the exact
-   edge the refusal exists for.** The rule itself is decided and is in
-   `METHODS_measurement_and_findings.md` §6.
+1. **Step 4, "Store the REDCap frame, and keep the freshness fetch anyway" — done 2026-09-07,
+   second session.** The tidy pain-report table is written as kind `redcap_reports`, Parquet, keyed
+   on the table's own content, once per distinct report set; the store keeps that kind's history
+   rather than sweeping it (`KEEP_HISTORY_KINDS`); **no page reads it** — the fresh fetch on every
+   request stays, and `Biomarkers/tests/test_redcap_snapshot.py` files a new report between two
+   requests and requires the second to return it. The frame carries its store key
+   (`PRO_STORE_KEY_ATTR`) so a derived product can cite it. Measured twice on the live record: no
+   freshness check is cheaper than the fetch itself, so the stored copy buys reproducibility and a
+   key for derived products, not speed.
+2. **Step 5, "Write the therapy and pain matched table into the store"** — therapy settings
+   matched in time to pain scores; the timezone-aware timestamp is why this is Parquet.
+3. **Step 6, "Write the biomarker results back after computing them"** — per band centre and
+   contact pair. All 22 centres, 8.5 to 29.5 Hz, read from the store's own centre list rather than
+   a hardcoded range.
+4. **Step 7, "Write the amplitude effect on each band where Stim Optimizer can read it"** — with
+   slope, **curvature**, and the number and range of currents actually tested. Curvature is
+   required, not optional: a rise-then-fall response exists in this record and a straight-line fit
+   reads it as no response.
+5. **Step 8, "Have Stim Optimizer read the store and write its outputs back"** — Stim Optimizer
+   reads the matched table and the amplitude effects as `consumer="stim_optimizer"`, which is
+   **the exact edge the refusal exists for**, and writes its own outputs back with provenance.
+
+**The ground-truth verdict is not a Track A step.** It is Track G step 2, "Agree a ground-truth
+rule for the three-source comparison, then write it back": the rule is decided
+(`METHODS_measurement_and_findings.md` §6, decision 33) and the write-back, which closed loop
+writes and Stim Optimizer reads, remains.
 
 Then the other tracks: the canonical decoded form, the re-derivation speedups, the Redis build
 lock, moving the remaining caches into the one location, and the statistics site that needs its own

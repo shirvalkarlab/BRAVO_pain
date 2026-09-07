@@ -90,6 +90,16 @@ _KIND_DIRS = {
 #: files keep being found. Everything else uses the current naming.
 _LEGACY_NAMING = {"raw_lsb_tiles"}
 
+#: Kinds whose SUPERSEDED entries are kept rather than swept when a new one lands.
+#:
+#: The sweep exists because one tile entry is 245 MB and a month of daily uploads would otherwise
+#: leave seven gigabytes of files that can never be read again. The pain-report snapshot is the
+#: opposite case: a few tens of kilobytes, written once per distinct report set, and its whole
+#: purpose is that a result computed on a given day can name the exact report table it used. A
+#: swept snapshot would leave the ledger row and the key but not the table, which is the one thing
+#: an audit needs. Growth is bounded by how often reports are filed, about one snapshot a day.
+KEEP_HISTORY_KINDS = {"redcap_reports"}
+
 #: Tests and any caller who wants a directory of their own point this at one. None means "ask
 #: Django, then the environment", which is the production path.
 DIR_OVERRIDE = None
@@ -501,7 +511,8 @@ def store(kind, participant_uid, signature, payload, *, provenance=None, trigger
         os.replace(tmp, final)
         os.replace(tmp_meta, _meta_path(stem))
         _bump("writes")
-        _sweep_superseded(kind, participant_uid, stem, root=root)
+        if kind not in KEEP_HISTORY_KINDS:
+            _sweep_superseded(kind, participant_uid, stem, root=root)
         try:
             from . import ledger
             ledger.record(meta)
@@ -529,7 +540,10 @@ def store_if_absent(kind, participant_uid, signature, build, **kw):
     THE KEY DECIDES, NOT THE CALLER. This is the entry point that makes that true by construction
     rather than by every caller remembering to check first.
     """
-    got = load(kind, participant_uid, signature, consumer=kw.get("consumer"))
+    # The SAME root for the read as for the write. Before this line the read went to the
+    # production root while the write went to the caller's, so under a test override the key
+    # never matched and every call wrote: the first snapshot test caught it.
+    got = load(kind, participant_uid, signature, consumer=kw.get("consumer"), root=kw.get("root"))
     if got is not None:
         return got, False
     payload = build()

@@ -53,11 +53,13 @@ python3 BRAVO/_agent_bridge/bridge_client.py --cwd /usr/src/BRAVO --timeout 900 
   "python3 _agent_bridge/run_tests.py"
 ```
 
-**On the host, environment `bravo_app`:**
+**On the host, environment `bravo_app`**, whose interpreter is
+`~/.claude-science/conda/envs/bravo_app/bin/python` (Python 3.11 with pytest). The `python` on the
+path (pyenv 3.12) has no pytest and fails with `No module named pytest`:
 
 ```
-cd BRAVO/modules && PYTHONPATH=. python -B -m pytest \
-  ClosedLoopDeployment/tests StimOptimizer/tests -q -W ignore
+cd BRAVO/modules && PYTHONPATH=. ~/.claude-science/conda/envs/bravo_app/bin/python -B -m pytest \
+  ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests -q -W ignore
 ```
 
 **Read the pass-and-fail line from the run. Do not carry a number from any document, including

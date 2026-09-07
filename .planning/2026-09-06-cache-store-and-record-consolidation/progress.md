@@ -157,3 +157,85 @@ landed in `b7036bf`.
 
 **Not run this session.** No count is quoted anywhere in this session's output, and the
 replacement documents carry the commands rather than a number.
+
+---
+
+## Session 2026-09-07, second session — Claude Code, the `planning-with-files` plugin adopted
+
+The machine's local date reads 2026-09-06 throughout; the session day is 2026-09-07.
+
+### What was read, in the order set
+
+`CLAUDE.md`, `AGENTS.md` (its override box first), `HOUSE_RULES_writing_and_claims.md`,
+`HANDOFF_2026-09-07_cache_store_to_claude_code.md`, `ARCHITECTURE_cache_store.md`,
+`DECISIONS_and_open_items.md`; then `CacheStore/store.py`, `provenance.py`, `ledger.py` and the
+three store test files; the REDCap loader and the within-request scope in
+`Biomarkers/bravo_service.py`; the settings stream, the epoch collapse and the pain-report matcher
+in `StimOptimizer/adapter.py`; the store delegations and `recording_set_signature` in
+`ClosedLoopDeployment/adapter.py`; `METHODS_measurement_and_findings.md` §5 and §6; the band-candidate
+contract in `DESIGN_biomarker_pipeline_v2.md` §6.
+
+### Inventory and state, checked rather than assumed
+
+- 13 root markdown files; 75 tracked files across the archive, the exported artifacts, the planning
+  directory and the store; 8 commits ahead of `origin/PS_closedloop_deployment`; last commit author
+  `Claude | noreply@anthropic.com`.
+- The framework tree under `.claude/` (rules, skills, hooks, agents, templates, `settings.json`)
+  now exists and is gitignored by `.gitignore` line 336. `.claude/commands/` and `./scratchpad/` do
+  not exist; `./artifacts/` exists and is empty.
+- The `planning-with-files` plugin, version 3.16.1, is installed at user scope. Its `plan-doctor`
+  resolves this plan and injects context. Its completion check read nothing from this plan until
+  the headings were restructured below.
+
+### Test results
+
+| Run | Runner | Result |
+|---|---|---|
+| Before any change | container, `run_tests.py` via the bridge | PASS=455 FAIL=0 |
+| Before any change | host, `bravo_app` pytest | 814 passed, 41 skipped |
+| After Track A step 4 | container | PASS=464 FAIL=0 (nine new tests: seven snapshot, two store) |
+| After Track A step 4 | host | 816 passed, 41 skipped (two new store tests) |
+
+The host runs used `~/.claude-science/conda/envs/bravo_app/bin/python`; the default `python` on
+this machine (pyenv 3.12.9) has no pytest.
+
+### Track A step 4 — "Store the REDCap frame, and keep the freshness fetch anyway" — built
+
+- **Status:** complete in the working tree, committed with this session's planning-file update.
+- Files changed: `BRAVO/modules/CacheStore/store.py` (`KEEP_HISTORY_KINDS`; `store_if_absent` reads
+  from the root it writes to), `BRAVO/modules/Biomarkers/bravo_service.py`
+  (`_snapshot_pain_reports`, `_pro_table_digest`, `PRO_STORE_KEY_ATTR`, called from `_load_pros`
+  after every fresh fetch), `BRAVO/modules/CacheStore/tests/test_store.py` (two tests),
+  `BRAVO/modules/Biomarkers/tests/test_redcap_request_scope.py` (store sandboxed),
+  `BRAVO/modules/Biomarkers/tests/test_redcap_snapshot.py` (new, seven tests).
+- Live check on RCS08 through the bridge (`_agent_bridge/_snap_live.py`, disposable): the snapshot
+  landed as Parquet, 760 rows, 12 columns, 28,315 bytes; the stored table against the fetched one:
+  **9,120 fields compared, 0 differences**, same column types, same index; a second fetch left the
+  directory byte-identical and five further calls likewise; the snapshot step costs 2.3 to 4.0 ms
+  per call when the key already matches, of which the content digest is 0.5 to 0.7 ms. The fetch
+  itself took 0.73 to 0.90 s per round, unchanged by the snapshot.
+- Two defects found in passing and fixed, and one of my own, are in the Errors table of
+  `task_plan.md`.
+
+### Adopted the planning-with-files skill
+
+- `task_plan.md` restructured: three-hash phase headings, one literal status line per phase
+  (Phase 1 complete, Phase 2 in progress, 3 to 5 pending), all 30 step titles verbatim from
+  `docs/archive/2026-09-07/PLAN_cache_store_phase2_2026-09-07.md` as checkboxes under Phases 2 to 4,
+  `Next Step` and `Current Phase` made true, decisions 6 to 8 and four error rows added. No existing
+  sentence was dropped.
+- `.mode` added with `inject-smart`. No attestation.
+- `CLAUDE.md` §4, §5, §6, §9 and the framework-tree paragraph, `AGENTS.md`'s override box,
+  `HANDOFF_2026-09-07_cache_store_to_claude_code.md`, `ARCHITECTURE_cache_store.md` §6 and
+  `OPERATIONS_runbook.md` updated to describe the skill and to correct the stale claims listed in
+  `findings.md` §6.
+
+### 5-question reboot check
+
+| Question | Answer |
+|---|---|
+| Where am I? | Phase 2, Track A, step 4 committed, step 5 next |
+| Where am I going? | Track A steps 5 to 8, then Phases 3 to 5 |
+| What's the goal? | Correct stored numbers first; the store as the route between modules second |
+| What have I learned? | `findings.md` §6 |
+| What have I done? | This entry |

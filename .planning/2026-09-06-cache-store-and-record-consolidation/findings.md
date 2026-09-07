@@ -235,3 +235,76 @@ a clean bill:**
    numbers would have been the error, not omitting them.**
 
 The full item-by-item list is `port_gap_report.json`.
+
+---
+
+## 6. Observations, second session 2026-09-07 — the code map for Track A steps 5 to 8, and the state of the tooling
+
+**Everything here is observation, read from the code and the tools on the day stated. Line numbers
+are omitted on purpose; search for the name.**
+
+### 6a. Where the remaining Track A products are built today
+
+- **The therapy table** is `settings_stream(participant)` in `StimOptimizer/adapter.py`: one row per
+  timestamp and hemisphere, columns `t, src, hemi, amp, pw, rate, upper, cathode, schema`, read
+  from every stored Percept file's `Groups.Final` and `GroupHistory`. Its own docstring records one
+  pass over 568 files at 33.65 s yielding 6,617 rows. **Both** the Stim Optimizer request
+  (`StimOptimizer/bravo_service.run_for_participant`) and the closed-loop request
+  (`ClosedLoopDeployment/adapter.evidence_inputs_cached`) build it, so it is paid twice per pair
+  of page loads. The closed-loop copy is memoised in that module's `inputs` store entry together
+  with the epochs and the design matrix.
+- **The matcher** is `attach_pros(epochs, pro_df, pro_times_utc, washin_min, items)` in the same
+  file, over `exposure_epochs(stream)`. Its output, the epoch-level design matrix, is what "the
+  therapy and pain matched table" means; it has never existed as a stored table. Its rows carry
+  per-epoch means, standard deviations and counts of six pain items.
+- **The 22-centre biomarker product** is the band-by-length sweep:
+  `band_time_sweep_for_participant` in `Biomarkers/bravo_service.py`, arithmetic in
+  `analytics.band_time_sweep_from_power`. The centres come from `analytics.sweep_center_freqs`
+  filtering the tile store's own centre list (`_LSB_SPECTRUM_CENTERS`, half-integers 2.5 to 99.5)
+  to 8 to 30 Hz, which yields 8.5 to 29.5. The response holds, per contact pair, grids of
+  correlation and discrimination value over lengths × centres, plus best rows per centre.
+  `DEFAULT_PAIN_BAND_CENTERS_HZ` (23 whole-Hz centres) and the closed-loop module's
+  `DEFAULT_BAND_CENTERS_HZ` are different lists for different products.
+- **The amplitude effect** today: slope by `assess_response` in
+  `StimOptimizer/routines/lfp_response.py` (era-blocked, cluster-robust fit of log power on
+  current); **curvature by `amplitude_response_shape` in `StimOptimizer/routines/within_visit.py`,
+  which has no caller in live code, only tests**; the per-band table with the harmonic-landing flag,
+  `within_visit_band_scores` in `ClosedLoopDeployment/clinic_steps.py`, likewise has no live caller.
+  The orchestrator `amplitude_response_cached` in `ClosedLoopDeployment/adapter.py` writes the
+  `response` kind but is reached by no endpoint. What the closed-loop page actually shows comes from
+  `lfp_evidence.build_all` and `screen_cells`.
+- **The three-source comparison** (`ClosedLoopDeployment/three_source_response.py`) computes per
+  route, per setting, the settled band power, drops saturated tiles, and reports the worst
+  pairwise fold between routes in `three_source_plots.py`. It gates nothing and writes no verdict.
+  `ground_truth_verdict` is a registered kind in `CacheStore/provenance.py` that nothing writes.
+- **Store traffic in live code**: exactly three kinds are written — `raw_lsb_tiles` by Biomarkers,
+  `inputs` and `response` by the closed-loop module. `consumer=` is passed by no production call
+  site, so the self-derived refusal has never yet fired outside its tests. `store_if_absent` had no
+  live caller before step 4.
+- **Module imports**: the closed-loop module imports Biomarkers (function-local, to avoid a cycle
+  and the Django registry order); Stim Optimizer imports Biomarkers; **nothing imports the
+  closed-loop module from Stim Optimizer or the reverse**. The pain reports reach the closed-loop
+  module through Stim Optimizer's `build_design_matrix`, which calls Biomarkers' `_load_pros`.
+
+### 6b. Facts about the written record found stale this session
+
+- The 30 step titles of the approved plan exist verbatim in exactly one file,
+  `docs/archive/2026-09-07/PLAN_cache_store_phase2_2026-09-07.md`; `task_plan.md` held only Phase 1's
+  nine until this session. The handoff's Track A table had renamed two: step 3 "in MySQL" had become
+  "in the database", and step 4 "Store the REDCap frame" had become "Store the REDCap pain-report
+  snapshot". `ARCHITECTURE_cache_store.md` §6 named "the ground-truth verdict" as the fifth remaining
+  Track A step; that is Track G step 2. Track A step 8 is "Have Stim Optimizer read the store and
+  write its outputs back".
+- `CLAUDE.md` and the `AGENTS.md` override box said the framework tree did not exist; it does, and
+  is gitignored.
+
+### 6c. Tooling
+
+- `planning-with-files` 3.16.1 is installed at user scope under `~/.claude/plugins/cache/`. Its
+  hooks fire from `hooks/hooks.json` on session start, each prompt, before matched tool calls, after
+  writes, before compaction and on stop. In legacy mode the stop hook is advisory only.
+  `plan-doctor.sh` against this repository: resolver PASS, injection PASS, one injection 221 ms.
+- The host test suite needs `~/.claude-science/conda/envs/bravo_app/bin/python`.
+- The store's live root is `/usr/src/BRAVO/BRAVOStorage/cache` with `biomarker_psd` (98 files,
+  506 MB), `biomarker_psd_rows` (6,309 files, 30 MB), `biomarker_shared` (one 245 MB tile entry),
+  `closed_loop` (two `inputs` entries, 5 MB) and now `redcap_reports` (one entry, 28 KB).

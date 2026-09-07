@@ -2584,9 +2584,104 @@ def _load_pros(request_data, participant=None):
         got = cache[key]
         return got.copy() if got is not None else None
     df = _normalize_pro_times(_load_pros_raw(request_data, participant))
+    if df is not None and not request_data.get("ProcessedPRO"):
+        _snapshot_pain_reports(df, request_data, participant)
     if key is not None:
         cache[key] = df.copy() if df is not None else None
     return df
+
+
+#: ==========================================================================================
+#: THE PAIN-REPORT SNAPSHOT. Written after every fresh fetch from REDCap; READ BY NO PAGE.
+#:
+#: Decision 22 stands: the pain reports are fetched fresh on every request, because the cheapest
+#: check that could prove a remembered report set still complete costs the same as the fetch. What
+#: is written here is not a cache and nothing above ever reads it back to answer a request. It is
+#: the exact tidy table a request used, kept so that a result computed on a given day can name the
+#: report set it was computed from. The stored copy buys reproducibility, not speed.
+#:
+#: THE KEY IS THE CONTENT OF THE TABLE, so the same report set writes exactly once however many
+#: requests fetch it, and a newly filed report writes a new entry. The store keeps this kind's
+#: history rather than sweeping it (`KEEP_HISTORY_KINDS`), because a swept snapshot would leave
+#: the ledger row and not the table. Every product derived from the reports cites the snapshot's
+#: key in its provenance, which is how the refusal in the store can tell a product built from
+#: device recordings and reports (raw inputs) from one built from another module's choices.
+#: ==========================================================================================
+_REDCAP_SNAPSHOT_KIND = "redcap_reports"
+
+#: Bumped when the shape of the tidy table changes in a way the columns alone do not capture.
+_REDCAP_SNAPSHOT_RULE_VERSION = "v1_tidy_utc"
+
+#: The name under which a frame carries the key of the entry it was snapshotted as. `DataFrame`
+#: attributes survive `copy()`, column selection and the within-request copy above, so a consumer
+#: holding any descendant of the fetched table can still cite it.
+PRO_STORE_KEY_ATTR = "bravo_store_key"
+
+
+def _pro_table_digest(df):
+    """A content hash of the tidy table: every value, every column name, in order.
+
+    `hash_pandas_object` is deterministic across processes (it uses a fixed hash key), so four
+    workers fetching the same report set agree on the digest and only the first one writes.
+    """
+    import hashlib
+    h = hashlib.blake2b(digest_size=16)
+    h.update(repr(list(map(str, df.columns))).encode("utf8"))
+    h.update(str(len(df)).encode("ascii"))
+    try:
+        rows = pd.util.hash_pandas_object(df, index=False).to_numpy()
+        h.update(rows.tobytes())
+    except Exception:
+        # A frame that cannot be hashed value-wise (an unhashable object column) still gets a
+        # stable digest from its printed form, so the snapshot is written rather than skipped.
+        h.update(df.to_csv(index=False).encode("utf8"))
+    return h.hexdigest()
+
+
+def _pro_participant_uid(request_data, participant):
+    uid = getattr(participant, "uid", None) if participant is not None else None
+    return str(uid or request_data.get("ParticipantId") or "shared")
+
+
+def _snapshot_pain_reports(df, request_data, participant):
+    """Write the fetched report table to the store if this exact table is not there already.
+
+    Returns the product key, and records it on the frame under `PRO_STORE_KEY_ATTR`. Every
+    failure is logged and swallowed: a snapshot that cannot be written must never be the reason a
+    clinician's page fails, and the fresh table is already in hand.
+    """
+    try:
+        if df is None or len(df) == 0:
+            return None
+        uid = _pro_participant_uid(request_data, participant)
+        # THE KEY IS THE TABLE, NOT HOW IT WAS ASKED FOR. The record identifier and the field map
+        # are recorded in the stamp, not the key: the same 760-row table requested two ways is one
+        # report set, and two entries for it would tell an audit nothing.
+        signature = (_REDCAP_SNAPSHOT_KIND, _REDCAP_SNAPSHOT_RULE_VERSION, uid,
+                     _pro_table_digest(df))
+        key = _cache_store.product_key(_REDCAP_SNAPSHOT_KIND, uid, signature)
+        df.attrs[PRO_STORE_KEY_ATTR] = key
+        field_map = _resolve_field_map(request_data, participant)
+        try:
+            fm = json.loads(json.dumps(field_map, default=str)) if field_map else None
+        except Exception:
+            fm = None
+        # `store_if_absent` reads first, and a read with no consumer applies no refusal. The read
+        # is only the existence check that makes the key decide; NOTHING RETURNED HERE IS USED TO
+        # ANSWER THE REQUEST -- `df` is the table just fetched, and it is what the caller gets.
+        _cache_store.store_if_absent(
+            _REDCAP_SNAPSHOT_KIND, uid, signature, lambda: df,
+            writer="biomarkers", trigger="fresh_fetch", provenance=[],
+            extra={"n_reports": int(len(df)), "columns": [str(c) for c in df.columns],
+                   "redcap_record_id": (str(request_data.get("RedcapRecordId"))
+                                        if request_data.get("RedcapRecordId") is not None
+                                        else None),
+                   "field_map": fm},
+            root=_SHARED_CACHE_DIR_OVERRIDE)
+        return key
+    except Exception as exc:
+        _log.info("Biomarkers: the pain-report snapshot was not written (%r)", exc)
+        return None
 
 
 def _load_pros_raw(request_data, participant=None):

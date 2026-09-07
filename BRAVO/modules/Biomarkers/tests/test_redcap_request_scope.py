@@ -15,9 +15,12 @@ Run inside the container:
     docker compose exec -w /usr/src/BRAVO bravo-server python3 -W ignore -m pytest \
         modules/Biomarkers/tests/test_redcap_request_scope.py -q
 """
+import contextlib
 import os
 import pathlib
+import shutil
 import sys
+import tempfile
 import types
 import unittest.mock as mock
 
@@ -159,9 +162,25 @@ def test_narrow_and_full_requests_give_the_same_reports():
 
 # ------------------------------------------------------- the within-request scope, and freshness
 
+@contextlib.contextmanager
 def _service_env():
-    return mock.patch.dict(os.environ, {"REDCAP_API_URL": "https://x/api/",
-                                        "REDCAP_API_TOKEN": "t"})
+    """REDCap credentials in the environment, AND the store pointed at a directory of its own.
+
+    Every fresh fetch now writes a pain-report snapshot to the store. Without the override these
+    tests wrote their fake four-row tables into the server's real cache root, which is where the
+    first live check found them.
+    """
+    from modules.CacheStore import ledger
+    tmp = tempfile.mkdtemp(prefix="bravo_scope_test_")
+    prev = (B._SHARED_CACHE_DIR_OVERRIDE, ledger.ENABLED)
+    B._SHARED_CACHE_DIR_OVERRIDE, ledger.ENABLED = tmp, False
+    try:
+        with mock.patch.dict(os.environ, {"REDCAP_API_URL": "https://x/api/",
+                                          "REDCAP_API_TOKEN": "t"}):
+            yield tmp
+    finally:
+        B._SHARED_CACHE_DIR_OVERRIDE, ledger.ENABLED = prev
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 class _FakeRedcap:

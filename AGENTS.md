@@ -26,10 +26,12 @@
 >    test suite, and the frontend build. **The two suites run in different places and a green run of
 >    one is not a green run of the platform.** Commands are in `CLAUDE.md` §1.
 >
-> Also note that `./artifacts/`, `./scratchpad/`, `.claude/rules/`, `.claude/skills/` and
-> `.claude/commands/` **do not exist here yet**, so nothing in this file may be reported as loaded
-> or available because a heading names it. `GitHub Issues` is not in use either — the durable list
-> is `DECISIONS_and_open_items.md`.
+> Also note that `.claude/rules/`, `.claude/skills/`, `.claude/hooks/` and `.claude/agents/` exist
+> on this machine **but are gitignored** (`.gitignore` line 336), `./artifacts/` exists and is
+> empty, and `.claude/commands/` and `./scratchpad/` **do not exist**, so nothing in this file may be
+> reported as loaded or available because a heading names it. `GitHub Issues` is not in use either —
+> the durable list is `DECISIONS_and_open_items.md`. The plan itself is kept with the
+> `planning-with-files` plugin; `CLAUDE.md` §4 says how.
 >
 > **Everything below this box is the unmodified framework text. It is useful for the worktree
 > isolation protocol and the recovery cases, which have no equivalent here and are worth keeping.**

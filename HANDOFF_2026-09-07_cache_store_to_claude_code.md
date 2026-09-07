@@ -58,9 +58,11 @@ today.**
 
 - **`BRAVO/modules/CacheStore/`** — the store, 8 files, 1,771 lines. Documented in
   `ARCHITECTURE_cache_store.md`.
-- **`.planning/2026-09-06-cache-store-and-record-consolidation/`** — `task_plan.md` (the 30 step
-  titles, verbatim, so progress reports still line up), `findings.md` (**the 30 resolved
-  contradictions, §1, and the machine-checked port, §5**), `progress.md`.
+- **`.planning/2026-09-06-cache-store-and-record-consolidation/`** — the `planning-with-files`
+  plugin's three files, kept in its parseable shape since 2026-09-07 (`CLAUDE.md` §4):
+  `task_plan.md` (five phases with the 30 step titles, verbatim, as checkboxes, so progress reports
+  still line up), `findings.md` (**the 30 resolved contradictions, §1, the machine-checked port, §5,
+  and the code map for the remaining steps, §6**), `progress.md`.
 - **`docs/archive/2026-09-07/`** — 51 superseded documents plus `INDEX.md` naming which document
   replaced each one. **Everything in there is superseded and every code line number in it has
   moved.** `docs/exported_artifacts/` holds 11 files pulled out of a cloud store so they are on
@@ -108,8 +110,8 @@ newer result, and the resolution record is
 |---|---|
 | Build the one store implementation as a superset, and delete the duplicate | **done** |
 | Give every written-back product a provenance chain, not just a version | **done, with the cycle proved by construction** |
-| Put the provenance and version ledger in the database | **done** — table created on first use, no migration to run |
-| Store the REDCap pain-report snapshot, and keep the freshness fetch anyway | not started |
+| Put the provenance and version ledger in MySQL | **done** — table created on first use, no migration to run |
+| Store the REDCap frame, and keep the freshness fetch anyway | **done, 2026-09-07 second session** — the pain-report table as `redcap_reports`, read by no page |
 | Write the therapy and pain matched table into the store | not started |
 | Write the biomarker results back after computing them | not started |
 | Write the amplitude effect on each band where Stim Optimizer can read it | not started |
@@ -118,8 +120,10 @@ newer result, and the resolution record is
 Tracks B through G — the canonical decoded form, the re-derivation speedups, the Redis build lock,
 moving the remaining caches into one location, the two closed-loop display fixes, the gated
 statistics site — **all not started.** The 30 step titles are in
-`.planning/2026-09-06-cache-store-and-record-consolidation/task_plan.md`, kept verbatim so progress
-reports against them still line up.
+`.planning/2026-09-06-cache-store-and-record-consolidation/task_plan.md` as checkboxes, verbatim
+from `docs/archive/2026-09-07/PLAN_cache_store_phase2_2026-09-07.md`, so progress reports against
+them still line up. (Two of them had been reworded in this table — "in the database" for "in
+MySQL", and "pain-report snapshot" for "REDCap frame" — and were restored on 2026-09-07.)
 
 **Test state, each read from a run today, and each obtained twice with agreement:**
 
@@ -197,9 +201,9 @@ actually discriminates between the two limits, are in `ARCHITECTURE_cache_store.
    **Count the commits with the command in §0 rather than reading a number here.** **That is the principal investigator's call, and so is whose name goes on future
    commits** — see `HOUSE_RULES_writing_and_claims.md` §7. The six already made carry a machine
    identity because the git configuration file is not writable in the sandbox they were made in.
-3. **Then the five remaining Track A steps**, in the order in §6 of
-   `ARCHITECTURE_cache_store.md`. Each one writes a new table and each **must** pass `writer=` and
-   `provenance=`; without them the self-derived refusal cannot fire.
+3. **Then the remaining Track A steps**, in the order of the checkboxes in `task_plan.md`; §6 of
+   `ARCHITECTURE_cache_store.md` describes what each one writes. Each one writes a new table and
+   each **must** pass `writer=` and `provenance=`; without them the self-derived refusal cannot fire.
 4. **Before any step that changes a stored number, read the equality-proof procedure** in
    `ARCHITECTURE_cache_store.md` §7. Field count and difference count on live data, never a
    tolerance; timings in alternating rounds.

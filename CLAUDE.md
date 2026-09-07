@@ -9,12 +9,13 @@ established.** Where the two disagree, the disagreement is written out rather th
 resolved — see **§10, which overrides anything above it.** Three of the seven core principles
 conflict with something here that was decided for a measured reason.
 
-**Framework tree status, checked rather than assumed:** `.claude/` exists but holds only an
-untracked `settings.local.json` from June. **`.claude/rules/`, `.claude/skills/` and
-`.claude/commands/` do not exist yet**, and neither do `./artifacts/` or `./scratchpad/`. So every
-reference below to an auto-loaded rule file or a skill directory describes where those things go
-once installed, not where they are. **Install the framework tree before relying on any of it, and
-do not report a rule as loaded because this file names it.**
+**Framework tree status, checked rather than assumed (re-checked 2026-09-07, second session):**
+`.claude/` now holds `rules/`, `skills/`, `hooks/`, `agents/`, `templates/` and `settings.json`, and
+**the whole tree is gitignored by `.gitignore` line 336**, so it exists on this machine and in no
+clone. `.claude/commands/` and `./scratchpad/` still do not exist; `./artifacts/` exists and is
+empty. Check `ls .claude` before relying on any of it, and **do not report a rule as loaded because
+this file names it.** The project's plan is tracked with the `planning-with-files` plugin, which is a
+user-scope install and not part of this tree — see §4.
 
 ---
 
@@ -177,22 +178,54 @@ line `v2.0-alpha` through `v2.2.1`.
 "short-lived branches off `main`" as not describing this repository.** If trunk-based development
 is wanted here, that is a change to propose to the principal investigator, not a default to assume.
 
-### Planning flow
+### Planning flow — the `planning-with-files` skill
 
 The framework's ladder — vision, requirements, architecture decision, design specification, plan,
-tasks — with ceremony scaled to scope. **The live plan already exists and is not in that shape:**
+tasks — with ceremony scaled to scope. **The live plan already exists and is kept in the shape of
+the `planning-with-files` plugin** (OthmanAdi, version 3.16.1, installed at user scope under
+`~/.claude/plugins/cache/planning-with-files/`; adopted for this project on 2026-09-07). The plugin
+keeps three markdown files on disk as working memory and injects the plan's head into every turn
+and every matched tool call, so the plan survives compaction and a new session.
 
-`.planning/2026-09-06-cache-store-and-record-consolidation/`
+**The active plan** is named in `.planning/.active_plan` and lives at
+`.planning/2026-09-06-cache-store-and-record-consolidation/`. The directory name says `2026-09-06`
+because this machine's local date runs a day behind the session day; it is a key, so leave it.
 
-| File | What it holds |
-|---|---|
-| `task_plan.md` | the 30 step titles, **verbatim from the approved plan** — do not rename them, progress is reported against them |
-| `findings.md` | **§1 the 30 resolved contradictions** across the source documents; **§5 the machine-checked port** |
-| `progress.md` | what was read, verified, decided and built, in order |
+| File | What it holds | Update it |
+|---|---|---|
+| `task_plan.md` | the goal, the single next step, the current phase, five phases with **all 30 step titles verbatim from the approved plan** (`docs/archive/2026-09-07/PLAN_cache_store_phase2_2026-09-07.md`) as checkboxes, the decision table, the error table | tick a step when it lands; change a phase's status when it changes; **rewrite Next Step whenever a status changes**; add a row to Decisions for every design choice and to Errors for every error, with the attempt number |
+| `findings.md` | observations only, never instructions: §1 the 30 resolved contradictions, §5 the machine-checked port, §6 the code map for the remaining steps and the state of the tooling | after any discovery, and after every two read or search operations whose result matters |
+| `progress.md` | the chronological session log: what was read, what was run with the counts beside the run that produced them, what was built, the errors, the reboot check | throughout the session, and before stopping |
 
-**Keep using these three for the cache-store work rather than opening a parallel plan.** The
-directory name says `2026-09-06` because this machine's local date runs a day behind the session
-day; it is a key, so leave it.
+**The format the plugin parses, which is why it matters.** Its completion check and its status
+command count every three-hash `Phase` heading under the `Phases` section and every bold status
+line whose value is one of `complete`, `in_progress` and `pending`; both are matched as substrings,
+so neither form may appear anywhere else in the file. One status line per phase, five phases, and
+step titles as checkboxes beneath them. Verify after editing:
+
+```bash
+sh ~/.claude/plugins/cache/planning-with-files/planning-with-files/3.16.1/scripts/check-complete.sh
+```
+
+**The rules the skill imposes, all of which this project already wanted:** create or re-read the
+plan before starting; re-read it before any decision; log every error to the plan and never repeat
+a failed action unchanged; after three failed attempts stop and ask; update the files after acting
+rather than at the end. Commands: `/plan` or `/pwf` to initialise a plan, `/status` for a phase
+summary, `/plan-doctor` when the hooks seem silent, `/plan-attest`, `/plan-loop` and `/plan-goal`
+for the optional attestation and loop modes.
+
+**Choices made for this project, decision 8 in `task_plan.md`.** The planning files are
+**committed** (the plugin's default is gitignored). The plan runs in the plugin's legacy mode with
+structure-aware injection only — `.planning/<plan-id>/.mode` holds the single token `inject-smart`,
+so each injection carries the goal, the next step, the phase in progress and the last three
+decisions rather than the file's first lines. **No attestation and no autonomous or gated mode**:
+attestation blocks injection whenever the plan file changes until it is re-attested, and this file
+changes after every phase; the gate can refuse a stop, and in this project the principal
+investigator decides when work stops.
+
+**Keep using these three files for the cache-store work rather than opening a parallel plan.** A
+second, independent task gets its own plan directory through `/pwf "<name>"` and its own
+`.active_plan` entry; do not put it in this one.
 
 ---
 
@@ -201,11 +234,11 @@ day; it is a key, so leave it.
 | Location | Use it for | Lifecycle |
 |---|---|---|
 | repository root, `*.md` | the ten reference documents — **already established, referenced by name in commit messages and the archive index; do not move them into `./artifacts/`** | committed |
-| `.planning/<plan-id>/` | the live plan, findings and progress for the cache-store work | committed |
-| `./artifacts/` | **new** framework-shaped documents, once the framework is installed: `adr_*.md`, `prd_*.md`, `design_spec_*.md`, `postmortem_*.md`, following the framework's naming table | committed; **does not exist yet** |
+| `.planning/<plan-id>/` | the live plan, findings and progress for the cache-store work, in the `planning-with-files` shape (§4), plus the `.mode` marker | committed |
+| `./artifacts/` | **new** framework-shaped documents: `adr_*.md`, `prd_*.md`, `design_spec_*.md`, `postmortem_*.md`, following the framework's naming table | exists, empty; committed once something is in it |
 | `docs/archive/2026-09-07/` | 51 superseded documents plus `INDEX.md` naming what replaced each. **Everything in there is superseded and every line number in it has moved** | committed, read-only in practice |
 | `docs/exported_artifacts/` | 11 files pulled out of a cloud store so they are on disk: both cache inventory drawings, the architecture drawing in three formats, the four-lens audit of record, the port gap list | committed |
-| `./scratchpad/` | ephemeral notes | gitignored; **does not exist yet** |
+| `./scratchpad/` | ephemeral notes | gitignored; **does not exist**, and `BRAVO/_agent_bridge/_*` is the scratch area in use |
 | `BRAVO/_agent_bridge/_*` | **the existing scratch area**, and the only path the container can see. Probe scripts written here are gitignored and disposable | gitignored |
 
 **Two warnings about this tree.**
@@ -227,7 +260,8 @@ day; it is a key, so leave it.
 1. **Durable record** — this project has no issue tracker in use. The durable list is
    **`DECISIONS_and_open_items.md`**: 34 decisions and the single open-items list. Add to it rather
    than starting an `ISSUES.md`.
-2. **In-flight work** — the native task list, owned by the orchestrator.
+2. **In-flight work** — the checkboxes and status lines of `task_plan.md` (§4), which survive the
+   session, plus the native task list within a session, owned by the orchestrator.
 3. **Handoffs** — `HANDOFF_2026-09-07_cache_store_to_claude_code.md` is the current one. Its §0
    lists every file, its §4 says what to do first.
 
@@ -235,7 +269,8 @@ day; it is a key, so leave it.
 
 ## 7. Commands
 
-The framework's roles. **They require `.claude/commands/`, which is not installed here yet.**
+The framework's roles. **`.claude/commands/` does not exist here; the roles are installed as skills
+under `.claude/skills/` instead, gitignored with the rest of the tree.**
 
 | Command | Role | Where it fits here |
 |---|---|---|
@@ -267,8 +302,9 @@ string literal that panel owns, not for the component name.
 ## 9. Skills
 
 Claude Code loads each skill's name and description at startup and pulls in the body when it
-matches. **`.claude/skills/` does not exist here yet**, so there is nothing to check until the
-framework tree is installed.
+matches. `.claude/skills/` now holds the framework's seventeen skills, gitignored. **The
+`planning-with-files` skill this project's plan depends on is not among them: it is a user-scope
+plugin** at `~/.claude/plugins/cache/planning-with-files/`, and §4 says how it is used here.
 
 **Three project-specific skills exist outside this repository and their substance is only partly
 written down.** The session obligations are in this file. **The figure conventions for the

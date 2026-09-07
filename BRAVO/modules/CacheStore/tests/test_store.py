@@ -231,6 +231,42 @@ def test_a_new_entry_sweeps_this_participants_older_ones_and_leaves_others_alone
             "another participant's entry must never be swept"
 
 
+def test_a_history_kind_keeps_its_superseded_entries_and_every_other_kind_still_sweeps():
+    """The pain-report snapshot exists so a result can name the exact report table it used. A
+    swept snapshot would leave the ledger row and not the table, so this kind keeps its history."""
+    with _Sandbox():
+        assert "redcap_reports" in st.KEEP_HISTORY_KINDS
+        a = pd.DataFrame({"nrs": [3.0, 4.0]})
+        b = pd.DataFrame({"nrs": [3.0, 4.0, 5.0]})
+        st.store("redcap_reports", UID, ("r", 1), a, writer="biomarkers", provenance=[])
+        st.store("redcap_reports", UID, ("r", 2), b, writer="biomarkers", provenance=[])
+        assert st.load("redcap_reports", UID, ("r", 1)) is not None, \
+            "the earlier report set was swept, so a result citing it can no longer be reproduced"
+        assert len(st.load("redcap_reports", UID, ("r", 2))) == 3
+        # the control: a kind not in the set still sweeps, so the tile behaviour is unchanged
+        st.store("biomarker_band_results", UID, ("k", 1), a)
+        st.store("biomarker_band_results", UID, ("k", 2), b)
+        assert st.load("biomarker_band_results", UID, ("k", 1)) is None
+
+
+def test_store_if_absent_reads_from_the_root_it_writes_to():
+    """Found by the first snapshot test: the read went to the production root while the write went
+    to the caller's, so under an override the key never matched and every call wrote."""
+    with _Sandbox() as sandbox_root:
+        other = tempfile.mkdtemp(prefix="bravo_store_root_")
+        try:
+            df = pd.DataFrame({"a": [1]})
+            st.store_if_absent("biomarker_band_results", UID, ("k", 1), lambda: df, root=other)
+            before = _tree(other)
+            _got, wrote = st.store_if_absent("biomarker_band_results", UID, ("k", 1),
+                                             lambda: df, root=other)
+            assert wrote is False, "the second call wrote again under an explicit root"
+            assert _tree(other) == before
+            assert _tree(sandbox_root) == {}, "nothing should have landed in the default root"
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+
 def test_an_entry_over_the_limit_is_refused_and_leaves_nothing_behind():
     with _Sandbox() as root:
         st.MAX_BYTES_BY_KIND["tiny_kind"] = 64
