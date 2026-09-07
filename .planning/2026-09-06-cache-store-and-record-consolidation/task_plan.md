@@ -30,14 +30,15 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Everything not gated on the PI is built. Left for him: Track C step 1 with Track E (open item 7,
-the two spectrum directories, one decision), Track D steps 1 and 2 behind the same gate, Track E's
-second sign-off, and the ceiling constant (open item 20). Phase 5's closing checks run next:
-both suites from their own runners, the bundle check, and the written record closed.**
+**Waiting on the PI. Everything that was not his to decide is built, proven and pushed. His
+decisions: the spectrum directories (`artifacts/adr_2026-09-07_track_e_spectrum_directories.md`,
+one decision covering Track C step 1, Track D steps 1 and 2 and Track E step 2), the device
+ceiling constant (open item 20), and the commit identity (open item 1). Nothing else is queued.**
 
 ## Current Phase
 
-Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
+Phases 3 and 4 are done except for the steps that are the PI's; Phase 5's checks are done except
+the commit-identity answer. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
 Track B is complete (`7e57ce03`, `a86e9c09`, `b6a8d1a4`); Track D steps 3 and 4, Track G step 1
 and Track F step 2 in `f01a0320`; Track F steps 3 and 4 assessed and Track G step 2 built in the
@@ -264,17 +265,28 @@ store.
 
 **Track E — "Statistics site" — gated on a second sign-off from the PI**
 
-- [ ] 1. Write the decision record before changing anything
-- [ ] 2. Connect the live path to the spectrum cache that already exists
+- [x] 1. Write the decision record before changing anything — 2026-09-07,
+  `artifacts/adr_2026-09-07_track_e_spectrum_directories.md`: who reads which directory
+  (measured: the assembled matrix once per page, report and validation; the per-recording
+  files by no page request), the stored spectra against a fresh computation (547,118 values,
+  0 differences), what connecting would save (about 2.5 s of a 52 s page, measured, smaller
+  than the 4.05 s projected), and three options with a recommendation. Nothing changed
+- [ ] 2. Connect the live path to the spectrum cache that already exists — **the PI's sign-off**;
+  the measurement is in the record
 
 ### Phase 5: Verify, rebuild, and close the record
 
-**Status:** pending
+**Status:** in_progress
 
-- [ ] Both suites green on their own runners, counts read from the runs
-- [ ] Frontend bundle rebuilt after any change under `Client/src`, and the chunks committed
-- [ ] `DECISIONS_and_open_items.md` and the reference documents updated for everything landed
-- [ ] The PI's two open questions answered and recorded: commit identity, and whether to push
+- [x] Both suites green on their own runners, counts read from the runs — after the last code
+  change (Track C step 4): container PASS=537 FAIL=0; host 934 passed, 41 skipped, both orders
+- [x] Frontend bundle rebuilt after any change under `Client/src`, and the chunks committed —
+  `f70b270d`, the status line's literal found in one served chunk
+- [x] `DECISIONS_and_open_items.md` and the reference documents updated for everything landed —
+  decisions 35 to 48, open items 16 to 20, the handoff, the architecture note, the methods note
+- [ ] The PI's two open questions answered and recorded: commit identity, and whether to push —
+  **push: answered 2026-09-07 ("Push everything"), every commit since is pushed; commit
+  identity: still open (open item 1), commits carry the machine identity**
 
 ---
 

@@ -126,7 +126,7 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 
 ### Open engineering, not blocked on anyone
 
-7. **The 6,309-file spectrum directory must be settled in one decision, not two.** Zero reads by any
+7. **The 6,309-file spectrum directory must be settled in one decision, not two.** *The decision record for it, with the measurements, is `artifacts/adr_2026-09-07_track_e_spectrum_directories.md` (2026-09-07).* Zero reads by any
    live page were measured, and the PI marked it for deletion. But a separate proposal would wire
    the live path onto those same files. **One plan deletes what the other connects** — decide
    together.

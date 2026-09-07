@@ -650,3 +650,18 @@ this machine (pyenv 3.12.9) has no pytest.
 | Track C step 4 | container, `run_tests.py` via the bridge | PASS=537 FAIL=0 |
 | Track C step 4 | host, documented order | 934 passed, 41 skipped |
 | Track C step 4 | host, reverse order | 934 passed, 41 skipped |
+
+### Track E step 1 — the decision record — written; Phase 5 closed except the identity answer
+
+- `artifacts/adr_2026-09-07_track_e_spectrum_directories.md`, from one bridge run
+  (`_agent_bridge/_trackE_measure.py`, disposable): `biomarker_psd` 98 files, 506.2 MB, read once
+  by the biomarker page, the closed-loop report and the band validation; `biomarker_psd_rows`
+  6,309 files, 30.5 MB, read by no page request (0 reads in five endpoints), written and read by
+  the warm path and the band-conversion panel; the page computes 381 Welch spectra fresh per
+  request; stored per-recording spectra against fresh: 6,219 rows, 5,795 keys in both,
+  547,118 values, 0 differences; files 0.54 s against 3.00 s fresh. Recommendation written;
+  nothing changed.
+- Phase 5: both suites green from runs after the last code change (container 537; host 934 in
+  both orders), the bundle rebuilt and committed, the documents updated. The push question was
+  answered by the PI on 2026-09-07 and every commit since is on `origin`. The commit identity
+  question is still his (open item 1).

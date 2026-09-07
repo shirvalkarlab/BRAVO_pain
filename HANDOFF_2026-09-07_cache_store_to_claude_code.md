@@ -102,12 +102,15 @@ document replaced each one. 30 contradictions across the source documents were r
 newer result, and the resolution record is
 `.planning/2026-09-06-cache-store-and-record-consolidation/findings.md` §1.
 
-**Phase 2, Track A, the one store: all eight steps are complete and committed.** Steps 1 to 3
-in `fa14edd` (the store, the provenance chain, the ledger, both duplicates removed) and `14ad802`
-(the decoded-form prototype tracked); step 4 in `d47b9a7`; step 5 in `7278f15c`; step 6 with the
-six-perspective review fixes in `4e29af7b`; step 7 in `0d619ca`; step 8 in the newest commit.
-Each of steps 4 to 8 was proved on the live record before it was committed, and the counts are in
-`.planning/2026-09-06-cache-store-and-record-consolidation/progress.md` beside the runs.
+**Phase 2 (Track A), Phase 3 (Tracks B, D, F, G) and Phase 4's Track C are done, pushed, and
+proven on the live record, except the steps that are the PI's to decide.** Track A in `fa14edd`,
+`d47b9a7`, `7278f15c`, `4e29af7b`, `0d619ca`, `9a6e0926`; Track B in `7e57ce03`, `a86e9c09`,
+`b6a8d1a4`; Track D steps 3 and 4, Track G step 1 and Track F step 2 in `f01a0320`; Track G
+step 2 in `7aa161ad`; Track C step 4 in `f70b270d`. Every step's counts are in
+`.planning/2026-09-06-cache-store-and-record-consolidation/progress.md` beside the run that
+produced them. **What is left is his:** the spectrum directories
+(`artifacts/adr_2026-09-07_track_e_spectrum_directories.md`), the device ceiling constant (open
+item 20), and the commit identity (open item 1).
 
 | Step | State |
 |---|---|
@@ -199,9 +202,12 @@ actually discriminates between the two limits, are in `ARCHITECTURE_cache_store.
 
 ## 4. What to do first, in order
 
+0. **Read `task_plan.md`'s Next Step** in the planning directory: on 2026-09-07 it says the work
+   is waiting on the PI's three decisions, and nothing is queued. The rest of this section is
+   from before that and stands as history.
 1. **Re-run both suites** and confirm the two counts above. Nothing else should be trusted until
    they agree.
-2. **Decide whether to push.** This branch is ahead of every remote; `origin` is at `705bdb0`.
+2. **Decide whether to push.** (Answered on 2026-09-07: pushed; `origin` is at the newest commit.) This branch is ahead of every remote; `origin` is at `705bdb0`.
    **Count the commits with the command in §0 rather than reading a number here.** **That is the principal investigator's call, and so is whose name goes on future
    commits** — see `HOUSE_RULES_writing_and_claims.md` §7. The six already made carry a machine
    identity because the git configuration file is not writable in the sandbox they were made in.
