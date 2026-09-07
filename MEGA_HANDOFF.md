@@ -75,13 +75,62 @@
 > No-agent-commits rule RETIRED — agent now commits + pushes (bravo-session-rules Rule 4).
 >
 > **Per-session detail** lives in the `SESSION_HANDOFF_*.md` / `HANDOFF_*.md` files this doc
-> synthesizes (the most recent narrative is `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md`; the
-> TD→LSB calibration write-up is `HANDOFF_TD_LSB_calibration_2026-06-27.md`). This doc keeps the
-> durable facts — constants, frozen model, decisions, gotchas, file map — not the blow-by-blow.
+> synthesizes. **The most recent narrative is `SESSION_HANDOFF_2026-09-07_cache_store_takeover.md`**
+> — written for a new session to take the cache work over, and carrying the reading order for the
+> other handoffs, the file-format measurements, and what the last ten sub-agent lanes did. It
+> supersedes the pointer previously here, which still named
+> `SESSION_HANDOFF_2026-06-28_biomarker_count_ux.md` from June. The one before it is
+> `SESSION_HANDOFF_2026-09-06_sweep_ramp_and_matcher.md`. **The TD→LSB calibration write-up is
+> `HANDOFF_TD_LSB_calibration_2026-06-27.md`, and it OVERRIDES §4 of the design ledger** on
+> band-power units — the ledger section predates that calibration and still claims no converter
+> exists. This doc keeps the durable facts — constants, frozen model, decisions, gotchas, file map —
+> not the blow-by-blow.
 
 ---
 
 ## 0. Recent work (newest first)
+
+**2026-09-07 — the cache store mapped and designed, Redis bounded, formats measured. Takeover
+handoff written: `SESSION_HANDOFF_2026-09-07_cache_store_takeover.md`, which a new session is to
+read.** Commit **`b7036bf`** is the only code change: Redis had been running with the `redis:5`
+image defaults, `maxmemory=0` (unlimited) and `maxmemory-policy=noeviction`, so it would grow until
+the host filled and then **refuse new writes** rather than evict — on a box shared with MySQL and
+the four uvicorn workers. Now `maxmemory 512mb` with `allkeys-lru`, applied live and set durably as
+a `command:` on the redis service in **both** `docker-compose.yml` and `Docker/docker-compose.yml`
+(`CONFIG REWRITE` is unavailable — the image runs with no config file).
+
+The cache was mapped from the code rather than recollection: **one root, four directories, about
+782 MB** — `biomarker_psd` 97 files/500.32 MB, `biomarker_shared` 1 file/245.90 MB,
+`biomarker_psd_rows` 6,309 files/30.47 MB with **zero reads by any live page**, `closed_loop` 2
+files/5.52 MB — written by **two duplicated store implementations with mismatched caps (1074 MB
+against 268 MB)**, while StimOptimizer has no on-disk cache at all and is the slowest endpoint.
+Also established: **the Google Drive visit sheets never reach the server** (no Sheets access exists
+in the codebase; at-home versus in-clinic comes from the Medtronic recording type).
+
+**Formats measured on the real 6,629-row therapy table: Parquet+zstd chosen at 0.027 MB** against
+pickle 0.451, CSV 0.492, JSON 0.999, HDF5 0.082–0.131. **CSV and JSON are excluded on correctness,
+not preference — the table carries a timezone-aware timestamp and both lose it.** Honest caveat kept
+in the record: **pickle writes twice as fast and reads are tied**, so Parquet is chosen for size and
+durability, not speed. **Redis measured 3x SLOWER than the filesystem for the 245.90 MB tile store**
+(0.14 s against 0.05 s) because those files are already in the page cache — BRAVO has a computation
+problem, not a latency problem — so Redis is scoped to build locks, freshness keys and Django's
+cache only.
+
+**Approved and NOT yet built**, awaiting the PI's explicit go-ahead: the PI's flowchart edits turn
+the cache into a **two-way bus** — all three modules write their computed outputs back and read each
+other's through the store. That closes a dependency cycle (Stim Optimizer would consume a
+ground-truth verdict derived from data it chose to collect, making exploration self-confirming), so
+**a provenance chain plus a proven refusal to consume self-derived products is ordered before
+anything that writes back**, with the ledger in MySQL. Six new stored tables, `biomarker_psd_rows`
+to be deleted, one store implementation as a superset, and two closed-loop fixes (the evidence
+triangle not displaying — suspect a component committed without a front-end rebuild; and a
+ground-truth decision rule for the three-source comparison, proposed and awaiting sign-off).
+
+> **Caveat on this entry, stated rather than hidden:** this doc's own update convention asks that
+> the whole file be read before editing and that §2, §3, §4, §7 and §8 be updated alongside §0.
+> Only §0 and the stale "most recent narrative" pointer above were updated here, because the cache
+> work is designed but not implemented. **A later session must reconcile the reference sections**
+> once the store is built.
 
 ### 2026-09-06 (latest) — the Biomarker tile cache shared across worker processes, the decode-pathway review, and a regression of mine caught by measuring something else
 
