@@ -136,6 +136,8 @@ services:
   redis:
     image: redis:5
     restart: unless-stopped
+    # Bound this disposable cache; evict old keys before rejecting new writes.
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     networks:
       - backend
     healthcheck:
