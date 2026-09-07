@@ -456,3 +456,45 @@ this machine (pyenv 3.12.9) has no pytest.
 - Container timezone checked through the bridge: `TZ=UTC`, offset 0 s. Whether the live record
   holds a start time with no timezone (open item 19) is still to be measured; the first probe
   called the recording loader with the wrong arguments.
+
+### Track B steps 2, 3 and 5 — the canonical form adopted at both hot sites, and proven
+
+- **Status:** complete, committed with this entry and pushed.
+- Files changed: `Biomarkers/routines/availability.py` (imports the form under both spellings;
+  `channel_index`; `per_pro_lsb` and `per_pro_lsb_spectrum` are entry points that read from the
+  form; the two scans renamed `_per_pro_lsb_scan` and `_per_pro_lsb_spectrum_scan` and kept as
+  the reference; `USE_CHANNEL_INDEX`), `Biomarkers/bravo_service.py` (both callers build the form
+  once per request and pass it), `DecodeCommon/per_pro_lsb_indexed.py` (`per_pro_lsb_spectrum_indexed`),
+  `DecodeCommon/__init__.py`, `DecodeCommon/representation.py` (description),
+  `DecodeCommon/tests/test_decode_common.py` (the identity tests now compare against the
+  reference scans; seven spectrum identity tests; one test of the entry points under both switch
+  settings and with a caller-supplied form).
+
+| Run | Runner | Result |
+|---|---|---|
+| Track B steps 2, 3, 5 | container, `run_tests.py` via the bridge | PASS=528 FAIL=0 |
+| Track B steps 2, 3, 5 | host, documented order | 906 passed, 41 skipped |
+| Track B steps 2, 3, 5 | host, reverse order | 906 passed, 41 skipped |
+
+- **Before the change**, RCS08 through the bridge (`_agent_bridge/_trackB_baseline.py`,
+  `_trackB_baseline_sweep.py`, disposable): the Biomarker page in 72.32 and 61.12 s, pickled
+  (39,386,425 bytes); the band-by-length sweep, computed fresh, in two runs, pickled. The sweep
+  calls neither `per_pro_lsb` nor `per_pro_lsb_spectrum` (0 calls in both runs), so the plan's
+  note that step 3 should be measured on it was stale.
+- **After the change** (`_agent_bridge/_trackB_after.py`, disposable), four rounds alternating
+  the switch on, off, on, off, each compared value for value with the pickled page:
+
+| Round | Switch | Page | Values compared | Differences | Canonicalisations | Readers called |
+|---|---|---|---|---|---|---|
+| 1 | on | 54.11 s | 8,087,210 | 0 | 5,132 | indexed 30 + spectrum indexed 30, form built twice |
+| 2 | off | 65.69 s | 8,087,210 | 0 | 72,457,293 | scan 30 |
+| 3 | on | 53.47 s | 8,087,210 | 0 | 5,102 | indexed 30, form built once |
+| 4 | off | 63.88 s | 8,087,210 | 0 | 72,457,293 | scan 30 |
+
+  The spectrum reader ran in round 1 only; the in-process memo served it afterwards, so its
+  values are inside round 1's comparison. The sweep computed fresh with the switch on: 27,323
+  values compared, 18 differ, all eighteen the sweep's own wall-clock timing fields
+  (`total_seconds`, `matched_seconds`, `logistic_fit_crosscheck/seconds`, three per contact
+  pair); the 27,305 measured values, 0 differences.
+- What a page still pays with the form: about 54 s, of which the form itself is a small part;
+  the rest is the pipeline behind the page (decision log, "resolved by this consolidation").

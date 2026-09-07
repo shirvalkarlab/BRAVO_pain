@@ -30,17 +30,18 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Phase 3, Track B step 2, "Adopt it at the 72-million-call site": replace the spectrum-record
-scan inside `availability.per_pro_lsb` with the prepared `ChannelIndex` built once per request,
-then step 3 for `per_pro_lsb_spectrum`, then the field-for-field proof and alternating timings
-(step 5). The PI authorised Phase 3 and pushing on 2026-09-07 ("Push everything, and then
-proceed to phase three").**
+**Track B step 4, "Fix the repeated column resolution and float conversion": the remaining site
+is the tile-cache builder `availability.raw_lsb_spectrum_cache`, which resolves the channel
+column and converts every recording's samples to float once per channel on a cold build. Route
+it through the form's prepared per-channel column, then prove the 245 MB tile entry unchanged
+field for field on a cleared tile store and time the cold build in alternating rounds.**
 
 ## Current Phase
 
 Phase 3 — Tracks B, D, F, G. Phase 2 is complete and pushed (`9a6e0926`; Track A steps 1 to 3 in
 `fa14edd`, 4 in `d47b9a7`, 5 in `7278f15c`, 6 in `4e29af7b`, 7 in `0d619ca`, 8 in `9a6e0926`).
-Track B step 1 is built and committed with this edit; Track F step 1 was done in `b7036bf`.
+Track B steps 1 (`7e57ce03`), 2, 3 and 5 (the commit carrying this edit) are done; Track F
+step 1 was done in `b7036bf`.
 The PI authorised the phase and the push on 2026-09-07.
 
 ## Phases
@@ -150,10 +151,21 @@ and the two closed-loop fixes. Track D needs Track B's form.
   container runner's package list). Both spellings now resolve to one module object, the
   container runner discovers it, the host command names it, and the no-constant test stays.
   One real disagreement found and settled: see decision 14
-- [ ] 2. Adopt it at the 72-million-call site
-- [ ] 3. Adopt it at the identical sibling scan
-- [ ] 4. Fix the repeated column resolution and float conversion
-- [ ] 5. Prove every number unchanged, then measure
+- [x] 2. Adopt it at the 72-million-call site — 2026-09-07: `availability.per_pro_lsb` reads
+  from a `ChannelIndex` the service builds once per request; the scan is kept as
+  `_per_pro_lsb_scan`, the reference, behind `USE_CHANNEL_INDEX`
+- [x] 3. Adopt it at the identical sibling scan — 2026-09-07: `per_pro_lsb_spectrum` likewise,
+  through the new `per_pro_lsb_spectrum_indexed`. The plan's note that this scan is not
+  exercised by the default page is stale: the page's spectral scan calls it 30 times on a cold
+  memo, and the band-by-length sweep calls neither reader at all (0 calls, measured)
+- [ ] 4. Fix the repeated column resolution and float conversion — the remaining site is the
+  tile-cache builder, reached only on a cold build
+- [x] 5. Prove every number unchanged, then measure — 2026-09-07, RCS08 through the bridge, four
+  alternating rounds with the switch on, off, on, off: 8,087,210 page values compared with the
+  page captured before the change, 0 differences in every round; 54.11 and 53.47 s with the
+  index against 65.69 and 63.88 s without; channel-name canonicalisations 5,132 and 5,102
+  against 72,457,293. The sweep as a control: 27,305 measured values, 0 differences (its 18
+  wall-clock timing fields differ, as they must)
 
 **Track D — "Readers"**
 
@@ -227,6 +239,7 @@ store.
 | 12 | **Track A step 7: the amplitude effect on every band is a table derived from the three-source comparison's voltage-trace panel, one row per run of rising current (visit, side turned up, sensing contact, stimulation rate) and band centre, with the number and range of currents actually tested, the pieces of recording behind them, the straight-line slope of log power on current with its standard error and p-value, the curvature test with the peak current, the fold change from lowest to highest current, and the harmonic-landing and checked-span flags.** It is built from every run the device's record holds, written by the closed-loop request as `amplitude_effect_by_band` with the tile entry in its provenance, and the page keeps drawing its four newest runs. A request whose table is already stored builds only those four. | The ladder of currents is read from the device's own record (constraint 4 of the three-source comparison), which the server holds, rather than the clinic sheet, which it does not. Every power value is copied from the panel, so the table is checkable against it. Rows are never pooled across visits, because a result established on one visit day must say so; the visit and run columns let Stim Optimizer pool with the visit as the blocking factor. The curvature floor of eight points is the routine's own and is not lowered to manufacture a verdict. | 2026-09-07 |
 | 13 | **Track A step 8: Stim Optimizer reads the therapy-and-pain matched table and the newest amplitude-effect table as `stim_optimizer`, reports which tile entry that table describes and whether it is the current one, and writes back `stim_optimizer_summary`, `exploration_ladder` (the pipeline's queue with its own `rank` kept), `exploration_batch`, `stim_optimizer_manifest` and the whole response as `stim_optimizer_response`, all under one key naming the matched table, the tile entry, the amplitude table, the sites, the brain sides, the wash-in, the backend and the batch settings, with every input's own chain flattened into theirs. A stored response whose key matches is served and marked; one the store refuses is reported, recomputed, and REPLACED; a write-back that fails is reported in the response. A digest of the module and its routines is in the key, the four tables are keyed without the figure backend, and a response computed without the delivered-settings census is not stored.** The amplitude summary counts — runs, currents tested, the smallest slope p-value, whether any run showed movement at p < 0.05 — inside the adaptive window, and does not judge. | Reading as `stim_optimizer` is the exact edge the refusal exists for: the ladder Stim Optimizer chooses decides which recordings come to exist, so a verdict derived from them must not come back to it as independent evidence, and the chain on every output is what lets the next reader see that. The pipeline's fitted surface is repeatable (fresh against fresh: 0 differences in 20,640 values), which is what makes the served response the same answer. The first version inserted a second `rank` column, pandas refused it, and nothing was written back on the live record while every test passed, because the stubbed queue had no `rank`; the stub now has one, and a failed write-back is reported in the response rather than only logged. | 2026-09-07 |
 | 14 | **Track B step 1: the decoded form's start-time parser mirrors the platform's exactly, including the rule that a start time written without a timezone is read in the process's local zone.** The disagreement is recorded here and in `findings.md` rather than corrected in the form alone. | The form exists to give the same answer as `availability.per_pro_lsb`, and step 5 proves that field for field on the live record; a form that silently "fixed" the zone would fail that proof, or worse, pass it in the container (which runs in universal time) and disagree on any other machine. The prototype's version read a naive string as universal time; the two agreed in the container and differed by eight hours on the analysis host, which is where the test first ran under pytest. Whether the platform's own rule should change is a separate question and is logged as an open item. | 2026-09-07 |
+| 15 | **Track B steps 2, 3 and 5: `availability.per_pro_lsb` and `per_pro_lsb_spectrum` read from the canonical decoded form, built once per request by `availability.channel_index` and passed in by the service; the two original scans stay as `_per_pro_lsb_scan` and `_per_pro_lsb_spectrum_scan`, the reference implementations, behind the module switch `USE_CHANNEL_INDEX`.** The switch off runs the scans with no deployment. | The scans are the specification the indexed readers are proven equal to on constructed recordings (DecodeCommon/tests, 40 tests on both runners), and flipping the switch inside one process is what makes the alternating rounds of the live proof honest: on, off, on, off, 8,087,210 values against the page captured before the change, 0 differences each round, 54 s against 65 s, 5 thousand canonicalisations against 72 million. Deleting the scans would delete the reference and the off switch together. | 2026-09-07 |
 
 ## Errors Encountered
 

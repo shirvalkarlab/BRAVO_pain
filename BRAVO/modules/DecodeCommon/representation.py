@@ -1,15 +1,16 @@
-"""The canonical form: one lookup, built once, holding what every reader currently re-derives.
+"""The canonical form: one lookup, built once per request, holding what every reader used to re-derive.
 
 WHAT PROBLEM THIS ADDRESSES, MEASURED RATHER THAN ASSUMED
 ---------------------------------------------------------
-During one Biomarker page request for participant 2e3c75c0 the channel-name canonicaliser
-`availability._canon_channel` was called **72,425,865 times**, and **72,332,380 of those
-(99.87 percent) came from a single line**, the spectrum-event scan inside
-`availability.per_pro_lsb`. That line walks the whole list of spectrum-bearing patient
-records once for every pain report, and re-canonicalises each record's channel name on every
-pass. The canonical name is a property of the record, so every pass after the first computes
-a value the request already had. The same line also re-parses each record's timestamp on
-every pass.
+Before Track B, during one Biomarker page request for participant 2e3c75c0 the channel-name
+canonicaliser `availability._canon_channel` was called **72,425,865 times**, and **72,332,380
+of those (99.87 percent) came from a single line**, the spectrum-event scan inside what is now
+`availability._per_pro_lsb_scan`. That line walked the whole list of spectrum-bearing patient
+records once for every pain report, and re-canonicalised each record's channel name on every
+pass. The canonical name is a property of the record, so every pass after the first computed
+a value the request already had. The same line also re-parsed each record's timestamp on
+every pass. Since Track B steps 2 and 3, `availability.channel_index` builds this form once
+per request and both readers use it.
 
 The cost is therefore NOT in turning bytes on disk into recordings. Reading and un-pickling
 every stored file for this participant costs 3.15 s of wall clock, because that work is

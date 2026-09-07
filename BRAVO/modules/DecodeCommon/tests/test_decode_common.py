@@ -14,14 +14,16 @@ import numpy as np
 # Both spellings on purpose: the container's path root makes these packages `modules.X`, the
 # host suite's root makes them `X`. See `CacheStore/__init__.py`.
 try:
-    from modules.DecodeCommon import build_channel_index, per_pro_lsb_indexed
+    from modules.DecodeCommon import (build_channel_index, per_pro_lsb_indexed,
+                                      per_pro_lsb_spectrum_indexed)
     from modules.DecodeCommon.representation import (
         CHANNEL_INDEX_VERSION, canon_channel, missing_per_sample, to_epoch,
     )
     from modules.Biomarkers.routines import availability
     from modules.Biomarkers.routines import analytics
 except ImportError:
-    from DecodeCommon import build_channel_index, per_pro_lsb_indexed
+    from DecodeCommon import (build_channel_index, per_pro_lsb_indexed,
+                              per_pro_lsb_spectrum_indexed)
     from DecodeCommon.representation import (
         CHANNEL_INDEX_VERSION, canon_channel, missing_per_sample, to_epoch,
     )
@@ -193,7 +195,8 @@ def test_the_form_stores_no_calibration_constant():
     # calibrated constants belong to analytics, and this asserts the module text is free of
     # them rather than trusting a reading of it.
     import inspect
-    from modules.DecodeCommon import representation
+    import sys as _sys
+    representation = _sys.modules[canon_channel.__module__]
     src = inspect.getsource(representation)
     body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
     for token in ("352.62", "73.63", "LSB_PER_UV2_TRANSFORM =", "LSB_PER_DEVICE_PSD ="):
@@ -213,8 +216,8 @@ FIELDS = ("t", "lsb", "tier", "center_hz", "used_s", "saturated", "reason")
 
 def _both(pro_times, native, channel, center_hz, td, psd, **kw):
     idx = _index(td, psd)
-    a = availability.per_pro_lsb(pro_times, native, channel, center_hz,
-                                 td_recordings=td, event_psd_recordings=psd, **kw)
+    a = availability._per_pro_lsb_scan(pro_times, native, channel, center_hz,
+                                       td_recordings=td, event_psd_recordings=psd, **kw)
     b = per_pro_lsb_indexed(pro_times, native, channel, center_hz,
                             index=idx, analytics=analytics,
                             saturation_uv=availability.PRO_LSB_SATURATION_UV,
@@ -379,3 +382,133 @@ def test_reading_the_same_form_twice_gives_the_same_answer():
     second = per_pro_lsb_indexed(pro, None, "ZERO_THREE_LEFT", 12.7,
                                  index=idx, analytics=analytics)
     _assert_identical(first, second)
+
+
+# ----------------------------------------------------------------------------------------
+# the indexed full-spectrum reader against the current implementation
+# ----------------------------------------------------------------------------------------
+
+SPECTRUM_FIELDS = ("t", "tier", "lsb", "calibrated", "center_hz", "used_s", "saturated", "reason")
+CENTERS = tuple(float(c) for c in np.arange(2.5, 100.0, 1.0))
+
+
+def _both_spectrum(pro_times, channel, td, psd, centers=CENTERS, **kw):
+    idx = _index(td, psd)
+    a = availability._per_pro_lsb_spectrum_scan(pro_times, channel, centers,
+                                                td_recordings=td, event_psd_recordings=psd, **kw)
+    b = per_pro_lsb_spectrum_indexed(pro_times, channel, centers, index=idx, analytics=analytics,
+                                     saturation_uv=availability.PRO_LSB_SATURATION_UV,
+                                     tier_td=availability.PRO_LSB_TIER_TD,
+                                     tier_bridge=availability.PRO_LSB_TIER_BRIDGE, **kw)
+    return a, b
+
+
+def _assert_identical_spectrum(a, b):
+    assert len(a) == len(b), "record counts differ: %d vs %d" % (len(a), len(b))
+    for i, (ra, rb) in enumerate(zip(a, b)):
+        assert tuple(ra) == tuple(rb), "record %d has different fields" % i
+        for f in SPECTRUM_FIELDS:
+            va, vb = ra[f], rb[f]
+            if isinstance(va, list):
+                assert len(va) == len(vb), "record %d field %r length" % (i, f)
+                for k, (x, y) in enumerate(zip(va, vb)):
+                    assert x == y, "record %d field %r centre %d: %r vs %r" % (i, f, k, x, y)
+            else:
+                assert va == vb, "record %d field %r: %r vs %r" % (i, f, va, vb)
+
+
+def test_spectrum_identical_on_the_voltage_trace_route():
+    td = [_td_recording(["ZERO_THREE_LEFT", "ONE_THREE_LEFT"], t0=T0, n=int(FS * 120), seed=7)]
+    a, b = _both_spectrum([T0 + 40.0, T0 + 70.0], "ZERO_THREE_LEFT", td, [])
+    _assert_identical_spectrum(a, b)
+    assert a[0]["tier"] == availability.PRO_LSB_TIER_TD and any(a[0]["calibrated"])
+
+
+def test_spectrum_identical_on_the_device_spectrum_route_with_per_band_calibration():
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 5.0, peak_hz=20.0)]
+    a, b = _both_spectrum([T0], "ZERO_THREE_LEFT", [], psd)
+    _assert_identical_spectrum(a, b)
+    assert a[0]["tier"] == availability.PRO_LSB_TIER_BRIDGE
+    cal = dict(zip(a[0]["center_hz"], a[0]["calibrated"]))
+    assert cal[2.5] is False and cal[12.5] is True and cal[55.5] is False
+
+
+def test_spectrum_identical_when_the_voltage_window_is_railed_and_both_fall_through():
+    td = [_td_recording(["ZERO_THREE_LEFT"], t0=T0, n=int(FS * 120), amp=5000.0, seed=1)]
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 60.0)]
+    a, b = _both_spectrum([T0 + 60.0], "ZERO_THREE_LEFT", td, psd)
+    _assert_identical_spectrum(a, b)
+    assert a[0]["tier"] == availability.PRO_LSB_TIER_BRIDGE and a[0]["saturated"] is True
+
+
+def test_spectrum_identical_when_a_report_has_no_source_at_all():
+    a, b = _both_spectrum([T0 + 99999.0], "ZERO_THREE_LEFT",
+                          [_td_recording(["ZERO_THREE_LEFT"], t0=T0)], [_psd_record("ZERO_THREE_LEFT", T0)])
+    _assert_identical_spectrum(a, b)
+    assert a[0]["tier"] is None and a[0]["reason"] == "no TD coverage and no coincident PSD event"
+
+
+def test_spectrum_identical_tie_break_between_two_equidistant_records():
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 10.0, peak_hz=9.0, seed=1),
+           _psd_record("ZERO_THREE_LEFT", T0 - 10.0, peak_hz=30.0, seed=2)]
+    a, b = _both_spectrum([T0], "ZERO_THREE_LEFT", [], psd)
+    _assert_identical_spectrum(a, b)
+    assert a[0]["tier"] == availability.PRO_LSB_TIER_BRIDGE
+
+
+def test_spectrum_identical_across_a_mixed_record_of_many_reports():
+    td = [_td_recording(["ZERO_THREE_LEFT"], t0=T0, n=int(FS * 200), seed=3),
+          _td_recording(["ONE_THREE_LEFT"], t0=T0 + 400, n=int(FS * 200), seed=4),
+          _td_recording(["ZERO_AND_THREE_LEFT_RING"], t0=T0 + 800, n=int(FS * 200), seed=5)]
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 300 + 7 * i, peak_hz=9.0 + i, seed=i)
+           for i in range(12)]
+    pro = [T0 + 50 * i for i in range(40)]
+    a, b = _both_spectrum(pro, "ZERO_THREE_LEFT", td, psd)
+    _assert_identical_spectrum(a, b)
+    tiers = [r["tier"] for r in a]
+    assert availability.PRO_LSB_TIER_TD in tiers and availability.PRO_LSB_TIER_BRIDGE in tiers
+    assert None in tiers
+
+
+def test_the_spectrum_reader_stores_no_calibration_constant_either():
+    import inspect
+    import sys as _sys
+    mod = _sys.modules[per_pro_lsb_spectrum_indexed.__module__]
+    body = "\n".join(l for l in inspect.getsource(mod).splitlines() if not l.strip().startswith("#"))
+    for token in ("352.62", "73.63", "LSB_PER_UV2_TRANSFORM =", "LSB_PER_DEVICE_PSD ="):
+        assert token not in body, "the consumer must not carry %r" % token
+
+
+# ----------------------------------------------------------------------------------------
+# the platform's own entry points, under both settings of the switch
+# ----------------------------------------------------------------------------------------
+
+def test_the_platform_entry_points_give_the_scan_answer_under_both_switch_settings():
+    td = [_td_recording(["ZERO_THREE_LEFT"], t0=T0, n=int(FS * 200), seed=3),
+          _td_recording(["ONE_THREE_LEFT"], t0=T0 + 400, n=int(FS * 200), seed=4)]
+    psd = [_psd_record("ZERO_THREE_LEFT", T0 + 300 + 7 * i, peak_hz=9.0 + i, seed=i)
+           for i in range(12)]
+    native = {"t": [T0 + 1500], "y": [777.0], "center_hz": [12.7], "modeled": [False]}
+    pro = [T0 + 50 * i for i in range(40)]
+    ref = availability._per_pro_lsb_scan(pro, native, "ZERO_THREE_LEFT", 12.7,
+                                         td_recordings=td, event_psd_recordings=psd)
+    ref_s = availability._per_pro_lsb_spectrum_scan(pro, "ZERO_THREE_LEFT", CENTERS,
+                                                    td_recordings=td, event_psd_recordings=psd)
+    prev = availability.USE_CHANNEL_INDEX
+    try:
+        for flag in (True, False):
+            availability.USE_CHANNEL_INDEX = flag
+            got = availability.per_pro_lsb(pro, native, "ZERO_THREE_LEFT", 12.7,
+                                           td_recordings=td, event_psd_recordings=psd)
+            _assert_identical(ref, got)
+            got_s = availability.per_pro_lsb_spectrum(pro, "ZERO_THREE_LEFT", CENTERS,
+                                                      td_recordings=td, event_psd_recordings=psd)
+            _assert_identical_spectrum(ref_s, got_s)
+        # and with a caller-supplied index, as the service passes it
+        idx = _index(td, psd)
+        _assert_identical(ref, availability.per_pro_lsb(pro, native, "ZERO_THREE_LEFT", 12.7,
+                                                        index=idx))
+        _assert_identical_spectrum(ref_s, availability.per_pro_lsb_spectrum(
+            pro, "ZERO_THREE_LEFT", CENTERS, index=idx))
+    finally:
+        availability.USE_CHANNEL_INDEX = prev

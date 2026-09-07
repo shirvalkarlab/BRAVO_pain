@@ -409,3 +409,20 @@ changed code or the record:
   it as universal time, the platform as the process's local time. Equal in the container (whose
   zone is universal time, checked: `TZ=UTC`, offset 0), eight hours apart on this machine. The form
   now follows the platform (decision 42); the platform's rule is open item 19.
+- Measured on RCS08 through the bridge (2026-09-07): every start time on the 826 time-domain
+  and device-spectrum recordings is a number (738 `float64`, 88 `float`), none a string. So the
+  local-zone rule in open item 19 is reachable by the code and not reached by this record.
+
+### 6i. Track B steps 2, 3 and 5 observations, 2026-09-07
+
+- The 72-million figure reproduced exactly on the reference path: 72,457,293 canonicalisations
+  per page request with the switch off, 5,132 with it on. The page went from about 64 to 65 s
+  to about 53 to 54 s, alternating rounds; every one of 8,087,210 response values equal to the
+  page captured before the change, in all four rounds.
+- `per_pro_lsb_spectrum` IS reached by the default page (the spectral scan, 30 calls on a cold
+  memo), and the band-by-length sweep reaches neither reader. The plan's step 3 note had this
+  the other way round.
+- A page's response holds 8,087,210 comparable values, of which none is a wall-clock timing; the
+  sweep's response holds 18 timing fields among 27,323 values. A comparison that skips only
+  top-level timing keys misses nested ones, which is why the sweep control reported 18
+  differences and each had to be read to see it was a timing.

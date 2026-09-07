@@ -26,6 +26,26 @@ import numpy as np
 
 from . import analytics
 
+# THE CANONICAL DECODED FORM (Track B). Both spellings on purpose: the container's path root makes
+# the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
+try:
+    from modules.DecodeCommon import (build_channel_index as _build_channel_index,
+                                      per_pro_lsb_indexed as _per_pro_lsb_indexed,
+                                      per_pro_lsb_spectrum_indexed as _per_pro_lsb_spectrum_indexed)
+except ImportError:
+    from DecodeCommon import (build_channel_index as _build_channel_index,
+                              per_pro_lsb_indexed as _per_pro_lsb_indexed,
+                              per_pro_lsb_spectrum_indexed as _per_pro_lsb_spectrum_indexed)
+
+#: THE SWITCH BETWEEN THE INDEXED READERS AND THE REFERENCE SCANS. `per_pro_lsb` and
+#: `per_pro_lsb_spectrum` read from a `ChannelIndex` prepared once per request when this is True,
+#: and run their original per-call scans (`_per_pro_lsb_scan`, `_per_pro_lsb_spectrum_scan`) when
+#: it is False. The scans are kept, not deleted: they are the reference the indexed readers are
+#: proven equal to (DecodeCommon/tests), and flipping this in one process is how the equality proof
+#: on the live record alternates rounds honestly. If a served number is ever suspected, set this
+#: False and the page recomputes the old way with no deployment.
+USE_CHANNEL_INDEX = True
+
 # Recording.type -> (dtype lane, product key). Mirrors the type strings assigned at ingestion in
 # MedtronicPercept/Session.py. Several map onto the same lane (density-gated, not product-gated).
 TYPE_MAP = {
@@ -845,11 +865,13 @@ PRO_LSB_TIER_BRIDGE = "psd_bridge"    # PSD-only patient event coincided -> CS-3
 PRO_LSB_SATURATION_UV = 4000.0
 
 
-def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
+def _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
                 td_recordings=None, event_psd_recordings=None,
                 native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
                 saturation_uv=PRO_LSB_SATURATION_UV):
-    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
+    """REFERENCE IMPLEMENTATION, kept for the equality check; `per_pro_lsb` is the entry point.
+
+    One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
 
     For each PRO timestamp, walk the precedence and stop at the first tier that yields a value:
       (1) NATIVE device LSB  — if `native_lsb_series` (a channel's lsb_series entry, NATIVE samples
@@ -1005,11 +1027,13 @@ def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_h
     return out
 
 
-def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
+def _per_pro_lsb_spectrum_scan(pro_times, channel, centers_hz, *, band_half_hz=2.5,
                          td_recordings=None, event_psd_recordings=None,
                          native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
                          saturation_uv=PRO_LSB_SATURATION_UV):
-    """Per-matched-pair FULL-SPECTRUM modeled LSB — the SHARED source of truth for both the timeline
+    """REFERENCE IMPLEMENTATION, kept for the equality check; `per_pro_lsb_spectrum` is the entry point.
+
+    Per-matched-pair FULL-SPECTRUM modeled LSB — the SHARED source of truth for both the timeline
     modeled markers and the spectral feature-importance panel. For each PRO and a vector of band
     centers, return the 0–100 Hz LSB vector via the SAME CS-1…CS-4 routes per_pro_lsb uses, but
     computed for EVERY center in one vectorized pass instead of a single sensing band.
@@ -1143,6 +1167,72 @@ def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
         rec["reason"] = "no TD coverage and no coincident PSD event"
         out.append(rec)
     return out
+
+
+def channel_index(td_recordings=None, event_psd_recordings=None):
+    """The canonical decoded form for one request's recordings, built once and read many times.
+
+    Group every voltage trace and every device-spectrum record by canonical channel name ONCE,
+    with the band-power recipe's own step, so no reader canonicalises a name or parses a start
+    time again. On the live record the per-report scan this replaces made 72,332,380 channel-name
+    canonicalisations in one page request (99.87 percent of all of them); through the index the
+    same work is one per (recording, channel).
+    """
+    return _build_channel_index(td_recordings, event_psd_recordings,
+                                step_seconds=analytics.TRANSFORM_STEP_SECONDS)
+
+
+def per_pro_lsb(pro_times, native_lsb_series, channel, center_hz, *, band_half_hz=2.5,
+                td_recordings=None, event_psd_recordings=None,
+                native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
+                saturation_uv=PRO_LSB_SATURATION_UV, index=None):
+    """One LSB value per PRO for THIS channel/band, chosen by a strict source precedence (CS-4).
+
+    Same contract, same rule, same record fields as `_per_pro_lsb_scan`, whose docstring is the
+    specification. Pass `index=` (from `channel_index`) when the caller serves several channels
+    from the same recordings, so the form is built once rather than once per channel; without
+    it the form is built here from `td_recordings` and `event_psd_recordings`. With
+    `USE_CHANNEL_INDEX` False and no `index`, the reference scan runs instead.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _per_pro_lsb_scan(pro_times, native_lsb_series, channel, center_hz,
+                                 band_half_hz=band_half_hz, td_recordings=td_recordings,
+                                 event_psd_recordings=event_psd_recordings,
+                                 native_tol_s=native_tol_s, extent_s=extent_s,
+                                 max_missing_frac=max_missing_frac, saturation_uv=saturation_uv)
+    if index is None:
+        index = channel_index(td_recordings, event_psd_recordings)
+    return _per_pro_lsb_indexed(pro_times, native_lsb_series, channel, center_hz,
+                                index=index, analytics=analytics, band_half_hz=band_half_hz,
+                                native_tol_s=native_tol_s, extent_s=extent_s,
+                                max_missing_frac=max_missing_frac, saturation_uv=saturation_uv,
+                                tier_native=PRO_LSB_TIER_NATIVE, tier_td=PRO_LSB_TIER_TD,
+                                tier_bridge=PRO_LSB_TIER_BRIDGE)
+
+
+def per_pro_lsb_spectrum(pro_times, channel, centers_hz, *, band_half_hz=2.5,
+                         td_recordings=None, event_psd_recordings=None,
+                         native_tol_s=120.0, extent_s=None, max_missing_frac=0.10,
+                         saturation_uv=PRO_LSB_SATURATION_UV, index=None):
+    """Per-matched-pair full-spectrum modeled LSB; `_per_pro_lsb_spectrum_scan` is the specification.
+
+    `index=` and `USE_CHANNEL_INDEX` behave exactly as in `per_pro_lsb`.
+    """
+    if index is None and not USE_CHANNEL_INDEX:
+        return _per_pro_lsb_spectrum_scan(pro_times, channel, centers_hz,
+                                          band_half_hz=band_half_hz, td_recordings=td_recordings,
+                                          event_psd_recordings=event_psd_recordings,
+                                          native_tol_s=native_tol_s, extent_s=extent_s,
+                                          max_missing_frac=max_missing_frac,
+                                          saturation_uv=saturation_uv)
+    if index is None:
+        index = channel_index(td_recordings, event_psd_recordings)
+    return _per_pro_lsb_spectrum_indexed(pro_times, channel, centers_hz, index=index,
+                                         analytics=analytics, band_half_hz=band_half_hz,
+                                         native_tol_s=native_tol_s, extent_s=extent_s,
+                                         max_missing_frac=max_missing_frac,
+                                         saturation_uv=saturation_uv,
+                                         tier_td=PRO_LSB_TIER_TD, tier_bridge=PRO_LSB_TIER_BRIDGE)
 
 
 # Map a TD recording's `product` key (TYPE_MAP, e.g. "streaming_td"/"indefinite"/"montage_td") to the

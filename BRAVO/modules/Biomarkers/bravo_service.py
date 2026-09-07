@@ -723,6 +723,10 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
     if pt.size == 0:
         return out
     sensing_hz_by_channel = sensing_hz_by_channel or {}
+    # ONE canonical form for every channel's call (Track B step 2): the recordings are grouped by
+    # channel and their start times parsed once here, not once per channel and per pain report.
+    index = (availability.channel_index(td_recordings, event_psd_blocks)
+             if availability.USE_CHANNEL_INDEX else None)
     for raw_ch, series in (lsb or {}).items():
         key = availability._canon_channel(raw_ch)
         # ONE center per channel — the configured sensing center (deployment 'one band' semantics).
@@ -743,7 +747,7 @@ def _pro_lsb_by_channel(pro_times, lsb, td_recordings, event_psd_blocks,
         try:
             out[raw_ch] = availability.per_pro_lsb(
                 pt, series, key, float(center),
-                td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+                td_recordings=td_recordings, event_psd_recordings=event_psd_blocks, index=index)
         except Exception as e:
             _log.warning("Biomarkers: per-PRO LSB failed for %s (%s)", raw_ch, e)
     return out
@@ -837,11 +841,14 @@ def _pro_lsb_spectrum_cached(participant_uid, pro_times, channels, td_recordings
         return cached
     out = {}
     cen = np.asarray(centers, dtype=float)
+    index = (availability.channel_index(td_recordings, event_psd_blocks)   # once, Track B step 3
+             if availability.USE_CHANNEL_INDEX else None)
     for raw_ch in channels:
         key = availability._canon_channel(raw_ch)
         try:
             out[raw_ch] = availability.per_pro_lsb_spectrum(
-                pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks)
+                pt, key, cen, td_recordings=td_recordings, event_psd_recordings=event_psd_blocks,
+                index=index)
         except Exception as e:
             _log.warning("Biomarkers: per-PRO LSB spectrum failed for %s (%s)", raw_ch, e)
     # bound the memo (FIFO-ish): drop the oldest entry when full. Check/evict/insert under the lock so
