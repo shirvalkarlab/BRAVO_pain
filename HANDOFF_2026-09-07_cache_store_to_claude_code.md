@@ -18,8 +18,14 @@ cd /Users/pshirvalkar/dev/BRAVO_pain
 ls *.md | wc -l                                    # expect 12
 git ls-files docs/archive/2026-09-07 docs/exported_artifacts \
             .planning BRAVO/modules/CacheStore | wc -l   # expect 75
-git log --oneline -4                               # expect four commits dated 2026-09-07
+git log --oneline -5                               # expect the five subjects listed below
 ```
+
+The five newest commits, oldest first, are the record consolidation, the one cache store, tracking
+the decoded-form prototype, the `.gitignore` fix, and a correction to this inventory check.
+**They are timestamped 2026-09-06 even though the work was done on the 2026-09-07 session day**,
+because this machine's local date runs a day behind; the same lag put `2026-09-06` in the planning
+directory's name.
 
 **Name those four directories explicitly rather than matching `docs/` as a whole** — `docs/` also
 holds 113 files that were already in this repository, including 77 images and the Sphinx
