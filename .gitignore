@@ -374,3 +374,13 @@ c2_*.png
 c2_*.csv
 sc[0-9]_*.png
 handoff_*.png
+
+# --- 2026-09-07: keep the handover package and the archive tracked ---------------
+# The blanket `HANDOFF_*.md` and `AUDIT_TRIAGE_*.md` rules above were written when this
+# repository root was filling up with per-session handoffs. They now exclude the OPPOSITE of
+# what was intended: the one handoff a new session must read, and three archived audits that
+# were moved into docs/archive/ deliberately. A file that exists locally but is untracked
+# survives only until someone runs `git clean`, and it is absent from every clone.
+# Later patterns win, so these negations restore them.
+!HANDOFF_2026-09-07_cache_store_to_claude_code.md
+!docs/archive/**/*.md
