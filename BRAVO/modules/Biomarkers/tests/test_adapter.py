@@ -15,6 +15,7 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+import pytest
 
 # Put BRAVO/ on the path so `modules.Biomarkers...` resolves (modules is a namespace pkg).
 _BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -90,6 +91,117 @@ def test_compute_psd_pain_correlation_runs():
     assert out["psd"].shape == (5, C, F)
     assert out["corr"].shape == (C, F)
     assert out["pval"].shape == (C, F)
+
+
+@pytest.mark.parametrize("orientation", ["samples_channels", "channels_samples", "vector"])
+def test_missing_packet_flags_survive_recording_adapter(orientation):
+    rec = _make_recording()
+    n = len(rec["Data"])
+    expected = np.zeros(n, dtype=bool)
+    expected[20:40] = True
+    flags = np.zeros((n, 2))
+    flags[20:40, 1] = 1  # Missing on either channel rejects the shared window.
+    rec["Missing"] = flags if orientation == "samples_channels" else (
+        flags.T if orientation == "channels_samples" else expected.astype(int))
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    np.testing.assert_array_equal(epoch["missing"], expected)
+    np.testing.assert_array_equal(epoch["stream_data"][0], rec["Data"].T)
+    assert epoch["channel_names"] == [CHAN_ORDER]
+    assert epoch["start_time"] == rec["StartTime"]
+
+
+@pytest.mark.parametrize("missing", [None, []])
+def test_optional_missing_mask_and_single_channel_remain_supported(missing):
+    rec = _make_recording()
+    rec["Data"] = rec["Data"][:, 0]
+    rec["ChannelNames"] = CHAN_ORDER[:1]
+    rec["Missing"] = missing
+    epoch = adapter.bravo_timedomain_to_streamdata(rec)
+    assert epoch["missing"] is None
+    assert epoch["stream_data"][0].shape == (1, len(rec["Data"]))
+    rec.pop("Missing")
+    assert adapter.bravo_timedomain_to_streamdata(rec)["missing"] is None
+
+
+@pytest.mark.parametrize("missing_samples,rejected", [(199, False), (200, False), (201, True)])
+def test_correlation_rejects_only_windows_above_existing_missing_limit(missing_samples, rejected):
+    recs = [_make_recording(seed=k) for k in range(5)]
+    recs[2]["Missing"][:missing_samples, 1] = 1
+    recs[2]["Data"][:missing_samples, 1] = 0
+    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
+    labels = np.array([2., 4., 6., 8., 9.])
+    controls = [{key: value for key, value in epoch.items() if key != "missing"}
+                for epoch in streams]
+    before = streaming_psd.compute_psd_pain_correlation(controls, labels, CHAN_ORDER)
+    with np.errstate(invalid="ignore"):
+        after = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
+    assert np.isfinite(before["psd"]).all()
+    if rejected:
+        assert np.isnan(after["psd"][2]).all()
+        np.testing.assert_array_equal(after["psd"][[0, 1, 3, 4]], before["psd"][[0, 1, 3, 4]])
+    else:
+        np.testing.assert_array_equal(after["psd"], before["psd"])
+    np.testing.assert_array_equal(after["labels"], labels)
+    assert after["chan_order"] == CHAN_ORDER
+
+
+def test_missing_fraction_uses_only_the_existing_first_thirty_second_window():
+    recs = [_make_recording(n_seconds=40, seed=k) for k in range(5)]
+    recs[2]["Missing"][7500:, :] = 1  # Later gap must not reject a clean first window.
+    recs[2]["Data"][7500:, :] = 0
+    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
+    labels = [2., 4., 6., 8., 9.]
+    after = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
+    controls = [dict(epoch, missing=None) for epoch in streams]
+    before = streaming_psd.compute_psd_pain_correlation(controls, labels, CHAN_ORDER)
+    np.testing.assert_array_equal(after["psd"], before["psd"])
+
+
+@pytest.mark.parametrize("transform", ["log", "log_zscore", "fooof", "relative_power", "relative_power_log"])
+def test_correlation_transform_routes_preserve_clean_psd(transform):
+    recs = [_make_recording(seed=k) for k in range(5)]
+    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
+    labels = [2., 4., 6., 8., 9.]
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform=transform)
+    expected = np.concatenate([
+        streaming_psd.welch_psd_for_instance(rec["Data"].T, CHAN_ORDER, FS, CHAN_ORDER)
+        for rec in recs], axis=0)
+    np.testing.assert_array_equal(out["psd"], expected)
+    assert out["transform"] == transform
+    assert out["feature"].shape == expected.shape
+
+
+def test_correlation_accepts_single_channel_group_name_and_rejects_unknown_transform():
+    recs = [_make_recording(seed=k) for k in range(5)]
+    streams = [{"stream_data": [rec["Data"][:, 0]],
+                "channel_names": [CHAN_ORDER[0]], "sample_rate": FS} for rec in recs]
+    out = streaming_psd.compute_psd_pain_correlation(streams, [2, 4, 6, 8, 9], CHAN_ORDER[:1])
+    assert out["psd"].shape == (5, 1, len(streaming_psd.F_SET))
+    assert np.isfinite(out["psd"]).all()
+    with pytest.raises(ValueError, match="transform must be one of"):
+        streaming_psd.compute_psd_pain_correlation(streams, [2, 4, 6, 8, 9], CHAN_ORDER[:1], transform="unknown")
+
+
+@pytest.mark.parametrize("matched", [True, False])
+@pytest.mark.parametrize("sources", [["TD streaming", "TD streaming"], ["TD streaming", "Montage/survey"]])
+def test_one_per_rating_aggregation_keeps_standardized_features_without_obsolete_density(matched, sources):
+    matrix = {"f_set": np.array([10., 20.]), "logX": np.array([[1., 2.], [3., 6.]]),
+              "t": np.array([1000., 1010.]), "channel": np.array(["LEFT", "LEFT"]),
+              "source": np.array(sources)}
+    out = streaming_psd.build_pooled_detail_from_matrix(
+        matrix, [1005. if matched else 10000.], [7.], tolerance_min=1.,
+        min_per_group=2, aggregate="one_per_rating")
+    assert "psd_abs_uv2_per_hz" not in out
+    assert "device_psd_scale_by_channel" not in out
+    if matched:
+        # Same-source standardization gives [-1,+1]; single-source rows center to zero.
+        np.testing.assert_allclose(out["feature"], np.zeros((1, 1, 2)), atol=1e-15)
+        np.testing.assert_array_equal(out["labels"], [7.])
+        np.testing.assert_array_equal(out["rating_group"], [0])
+        np.testing.assert_array_equal(out["row_lsb_tier"], ["td"])
+    else:
+        assert out["feature"].shape == (0, 0, 2)
+        assert out["labels"].size == 0
 
 
 def _make_pro_df():

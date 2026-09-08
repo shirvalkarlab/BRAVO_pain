@@ -150,6 +150,12 @@
       ],
       "BRAVO/Server/views.py": [
         "get_client_ip"
+      ],
+      "BRAVO/modules/Biomarkers/adapter.py": [
+        "bravo_timedomain_to_streamdata"
+      ],
+      "BRAVO/modules/Biomarkers/routines/streaming_psd.py": [
+        "compute_psd_pain_correlation"
       ]
     }
   },
@@ -395,6 +401,24 @@
       "alternative_evidence": "Real Nginx-to-Uvicorn origin-forwarding component tests, spoofed-header/manual-ban regressions, normal authenticated public viewer checks.",
       "owner": "Aditya BRAVO maintainer",
       "revisit": "Expand strict scope before changing remaining homepage/rate-limit behavior."
+    },
+    {
+      "path": "BRAVO/modules/Biomarkers/adapter.py",
+      "source_revision": "71e3933c8a2e45059d29a1713e84c315b07b3310 with selective Prasad 1f757484 adaptation",
+      "reason": "Missing-mask propagation in bravo_timedomain_to_streamdata is strict; unchanged inherited survey, chronic and timestamp adapters remain measured legacy scope.",
+      "risk": "No whole-file 95 percent claim for inherited adapter pathways.",
+      "alternative_evidence": "Full adapter/pipeline regressions; strict changed-function branch gate; private canonical first-window PSD equivalence and rejection check.",
+      "owner": "Aditya BRAVO maintainer",
+      "revisit": "Extend strict scope before substantive changes to remaining inherited adapters."
+    },
+    {
+      "path": "BRAVO/modules/Biomarkers/routines/streaming_psd.py",
+      "source_revision": "71e3933c8a2e45059d29a1713e84c315b07b3310 with selective Prasad 1f757484 adaptation",
+      "reason": "compute_psd_pain_correlation is strict. Other inherited methods remain measured legacy scope. The matcher local-variable rename is mechanical; optional one-per-rating cleanup removes obsolete undefined absolute-density bookkeeping without changing standardized features or source tiers.",
+      "risk": "No whole-file or whole-aggregation-function 95 percent claim; historical scientific branches remain incompletely covered.",
+      "alternative_evidence": "Full streaming and matching regressions; strict changed-orchestrator gate; private canonical PSD equivalence; matched TD and mixed-source plus all-unmatched aggregation regressions with absent obsolete density outputs; independent diff review.",
+      "owner": "Aditya BRAVO maintainer; independent nightly technical reviewer",
+      "revisit": "Expand strict scope and numerical acceptance before substantive matcher, aggregation or other inherited algorithm changes."
     }
   ]
 }

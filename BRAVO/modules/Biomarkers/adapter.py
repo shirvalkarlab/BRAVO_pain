@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
+from .routines.availability import _missing_per_sample
+
 
 # ---------------------------------------------------------------------------
 # 1) Recording reshape: BRAVO TimeDomain dict -> Stream-like epoch dict
@@ -40,7 +42,8 @@ def bravo_timedomain_to_streamdata(recording):
       {"stream_data": [ (n_ch, n_samples) ],     # single group per recording
        "channel_names": [ [ch0, ch1, ...] ],
        "sample_rate": float,
-       "start_time": float or None}
+       "start_time": float or None,
+       "missing": per-sample dropped-packet flags, or None}
     """
     data = np.asarray(recording["Data"], dtype=float)
     if data.ndim == 1:
@@ -51,6 +54,7 @@ def bravo_timedomain_to_streamdata(recording):
         "channel_names": [list(recording["ChannelNames"])],
         "sample_rate": float(recording["SamplingRate"]),
         "start_time": recording.get("StartTime"),
+        "missing": _missing_per_sample(recording.get("Missing"), data.shape[0]),
     }
 
 

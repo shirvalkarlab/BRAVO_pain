@@ -670,29 +670,29 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="ne
             return lab, dt, pro_idx
 
     # --- PSD-first branches ("prior", "nearest") -----------------------------------------------
-    for i, t in enumerate(times_s):
-        if not _np.isfinite(t):
+    for i, psd_time in enumerate(times_s):
+        if not _np.isfinite(psd_time):
             continue
-        pos = int(_np.searchsorted(pt, t))
+        pos = int(_np.searchsorted(pt, psd_time))
         best, best_d = -1, None
         if direction == "prior":
-            # PSD must precede the rating: consider only PRO times at or after t (pt[k] >= t), and
-            # pick the nearest such within tolerance. searchsorted(pt, t) is the first index with
-            # pt[k] >= t, so the candidate is pos (and pos itself if pt[pos]==t).
+            # PSD must precede the rating: consider only PRO times at or after psd_time (pt[k] >= psd_time), and
+            # pick the nearest such within tolerance. searchsorted(pt, psd_time) is the first index with
+            # pt[k] >= psd_time, so the candidate is pos (and pos itself if pt[pos]==psd_time).
             k = pos
             if 0 <= k < pt.size:
-                d = pt[k] - t
+                d = pt[k] - psd_time
                 if 0 <= d <= tol_s:
                     best, best_d = k, d
         else:
             for k in (pos - 1, pos):
                 if 0 <= k < pt.size:
-                    d = abs(pt[k] - t)
+                    d = abs(pt[k] - psd_time)
                     if d <= tol_s and (best_d is None or d < best_d):
                         best, best_d = k, d
         if best >= 0:
             lab[i] = pv[best]
-            dt[i] = (pt[best] - t) / 60.0
+            dt[i] = (pt[best] - psd_time) / 60.0
             pro_idx[i] = int(order[best])   # map back to caller's original PRO ordering
     return lab, dt, pro_idx
 
@@ -812,7 +812,6 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "max_s": round(float(np.max(_td_dur)), 1),
     } if _td_dur.size else None)
 
-    # ABSOLUTE linear PSD density (µV²/Hz), recovered from the cached log matrix BEFORE the
     # Per-row source tag (unchanged z-score machinery uses src_arr directly; the short
     # _lsb_tier tag is kept so callers can label rows as td/survey/patient_event in the UI).
     # NOTE: the old Welch-density × k=269 / device-FFT rescale path was REMOVED 2026-06-27 (PI).
@@ -890,13 +889,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             for i in np.where(keep)[0]:
                 keys.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
             rows_Xz, rows_ch, rows_src, rows_t, rows_lab, rows_dt, rows_pidx = ([] for _ in range(7))
-            rows_Xabs = []
             rows_tier = []
-            # LSB-fidelity priority within a (channel, rating) cluster: a real TD reading outranks a
-            # montage/survey sweep, which outranks a scaled device-FFT, which outranks an
-            # uncalibrated one. The cluster's calibrated-LSB density is the LINEAR mean over ONLY the
-            # highest tier present (so a survey or device-PSD reading never dilutes a TD one); the
-            # z-scored dB view still averages the whole cluster as before.
+            # Retain the highest source tier for display; z-scored features average the
+            # whole cluster. Absolute-density conversion is handled by the separate cache.
             _tier_rank = {"td": 0, "survey": 1, "device_psd_scaled": 2,
                           "device_psd_uncalibrated": 3, "excluded": 9}
             for (ch, pidx), idxs in keys.items():
@@ -906,12 +901,8 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 ranks = [_tier_rank.get(t, 9) for t in tiers_here]
                 best = min(ranks) if ranks else 9
                 if best >= 9:
-                    rows_Xabs.append(np.full(F, np.nan)); rows_tier.append("excluded")
+                    rows_tier.append("excluded")
                 else:
-                    sel = idxs[np.asarray(ranks) == best]
-                    # Absolute density aggregates in LINEAR space (mean µV²/Hz), so the band integral
-                    # × 269 stays a physical LSB. Only the top-tier rows define it.
-                    rows_Xabs.append(np.nanmean(Xabs[sel], axis=0))
                     rows_tier.append({0: "td", 1: "survey", 2: "device_psd_scaled",
                                       3: "device_psd_uncalibrated"}[best])
                 rows_ch.append(ch)
@@ -922,7 +913,6 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 rows_dt.append(float(np.nanmean(dt_min[idxs])))
                 rows_pidx.append(int(pidx))
             Xz = np.vstack(rows_Xz)
-            Xabs = np.vstack(rows_Xabs)
             ch_arr = np.asarray(rows_ch, dtype=object)
             src_arr = np.asarray(rows_src, dtype=object)
             _lsb_tier = np.asarray(rows_tier, dtype=object)
@@ -931,7 +921,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             dt_min = np.asarray(rows_dt, dtype=float)
             pro_idx = np.asarray(rows_pidx, dtype=int)
         else:
-            Xz = Xz[:0]; Xabs = Xabs[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
+            Xz = Xz[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
             _lsb_tier = _lsb_tier[:0]
             t_arr = t_arr[:0]; labels = labels[:0]; dt_min = dt_min[:0]; pro_idx = pro_idx[:0]
 
@@ -1079,6 +1069,8 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
             "stream_data"    : list of per-group channel arrays (or 2-D (n_ch, n_samples))
             "channel_names"  : list aligned to stream_data groups (list of lists)
             "sample_rate"    : float
+            "missing"        : optional per-sample dropped-packet flags; the existing
+                               >10% first-window rejection applies when supplied.
         This is exactly the shape `adapter.bravo_timedomain_to_streamdata` emits, and is
         also what `dbs_io.Stream.Stream` exposes (`.stream_data`, `.channel_names`,
         `.sample_rate`).
@@ -1112,7 +1104,8 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
         for g_idx, group in enumerate(sd):
             names = cn[g_idx] if isinstance(cn[g_idx], (list, tuple)) else [cn[g_idx]]
             group_psds.append(
-                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set)
+                welch_psd_for_instance(group, names, fs, chan_order, f_set=f_set,
+                                       missing=ep.get("missing"))
             )
         psd_epochs.append(np.nanmean(np.concatenate(group_psds, axis=0), axis=0, keepdims=True))
 

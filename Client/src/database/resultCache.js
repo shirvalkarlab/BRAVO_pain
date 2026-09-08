@@ -9,6 +9,8 @@ const VERSIONS = new Map();
 const LISTENERS = new Set();
 const USERS = new WeakMap();
 const MAX_ENTRIES = 24;
+const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
+const MAX_PARTICIPANTS = 8;
 let nextUser = 0;
 let principal = null;
 let epoch = 0;
@@ -91,6 +93,40 @@ export function isCompletedResult(bundle) {
     ["pending", "queued", "running", "processing"].includes(bundle.data.status)));
 }
 
+/** Serialized UTF-16 size at insertion, not a measurement of retained JavaScript heap.
+ * Include payload, metadata and identity/key strings; decline lossy/non-JSON values rather
+ * than assign them a small fallback size. Serialization itself temporarily allocates a string.
+ */
+function estimateBytes(entry) {
+  try {
+    const json = JSON.stringify(entry, function jsonValue(key, value) {
+      // Inspect the original too: toJSON must not hide a large non-JSON object.
+      const original = this[key];
+      if (["undefined", "function", "symbol", "bigint"].includes(typeof original) ||
+          (typeof original === "number" && !Number.isFinite(original))) throw new Error("non-JSON value");
+      if (original !== null && typeof original === "object" &&
+          !Array.isArray(original) && Object.getPrototypeOf(original) !== Object.prototype) throw new Error("non-JSON object");
+      if (original !== value) throw new Error("custom JSON conversion");
+      return value;
+    });
+    return json.length * 2;
+  } catch (_) { return null; }
+}
+
+function totalBytes() { return [...STORE.values()].reduce((sum, entry) => sum + entry.bytes, 0); }
+function participants() { return new Set([...STORE.values()].map((entry) => entry.uid)); }
+
+/** Drop a whole other participant using its most recent read across all module/QC slots. */
+function evictParticipant(currentUid) {
+  const touched = new Map();
+  for (const entry of STORE.values()) {
+    if (entry.uid === currentUid) continue;
+    touched.set(entry.uid, Math.max(touched.get(entry.uid) ?? -Infinity, entry.lastReadAt));
+  }
+  const [victim] = [...touched.entries()].sort((a, b) => a[1] - b[1])[0];
+  for (const [key, entry] of STORE) if (entry.uid === victim) STORE.delete(key);
+}
+
 export function putResult(moduleKey, uid, key, bundle, meta = null, identity = null) {
   const scope = cacheScope(identity);
   if (!moduleKey || !uid || !scope) return { stored: false, reason: "no authenticated cache scope" };
@@ -98,10 +134,16 @@ export function putResult(moduleKey, uid, key, bundle, meta = null, identity = n
   const s = slot(moduleKey, uid, scope);
   if (underMemoryPressure()) STORE.clear();
   if (underMemoryPressure()) return { stored: false, reason: "browser memory is near its limit" };
+  const entry = { bundle, moduleKey, uid, key, scope, serverToken: serverToken(uid), meta };
+  const bytes = estimateBytes(entry);
+  if (bytes === null) return { stored: false, reason: "result is not JSON-serializable" };
+  if (bytes > MAX_TOTAL_BYTES) return { stored: false, reason: "result exceeds the cache byte budget" };
+  if (underMemoryPressure()) { STORE.clear(); return { stored: false, reason: "browser memory is near its limit" }; }
   const now = Date.now();
-  STORE.set(s, { bundle, moduleKey, uid, key, savedAt: now, lastReadAt: now,
-    serverToken: serverToken(uid), meta });
-  while (STORE.size > MAX_ENTRIES) {
+  STORE.set(s, { ...entry, bytes, savedAt: now, lastReadAt: now });
+  while (participants().size > MAX_PARTICIPANTS) evictParticipant(uid);
+  // The admitted entry fits alone; each iteration can remove another slot and terminates.
+  while (STORE.size > MAX_ENTRIES || totalBytes() > MAX_TOTAL_BYTES) {
     const candidates = [...STORE.entries()].filter(([k]) => k !== s);
     candidates.sort((a, b) => Number(a[1].uid === uid) - Number(b[1].uid === uid) || a[1].lastReadAt - b[1].lastReadAt);
     STORE.delete(candidates[0][0]);
@@ -143,5 +185,7 @@ export function cacheStats() {
   cacheScope();
   const memory = memoryInfo();
   // Do not expose account identifiers, participant identifiers, request settings or payloads.
-  return { count: STORE.size, maxEntries: MAX_ENTRIES, memory, memoryMeasurable: memory !== null };
+  return { count: STORE.size, maxEntries: MAX_ENTRIES, totalBytes: totalBytes(),
+    maxTotalBytes: MAX_TOTAL_BYTES, participantCount: participants().size, maxParticipants: MAX_PARTICIPANTS,
+    byteMeasurement: "serialized UTF-16 at insertion; not heap usage", memory, memoryMeasurable: memory !== null };
 }
