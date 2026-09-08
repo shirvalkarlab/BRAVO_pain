@@ -819,3 +819,31 @@ this machine (pyenv 3.12.9) has no pytest.
 - Host suite 940 passed (was 936, +4 new), both orders. Not yet wired into the stored
   `amplitude_effect_by_band` table (decision 40) -- that is a separate integration step (extending
   the stored schema, the key, the provenance chain) not built in this pass.
+- Committed and pushed as `10b9e8bb` under the PI's own identity.
+
+## Session 2026-09-08, third entry -- two background investigations landed, recorded, not yet fixed
+
+- The entangled-pipeline review (open item 6) completed. Confirmed finding, decision 57: the
+  older notebook-derived routine `streaming_psd.compute_psd_pain_correlation` never applies the
+  zero-fill rejection rule (decision 4) the rest of the pipeline enforces since June, because the
+  adapter feeding it windows drops the field that carries how filled-in each window is. This is
+  live and currently runs on every ordinary Recompute click. No code changed. The review's own
+  draft over-claimed twice and both were caught and corrected before reporting: only one
+  production call site reaches this routine (not two -- the second apparent site is a different
+  module's function of the same name), and two tests do run this routine's output live on RCS08,
+  but only checking internal self-consistency, never a fixed known-correct value. Recorded as
+  decision 57 and open item 9 (his call: fix now with an equality proof, or defer; his go-ahead
+  is required before any change per constraint 8).
+- The Recompute profiling investigation (`a995da316079930ca`) completed, live on RCS08, twice.
+  Matching pain ratings to signal chunks is NOT the bottleneck: 0.09-0.74 s of a 40-43 s request,
+  0.2-1.7 percent, already array-wide math from the `958cc89` vectorization. The two real costs
+  are a 1,000-shuffle randomization test repeated nine times inside the same older routine
+  (33.6-36.7 percent) and a separate ~90-band x 6-contact scan (22.0-22.8 percent), neither
+  related to matching. Recorded in "Resolved by this consolidation".
+- The double-fetch live check (a separate agent) could not get past the running app's sign-in
+  wall; correctly refused to enter credentials and reported the block rather than guessing.
+  Recorded as open item 21 -- the code-reading conclusion (an existing in-flight guard already
+  prevents the double fetch) stands unconfirmed against a live page.
+- `DECISIONS_and_open_items.md` updated: item 6 marked resolved-with-findings, new decision 57,
+  new open items 9 and 21, and two new "Resolved by this consolidation" entries. `task_plan.md`
+  Next Step rewritten to point at open item 9 as the one thing waiting on the PI.

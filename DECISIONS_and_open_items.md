@@ -88,6 +88,7 @@ superseding decision describes the code as it stands.
 | 54 | **The shared result-cache's flat entry-count cap is replaced with a byte budget and a cap on how many distinct participants are kept resident, and the do-not-edit restriction on the three files that hold it is lifted for this one change.** | A count was always the wrong unit for entries three orders of magnitude apart in size (twenty kilobytes to nineteen megabytes), and the count also conflated two different problems: one participant's own module fan-out (up to nine slots) and unbounded growth across many participants in one session. The two new bounds separate them; the heap-pressure guard remains the actual safety net either way. | 2026-09-08 |
 | 55 | **A switching value may be placed on a band whose power rises then falls with current, but only on the side of the peak where one power value maps to one current. The current-to-power relationship is tested for curvature first, pooled across every stimulation-current ladder this participant has across every visit rather than one visit at a time, with the grouping between visits accounted for rather than pooled points treated as independent. When a real bend is confirmed and fits well, a second straight-line fit is added using only the data from the peak current onward.** | The device places its switching value between two power readings; a peaked band satisfies the same value going up and coming down, so the device cannot tell the two situations apart from the power reading alone unless the switching value sits on the one-sided, unambiguous stretch. Pooling across visits also answers open item 18: a single visit's ladder has too few settled points for the curvature test, but combined ladders across visits should clear it. | 2026-09-08 |
 | 56 | **Built and proven: the pooled, cluster-robust curvature test (`within_visit.amplitude_response_shape_pooled`) confirmed live on RCS08 rather than only on constructed data.** Pooling across visits does clear the eight-point floor for two of the three contacts with any coverage at 25-28 Hz: ONE_THREE_LEFT reaches 13 points across 4 visits, ZERO_THREE_RIGHT reaches 12 across 6. The result is more mixed than the single-day clinic-sheet finding: on ONE_THREE_LEFT, 26.5 and 27.5 Hz show significant curvature but without a clean peak inside the tested currents, while 25.5 and 28.5 Hz show none; on ZERO_THREE_RIGHT none of the four bands show curvature; ZERO_TWO_LEFT still has only one visit's worth of data (5 points) regardless of pooling. | On constructed data: a fixture built to fake a peak purely from between-visit baseline differences is correctly NOT reported as curved once visit is accounted for (the naive, unpooled test on the same points is fooled by it, confirming the fixture does what it claims); a genuine peak riding on three different per-visit baselines is correctly detected with the peak location undistorted. Host suite 940 passed (was 936, +4 new tests), both orders. | 2026-09-08 |
+| 57 | **The review authorized by item 6 found one confirmed, currently-live correctness gap in the entangled spectrum-and-pain routine, `streaming_psd.compute_psd_pain_correlation`: it never applies the zero-fill rejection rule (decision 4) that the rest of the pipeline has enforced since June, because the adapter that feeds it windows drops the field that carries how much of each window was filled in.** No fix has been made — see open item 9 for the three-part recommendation and why his go-ahead is needed first. Two smaller things the review found and corrected in its own draft before reporting them: only one production call site reaches this routine, not two as first read, because a second apparent site calls a different module's function of the same name; and two existing tests do exercise this routine's output live on RCS08, but only for internal self-consistency, never against a fixed known-correct value — the earlier claim that no test touches it at all was too broad and is withdrawn. | A same-window rejection rule with no visible failure mode is exactly the kind of gap that survives unnoticed (§2 principle 2's own reasoning for why this project treats a false-passing test as worse than none): every number this routine has ever produced from a heavily filled-in window is quietly wrong in the same silent way, and nothing before this review checked whether it was even applying the rule. | 2026-09-08 |
 | 47 | **Track G step 2: the device route in the three-source comparison excludes and counts samples above a saturation ceiling (`DEVICE_SPIKE_FOLD = 10` times the settled window's own median, provisional, open item 20); the ground-truth verdict of decision 33 is applied to every run, band and setting, pairing the device's band with the single nearest stored centre the comparison uses, and written as `ground_truth_verdict` by the closed-loop request with the tile entry in its provenance; Stim Optimizer reads it as `stim_optimizer`, reports it, keys its response on it and cites it.** | The rule was decided and not written back; the ceiling it requires did not exist in the code, and the number is a scientific choice, so it is one named constant relative to the window's own median. On RCS08 the ceiling changed 3 of 12,068 comparison values, excluded 12 spikes and moved no settled power; the verdict has 2,958 rows over 11 runs, 29 with both routes, fold 0.807 to 1.785, median 0.987; 2,912 copied values, 0 differences. | 2026-09-07 |
 | 46 | **Track F step 2: a short-lived Redis lock (`CacheStore/locks.py`) keyed on the tile file's own key is held while the tiles are built; it expires on its own (300 s against a 36 to 39 s build), a waiter reads the file when its sidecar appears and builds anyway after 150 s, and Redis unreachable, the client absent or the lock switched off all mean building as before.** | Proven on RCS08 with four concurrent cold requests: one build, three served, every request in about 41 s; the control with the lock off ran four builds contending for the machine and every request took about 368 s. Seven tests on a stand-in pin the requirements. | 2026-09-07 |
 | 45 | **Track G step 1: the deployment report's joined table and its fingerprint accept the calibrated frame, reading each band's linear power from its own `band_lsb_<centre>` column, its decibel expression from that, and leaving the mean-of-log scale empty; tiles marked unusable or railed are left out; the pipeline adds the candidate's own centre to the join's grid.** | The report had raised on every candidate since 2026-09-05, when `90eb109` switched its input to the calibrated frame and `8e31342` made the fingerprint strict, and the page showed the empty state. Reading the device's own scale follows decision 33. On RCS08 every candidate now returns three edges; the amplitude-to-pain edge resolves at −0.159 pain points per mA (90 clusters). | 2026-09-07 |
@@ -137,7 +138,8 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 ~~6. **A second sign-off before touching the entangled spectrum-and-correlation pass.**~~
    **RESOLVED 2026-09-08.** Authorized: open it up for the same review the rest of the pipeline
    received, and look for a chance to fold it into the pipeline that already exists separately.
-   Review in progress; nothing has been changed yet.
+   **The review is complete and found a live correctness gap — decision 57 and open item 9
+   below.** No code has been changed; the gap is confirmed but not yet fixed.
 7. **Clean up and simplify the band-by-length sweep's display** on the Biomarkers exploration page:
    less text, and the selected contact shown clearly on every plot rather than only some. When this
    happens, decide at the same time whether the sweep should run across every patient-reported
@@ -147,6 +149,27 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 8. **The example data shown in the Biomarkers module is not informative.** Raised in passing
    2026-09-08 while reviewing live output; not investigated further yet. Address during the same
    feature-polishing pass as item 7, not before.
+
+9. **Whether to fix the entangled pass's missing zero-fill rejection now, as its own change, or
+   defer it.** Decision 57: the review authorized by item 6 confirmed that
+   `streaming_psd.compute_psd_pain_correlation` — the older, notebook-derived spectrum-and-pain
+   routine, which still runs on every ordinary Recompute click today — never applies the rule the
+   rest of the pipeline has enforced since June (decision 4): drop, rather than analyse, any
+   window whose recording is more than 10 percent filled-in rather than real. The gap exists
+   because the adapter feeding this one routine its windows drops the field that says how much of
+   each window was filled in before the routine ever sees it; every other consumer of that same
+   recording keeps the field and enforces the rule. **This changes some already-published numbers
+   if fixed**, so it needs his go-ahead before anyone touches it (constraint 8), and any fix must
+   carry the field count and difference count on live RCS08 data, never a tolerance (§2 principle
+   2), showing exactly how many rows changed and by how much. The review's recommendation, in
+   order: (1) fix the missing rejection first, as its own change, with the equality proof, before
+   anything else touches this routine; (2) only after that, consider folding this routine's
+   spectrum-and-correlation step into the newer band-by-length sweep's own version of the same
+   calculation, since a channel-set check first is needed to confirm the two routines look at the
+   same electrode contacts, and a further equality proof is needed to confirm folding one into
+   the other changes no number; (3) leave every statistical method in this routine exactly as it
+   is — the review found no problem with the statistics themselves, only with what data reaches
+   them.
 
 ### Open engineering, not blocked on anyone
 
@@ -215,6 +238,15 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
 ~~20. **The device route's saturation ceiling is a provisional constant.**~~ **RESOLVED 2026-09-08,
     decision 52.** Raised 2026-09-07.
 
+21. **The Recompute double-fetch fix (decision 54, open item 4) is not yet confirmed against a
+    running page.** Reading `useCachedResult.js` line by line, tracing every path that can start a
+    fetch — the page's own mount, a plain `run()`, and `recompute()` — turns up no window where a
+    second request could start; an existing in-flight guard appears to already prevent it. A live
+    check was attempted with a real browser against the running server and could not get past its
+    sign-in page, so this is the code-reading conclusion only, not yet watched happen on a real
+    page. Confirm with the browser once signed in: press Recompute on the Biomarkers or Closed-Loop
+    Deployment page and count the network requests it fires.
+
 ### Resolved by this consolidation — do not re-open
 
 - **"Reading recordings off disk is the largest cost and should be optimised next."** Two different
@@ -227,6 +259,15 @@ hygiene as a work item — the latter is an operational note in `OPERATIONS_runb
   three edits are incorporated: the closed-loop module's use of the calibrated route, the removal of
   a screening gate that exists nowhere in the code, and the section that deliberately ignores the
   length-of-signal slider.
+- **"Matching pain ratings to brain-signal chunks is probably the slowest step of Recompute, and the
+  place to look for a vectorization win."** Measured live on RCS08, twice, back to back: matching
+  cost 0.09-0.74 s of a 40-43 s Recompute request, 0.2-1.7 percent, and is already array-wide math
+  with no per-pair loop (the `958cc89` vectorization already covers it). **The two costs that
+  actually dominate have nothing to do with matching**: a 1,000-shuffle randomization test repeated
+  nine times inside the older notebook-derived routine, 33.6-36.7 percent, and a separate scan
+  across about 90 candidate bands on 6 sensing-contact pairs, 22.0-22.8 percent. There is no
+  performance case for touching the matching step further.
+
 
 ### Then
 

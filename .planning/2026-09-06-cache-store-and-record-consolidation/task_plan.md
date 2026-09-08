@@ -30,10 +30,11 @@ Two goals, in this order, and the second is subordinate to the first.
 
 ## Next Step
 
-**Track E is now complete (decision 53): the assembled matrix moved into the one store as
-`biomarker_psd_matrix`, alongside decision 52's device-ceiling replacement. Nothing outstanding
-remains that is not the PI's: the spectrum-directory decision, the ceiling rule, and this
-migration are all built, tested and pushed. Nothing is queued.**
+**Waiting on the PI's answer to open item 9 (decision 57): fix the entangled pass's missing
+zero-fill rejection now, as its own change with a field-count/difference-count proof, or defer.**
+Decisions 54-56 (cache byte budget, peaked-band curvature rule, its live pooled-data check) are
+built, tested and pushed. Open item 21 (double-fetch) needs a live browser confirmation once
+signed in; nothing else is queued.
 
 ## Current Phase
 
